@@ -16,7 +16,7 @@ from .models import (
     total_item_count,
     validate_action,
 )
-from .planner import AutomationScienceSkill, IronPlateSkill
+from .planner import AutomationScienceSkill, CopperPlateSkill, IronPlateSkill
 from .rcon import FactorioRconClient
 from .skill_registry import annotate_strategy_with_skill_status
 from .strategy import heuristic_strategy, make_strategy_payload, skill_catalog_payload
@@ -34,6 +34,10 @@ class RunSummary:
 
     @property
     def iron_plate_count(self) -> int:
+        return self.item_count
+
+    @property
+    def copper_plate_count(self) -> int:
         return self.item_count
 
 
@@ -90,6 +94,22 @@ class FactorioController:
             goal="produce_automation_science_pack",
             max_steps=max_steps,
             log_prefix="science-mvp",
+            log_path=log_path,
+        )
+
+    def run_copper_mvp(
+        self,
+        target: int = 10,
+        max_steps: int = 250,
+        log_path: Path | None = None,
+    ) -> RunSummary:
+        return self._run_skill(
+            skill=CopperPlateSkill(target),
+            target_item="copper-plate",
+            target=target,
+            goal="produce_copper_plate",
+            max_steps=max_steps,
+            log_prefix="copper-mvp",
             log_path=log_path,
         )
 

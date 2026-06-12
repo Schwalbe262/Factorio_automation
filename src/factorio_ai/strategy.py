@@ -59,7 +59,7 @@ SKILL_CATALOG: dict[str, SkillContract] = {
     "produce_copper_plate": SkillContract(
         name="produce_copper_plate",
         description="Create or replenish copper plate supply.",
-        executor="AutomationScienceSkill copper sub-skill",
+        executor="CopperPlateSkill",
         preconditions=["reachable copper ore", "fuel or power available", "furnace available or craftable"],
         completion=["copper plates exist in player inventory or furnace output"],
         llm_scope="Choose this when circuits, science, or cable are blocked by copper.",
@@ -106,6 +106,21 @@ SKILL_CATALOG: dict[str, SkillContract] = {
         preconditions=["remote resource patches or long transport distance", "rail technology and materials available"],
         completion=["rail corridor and station intent are selected for executor validation"],
         llm_scope="Choose rail topology and station intent; executor validates rails, signals, and exact buildability.",
+    ),
+    "build_rail_supply_line": SkillContract(
+        name="build_rail_supply_line",
+        description="Connect a remote resource outpost to the factory by train when belt or walking logistics are too long.",
+        executor="future RailSupplyLineSkill",
+        preconditions=[
+            "rail technology unlocked",
+            "locomotive, cargo wagon, rails, train stops, signals, and fuel are craftable or available",
+            "remote resource patch and factory unload district selected",
+        ],
+        completion=["train can move resource or intermediate items between load and unload stations"],
+        llm_scope=(
+            "Choose the supply route, served item, and station intent for remote resources. "
+            "Do not place each rail segment, signal, train stop, or schedule entry directly."
+        ),
     ),
     "research_logistics": SkillContract(
         name="research_logistics",
@@ -182,9 +197,11 @@ def make_spatial_planning_context(observation: dict[str, Any]) -> dict[str, Any]
             "planning_inputs": {
                 "known_remote_resources": _resource_summary(observation, minimum_distance=80.0),
                 "existing_factory_centroid": _entity_centroid(observation),
+                "rail_candidate_distance_tiles": 160,
             },
             "constraints": [
                 "avoid rail plans before the required technology and material supply exist",
+                "if a needed resource or factory district is far away, prefer train outposts over long belt or walking loops",
                 "separate station blocks from dense starter factories",
                 "prefer expandable trunk corridors over point-to-point spaghetti",
                 "treat signaling and station placement as executor-level validated details",

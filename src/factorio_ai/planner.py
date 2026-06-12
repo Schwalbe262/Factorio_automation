@@ -17,6 +17,7 @@ from .models import (
 
 
 EAST = 2
+FURNACE_RESOURCE_RADIUS = 12.0
 
 
 class IronPlateSkill:
@@ -30,7 +31,7 @@ class IronPlateSkill:
         if iron_total >= self.target_count:
             return PlannerDecision(None, f"iron plate target reached: {iron_total}/{self.target_count}", done=True)
 
-        furnace = nearest_entity(observation, "stone-furnace")
+        furnace = _select_iron_furnace(observation)
         drill = nearest_entity(observation, "burner-mining-drill")
         player = player_position(observation)
 
@@ -205,6 +206,7 @@ class IronPlateSkill:
                 "target": "resource",
                 "name": name,
                 "near": pos,
+                "radius": 8,
                 "count": count,
             },
             f"mine {name}",
@@ -218,6 +220,7 @@ class AutomationScienceSkill:
         self.target_count = target_count
         self.iron_plate_floor = iron_plate_floor
         self.iron_skill = IronPlateSkill(iron_plate_floor)
+        self.copper_skill = CopperPlateSkill(target_count)
 
     def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
         science_total = total_item_count(observation, "automation-science-pack")
@@ -233,7 +236,6 @@ class AutomationScienceSkill:
             if decision.action is not None:
                 return decision
 
-        player = player_position(observation)
         copper_plate_inventory = inventory_count(observation, "copper-plate")
         gear_total = inventory_count(observation, "iron-gear-wheel")
         science_needed = self.target_count - science_total
@@ -259,8 +261,8 @@ class AutomationScienceSkill:
             )
 
         if copper_plate_inventory < science_needed:
-            decision = self._produce_copper_plate(observation, player, science_needed)
-            if decision is not None:
+            decision = self.copper_skill.next_action(observation, target_count=science_needed, inventory_only=True)
+            if not decision.done:
                 return decision
 
         if gear_total < science_needed:
@@ -271,12 +273,26 @@ class AutomationScienceSkill:
             "wait before rechecking automation science prerequisites",
         )
 
-    def _produce_copper_plate(
+
+class CopperPlateSkill:
+    """Reusable early-game skill that produces copper plates with hand mining and a stone furnace."""
+
+    def __init__(self, target_count: int = 10) -> None:
+        self.target_count = target_count
+        self.support_skill = IronPlateSkill(target_count=10)
+
+    def next_action(
         self,
         observation: dict[str, Any],
-        player: dict[str, float],
-        science_needed: int,
-    ) -> PlannerDecision | None:
+        target_count: int | None = None,
+        inventory_only: bool = False,
+    ) -> PlannerDecision:
+        target = target_count or self.target_count
+        copper_total = inventory_count(observation, "copper-plate") if inventory_only else total_item_count(observation, "copper-plate")
+        if copper_total >= target:
+            return PlannerDecision(None, f"copper plate target reached: {copper_total}/{target}", done=True)
+
+        player = player_position(observation)
         copper_furnace = _select_copper_furnace(observation)
         copper = nearest_resource(observation, "copper-ore")
         if copper is None:
@@ -286,21 +302,24 @@ class AutomationScienceSkill:
             coal = nearest_resource(observation, "coal")
             if coal is None:
                 return PlannerDecision(None, "cannot find nearby coal for copper smelting")
-            return self.iron_skill._mine_resource(player, coal, "coal", 8)
+            return self.support_skill._mine_resource(player, coal, "coal", 8)
 
         if copper_furnace is None:
             furnaces = entities_named(observation, "stone-furnace")
-            if len(furnaces) < 2:
+            free_furnaces = [item for item in furnaces if not _is_iron_busy_furnace(item)]
+            if free_furnaces:
+                copper_furnace = _nearest_to(free_furnaces, _position(copper))
+            else:
                 if inventory_count(observation, "stone-furnace") <= 0:
                     if craftable_count(observation, "stone-furnace") > 0:
                         return PlannerDecision(
                             {"type": "craft", "recipe": "stone-furnace", "count": 1},
-                            "craft second stone furnace for copper smelting",
+                            "craft stone furnace for copper smelting",
                         )
                     stone = nearest_resource(observation, "stone")
                     if stone is None:
-                        return PlannerDecision(None, "cannot find stone for second furnace")
-                    return self.iron_skill._mine_resource(player, stone, "stone", 8)
+                        return PlannerDecision(None, "cannot find stone for copper furnace")
+                    return self.support_skill._mine_resource(player, stone, "stone", 8)
                 copper_pos = _position(copper)
                 furnace_pos = {"x": copper_pos["x"] + 3, "y": copper_pos["y"]}
                 if distance(player, furnace_pos) > 20:
@@ -315,9 +334,8 @@ class AutomationScienceSkill:
                         "position": furnace_pos,
                         "allow_nearby": True,
                     },
-                    "place second furnace for copper smelting",
+                    "place furnace for copper smelting",
                 )
-            copper_furnace = _nearest_to(furnaces, _position(copper))
 
         if copper_furnace and entity_item_count(copper_furnace, "copper-plate") > 0:
             furnace_pos = _position(copper_furnace)
@@ -339,10 +357,10 @@ class AutomationScienceSkill:
             )
 
         if inventory_count(observation, "copper-ore") <= 0:
-            return self.iron_skill._mine_resource(player, copper, "copper-ore", max(8, science_needed))
+            return self.support_skill._mine_resource(player, copper, "copper-ore", max(8, target - copper_total))
 
         furnace_pos = _position(copper_furnace)
-        if entity_item_count(copper_furnace, "copper-ore") < science_needed:
+        if entity_item_count(copper_furnace, "copper-ore") < target:
             if distance(player, furnace_pos) > 20:
                 return PlannerDecision(
                     {"type": "move_to", "position": furnace_pos},
@@ -352,7 +370,7 @@ class AutomationScienceSkill:
                 {
                     "type": "insert",
                     "item": "copper-ore",
-                    "count": min(max(8, science_needed), inventory_count(observation, "copper-ore")),
+                    "count": min(max(8, target - copper_total), inventory_count(observation, "copper-ore")),
                     "unit_number": copper_furnace.get("unit_number"),
                     "name": "stone-furnace",
                     "position": furnace_pos,
@@ -402,15 +420,46 @@ def _select_copper_furnace(observation: dict[str, Any]) -> dict[str, Any] | None
         if entity_item_count(item, "copper-plate") > 0 or entity_item_count(item, "copper-ore") > 0:
             return item
     copper = nearest_resource(observation, "copper-ore")
-    if copper is None or len(furnaces) < 2:
+    if copper is None or not furnaces:
         return None
-    iron_busy = [
-        item
-        for item in furnaces
-        if entity_item_count(item, "iron-plate") > 0 or entity_item_count(item, "iron-ore") > 0
-    ]
+    iron_busy = [item for item in furnaces if _is_iron_busy_furnace(item)]
+    if len(furnaces) == 1 and iron_busy:
+        return None
     candidates = [item for item in furnaces if item not in iron_busy] or furnaces
-    return _nearest_to(candidates, _position(copper))
+    near = _near_position(candidates, _position(copper), FURNACE_RESOURCE_RADIUS)
+    return _nearest_to(near, _position(copper)) if near else None
+
+
+def _select_iron_furnace(observation: dict[str, Any]) -> dict[str, Any] | None:
+    furnaces = entities_named(observation, "stone-furnace")
+    for item in furnaces:
+        if _is_iron_busy_furnace(item):
+            return item
+    iron = nearest_resource(observation, "iron-ore")
+    if iron is None or not furnaces:
+        return None
+    copper_busy = [item for item in furnaces if _is_copper_busy_furnace(item)]
+    if len(furnaces) == 1 and copper_busy:
+        return None
+    candidates = [item for item in furnaces if item not in copper_busy] or furnaces
+    near = _near_position(candidates, _position(iron), FURNACE_RESOURCE_RADIUS)
+    return _nearest_to(near, _position(iron)) if near else None
+
+
+def _is_iron_busy_furnace(entity: dict[str, Any]) -> bool:
+    return entity_item_count(entity, "iron-plate") > 0 or entity_item_count(entity, "iron-ore") > 0
+
+
+def _is_copper_busy_furnace(entity: dict[str, Any]) -> bool:
+    return entity_item_count(entity, "copper-plate") > 0 or entity_item_count(entity, "copper-ore") > 0
+
+
+def _near_position(
+    entities: list[dict[str, Any]],
+    position: dict[str, float],
+    radius: float,
+) -> list[dict[str, Any]]:
+    return [item for item in entities if distance(_position(item), position) <= radius]
 
 
 def _nearest_to(entities: list[dict[str, Any]], position: dict[str, float]) -> dict[str, Any] | None:

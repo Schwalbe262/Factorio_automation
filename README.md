@@ -38,6 +38,7 @@ implements that skill as a normal code change.
 - Observe player position, inventory, nearby resources, nearby entities, and craftable recipes.
 - Execute allowlisted actions only.
 - Run a rule-based `produce_iron_plate` skill until at least 10 iron plates exist in inventory or machine outputs.
+- Run a reusable rule-based `produce_copper_plate` skill until copper plates exist in inventory or machine outputs.
 - Run a rule-based `produce_automation_science_pack` skill until at least 5 automation science packs exist.
 - Ask the strategic layer for the next high-level skill with `factorio-ai strategy`.
 - Submit planner tasks to a Slurm worker queue when configured, with local rule-based fallback.
@@ -90,6 +91,12 @@ In another terminal, run the iron plate MVP loop:
 
 ```powershell
 factorio-ai run-iron-mvp --target 10
+```
+
+Run the copper plate MVP loop:
+
+```powershell
+factorio-ai run-copper-mvp --target 10
 ```
 
 Or run the automation science MVP loop from a fresh server save:
@@ -176,6 +183,18 @@ The intended planner flow is:
 3. Convert useful explanations into fine-tuning examples.
 4. Ask the Slurm LLM worker to rank designs against the current game state.
 5. Execute only validated skill/build actions through the active executor.
+
+## Spatial And Rail Planning
+
+Factory placement is a strategic concern, not only a build-detail concern. The strategic payload
+includes site-selection and rail-network context so the LLM can choose where a production district,
+logistics corridor, or train outpost should go before a deterministic executor validates exact tiles.
+
+When a required resource patch or factory district is far from the current base, the planner should
+prefer a rail supply line over long walking loops or very long belts after rail technology and
+materials are available. The current catalog exposes `plan_rail_network` and `build_rail_supply_line`
+as future skills; until those executors exist, selecting them records a missing-skill backlog entry
+instead of faking rail construction.
 
 ## Learning Loop
 
