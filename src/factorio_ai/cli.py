@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from typing import Any
 
@@ -10,6 +11,7 @@ from .controller import FactorioController
 from .factorio import create_save, install_mod, start_gui_client, start_server, wait_for_rcon
 from . import remote_slurm
 from .vanilla_gui import VanillaGuiDriver, launch_vanilla_gui
+from .web_dashboard import FACTORIO_ROUTE, serve_dashboard
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -40,6 +42,15 @@ def main(argv: list[str] | None = None) -> None:
     confirm_parser.add_argument("--timeout", type=float, default=15.0)
 
     subparsers.add_parser("observe", help="Print /ai_observe JSON")
+
+    strategy_parser = subparsers.add_parser("strategy", help="Ask the strategic LLM layer for the next high-level skill")
+    strategy_parser.add_argument("--objective", default="launch_rocket_program")
+    strategy_parser.add_argument("--require-llm", action="store_true")
+
+    web_parser = subparsers.add_parser("web", help="Serve the local Factorio production monitor at /팩토리오")
+    web_parser.add_argument("--host", default="127.0.0.1")
+    web_parser.add_argument("--port", type=int, default=18889)
+    web_parser.add_argument("--objective", default="launch_rocket_program")
 
     action_parser = subparsers.add_parser("action", help="Execute /ai_action JSON")
     action_parser.add_argument("json_action")
@@ -106,6 +117,21 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "observe":
         print_json(FactorioController(cfg).observe())
+        return
+
+    if args.command == "strategy":
+        require_llm = args.require_llm or os.getenv("FACTORIO_AI_REQUIRE_LLM_STRATEGY", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        print_json(FactorioController(cfg).strategy_decision(args.objective, require_llm=require_llm))
+        return
+
+    if args.command == "web":
+        print_json({"ok": True, "url": f"http://{args.host}:{args.port}{FACTORIO_ROUTE}"})
+        serve_dashboard(cfg, host=args.host, port=args.port, objective=args.objective)
         return
 
     if args.command == "action":

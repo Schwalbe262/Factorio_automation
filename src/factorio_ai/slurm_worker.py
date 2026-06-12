@@ -9,6 +9,8 @@ import time
 from typing import Any
 from urllib import request, error
 
+from .strategy import heuristic_strategy, make_strategy_payload, normalize_strategy_response, skill_catalog_payload
+
 
 DEFAULT_POLL_SECONDS = 1.0
 PLANNER_RESPONSE_SCHEMA = {
@@ -22,6 +24,19 @@ PLANNER_RESPONSE_SCHEMA = {
         "safety_notes": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["selected_goal", "action_hint", "confidence", "reason", "safety_notes"],
+}
+STRATEGY_RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "selected_skill": {"type": "string"},
+        "priority": {"type": "integer"},
+        "reason": {"type": "string"},
+        "evidence": {"type": "array", "items": {"type": "string"}},
+        "blockers": {"type": "array", "items": {"type": "string"}},
+        "expected_effect": {"type": "string"},
+    },
+    "required": ["selected_skill", "priority", "reason", "evidence", "blockers", "expected_effect"],
 }
 
 
@@ -112,10 +127,12 @@ def run_task_file(task_path: Path, result_path: Path) -> dict[str, Any]:
 
 def execute_task(task: dict[str, Any]) -> dict[str, Any]:
     task_type = task.get("type")
-    if task_type != "planner_request":
-        raise ValueError(f"unsupported task type: {task_type}")
     payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
-    return run_planner_request(payload)
+    if task_type == "planner_request":
+        return run_planner_request(payload)
+    if task_type == "strategy_request":
+        return run_strategy_request(payload)
+    raise ValueError(f"unsupported task type: {task_type}")
 
 
 def run_planner_request(payload: dict[str, Any]) -> dict[str, Any]:
@@ -125,6 +142,21 @@ def run_planner_request(payload: dict[str, Any]) -> dict[str, Any]:
         return llm_result
     result = heuristic_planner(payload)
     result["source"] = "heuristic"
+    return result
+
+
+def run_strategy_request(payload: dict[str, Any]) -> dict[str, Any]:
+    llm_result = try_llm_strategy(payload)
+    if llm_result is not None:
+        llm_result["source"] = "llm"
+        return llm_result
+    result = heuristic_strategy(
+        objective=str(payload.get("objective") or payload.get("goal") or "launch_rocket_program"),
+        observation=payload.get("observation") if isinstance(payload.get("observation"), dict) else {},
+        production_targets=payload.get("production_targets") if isinstance(payload.get("production_targets"), dict) else {},
+    )
+    result["source"] = "heuristic"
+    result["ok"] = True
     return result
 
 
@@ -171,6 +203,72 @@ def try_llm_planner(payload: dict[str, Any]) -> dict[str, Any] | None:
     if isinstance(parsed, dict):
         return normalize_planner_response(parsed)
     return None
+
+
+def try_llm_strategy(payload: dict[str, Any]) -> dict[str, Any] | None:
+    objective = str(payload.get("objective") or payload.get("goal") or "launch_rocket_program")
+    observation = payload.get("observation") if isinstance(payload.get("observation"), dict) else {}
+    production_targets = payload.get("production_targets") if isinstance(payload.get("production_targets"), dict) else {}
+    base_payload = make_strategy_payload(objective, observation, production_targets)
+    if isinstance(payload.get("available_skills"), list):
+        base_payload["available_skills"] = payload["available_skills"]
+    base_payload["rule"] = (
+        "Select one high-level skill. Follow the dependency tree backward from the objective, "
+        "then use factory_monitor production estimates to identify the current bottleneck. "
+        "Never emit tick-level actions."
+    )
+    prompt = (
+        "You are the strategic layer for a Factorio autoplayer. "
+        "Pick the next high-level skill and justify it from the observation. "
+        "Return strict JSON only matching the schema.\n\n"
+        f"Payload:\n{json.dumps(base_payload, ensure_ascii=False)}"
+    )
+    parsed = call_llm_json(
+        system="Return strict JSON only. You choose strategy, not direct world actions.",
+        prompt=prompt,
+        schema=STRATEGY_RESPONSE_SCHEMA,
+    )
+    if parsed is None:
+        return None
+    return normalize_strategy_response(parsed, fallback_objective=objective)
+
+
+def call_llm_json(system: str, prompt: str, schema: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    base_url = os.getenv("FACTORIO_AI_LLM_BASE_URL", "").rstrip("/")
+    model = os.getenv("FACTORIO_AI_LLM_MODEL", "")
+    if not base_url or not model:
+        return None
+    request_payload: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+    }
+    if schema and os.getenv("FACTORIO_AI_LLM_GUIDED_JSON", "").lower() in {"1", "true", "yes", "on"}:
+        request_payload["guided_json"] = schema
+    req = request.Request(
+        f"{base_url}/chat/completions",
+        data=json.dumps(request_payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    api_key = os.getenv("FACTORIO_AI_LLM_API_KEY")
+    if api_key:
+        req.add_header("Authorization", f"Bearer {api_key}")
+    try:
+        with request.urlopen(req, timeout=float(os.getenv("FACTORIO_AI_LLM_TIMEOUT", "60"))) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except (OSError, error.URLError, json.JSONDecodeError, TimeoutError):
+        return None
+    try:
+        content = body["choices"][0]["message"]["content"]
+        parsed = json.loads(content)
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def heuristic_planner(payload: dict[str, Any]) -> dict[str, Any]:

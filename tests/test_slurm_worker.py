@@ -47,6 +47,26 @@ class SlurmWorkerTests(unittest.TestCase):
             saved = json.loads(result_path.read_text(encoding="utf-8"))
             self.assertEqual(saved["source"], "heuristic")
 
+    def test_run_task_file_handles_strategy_request(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            task_path = root / "strategy-test.json"
+            result_path = root / "strategy-result.json"
+            task = {
+                "id": "strategy-test",
+                "type": "strategy_request",
+                "payload": {
+                    "objective": "전자회로를 만들어야함",
+                    "observation": {"inventory": {"iron-plate": 1, "copper-plate": 40}, "entities": []},
+                    "available_skills": [],
+                },
+            }
+            task_path.write_text(json.dumps(task), encoding="utf-8")
+            result = run_task_file(task_path, result_path)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["selected_skill"], "expand_iron_smelting")
+            self.assertEqual(result["source"], "heuristic")
+
 
 if __name__ == "__main__":
     unittest.main()

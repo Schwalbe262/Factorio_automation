@@ -10,12 +10,36 @@ The local machine runs Factorio and controls it through RCON. A Factorio Lua mod
 
 Python owns the safety checks, orchestration, logs, and planner loop. Slurm is optional and is used for higher-latency LLM planning or large evaluation jobs, not for directly mutating the Factorio world.
 
+## Control Philosophy
+
+The LLM is required for strategic play, but it must not drive the game one tick at a time.
+
+The intended split is:
+
+1. Strategic LLM layer: choose the next high-level skill from the current game state.
+2. Skill layer: execute stable routines such as `produce_iron_plate`, `setup_power`, or `produce_electronic_circuit`.
+3. Executor layer: translate skill actions into either development RCON actions or vanilla keyboard/mouse input.
+
+Example:
+
+```text
+Need electronic circuits -> iron plate throughput is too low -> run expand_iron_smelting.
+```
+
+The LLM stops at the skill choice and bottleneck explanation. The skill code handles walking,
+mining, building, item insertion, retries, and local validation.
+
+If the strategic LLM selects a skill whose executor does not exist yet, the controller must not fake
+or improvise game actions. It records the missing skill in `runtime/missing-skills.jsonl`; Codex then
+implements that skill as a normal code change.
+
 ## Current MVP
 
 - Observe player position, inventory, nearby resources, nearby entities, and craftable recipes.
 - Execute allowlisted actions only.
 - Run a rule-based `produce_iron_plate` skill until at least 10 iron plates exist in inventory or machine outputs.
 - Run a rule-based `produce_automation_science_pack` skill until at least 5 automation science packs exist.
+- Ask the strategic layer for the next high-level skill with `factorio-ai strategy`.
 - Submit planner tasks to a Slurm worker queue when configured, with local rule-based fallback.
 
 ## Requirements
@@ -74,6 +98,37 @@ Or run the automation science MVP loop from a fresh server save:
 factorio-ai run-science-mvp --target 5 --max-steps 500
 ```
 
+Ask the strategic layer what to do next:
+
+```powershell
+factorio-ai strategy --objective "produce electronic circuits"
+```
+
+Start the local production monitor:
+
+```powershell
+factorio-ai web
+```
+
+Open:
+
+```text
+http://127.0.0.1:18889/팩토리오
+```
+
+The monitor has no login, no admin role, and no session expiry. It shows estimated production,
+estimated consumption, net rates, target deficits, bottlenecks, dependency tree, and technology
+chain. Desired production targets are editable per item. If user targets are satisfied, the
+strategic LLM may raise targets or add the next rocket-program item automatically.
+
+Use this for production runs when a real LLM endpoint is configured:
+
+```powershell
+$env:FACTORIO_AI_SLURM_ENABLED=1
+$env:FACTORIO_AI_REQUIRE_LLM_STRATEGY=1
+factorio-ai strategy --objective "launch_rocket_program"
+```
+
 ## Achievement-Compatible Track
 
 The current `factorio-ai` engine is a development and verification track. It uses a mod, RCON,
@@ -107,13 +162,35 @@ to the development track and must not be used for achievement runs.
 Rocket-scale play should use proven layouts instead of inventing every production block from
 scratch. `factorio_ai.blueprints` decodes Factorio blueprint exchange strings and summarizes entity
 counts, so blueprint sources such as Factorio Prints can feed the planner as candidate designs.
+The goal is not blind copy/paste. The code infers a blueprint lesson: likely purpose, bottlenecks,
+design principles, and rough ratios.
 
 The intended planner flow is:
 
 1. Decode candidate blueprints.
-2. Summarize required entities and technologies.
-3. Ask the Slurm LLM worker to rank designs against the current game state.
-4. Execute only validated build actions through the active executor.
+2. Infer why the design exists and which bottleneck it addresses.
+3. Convert useful explanations into fine-tuning examples.
+4. Ask the Slurm LLM worker to rank designs against the current game state.
+5. Execute only validated skill/build actions through the active executor.
+
+## Learning Loop
+
+The model should improve over time instead of relying only on a commercial LLM forever.
+
+Data sources to save:
+
+- strategic decisions: observation, selected skill, reason, blockers, result;
+- failed skill runs: last observation, failed action, local rejection reason;
+- successful factory blocks: objective, blueprint lesson, required tech, production effect;
+- vanilla GUI runs: screen state, selected skill, input sequence summary, outcome.
+
+Fine-tuning target:
+
+- input: current objective, summarized game state, available skills, candidate blueprint lessons;
+- output: selected high-level skill, bottleneck diagnosis, expected effect, safety notes.
+
+The fine-tuned model should still operate only at the strategic layer. Skill execution remains
+deterministic and locally validated.
 
 ## Slurm Worker
 

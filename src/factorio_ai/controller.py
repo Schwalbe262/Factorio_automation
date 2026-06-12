@@ -18,6 +18,9 @@ from .models import (
 )
 from .planner import AutomationScienceSkill, IronPlateSkill
 from .rcon import FactorioRconClient
+from .skill_registry import annotate_strategy_with_skill_status
+from .strategy import heuristic_strategy, make_strategy_payload, skill_catalog_payload
+from .targets import load_targets
 
 
 @dataclass
@@ -89,6 +92,41 @@ class FactorioController:
             log_prefix="science-mvp",
             log_path=log_path,
         )
+
+    def strategy_decision(self, objective: str, require_llm: bool = False) -> dict[str, Any]:
+        observation = self.observe()
+        production_targets = load_targets(self.cfg.runtime_dir, objective).per_minute
+        result: dict[str, Any] | None = None
+        if self.cfg.slurm_enabled:
+            try:
+                from . import remote_slurm
+
+                result = remote_slurm.request_strategy(
+                    objective=objective,
+                    observation=observation,
+                    production_targets=production_targets,
+                    available_skills=skill_catalog_payload(),
+                    timeout_seconds=30,
+                )
+            except Exception:
+                if require_llm:
+                    raise
+
+        if result is None:
+            try:
+                from .slurm_worker import run_strategy_request
+
+                result = run_strategy_request(make_strategy_payload(objective, observation, production_targets))
+            except Exception:
+                if require_llm:
+                    raise
+                result = heuristic_strategy(objective, observation, production_targets)
+                result["source"] = "heuristic"
+                result["ok"] = True
+
+        if require_llm and result.get("source") != "llm":
+            raise RuntimeError(f"LLM strategy was required but source was {result.get('source')}")
+        return annotate_strategy_with_skill_status(result, runtime_dir=self.cfg.runtime_dir)
 
     def _run_skill(
         self,

@@ -294,6 +294,41 @@ def request_plan(
     raise TimeoutError(f"remote planner task timed out: {task_name}")
 
 
+def request_strategy(
+    objective: str,
+    observation: dict[str, Any],
+    production_targets: dict[str, float] | None = None,
+    available_skills: list[dict[str, Any]] | None = None,
+    cfg: RemoteSlurmConfig | None = None,
+    timeout_seconds: int | None = None,
+) -> dict[str, Any]:
+    cfg = cfg or config()
+    task = {
+        "id": f"strategy-{uuid.uuid4().hex}",
+        "type": "strategy_request",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "payload": {
+            "objective": objective,
+            "observation": observation,
+            "production_targets": production_targets or {},
+            "available_skills": available_skills or [],
+        },
+    }
+    if _use_attached_srun(cfg):
+        return _request_task_via_attached_srun(task, cfg, timeout_seconds)
+
+    task_name = submit_task(task, cfg)
+    deadline = time.monotonic() + (timeout_seconds or cfg.task_timeout_seconds)
+    while time.monotonic() < deadline:
+        state, data, _raw = read_task_state(task_name, cfg)
+        if state == "result" and data is not None:
+            return data
+        if state == "failed":
+            raise RemoteSlurmError(f"remote strategy task failed: {data}")
+        time.sleep(2)
+    raise TimeoutError(f"remote strategy task timed out: {task_name}")
+
+
 def _use_attached_srun(cfg: RemoteSlurmConfig) -> bool:
     mode = os.getenv("FACTORIO_AI_SLURM_MODE", "auto").strip().lower()
     if mode in {"queue", "worker_queue"}:
@@ -304,6 +339,14 @@ def _use_attached_srun(cfg: RemoteSlurmConfig) -> bool:
 
 
 def _request_plan_via_attached_srun(
+    task: dict[str, Any],
+    cfg: RemoteSlurmConfig,
+    timeout_seconds: int | None = None,
+) -> dict[str, Any]:
+    return _request_task_via_attached_srun(task, cfg, timeout_seconds)
+
+
+def _request_task_via_attached_srun(
     task: dict[str, Any],
     cfg: RemoteSlurmConfig,
     timeout_seconds: int | None = None,
@@ -348,12 +391,12 @@ rm -f "$TASK_PATH" "$RESULT_PATH"
             json_line = line
             break
     if not json_line:
-        raise RemoteSlurmError(f"attached AUTO planner did not return JSON: {output[:500]}")
+        raise RemoteSlurmError(f"attached AUTO task did not return JSON: {output[:500]}")
     result = json.loads(json_line)
     if not isinstance(result, dict):
-        raise RemoteSlurmError("attached AUTO planner returned non-object JSON")
+        raise RemoteSlurmError("attached AUTO task returned non-object JSON")
     if not result.get("ok"):
-        raise RemoteSlurmError(f"attached AUTO planner failed: {result}")
+        raise RemoteSlurmError(f"attached AUTO task failed: {result}")
     return result
 
 
