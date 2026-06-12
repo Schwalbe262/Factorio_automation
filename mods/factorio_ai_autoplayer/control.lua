@@ -22,6 +22,14 @@ local VIRTUAL_RECIPES = {
     ingredients = { ["copper-plate"] = 1 },
     results = { ["copper-cable"] = 2 }
   },
+  ["transport-belt"] = {
+    ingredients = { ["iron-plate"] = 1, ["iron-gear-wheel"] = 1 },
+    results = { ["transport-belt"] = 2 }
+  },
+  ["burner-inserter"] = {
+    ingredients = { ["iron-plate"] = 1, ["iron-gear-wheel"] = 1 },
+    results = { ["burner-inserter"] = 1 }
+  },
   ["electronic-circuit"] = {
     ingredients = { ["iron-plate"] = 1, ["copper-cable"] = 3 },
     results = { ["electronic-circuit"] = 1 }
@@ -402,6 +410,19 @@ local function entity_inventory_snapshot(entity)
   return result
 end
 
+local function optional_entity_position(entity, property)
+  if not entity or not entity.valid then
+    return nil
+  end
+  local ok, value = pcall(function()
+    return entity[property]
+  end)
+  if ok and value then
+    return position_table(value)
+  end
+  return nil
+end
+
 local function collect_resources(surface, position)
   local resources = {}
   local resource_names = { "iron-ore", "coal", "stone", "copper-ore", "uranium-ore", "crude-oil" }
@@ -444,6 +465,7 @@ local function collect_entities(surface, position)
     "steam-engine",
     "offshore-pump",
     "transport-belt",
+    "burner-inserter",
     "inserter",
     "small-electric-pole"
   }
@@ -463,6 +485,8 @@ local function collect_entities(surface, position)
           position = position_table(entity.position),
           direction = entity.direction,
           status = entity.status,
+          drop_position = optional_entity_position(entity, "drop_position"),
+          pickup_position = optional_entity_position(entity, "pickup_position"),
           distance = round(distance(position, entity.position)),
           inventories = entity_inventory_snapshot(entity)
         })
@@ -483,6 +507,8 @@ local function collect_entities(surface, position)
         position = position_table(entity.position),
         direction = entity.direction,
         status = entity.status,
+        drop_position = optional_entity_position(entity, "drop_position"),
+        pickup_position = optional_entity_position(entity, "pickup_position"),
         distance = round(distance(position, entity.position)),
         inventories = entity_inventory_snapshot(entity)
       })

@@ -16,7 +16,8 @@ from .models import (
 )
 
 
-EAST = 2
+EAST = 4
+WEST = 12
 FURNACE_RESOURCE_RADIUS = 12.0
 
 
@@ -478,6 +479,170 @@ class ElectronicCircuitSkill:
         )
 
 
+class BeltSmeltingLineSkill:
+    """Build a minimal belt-fed burner smelting line for early iron automation."""
+
+    def __init__(self, target_count: int = 10) -> None:
+        self.target_count = target_count
+        self.support_skill = IronPlateSkill(target_count=20)
+
+    def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
+        line = _find_belt_smelting_line(observation)
+        line_furnace = line.get("furnace") if line else None
+        total_iron = total_item_count(observation, "iron-plate")
+        if line_furnace and self._line_has_started(line_furnace) and total_iron >= self.target_count:
+            return PlannerDecision(
+                None,
+                f"belt smelting line produced iron plates: {total_iron}/{self.target_count}",
+                done=True,
+            )
+
+        player = player_position(observation)
+        layout = line or _select_belt_smelting_layout(observation)
+        if layout is None:
+            return PlannerDecision(None, "cannot find open iron ore site for belt smelting line")
+
+        if inventory_count(observation, "coal") < 12:
+            coal = nearest_resource(observation, "coal")
+            if coal is None:
+                return PlannerDecision(None, "cannot find coal for burner smelting line")
+            return self.support_skill._mine_resource(player, coal, "coal", 16)
+
+        need = _line_missing_item(observation, layout)
+        if need:
+            decision = self._ensure_item(observation, player, need)
+            if decision is not None:
+                return decision
+
+        for name, key, direction in [
+            ("transport-belt", "belt1_position", EAST),
+            ("transport-belt", "belt2_position", EAST),
+            ("burner-inserter", "inserter_position", WEST),
+            ("stone-furnace", "furnace_position", None),
+            ("burner-mining-drill", "drill_position", EAST),
+        ]:
+            entity_key = _entity_key_for_layout(name, key)
+            if layout.get(entity_key) is not None:
+                continue
+            position = layout[key]
+            if distance(player, position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position)},
+                    f"move near planned {name} position",
+                )
+            action: dict[str, Any] = {
+                "type": "build",
+                "name": name,
+                "position": position,
+                "allow_nearby": name == "burner-mining-drill",
+            }
+            if direction is not None:
+                action["direction"] = direction
+            return PlannerDecision(action, f"place {name} for belt smelting line")
+
+        for entity_name, item, threshold, count in [
+            ("burner-mining-drill", "coal", 3, 5),
+            ("burner-inserter", "coal", 2, 3),
+            ("stone-furnace", "coal", 3, 5),
+        ]:
+            entity = layout.get(_entity_key(entity_name))
+            if entity and entity_item_count(entity, item) < threshold:
+                position = _position(entity)
+                if distance(player, position) > 20:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": position},
+                        f"move near {entity_name} to fuel belt smelting line",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "insert",
+                        "item": item,
+                        "count": min(count, inventory_count(observation, item)),
+                        "unit_number": entity.get("unit_number"),
+                        "name": entity_name,
+                        "position": position,
+                    },
+                    f"fuel {entity_name} in belt smelting line",
+                )
+
+        layout_furnace = layout.get("furnace")
+        if layout_furnace and entity_item_count(layout_furnace, "iron-plate") > 0:
+            furnace_pos = _position(layout_furnace)
+            if distance(player, furnace_pos) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": furnace_pos},
+                    "move near automated furnace output",
+                )
+            return PlannerDecision(
+                {
+                    "type": "take",
+                    "item": "iron-plate",
+                    "count": min(50, entity_item_count(layout_furnace, "iron-plate")),
+                    "unit_number": layout_furnace.get("unit_number"),
+                    "name": "stone-furnace",
+                    "position": furnace_pos,
+                },
+                "take iron plates produced by belt smelting line",
+            )
+
+        return PlannerDecision(
+            {"type": "wait", "ticks": 300},
+            "wait for belt smelting line to move ore and smelt plates",
+        )
+
+    def _ensure_item(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        item: str,
+    ) -> PlannerDecision | None:
+        if item == "stone-furnace":
+            if craftable_count(observation, "stone-furnace") > 0:
+                return PlannerDecision({"type": "craft", "recipe": "stone-furnace", "count": 1}, "craft furnace for line")
+            stone = nearest_resource(observation, "stone")
+            if stone is None:
+                return PlannerDecision(None, "cannot find stone for line furnace")
+            return self.support_skill._mine_resource(player, stone, "stone", 8)
+
+        if item == "burner-mining-drill":
+            if craftable_count(observation, "burner-mining-drill") > 0:
+                return PlannerDecision(
+                    {"type": "craft", "recipe": "burner-mining-drill", "count": 1},
+                    "craft burner mining drill for line",
+                )
+            if inventory_count(observation, "stone") < 5:
+                stone = nearest_resource(observation, "stone")
+                if stone is None:
+                    return PlannerDecision(None, "cannot find stone for line drill")
+                return self.support_skill._mine_resource(player, stone, "stone", 8)
+            if inventory_count(observation, "iron-gear-wheel") < 3 and craftable_count(observation, "iron-gear-wheel") > 0:
+                return PlannerDecision(
+                    {
+                        "type": "craft",
+                        "recipe": "iron-gear-wheel",
+                        "count": min(3 - inventory_count(observation, "iron-gear-wheel"), craftable_count(observation, "iron-gear-wheel")),
+                    },
+                    "craft gears for line drill",
+                )
+            return self.support_skill.next_action(observation, target_count=20, inventory_only=True)
+
+        if item in {"transport-belt", "burner-inserter"}:
+            if craftable_count(observation, item) > 0:
+                return PlannerDecision({"type": "craft", "recipe": item, "count": 1}, f"craft {item} for line")
+            if inventory_count(observation, "iron-gear-wheel") < 1 and craftable_count(observation, "iron-gear-wheel") > 0:
+                return PlannerDecision(
+                    {"type": "craft", "recipe": "iron-gear-wheel", "count": 1},
+                    f"craft gear for {item}",
+                )
+            return self.support_skill.next_action(observation, target_count=20, inventory_only=True)
+
+        return None
+
+    @staticmethod
+    def _line_has_started(furnace: dict[str, Any]) -> bool:
+        return entity_item_count(furnace, "iron-ore") > 0 or entity_item_count(furnace, "iron-plate") > 0
+
+
 def _position(entity: dict[str, Any]) -> dict[str, float]:
     position = entity.get("position") if isinstance(entity.get("position"), dict) else {}
     return {
@@ -546,3 +711,118 @@ def _nearest_to(entities: list[dict[str, Any]], position: dict[str, float]) -> d
 
 def _ceil_div(value: int, divisor: int) -> int:
     return (value + divisor - 1) // divisor
+
+
+def _line_missing_item(observation: dict[str, Any], layout: dict[str, Any]) -> str | None:
+    missing_belts = sum(1 for key in ("belt1", "belt2") if layout.get(key) is None)
+    if missing_belts > inventory_count(observation, "transport-belt"):
+        return "transport-belt"
+    for item, entity_name in [
+        ("burner-inserter", "burner-inserter"),
+        ("stone-furnace", "stone-furnace"),
+        ("burner-mining-drill", "burner-mining-drill"),
+    ]:
+        if layout.get(_entity_key(entity_name)) is None and inventory_count(observation, item) <= 0:
+            return item
+    return None
+
+
+def _find_belt_smelting_line(observation: dict[str, Any]) -> dict[str, Any] | None:
+    belts = entities_named(observation, "transport-belt")
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for belt in belts:
+        belt_pos = _position(belt)
+        layout = _layout_from_belt1_position(belt_pos)
+        layout["belt1"] = belt
+        layout["belt2"] = _entity_near(observation, "transport-belt", layout["belt2_position"], radius=0.75)
+        layout["inserter"] = _entity_near(observation, "burner-inserter", layout["inserter_position"], radius=1.0)
+        layout["furnace"] = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=1.5)
+        layout["drill"] = _entity_near(observation, "burner-mining-drill", layout["drill_position"], radius=2.0)
+        score = sum(1 for key in ("belt1", "belt2", "inserter", "furnace", "drill") if layout.get(key) is not None)
+        candidates.append((score, layout))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def _select_belt_smelting_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
+    resources = observation.get("resources")
+    if not isinstance(resources, list):
+        return None
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    candidates = [item for item in resources if isinstance(item, dict) and item.get("name") == "iron-ore"]
+    candidates.sort(key=lambda item: float(item.get("distance") or 999999))
+    for resource in candidates:
+        layout = _layout_from_drill_position(_position(resource))
+        footprint = [
+            layout["drill_position"],
+            layout["belt1_position"],
+            layout["belt2_position"],
+            layout["inserter_position"],
+            layout["furnace_position"],
+        ]
+        blocked = False
+        for entity in entities:
+            if not isinstance(entity, dict):
+                continue
+            name = str(entity.get("name") or "")
+            if name in {"character", "transport-belt", "burner-inserter", "stone-furnace", "burner-mining-drill"}:
+                entity_pos = _position(entity)
+                if any(distance(entity_pos, pos) < 2.0 for pos in footprint):
+                    blocked = True
+                    break
+        if not blocked:
+            return layout
+    return None
+
+
+def _layout_from_drill_position(drill_position: dict[str, float]) -> dict[str, Any]:
+    return {
+        "drill_position": drill_position,
+        "belt1_position": {"x": drill_position["x"] + 2, "y": drill_position["y"]},
+        "belt2_position": {"x": drill_position["x"] + 3, "y": drill_position["y"]},
+        "inserter_position": {"x": drill_position["x"] + 4, "y": drill_position["y"]},
+        "furnace_position": {"x": drill_position["x"] + 5, "y": drill_position["y"]},
+        "drill": None,
+        "belt1": None,
+        "belt2": None,
+        "inserter": None,
+        "furnace": None,
+    }
+
+
+def _layout_from_belt1_position(belt_position: dict[str, float]) -> dict[str, Any]:
+    return _layout_from_drill_position({"x": belt_position["x"] - 2, "y": belt_position["y"]})
+
+
+def _entity_key_for_layout(entity_name: str, layout_key: str) -> str:
+    if entity_name == "transport-belt" and layout_key == "belt1_position":
+        return "belt1"
+    if entity_name == "transport-belt" and layout_key == "belt2_position":
+        return "belt2"
+    if entity_name == "burner-mining-drill":
+        return "drill"
+    if entity_name == "stone-furnace":
+        return "furnace"
+    if entity_name == "burner-inserter":
+        return "inserter"
+    return entity_name
+
+
+def _entity_key(entity_name: str) -> str:
+    return _entity_key_for_layout(entity_name, "")
+
+
+def _entity_near(
+    observation: dict[str, Any],
+    name: str,
+    position: dict[str, float],
+    radius: float,
+) -> dict[str, Any] | None:
+    candidates = [
+        item
+        for item in entities_named(observation, name)
+        if distance(_position(item), position) <= radius
+    ]
+    return _nearest_to(candidates, position)

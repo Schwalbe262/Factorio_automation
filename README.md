@@ -42,6 +42,7 @@ implements that skill as a normal code change.
 - Run a rule-based `produce_automation_science_pack` skill until at least 5 automation science packs exist.
 - Run a rule-based `produce_electronic_circuit` skill for early hand-crafted green circuits.
 - Run one strategic step with `run-strategy-step`, which asks the strategic layer for a skill and executes it only if a local executor exists.
+- Build a minimal belt-fed iron smelting line with `build_belt_smelting_line`.
 - Ask the strategic layer for the next high-level skill with `factorio-ai strategy`.
 - Submit planner tasks to a Slurm worker queue when configured, with local rule-based fallback.
 
@@ -105,6 +106,12 @@ Run the electronic circuit MVP loop:
 
 ```powershell
 factorio-ai run-circuit-mvp --target 5
+```
+
+Build a minimal belt-fed smelting line:
+
+```powershell
+factorio-ai run-belt-smelting-mvp --target 10 --max-steps 700
 ```
 
 Run one strategy-selected skill:
@@ -224,8 +231,23 @@ working production blocks:
 - power poles and fuel keep the block running.
 
 For this reason, `expand_iron_smelting`, `build_belt_smelting_line`, and
-`automate_electronic_circuit_line` are separate skill contracts. Until those executors exist, the
-strategy runner reports them as missing instead of substituting a hand-crafting routine.
+`automate_electronic_circuit_line` are separate skill contracts. The first belt-smelting executor now
+exists; the remaining higher-throughput smelting and assembling-machine executors are still reported
+as missing instead of substituting a hand-crafting routine.
+
+## Space Age Objective
+
+The long-term target extends past the first rocket. The AI should eventually launch rockets, build
+space platforms, design compact space-efficient spacecraft, and produce space science packs. That
+requires a stronger design layer than the early Nauvis skills:
+
+- strategic LLM: select the next planet/platform/science objective and diagnose bottlenecks;
+- design learner: study blueprints and successful layouts to infer ratios, footprints, and logistics principles;
+- deterministic executors: place validated belts, inserters, assemblers, rails, power, pipes, rockets, and platform entities;
+- fine-tuning loop: save successful and failed layout decisions as training examples for future local models.
+
+The current belt-smelting skill is intentionally small, but it establishes the executor pattern
+needed for later compact factory and spacecraft layout skills.
 
 ## Learning Loop
 

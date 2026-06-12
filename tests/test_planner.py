@@ -1,6 +1,12 @@
 import unittest
 
-from factorio_ai.planner import AutomationScienceSkill, CopperPlateSkill, ElectronicCircuitSkill, IronPlateSkill
+from factorio_ai.planner import (
+    AutomationScienceSkill,
+    BeltSmeltingLineSkill,
+    CopperPlateSkill,
+    ElectronicCircuitSkill,
+    IronPlateSkill,
+)
 
 
 def base_observation():
@@ -231,6 +237,152 @@ class PlannerTests(unittest.TestCase):
         obs["inventory"] = {"iron-plate": 5, "coal": 8, "stone-furnace": 1}
         decision = ElectronicCircuitSkill(target_count=5).next_action(obs)
         self.assertIn(decision.action["type"], {"build", "mine", "move_to", "insert", "take", "wait"})
+
+    def test_belt_smelting_skill_crafts_belt_when_missing(self):
+        obs = base_observation()
+        obs["inventory"] = {
+            "coal": 12,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "burner-inserter": 1,
+            "iron-plate": 2,
+            "iron-gear-wheel": 1,
+        }
+        obs["craftable"] = {"transport-belt": 1}
+        decision = BeltSmeltingLineSkill(target_count=10).next_action(obs)
+        self.assertEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["recipe"], "transport-belt")
+
+    def test_belt_smelting_skill_places_belt_first_when_parts_exist(self):
+        obs = base_observation()
+        obs["inventory"] = {
+            "coal": 12,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "burner-inserter": 1,
+            "transport-belt": 2,
+        }
+        decision = BeltSmeltingLineSkill(target_count=10).next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertEqual(decision.action["direction"], 4)
+
+    def test_belt_smelting_skill_places_inserter_with_pickup_from_belt(self):
+        obs = base_observation()
+        obs["inventory"] = {
+            "coal": 12,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "burner-inserter": 1,
+        }
+        obs["entities"] = [
+            {
+                "name": "transport-belt",
+                "unit_number": 501,
+                "position": {"x": 6, "y": 0},
+                "distance": 6,
+                "inventories": {},
+            },
+            {
+                "name": "transport-belt",
+                "unit_number": 502,
+                "position": {"x": 7, "y": 0},
+                "distance": 7,
+                "inventories": {},
+            },
+        ]
+        decision = BeltSmeltingLineSkill(target_count=10).next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "burner-inserter")
+        self.assertEqual(decision.action["direction"], 12)
+
+    def test_belt_smelting_skill_done_after_line_outputs_plates(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 12}
+        obs["entities"] = [
+            {
+                "name": "transport-belt",
+                "unit_number": 501,
+                "position": {"x": 6, "y": 0},
+                "distance": 6,
+                "inventories": {},
+            },
+            {
+                "name": "transport-belt",
+                "unit_number": 505,
+                "position": {"x": 7, "y": 0},
+                "distance": 7,
+                "inventories": {},
+            },
+            {
+                "name": "burner-inserter",
+                "unit_number": 502,
+                "position": {"x": 8, "y": 0},
+                "distance": 8,
+                "inventories": {},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 503,
+                "position": {"x": 9, "y": 0},
+                "distance": 9,
+                "inventories": {"3": {"iron-plate": 10}},
+            },
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 504,
+                "position": {"x": 4, "y": 0},
+                "distance": 4,
+                "inventories": {},
+            },
+        ]
+        decision = BeltSmeltingLineSkill(target_count=10).next_action(obs)
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
+
+    def test_belt_smelting_skill_done_after_line_starts_and_inventory_has_target(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 12, "iron-plate": 10}
+        obs["entities"] = [
+            {
+                "name": "transport-belt",
+                "unit_number": 501,
+                "position": {"x": 6, "y": 0},
+                "distance": 6,
+                "inventories": {},
+            },
+            {
+                "name": "transport-belt",
+                "unit_number": 505,
+                "position": {"x": 7, "y": 0},
+                "distance": 7,
+                "inventories": {},
+            },
+            {
+                "name": "burner-inserter",
+                "unit_number": 502,
+                "position": {"x": 8, "y": 0},
+                "distance": 8,
+                "inventories": {},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 503,
+                "position": {"x": 9, "y": 0},
+                "distance": 9,
+                "inventories": {"2": {"iron-ore": 1}},
+            },
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 504,
+                "position": {"x": 4, "y": 0},
+                "distance": 4,
+                "inventories": {},
+            },
+        ]
+        decision = BeltSmeltingLineSkill(target_count=10).next_action(obs)
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
 
 
 if __name__ == "__main__":

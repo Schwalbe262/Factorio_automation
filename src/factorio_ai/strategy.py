@@ -63,7 +63,7 @@ SKILL_CATALOG: dict[str, SkillContract] = {
     "build_belt_smelting_line": SkillContract(
         name="build_belt_smelting_line",
         description="Build a belt-fed smelting line using miners, belts, inserters, and furnaces.",
-        executor="future BeltSmeltingLineSkill",
+        executor="BeltSmeltingLineSkill",
         preconditions=[
             "ore patch and coal or power source identified",
             "transport belts, inserters, miners, and furnaces available or craftable",

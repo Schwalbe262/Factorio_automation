@@ -35,7 +35,11 @@ class ControllerTests(unittest.TestCase):
     def test_strategy_runner_does_not_fake_automation_skill(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             controller = FactorioController(test_config(Path(temp_dir)))
-            self.assertIsNone(controller._skill_run_config("build_belt_smelting_line"))
+            belt_config = controller._skill_run_config("build_belt_smelting_line", target_count=12, max_steps=222)
+            self.assertIsNotNone(belt_config)
+            self.assertEqual(belt_config["goal"], "build_belt_smelting_line")
+            self.assertEqual(belt_config["target"], 12)
+            self.assertEqual(belt_config["max_steps"], 222)
             self.assertIsNone(controller._skill_run_config("automate_electronic_circuit_line"))
             self.assertIsNone(controller._skill_run_config("expand_iron_smelting"))
 

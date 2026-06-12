@@ -16,7 +16,7 @@ from .models import (
     total_item_count,
     validate_action,
 )
-from .planner import AutomationScienceSkill, CopperPlateSkill, ElectronicCircuitSkill, IronPlateSkill
+from .planner import AutomationScienceSkill, BeltSmeltingLineSkill, CopperPlateSkill, ElectronicCircuitSkill, IronPlateSkill
 from .rcon import FactorioRconClient
 from .skill_registry import annotate_strategy_with_skill_status
 from .strategy import heuristic_strategy, make_strategy_payload, skill_catalog_payload
@@ -163,6 +163,22 @@ class FactorioController:
             log_path=log_path,
         )
 
+    def run_belt_smelting_mvp(
+        self,
+        target: int = 10,
+        max_steps: int = 700,
+        log_path: Path | None = None,
+    ) -> RunSummary:
+        return self._run_skill(
+            skill=BeltSmeltingLineSkill(target),
+            target_item="iron-plate",
+            target=target,
+            goal="build_belt_smelting_line",
+            max_steps=max_steps,
+            log_prefix="belt-smelting-mvp",
+            log_path=log_path,
+        )
+
     def strategy_decision(self, objective: str, require_llm: bool = False) -> dict[str, Any]:
         observation = self.observe()
         production_targets = load_targets(self.cfg.runtime_dir, objective).per_minute
@@ -281,6 +297,16 @@ class FactorioController:
                 "goal": skill_name,
                 "max_steps": max_steps or 500,
                 "log_prefix": "strategy-circuit",
+            }
+        if skill_name == "build_belt_smelting_line":
+            target = target_count or 10
+            return {
+                "skill": BeltSmeltingLineSkill(target),
+                "target_item": "iron-plate",
+                "target": target,
+                "goal": skill_name,
+                "max_steps": max_steps or 700,
+                "log_prefix": "strategy-belt-smelting",
             }
         return None
 
