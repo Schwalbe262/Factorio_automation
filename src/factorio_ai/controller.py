@@ -22,11 +22,13 @@ from .planner import (
     CircuitAutomationSkill,
     CopperPlateSkill,
     ElectronicCircuitSkill,
+    ExpandCopperSmeltingSkill,
     ExpandIronSmeltingSkill,
     IronPlateSkill,
     ResearchAutomationSkill,
     ResearchTechnologySkill,
     SetupPowerSkill,
+    StarterDefenseSkill,
 )
 from .rcon import FactorioRconClient
 from .skill_registry import annotate_strategy_with_skill_status
@@ -253,8 +255,8 @@ class FactorioController:
 
     def run_expand_iron_smelting_mvp(
         self,
-        target_rate: int = 37,
-        max_steps: int = 900,
+        target_rate: int = 90,
+        max_steps: int = 2000,
         log_path: Path | None = None,
     ) -> RunSummary:
         return self._run_skill(
@@ -264,6 +266,22 @@ class FactorioController:
             goal="expand_iron_smelting",
             max_steps=max_steps,
             log_prefix="expand-iron-smelting-mvp",
+            log_path=log_path,
+        )
+
+    def run_expand_copper_smelting_mvp(
+        self,
+        target_rate: int = 75,
+        max_steps: int = 1600,
+        log_path: Path | None = None,
+    ) -> RunSummary:
+        return self._run_skill(
+            skill=ExpandCopperSmeltingSkill(float(target_rate)),
+            target_item="copper-plate",
+            target=target_rate,
+            goal="expand_copper_smelting",
+            max_steps=max_steps,
+            log_prefix="expand-copper-smelting-mvp",
             log_path=log_path,
         )
 
@@ -397,14 +415,24 @@ class FactorioController:
                 "log_prefix": "strategy-belt-smelting",
             }
         if skill_name == "expand_iron_smelting":
-            target = target_count or 37
+            target = target_count or 90
             return {
                 "skill": ExpandIronSmeltingSkill(float(target)),
                 "target_item": "iron-plate",
                 "target": target,
                 "goal": skill_name,
-                "max_steps": max_steps or 900,
+                "max_steps": max_steps or 2000,
                 "log_prefix": "strategy-expand-iron-smelting",
+            }
+        if skill_name == "expand_copper_smelting":
+            target = target_count or 75
+            return {
+                "skill": ExpandCopperSmeltingSkill(float(target)),
+                "target_item": "copper-plate",
+                "target": target,
+                "goal": skill_name,
+                "max_steps": max_steps or 1600,
+                "log_prefix": "strategy-expand-copper-smelting",
             }
         if skill_name == "setup_power":
             return {
@@ -442,6 +470,15 @@ class FactorioController:
                 "goal": skill_name,
                 "max_steps": max_steps or 2200,
                 "log_prefix": "strategy-logistics-research",
+            }
+        if skill_name == "build_starter_defense":
+            return {
+                "skill": StarterDefenseSkill(),
+                "target_item": "gun-turret",
+                "target": 1,
+                "goal": skill_name,
+                "max_steps": max_steps or 900,
+                "log_prefix": "strategy-starter-defense",
             }
         return None
 

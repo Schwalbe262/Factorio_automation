@@ -5,7 +5,7 @@ from typing import Any
 
 from .knowledge import dependency_tree_for_objective
 from .monitor import summarize_factory
-from .models import inventory_count, total_item_count
+from .models import entities_named, entity_item_count, inventory_count, total_item_count
 
 
 KOREAN_ELECTRONIC_CIRCUIT = "\uc804\uc790\ud68c\ub85c"
@@ -59,6 +59,18 @@ SKILL_CATALOG: dict[str, SkillContract] = {
         ],
         completion=["sustained iron plate output on belts or machine outputs exceeds downstream demand"],
         llm_scope="Choose this when downstream goals are blocked by low iron throughput.",
+    ),
+    "expand_copper_smelting": SkillContract(
+        name="expand_copper_smelting",
+        description="Build additional copper ore mining and smelting capacity with drills, furnaces, inserters, and belts.",
+        executor="ExpandCopperSmeltingSkill",
+        preconditions=[
+            "copper ore patch identified",
+            "fuel or power available",
+            "furnaces, drills, inserters, and belts craftable or available",
+        ],
+        completion=["sustained copper plate output on belts or machine outputs exceeds downstream demand"],
+        llm_scope="Choose this when circuits, science, or cable are blocked by low copper throughput.",
     ),
     "build_belt_smelting_line": SkillContract(
         name="build_belt_smelting_line",
@@ -138,6 +150,17 @@ SKILL_CATALOG: dict[str, SkillContract] = {
             "Executor validates exact assembler, belt, inserter, and pole placement."
         ),
     ),
+    "build_starter_defense": SkillContract(
+        name="build_starter_defense",
+        description="Build early defenses when enemy units, spawners, or worms threaten the starter factory.",
+        executor="StarterDefenseSkill",
+        preconditions=["enemy positions observed", "firearm magazines, gun turrets, walls, or military science path available"],
+        completion=["nearby hostile pressure is reduced or the factory perimeter has working defenses"],
+        llm_scope=(
+            "Choose whether to defend, clear nearby nests, or delay expansion. "
+            "Executor handles exact turret, ammo, wall, and combat movement validation."
+        ),
+    ),
     "plan_factory_site": SkillContract(
         name="plan_factory_site",
         description="Choose a factory district location and expansion direction before building a larger block.",
@@ -207,6 +230,7 @@ def make_strategy_payload(
         "production_targets": dict(sorted((production_targets or {}).items())),
         "factory_monitor": monitor,
         "spatial_planning": make_spatial_planning_context(observation),
+        "threats": make_threat_context(observation),
         "goal_dependency_tree": dependency_tree_for_objective(objective, max_depth=5),
         "available_skills": skill_catalog_payload(),
         "decision_rule": (
@@ -260,6 +284,40 @@ def make_spatial_planning_context(observation: dict[str, Any]) -> dict[str, Any]
     }
 
 
+def make_threat_context(observation: dict[str, Any]) -> dict[str, Any]:
+    enemies = observation.get("enemies")
+    if not isinstance(enemies, list):
+        enemies = []
+    enemy_rows = [item for item in enemies if isinstance(item, dict)]
+    nearest = _nearest_enemy(enemy_rows)
+    nearest_spawner = _nearest_enemy([item for item in enemy_rows if item.get("type") == "unit-spawner"])
+    nearest_turret = _nearest_enemy([item for item in enemy_rows if item.get("type") == "turret"])
+    counts_by_type: dict[str, int] = {}
+    counts_by_name: dict[str, int] = {}
+    for enemy in enemy_rows:
+        enemy_type = str(enemy.get("type") or "unknown")
+        enemy_name = str(enemy.get("name") or "unknown")
+        counts_by_type[enemy_type] = counts_by_type.get(enemy_type, 0) + 1
+        counts_by_name[enemy_name] = counts_by_name.get(enemy_name, 0) + 1
+    nearest_distance = _enemy_distance(nearest)
+    armed_gun_turret_count = _armed_gun_turret_count(observation)
+    return {
+        "enemy_count": len(enemy_rows),
+        "counts_by_type": dict(sorted(counts_by_type.items())),
+        "counts_by_name": dict(sorted(counts_by_name.items())),
+        "nearest_enemy": nearest,
+        "nearest_spawner": nearest_spawner,
+        "nearest_turret": nearest_turret,
+        "armed_gun_turret_count": armed_gun_turret_count,
+        "danger_level": _danger_level(nearest_distance),
+        "constraints": [
+            "avoid expanding toward enemy nests without a defense plan",
+            "prioritize defense when hostile units are close to the factory or player",
+            "reserve space for turret lines, walls, ammo belts, and radar coverage",
+        ],
+    }
+
+
 def normalize_strategy_response(raw: dict[str, Any], fallback_objective: str = "launch_rocket_program") -> dict[str, Any]:
     selected = str(raw.get("selected_skill") or raw.get("selected_goal") or "")
     if selected not in SKILL_CATALOG:
@@ -292,6 +350,21 @@ def heuristic_strategy(
     automation_researched = _technology_researched(observation, "automation")
     monitor = summarize_factory(observation, objective, production_targets=production_targets)
     bottlenecks = monitor.get("bottlenecks") if isinstance(monitor.get("bottlenecks"), list) else []
+    threats = make_threat_context(observation)
+    if threats["danger_level"] in {"critical", "high"} and int(threats.get("armed_gun_turret_count") or 0) <= 0:
+        nearest = threats.get("nearest_enemy") if isinstance(threats.get("nearest_enemy"), dict) else {}
+        return StrategicDecision(
+            selected_skill="build_starter_defense",
+            priority=98,
+            reason="Hostile entities are close enough to threaten factory expansion.",
+            evidence=[
+                f"danger_level={threats['danger_level']}",
+                f"nearest_enemy={nearest.get('name')}",
+                f"nearest_enemy_distance={nearest.get('distance')}",
+            ],
+            blockers=["enemy threat"],
+            expected_effect="Pause expansion and build or plan starter defenses before continuing production growth.",
+        ).to_dict()
 
     if bottlenecks:
         first = bottlenecks[0] if isinstance(bottlenecks[0], dict) else {}
@@ -319,12 +392,12 @@ def heuristic_strategy(
             ).to_dict()
         if total_copper < 20:
             return StrategicDecision(
-                selected_skill="produce_copper_plate",
+                selected_skill="expand_copper_smelting",
                 priority=85,
                 reason="Electronic circuits also need copper cable; copper plates are below the circuit threshold.",
                 evidence=[f"copper_plate_total={total_copper}"],
                 blockers=["copper plate throughput"],
-                expected_effect="Create copper plate supply for cable production.",
+                expected_effect="Increase copper plate supply for cable production.",
             ).to_dict()
         return StrategicDecision(
             selected_skill="produce_electronic_circuit",
@@ -428,7 +501,7 @@ def _skill_for_bottleneck_item(item: str, observation: dict[str, Any]) -> str | 
     if item in {"iron-plate", "iron-ore", "steel-plate"}:
         return "expand_iron_smelting"
     if item in {"copper-plate", "copper-ore", "copper-cable"}:
-        return "produce_copper_plate"
+        return "expand_copper_smelting"
     if item == "automation-science-pack":
         return "produce_automation_science_pack"
     if item == "electronic-circuit":
@@ -525,3 +598,34 @@ def _distance(a: dict[str, Any] | None, b: dict[str, Any] | None) -> float | Non
     except (KeyError, TypeError, ValueError):
         return None
     return (dx * dx + dy * dy) ** 0.5
+
+
+def _nearest_enemy(enemies: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not enemies:
+        return None
+    return min(enemies, key=lambda item: _enemy_distance(item) or 999999.0)
+
+
+def _armed_gun_turret_count(observation: dict[str, Any]) -> int:
+    return sum(1 for turret in entities_named(observation, "gun-turret") if entity_item_count(turret, "firearm-magazine") > 0)
+
+
+def _enemy_distance(enemy: dict[str, Any] | None) -> float | None:
+    if not enemy:
+        return None
+    try:
+        return float(enemy.get("distance"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _danger_level(nearest_distance: float | None) -> str:
+    if nearest_distance is None:
+        return "none"
+    if nearest_distance <= 32:
+        return "critical"
+    if nearest_distance <= 96:
+        return "high"
+    if nearest_distance <= 192:
+        return "medium"
+    return "low"

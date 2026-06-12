@@ -23,6 +23,12 @@ class SkillRegistryTests(unittest.TestCase):
         self.assertEqual(status.executor, "ExpandIronSmeltingSkill")
         self.assertFalse(status.codex_required)
 
+    def test_expand_copper_smelting_skill_is_implemented(self):
+        status = skill_status("expand_copper_smelting")
+        self.assertTrue(status.implemented)
+        self.assertEqual(status.executor, "ExpandCopperSmeltingSkill")
+        self.assertFalse(status.codex_required)
+
     def test_electronic_circuit_skill_is_implemented(self):
         status = skill_status("produce_electronic_circuit")
         self.assertTrue(status.implemented)
@@ -56,6 +62,12 @@ class SkillRegistryTests(unittest.TestCase):
         status = skill_status("research_logistics")
         self.assertTrue(status.implemented)
         self.assertEqual(status.executor, "ResearchTechnologySkill")
+        self.assertFalse(status.codex_required)
+
+    def test_starter_defense_skill_is_implemented(self):
+        status = skill_status("build_starter_defense")
+        self.assertTrue(status.implemented)
+        self.assertEqual(status.executor, "StarterDefenseSkill")
         self.assertFalse(status.codex_required)
 
     def test_missing_skill_writes_backlog(self):

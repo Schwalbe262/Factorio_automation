@@ -128,6 +128,28 @@ def start_gui_client(cfg: AppConfig, window_size: str = "1600x900", connect: boo
     return subprocess.Popen(command, cwd=str(REPO_ROOT))
 
 
+def start_save_gui(cfg: AppConfig, window_size: str = "1600x900") -> subprocess.Popen[bytes]:
+    if not cfg.factorio_exe.exists():
+        raise FileNotFoundError(f"Factorio executable not found: {cfg.factorio_exe}")
+    install_mod(cfg)
+    if not cfg.save_path.exists():
+        raise FileNotFoundError(f"Factorio save not found: {cfg.save_path}")
+    client_config = write_client_config(cfg)
+    command = [
+        str(cfg.factorio_exe),
+        "--config",
+        str(client_config),
+        "--mod-directory",
+        str(cfg.mod_runtime_dir),
+        "--disable-migration-window",
+        "--window-size",
+        window_size,
+        "--load-game",
+        str(cfg.save_path),
+    ]
+    return subprocess.Popen(command, cwd=str(REPO_ROOT))
+
+
 def start_server(cfg: AppConfig) -> subprocess.Popen[bytes]:
     if not cfg.factorio_exe.exists():
         raise FileNotFoundError(f"Factorio executable not found: {cfg.factorio_exe}")

@@ -62,6 +62,16 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(expand_config["goal"], "expand_iron_smelting")
             self.assertEqual(expand_config["target"], 38)
             self.assertEqual(expand_config["max_steps"], 777)
+            copper_expand_config = controller._skill_run_config("expand_copper_smelting", target_count=56, max_steps=888)
+            self.assertIsNotNone(copper_expand_config)
+            self.assertEqual(copper_expand_config["goal"], "expand_copper_smelting")
+            self.assertEqual(copper_expand_config["target"], 56)
+            self.assertEqual(copper_expand_config["max_steps"], 888)
+            defense_config = controller._skill_run_config("build_starter_defense", max_steps=999)
+            self.assertIsNotNone(defense_config)
+            self.assertEqual(defense_config["goal"], "build_starter_defense")
+            self.assertEqual(defense_config["target_item"], "gun-turret")
+            self.assertEqual(defense_config["max_steps"], 999)
 
     def test_strategy_step_summary_serializes_run(self):
         run = RunSummary(

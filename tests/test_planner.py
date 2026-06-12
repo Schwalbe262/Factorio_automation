@@ -6,11 +6,13 @@ from factorio_ai.planner import (
     CircuitAutomationSkill,
     CopperPlateSkill,
     ElectronicCircuitSkill,
+    ExpandCopperSmeltingSkill,
     ExpandIronSmeltingSkill,
     IronPlateSkill,
     ResearchAutomationSkill,
     ResearchTechnologySkill,
     SetupPowerSkill,
+    StarterDefenseSkill,
 )
 
 
@@ -450,6 +452,18 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.done)
         self.assertIsNone(decision.action)
 
+    def test_expand_iron_smelting_fuels_complete_line_before_counting_capacity(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 12}
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500)
+        for entity in obs["entities"]:
+            if entity["name"] == "burner-inserter":
+                entity["inventories"] = {}
+        decision = ExpandIronSmeltingSkill(target_rate_per_minute=18).next_action(obs)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["name"], "burner-inserter")
+
     def test_expand_iron_smelting_clears_blocking_rock(self):
         obs = base_observation()
         obs["inventory"] = {
@@ -470,6 +484,95 @@ class PlannerTests(unittest.TestCase):
         decision = ExpandIronSmeltingSkill(target_rate_per_minute=37).next_action(obs)
         self.assertEqual(decision.action["type"], "mine")
         self.assertEqual(decision.action["name"], "huge-rock")
+
+    def test_expand_copper_smelting_places_new_belt_on_copper(self):
+        obs = base_observation()
+        obs["inventory"] = {
+            "coal": 12,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "burner-inserter": 1,
+            "transport-belt": 2,
+        }
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=37).next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertEqual(decision.action["position"], {"x": 10.0, "y": 0.0})
+
+    def test_expand_copper_smelting_done_when_capacity_target_reached(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 12}
+        obs["entities"] = complete_belt_smelting_entities(8, 0, 700, resource="copper-ore", product="copper-plate")
+        obs["entities"].extend(complete_belt_smelting_entities(18, 0, 800, resource="copper-ore", product="copper-plate"))
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=37).next_action(obs)
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
+
+    def test_expand_copper_smelting_ignores_incomplete_iron_line(self):
+        obs = base_observation()
+        obs["inventory"] = {
+            "coal": 12,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "burner-inserter": 1,
+            "transport-belt": 2,
+        }
+        obs["entities"] = [
+            {
+                "name": "transport-belt",
+                "unit_number": 901,
+                "position": {"x": 6, "y": 0},
+                "direction": 4,
+                "distance": 6,
+                "inventories": {},
+            }
+        ]
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=37).next_action(obs)
+        self.assertEqual(decision.action["position"], {"x": 10.0, "y": 0.0})
+
+    def test_starter_defense_places_turret_toward_nearest_enemy(self):
+        obs = base_observation()
+        obs["inventory"] = {"gun-turret": 1, "firearm-magazine": 10}
+        obs["enemies"] = [{"name": "small-biter", "type": "unit", "position": {"x": -20, "y": 0}, "distance": 20}]
+        decision = StarterDefenseSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "gun-turret")
+        self.assertEqual(decision.action["position"], {"x": -8.0, "y": 0.0})
+
+    def test_starter_defense_arms_existing_turret(self):
+        obs = base_observation()
+        obs["inventory"] = {"firearm-magazine": 10}
+        obs["enemies"] = [{"name": "small-biter", "type": "unit", "position": {"x": -20, "y": 0}, "distance": 20}]
+        obs["entities"] = [
+            {
+                "name": "gun-turret",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 0},
+                "distance": 8,
+                "inventories": {},
+            }
+        ]
+        decision = StarterDefenseSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "firearm-magazine")
+        self.assertEqual(decision.action["unit_number"], 950)
+
+    def test_starter_defense_done_when_turret_is_armed(self):
+        obs = base_observation()
+        obs["inventory"] = {}
+        obs["enemies"] = [{"name": "small-biter", "type": "unit", "position": {"x": -20, "y": 0}, "distance": 20}]
+        obs["entities"] = [
+            {
+                "name": "gun-turret",
+                "unit_number": 951,
+                "position": {"x": -8, "y": 0},
+                "distance": 8,
+                "inventories": {"1": {"firearm-magazine": 5}},
+            }
+        ]
+        decision = StarterDefenseSkill().next_action(obs)
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
 
     def test_setup_power_skill_places_offshore_pump_first_when_parts_exist(self):
         obs = base_observation()
@@ -916,7 +1019,7 @@ def circuit_cell_entities(
     ]
 
 
-def complete_belt_smelting_entities(drill_x, drill_y, base_unit):
+def complete_belt_smelting_entities(drill_x, drill_y, base_unit, resource="iron-ore", product="iron-plate"):
     return [
         {
             "name": "burner-mining-drill",
@@ -951,7 +1054,7 @@ def complete_belt_smelting_entities(drill_x, drill_y, base_unit):
             "unit_number": base_unit + 4,
             "position": {"x": drill_x + 5, "y": drill_y},
             "distance": 9,
-            "inventories": {"2": {"iron-ore": 1}, "1": {"coal": 3}},
+            "inventories": {"2": {resource: 1}, "1": {"coal": 3}, "3": {product: 1}},
         },
     ]
 

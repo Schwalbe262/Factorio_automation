@@ -91,6 +91,22 @@ factorio-ai launch-gui
 This avoids the Steam launch confirmation dialog and lets the dedicated server and GUI client run
 at the same time on the local machine.
 
+For a saved-map GUI demo, use:
+
+```powershell
+factorio-ai launch-save-gui
+```
+
+Or run the Windows helpers from the repository root:
+
+```bat
+run_factorio_non_gui.bat
+run_factorio_gui.bat
+```
+
+`run_factorio_non_gui.bat` starts the development server in a separate window and repeatedly executes
+strategic steps. `run_factorio_gui.bat` opens the configured save for visual inspection.
+
 In another terminal, run the iron plate MVP loop:
 
 ```powershell
@@ -255,6 +271,13 @@ requires a stronger design layer than the early Nauvis skills:
 
 The current belt-smelting skill is intentionally small, but it establishes the executor pattern
 needed for later compact factory and spacecraft layout skills.
+
+## Enemy Awareness
+
+The observation API reports hostile `unit`, `unit-spawner`, and `turret` entities as `enemies`.
+The strategic payload summarizes nearest enemy distance, spawner/turret presence, type/name counts,
+and a danger level. Close hostile pressure selects `build_starter_defense` before blindly expanding
+production toward nests.
 
 ## Learning Loop
 

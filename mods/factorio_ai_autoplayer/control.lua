@@ -14,6 +14,14 @@ local VIRTUAL_STARTER_ITEMS = {
 }
 
 local VIRTUAL_RECIPES = {
+  ["firearm-magazine"] = {
+    ingredients = { ["iron-plate"] = 4 },
+    results = { ["firearm-magazine"] = 1 }
+  },
+  ["gun-turret"] = {
+    ingredients = { ["iron-plate"] = 10, ["copper-plate"] = 5, ["iron-gear-wheel"] = 10 },
+    results = { ["gun-turret"] = 1 }
+  },
   ["stone-furnace"] = {
     ingredients = { stone = 5 },
     results = { ["stone-furnace"] = 1 }
@@ -556,6 +564,8 @@ local function entity_snapshot(entity, position)
     unit_number = entity.unit_number,
     name = entity.name,
     type = entity.type,
+    force = entity.force and entity.force.name or nil,
+    health = entity.health,
     position = position_table(entity.position),
     direction = entity.direction,
     status = entity.status,
@@ -569,8 +579,28 @@ local function entity_snapshot(entity, position)
   }
 end
 
+local function entity_identity_key(entity)
+  if entity.unit_number then
+    return tostring(entity.unit_number)
+  end
+  return entity.name .. ":" .. tostring(entity.position.x) .. ":" .. tostring(entity.position.y)
+end
+
+local function add_unique_entity_snapshot(rows, seen, entity, position)
+  if not entity.valid then
+    return
+  end
+  local key = entity_identity_key(entity)
+  if seen[key] then
+    return
+  end
+  seen[key] = true
+  table.insert(rows, entity_snapshot(entity, position))
+end
+
 local function collect_entities(surface, position)
   local entities = {}
+  local seen = {}
   local entity_names = {
     "burner-mining-drill",
     "stone-furnace",
@@ -585,6 +615,7 @@ local function collect_entities(surface, position)
     "transport-belt",
     "burner-inserter",
     "inserter",
+    "gun-turret",
     "small-electric-pole"
   }
   for _, entity_name in pairs(entity_names) do
@@ -595,9 +626,7 @@ local function collect_entities(surface, position)
       limit = 80
     })
     for _, entity in pairs(found) do
-      if entity.valid then
-        table.insert(entities, entity_snapshot(entity, position))
-      end
+      add_unique_entity_snapshot(entities, seen, entity, position)
     end
   end
   local trees = surface.find_entities_filtered({
@@ -607,9 +636,7 @@ local function collect_entities(surface, position)
     limit = 80
   })
   for _, entity in pairs(trees) do
-    if entity.valid then
-      table.insert(entities, entity_snapshot(entity, position))
-    end
+    add_unique_entity_snapshot(entities, seen, entity, position)
   end
   local simple_entities = surface.find_entities_filtered({
     position = position,
@@ -618,9 +645,7 @@ local function collect_entities(surface, position)
     limit = 80
   })
   for _, entity in pairs(simple_entities) do
-    if entity.valid then
-      table.insert(entities, entity_snapshot(entity, position))
-    end
+    add_unique_entity_snapshot(entities, seen, entity, position)
   end
   local misc = surface.find_entities_filtered({
     position = position,
@@ -629,13 +654,42 @@ local function collect_entities(surface, position)
   })
   for _, entity in pairs(misc) do
     if entity.valid and entity.name ~= "character" and entity.type ~= "resource" then
-      table.insert(entities, entity_snapshot(entity, position))
+      add_unique_entity_snapshot(entities, seen, entity, position)
     end
   end
   table.sort(entities, function(a, b)
     return a.distance < b.distance
   end)
   return entities
+end
+
+local function collect_enemies(surface, position, force)
+  local enemies = {}
+  local seen = {}
+  local enemy_force = game.forces.enemy
+  local enemy_types = { "unit", "unit-spawner", "turret" }
+  for _, enemy_type in pairs(enemy_types) do
+    local found = surface.find_entities_filtered({
+      position = position,
+      radius = OBSERVE_RADIUS,
+      force = enemy_force,
+      type = enemy_type,
+      limit = 80
+    })
+    for _, entity in pairs(found) do
+      if entity.valid and (not force or entity.force ~= force) then
+        local key = entity_identity_key(entity)
+        if not seen[key] then
+          seen[key] = true
+          table.insert(enemies, entity_snapshot(entity, position))
+        end
+      end
+    end
+  end
+  table.sort(enemies, function(a, b)
+    return a.distance < b.distance
+  end)
+  return enemies
 end
 
 local function can_place_manual(surface, force, name, position, direction)
@@ -1101,6 +1155,7 @@ local function observe(command, options)
     craftable = collect_craftable(agent),
     resources = collect_resources(surface, position),
     entities = collect_entities(surface, position),
+    enemies = collect_enemies(surface, position, agent.force),
     power_sites = collect_power_sites(surface, position, agent.force),
     lab_sites = collect_lab_sites(surface, position, agent.force),
     automation_sites = collect_automation_sites(surface, position, agent.force),

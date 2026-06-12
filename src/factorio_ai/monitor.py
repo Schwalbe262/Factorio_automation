@@ -90,6 +90,10 @@ ASSEMBLER_SPEEDS = {
     "assembling-machine-2": 0.75,
     "assembling-machine-3": 1.25,
 }
+NORTH = 0
+EAST = 4
+SOUTH = 8
+WEST = 12
 
 
 def summarize_factory(
@@ -127,31 +131,32 @@ def inventory_summary(observation: dict[str, Any], objective: str) -> dict[str, 
 
 def estimate_production(observation: dict[str, Any]) -> list[ProductionEstimate]:
     rates: dict[str, ProductionEstimate] = {}
-    busy_iron_furnaces = 0
+    busy_plate_furnaces = {"iron-plate": 0, "copper-plate": 0}
     for entity in _entities(observation):
         name = str(entity.get("name") or "")
         if name in FURNACE_SPEEDS:
             estimate = _estimate_furnace(entity, FURNACE_SPEEDS[name])
-            if estimate and estimate.item == "iron-plate":
-                busy_iron_furnaces += 1
+            if estimate and estimate.item in busy_plate_furnaces:
+                busy_plate_furnaces[estimate.item] += 1
             _add_estimate(rates, estimate)
         elif name in MINER_RATES_PER_MINUTE:
             _add_estimate(rates, _estimate_miner(entity, observation, MINER_RATES_PER_MINUTE[name]))
         elif name in ASSEMBLER_SPEEDS:
             _add_estimate(rates, _estimate_assembler(entity, ASSEMBLER_SPEEDS[name]))
-    complete_iron_lines = _complete_belt_iron_line_count(observation)
-    extra_lines = max(0, complete_iron_lines - busy_iron_furnaces)
-    if extra_lines:
-        _add_estimate(
-            rates,
-            ProductionEstimate(
-                item="iron-plate",
-                per_minute=round(extra_lines * 18.75, 3),
-                producers=extra_lines,
-                confidence=0.5,
-                notes=["inferred from complete burner belt smelting lines"],
-            ),
-        )
+    for product, resource in [("iron-plate", "iron-ore"), ("copper-plate", "copper-ore")]:
+        complete_lines = _complete_belt_line_count(observation, resource)
+        extra_lines = max(0, complete_lines - busy_plate_furnaces[product])
+        if extra_lines:
+            _add_estimate(
+                rates,
+                ProductionEstimate(
+                    item=product,
+                    per_minute=round(extra_lines * 18.75, 3),
+                    producers=extra_lines,
+                    confidence=0.5,
+                    notes=[f"inferred from complete burner {resource} belt smelting lines"],
+                ),
+            )
     return sorted(rates.values(), key=lambda item: (-item.per_minute, item.item))
 
 
@@ -288,6 +293,11 @@ def technology_requirements_for_objective(objective: str) -> list[dict[str, Any]
 
 
 def _estimate_furnace(entity: dict[str, Any], speed: float) -> ProductionEstimate | None:
+    name = str(entity.get("name") or "")
+    if name in {"stone-furnace", "steel-furnace"} and entity_item_count(entity, "coal") <= 0:
+        return None
+    if name == "electric-furnace" and entity.get("electric_network_connected") is False:
+        return None
     product = None
     if entity_item_count(entity, "iron-ore") > 0 or entity_item_count(entity, "iron-plate") > 0:
         product = "iron-plate"
@@ -405,21 +415,80 @@ def _nearest_resource(observation: dict[str, Any], position: dict[str, float]) -
     return nearest
 
 
-def _complete_belt_iron_line_count(observation: dict[str, Any]) -> int:
+def _complete_belt_line_count(observation: dict[str, Any], resource_name: str) -> int:
     furnace_positions: set[tuple[float, float]] = set()
     for belt in [item for item in _entities(observation) if item.get("name") == "transport-belt"]:
-        belt_position = _position(belt)
-        layout = {
-            "belt1": belt,
-            "belt2": _entity_near(observation, "transport-belt", {"x": belt_position["x"] + 1, "y": belt_position["y"]}, 0.75),
-            "inserter": _entity_near(observation, "burner-inserter", {"x": belt_position["x"] + 2, "y": belt_position["y"]}, 1.0),
-            "furnace": _entity_near(observation, "stone-furnace", {"x": belt_position["x"] + 3, "y": belt_position["y"]}, 1.5),
-            "drill": _entity_near(observation, "burner-mining-drill", {"x": belt_position["x"] - 2, "y": belt_position["y"]}, 2.0),
-        }
-        if all(layout.values()):
-            furnace_position = _position(layout["furnace"])
-            furnace_positions.add((round(furnace_position["x"], 2), round(furnace_position["y"], 2)))
+        for layout in _belt_line_layouts_from_anchor(observation, belt):
+            if layout["resource_name"] != resource_name:
+                continue
+            if all(layout.get(key) is not None for key in ("belt1", "belt2", "inserter", "furnace", "drill")) and _belt_line_fueled(layout):
+                furnace_position = _position(layout["furnace"])
+                furnace_positions.add((round(furnace_position["x"], 2), round(furnace_position["y"], 2)))
     return len(furnace_positions)
+
+
+def _belt_line_layouts_from_anchor(observation: dict[str, Any], belt: dict[str, Any]) -> list[dict[str, Any]]:
+    belt_position = _position(belt)
+    output = []
+    for orientation in ("east", "west", "south", "north"):
+        dx, dy, belt_direction = _smelting_orientation(orientation)
+        if not _entity_direction_matches(belt, belt_direction):
+            continue
+        drill_position = {"x": belt_position["x"] - 2 * dx, "y": belt_position["y"] - 2 * dy}
+        resource = _nearest_resource(observation, drill_position)
+        output.append(
+            {
+                "resource_name": str(resource.get("name")) if resource is not None and resource.get("name") else "iron-ore",
+                "belt1": belt,
+                "belt2": _entity_near(
+                    observation,
+                    "transport-belt",
+                    {"x": belt_position["x"] + dx, "y": belt_position["y"] + dy},
+                    0.75,
+                ),
+                "inserter": _entity_near(
+                    observation,
+                    "burner-inserter",
+                    {"x": belt_position["x"] + 2 * dx, "y": belt_position["y"] + 2 * dy},
+                    1.0,
+                ),
+                "furnace": _entity_near(
+                    observation,
+                    "stone-furnace",
+                    {"x": belt_position["x"] + 3 * dx, "y": belt_position["y"] + 3 * dy},
+                    1.75,
+                ),
+                "drill": _entity_near(observation, "burner-mining-drill", drill_position, 2.0),
+            }
+        )
+    return output
+
+
+def _smelting_orientation(orientation: str) -> tuple[int, int, int]:
+    if orientation == "west":
+        return -1, 0, WEST
+    if orientation == "south":
+        return 0, 1, SOUTH
+    if orientation == "north":
+        return 0, -1, NORTH
+    return 1, 0, EAST
+
+
+def _entity_direction_matches(entity: dict[str, Any], expected: int) -> bool:
+    if "direction" not in entity:
+        return True
+    try:
+        return int(entity.get("direction")) == expected
+    except (TypeError, ValueError):
+        return True
+
+
+def _belt_line_fueled(layout: dict[str, Any]) -> bool:
+    for key in ("drill", "inserter", "furnace"):
+        entity = layout.get(key)
+        if not isinstance(entity, dict) or entity_item_count(entity, "coal") < 1:
+            return False
+    return True
 
 
 def _entity_near(observation: dict[str, Any], name: str, position: dict[str, float], radius: float) -> dict[str, Any] | None:

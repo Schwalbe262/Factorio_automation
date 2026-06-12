@@ -66,6 +66,24 @@ class MonitorTests(unittest.TestCase):
         estimates = estimate_production(
             {
                 "entities": [
+                    {"name": "burner-mining-drill", "position": {"x": 4, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "transport-belt", "position": {"x": 6, "y": 0}, "inventories": {}},
+                    {"name": "transport-belt", "position": {"x": 7, "y": 0}, "inventories": {}},
+                    {"name": "burner-inserter", "position": {"x": 8, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "stone-furnace", "position": {"x": 9, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                ],
+                "resources": [],
+            }
+        )
+        by_item = {item.item: item for item in estimates}
+        self.assertIn("iron-plate", by_item)
+        self.assertEqual(by_item["iron-plate"].per_minute, 18.75)
+        self.assertNotIn("copper-plate", by_item)
+
+    def test_ignores_unfueled_complete_belt_smelting_line(self):
+        estimates = estimate_production(
+            {
+                "entities": [
                     {"name": "burner-mining-drill", "position": {"x": 4, "y": 0}, "inventories": {}},
                     {"name": "transport-belt", "position": {"x": 6, "y": 0}, "inventories": {}},
                     {"name": "transport-belt", "position": {"x": 7, "y": 0}, "inventories": {}},
@@ -76,8 +94,38 @@ class MonitorTests(unittest.TestCase):
             }
         )
         by_item = {item.item: item for item in estimates}
-        self.assertIn("iron-plate", by_item)
-        self.assertEqual(by_item["iron-plate"].per_minute, 18.75)
+        self.assertNotIn("iron-plate", by_item)
+
+    def test_ignores_unfueled_stone_furnace_inventory_output(self):
+        estimates = estimate_production(
+            {
+                "entities": [
+                    {
+                        "name": "stone-furnace",
+                        "inventories": {"2": {"iron-ore": 1}, "3": {"iron-plate": 1}},
+                    }
+                ]
+            }
+        )
+        self.assertEqual(estimates, [])
+
+    def test_estimates_complete_belt_copper_smelting_line(self):
+        estimates = estimate_production(
+            {
+                "entities": [
+                    {"name": "burner-mining-drill", "position": {"x": 8, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "transport-belt", "position": {"x": 10, "y": 0}, "inventories": {}},
+                    {"name": "transport-belt", "position": {"x": 11, "y": 0}, "inventories": {}},
+                    {"name": "burner-inserter", "position": {"x": 12, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "stone-furnace", "position": {"x": 13, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                ],
+                "resources": [{"name": "copper-ore", "position": {"x": 8, "y": 0}}],
+            }
+        )
+        by_item = {item.item: item for item in estimates}
+        self.assertIn("copper-plate", by_item)
+        self.assertEqual(by_item["copper-plate"].per_minute, 18.75)
+        self.assertNotIn("iron-plate", by_item)
 
 
 if __name__ == "__main__":

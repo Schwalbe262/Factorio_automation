@@ -8,7 +8,7 @@ from typing import Any
 
 from .config import load_config
 from .controller import FactorioController
-from .factorio import create_save, install_mod, start_gui_client, start_server, wait_for_rcon
+from .factorio import create_save, install_mod, start_gui_client, start_save_gui, start_server, wait_for_rcon
 from . import remote_slurm
 from .vanilla_gui import VanillaGuiDriver, launch_vanilla_gui
 from .web_dashboard import FACTORIO_ROUTE, public_dashboard_urls, serve_dashboard
@@ -30,6 +30,9 @@ def main(argv: list[str] | None = None) -> None:
     launch_gui_parser = subparsers.add_parser("launch-gui", help="Launch a GUI Factorio client and connect to the local server")
     launch_gui_parser.add_argument("--window-size", default="1600x900")
     launch_gui_parser.add_argument("--no-connect", action="store_true")
+
+    launch_save_gui_parser = subparsers.add_parser("launch-save-gui", help="Launch GUI Factorio and load the configured save")
+    launch_save_gui_parser.add_argument("--window-size", default="1600x900")
 
     vanilla_gui_parser = subparsers.add_parser(
         "launch-vanilla-gui",
@@ -91,8 +94,15 @@ def main(argv: list[str] | None = None) -> None:
         "run-expand-iron-smelting-mvp",
         help="Add belt-fed iron smelting capacity",
     )
-    expand_iron_parser.add_argument("--target-rate", type=int, default=37)
-    expand_iron_parser.add_argument("--max-steps", type=int, default=900)
+    expand_iron_parser.add_argument("--target-rate", type=int, default=90)
+    expand_iron_parser.add_argument("--max-steps", type=int, default=2000)
+
+    expand_copper_parser = subparsers.add_parser(
+        "run-expand-copper-smelting-mvp",
+        help="Add belt-fed copper smelting capacity",
+    )
+    expand_copper_parser.add_argument("--target-rate", type=int, default=75)
+    expand_copper_parser.add_argument("--max-steps", type=int, default=1600)
 
     power_parser = subparsers.add_parser("run-power-mvp", help="Build the first steam power block")
     power_parser.add_argument("--max-steps", type=int, default=900)
@@ -152,6 +162,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "launch-gui":
         proc = start_gui_client(cfg, window_size=args.window_size, connect=not args.no_connect)
         print_json({"ok": True, "pid": proc.pid})
+        return
+
+    if args.command == "launch-save-gui":
+        proc = start_save_gui(cfg, window_size=args.window_size)
+        print_json({"ok": True, "pid": proc.pid, "savePath": str(cfg.save_path)})
         return
 
     if args.command == "launch-vanilla-gui":
@@ -307,6 +322,22 @@ def main(argv: list[str] | None = None) -> None:
                 "reason": summary.reason,
                 "steps": summary.steps,
                 "ironPlateCount": summary.item_count,
+                "targetRatePerMinute": args.target_rate,
+                "logPath": str(summary.log_path),
+            }
+        )
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-expand-copper-smelting-mvp":
+        summary = FactorioController(cfg).run_expand_copper_smelting_mvp(target_rate=args.target_rate, max_steps=args.max_steps)
+        print_json(
+            {
+                "ok": summary.ok,
+                "reason": summary.reason,
+                "steps": summary.steps,
+                "copperPlateCount": summary.item_count,
                 "targetRatePerMinute": args.target_rate,
                 "logPath": str(summary.log_path),
             }
