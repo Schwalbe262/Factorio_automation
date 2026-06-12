@@ -110,11 +110,15 @@ Start the local production monitor:
 factorio-ai web
 ```
 
-Open:
+The command binds to `0.0.0.0` by default and prints the reachable LAN URL. Open the URL it prints,
+for example:
 
 ```text
-http://127.0.0.1:18889/팩토리오
+http://<LAN-IP>:18889/factorio
 ```
+
+`/factorio` is the canonical route. `/팩토리오` redirects to `/factorio?lang=ko`.
+The dashboard can switch between EN and KR from the header.
 
 The monitor has no login, no admin role, and no session expiry. It shows estimated production,
 estimated consumption, net rates, target deficits, bottlenecks, dependency tree, and technology

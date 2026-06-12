@@ -11,7 +11,7 @@ from .controller import FactorioController
 from .factorio import create_save, install_mod, start_gui_client, start_server, wait_for_rcon
 from . import remote_slurm
 from .vanilla_gui import VanillaGuiDriver, launch_vanilla_gui
-from .web_dashboard import FACTORIO_ROUTE, serve_dashboard
+from .web_dashboard import FACTORIO_ROUTE, public_dashboard_urls, serve_dashboard
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -47,8 +47,8 @@ def main(argv: list[str] | None = None) -> None:
     strategy_parser.add_argument("--objective", default="launch_rocket_program")
     strategy_parser.add_argument("--require-llm", action="store_true")
 
-    web_parser = subparsers.add_parser("web", help="Serve the local Factorio production monitor at /팩토리오")
-    web_parser.add_argument("--host", default="127.0.0.1")
+    web_parser = subparsers.add_parser("web", help="Serve the Factorio production monitor at /factorio")
+    web_parser.add_argument("--host", default="0.0.0.0")
     web_parser.add_argument("--port", type=int, default=18889)
     web_parser.add_argument("--objective", default="launch_rocket_program")
 
@@ -130,7 +130,17 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.command == "web":
-        print_json({"ok": True, "url": f"http://{args.host}:{args.port}{FACTORIO_ROUTE}"})
+        urls = public_dashboard_urls(args.host, args.port)
+        print_json(
+            {
+                "ok": True,
+                "url": urls[0],
+                "urls": urls,
+                "host": args.host,
+                "port": args.port,
+                "route": FACTORIO_ROUTE,
+            }
+        )
         serve_dashboard(cfg, host=args.host, port=args.port, objective=args.objective)
         return
 

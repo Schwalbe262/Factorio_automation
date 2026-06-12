@@ -88,6 +88,25 @@ SKILL_CATALOG: dict[str, SkillContract] = {
         completion=["electronic circuits are produced at required rate"],
         llm_scope="Choose this after diagnosing whether iron or copper supply is the real bottleneck.",
     ),
+    "plan_factory_site": SkillContract(
+        name="plan_factory_site",
+        description="Choose a factory district location and expansion direction before building a larger block.",
+        executor="future SpatialPlannerSkill",
+        preconditions=["observed resource patches", "existing factory footprint", "known near-term production goal"],
+        completion=["candidate site and reserved logistics corridors are selected"],
+        llm_scope=(
+            "Choose relative factory placement, expansion direction, and logistics corridors. "
+            "Do not emit exact tile placements."
+        ),
+    ),
+    "plan_rail_network": SkillContract(
+        name="plan_rail_network",
+        description="Plan main rail corridors, station districts, and resource outpost connections.",
+        executor="future RailNetworkPlannerSkill",
+        preconditions=["remote resource patches or long transport distance", "rail technology and materials available"],
+        completion=["rail corridor and station intent are selected for executor validation"],
+        llm_scope="Choose rail topology and station intent; executor validates rails, signals, and exact buildability.",
+    ),
     "research_logistics": SkillContract(
         name="research_logistics",
         description="Feed labs with automation science to unlock belts/splitters and early logistics.",
@@ -122,12 +141,55 @@ def make_strategy_payload(
         "observation": observation,
         "production_targets": dict(sorted((production_targets or {}).items())),
         "factory_monitor": monitor,
+        "spatial_planning": make_spatial_planning_context(observation),
         "goal_dependency_tree": dependency_tree_for_objective(objective, max_depth=5),
         "available_skills": skill_catalog_payload(),
         "decision_rule": (
             "Select exactly one high-level skill. Diagnose bottlenecks first. "
-            "Do not emit tile-level movement, mining, or building actions."
+            "For spatial work, choose districts, corridors, or rail topology only. "
+            "Do not emit tile-level movement, mining, building, rail, or signal actions."
         ),
+    }
+
+
+def make_spatial_planning_context(observation: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "site_selection": {
+            "llm_responsibility": (
+                "Pick production districts near the right inputs, reserve room for expansion, "
+                "and avoid forcing high-volume items to cross the whole base."
+            ),
+            "executor_responsibility": "Validate exact tiles, walking, buildability, collisions, and entity placement.",
+            "current_inputs": {
+                "player_position": observation.get("player", {}).get("position")
+                if isinstance(observation.get("player"), dict)
+                else None,
+                "factory_centroid": _entity_centroid(observation),
+                "resource_patches": _resource_summary(observation),
+            },
+            "constraints": [
+                "place smelting close to ore when early logistics are weak",
+                "reserve straight transport corridors before dense builds",
+                "keep high-throughput intermediates near their consumers",
+                "leave room for belts, power poles, pipes, train stops, and expansion",
+            ],
+        },
+        "rail_network": {
+            "llm_responsibility": (
+                "Choose when rails are justified, where trunk lines should run, and which resources need outposts."
+            ),
+            "executor_responsibility": "Place rails, signals, stations, trains, and schedules only after local validation.",
+            "planning_inputs": {
+                "known_remote_resources": _resource_summary(observation, minimum_distance=80.0),
+                "existing_factory_centroid": _entity_centroid(observation),
+            },
+            "constraints": [
+                "avoid rail plans before the required technology and material supply exist",
+                "separate station blocks from dense starter factories",
+                "prefer expandable trunk corridors over point-to-point spaghetti",
+                "treat signaling and station placement as executor-level validated details",
+            ],
+        },
     }
 
 
@@ -274,3 +336,63 @@ def _skill_for_bottleneck_item(item: str) -> str | None:
     if item == "electronic-circuit":
         return "produce_electronic_circuit"
     return None
+
+
+def _entity_centroid(observation: dict[str, Any]) -> dict[str, float] | None:
+    entities = observation.get("entities")
+    if not isinstance(entities, list):
+        return None
+    positions = [_position(item) for item in entities if isinstance(item, dict)]
+    positions = [item for item in positions if item is not None]
+    if not positions:
+        return None
+    return {
+        "x": round(sum(item["x"] for item in positions) / len(positions), 2),
+        "y": round(sum(item["y"] for item in positions) / len(positions), 2),
+    }
+
+
+def _resource_summary(observation: dict[str, Any], minimum_distance: float = 0.0) -> list[dict[str, Any]]:
+    resources = observation.get("resources")
+    if not isinstance(resources, list):
+        return []
+    player = observation.get("player") if isinstance(observation.get("player"), dict) else {}
+    player_position = player.get("position") if isinstance(player.get("position"), dict) else None
+    rows: list[dict[str, Any]] = []
+    for resource in resources:
+        if not isinstance(resource, dict):
+            continue
+        position = _position(resource)
+        distance_value = _distance(player_position, position)
+        if distance_value is not None and distance_value < minimum_distance:
+            continue
+        rows.append(
+            {
+                "name": resource.get("name"),
+                "position": position,
+                "amount": resource.get("amount"),
+                "distance_from_player": round(distance_value, 1) if distance_value is not None else None,
+            }
+        )
+    return rows[:30]
+
+
+def _position(value: dict[str, Any]) -> dict[str, float] | None:
+    raw = value.get("position")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return {"x": float(raw["x"]), "y": float(raw["y"])}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _distance(a: dict[str, Any] | None, b: dict[str, Any] | None) -> float | None:
+    if not a or not b:
+        return None
+    try:
+        dx = float(a["x"]) - float(b["x"])
+        dy = float(a["y"]) - float(b["y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (dx * dx + dy * dy) ** 0.5
