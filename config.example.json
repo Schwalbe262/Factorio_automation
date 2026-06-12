@@ -1,0 +1,13 @@
+{
+  "factorio_exe": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Factorio\\bin\\x64\\factorio.exe",
+  "runtime_dir": "runtime",
+  "mod_runtime_dir": "runtime/mods",
+  "save_path": "runtime/saves/ai-mvp.zip",
+  "rcon_host": "127.0.0.1",
+  "rcon_port": 27015,
+  "rcon_password": "factorio-ai",
+  "server_port": 34197,
+  "log_dir": "logs",
+  "agent_player_name": "AI",
+  "slurm_enabled": false
+}
