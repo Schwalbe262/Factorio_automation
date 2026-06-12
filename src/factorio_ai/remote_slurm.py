@@ -20,8 +20,8 @@ DEFAULT_HOST = "172.16.10.37"
 DEFAULT_USER = "r1jae262"
 DEFAULT_PORT = 22
 DEFAULT_KEY_NAME = "r1jae262.pem"
-DEFAULT_REMOTE_DIR = "~/factorio-ai-worker"
-DEFAULT_JOB_NAME = "factorio-ai-worker"
+DEFAULT_REMOTE_DIR = "~/kakao-bot-worker"
+DEFAULT_JOB_NAME = "AUTO"
 DEFAULT_CONDA_ENV = "factorio-ai"
 
 
@@ -279,6 +279,9 @@ def request_plan(
             "legal_actions": legal_actions,
         },
     }
+    if _use_attached_srun(cfg):
+        return _request_plan_via_attached_srun(task, cfg, timeout_seconds)
+
     task_name = submit_task(task, cfg)
     deadline = time.monotonic() + (timeout_seconds or cfg.task_timeout_seconds)
     while time.monotonic() < deadline:
@@ -289,6 +292,69 @@ def request_plan(
             raise RemoteSlurmError(f"remote planner task failed: {data}")
         time.sleep(2)
     raise TimeoutError(f"remote planner task timed out: {task_name}")
+
+
+def _use_attached_srun(cfg: RemoteSlurmConfig) -> bool:
+    mode = os.getenv("FACTORIO_AI_SLURM_MODE", "auto").strip().lower()
+    if mode in {"queue", "worker_queue"}:
+        return False
+    if mode in {"attach", "attached", "srun", "auto_srun"}:
+        return True
+    return cfg.job_name == "AUTO" and cfg.remote_dir.endswith("kakao-bot-worker")
+
+
+def _request_plan_via_attached_srun(
+    task: dict[str, Any],
+    cfg: RemoteSlurmConfig,
+    timeout_seconds: int | None = None,
+) -> dict[str, Any]:
+    remote_dir = resolve_remote_dir(cfg)
+    task_name = f"{task['id']}.json"
+    result_name = f"{task['id']}.result.json"
+    payload = base64.b64encode(json.dumps(task, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).decode("ascii")
+    output = _run_remote(
+        f"""set -euo pipefail
+REMOTE_DIR={json.dumps(remote_dir)}
+JOB_NAME={json.dumps(cfg.job_name)}
+TASK_NAME={json.dumps(task_name)}
+RESULT_NAME={json.dumps(result_name)}
+PAYLOAD={json.dumps(payload)}
+JOB_ID="$(squeue -h -u "$USER" -n "$JOB_NAME" -t R -o "%i" | head -1 | tr -d '[:space:]')"
+if [[ -z "$JOB_ID" ]]; then
+  echo "__ERROR__:running job not found for $JOB_NAME"
+  exit 2
+fi
+TASK_PATH="$REMOTE_DIR/$TASK_NAME"
+RESULT_PATH="$REMOTE_DIR/$RESULT_NAME"
+python3 - "$TASK_PATH" "$PAYLOAD" <<'PY'
+import base64
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_bytes(base64.b64decode(sys.argv[2]) + b"\\n")
+PY
+rm -f "$RESULT_PATH"
+srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate {cfg.conda_env} && cd '$REMOTE_DIR/factorio-ai' && python -m factorio_ai.slurm_worker --task '$TASK_PATH' --result '$RESULT_PATH'" < /dev/null
+cat "$RESULT_PATH"
+rm -f "$TASK_PATH" "$RESULT_PATH"
+""",
+        cfg,
+        timeout=timeout_seconds or cfg.task_timeout_seconds,
+    )
+    json_line = ""
+    for line in reversed(output.splitlines()):
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            json_line = line
+            break
+    if not json_line:
+        raise RemoteSlurmError(f"attached AUTO planner did not return JSON: {output[:500]}")
+    result = json.loads(json_line)
+    if not isinstance(result, dict):
+        raise RemoteSlurmError("attached AUTO planner returned non-object JSON")
+    if not result.get("ok"):
+        raise RemoteSlurmError(f"attached AUTO planner failed: {result}")
+    return result
 
 
 def resolve_remote_dir(cfg: RemoteSlurmConfig | None = None) -> str:

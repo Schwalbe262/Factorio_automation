@@ -87,6 +87,29 @@ def run_one(root: Path, task_path: Path) -> None:
             pass
 
 
+def run_task_file(task_path: Path, result_path: Path) -> dict[str, Any]:
+    started_at = datetime.now(timezone.utc).isoformat()
+    try:
+        task = json.loads(task_path.read_text(encoding="utf-8"))
+        result = execute_task(task)
+        result.setdefault("id", task.get("id"))
+        result.setdefault("type", task.get("type"))
+        result.setdefault("ok", True)
+        result["started_at"] = started_at
+        result["finished_at"] = datetime.now(timezone.utc).isoformat()
+    except Exception as exc:  # noqa: BLE001
+        result = {
+            "ok": False,
+            "id": None,
+            "type": None,
+            "error": f"{type(exc).__name__}: {exc}",
+            "started_at": started_at,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }
+    atomic_json(result_path, result)
+    return result
+
+
 def execute_task(task: dict[str, Any]) -> dict[str, Any]:
     task_type = task.get("type")
     if task_type != "planner_request":
@@ -204,9 +227,18 @@ def write_status(root: Path, message: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the Factorio AI Slurm queue worker.")
     parser.add_argument("--root", default=os.getenv("ROOT") or os.getcwd())
+    parser.add_argument("--task", help="Run one task file and write --result, for AUTO worker dispatch.")
+    parser.add_argument("--result", help="Result path for --task.")
     parser.add_argument("--poll-seconds", type=float, default=DEFAULT_POLL_SECONDS)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
+    if args.task:
+        if not args.result:
+            raise SystemExit("--result is required with --task")
+        result = run_task_file(Path(args.task), Path(args.result))
+        if not result.get("ok"):
+            raise SystemExit(1)
+        return
     run_worker(Path(args.root), poll_seconds=args.poll_seconds, once=args.once)
 
 

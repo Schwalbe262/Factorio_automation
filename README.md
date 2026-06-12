@@ -67,9 +67,13 @@ The remote worker follows the same shape as the reference projects:
 - `failed/`
 - `logs/`
 
-Default remote directory: `~/factorio-ai-worker`
+Default remote directory: `~/kakao-bot-worker`
 
-Default job name: `factorio-ai-worker`
+Default job name: `AUTO`
+
+When the running job is `AUTO`, planner requests use `srun --jobid=<AUTO_JOB_ID> --overlap`
+to execute `factorio_ai.slurm_worker --task ...` inside the existing AUTO allocation. This avoids
+submitting another Slurm job and does not require replacing the existing flight worker loop.
 
 Common environment variables:
 
