@@ -94,7 +94,7 @@ SKILL_CATALOG: dict[str, SkillContract] = {
     "setup_power": SkillContract(
         name="setup_power",
         description="Build early steam power with offshore pump, boiler, steam engine, and poles.",
-        executor="future SetupPowerSkill",
+        executor="SetupPowerSkill",
         preconditions=["water located", "coal available", "stone/iron/copper supply available"],
         completion=["electric network has sustained production and powered poles"],
         llm_scope="Choose this before electric miners, assemblers, labs, and scalable factory blocks.",

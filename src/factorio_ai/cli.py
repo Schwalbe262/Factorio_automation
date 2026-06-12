@@ -87,6 +87,9 @@ def main(argv: list[str] | None = None) -> None:
     belt_smelting_parser.add_argument("--target", type=int, default=10)
     belt_smelting_parser.add_argument("--max-steps", type=int, default=700)
 
+    power_parser = subparsers.add_parser("run-power-mvp", help="Build the first steam power block")
+    power_parser.add_argument("--max-steps", type=int, default=900)
+
     subparsers.add_parser("slurm-deploy", help="Deploy project source to the Slurm remote directory")
     subparsers.add_parser("slurm-start-worker", help="Submit the persistent Slurm worker job")
     subparsers.add_parser("slurm-status", help="Print Slurm worker status")
@@ -263,6 +266,20 @@ def main(argv: list[str] | None = None) -> None:
                 "reason": summary.reason,
                 "steps": summary.steps,
                 "ironPlateCount": summary.item_count,
+                "logPath": str(summary.log_path),
+            }
+        )
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-power-mvp":
+        summary = FactorioController(cfg).run_power_mvp(max_steps=args.max_steps)
+        print_json(
+            {
+                "ok": summary.ok,
+                "reason": summary.reason,
+                "steps": summary.steps,
                 "logPath": str(summary.log_path),
             }
         )

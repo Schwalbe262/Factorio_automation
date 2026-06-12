@@ -6,6 +6,7 @@ from factorio_ai.planner import (
     CopperPlateSkill,
     ElectronicCircuitSkill,
     IronPlateSkill,
+    SetupPowerSkill,
 )
 
 
@@ -25,6 +26,34 @@ def base_observation():
             {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 2},
         ],
         "entities": [],
+    }
+
+
+def power_site():
+    return {
+        "distance": 10,
+        "layout": {
+            "offshore_pump": {
+                "name": "offshore-pump",
+                "position": {"x": 10.5, "y": 10.5},
+                "direction": 12,
+            },
+            "boiler": {
+                "name": "boiler",
+                "position": {"x": 12.5, "y": 9.5},
+                "direction": 0,
+            },
+            "steam_engine": {
+                "name": "steam-engine",
+                "position": {"x": 12.5, "y": 6.5},
+                "direction": 0,
+            },
+            "small_electric_pole": {
+                "name": "small-electric-pole",
+                "position": {"x": 10.5, "y": 6.5},
+                "direction": 0,
+            },
+        },
     }
 
 
@@ -381,6 +410,91 @@ class PlannerTests(unittest.TestCase):
             },
         ]
         decision = BeltSmeltingLineSkill(target_count=10).next_action(obs)
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
+
+    def test_setup_power_skill_places_offshore_pump_first_when_parts_exist(self):
+        obs = base_observation()
+        obs["inventory"] = {
+            "coal": 10,
+            "offshore-pump": 1,
+            "boiler": 1,
+            "steam-engine": 1,
+            "small-electric-pole": 1,
+        }
+        obs["power_sites"] = [power_site()]
+        decision = SetupPowerSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "offshore-pump")
+        self.assertEqual(decision.action["direction"], 12)
+
+    def test_setup_power_skill_mines_tree_when_pole_needs_wood(self):
+        obs = base_observation()
+        obs["inventory"] = {
+            "coal": 10,
+            "offshore-pump": 1,
+            "boiler": 1,
+            "steam-engine": 1,
+            "copper-cable": 2,
+        }
+        obs["power_sites"] = [power_site()]
+        obs["entities"] = [
+            {
+                "name": "tree-07",
+                "type": "tree",
+                "position": {"x": 3, "y": 0},
+                "distance": 3,
+            }
+        ]
+        decision = SetupPowerSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "tree-07")
+
+    def test_setup_power_skill_done_when_engine_has_steam_and_pole_connected(self):
+        obs = base_observation()
+        obs["entities"] = [
+            {
+                "name": "offshore-pump",
+                "unit_number": 601,
+                "position": {"x": 10.5, "y": 10.5},
+                "direction": 12,
+                "distance": 10,
+                "inventories": {},
+                "fluids": {"1": {"name": "water", "amount": 100}},
+            },
+            {
+                "name": "boiler",
+                "unit_number": 602,
+                "position": {"x": 12.5, "y": 10},
+                "direction": 0,
+                "distance": 12,
+                "inventories": {"1": {"coal": 5}},
+                "fluids": {
+                    "1": {"name": "water", "amount": 200},
+                    "2": {"name": "steam", "amount": 20},
+                },
+            },
+            {
+                "name": "steam-engine",
+                "unit_number": 603,
+                "position": {"x": 12.5, "y": 6.5},
+                "direction": 0,
+                "status": 1,
+                "distance": 13,
+                "inventories": {},
+                "fluids": {"1": {"name": "steam", "amount": 80}},
+            },
+            {
+                "name": "small-electric-pole",
+                "unit_number": 604,
+                "position": {"x": 10.5, "y": 6.5},
+                "direction": 0,
+                "distance": 12,
+                "inventories": {},
+                "fluids": {},
+            },
+        ]
+        decision = SetupPowerSkill().next_action(obs)
         self.assertTrue(decision.done)
         self.assertIsNone(decision.action)
 

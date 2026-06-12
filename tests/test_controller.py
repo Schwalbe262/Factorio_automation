@@ -40,6 +40,10 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(belt_config["goal"], "build_belt_smelting_line")
             self.assertEqual(belt_config["target"], 12)
             self.assertEqual(belt_config["max_steps"], 222)
+            power_config = controller._skill_run_config("setup_power", max_steps=333)
+            self.assertIsNotNone(power_config)
+            self.assertEqual(power_config["goal"], "setup_power")
+            self.assertEqual(power_config["max_steps"], 333)
             self.assertIsNone(controller._skill_run_config("automate_electronic_circuit_line"))
             self.assertIsNone(controller._skill_run_config("expand_iron_smelting"))
 

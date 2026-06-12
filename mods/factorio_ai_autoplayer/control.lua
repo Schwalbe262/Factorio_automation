@@ -1,6 +1,8 @@
 local MOD = "factorio_ai_autoplayer"
 local AGENT_NAME = "AI"
 local OBSERVE_RADIUS = 512
+local POWER_SITE_RADIUS = 512
+local POWER_SITE_WATER_TILE_LIMIT = 1200
 local MOVE_STOP_DISTANCE = 0.35
 local PLAYER_MOVE_STEP = 0.10
 
@@ -29,6 +31,26 @@ local VIRTUAL_RECIPES = {
   ["burner-inserter"] = {
     ingredients = { ["iron-plate"] = 1, ["iron-gear-wheel"] = 1 },
     results = { ["burner-inserter"] = 1 }
+  },
+  ["pipe"] = {
+    ingredients = { ["iron-plate"] = 1 },
+    results = { ["pipe"] = 1 }
+  },
+  ["boiler"] = {
+    ingredients = { pipe = 4, ["stone-furnace"] = 1 },
+    results = { ["boiler"] = 1 }
+  },
+  ["steam-engine"] = {
+    ingredients = { ["iron-gear-wheel"] = 8, pipe = 5, ["iron-plate"] = 10 },
+    results = { ["steam-engine"] = 1 }
+  },
+  ["offshore-pump"] = {
+    ingredients = { ["electronic-circuit"] = 2, pipe = 1, ["iron-gear-wheel"] = 1 },
+    results = { ["offshore-pump"] = 1 }
+  },
+  ["small-electric-pole"] = {
+    ingredients = { wood = 1, ["copper-cable"] = 2 },
+    results = { ["small-electric-pole"] = 2 }
   },
   ["electronic-circuit"] = {
     ingredients = { ["iron-plate"] = 1, ["copper-cable"] = 3 },
@@ -410,6 +432,30 @@ local function entity_inventory_snapshot(entity)
   return result
 end
 
+local function entity_fluidbox_snapshot(entity)
+  local result = {}
+  if not entity or not entity.valid then
+    return result
+  end
+  local ok, fluidbox = pcall(function()
+    return entity.fluidbox
+  end)
+  if not ok or not fluidbox then
+    return result
+  end
+  for i = 1, #fluidbox do
+    local fluid = fluidbox[i]
+    if fluid and fluid.name then
+      result[tostring(i)] = {
+        name = fluid.name,
+        amount = round(fluid.amount or 0),
+        temperature = round(fluid.temperature or 0)
+      }
+    end
+  end
+  return result
+end
+
 local function optional_entity_position(entity, property)
   if not entity or not entity.valid then
     return nil
@@ -452,6 +498,22 @@ local function collect_resources(surface, position)
   return resources
 end
 
+local function entity_snapshot(entity, position)
+  return {
+    unit_number = entity.unit_number,
+    name = entity.name,
+    type = entity.type,
+    position = position_table(entity.position),
+    direction = entity.direction,
+    status = entity.status,
+    drop_position = optional_entity_position(entity, "drop_position"),
+    pickup_position = optional_entity_position(entity, "pickup_position"),
+    distance = round(distance(position, entity.position)),
+    inventories = entity_inventory_snapshot(entity),
+    fluids = entity_fluidbox_snapshot(entity)
+  }
+end
+
 local function collect_entities(surface, position)
   local entities = {}
   local entity_names = {
@@ -464,6 +526,7 @@ local function collect_entities(surface, position)
     "boiler",
     "steam-engine",
     "offshore-pump",
+    "pipe",
     "transport-belt",
     "burner-inserter",
     "inserter",
@@ -478,19 +541,19 @@ local function collect_entities(surface, position)
     })
     for _, entity in pairs(found) do
       if entity.valid then
-        table.insert(entities, {
-          unit_number = entity.unit_number,
-          name = entity.name,
-          type = entity.type,
-          position = position_table(entity.position),
-          direction = entity.direction,
-          status = entity.status,
-          drop_position = optional_entity_position(entity, "drop_position"),
-          pickup_position = optional_entity_position(entity, "pickup_position"),
-          distance = round(distance(position, entity.position)),
-          inventories = entity_inventory_snapshot(entity)
-        })
+        table.insert(entities, entity_snapshot(entity, position))
       end
+    end
+  end
+  local trees = surface.find_entities_filtered({
+    position = position,
+    radius = OBSERVE_RADIUS,
+    type = "tree",
+    limit = 80
+  })
+  for _, entity in pairs(trees) do
+    if entity.valid then
+      table.insert(entities, entity_snapshot(entity, position))
     end
   end
   local misc = surface.find_entities_filtered({
@@ -500,24 +563,95 @@ local function collect_entities(surface, position)
   })
   for _, entity in pairs(misc) do
     if entity.valid and entity.name ~= "character" and entity.type ~= "resource" then
-      table.insert(entities, {
-        unit_number = entity.unit_number,
-        name = entity.name,
-        type = entity.type,
-        position = position_table(entity.position),
-        direction = entity.direction,
-        status = entity.status,
-        drop_position = optional_entity_position(entity, "drop_position"),
-        pickup_position = optional_entity_position(entity, "pickup_position"),
-        distance = round(distance(position, entity.position)),
-        inventories = entity_inventory_snapshot(entity)
-      })
+      table.insert(entities, entity_snapshot(entity, position))
     end
   end
   table.sort(entities, function(a, b)
     return a.distance < b.distance
   end)
   return entities
+end
+
+local function can_place_manual(surface, force, name, position, direction)
+  return surface.can_place_entity({
+    name = name,
+    position = position,
+    direction = direction or defines.direction.north,
+    force = force,
+    build_check_type = defines.build_check_type.manual
+  })
+end
+
+local function west_power_layout(position)
+  return {
+    offshore_pump = {
+      name = "offshore-pump",
+      position = position,
+      direction = defines.direction.west
+    },
+    boiler = {
+      name = "boiler",
+      position = { x = position.x + 2, y = position.y - 1 },
+      direction = defines.direction.north
+    },
+    steam_engine = {
+      name = "steam-engine",
+      position = { x = position.x + 2, y = position.y - 4 },
+      direction = defines.direction.north
+    },
+    small_electric_pole = {
+      name = "small-electric-pole",
+      position = { x = position.x, y = position.y - 4 },
+      direction = defines.direction.north
+    }
+  }
+end
+
+local function power_layout_can_place(surface, force, layout)
+  return can_place_manual(surface, force, "offshore-pump", layout.offshore_pump.position, layout.offshore_pump.direction)
+    and can_place_manual(surface, force, "boiler", layout.boiler.position, layout.boiler.direction)
+    and can_place_manual(surface, force, "steam-engine", layout.steam_engine.position, layout.steam_engine.direction)
+    and can_place_manual(surface, force, "small-electric-pole", layout.small_electric_pole.position, layout.small_electric_pole.direction)
+end
+
+local function collect_power_sites(surface, position, force)
+  local sites = {}
+  local checked = {}
+  local water_tiles = surface.find_tiles_filtered({
+    position = position,
+    radius = POWER_SITE_RADIUS,
+    name = { "water", "deepwater", "water-green", "deepwater-green" },
+    limit = POWER_SITE_WATER_TILE_LIMIT
+  })
+  for _, tile in pairs(water_tiles) do
+    local tile_position = tile.position
+    for dx = -8, 8 do
+      for dy = -8, 8 do
+        local pump_position = { x = tile_position.x + dx + 0.5, y = tile_position.y + dy + 0.5 }
+        local key = tostring(pump_position.x) .. "," .. tostring(pump_position.y)
+        if not checked[key] then
+          checked[key] = true
+          local layout = west_power_layout(pump_position)
+          if power_layout_can_place(surface, force, layout) then
+            table.insert(sites, {
+              distance = round(distance(position, pump_position)),
+              layout = layout
+            })
+            if #sites >= 20 then
+              table.sort(sites, function(a, b)
+                return a.distance < b.distance
+              end)
+              return sites
+            end
+          end
+        end
+      end
+    end
+  end
+  table.sort(sites, function(a, b)
+    return a.distance < b.distance
+  end)
+  return sites
 end
 
 local function virtual_craftable(agent)
@@ -573,7 +707,8 @@ local function observe(command, options)
     inventory = inventory_contents(inventory),
     craftable = collect_craftable(agent),
     resources = collect_resources(surface, position),
-    entities = collect_entities(surface, position)
+    entities = collect_entities(surface, position),
+    power_sites = collect_power_sites(surface, position, agent.force)
   })
   return response
 end
@@ -808,7 +943,8 @@ local function action_build(agent, action)
     name = action.name,
     position = place_position,
     direction = direction,
-    force = agent.force
+    force = agent.force,
+    build_check_type = defines.build_check_type.manual
   }) then
     if action.allow_nearby then
       local found = nil
@@ -820,7 +956,8 @@ local function action_build(agent, action)
               name = action.name,
               position = candidate,
               direction = direction,
-              force = agent.force
+              force = agent.force,
+              build_check_type = defines.build_check_type.manual
             }) then
               found = candidate
               break

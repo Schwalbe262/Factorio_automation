@@ -154,3 +154,21 @@ def entities_named(observation: dict[str, Any], name: str) -> list[dict[str, Any
 
 def entity_item_count(entity: dict[str, Any], item: str) -> int:
     return nested_item_count(entity.get("inventories", {}), item)
+
+
+def entity_fluid_count(entity: dict[str, Any], fluid: str) -> float:
+    return _nested_fluid_count(entity.get("fluids", {}), fluid)
+
+
+def _nested_fluid_count(value: Any, fluid: str) -> float:
+    if isinstance(value, dict):
+        total = 0.0
+        if value.get("name") == fluid and isinstance(value.get("amount"), (int, float)):
+            total += float(value.get("amount") or 0.0)
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                total += _nested_fluid_count(child, fluid)
+        return total
+    if isinstance(value, list):
+        return sum(_nested_fluid_count(child, fluid) for child in value)
+    return 0.0

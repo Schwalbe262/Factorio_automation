@@ -7,6 +7,7 @@ from .models import (
     craftable_count,
     distance,
     entities_named,
+    entity_fluid_count,
     entity_item_count,
     inventory_count,
     nearest_entity,
@@ -16,6 +17,7 @@ from .models import (
 )
 
 
+NORTH = 0
 EAST = 4
 WEST = 12
 FURNACE_RESOURCE_RADIUS = 12.0
@@ -643,6 +645,176 @@ class BeltSmeltingLineSkill:
         return entity_item_count(furnace, "iron-ore") > 0 or entity_item_count(furnace, "iron-plate") > 0
 
 
+class SetupPowerSkill:
+    """Build the first steam power block: offshore pump, boiler, engine, and pole."""
+
+    def __init__(self) -> None:
+        self.iron_skill = IronPlateSkill(target_count=40)
+        self.copper_skill = CopperPlateSkill(target_count=10)
+        self.circuit_skill = ElectronicCircuitSkill(target_count=2)
+
+    def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
+        block = _find_steam_power_block(observation)
+        if _steam_power_ready(block):
+            return PlannerDecision(None, "steam power block is producing usable steam power", done=True)
+
+        player = player_position(observation)
+        layout = block or _select_power_layout(observation)
+        if layout is None:
+            return PlannerDecision(None, "cannot find a buildable west-facing water site for steam power")
+
+        missing = _missing_power_item(observation, layout)
+        if missing:
+            decision = self._ensure_item_quantity(observation, player, missing, _power_item_required_count(missing))
+            if decision is not None:
+                return decision
+
+        for key in ("offshore_pump", "boiler", "steam_engine", "small_electric_pole"):
+            if layout.get(key) is not None:
+                continue
+            spec = layout[f"{key}_spec"]
+            position = spec["position"]
+            if distance(player, position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _power_stand_position(layout)},
+                    f"move near planned {spec['name']} position",
+                )
+            return PlannerDecision(
+                {
+                    "type": "build",
+                    "name": spec["name"],
+                    "position": position,
+                    "direction": spec.get("direction", NORTH),
+                },
+                f"place {spec['name']} for first steam power block",
+            )
+
+        boiler = layout.get("boiler")
+        if boiler and entity_item_count(boiler, "coal") < 3:
+            if inventory_count(observation, "coal") < 5:
+                coal = nearest_resource(observation, "coal")
+                if coal is None:
+                    return PlannerDecision(None, "cannot find coal to fuel boiler")
+                return self.iron_skill._mine_resource(player, coal, "coal", 10)
+            boiler_pos = _position(boiler)
+            if distance(player, boiler_pos) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": boiler_pos},
+                    "move near boiler to insert coal",
+                )
+            return PlannerDecision(
+                {
+                    "type": "insert",
+                    "item": "coal",
+                    "count": min(10, inventory_count(observation, "coal")),
+                    "unit_number": boiler.get("unit_number"),
+                    "name": "boiler",
+                    "position": boiler_pos,
+                },
+                "fuel boiler for first steam power block",
+            )
+
+        return PlannerDecision(
+            {"type": "wait", "ticks": 300},
+            "wait for offshore pump, boiler, and steam engine to fill with steam",
+        )
+
+    def _ensure_item_quantity(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        item: str,
+        quantity: int,
+    ) -> PlannerDecision | None:
+        if inventory_count(observation, item) >= quantity:
+            return None
+        if craftable_count(observation, item) > 0:
+            return PlannerDecision(
+                {
+                    "type": "craft",
+                    "recipe": item,
+                    "count": min(quantity - inventory_count(observation, item), craftable_count(observation, item)),
+                },
+                f"craft {item} for steam power",
+            )
+
+        if item == "pipe":
+            return self._ensure_iron_plates(observation, quantity - inventory_count(observation, "pipe"))
+        if item == "iron-gear-wheel":
+            return self._ensure_iron_plates(observation, 2 * (quantity - inventory_count(observation, "iron-gear-wheel")))
+        if item == "copper-cable":
+            return self._ensure_copper_plates(observation, _ceil_div(quantity - inventory_count(observation, "copper-cable"), 2))
+        if item == "stone-furnace":
+            if craftable_count(observation, "stone-furnace") > 0:
+                return PlannerDecision({"type": "craft", "recipe": "stone-furnace", "count": 1}, "craft furnace for boiler")
+            stone = nearest_resource(observation, "stone")
+            if stone is None:
+                return PlannerDecision(None, "cannot find stone for boiler furnace prerequisite")
+            return self.iron_skill._mine_resource(player, stone, "stone", 8)
+        if item == "small-electric-pole":
+            if inventory_count(observation, "wood") < 1:
+                tree = _nearest_tree(observation)
+                if tree is None:
+                    return PlannerDecision(None, "cannot find a tree for small electric poles")
+                tree_pos = _position(tree)
+                if distance(player, tree_pos) > 8:
+                    return PlannerDecision({"type": "move_to", "position": tree_pos}, "move near tree for pole wood")
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "name": tree.get("name"),
+                        "position": tree_pos,
+                        "count": 1,
+                    },
+                    "mine tree for pole wood",
+                )
+            return self._ensure_item_quantity(observation, player, "copper-cable", 2)
+        if item == "boiler":
+            decision = self._ensure_item_quantity(observation, player, "stone-furnace", 1)
+            if decision is not None:
+                return decision
+            return self._ensure_item_quantity(observation, player, "pipe", 4)
+        if item == "steam-engine":
+            for prerequisite, count in [("iron-gear-wheel", 8), ("pipe", 5), ("iron-plate", 10)]:
+                decision = self._ensure_item_quantity(observation, player, prerequisite, count)
+                if decision is not None:
+                    return decision
+            return None
+        if item == "offshore-pump":
+            for prerequisite, count in [("electronic-circuit", 2), ("pipe", 1), ("iron-gear-wheel", 1)]:
+                decision = self._ensure_item_quantity(observation, player, prerequisite, count)
+                if decision is not None:
+                    return decision
+            return None
+        if item == "electronic-circuit":
+            decision = self.circuit_skill.next_action(observation)
+            if not decision.done:
+                return decision
+            return None
+        if item == "iron-plate":
+            return self._ensure_iron_plates(observation, quantity)
+        if item == "copper-plate":
+            return self._ensure_copper_plates(observation, quantity)
+
+        return PlannerDecision(None, f"missing {item} and no prerequisite path is implemented")
+
+    def _ensure_iron_plates(self, observation: dict[str, Any], quantity: int) -> PlannerDecision | None:
+        if inventory_count(observation, "iron-plate") >= quantity:
+            return None
+        decision = self.iron_skill.next_action(observation, target_count=quantity, inventory_only=True)
+        if decision.done:
+            return None
+        return decision
+
+    def _ensure_copper_plates(self, observation: dict[str, Any], quantity: int) -> PlannerDecision | None:
+        if inventory_count(observation, "copper-plate") >= quantity:
+            return None
+        decision = self.copper_skill.next_action(observation, target_count=quantity, inventory_only=True)
+        if decision.done:
+            return None
+        return decision
+
+
 def _position(entity: dict[str, Any]) -> dict[str, float]:
     position = entity.get("position") if isinstance(entity.get("position"), dict) else {}
     return {
@@ -826,3 +998,144 @@ def _entity_near(
         if distance(_position(item), position) <= radius
     ]
     return _nearest_to(candidates, position)
+
+
+def _select_power_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
+    sites = observation.get("power_sites")
+    if not isinstance(sites, list):
+        return None
+    for site in sites:
+        if not isinstance(site, dict):
+            continue
+        layout = _layout_from_power_site(site)
+        if layout is not None:
+            return layout
+    return None
+
+
+def _layout_from_power_site(site: dict[str, Any]) -> dict[str, Any] | None:
+    raw_layout = site.get("layout")
+    if not isinstance(raw_layout, dict):
+        return None
+    specs: dict[str, dict[str, Any]] = {}
+    for key in ("offshore_pump", "boiler", "steam_engine", "small_electric_pole"):
+        raw_spec = raw_layout.get(key)
+        if not isinstance(raw_spec, dict) or not isinstance(raw_spec.get("position"), dict):
+            return None
+        specs[key] = {
+            "name": str(raw_spec.get("name") or _power_spec_name(key)),
+            "position": _position(raw_spec),
+            "direction": int(raw_spec.get("direction") or NORTH),
+        }
+    return _power_layout_from_specs(specs)
+
+
+def _power_layout_from_pump_position(position: dict[str, float]) -> dict[str, Any]:
+    specs = {
+        "offshore_pump": {
+            "name": "offshore-pump",
+            "position": position,
+            "direction": WEST,
+        },
+        "boiler": {
+            "name": "boiler",
+            "position": {"x": position["x"] + 2, "y": position["y"] - 1},
+            "direction": NORTH,
+        },
+        "steam_engine": {
+            "name": "steam-engine",
+            "position": {"x": position["x"] + 2, "y": position["y"] - 4},
+            "direction": NORTH,
+        },
+        "small_electric_pole": {
+            "name": "small-electric-pole",
+            "position": {"x": position["x"], "y": position["y"] - 4},
+            "direction": NORTH,
+        },
+    }
+    return _power_layout_from_specs(specs)
+
+
+def _power_layout_from_specs(specs: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    layout: dict[str, Any] = {}
+    for key, spec in specs.items():
+        layout[key] = None
+        layout[f"{key}_spec"] = spec
+    return layout
+
+
+def _find_steam_power_block(observation: dict[str, Any]) -> dict[str, Any] | None:
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for pump in entities_named(observation, "offshore-pump"):
+        layout = _power_layout_from_pump_position(_position(pump))
+        layout["offshore_pump"] = pump
+        layout["boiler"] = _entity_near(observation, "boiler", layout["boiler_spec"]["position"], radius=1.0)
+        layout["steam_engine"] = _entity_near(observation, "steam-engine", layout["steam_engine_spec"]["position"], radius=1.0)
+        layout["small_electric_pole"] = _entity_near(
+            observation,
+            "small-electric-pole",
+            layout["small_electric_pole_spec"]["position"],
+            radius=1.0,
+        )
+        score = sum(1 for key in ("offshore_pump", "boiler", "steam_engine", "small_electric_pole") if layout.get(key) is not None)
+        candidates.append((score, layout))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def _missing_power_item(observation: dict[str, Any], layout: dict[str, Any]) -> str | None:
+    for key in ("offshore_pump", "boiler", "steam_engine", "small_electric_pole"):
+        if layout.get(key) is None:
+            item = _power_spec_name(key)
+            if inventory_count(observation, item) <= 0:
+                return item
+    return None
+
+
+def _power_spec_name(key: str) -> str:
+    return {
+        "offshore_pump": "offshore-pump",
+        "boiler": "boiler",
+        "steam_engine": "steam-engine",
+        "small_electric_pole": "small-electric-pole",
+    }[key]
+
+
+def _power_item_required_count(item: str) -> int:
+    return {
+        "pipe": 5,
+        "iron-gear-wheel": 8,
+        "copper-cable": 2,
+        "electronic-circuit": 2,
+    }.get(item, 1)
+
+
+def _steam_power_ready(layout: dict[str, Any] | None) -> bool:
+    if not layout:
+        return False
+    return (
+        layout.get("offshore_pump") is not None
+        and layout.get("boiler") is not None
+        and layout.get("steam_engine") is not None
+        and layout.get("small_electric_pole") is not None
+        and entity_fluid_count(layout["steam_engine"], "steam") > 0
+        and int(layout["steam_engine"].get("status") or 0) != 5
+    )
+
+
+def _power_stand_position(layout: dict[str, Any]) -> dict[str, float]:
+    pump_spec = layout.get("offshore_pump_spec") if isinstance(layout.get("offshore_pump_spec"), dict) else {}
+    position = pump_spec.get("position") if isinstance(pump_spec.get("position"), dict) else {"x": 0.0, "y": 0.0}
+    return {"x": float(position["x"]) + 5.0, "y": float(position["y"]) + 3.0}
+
+
+def _nearest_tree(observation: dict[str, Any]) -> dict[str, Any] | None:
+    entities = observation.get("entities")
+    if not isinstance(entities, list):
+        return None
+    trees = [item for item in entities if isinstance(item, dict) and item.get("type") == "tree"]
+    if not trees:
+        return None
+    return min(trees, key=lambda item: float(item.get("distance") or 999999))

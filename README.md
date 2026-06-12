@@ -43,6 +43,7 @@ implements that skill as a normal code change.
 - Run a rule-based `produce_electronic_circuit` skill for early hand-crafted green circuits.
 - Run one strategic step with `run-strategy-step`, which asks the strategic layer for a skill and executes it only if a local executor exists.
 - Build a minimal belt-fed iron smelting line with `build_belt_smelting_line`.
+- Build the first steam power block with `setup_power`: offshore pump, boiler, steam engine, and small electric pole.
 - Ask the strategic layer for the next high-level skill with `factorio-ai strategy`.
 - Submit planner tasks to a Slurm worker queue when configured, with local rule-based fallback.
 
@@ -112,6 +113,12 @@ Build a minimal belt-fed smelting line:
 
 ```powershell
 factorio-ai run-belt-smelting-mvp --target 10 --max-steps 700
+```
+
+Build the first steam power block:
+
+```powershell
+factorio-ai run-power-mvp --max-steps 900
 ```
 
 Run one strategy-selected skill:
@@ -230,10 +237,10 @@ working production blocks:
 - assembling machines craft intermediates;
 - power poles and fuel keep the block running.
 
-For this reason, `expand_iron_smelting`, `build_belt_smelting_line`, and
-`automate_electronic_circuit_line` are separate skill contracts. The first belt-smelting executor now
-exists; the remaining higher-throughput smelting and assembling-machine executors are still reported
-as missing instead of substituting a hand-crafting routine.
+For this reason, `expand_iron_smelting`, `build_belt_smelting_line`, `setup_power`, and
+`automate_electronic_circuit_line` are separate skill contracts. The first belt-smelting and steam
+power executors now exist; the remaining higher-throughput smelting and assembling-machine executors
+are still reported as missing instead of substituting a hand-crafting routine.
 
 ## Space Age Objective
 
