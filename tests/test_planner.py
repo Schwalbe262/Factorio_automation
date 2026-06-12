@@ -1,6 +1,6 @@
 import unittest
 
-from factorio_ai.planner import AutomationScienceSkill, CopperPlateSkill, IronPlateSkill
+from factorio_ai.planner import AutomationScienceSkill, CopperPlateSkill, ElectronicCircuitSkill, IronPlateSkill
 
 
 def base_observation():
@@ -186,6 +186,51 @@ class PlannerTests(unittest.TestCase):
         decision = CopperPlateSkill(target_count=5).next_action(obs)
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "stone-furnace")
+
+    def test_electronic_circuit_skill_done_when_target_reached(self):
+        obs = base_observation()
+        obs["inventory"]["electronic-circuit"] = 5
+        decision = ElectronicCircuitSkill(target_count=5).next_action(obs)
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
+
+    def test_electronic_circuit_skill_crafts_circuits_when_ready(self):
+        obs = base_observation()
+        obs["inventory"] = {"iron-plate": 5, "copper-cable": 15}
+        obs["craftable"] = {"electronic-circuit": 5}
+        decision = ElectronicCircuitSkill(target_count=5).next_action(obs)
+        self.assertEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["recipe"], "electronic-circuit")
+
+    def test_electronic_circuit_skill_crafts_cable_before_circuit(self):
+        obs = base_observation()
+        obs["inventory"] = {"iron-plate": 5, "copper-plate": 8}
+        obs["craftable"] = {"copper-cable": 8}
+        decision = ElectronicCircuitSkill(target_count=5).next_action(obs)
+        self.assertEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["recipe"], "copper-cable")
+
+    def test_electronic_circuit_skill_takes_iron_from_furnace_for_inventory_target(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 8, "copper-cable": 15}
+        obs["entities"] = [
+            {
+                "name": "stone-furnace",
+                "unit_number": 401,
+                "position": {"x": 4, "y": 0},
+                "distance": 4,
+                "inventories": {"3": {"iron-plate": 5}},
+            }
+        ]
+        decision = ElectronicCircuitSkill(target_count=5).next_action(obs)
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-plate")
+
+    def test_electronic_circuit_skill_requests_copper_plate_when_cable_cannot_be_crafted(self):
+        obs = base_observation()
+        obs["inventory"] = {"iron-plate": 5, "coal": 8, "stone-furnace": 1}
+        decision = ElectronicCircuitSkill(target_count=5).next_action(obs)
+        self.assertIn(decision.action["type"], {"build", "mine", "move_to", "insert", "take", "wait"})
 
 
 if __name__ == "__main__":

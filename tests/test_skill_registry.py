@@ -17,6 +17,12 @@ class SkillRegistryTests(unittest.TestCase):
         self.assertEqual(status.executor, "CopperPlateSkill")
         self.assertFalse(status.codex_required)
 
+    def test_electronic_circuit_skill_is_implemented(self):
+        status = skill_status("produce_electronic_circuit")
+        self.assertTrue(status.implemented)
+        self.assertEqual(status.executor, "ElectronicCircuitSkill")
+        self.assertFalse(status.codex_required)
+
     def test_missing_skill_writes_backlog(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             runtime = Path(temp_dir)

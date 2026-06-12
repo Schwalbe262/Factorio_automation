@@ -26,10 +26,16 @@ class IronPlateSkill:
     def __init__(self, target_count: int = 10) -> None:
         self.target_count = target_count
 
-    def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
-        iron_total = total_item_count(observation, "iron-plate")
-        if iron_total >= self.target_count:
-            return PlannerDecision(None, f"iron plate target reached: {iron_total}/{self.target_count}", done=True)
+    def next_action(
+        self,
+        observation: dict[str, Any],
+        target_count: int | None = None,
+        inventory_only: bool = False,
+    ) -> PlannerDecision:
+        target = target_count or self.target_count
+        iron_total = inventory_count(observation, "iron-plate") if inventory_only else total_item_count(observation, "iron-plate")
+        if iron_total >= target:
+            return PlannerDecision(None, f"iron plate target reached: {iron_total}/{target}", done=True)
 
         furnace = _select_iron_furnace(observation)
         drill = nearest_entity(observation, "burner-mining-drill")
@@ -402,6 +408,76 @@ class CopperPlateSkill:
         )
 
 
+class ElectronicCircuitSkill:
+    """Craft early electronic circuits by ensuring iron plates, copper plates, and copper cable."""
+
+    def __init__(self, target_count: int = 5) -> None:
+        self.target_count = target_count
+        self.iron_skill = IronPlateSkill(max(10, target_count))
+        self.copper_skill = CopperPlateSkill(max(10, _ceil_div(target_count * 3, 2)))
+
+    def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
+        circuit_total = total_item_count(observation, "electronic-circuit")
+        if circuit_total >= self.target_count:
+            return PlannerDecision(
+                None,
+                f"electronic circuit target reached: {circuit_total}/{self.target_count}",
+                done=True,
+            )
+
+        missing_circuits = self.target_count - circuit_total
+        craftable_circuits = craftable_count(observation, "electronic-circuit")
+        if craftable_circuits > 0:
+            return PlannerDecision(
+                {
+                    "type": "craft",
+                    "recipe": "electronic-circuit",
+                    "count": min(missing_circuits, craftable_circuits),
+                },
+                "craft electronic circuits",
+            )
+
+        required_cables = missing_circuits * 3
+        cable_inventory = inventory_count(observation, "copper-cable")
+        if cable_inventory < required_cables:
+            craftable_cable = craftable_count(observation, "copper-cable")
+            if craftable_cable > 0:
+                cable_crafts_needed = _ceil_div(required_cables - cable_inventory, 2)
+                return PlannerDecision(
+                    {
+                        "type": "craft",
+                        "recipe": "copper-cable",
+                        "count": min(cable_crafts_needed, craftable_cable),
+                    },
+                    "craft copper cable for electronic circuits",
+                )
+
+            copper_plates_needed = _ceil_div(required_cables - cable_inventory, 2)
+            if inventory_count(observation, "copper-plate") < copper_plates_needed:
+                decision = self.copper_skill.next_action(
+                    observation,
+                    target_count=copper_plates_needed,
+                    inventory_only=True,
+                )
+                if not decision.done:
+                    return decision
+
+        iron_plates_needed = missing_circuits
+        if inventory_count(observation, "iron-plate") < iron_plates_needed:
+            decision = self.iron_skill.next_action(
+                observation,
+                target_count=iron_plates_needed,
+                inventory_only=True,
+            )
+            if not decision.done:
+                return decision
+
+        return PlannerDecision(
+            {"type": "wait", "ticks": 120},
+            "wait before rechecking electronic circuit prerequisites",
+        )
+
+
 def _position(entity: dict[str, Any]) -> dict[str, float]:
     position = entity.get("position") if isinstance(entity.get("position"), dict) else {}
     return {
@@ -466,3 +542,7 @@ def _nearest_to(entities: list[dict[str, Any]], position: dict[str, float]) -> d
     if not entities:
         return None
     return min(entities, key=lambda item: distance(_position(item), position))
+
+
+def _ceil_div(value: int, divisor: int) -> int:
+    return (value + divisor - 1) // divisor

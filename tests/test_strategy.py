@@ -33,6 +33,10 @@ class StrategyTests(unittest.TestCase):
         catalog = skill_catalog_payload()
         self.assertTrue(any(item["name"] == "produce_electronic_circuit" for item in catalog))
         self.assertTrue(any(item["name"] == "build_rail_supply_line" for item in catalog))
+        self.assertEqual(
+            next(item for item in catalog if item["name"] == "produce_electronic_circuit")["executor"],
+            "ElectronicCircuitSkill",
+        )
         self.assertTrue(all("llm_scope" in item for item in catalog))
 
     def test_strategy_payload_exposes_spatial_planning_context(self):

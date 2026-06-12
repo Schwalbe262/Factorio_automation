@@ -11,6 +11,7 @@ IMPLEMENTED_SKILLS = {
     "produce_iron_plate": "IronPlateSkill",
     "produce_copper_plate": "CopperPlateSkill",
     "produce_automation_science_pack": "AutomationScienceSkill",
+    "produce_electronic_circuit": "ElectronicCircuitSkill",
 }
 
 

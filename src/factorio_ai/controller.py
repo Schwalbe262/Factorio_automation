@@ -16,7 +16,7 @@ from .models import (
     total_item_count,
     validate_action,
 )
-from .planner import AutomationScienceSkill, CopperPlateSkill, IronPlateSkill
+from .planner import AutomationScienceSkill, CopperPlateSkill, ElectronicCircuitSkill, IronPlateSkill
 from .rcon import FactorioRconClient
 from .skill_registry import annotate_strategy_with_skill_status
 from .strategy import heuristic_strategy, make_strategy_payload, skill_catalog_payload
@@ -38,6 +38,10 @@ class RunSummary:
 
     @property
     def copper_plate_count(self) -> int:
+        return self.item_count
+
+    @property
+    def electronic_circuit_count(self) -> int:
         return self.item_count
 
 
@@ -110,6 +114,22 @@ class FactorioController:
             goal="produce_copper_plate",
             max_steps=max_steps,
             log_prefix="copper-mvp",
+            log_path=log_path,
+        )
+
+    def run_circuit_mvp(
+        self,
+        target: int = 5,
+        max_steps: int = 500,
+        log_path: Path | None = None,
+    ) -> RunSummary:
+        return self._run_skill(
+            skill=ElectronicCircuitSkill(target),
+            target_item="electronic-circuit",
+            target=target,
+            goal="produce_electronic_circuit",
+            max_steps=max_steps,
+            log_prefix="circuit-mvp",
             log_path=log_path,
         )
 

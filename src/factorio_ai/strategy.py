@@ -82,10 +82,10 @@ SKILL_CATALOG: dict[str, SkillContract] = {
     ),
     "produce_electronic_circuit": SkillContract(
         name="produce_electronic_circuit",
-        description="Automate green circuit supply from iron plates and copper cable.",
-        executor="future ElectronicCircuitSkill",
-        preconditions=["iron plate throughput", "copper plate throughput", "assemblers and power"],
-        completion=["electronic circuits are produced at required rate"],
+        description="Produce early green circuits from iron plates and copper cable.",
+        executor="ElectronicCircuitSkill",
+        preconditions=["iron plates available or producible", "copper plates available or producible", "copper cable recipe available"],
+        completion=["electronic circuits exist in inventory"],
         llm_scope="Choose this after diagnosing whether iron or copper supply is the real bottleneck.",
     ),
     "plan_factory_site": SkillContract(

@@ -63,6 +63,10 @@ def main(argv: list[str] | None = None) -> None:
     copper_parser.add_argument("--target", type=int, default=10)
     copper_parser.add_argument("--max-steps", type=int, default=250)
 
+    circuit_parser = subparsers.add_parser("run-circuit-mvp", help="Run the electronic circuit MVP loop")
+    circuit_parser.add_argument("--target", type=int, default=5)
+    circuit_parser.add_argument("--max-steps", type=int, default=500)
+
     science_parser = subparsers.add_parser("run-science-mvp", help="Run the automation science MVP loop")
     science_parser.add_argument("--target", type=int, default=5)
     science_parser.add_argument("--max-steps", type=int, default=400)
@@ -179,6 +183,21 @@ def main(argv: list[str] | None = None) -> None:
                 "reason": summary.reason,
                 "steps": summary.steps,
                 "copperPlateCount": summary.item_count,
+                "logPath": str(summary.log_path),
+            }
+        )
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-circuit-mvp":
+        summary = FactorioController(cfg).run_circuit_mvp(target=args.target, max_steps=args.max_steps)
+        print_json(
+            {
+                "ok": summary.ok,
+                "reason": summary.reason,
+                "steps": summary.steps,
+                "electronicCircuitCount": summary.item_count,
                 "logPath": str(summary.log_path),
             }
         )

@@ -40,6 +40,7 @@ implements that skill as a normal code change.
 - Run a rule-based `produce_iron_plate` skill until at least 10 iron plates exist in inventory or machine outputs.
 - Run a reusable rule-based `produce_copper_plate` skill until copper plates exist in inventory or machine outputs.
 - Run a rule-based `produce_automation_science_pack` skill until at least 5 automation science packs exist.
+- Run a rule-based `produce_electronic_circuit` skill for early hand-crafted green circuits.
 - Ask the strategic layer for the next high-level skill with `factorio-ai strategy`.
 - Submit planner tasks to a Slurm worker queue when configured, with local rule-based fallback.
 
@@ -97,6 +98,12 @@ Run the copper plate MVP loop:
 
 ```powershell
 factorio-ai run-copper-mvp --target 10
+```
+
+Run the electronic circuit MVP loop:
+
+```powershell
+factorio-ai run-circuit-mvp --target 5
 ```
 
 Or run the automation science MVP loop from a fresh server save:

@@ -18,6 +18,14 @@ local VIRTUAL_RECIPES = {
     ingredients = { ["iron-plate"] = 2 },
     results = { ["iron-gear-wheel"] = 1 }
   },
+  ["copper-cable"] = {
+    ingredients = { ["copper-plate"] = 1 },
+    results = { ["copper-cable"] = 2 }
+  },
+  ["electronic-circuit"] = {
+    ingredients = { ["iron-plate"] = 1, ["copper-cable"] = 3 },
+    results = { ["electronic-circuit"] = 1 }
+  },
   ["burner-mining-drill"] = {
     ingredients = { ["iron-plate"] = 3, ["iron-gear-wheel"] = 3, stone = 5 },
     results = { ["burner-mining-drill"] = 1 }
