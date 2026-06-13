@@ -249,6 +249,7 @@ Useful vanilla diagnostics:
 ```powershell
 factorio-ai vanilla-window
 factorio-ai vanilla-screenshot --output runtime\vanilla\screenshots\current.bmp
+factorio-ai vanilla-screen-state --output runtime\vanilla\screenshots\screen-state.bmp
 factorio-ai vanilla-probe --minimize-check
 ```
 
@@ -258,6 +259,16 @@ play is different: the current probe only gets a small title-bar-sized frame aft
 minimized automation is not enabled. Foreground `SendInput` remains the reliable
 achievement-compatible input path; background `PostMessage` can be probed, but Factorio must prove it
 actually consumes those inputs before background movement/building is trusted.
+
+Low-level vanilla input is available for controlled probes:
+
+```powershell
+factorio-ai vanilla-key shift
+factorio-ai vanilla-key shift --background
+```
+
+Use foreground input for real play. Background key posting is only a capability probe until state
+changes prove that Factorio consumed the input.
 
 ## Blueprint Library
 

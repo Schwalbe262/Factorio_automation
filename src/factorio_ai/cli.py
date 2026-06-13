@@ -11,6 +11,7 @@ from .controller import FactorioController
 from .factorio import create_save, install_mod, start_gui_client, start_save_gui, start_server, wait_for_rcon
 from . import remote_slurm
 from .vanilla_gui import VanillaGuiDriver, launch_vanilla_gui
+from .vanilla_perception import classify_bmp_file
 from .web_dashboard import FACTORIO_ROUTE, public_dashboard_urls, serve_dashboard
 
 
@@ -66,6 +67,26 @@ def main(argv: list[str] | None = None) -> None:
     )
     vanilla_screenshot_parser.add_argument("--output", help="Output BMP path")
     vanilla_screenshot_parser.add_argument("--method", choices=["auto", "screen", "window"], default="auto")
+
+    vanilla_state_parser = subparsers.add_parser(
+        "vanilla-screen-state",
+        help="Capture and classify the current vanilla Factorio screen state",
+    )
+    vanilla_state_parser.add_argument("--output", help="Output BMP path")
+    vanilla_state_parser.add_argument("--method", choices=["auto", "screen", "window"], default="auto")
+    vanilla_state_parser.add_argument("--no-capture", action="store_true", help="Classify an existing --output BMP")
+
+    vanilla_key_parser = subparsers.add_parser(
+        "vanilla-key",
+        help="Send one vanilla-safe keyboard input to the detected Factorio window",
+    )
+    vanilla_key_parser.add_argument("key", help="Key name, e.g. escape, tab, w, a, s, d, shift")
+    vanilla_key_parser.add_argument("--duration", type=float, default=0.05)
+    vanilla_key_parser.add_argument(
+        "--background",
+        action="store_true",
+        help="Use experimental background PostMessage instead of foreground SendInput",
+    )
 
     vanilla_probe_parser = subparsers.add_parser(
         "vanilla-probe",
@@ -288,6 +309,39 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "vanilla-screenshot":
         snapshot = VanillaGuiDriver(cfg).capture_factorio_window(args.output, method=args.method)
         print_json({"ok": True, "snapshot": snapshot.to_dict(), "method": args.method})
+        return
+
+    if args.command == "vanilla-screen-state":
+        output = args.output or str(cfg.runtime_dir / "vanilla" / "screenshots" / "screen-state.bmp")
+        snapshot = None
+        if not args.no_capture:
+            snapshot = VanillaGuiDriver(cfg).capture_factorio_window(output, method=args.method)
+            output = str(snapshot.path)
+        state = classify_bmp_file(output)
+        print_json(
+            {
+                "ok": True,
+                "screen_state": state.to_dict(),
+                "snapshot": snapshot.to_dict() if snapshot else None,
+                "method": args.method,
+            }
+        )
+        return
+
+    if args.command == "vanilla-key":
+        driver = VanillaGuiDriver(cfg)
+        if args.background:
+            posted = driver.post_key_to_factorio(args.key, duration_seconds=args.duration)
+            print_json({"ok": posted, "mode": "background", "key": args.key, "verified": False})
+            if not posted:
+                raise SystemExit(1)
+        else:
+            activated = driver.activate_factorio(timeout_seconds=5.0)
+            if not activated:
+                print_json({"ok": False, "mode": "foreground", "key": args.key, "reason": "Factorio window not found"})
+                raise SystemExit(1)
+            driver.press_key(args.key, duration_seconds=args.duration)
+            print_json({"ok": True, "mode": "foreground", "key": args.key, "activated": activated})
         return
 
     if args.command == "vanilla-probe":

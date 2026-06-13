@@ -5,6 +5,7 @@ from factorio_ai.vanilla_gui import (
     AchievementPolicyError,
     GuiAutomationError,
     _capture_method,
+    _virtual_key,
     encode_bgra_bmp,
     is_factorio_game_window_title,
     validate_achievement_safe_args,
@@ -85,6 +86,12 @@ class VanillaGuiTests(unittest.TestCase):
         payload = report.to_dict()
         self.assertFalse(payload["can_run_minimized"])
         self.assertFalse(payload["background_input_verified"])
+
+    def test_virtual_key_mapping_rejects_unsupported_keys(self):
+        self.assertEqual(_virtual_key("w"), 0x57)
+        self.assertEqual(_virtual_key("escape"), 0x1B)
+        with self.assertRaises(GuiAutomationError):
+            _virtual_key("f13")
 
 
 if __name__ == "__main__":
