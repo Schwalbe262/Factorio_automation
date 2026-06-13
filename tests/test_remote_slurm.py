@@ -79,7 +79,7 @@ class RemoteSlurmTests(unittest.TestCase):
         setup = _attached_env_setup("/home/user/kakao-bot-worker")
         self.assertIn("/home/user/kakao-bot-worker/config.env", setup)
         self.assertIn("FACTORIO_AI_LLM_*|FACTORIO_AI_VLLM_*|FACTORIO_AI_CONDA_ENV", setup)
-        self.assertIn('export "$key=$value"', setup)
+        self.assertIn('export "\\$key=\\$value"', setup)
 
     def test_strategy_model_benchmark_runs_same_payload_per_model(self):
         result = run_strategy_model_benchmark(

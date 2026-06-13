@@ -248,7 +248,7 @@ print(json.dumps({{
         output = _run_remote(
             f"""set -euo pipefail
 JOB_NAME={json.dumps(cfg.job_name)}
-INNER_COMMAND={json.dumps(inner_command)}
+INNER_COMMAND={shlex.quote(inner_command)}
 JOB_ID="$(squeue -h -u "$USER" -n "$JOB_NAME" -t R -o "%i" | head -1 | tr -d '[:space:]')"
 if [[ -z "$JOB_ID" ]]; then
   echo "{{\\"job_running\\":false}}"
@@ -627,7 +627,7 @@ JOB_NAME={json.dumps(cfg.job_name)}
 TASK_NAME={json.dumps(task_name)}
 RESULT_NAME={json.dumps(result_name)}
 PAYLOAD={json.dumps(payload)}
-INNER_COMMAND={json.dumps(inner_command)}
+INNER_COMMAND={shlex.quote(inner_command)}
 JOB_ID="$(squeue -h -u "$USER" -n "$JOB_NAME" -t R -o "%i" | head -1 | tr -d '[:space:]')"
 if [[ -z "$JOB_ID" ]]; then
   echo "__ERROR__:running job not found for $JOB_NAME"
@@ -705,8 +705,8 @@ def _attached_env_setup(remote_dir: str | None = None) -> str:
         commands.append(
             f"if [[ -f {config_path} ]]; then "
             f"while IFS='=' read -r key value; do "
-            f"case \"$key\" in FACTORIO_AI_LLM_*|FACTORIO_AI_VLLM_*|FACTORIO_AI_CONDA_ENV) "
-            f"export \"$key=$value\";; "
+            f"case \"\\$key\" in FACTORIO_AI_LLM_*|FACTORIO_AI_VLLM_*|FACTORIO_AI_CONDA_ENV) "
+            f"export \"\\$key=\\$value\";; "
             f"esac; "
             f"done < {config_path}; "
             f"fi"
