@@ -44,7 +44,7 @@ class IronPlateSkill:
             return PlannerDecision(None, f"iron plate target reached: {iron_total}/{target}", done=True)
 
         furnace = _select_iron_furnace(observation)
-        drill = nearest_entity(observation, "burner-mining-drill")
+        drill = _select_mining_drill_for_resource(observation, "iron-ore")
         player = player_position(observation)
 
         if furnace and entity_item_count(furnace, "iron-plate") > 0:
@@ -88,9 +88,30 @@ class IronPlateSkill:
                     {"type": "craft", "recipe": "burner-mining-drill", "count": 1},
                     "craft burner mining drill",
                 )
-            return PlannerDecision(None, "missing burner mining drill and cannot craft it from current inventory")
+            if furnace is None and inventory_count(observation, "stone-furnace") > 0:
+                iron = nearest_resource(observation, "iron-ore")
+                if iron is None:
+                    return PlannerDecision(None, "cannot find nearby iron ore")
+                iron_pos = _position(iron)
+                furnace_pos = {"x": iron_pos["x"] + 3, "y": iron_pos["y"]}
+                if distance(player, furnace_pos) > 20:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": _stand_position(furnace_pos)},
+                        "move near iron ore before placing hand-smelting furnace",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "build",
+                        "name": "stone-furnace",
+                        "position": furnace_pos,
+                        "allow_nearby": True,
+                    },
+                    "place hand-smelting furnace near iron ore",
+                )
+            if furnace is None:
+                return PlannerDecision(None, "missing burner mining drill and cannot craft it from current inventory")
 
-        if drill is None:
+        if drill is None and inventory_count(observation, "burner-mining-drill") > 0:
             iron = nearest_resource(observation, "iron-ore")
             if iron is None:
                 return PlannerDecision(None, "cannot find nearby iron ore")
@@ -915,7 +936,7 @@ class SetupPowerSkill:
         player = player_position(observation)
         layout = block or _select_power_layout(observation)
         if layout is None:
-            return PlannerDecision(None, "cannot find a buildable west-facing water site for steam power")
+            return PlannerDecision(None, "cannot find a buildable water site for steam power")
 
         missing = _missing_power_item(observation, layout)
         if missing:
@@ -1150,6 +1171,16 @@ def _nearest_resource_to_position(
         return None
     candidates = [item for item in resources if isinstance(item, dict) and item.get("name") == resource_name]
     return _nearest_to(candidates, position) if candidates else None
+
+
+def _select_mining_drill_for_resource(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
+    drills = [
+        item
+        for item in entities_named(observation, "burner-mining-drill") + entities_named(observation, "electric-mining-drill")
+        if _nearest_resource_to_position(observation, _position(item), resource_name) is not None
+        and distance(_position(item), _position(_nearest_resource_to_position(observation, _position(item), resource_name))) <= 4.5
+    ]
+    return _nearest_to(drills, _position(nearest_resource(observation, resource_name) or {"position": {"x": 0, "y": 0}})) if drills else None
 
 
 def _nearest_observed_enemy(observation: dict[str, Any]) -> dict[str, Any] | None:
@@ -1636,30 +1667,62 @@ def _layout_from_power_site(site: dict[str, Any]) -> dict[str, Any] | None:
     return _power_layout_from_specs(specs)
 
 
-def _power_layout_from_pump_position(position: dict[str, float]) -> dict[str, Any]:
+def _power_layout_from_pump_position(position: dict[str, float], direction: int = WEST) -> dict[str, Any]:
+    turns = _turns_from_west(direction)
     specs = {
         "offshore_pump": {
             "name": "offshore-pump",
             "position": position,
-            "direction": WEST,
+            "direction": direction,
         },
         "boiler": {
             "name": "boiler",
-            "position": {"x": position["x"] + 2, "y": position["y"] - 1},
-            "direction": NORTH,
+            "position": _offset_position(position, _rotate_offset({"x": 2, "y": -1}, turns)),
+            "direction": _rotate_direction(NORTH, turns),
         },
         "steam_engine": {
             "name": "steam-engine",
-            "position": {"x": position["x"] + 2, "y": position["y"] - 4},
-            "direction": NORTH,
+            "position": _offset_position(position, _rotate_offset({"x": 2, "y": -4}, turns)),
+            "direction": _rotate_direction(NORTH, turns),
         },
         "small_electric_pole": {
             "name": "small-electric-pole",
-            "position": {"x": position["x"], "y": position["y"] - 4},
+            "position": _offset_position(position, _rotate_offset({"x": 0, "y": -4}, turns)),
             "direction": NORTH,
         },
     }
     return _power_layout_from_specs(specs)
+
+
+def _turns_from_west(direction: int) -> int:
+    if direction == NORTH:
+        return 1
+    if direction == EAST:
+        return 2
+    if direction == SOUTH:
+        return 3
+    return 0
+
+
+def _rotate_offset(offset: dict[str, float], turns: int) -> dict[str, float]:
+    x = float(offset["x"])
+    y = float(offset["y"])
+    for _ in range(turns):
+        x, y = -y, x
+    return {"x": x, "y": y}
+
+
+def _offset_position(position: dict[str, float], offset: dict[str, float]) -> dict[str, float]:
+    return {"x": float(position["x"]) + float(offset["x"]), "y": float(position["y"]) + float(offset["y"])}
+
+
+def _rotate_direction(direction: int, turns: int) -> int:
+    directions = [NORTH, EAST, SOUTH, WEST]
+    try:
+        index = directions.index(direction)
+    except ValueError:
+        index = 0
+    return directions[(index + turns) % len(directions)]
 
 
 def _power_layout_from_specs(specs: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -1673,7 +1736,7 @@ def _power_layout_from_specs(specs: dict[str, dict[str, Any]]) -> dict[str, Any]
 def _find_steam_power_block(observation: dict[str, Any]) -> dict[str, Any] | None:
     candidates: list[tuple[int, dict[str, Any]]] = []
     for pump in entities_named(observation, "offshore-pump"):
-        layout = _power_layout_from_pump_position(_position(pump))
+        layout = _power_layout_from_pump_position(_position(pump), int(pump.get("direction") or WEST))
         layout["offshore_pump"] = pump
         layout["boiler"] = _entity_near(observation, "boiler", layout["boiler_spec"]["position"], radius=1.0)
         layout["steam_engine"] = _entity_near(observation, "steam-engine", layout["steam_engine_spec"]["position"], radius=1.0)
@@ -1754,6 +1817,7 @@ class ResearchAutomationSkill:
         self.technology = technology
         self.power_skill = SetupPowerSkill()
         self.science_skill = AutomationScienceSkill(target_count=10)
+        self._research_requested = False
 
     def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
         technology = _technology_state(observation, self.technology)
@@ -1767,12 +1831,6 @@ class ResearchAutomationSkill:
             if decision.done:
                 return PlannerDecision({"type": "wait", "ticks": 120}, "wait for power observation to settle")
             return decision
-
-        if _current_research(observation) != self.technology:
-            return PlannerDecision(
-                {"type": "research", "technology": self.technology},
-                f"set current research to {self.technology}",
-            )
 
         lab = _find_research_lab(observation)
         if lab is None:
@@ -1814,6 +1872,27 @@ class ResearchAutomationSkill:
                     "allow_nearby": True,
                 },
                 "place first research lab",
+            )
+
+        if not _lab_powered(lab):
+            decision = self._ensure_lab_power(observation, player, lab)
+            if decision is not None:
+                return decision
+
+        if not bool(_technology_state(observation, "automation-science-pack").get("researched")):
+            return PlannerDecision(
+                {"type": "research", "technology": "automation-science-pack"},
+                "unlock automation science pack trigger technology after lab bootstrap",
+            )
+
+        current = _current_research(observation)
+        if current == self.technology:
+            self._research_requested = True
+        elif not self._research_requested:
+            self._research_requested = True
+            return PlannerDecision(
+                {"type": "research", "technology": self.technology},
+                f"set current research to {self.technology}",
             )
 
         pack_name = "automation-science-pack"
@@ -1897,6 +1976,44 @@ class ResearchAutomationSkill:
 
         return self.power_skill._ensure_item_quantity(observation, player, item, quantity)
 
+    def _ensure_lab_power(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        lab: dict[str, Any],
+    ) -> PlannerDecision | None:
+        lab_position = _position(lab)
+        nearby_pole = _nearest_power_pole_to_supply(observation, lab_position)
+        if nearby_pole is not None:
+            pole_position = _position(nearby_pole)
+            if distance(player, pole_position) > 20:
+                return PlannerDecision({"type": "move_to", "position": pole_position}, "move near lab power pole")
+            return PlannerDecision(
+                {
+                    "type": "connect_power",
+                    "unit_number": nearby_pole.get("unit_number"),
+                    "name": nearby_pole.get("name") or "small-electric-pole",
+                    "position": pole_position,
+                },
+                "connect lab power pole to the starter electric network",
+            )
+
+        decision = self._ensure_item_quantity(observation, player, "small-electric-pole", 1)
+        if decision is not None:
+            return decision
+
+        pole_position = _pole_position_to_supply_entity(observation, lab_position)
+        if distance(player, pole_position) > 20:
+            return PlannerDecision({"type": "move_to", "position": pole_position}, "move near unpowered lab to place supply pole")
+        return PlannerDecision(
+            {
+                "type": "build",
+                "name": "small-electric-pole",
+                "position": pole_position,
+            },
+            "place small electric pole to power the lab",
+        )
+
 
 class ResearchTechnologySkill:
     """Research the next early technology using existing powered labs and red science."""
@@ -1904,6 +2021,7 @@ class ResearchTechnologySkill:
     def __init__(self, technology: str = "logistics") -> None:
         self.technology = technology
         self.bootstrap_skill = ResearchAutomationSkill()
+        self._research_requested = False
 
     def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
         technology = _technology_state(observation, self.technology)
@@ -1923,7 +2041,11 @@ class ResearchTechnologySkill:
                 return PlannerDecision({"type": "wait", "ticks": 120}, "wait for power observation to settle")
             return decision
 
-        if _current_research(observation) != self.technology:
+        current = _current_research(observation)
+        if current == self.technology:
+            self._research_requested = True
+        elif not self._research_requested:
+            self._research_requested = True
             return PlannerDecision(
                 {"type": "research", "technology": self.technology},
                 f"set current research to {self.technology}",
@@ -1967,7 +2089,7 @@ class ResearchTechnologySkill:
             if _any_lab_has_pack(observation, pack_name):
                 return PlannerDecision({"type": "wait", "ticks": 600}, f"wait for lab chain to consume {pack_name}")
 
-            science_decision = AutomationScienceSkill(target_count=packs_needed).next_action(observation)
+            science_decision = BuildItemMallSkill("automation-science-pack", packs_needed).next_action(observation)
             if not science_decision.done:
                 return science_decision
 
@@ -2547,10 +2669,41 @@ def _find_research_lab(observation: dict[str, Any]) -> dict[str, Any] | None:
     return labs[0]
 
 
+def _lab_powered(lab: dict[str, Any]) -> bool:
+    return lab.get("electric_network_connected") is not False
+
+
+def _power_poles(observation: dict[str, Any]) -> list[dict[str, Any]]:
+    names = ["small-electric-pole", "medium-electric-pole", "big-electric-pole", "substation"]
+    poles: list[dict[str, Any]] = []
+    for name in names:
+        poles.extend(entities_named(observation, name))
+    return poles
+
+
+def _nearest_power_pole_to_supply(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:
+    candidates = [pole for pole in _power_poles(observation) if distance(_position(pole), position) <= 2.5]
+    return _nearest_to(candidates, position) if candidates else None
+
+
+def _pole_position_to_supply_entity(observation: dict[str, Any], position: dict[str, float]) -> dict[str, float]:
+    source = _nearest_to(_power_poles(observation), position)
+    if source is None:
+        return {"x": position["x"] + 2.0, "y": position["y"]}
+    source_position = _position(source)
+    dx = source_position["x"] - position["x"]
+    dy = source_position["y"] - position["y"]
+    length = max(0.001, (dx * dx + dy * dy) ** 0.5)
+    return {
+        "x": position["x"] + dx / length * 2.0,
+        "y": position["y"] + dy / length * 2.0,
+    }
+
+
 def _research_labs(observation: dict[str, Any], *, powered_only: bool = False) -> list[dict[str, Any]]:
     labs = entities_named(observation, "lab")
     if powered_only:
-        labs = [lab for lab in labs if lab.get("electric_network_connected") is not False]
+        labs = [lab for lab in labs if _lab_powered(lab)]
     labs.sort(
         key=lambda item: (
             0 if item.get("electric_network_connected") else 1,

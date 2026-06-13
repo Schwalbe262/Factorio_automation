@@ -37,6 +37,12 @@ def base_observation():
             "current": None,
             "progress": 0.0,
             "technologies": {
+                "automation-science-pack": {
+                    "researched": True,
+                    "enabled": True,
+                    "research_unit_count": 1,
+                    "ingredients": {},
+                },
                 "automation": {
                     "researched": False,
                     "enabled": True,
@@ -99,6 +105,35 @@ class PlannerTests(unittest.TestCase):
         decision = IronPlateSkill(target_count=10).next_action(obs)
         self.assertEqual(decision.action["type"], "move_to")
         self.assertEqual(decision.action["position"], {"x": 102.0, "y": 0.0})
+
+    def test_iron_skill_ignores_drills_not_on_iron_patch(self):
+        obs = base_observation()
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 501,
+                "position": {"x": 2, "y": 0},
+                "inventories": {"1": {"coal": 4}},
+            }
+        ]
+        obs["resources"] = [
+            {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 2},
+            {"name": "iron-ore", "position": {"x": 40, "y": 0}, "distance": 40},
+        ]
+        decision = IronPlateSkill(target_count=5).next_action(obs, target_count=5, inventory_only=True)
+        self.assertEqual(decision.action["type"], "move_to")
+        self.assertIn("iron ore", decision.reason)
+
+    def test_iron_skill_hand_smelts_when_no_drill_is_available(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 8, "stone-furnace": 1}
+        obs["resources"] = [
+            {"name": "iron-ore", "position": {"x": 40, "y": 0}, "distance": 40},
+            {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 2},
+        ]
+        decision = IronPlateSkill(target_count=5).next_action(obs, target_count=5, inventory_only=True)
+        self.assertEqual(decision.action["type"], "move_to")
+        self.assertIn("hand-smelting furnace", decision.reason)
 
     def test_mines_ore_when_drill_and_furnace_exist(self):
         obs = base_observation()
@@ -733,6 +768,54 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.done)
         self.assertIsNone(decision.action)
 
+    def test_setup_power_skill_recognizes_non_west_pump_layout(self):
+        obs = base_observation()
+        obs["entities"] = [
+            {
+                "name": "offshore-pump",
+                "unit_number": 611,
+                "position": {"x": 10.5, "y": 10.5},
+                "direction": 4,
+                "distance": 10,
+                "inventories": {},
+                "fluids": {"1": {"name": "water", "amount": 100}},
+            },
+            {
+                "name": "boiler",
+                "unit_number": 612,
+                "position": {"x": 8.5, "y": 11.5},
+                "direction": 8,
+                "distance": 12,
+                "inventories": {"1": {"coal": 5}},
+                "fluids": {
+                    "1": {"name": "water", "amount": 200},
+                    "2": {"name": "steam", "amount": 20},
+                },
+            },
+            {
+                "name": "steam-engine",
+                "unit_number": 613,
+                "position": {"x": 8.5, "y": 14.5},
+                "direction": 8,
+                "status": 1,
+                "distance": 13,
+                "inventories": {},
+                "fluids": {"1": {"name": "steam", "amount": 80}},
+            },
+            {
+                "name": "small-electric-pole",
+                "unit_number": 614,
+                "position": {"x": 10.5, "y": 14.5},
+                "direction": 0,
+                "distance": 12,
+                "inventories": {},
+                "fluids": {},
+            },
+        ]
+        decision = SetupPowerSkill().next_action(obs)
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
+
     def test_research_automation_done_when_technology_researched(self):
         obs = powered_research_observation()
         obs["research"]["technologies"]["automation"]["researched"] = True
@@ -742,9 +825,89 @@ class PlannerTests(unittest.TestCase):
 
     def test_research_automation_sets_current_research_after_power(self):
         obs = powered_research_observation()
+        obs["entities"].append(
+            {
+                "name": "lab",
+                "unit_number": 701,
+                "position": {"x": 13.5, "y": 6.5},
+                "distance": 5,
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
         decision = ResearchAutomationSkill().next_action(obs)
         self.assertEqual(decision.action["type"], "research")
         self.assertEqual(decision.action["technology"], "automation")
+
+    def test_research_automation_builds_lab_before_selecting_research(self):
+        obs = powered_research_observation()
+        obs["inventory"]["lab"] = 1
+        obs["lab_sites"] = [
+            {
+                "powered": True,
+                "pole_unit_number": 604,
+                "pole_position": {"x": 10.5, "y": 6.5},
+                "lab_position": {"x": 13.5, "y": 6.5},
+                "distance": 3,
+            }
+        ]
+        decision = ResearchAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "lab")
+
+    def test_research_automation_unlocks_science_pack_trigger_after_lab(self):
+        obs = powered_research_observation()
+        obs["research"]["technologies"]["automation-science-pack"]["researched"] = False
+        obs["entities"].append(
+            {
+                "name": "lab",
+                "unit_number": 701,
+                "position": {"x": 13.5, "y": 6.5},
+                "distance": 5,
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
+        decision = ResearchAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "research")
+        self.assertEqual(decision.action["technology"], "automation-science-pack")
+
+    def test_research_automation_repairs_unpowered_lab(self):
+        obs = powered_research_observation()
+        obs["inventory"]["small-electric-pole"] = 1
+        obs["entities"].append(
+            {
+                "name": "lab",
+                "unit_number": 701,
+                "position": {"x": 13.5, "y": 6.5},
+                "distance": 5,
+                "electric_network_connected": False,
+                "inventories": {"2": {"automation-science-pack": 10}},
+            }
+        )
+        decision = ResearchAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "small-electric-pole")
+
+    def test_research_automation_continues_when_current_research_is_not_observable(self):
+        obs = powered_research_observation()
+        obs["entities"].append(
+            {
+                "name": "lab",
+                "unit_number": 701,
+                "position": {"x": 13.5, "y": 6.5},
+                "distance": 5,
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
+        skill = ResearchAutomationSkill()
+        first = skill.next_action(obs)
+        self.assertEqual(first.action["type"], "research")
+        obs["inventory"]["automation-science-pack"] = 10
+        second = skill.next_action(obs)
+        self.assertEqual(second.action["type"], "insert")
+        self.assertEqual(second.action["item"], "automation-science-pack")
 
     def test_research_automation_builds_lab_when_item_and_site_exist(self):
         obs = powered_research_observation()
@@ -862,6 +1025,16 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "research")
         self.assertEqual(decision.action["technology"], "logistics")
 
+    def test_research_logistics_continues_when_current_research_is_not_observable(self):
+        obs = powered_logistics_observation()
+        skill = ResearchTechnologySkill("logistics")
+        first = skill.next_action(obs)
+        self.assertEqual(first.action["type"], "research")
+        obs["inventory"]["automation-science-pack"] = 20
+        second = skill.next_action(obs)
+        self.assertEqual(second.action["type"], "insert")
+        self.assertEqual(second.action["item"], "automation-science-pack")
+
     def test_research_logistics_inserts_red_science_into_lab(self):
         obs = powered_logistics_observation()
         obs["research"]["current"] = "logistics"
@@ -876,11 +1049,23 @@ class PlannerTests(unittest.TestCase):
         obs["inventory"] = {"iron-plate": 20, "iron-gear-wheel": 1, "copper-plate": 1}
         obs["craftable"] = {"automation-science-pack": 1}
         decision = ResearchTechnologySkill("logistics").next_action(obs)
-        self.assertEqual(decision.action["type"], "craft")
-        self.assertEqual(decision.action["recipe"], "automation-science-pack")
+        self.assertFalse(
+            decision.action["type"] == "craft"
+            and decision.action.get("recipe") == "automation-science-pack"
+        )
 
     def test_circuit_automation_delegates_until_automation_is_researched(self):
         obs = powered_research_observation()
+        obs["entities"].append(
+            {
+                "name": "lab",
+                "unit_number": 701,
+                "position": {"x": 13.5, "y": 6.5},
+                "distance": 5,
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
         decision = CircuitAutomationSkill().next_action(obs)
         self.assertEqual(decision.action["type"], "research")
         self.assertEqual(decision.action["technology"], "automation")

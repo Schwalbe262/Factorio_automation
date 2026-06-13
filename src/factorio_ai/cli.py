@@ -302,11 +302,23 @@ def main(argv: list[str] | None = None) -> None:
     power_parser = subparsers.add_parser("run-power-mvp", help="Build the first steam power block")
     power_parser.add_argument("--max-steps", type=int, default=900)
 
+    no_mod_power_parser = subparsers.add_parser(
+        "run-no-mod-power-mvp",
+        help="Build the first steam power block through the no-custom-mod RCON/Lua adapter",
+    )
+    no_mod_power_parser.add_argument("--max-steps", type=int, default=900)
+
     automation_research_parser = subparsers.add_parser(
         "run-automation-research-mvp",
         help="Build and feed the first lab to research Automation",
     )
     automation_research_parser.add_argument("--max-steps", type=int, default=1500)
+
+    no_mod_automation_research_parser = subparsers.add_parser(
+        "run-no-mod-automation-research-mvp",
+        help="Build and feed the first lab to research Automation through the no-custom-mod RCON/Lua adapter",
+    )
+    no_mod_automation_research_parser.add_argument("--max-steps", type=int, default=1500)
 
     circuit_automation_parser = subparsers.add_parser(
         "run-circuit-automation-mvp",
@@ -314,6 +326,13 @@ def main(argv: list[str] | None = None) -> None:
     )
     circuit_automation_parser.add_argument("--target", type=int, default=5)
     circuit_automation_parser.add_argument("--max-steps", type=int, default=1800)
+
+    no_mod_circuit_automation_parser = subparsers.add_parser(
+        "run-no-mod-circuit-automation-mvp",
+        help="Build a powered assembler cell for electronic circuits through the no-custom-mod RCON/Lua adapter",
+    )
+    no_mod_circuit_automation_parser.add_argument("--target", type=int, default=5)
+    no_mod_circuit_automation_parser.add_argument("--max-steps", type=int, default=1800)
 
     logistics_research_parser = subparsers.add_parser(
         "run-logistics-research-mvp",
@@ -935,6 +954,21 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(1)
         return
 
+    if args.command == "run-no-mod-power-mvp":
+        summary = ModlessFactorioController(cfg).run_power_mvp(max_steps=args.max_steps)
+        print_json(
+            {
+                "ok": summary.ok,
+                "reason": summary.reason,
+                "steps": summary.steps,
+                "logPath": str(summary.log_path),
+                "mode": "no-mod-rcon-lua",
+            }
+        )
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
     if args.command == "run-automation-research-mvp":
         summary = FactorioController(cfg).run_automation_research_mvp(max_steps=args.max_steps)
         print_json(
@@ -950,6 +984,22 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(1)
         return
 
+    if args.command == "run-no-mod-automation-research-mvp":
+        summary = ModlessFactorioController(cfg).run_automation_research_mvp(max_steps=args.max_steps)
+        print_json(
+            {
+                "ok": summary.ok,
+                "reason": summary.reason,
+                "steps": summary.steps,
+                "automationSciencePackCount": summary.item_count,
+                "logPath": str(summary.log_path),
+                "mode": "no-mod-rcon-lua",
+            }
+        )
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
     if args.command == "run-circuit-automation-mvp":
         summary = FactorioController(cfg).run_circuit_automation_mvp(target=args.target, max_steps=args.max_steps)
         print_json(
@@ -959,6 +1009,22 @@ def main(argv: list[str] | None = None) -> None:
                 "steps": summary.steps,
                 "electronicCircuitCount": summary.item_count,
                 "logPath": str(summary.log_path),
+            }
+        )
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-no-mod-circuit-automation-mvp":
+        summary = ModlessFactorioController(cfg).run_circuit_automation_mvp(target=args.target, max_steps=args.max_steps)
+        print_json(
+            {
+                "ok": summary.ok,
+                "reason": summary.reason,
+                "steps": summary.steps,
+                "electronicCircuitCount": summary.item_count,
+                "logPath": str(summary.log_path),
+                "mode": "no-mod-rcon-lua",
             }
         )
         if not summary.ok:

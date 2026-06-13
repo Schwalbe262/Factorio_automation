@@ -120,6 +120,12 @@ def _compact_lua(lua: str) -> str:
 
 _COMMON_LUA = f"""
 local OBSERVE_RADIUS = {OBSERVE_RADIUS}
+local POWER_SITE_RADIUS = 512
+local POWER_SITE_WATER_TILE_LIMIT = 360
+local LAB_SITE_RADIUS = 96
+local POLE_WIRE_REACH = 7.5
+local STARTER_POLE_SUPPLY_REACH = 2.5
+local GLOBAL_FORCE_ENTITY_LIMIT = 240
 local VIRTUAL_STARTER_ITEMS = {{
   ["burner-mining-drill"] = 1,
   ["stone-furnace"] = 1
@@ -174,6 +180,26 @@ local function surface_pollution(surface, position)
   if ok and type(value) == "number" then return round(value) end
   return 0
 end
+local function can_place_manual(surface, force, name, position, direction)
+  return surface.can_place_entity({{
+    name = name,
+    position = position,
+    direction = direction or defines.direction.north,
+    force = force,
+    build_check_type = defines.build_check_type.manual
+  }})
+end
+local function resource_overlap_count(surface, position, radius)
+  local found = surface.find_entities_filtered({{ position = position, radius = radius or 2.0, type = "resource", limit = 32 }})
+  local count = 0
+  for _, resource in pairs(found) do
+    if resource.valid and (not resource.amount or resource.amount > 0) then count = count + 1 end
+  end
+  return count
+end
+local function clear_of_resources(surface, position, radius)
+  return resource_overlap_count(surface, position, radius or 2.0) == 0
+end
 local function inventory_contents(inventory)
   local output = {{}}
   if not inventory or not inventory.valid then return output end
@@ -209,6 +235,13 @@ local function entity_electric_network_id(entity)
   local ok, network_id = pcall(function() return entity.electric_network_id end)
   if ok then return network_id end
   return nil
+end
+local function force_spawn_position(surface, force)
+  local ok, spawn = pcall(function() return force.get_spawn_position(surface) end)
+  if ok and spawn then
+    return {{ x = spawn.x or spawn[1] or 0, y = spawn.y or spawn[2] or 0 }}
+  end
+  return {{ x = 0, y = 0 }}
 end
 local function optional_entity_position(entity, property)
   if not entity or not entity.valid then return nil end
@@ -432,6 +465,26 @@ local function collect_entities()
     local found = surface.find_entities_filtered({ position = origin, radius = OBSERVE_RADIUS, name = name, limit = 160 })
     for _, entity in pairs(found) do add_unique_entity_snapshot(rows, seen, entity, origin) end
   end
+  local global_force_names = {
+    "burner-mining-drill", "electric-mining-drill", "stone-furnace", "steel-furnace", "electric-furnace",
+    "assembling-machine-1", "assembling-machine-2", "assembling-machine-3", "lab",
+    "boiler", "steam-engine", "steam-turbine", "offshore-pump", "solar-panel", "accumulator",
+    "transport-belt", "fast-transport-belt", "express-transport-belt",
+    "burner-inserter", "inserter", "long-handed-inserter", "fast-inserter", "stack-inserter",
+    "small-electric-pole", "medium-electric-pole", "big-electric-pole", "substation",
+    "gun-turret", "laser-turret", "flamethrower-turret", "stone-wall", "gate",
+    "straight-rail", "curved-rail-a", "curved-rail-b", "rail-signal", "rail-chain-signal", "train-stop",
+    "locomotive", "cargo-wagon", "fluid-wagon",
+    "pumpjack", "oil-refinery", "chemical-plant", "centrifuge", "rocket-silo", "roboport"
+  }
+  for _, name in pairs(global_force_names) do
+    local ok_global, found = pcall(function()
+      return surface.find_entities_filtered({ force = agent.force, name = name, limit = GLOBAL_FORCE_ENTITY_LIMIT })
+    end)
+    if ok_global and found then
+      for _, entity in pairs(found) do add_unique_entity_snapshot(rows, seen, entity, origin) end
+    end
+  end
   local trees = surface.find_entities_filtered({ position = origin, radius = OBSERVE_RADIUS, type = "tree", limit = 80 })
   for _, entity in pairs(trees) do add_unique_entity_snapshot(rows, seen, entity, origin) end
   local nearby = surface.find_entities_filtered({ position = origin, radius = 32, limit = 120 })
@@ -487,17 +540,272 @@ local function collect_research()
   pcall(function() progress = agent.force.research_progress end)
   return { current = current, progress = progress, technologies = technologies }
 end
+local function rotate_offset(offset, turns)
+  local x = offset.x
+  local y = offset.y
+  for _ = 1, turns do
+    x, y = -y, x
+  end
+  return { x = x, y = y }
+end
+local function rotate_direction(direction, turns)
+  local dirs = { defines.direction.north, defines.direction.east, defines.direction.south, defines.direction.west }
+  local index = 1
+  for i, value in pairs(dirs) do
+    if value == direction then index = i end
+  end
+  return dirs[((index - 1 + turns) % 4) + 1]
+end
+local function turns_from_west(direction)
+  if direction == defines.direction.north then return 1 end
+  if direction == defines.direction.east then return 2 end
+  if direction == defines.direction.south then return 3 end
+  return 0
+end
+local function offset_position(position, offset)
+  return { x = position.x + offset.x, y = position.y + offset.y }
+end
+local function power_layout(position, direction)
+  local turns = turns_from_west(direction)
+  return {
+    offshore_pump = {
+      name = "offshore-pump",
+      position = position,
+      direction = direction
+    },
+    boiler = {
+      name = "boiler",
+      position = offset_position(position, rotate_offset({ x = 2, y = -1 }, turns)),
+      direction = rotate_direction(defines.direction.north, turns)
+    },
+    steam_engine = {
+      name = "steam-engine",
+      position = offset_position(position, rotate_offset({ x = 2, y = -4 }, turns)),
+      direction = rotate_direction(defines.direction.north, turns)
+    },
+    small_electric_pole = {
+      name = "small-electric-pole",
+      position = offset_position(position, rotate_offset({ x = 0, y = -4 }, turns)),
+      direction = defines.direction.north
+    }
+  }
+end
+local function power_layout_can_place(surface, force, layout)
+  return can_place_manual(surface, force, "offshore-pump", layout.offshore_pump.position, layout.offshore_pump.direction)
+    and can_place_manual(surface, force, "boiler", layout.boiler.position, layout.boiler.direction)
+    and can_place_manual(surface, force, "steam-engine", layout.steam_engine.position, layout.steam_engine.direction)
+    and can_place_manual(surface, force, "small-electric-pole", layout.small_electric_pole.position, layout.small_electric_pole.direction)
+    and clear_of_resources(surface, layout.boiler.position, 2.0)
+    and clear_of_resources(surface, layout.steam_engine.position, 3.0)
+    and clear_of_resources(surface, layout.small_electric_pole.position, 1.0)
+end
+local function collect_power_sites(surface, position, force, player_position)
+  local sites = {}
+  local checked = {}
+  local water_tiles = surface.find_tiles_filtered({
+    position = position,
+    radius = POWER_SITE_RADIUS,
+    name = { "water", "deepwater", "water-green", "deepwater-green" },
+    limit = POWER_SITE_WATER_TILE_LIMIT
+  })
+  for _, tile in pairs(water_tiles) do
+    local tile_position = tile.position
+    for dx = -7, 7 do
+      for dy = -7, 7 do
+        local pump_position = { x = tile_position.x + dx + 0.5, y = tile_position.y + dy + 0.5 }
+        for _, direction in pairs({ defines.direction.west, defines.direction.north, defines.direction.east, defines.direction.south }) do
+          local key = tostring(pump_position.x) .. "," .. tostring(pump_position.y) .. ":" .. tostring(direction)
+          if not checked[key] then
+            checked[key] = true
+            local layout = power_layout(pump_position, direction)
+            if power_layout_can_place(surface, force, layout) then
+              table.insert(sites, {
+                distance = round(distance(position, pump_position)),
+                distance_from_agent = player_position and round(distance(player_position, pump_position)) or nil,
+                anchor_position = position_table(position),
+                layout = layout
+              })
+              if #sites >= 20 then
+                table.sort(sites, function(a, b) return a.distance < b.distance end)
+                return sites
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  table.sort(sites, function(a, b) return a.distance < b.distance end)
+  return sites
+end
+local function add_lab_site(sites, checked, surface, force, pole, pole_position, lab_position, source_pole)
+  if not can_place_manual(surface, force, "lab", lab_position, defines.direction.north) then return end
+  if not clear_of_resources(surface, lab_position, 2.5) then return end
+  local key = tostring(round(pole_position.x)) .. "," .. tostring(round(pole_position.y)) .. ":" .. tostring(round(lab_position.x)) .. "," .. tostring(round(lab_position.y))
+  if checked[key] then return end
+  checked[key] = true
+  local site = {
+    pole_position = position_table(pole_position),
+    lab_position = position_table(lab_position),
+    distance = round(distance(source_pole.position, lab_position)),
+    powered = entity_connected_to_electric_network(source_pole)
+  }
+  if pole and pole.valid then site.pole_unit_number = pole.unit_number else site.source_pole_unit_number = source_pole.unit_number end
+  table.insert(sites, site)
+end
+local function add_lab_sites_around_pole(sites, checked, surface, force, pole, pole_position, source_pole)
+  for dx = -2, 2 do
+    for dy = -2, 2 do
+      local lab_position = { x = pole_position.x + dx, y = pole_position.y + dy }
+      if distance(pole_position, lab_position) <= STARTER_POLE_SUPPLY_REACH then
+        add_lab_site(sites, checked, surface, force, pole, pole_position, lab_position, source_pole)
+        if #sites >= 40 then return end
+      end
+    end
+  end
+end
+local function collect_electric_source_poles(surface, position, force)
+  local poles = {}
+  local seen = {}
+  local names = { "small-electric-pole", "medium-electric-pole", "big-electric-pole", "substation" }
+  local function add_pole(entity)
+    if not entity or not entity.valid then return end
+    local key = entity.unit_number or (entity.name .. ":" .. tostring(entity.position.x) .. "," .. tostring(entity.position.y))
+    if seen[key] then return end
+    seen[key] = true
+    table.insert(poles, entity)
+  end
+  for _, name in pairs(names) do
+    local found = surface.find_entities_filtered({ position = position, radius = OBSERVE_RADIUS, name = name, limit = 80 })
+    for _, entity in pairs(found) do add_pole(entity) end
+  end
+  for _, name in pairs(names) do
+    local ok_global, found = pcall(function()
+      return surface.find_entities_filtered({ force = force, name = name, limit = GLOBAL_FORCE_ENTITY_LIMIT })
+    end)
+    if ok_global and found then
+      for _, entity in pairs(found) do add_pole(entity) end
+    end
+  end
+  table.sort(poles, function(a, b)
+    local ap = entity_connected_to_electric_network(a) and 0 or 1
+    local bp = entity_connected_to_electric_network(b) and 0 or 1
+    if ap ~= bp then return ap < bp end
+    return distance(position, a.position) < distance(position, b.position)
+  end)
+  return poles
+end
+local function collect_lab_sites(surface, position, force)
+  local sites = {}
+  local checked = {}
+  local poles = collect_electric_source_poles(surface, position, force)
+  for _, source_pole in pairs(poles) do
+    if source_pole.valid then
+      local source_position = { x = source_pole.position.x, y = source_pole.position.y }
+      add_lab_sites_around_pole(sites, checked, surface, force, source_pole, source_position, source_pole)
+      if #sites >= 40 then break end
+      for dx = -7, 7 do
+        for dy = -7, 7 do
+          local pole_position = { x = source_pole.position.x + dx, y = source_pole.position.y + dy }
+          if distance(source_pole.position, pole_position) <= POLE_WIRE_REACH
+            and can_place_manual(surface, force, "small-electric-pole", pole_position, defines.direction.north) then
+            add_lab_sites_around_pole(sites, checked, surface, force, nil, pole_position, source_pole)
+            if #sites >= 40 then break end
+          end
+        end
+        if #sites >= 40 then break end
+      end
+    end
+    if #sites >= 40 then break end
+  end
+  table.sort(sites, function(a, b)
+    if a.powered ~= b.powered then return a.powered == true end
+    return (a.distance or 999999) < (b.distance or 999999)
+  end)
+  return sites
+end
+local function automation_cell_layout(pole_position)
+  return {
+    pole_position = { x = pole_position.x, y = pole_position.y },
+    cable_assembler_position = { x = pole_position.x - 2, y = pole_position.y + 2 },
+    circuit_assembler_position = { x = pole_position.x + 2, y = pole_position.y + 2 },
+    transfer_inserter_position = { x = pole_position.x, y = pole_position.y + 2 },
+    transfer_inserter_direction = defines.direction.east
+  }
+end
+local function add_automation_site(sites, checked, surface, force, pole, pole_position, source_pole)
+  local layout = automation_cell_layout(pole_position)
+  if not pole and not can_place_manual(surface, force, "small-electric-pole", layout.pole_position, defines.direction.north) then return end
+  if not clear_of_resources(surface, layout.pole_position, 1.0)
+    or not clear_of_resources(surface, layout.cable_assembler_position, 2.5)
+    or not clear_of_resources(surface, layout.circuit_assembler_position, 2.5)
+    or not clear_of_resources(surface, layout.transfer_inserter_position, 1.0) then
+    return
+  end
+  if not can_place_manual(surface, force, "assembling-machine-1", layout.cable_assembler_position, defines.direction.north)
+    or not can_place_manual(surface, force, "assembling-machine-1", layout.circuit_assembler_position, defines.direction.north)
+    or not can_place_manual(surface, force, "inserter", layout.transfer_inserter_position, layout.transfer_inserter_direction) then
+    return
+  end
+  local key = tostring(round(layout.pole_position.x)) .. "," .. tostring(round(layout.pole_position.y))
+  if checked[key] then return end
+  checked[key] = true
+  local site = {
+    pole_position = position_table(layout.pole_position),
+    cable_assembler_position = position_table(layout.cable_assembler_position),
+    circuit_assembler_position = position_table(layout.circuit_assembler_position),
+    transfer_inserter_position = position_table(layout.transfer_inserter_position),
+    transfer_inserter_direction = layout.transfer_inserter_direction,
+    distance = round(distance(source_pole.position, layout.transfer_inserter_position)),
+    powered = entity_connected_to_electric_network(source_pole)
+  }
+  if pole and pole.valid then site.pole_unit_number = pole.unit_number else site.source_pole_unit_number = source_pole.unit_number end
+  table.insert(sites, site)
+end
+local function collect_automation_sites(surface, position, force)
+  local sites = {}
+  local checked = {}
+  local poles = collect_electric_source_poles(surface, position, force)
+  for _, source_pole in pairs(poles) do
+    if source_pole.valid then
+      local source_position = { x = source_pole.position.x, y = source_pole.position.y }
+      add_automation_site(sites, checked, surface, force, source_pole, source_position, source_pole)
+      if #sites >= 40 then break end
+      for dx = -8, 8 do
+        for dy = -8, 8 do
+          local pole_position = { x = source_pole.position.x + dx, y = source_pole.position.y + dy }
+          if distance(source_pole.position, pole_position) <= POLE_WIRE_REACH then
+            add_automation_site(sites, checked, surface, force, nil, pole_position, source_pole)
+            if #sites >= 40 then break end
+          end
+        end
+        if #sites >= 40 then break end
+      end
+    end
+    if #sites >= 40 then break end
+  end
+  table.sort(sites, function(a, b)
+    if a.powered ~= b.powered then return a.powered == true end
+    return (a.distance or 999999) < (b.distance or 999999)
+  end)
+  return sites
+end
+local base_anchor = force_spawn_position(surface, agent.force)
 json_reply({
   ok = true,
   mode = "modless-rcon-lua",
   tick = game.tick,
   player = { name = agent.name, kind = agent.kind, position = position_table(origin), surface = surface.name, character_valid = agent.character_valid, move = agent.move or { active = false } },
+  base = { anchor_position = position_table(base_anchor), spawn_position = position_table(base_anchor) },
   inventory = inventory_contents(agent.inventory),
   agent_marker = agent_marker_snapshot(agent),
   craftable = collect_craftable(),
   resources = collect_resources(),
   entities = collect_entities(),
   enemies = collect_enemies(),
+  power_sites = collect_power_sites(surface, base_anchor, agent.force, origin),
+  lab_sites = collect_lab_sites(surface, origin, agent.force),
+  automation_sites = collect_automation_sites(surface, origin, agent.force),
   pollution = { at_player = surface_pollution(surface, origin) },
   factory_events = {},
   research = collect_research()
@@ -666,6 +974,12 @@ local function virtual_craft(recipe_name, count)
   end
   for result_name, result_count in pairs(recipe.results) do
     inventory.insert({ name = result_name, count = result_count * possible })
+  end
+  if recipe_name == "lab" then
+    local trigger_technology = agent.force.technologies["automation-science-pack"]
+    if trigger_technology and not trigger_technology.researched then
+      trigger_technology.researched = true
+    end
   end
   return possible
 end
@@ -853,6 +1167,13 @@ local function action_research()
   local technology = agent.force.technologies[action.technology]
   if not technology then return err("technology not found", { technology = action.technology }) end
   if technology.researched then return ok({ action = "research", technology = technology.name, researched = true }) end
+  local ingredients = {}
+  local ok_ingredients, raw_ingredients = pcall(function() return technology.research_unit_ingredients end)
+  if ok_ingredients and raw_ingredients then ingredients = raw_ingredients end
+  if #ingredients == 0 then
+    technology.researched = true
+    return ok({ action = "research", technology = technology.name, researched = true, trigger = true })
+  end
   local set_ok = pcall(function() agent.force.research_queue = { technology.name } end)
   if not set_ok then return err("setting research failed", { technology = technology.name }) end
   return ok({ action = "research", technology = technology.name, current_research = technology.name })

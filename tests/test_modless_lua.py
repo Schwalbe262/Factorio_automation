@@ -12,6 +12,14 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("agent_marker", command)
         self.assertIn("add_chart_tag", command)
         self.assertIn("return ensure_server_agent()", command)
+        self.assertIn("power_sites = collect_power_sites", command)
+        self.assertIn("lab_sites = collect_lab_sites", command)
+        self.assertIn("automation_sites = collect_automation_sites", command)
+        self.assertIn("GLOBAL_FORCE_ENTITY_LIMIT", command)
+        self.assertIn("force = agent.force", command)
+        self.assertIn("base = { anchor_position", command)
+        self.assertIn("clear_of_resources", command)
+        self.assertIn("distance_from_agent", command)
         self.assertNotIn("ai_observe", command)
         self.assertNotIn("factorio_ai_autoplayer", command)
 
@@ -42,6 +50,16 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("remember_agent_marker", command)
         self.assertIn("agent_marker", command)
         self.assertIn("[AI]", command)
+
+    def test_action_handles_virtual_lab_trigger_research(self):
+        command = build_modless_action_command({"type": "craft", "recipe": "lab", "count": 1})
+        self.assertIn('recipe_name == "lab"', command)
+        self.assertIn('agent.force.technologies["automation-science-pack"]', command)
+
+    def test_action_research_completes_trigger_technology(self):
+        command = build_modless_action_command({"type": "research", "technology": "automation-science-pack"})
+        self.assertIn("research_unit_ingredients", command)
+        self.assertIn("trigger = true", command)
 
 
 if __name__ == "__main__":
