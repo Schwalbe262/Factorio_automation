@@ -46,10 +46,15 @@ Do not confuse the Codex/handoff context with the local Slurm LLM prompt context
 
 - `README.md`, `AGENT_HANDOFF.md`, and similar documents are long-form handoff material for humans,
   Codex, and other coding agents. They are not injected wholesale into every strategy request.
-- The active 4B and 9B Slurm workers currently run vLLM with `--max-model-len 4096` for stability on
-  one GPU. The 27B comparison worker is queued with `--max-model-len 8192`.
-- Strategy requests send a compact current-state payload: objective, inventory, target deficits,
-  bottlenecks, site/link summaries, power state, research state, threats, and implemented skill names.
+- The active 4B and 9B Slurm workers run vLLM with `--max-model-len 32768` by default. This is an
+  execution setting, not the native Qwen context limit. Qwen3.5 supports much longer contexts, but
+  the worker setting should be increased in measured steps after checking GPU memory and latency.
+  The 27B comparison worker is also queued with `--max-model-len 32768`.
+- Strategy requests send a bounded current-state payload: objective, inventory, target deficits,
+  bottlenecks, site/link summaries, layout simulation candidates, power state, research state,
+  threats, and implemented skill names. The 4B fast worker test budget is now 16KB+ JSON payloads,
+  because the worker context limit is 32K tokens; larger raw design archives should still use
+  retrieval or the larger worker path.
 - Long-term Factorio knowledge should be added through structured recipe/technology data, design
   pattern summaries, and retrieval of relevant blueprint notes, not by appending a 300k markdown file
   to every LLM call.
@@ -403,6 +408,28 @@ The intended planner flow is:
 4. Ask the Slurm LLM worker to rank designs against the current game state.
 5. Execute only validated skill/build actions through the active executor.
 
+## Layout Improvement Simulation
+
+`plan_factory_site` is implemented as a safe planning skill. It does not demolish or build anything.
+When urgent production, defense, research, and power work are not blocking progress, the LLM can use
+idle strategy cycles to inspect the current site graph and generate simulated improvement candidates.
+
+The current layout evaluator separates:
+
+- hard issues: disconnected power, incomplete logistics links, manual fuel/feed, remote starter power,
+  or production blocks placed on starter resource patches;
+- optimization opportunities: nonstandard smelting rows, inefficient green-circuit ratios, long
+  intermediate-item flows, manual lab feed, scattered mall cells, and belt-capacity risk;
+- simulation candidates: before/after estimates for pattern changes such as `3 cable : 2 circuit`
+  green-circuit cells, parallel smelting columns, lab daisy chains, mall compaction, flow shortening,
+  and extra belt lanes.
+
+The simulation is RateCalculator-style static reasoning: recipe rates, machine counts, estimated
+item flow, belt capacity, footprint, and distance are scored without applying the layout to the live
+map. A future build command can take the best saved candidate and hand it to a deterministic executor
+that validates exact tiles, collisions, power, belts, inserters, and resource preservation before
+building.
+
 ## Spatial And Rail Planning
 
 Factory placement is a strategic concern, not only a build-detail concern. The strategic payload
@@ -555,7 +582,7 @@ $env:FACTORIO_AI_SLURM_GPUS_PER_NODE="1"
 $env:FACTORIO_AI_SLURM_GRES="gpu:1"
 $env:FACTORIO_AI_SLURM_PARTITION="gpu4,gpu2,gpu1"
 $env:FACTORIO_AI_VLLM_MODEL="Qwen/Qwen3.5-4B"
-$env:FACTORIO_AI_VLLM_ARGS="--max-model-len 4096 --gpu-memory-utilization 0.85 --enforce-eager"
+$env:FACTORIO_AI_VLLM_ARGS="--max-model-len 32768 --gpu-memory-utilization 0.85 --enforce-eager"
 $env:FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER="0"
 factorio-ai slurm-start-worker
 ```

@@ -21,6 +21,7 @@ IMPLEMENTED_SKILLS = {
     "research_logistics": "ResearchTechnologySkill",
     "bootstrap_build_item_mall": "BuildItemMallSkill",
     "build_starter_defense": "StarterDefenseSkill",
+    "plan_factory_site": "FactoryLayoutImprovementSkill",
 }
 
 

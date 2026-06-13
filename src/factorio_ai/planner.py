@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 from .knowledge import RECIPES
+from .monitor import estimate_factory_sites, estimate_logistics_links
 from .models import (
     PlannerDecision,
     craftable_count,
@@ -24,6 +26,724 @@ SOUTH = 8
 WEST = 12
 FURNACE_RESOURCE_RADIUS = 12.0
 WALK_FUEL_LOGISTICS_LIMIT = 160.0
+
+
+class FactoryLayoutImprovementSkill:
+    """Plan safe layout improvements before committing to more inefficient builds."""
+
+    def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
+        issues = factory_layout_issues(observation)
+        opportunities = factory_layout_opportunities(observation)
+        candidates = factory_layout_simulation_candidates(observation)
+        if not issues and not opportunities:
+            return PlannerDecision(None, "factory layout has no high-priority issues or optimization opportunities", done=True)
+        issue_text = "; ".join(
+            f"{item['kind']}({item['severity']}): {item['recommendation']}"
+            for item in issues[:5]
+        )
+        opportunity_text = "; ".join(
+            f"{item['kind']}({item['severity']}): {item['recommendation']}"
+            for item in opportunities[:5]
+        )
+        candidate_text = ""
+        if candidates:
+            best = candidates[0]
+            simulation = best.get("simulation") if isinstance(best.get("simulation"), dict) else {}
+            candidate_text = (
+                f"best_candidate={best.get('candidate_id')} score={simulation.get('score')} "
+                f"not_applied=true"
+            )
+        parts = [part for part in (issue_text, opportunity_text, candidate_text) if part]
+        return PlannerDecision(None, f"layout improvement plan: {'; '.join(parts)}", done=True)
+
+
+def factory_layout_structure(observation: dict[str, Any]) -> dict[str, Any]:
+    sites = [site.to_dict() for site in estimate_factory_sites(observation)]
+    links = [link.to_dict() for link in estimate_logistics_links(observation)]
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    positions = [
+        entity.get("position")
+        for entity in entities
+        if isinstance(entity, dict) and isinstance(entity.get("position"), dict)
+    ]
+    site_kind_counts = Counter(str(site.get("kind") or "") for site in sites)
+    item_site_counts = Counter(str(site.get("item") or "") for site in sites if site.get("item"))
+    link_status_counts = Counter(str(link.get("status") or "") for link in links)
+    machine_counts = Counter(str(entity.get("name") or "") for entity in entities if isinstance(entity, dict))
+    footprint = _layout_footprint(positions)
+    return {
+        "site_count": len(sites),
+        "site_kinds": dict(site_kind_counts.most_common(12)),
+        "site_items": dict(item_site_counts.most_common(12)),
+        "link_status": dict(link_status_counts.most_common(12)),
+        "machine_counts": dict(machine_counts.most_common(16)),
+        "factory_centroid": _centroid(positions),
+        "footprint": footprint,
+        "estimated_density": _safe_density(len(positions), footprint),
+    }
+
+
+def factory_layout_issues(observation: dict[str, Any]) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    sites = [site.to_dict() for site in estimate_factory_sites(observation)]
+    links = [link.to_dict() for link in estimate_logistics_links(observation)]
+    player = player_position(observation)
+    spawn = observation.get("base", {}).get("spawn_position") if isinstance(observation.get("base"), dict) else None
+    anchor = spawn if isinstance(spawn, dict) else {"x": 0.0, "y": 0.0}
+
+    for site in sites:
+        kind = str(site.get("kind") or "")
+        status = str(site.get("status") or "")
+        automation = str(site.get("automation_level") or "")
+        machines_text = " ".join(str(item) for item in site.get("machines", []))
+        position = site.get("position") if isinstance(site.get("position"), dict) else None
+        if kind == "steam_power" and position:
+            spawn_distance = distance(anchor, position)
+            player_distance = distance(player, position)
+            if spawn_distance > 160 and player_distance > 120:
+                issues.append(
+                    _layout_issue(
+                        "remote_power_block",
+                        92,
+                        site,
+                        f"starter steam power is {spawn_distance:.0f} tiles from spawn and {player_distance:.0f} tiles from the agent",
+                        "plan a closer main power block or a clear pole corridor before expanding powered automation",
+                    )
+                )
+            if "manual_fuel" in status:
+                issues.append(
+                    _layout_issue(
+                        "manual_power_fuel",
+                        76,
+                        site,
+                        "steam power still depends on manual coal insertion",
+                        "route coal belt/inserter fuel feed to boiler before scaling electric machines",
+                    )
+                )
+        if "burner-bootstrap" in automation and "burner-mining-drill" in machines_text:
+            issues.append(
+                _layout_issue(
+                    "burner_bootstrap_upgrade",
+                    58,
+                    site,
+                    "burner mining remains in a bootstrap layout",
+                    "replace with electric miners and belt-fed smelting once power and build items are stable",
+                )
+            )
+        if kind in {"research_lab_block", "assembler_cell", "circuit_automation"} and "manual" in automation:
+            issues.append(
+                _layout_issue(
+                    "manual_feed_factory_block",
+                    64,
+                    site,
+                    f"{kind} is still manually fed",
+                    "reserve belt/chest feed lanes and convert the block to automated input/output logistics",
+                )
+            )
+
+    for entity_issue in _resource_tile_blocking_issues(observation):
+        issues.append(entity_issue)
+
+    for link in links:
+        status = str(link.get("status") or "")
+        if any(token in status for token in ("incomplete", "missing", "blocked")):
+            issues.append(
+                {
+                    "kind": "incomplete_logistics_link",
+                    "severity": 82,
+                    "site_id": link.get("link_id"),
+                    "item": link.get("item"),
+                    "detail": f"{link.get('from_site')} -> {link.get('to_site')} is {status}",
+                    "recommendation": "finish producer-to-consumer belt or rail link before adding more consumers",
+                }
+            )
+        try:
+            length = float(link.get("length_tiles") or 0.0)
+        except (TypeError, ValueError):
+            length = 0.0
+        if length > 180 and str(link.get("kind")) != "rail":
+            issues.append(
+                {
+                    "kind": "long_nonrail_logistics",
+                    "severity": 70,
+                    "site_id": link.get("link_id"),
+                    "item": link.get("item"),
+                    "detail": f"{link.get('from_site')} -> {link.get('to_site')} is {length:.0f} tiles without rail",
+                    "recommendation": "reserve a rail or trunk-belt corridor instead of extending ad-hoc local belts",
+                }
+            )
+
+    issues.sort(key=lambda item: int(item.get("severity") or 0), reverse=True)
+    return issues[:12]
+
+
+def factory_layout_opportunities(observation: dict[str, Any]) -> list[dict[str, Any]]:
+    sites = [site.to_dict() for site in estimate_factory_sites(observation)]
+    links = [link.to_dict() for link in estimate_logistics_links(observation)]
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    opportunities: list[dict[str, Any]] = []
+
+    smelting_by_item: dict[str, list[dict[str, Any]]] = {}
+    for site in sites:
+        if site.get("kind") == "plate_smelting_line" and site.get("item"):
+            smelting_by_item.setdefault(str(site.get("item")), []).append(site)
+    for item, rows in sorted(smelting_by_item.items()):
+        if len(rows) >= 3:
+            positions = [row.get("position") for row in rows if isinstance(row.get("position"), dict)]
+            footprint = _layout_footprint(positions)
+            opportunities.append(
+                {
+                    "kind": "standardize_smelting_block",
+                    "severity": min(88, 60 + len(rows) * 5),
+                    "site_id": f"smelting:{item}",
+                    "item": item,
+                    "detail": f"{len(rows)} {item} smelting rows/sites are split across footprint {footprint.get('width', 0):.0f}x{footprint.get('height', 0):.0f}",
+                    "recommendation": "migrate bootstrap rows toward repeatable parallel smelting columns with shared ore/fuel/input and plate output lanes",
+                    "parameters": {
+                        "target_pattern": "parallel_smelting_columns",
+                        "grouped_rows": len(rows),
+                        "reserve_input_lanes": ["ore", "coal_or_power"],
+                        "reserve_output_lanes": ["plate"],
+                    },
+                }
+            )
+
+    recipe_counts = Counter(
+        str(entity.get("recipe") or "")
+        for entity in entities
+        if isinstance(entity, dict) and str(entity.get("recipe") or "")
+    )
+    circuit_assemblers = recipe_counts.get("electronic-circuit", 0)
+    cable_assemblers = recipe_counts.get("copper-cable", 0)
+    if circuit_assemblers > 0:
+        ratio = cable_assemblers / max(circuit_assemblers, 1)
+        if ratio < 1.3 or ratio > 1.8:
+            opportunities.append(
+                {
+                    "kind": "rebalance_green_circuit_ratio",
+                    "severity": 78,
+                    "site_id": "circuit_automation:green",
+                    "item": "electronic-circuit",
+                    "detail": f"green circuit block has cable:circuit assembler ratio {cable_assemblers}:{circuit_assemblers}; target is about 3:2",
+                    "recommendation": "rebuild or extend green circuits as a compact 3 cable to 2 circuit assembler pattern with short direct cable transfer",
+                    "parameters": {
+                        "target_pattern": "3_cable_to_2_circuit",
+                        "target_cable_per_circuit_assembler": 1.5,
+                        "current_cable_per_circuit_assembler": round(ratio, 2),
+                    },
+                }
+            )
+    elif any(site.get("kind") == "circuit_automation" for site in sites):
+        opportunities.append(
+            {
+                "kind": "complete_green_circuit_block_pattern",
+                "severity": 72,
+                "site_id": "circuit_automation:green",
+                "item": "electronic-circuit",
+                "detail": "circuit automation exists but no complete electronic-circuit assembler pattern is visible",
+                "recommendation": "convert ad-hoc circuit machines into a ratioed green-circuit cell before scaling red/green science",
+                "parameters": {"target_pattern": "3_cable_to_2_circuit", "inputs": ["copper-plate", "iron-plate"]},
+            }
+        )
+
+    local_intermediates = {"iron-plate", "copper-plate", "iron-gear-wheel", "copper-cable", "electronic-circuit"}
+    for link in links:
+        if not isinstance(link, dict) or link.get("item") not in local_intermediates:
+            continue
+        try:
+            length = float(link.get("length_tiles") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if 45.0 <= length <= 180.0 and str(link.get("kind") or "") != "rail":
+            opportunities.append(
+                {
+                    "kind": "shorten_intermediate_flow",
+                    "severity": 62,
+                    "site_id": link.get("link_id"),
+                    "item": link.get("item"),
+                    "detail": f"{link.get('item')} travels {length:.0f} tiles between {link.get('from_site')} and {link.get('to_site')}",
+                    "recommendation": "co-locate the consumer near the producer or move both onto a planned bus/trunk lane before the flow grows",
+                    "parameters": {"max_pre_bus_distance": 45, "preferred_solution": "co_locate_or_trunk_belt"},
+                }
+            )
+
+    lab_sites = [site for site in sites if site.get("kind") == "research_lab_block"]
+    if lab_sites and any("manual" in str(site.get("automation_level") or "") for site in lab_sites):
+        opportunities.append(
+            {
+                "kind": "upgrade_lab_feed_pattern",
+                "severity": 66,
+                "site_id": "research_lab_block",
+                "item": "research",
+                "detail": "labs are present but the feed pattern is still manual",
+                "recommendation": "use a short lab daisy chain or multi-feed science belt before expanding research throughput",
+                "parameters": {"target_pattern": "lab_daisy_chain", "max_chain_length": 8},
+            }
+        )
+
+    build_item_sites = [site for site in sites if site.get("kind") == "build_item_mall"]
+    if len(build_item_sites) >= 4:
+        positions = [site.get("position") for site in build_item_sites if isinstance(site.get("position"), dict)]
+        footprint = _layout_footprint(positions)
+        if max(float(footprint.get("width") or 0.0), float(footprint.get("height") or 0.0)) > 36:
+            opportunities.append(
+                {
+                    "kind": "compact_build_item_mall",
+                    "severity": 64,
+                    "site_id": "build_item_mall",
+                    "item": "factory_build_items",
+                    "detail": f"build-item assemblers are spread across {footprint.get('width', 0):.0f}x{footprint.get('height', 0):.0f} tiles",
+                    "recommendation": "group mall cells near iron/circuit supply with shared input and chest output lanes",
+                    "parameters": {"target_pattern": "starter_mall_row", "shared_inputs": ["iron-plate", "gear", "circuit"]},
+                }
+            )
+
+    opportunities.sort(key=lambda item: int(item.get("severity") or 0), reverse=True)
+    return opportunities[:12]
+
+
+def factory_layout_simulation_candidates(observation: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return simulation-only layout candidates; nothing here is applied to the game."""
+
+    opportunities = factory_layout_opportunities(observation)
+    sites = [site.to_dict() for site in estimate_factory_sites(observation)]
+    links = [link.to_dict() for link in estimate_logistics_links(observation)]
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    recipe_counts = Counter(
+        str(entity.get("recipe") or "")
+        for entity in entities
+        if isinstance(entity, dict) and str(entity.get("recipe") or "")
+    )
+    candidates: list[dict[str, Any]] = []
+
+    opportunity_kinds = {str(item.get("kind") or "") for item in opportunities}
+    if {"rebalance_green_circuit_ratio", "complete_green_circuit_block_pattern"} & opportunity_kinds:
+        candidates.append(_green_circuit_layout_candidate(recipe_counts))
+
+    smelting_items = sorted(
+        {
+            str(site.get("item"))
+            for site in sites
+            if site.get("kind") == "plate_smelting_line" and site.get("item") in {"iron-plate", "copper-plate"}
+        }
+    )
+    for item in smelting_items:
+        rows = [site for site in sites if site.get("kind") == "plate_smelting_line" and site.get("item") == item]
+        if len(rows) >= 2:
+            candidates.append(_smelting_standardization_candidate(item, rows))
+
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        try:
+            length = float(link.get("length_tiles") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if link.get("item") in {"iron-plate", "copper-plate", "iron-gear-wheel", "copper-cable", "electronic-circuit"} and length >= 45:
+            candidates.append(_flow_shortening_candidate(link, length))
+
+    candidates.extend(_belt_bottleneck_candidates(observation, sites, links))
+
+    lab_count = sum(1 for entity in entities if isinstance(entity, dict) and entity.get("name") == "lab")
+    if lab_count > 0:
+        lab_sites = [site for site in sites if site.get("kind") == "research_lab_block"]
+        if any("manual" in str(site.get("automation_level") or "") for site in lab_sites):
+            candidates.append(_lab_daisy_chain_candidate(lab_count))
+
+    mall_sites = [site for site in sites if site.get("kind") == "build_item_mall"]
+    if len(mall_sites) >= 4:
+        candidates.append(_mall_compaction_candidate(mall_sites))
+
+    candidates = [candidate for candidate in candidates if candidate]
+    candidates.sort(
+        key=lambda item: float((item.get("simulation") if isinstance(item.get("simulation"), dict) else {}).get("score") or 0.0),
+        reverse=True,
+    )
+    return candidates[:8]
+
+
+def _layout_issue(
+    kind: str,
+    severity: int,
+    site: dict[str, Any],
+    detail: str,
+    recommendation: str,
+) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "severity": severity,
+        "site_id": site.get("site_id"),
+        "item": site.get("item"),
+        "position": site.get("position"),
+        "detail": detail,
+        "recommendation": recommendation,
+    }
+
+
+def _resource_tile_blocking_issues(observation: dict[str, Any]) -> list[dict[str, Any]]:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    resources = observation.get("resources") if isinstance(observation.get("resources"), list) else []
+    protected_resources = {"iron-ore", "copper-ore", "coal", "stone", "uranium-ore"}
+    allowed_on_resource = {
+        "burner-mining-drill",
+        "electric-mining-drill",
+        "big-mining-drill",
+        "transport-belt",
+        "underground-belt",
+        "fast-transport-belt",
+        "express-transport-belt",
+    }
+    blocking_names = {
+        "stone-furnace",
+        "steel-furnace",
+        "electric-furnace",
+        "assembling-machine-1",
+        "assembling-machine-2",
+        "assembling-machine-3",
+        "boiler",
+        "steam-engine",
+        "lab",
+    }
+    resource_positions = [
+        resource
+        for resource in resources
+        if isinstance(resource, dict) and str(resource.get("name") or "") in protected_resources
+    ]
+    issues: list[dict[str, Any]] = []
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("name") or "")
+        if name in allowed_on_resource or name not in blocking_names:
+            continue
+        position = entity.get("position") if isinstance(entity.get("position"), dict) else None
+        if not position:
+            continue
+        nearest = min(
+            (
+                resource
+                for resource in resource_positions
+                if isinstance(resource.get("position"), dict)
+            ),
+            key=lambda resource: distance(position, resource["position"]),
+            default=None,
+        )
+        if nearest is None or distance(position, nearest["position"]) > 2.0:
+            continue
+        issues.append(
+            {
+                "kind": "resource_tile_blocked",
+                "severity": 74,
+                "site_id": f"entity:{name}:{entity.get('unit_number') or position}",
+                "item": nearest.get("name"),
+                "position": position,
+                "detail": f"{name} is built on or very near a starter {nearest.get('name')} patch",
+                "recommendation": "avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains",
+            }
+        )
+    return issues[:8]
+
+
+def _layout_footprint(positions: list[Any]) -> dict[str, float]:
+    valid = [position for position in positions if isinstance(position, dict) and "x" in position and "y" in position]
+    if not valid:
+        return {"width": 0.0, "height": 0.0, "area": 0.0}
+    xs = [float(position["x"]) for position in valid]
+    ys = [float(position["y"]) for position in valid]
+    width = max(xs) - min(xs)
+    height = max(ys) - min(ys)
+    return {"width": round(width, 1), "height": round(height, 1), "area": round(max(width, 1.0) * max(height, 1.0), 1)}
+
+
+def _centroid(positions: list[Any]) -> dict[str, float] | None:
+    valid = [position for position in positions if isinstance(position, dict) and "x" in position and "y" in position]
+    if not valid:
+        return None
+    return {
+        "x": round(sum(float(position["x"]) for position in valid) / len(valid), 1),
+        "y": round(sum(float(position["y"]) for position in valid) / len(valid), 1),
+    }
+
+
+def _safe_density(count: int, footprint: dict[str, float]) -> float:
+    try:
+        area = float(footprint.get("area") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if area <= 0:
+        return 0.0
+    return round(count / area, 4)
+
+
+def _green_circuit_layout_candidate(recipe_counts: Counter[str]) -> dict[str, Any]:
+    current_cable = int(recipe_counts.get("copper-cable", 0))
+    current_circuit = int(recipe_counts.get("electronic-circuit", 0))
+    current_circuit = max(current_circuit, 1)
+    groups = max(1, (current_circuit + 1) // 2)
+    proposed_cable = groups * 3
+    proposed_circuit = groups * 2
+    before_rate = _green_circuit_rate_per_minute(current_cable, current_circuit)
+    after_rate = _green_circuit_rate_per_minute(proposed_cable, proposed_circuit)
+    score = 70.0 + min(20.0, max(0.0, after_rate - before_rate) / 12.0)
+    if current_cable == 0:
+        score += 5.0
+    return {
+        "candidate_id": "green-circuit-3-cable-2-circuit-cell",
+        "simulation_only": True,
+        "not_applied": True,
+        "source": "rate-calculator-style static recipe throughput",
+        "target_pattern": "3 copper-cable assemblers feeding 2 electronic-circuit assemblers",
+        "requires_build_command": True,
+        "simulation": {
+            "before": {
+                "copper_cable_assemblers": current_cable,
+                "electronic_circuit_assemblers": current_circuit,
+                "electronic_circuit_per_minute": round(before_rate, 1),
+            },
+            "after": {
+                "copper_cable_assemblers": proposed_cable,
+                "electronic_circuit_assemblers": proposed_circuit,
+                "electronic_circuit_per_minute": round(after_rate, 1),
+            },
+            "delta": {
+                "electronic_circuit_per_minute": round(after_rate - before_rate, 1),
+                "ratio_error_reduced": True,
+            },
+            "score": round(min(score, 95.0), 1),
+        },
+        "notes": [
+            "Simulation assumes assembling-machine-1 speed and recipe max rates.",
+            "Real build still needs tile collision, power, inserter, belt, and input-source validation.",
+        ],
+    }
+
+
+def _green_circuit_rate_per_minute(cable_assemblers: int, circuit_assemblers: int) -> float:
+    cable_recipe = RECIPES["copper-cable"]
+    circuit_recipe = RECIPES["electronic-circuit"]
+    assembler_speed = 0.5
+    cable_per_minute = (
+        cable_assemblers
+        * float(cable_recipe.products["copper-cable"])
+        / float(cable_recipe.time_seconds)
+        * assembler_speed
+        * 60.0
+    )
+    circuit_capacity = (
+        circuit_assemblers
+        * float(circuit_recipe.products["electronic-circuit"])
+        / float(circuit_recipe.time_seconds)
+        * assembler_speed
+        * 60.0
+    )
+    cable_limited_circuits = cable_per_minute / float(circuit_recipe.ingredients["copper-cable"])
+    return min(circuit_capacity, cable_limited_circuits)
+
+
+def _smelting_standardization_candidate(item: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    positions = [row.get("position") for row in rows if isinstance(row.get("position"), dict)]
+    footprint = _layout_footprint(positions)
+    furnace_count = sum(_machine_count(row, "stone-furnace") + _machine_count(row, "steel-furnace") for row in rows)
+    if furnace_count <= 0:
+        furnace_count = len(rows)
+    before_rate = furnace_count * 18.75
+    target_columns = max(1, min(4, (furnace_count + 11) // 12))
+    after_footprint_area = max(16.0, float(footprint.get("area") or 16.0) * 0.72)
+    area_reduction = max(0.0, float(footprint.get("area") or 0.0) - after_footprint_area)
+    score = 58.0 + min(22.0, len(rows) * 4.0) + min(12.0, area_reduction / 20.0)
+    return {
+        "candidate_id": f"{item}-parallel-smelting-columns",
+        "simulation_only": True,
+        "not_applied": True,
+        "source": "blueprint-pattern heuristic plus static furnace throughput",
+        "target_pattern": "parallel smelting columns with shared ore/fuel/input and plate output lanes",
+        "requires_build_command": True,
+        "simulation": {
+            "before": {
+                "sites": len(rows),
+                "furnaces": furnace_count,
+                "plate_per_minute": round(before_rate, 1),
+                "footprint_area": footprint.get("area"),
+            },
+            "after": {
+                "columns": target_columns,
+                "furnaces": furnace_count,
+                "plate_per_minute": round(before_rate, 1),
+                "estimated_footprint_area": round(after_footprint_area, 1),
+            },
+            "delta": {
+                "plate_per_minute": 0.0,
+                "footprint_area": round(-area_reduction, 1),
+                "expandability": "higher; repeatable columns can be copied without re-solving local layout",
+            },
+            "score": round(min(score, 92.0), 1),
+        },
+    }
+
+
+def _flow_shortening_candidate(link: dict[str, Any], length: float) -> dict[str, Any]:
+    target_length = 36.0 if link.get("item") in {"copper-cable", "iron-gear-wheel"} else 45.0
+    saved = max(0.0, length - target_length)
+    score = 55.0 + min(30.0, saved / 4.0)
+    return {
+        "candidate_id": f"shorten-{link.get('item')}-flow",
+        "simulation_only": True,
+        "not_applied": True,
+        "source": "site graph distance optimization",
+        "target_pattern": "co-locate producer/consumer or move both onto planned trunk belt",
+        "requires_build_command": True,
+        "simulation": {
+            "before": {"length_tiles": round(length, 1), "status": link.get("status")},
+            "after": {"target_length_tiles": target_length, "transport_mode": "local_belt_or_trunk_belt"},
+            "delta": {"length_tiles": round(-saved, 1), "lower_buffering_needed": saved > 20},
+            "score": round(min(score, 90.0), 1),
+        },
+    }
+
+
+def _belt_bottleneck_candidates(
+    observation: dict[str, Any],
+    sites: list[dict[str, Any]],
+    links: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    production_by_item = _site_production_estimate_by_item(sites)
+    target_status = observation.get("factory_monitor", {}).get("target_status") if isinstance(observation.get("factory_monitor"), dict) else None
+    target_items = target_status.get("items") if isinstance(target_status, dict) and isinstance(target_status.get("items"), list) else []
+    desired_by_item = {
+        str(row.get("item")): float(row.get("target_per_minute") or 0.0)
+        for row in target_items
+        if isinstance(row, dict) and row.get("item")
+    }
+    candidates: list[dict[str, Any]] = []
+    belt_capacity = 900.0
+    for link in links:
+        if not isinstance(link, dict) or str(link.get("kind") or "") != "belt":
+            continue
+        item = str(link.get("item") or "")
+        if not item:
+            continue
+        required = max(float(production_by_item.get(item, 0.0)), float(desired_by_item.get(item, 0.0)))
+        if required <= belt_capacity * 0.75:
+            continue
+        lanes_needed = max(1, int((required + belt_capacity - 1) // belt_capacity))
+        overload = required / belt_capacity
+        candidates.append(
+            {
+                "candidate_id": f"belt-capacity-{item}",
+                "simulation_only": True,
+                "not_applied": True,
+                "source": "rate-calculator-style flow demand versus vanilla yellow-belt capacity",
+                "target_pattern": "add parallel belt lanes, splitters, or a trunk bus before adding more consumers",
+                "requires_build_command": True,
+                "simulation": {
+                    "before": {
+                        "item": item,
+                        "estimated_required_per_minute": round(required, 1),
+                        "yellow_belt_capacity_per_minute": belt_capacity,
+                        "utilization": round(overload, 2),
+                    },
+                    "after": {
+                        "recommended_lanes": lanes_needed,
+                        "estimated_capacity_per_minute": round(lanes_needed * belt_capacity, 1),
+                    },
+                    "delta": {
+                        "capacity_per_minute": round((lanes_needed * belt_capacity) - belt_capacity, 1),
+                        "prevents_transport_bottleneck": overload >= 1.0,
+                    },
+                    "score": round(min(90.0, 55.0 + overload * 20.0), 1),
+                },
+            }
+        )
+    return candidates[:6]
+
+
+def _site_production_estimate_by_item(sites: list[dict[str, Any]]) -> dict[str, float]:
+    output: dict[str, float] = {}
+    for site in sites:
+        item = str(site.get("item") or "")
+        if not item:
+            continue
+        rate = 0.0
+        if site.get("kind") == "plate_smelting_line":
+            furnace_count = max(
+                1,
+                _machine_count(site, "stone-furnace")
+                + _machine_count(site, "steel-furnace")
+                + _machine_count(site, "electric-furnace"),
+            )
+            rate = furnace_count * 18.75
+        elif site.get("kind") in {"circuit_automation", "build_item_mall", "assembler_cell"}:
+            recipe = RECIPES.get(item)
+            assembler_count = max(
+                1,
+                _machine_count(site, "assembling-machine-1")
+                + _machine_count(site, "assembling-machine-2")
+                + _machine_count(site, "assembling-machine-3"),
+            )
+            if recipe and recipe.products.get(item):
+                rate = assembler_count * float(recipe.products[item]) / float(recipe.time_seconds) * 0.5 * 60.0
+        elif site.get("kind") == "mining_patch":
+            drill_count = max(1, _machine_count(site, "burner-mining-drill") + _machine_count(site, "electric-mining-drill"))
+            rate = drill_count * 30.0
+        if rate > 0:
+            output[item] = output.get(item, 0.0) + rate
+    return output
+
+
+def _lab_daisy_chain_candidate(lab_count: int) -> dict[str, Any]:
+    before_effective = lab_count * 0.5
+    after_effective = lab_count * 0.85
+    return {
+        "candidate_id": "lab-short-daisy-chain-feed",
+        "simulation_only": True,
+        "not_applied": True,
+        "source": "research feed pattern heuristic",
+        "target_pattern": "short lab daisy chain or multi-feed science belt",
+        "requires_build_command": True,
+        "simulation": {
+            "before": {"labs": lab_count, "effective_lab_utilization": 0.5, "effective_labs": round(before_effective, 2)},
+            "after": {"labs": lab_count, "effective_lab_utilization": 0.85, "effective_labs": round(after_effective, 2)},
+            "delta": {"effective_labs": round(after_effective - before_effective, 2)},
+            "score": round(62.0 + min(18.0, lab_count * 2.0), 1),
+        },
+    }
+
+
+def _mall_compaction_candidate(mall_sites: list[dict[str, Any]]) -> dict[str, Any]:
+    positions = [site.get("position") for site in mall_sites if isinstance(site.get("position"), dict)]
+    footprint = _layout_footprint(positions)
+    before_area = float(footprint.get("area") or 0.0)
+    after_area = max(24.0, before_area * 0.65)
+    return {
+        "candidate_id": "starter-mall-row-compaction",
+        "simulation_only": True,
+        "not_applied": True,
+        "source": "blueprint-pattern heuristic",
+        "target_pattern": "starter mall row with shared iron/gear/circuit inputs and chest outputs",
+        "requires_build_command": True,
+        "simulation": {
+            "before": {"cells": len(mall_sites), "footprint_area": round(before_area, 1)},
+            "after": {"cells": len(mall_sites), "estimated_footprint_area": round(after_area, 1)},
+            "delta": {"footprint_area": round(after_area - before_area, 1), "shared_input_lanes": True},
+            "score": round(60.0 + min(22.0, max(0.0, before_area - after_area) / 16.0), 1),
+        },
+    }
+
+
+def _machine_count(site: dict[str, Any], machine: str) -> int:
+    total = 0
+    for row in site.get("machines", []):
+        text = str(row)
+        if not text.startswith(machine):
+            continue
+        if " x" not in text:
+            total += 1
+            continue
+        try:
+            total += int(text.rsplit(" x", 1)[1])
+        except ValueError:
+            total += 1
+    return total
 
 
 class IronPlateSkill:

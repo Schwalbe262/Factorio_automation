@@ -242,7 +242,7 @@ class RemoteSlurmTests(unittest.TestCase):
         }
         compact = compact_strategy_payload(verbose)
         encoded = json.dumps(compact, ensure_ascii=False)
-        self.assertLess(len(encoded), 12000)
+        self.assertLess(len(encoded), 16000)
         self.assertLessEqual(len(compact["bottlenecks"]), 10)
         self.assertLessEqual(len(compact["dependency_targets"]), 40)
         self.assertLessEqual(len(compact["factory_sites"]), 18)
@@ -254,7 +254,16 @@ class RemoteSlurmTests(unittest.TestCase):
         compact = compact_strategy_payload(payload)
         self.assertIn("produce_iron_plate", compact["allowed_skill_names"])
         self.assertIn("automate_electronic_circuit_line", compact["allowed_skill_names"])
+        self.assertIn("plan_factory_site", compact["allowed_skill_names"])
         self.assertNotIn("launch_rocket_program", compact["allowed_skill_names"])
+        circuit_skill = next(item for item in compact["available_skills"] if item["name"] == "produce_electronic_circuit")
+        self.assertIn("bootstrap stock", circuit_skill["role"])
+        automation_skill = next(
+            item for item in compact["available_skills"] if item["name"] == "automate_electronic_circuit_line"
+        )
+        self.assertIn("sustained green-circuit throughput", automation_skill["role"])
+        layout_skill = next(item for item in compact["available_skills"] if item["name"] == "plan_factory_site")
+        self.assertIn("inefficient site placement", layout_skill["role"])
 
     def test_compact_strategy_payload_includes_site_level_logistics(self):
         payload = {
@@ -305,6 +314,33 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertEqual(compact["logistics_links"][0]["from_site"], "group:iron-mining")
         self.assertEqual(compact["logistics_links"][0]["to_site"], "group:iron-smelting")
         self.assertEqual(compact["logistics_links"][0]["length_tiles"], 30.5)
+
+    def test_compact_strategy_payload_includes_layout_opportunities(self):
+        payload = {
+            "objective": "launch_rocket_program",
+            "observation": {
+                "inventory": {},
+                "research": {"technologies": {}},
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "unit_number": 50,
+                        "recipe": "electronic-circuit",
+                        "position": {"x": 10, "y": 0},
+                        "electric_network_connected": True,
+                        "inventories": {},
+                    }
+                ],
+                "resources": [],
+            },
+            "production_targets": {},
+            "available_skills": skill_catalog_payload(),
+        }
+        compact = compact_strategy_payload(payload)
+        layout = compact["layout_improvement"]
+        self.assertEqual(layout["recommended_skill"], "plan_factory_site")
+        self.assertEqual(layout["site_structure"]["machine_counts"]["assembling-machine-1"], 1)
+        self.assertIn("rebalance_green_circuit_ratio", {item["kind"] for item in layout["opportunities"]})
 
 
 if __name__ == "__main__":

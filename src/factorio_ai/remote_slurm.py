@@ -143,9 +143,18 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 env = json.loads(base64.b64decode(sys.argv[2]).decode("utf-8"))
+existing = {{}}
+if path.exists():
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key.startswith("FACTORIO_AI_"):
+            existing[key] = value
+existing.update(env)
 lines = []
-for key in sorted(env):
-    value = str(env[key]).replace(chr(10), " ")
+for key in sorted(existing):
+    value = str(existing[key]).replace(chr(10), " ")
     lines.append(key + "=" + value)
 path.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
 PY
@@ -532,7 +541,43 @@ def submit_task(task: dict[str, Any], cfg: RemoteSlurmConfig | None = None) -> s
     task_id = str(task.get("id") or f"task-{uuid.uuid4().hex}")
     task["id"] = task_id
     task_name = f"{task_id}.json"
-    payload = base64.b64encode(json.dumps(task, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).decode("ascii")
+    payload_bytes = json.dumps(task, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
+    if len(payload_bytes) > 60_000:
+        remote_temp = f"{remote_dir}/queue/.{task_name}.{uuid.uuid4().hex}.tmp"
+        remote_target = f"{remote_dir}/queue/{task_name}"
+        _run_remote(
+            f"""set -euo pipefail
+REMOTE_DIR={json.dumps(remote_dir)}
+TASK_NAME={json.dumps(task_name)}
+mkdir -p "$REMOTE_DIR"/{{queue,running,results,failed,logs}}
+rm -f "$REMOTE_DIR/results/$TASK_NAME" "$REMOTE_DIR/failed/$TASK_NAME" "$REMOTE_DIR/running/$TASK_NAME" "$REMOTE_DIR/running/$TASK_NAME.progress" "$REMOTE_DIR/queue/$TASK_NAME"
+""",
+            cfg,
+            timeout=60,
+        )
+        local_temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(prefix="factorio-ai-task-", suffix=".json", delete=False) as file:
+                file.write(payload_bytes)
+                local_temp_path = Path(file.name)
+            _run_scp(local_temp_path, f"{cfg.user}@{cfg.host}:{remote_temp}", cfg, timeout=cfg.setup_timeout_seconds)
+            _run_remote(
+                f"""set -euo pipefail
+REMOTE_TEMP={json.dumps(remote_temp)}
+REMOTE_TARGET={json.dumps(remote_target)}
+mv "$REMOTE_TEMP" "$REMOTE_TARGET"
+""",
+                cfg,
+                timeout=60,
+            )
+        finally:
+            if local_temp_path is not None:
+                try:
+                    local_temp_path.unlink()
+                except FileNotFoundError:
+                    pass
+        return task_name
+    payload = base64.b64encode(payload_bytes.rstrip(b"\n")).decode("ascii")
     _run_remote(
         f"""set -euo pipefail
 REMOTE_DIR={json.dumps(remote_dir)}
@@ -670,6 +715,46 @@ def request_strategy(
     raise TimeoutError(f"remote strategy task timed out: {task_name}")
 
 
+def request_layout_improvement(
+    objective: str,
+    active_skill: str,
+    active_step: int,
+    observation: dict[str, Any],
+    production_targets: dict[str, float] | None = None,
+    factory_monitor: dict[str, Any] | None = None,
+    cfg: RemoteSlurmConfig | None = None,
+    timeout_seconds: int | None = None,
+    force_attached: bool = False,
+) -> dict[str, Any]:
+    cfg = cfg or config()
+    task = {
+        "id": f"layout-improvement-{uuid.uuid4().hex}",
+        "type": "layout_improvement_request",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "payload": {
+            "objective": objective,
+            "active_skill": active_skill,
+            "active_step": active_step,
+            "observation": observation,
+            "production_targets": production_targets or {},
+            "factory_monitor": factory_monitor or {},
+        },
+    }
+    if force_attached or _use_attached_srun(cfg):
+        return _request_task_via_attached_srun(task, cfg, timeout_seconds or max(cfg.task_timeout_seconds, 120))
+
+    task_name = submit_task(task, cfg)
+    deadline = time.monotonic() + (timeout_seconds or cfg.task_timeout_seconds)
+    while time.monotonic() < deadline:
+        state, data, _raw = read_task_state(task_name, cfg)
+        if state == "result" and data is not None:
+            return data
+        if state == "failed":
+            raise RemoteSlurmError(f"remote layout improvement task failed: {data}")
+        time.sleep(2)
+    raise TimeoutError(f"remote layout improvement task timed out: {task_name}")
+
+
 def request_strategy_model_benchmark(
     strategy_payload: dict[str, Any],
     models: list[str],
@@ -728,7 +813,20 @@ def _request_task_via_attached_srun(
     result_name = f"{task['id']}.result.json"
     task_path = f"{remote_dir}/{task_name}"
     result_path = f"{remote_dir}/{result_name}"
-    payload = base64.b64encode(json.dumps(task, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).decode("ascii")
+    remote_temp = f"{remote_dir}/.{task_name}.{uuid.uuid4().hex}.tmp"
+    payload_bytes = json.dumps(task, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
+    local_temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix="factorio-ai-attached-task-", suffix=".json", delete=False) as file:
+            file.write(payload_bytes)
+            local_temp_path = Path(file.name)
+        _run_scp(local_temp_path, f"{cfg.user}@{cfg.host}:{remote_temp}", cfg, timeout=cfg.setup_timeout_seconds)
+    finally:
+        if local_temp_path is not None:
+            try:
+                local_temp_path.unlink()
+            except FileNotFoundError:
+                pass
     inner_command = (
         "set -euo pipefail; "
         f"{_attached_env_setup(remote_dir)}"
@@ -743,7 +841,7 @@ REMOTE_DIR={json.dumps(remote_dir)}
 JOB_NAME={json.dumps(cfg.job_name)}
 TASK_NAME={json.dumps(task_name)}
 RESULT_NAME={json.dumps(result_name)}
-PAYLOAD={json.dumps(payload)}
+REMOTE_TEMP={json.dumps(remote_temp)}
 INNER_COMMAND={shlex.quote(inner_command)}
 JOB_ID="$(squeue -h -u "$USER" -n "$JOB_NAME" -t R -o "%i" | head -1 | tr -d '[:space:]')"
 if [[ -z "$JOB_ID" ]]; then
@@ -752,13 +850,7 @@ if [[ -z "$JOB_ID" ]]; then
 fi
 TASK_PATH="$REMOTE_DIR/$TASK_NAME"
 RESULT_PATH="$REMOTE_DIR/$RESULT_NAME"
-python3 - "$TASK_PATH" "$PAYLOAD" <<'PY'
-import base64
-import sys
-from pathlib import Path
-
-Path(sys.argv[1]).write_bytes(base64.b64decode(sys.argv[2]) + b"\\n")
-PY
+mv "$REMOTE_TEMP" "$TASK_PATH"
 rm -f "$RESULT_PATH"
 srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/null
 cat "$RESULT_PATH"

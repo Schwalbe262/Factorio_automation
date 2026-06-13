@@ -67,6 +67,43 @@ class SlurmWorkerTests(unittest.TestCase):
             self.assertEqual(result["selected_skill"], "expand_iron_smelting")
             self.assertEqual(result["source"], "heuristic")
 
+    def test_run_task_file_handles_layout_improvement_request(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            task_path = root / "layout-test.json"
+            result_path = root / "layout-result.json"
+            task = {
+                "id": "layout-test",
+                "type": "layout_improvement_request",
+                "payload": {
+                    "objective": "launch_rocket_program",
+                    "active_skill": "bootstrap_build_item_mall",
+                    "active_step": 3,
+                    "observation": {
+                        "inventory": {},
+                        "entities": [
+                            {
+                                "name": "assembling-machine-1",
+                                "unit_number": 10,
+                                "recipe": "electronic-circuit",
+                                "position": {"x": 0, "y": 0},
+                                "electric_network_connected": True,
+                                "inventories": {},
+                            }
+                        ],
+                        "resources": [],
+                    },
+                    "production_targets": {},
+                },
+            }
+            task_path.write_text(json.dumps(task), encoding="utf-8")
+            result = run_task_file(task_path, result_path)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["source"], "heuristic")
+            self.assertEqual(result["selected_candidate_id"], "green-circuit-3-cable-2-circuit-cell")
+            self.assertTrue(result["no_apply"])
+            self.assertFalse(result["build_ready"])
+
 
 if __name__ == "__main__":
     unittest.main()

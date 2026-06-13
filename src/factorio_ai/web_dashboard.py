@@ -16,7 +16,7 @@ from .monitor import summarize_factory
 from .networking import dashboard_urls
 from .modless_lua import ModlessLuaController
 from .skill_registry import annotate_strategy_with_skill_status
-from .strategy import heuristic_strategy
+from .strategy import heuristic_strategy, make_layout_improvement_context
 from .targets import TARGET_ITEMS, load_targets, parse_target_form, save_targets
 from .token_usage import token_usage_summary
 
@@ -236,6 +236,38 @@ TEXT["ko"].update(
         "no_agent_activity": "아직 기록된 AI 위치 marker가 없습니다.",
     }
 )
+TEXT["en"].update(
+    {
+        "layout_improvement": "Layout Improvement",
+        "layout_issues": "Issues",
+        "layout_opportunities": "Opportunities",
+        "layout_candidates": "Simulation Candidates",
+        "no_layout_improvement": "No layout issues, optimization opportunities, or simulation candidates inferred yet.",
+        "candidate": "Candidate",
+        "pattern": "Pattern",
+        "score": "Score",
+        "before": "Before",
+        "after": "After",
+        "delta": "Delta",
+        "not_applied": "Not Applied",
+    }
+)
+TEXT["ko"].update(
+    {
+        "layout_improvement": "\ub808\uc774\uc544\uc6c3 \uac1c\uc120",
+        "layout_issues": "\ubb38\uc81c",
+        "layout_opportunities": "\uac1c\uc120 \uae30\ud68c",
+        "layout_candidates": "\uc2dc\ubbac\ub808\uc774\uc158 \ud6c4\ubcf4",
+        "no_layout_improvement": "\uc544\uc9c1 \ucd94\uc815\ub41c \ub808\uc774\uc544\uc6c3 \ubb38\uc81c, \uac1c\uc120 \uae30\ud68c, \uc2dc\ubbac\ub808\uc774\uc158 \ud6c4\ubcf4\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "candidate": "\ud6c4\ubcf4",
+        "pattern": "\ud328\ud134",
+        "score": "\uc810\uc218",
+        "before": "\uac1c\uc120 \uc804",
+        "after": "\uac1c\uc120 \ud6c4",
+        "delta": "\ubcc0\ud654",
+        "not_applied": "\ubbf8\uc801\uc6a9",
+    }
+)
 
 
 def serve_dashboard(
@@ -380,6 +412,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
     try:
         observation, adapter = observe_dashboard_state(cfg)
         monitor = summarize_factory(observation, objective, production_targets=targets.per_minute)
+        layout_improvement = make_layout_improvement_context(observation)
         strategy = annotate_strategy_with_skill_status(
             heuristic_strategy(objective, observation, targets.per_minute),
             runtime_dir=cfg.runtime_dir,
@@ -394,6 +427,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "agent_marker": observation.get("agent_marker"),
             "adapter": adapter,
             "monitor": monitor,
+            "layout_improvement": layout_improvement,
             "strategy": strategy,
             "token_usage": token_usage,
             "llm_decisions": llm_decisions,
@@ -476,6 +510,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     token_usage = state.get("token_usage") if isinstance(state.get("token_usage"), dict) else {}
     llm_decisions = state.get("llm_decisions") if isinstance(state.get("llm_decisions"), dict) else {}
     agent_marker = state.get("agent_marker") if isinstance(state.get("agent_marker"), dict) else {}
+    layout_improvement = state.get("layout_improvement") if isinstance(state.get("layout_improvement"), dict) else {}
 
     body = f"""
     <section class="summary">
@@ -559,6 +594,11 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
         <h2>{_t(lang, "logistics_links")}</h2>
         {_logistics_link_table(logistics_links, lang)}
       </div>
+    </section>
+
+    <section class="panel">
+      <h2>{_t(lang, "layout_improvement")}</h2>
+      {_layout_improvement_panel(layout_improvement, lang)}
     </section>
 
     <section class="panel">
@@ -942,6 +982,74 @@ def _power_network_table(rows: list[Any], lang: str) -> str:
         f"<th>{_t(lang, 'satisfaction')}</th><th>{_t(lang, 'unconnected')}</th>"
         f"<th>{_t(lang, 'reason')}</th></tr></thead><tbody>{body}</tbody></table>"
     )
+
+
+def _layout_improvement_panel(layout: dict[str, Any], lang: str) -> str:
+    if not layout:
+        return f"<p class=\"muted\">{_t(lang, 'no_layout_improvement')}</p>"
+    issues = layout.get("issues") if isinstance(layout.get("issues"), list) else []
+    opportunities = layout.get("opportunities") if isinstance(layout.get("opportunities"), list) else []
+    candidates = layout.get("simulation_candidates") if isinstance(layout.get("simulation_candidates"), list) else []
+    if not issues and not opportunities and not candidates:
+        return f"<p class=\"muted\">{_t(lang, 'no_layout_improvement')}</p>"
+    return (
+        f"<h3>{_t(lang, 'layout_issues')}</h3>{_layout_item_table(issues, lang)}"
+        f"<h3>{_t(lang, 'layout_opportunities')}</h3>{_layout_item_table(opportunities, lang)}"
+        f"<h3>{_t(lang, 'layout_candidates')}</h3>{_layout_candidate_table(candidates, lang)}"
+    )
+
+
+def _layout_item_table(rows: list[Any], lang: str) -> str:
+    if not rows:
+        return f"<p class=\"muted\">{_t(lang, 'no_layout_improvement')}</p>"
+    body = "".join(
+        "<tr>"
+        f"<td>{escape(str(row.get('kind') or ''))}</td>"
+        f"<td>{escape(str(row.get('severity') or 0))}</td>"
+        f"<td>{_item_cell(str(row.get('item') or '')) if row.get('item') else ''}</td>"
+        f"<td>{escape(str(row.get('site_id') or ''))}</td>"
+        f"<td>{escape(str(row.get('detail') or ''))}</td>"
+        f"<td>{escape(str(row.get('recommendation') or ''))}</td>"
+        "</tr>"
+        for row in rows[:20]
+        if isinstance(row, dict)
+    )
+    return (
+        f"<table><thead><tr><th>{_t(lang, 'kind')}</th><th>{_t(lang, 'score')}</th>"
+        f"<th>{_t(lang, 'item')}</th><th>Site</th><th>{_t(lang, 'reason')}</th>"
+        f"<th>{_t(lang, 'recommended_actions')}</th></tr></thead><tbody>{body}</tbody></table>"
+    )
+
+
+def _layout_candidate_table(rows: list[Any], lang: str) -> str:
+    if not rows:
+        return f"<p class=\"muted\">{_t(lang, 'no_layout_improvement')}</p>"
+    body = ""
+    for row in rows[:20]:
+        if not isinstance(row, dict):
+            continue
+        simulation = row.get("simulation") if isinstance(row.get("simulation"), dict) else {}
+        body += (
+            "<tr>"
+            f"<td>{escape(str(row.get('candidate_id') or ''))}</td>"
+            f"<td>{escape(str(row.get('target_pattern') or ''))}</td>"
+            f"<td>{escape(str(simulation.get('score') or 0))}</td>"
+            f"<td>{escape(_compact_json_text(simulation.get('before')))}</td>"
+            f"<td>{escape(_compact_json_text(simulation.get('after')))}</td>"
+            f"<td>{escape(_compact_json_text(simulation.get('delta')))}</td>"
+            f"<td>{escape(_t(lang, 'not_applied') if row.get('not_applied') else '')}</td>"
+            "</tr>"
+        )
+    return (
+        f"<table><thead><tr><th>{_t(lang, 'candidate')}</th><th>{_t(lang, 'pattern')}</th>"
+        f"<th>{_t(lang, 'score')}</th><th>{_t(lang, 'before')}</th><th>{_t(lang, 'after')}</th>"
+        f"<th>{_t(lang, 'delta')}</th><th>{_t(lang, 'status')}</th></tr></thead><tbody>{body}</tbody></table>"
+    )
+
+
+def _compact_json_text(value: Any) -> str:
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return text if len(text) <= 180 else text[:177] + "..."
 
 
 def _factory_site_table(rows: list[Any], lang: str) -> str:

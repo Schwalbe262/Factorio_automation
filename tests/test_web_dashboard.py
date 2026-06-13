@@ -125,6 +125,32 @@ class WebDashboardTests(unittest.TestCase):
                     },
                 },
                 "strategy": {"selected_skill": "produce_iron_plate", "priority": 95, "skill_status": {"implemented": True}},
+                "layout_improvement": {
+                    "issues": [],
+                    "opportunities": [
+                        {
+                            "kind": "rebalance_green_circuit_ratio",
+                            "severity": 78,
+                            "item": "electronic-circuit",
+                            "site_id": "circuit_automation:green",
+                            "detail": "ratio mismatch",
+                            "recommendation": "use 3 cable assemblers per 2 circuit assemblers",
+                        }
+                    ],
+                    "simulation_candidates": [
+                        {
+                            "candidate_id": "green-circuit-3-cable-2-circuit-cell",
+                            "target_pattern": "3 copper-cable assemblers feeding 2 electronic-circuit assemblers",
+                            "not_applied": True,
+                            "simulation": {
+                                "score": 88,
+                                "before": {"electronic_circuit_per_minute": 10},
+                                "after": {"electronic_circuit_per_minute": 60},
+                                "delta": {"electronic_circuit_per_minute": 50},
+                            },
+                        }
+                    ],
+                },
                 "llm_decisions": {
                     "entries": [
                         {
@@ -199,6 +225,9 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("AI 동작 위치", html)
         self.assertIn("copper-ore", html)
         self.assertIn("agent-map", html)
+        self.assertIn("green-circuit-3-cable-2-circuit-cell", html)
+        self.assertIn("rebalance_green_circuit_ratio", html)
+        self.assertIn("3 copper-cable assemblers", html)
 
     def test_token_usage_chart_uses_timestamp_spacing(self):
         svg = _token_usage_svg(

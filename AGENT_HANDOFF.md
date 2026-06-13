@@ -201,6 +201,7 @@ job name: factorio-ai-worker
 model: Qwen/Qwen3.5-4B
 GPU request: gres/gpu:1
 partition preference: gpu4,gpu2,gpu1
+vLLM args: --max-model-len 32768 --gpu-memory-utilization 0.85 --enforce-eager
 vLLM env: FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER=0
 ```
 
@@ -212,6 +213,7 @@ job name: factorio-ai-worker-9b
 model: Qwen/Qwen3.5-9B
 GPU request: gres/gpu:a6000:1
 partition: gpu4
+vLLM args: --max-model-len 32768 --gpu-memory-utilization 0.90 --enforce-eager
 vLLM env: FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER=0
 ```
 
@@ -223,6 +225,7 @@ job name: factorio-ai-worker-27b
 model: Qwen/Qwen3.6-27B-FP8
 GPU request: gres/gpu:a6000ada:3
 partition: gpu3
+vLLM args: --tensor-parallel-size 3 --max-model-len 32768 --gpu-memory-utilization 0.85 --enforce-eager
 vLLM env: FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER=0
 ```
 
@@ -308,6 +311,13 @@ Key constraints to preserve:
 - Logistic links should be between sites, not individual belts.
 - Sites should be grouped by nearby entities, not listed as hundreds of
   individual machines.
+- When the LLM has no urgent production/research/defense work, it should use
+  idle cycles for site layout improvement.
+- `plan_factory_site` is a simulation/planning skill, not a build skill. It
+  may propose blueprint-style improvements, compare before/after rates,
+  footprint, distance, ratios, and belt-capacity risk, but it must mark those
+  candidates `simulation_only` / `not_applied` until a deterministic build
+  executor is explicitly selected.
 - Defenses should start with gun turrets and ammo production, not early nest
   clearing.
 - Power matters:

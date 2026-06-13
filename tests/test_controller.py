@@ -89,6 +89,51 @@ class ControllerTests(unittest.TestCase):
         request_plan.assert_not_called()
         self.assertEqual(action, {"type": "wait", "ticks": 60})
 
+    def test_background_layout_work_submits_simulation_task_during_active_skill(self):
+        observation = {
+            "tick": 1,
+            "inventory": {},
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 10,
+                    "recipe": "electronic-circuit",
+                    "position": {"x": 0, "y": 0},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                }
+            ],
+            "resources": [],
+            "research": {"technologies": {}},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(test_config(Path(temp_dir)), slurm_enabled=True)
+            controller = FactorioController(cfg)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS": "0",
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "queue",
+                    },
+                ),
+                patch("factorio_ai.remote_slurm.submit_task", return_value="layout-task.json") as submit_task,
+            ):
+                controller._maybe_progress_background_layout_work(
+                    observation,
+                    "launch_rocket_program",
+                    "bootstrap_build_item_mall",
+                    4,
+                )
+            log_path = cfg.log_dir / "layout-improvement-background.jsonl"
+            log_text = log_path.read_text(encoding="utf-8")
+
+        submit_task.assert_called_once()
+        submitted = submit_task.call_args.args[0]
+        self.assertEqual(submitted["type"], "layout_improvement_request")
+        self.assertEqual(submitted["payload"]["active_skill"], "bootstrap_build_item_mall")
+        self.assertIn("layout_task_submitted", log_text)
+
     def test_strategy_runner_maps_implemented_material_skills(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             controller = FactorioController(test_config(Path(temp_dir)))
@@ -144,6 +189,11 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(mall_config["target_item"], "transport-belt")
             self.assertEqual(mall_config["target"], 24)
             self.assertEqual(mall_config["max_steps"], 1111)
+            layout_config = controller._skill_run_config("plan_factory_site", max_steps=2)
+            self.assertIsNotNone(layout_config)
+            self.assertEqual(layout_config["goal"], "plan_factory_site")
+            self.assertEqual(layout_config["target_item"], "layout-plan")
+            self.assertEqual(layout_config["max_steps"], 2)
 
     def test_strategy_step_summary_serializes_run(self):
         run = RunSummary(

@@ -6,6 +6,12 @@ from typing import Any
 from .knowledge import dependency_tree_for_objective
 from .monitor import recent_damage_events, summarize_factory
 from .models import entities_named, entity_item_count, inventory_count, total_item_count
+from .planner import (
+    factory_layout_issues,
+    factory_layout_opportunities,
+    factory_layout_simulation_candidates,
+    factory_layout_structure,
+)
 
 
 KOREAN_ELECTRONIC_CIRCUIT = "\uc804\uc790\ud68c\ub85c"
@@ -194,13 +200,14 @@ SKILL_CATALOG: dict[str, SkillContract] = {
     ),
     "plan_factory_site": SkillContract(
         name="plan_factory_site",
-        description="Choose a factory district location and expansion direction before building a larger block.",
-        executor="future SpatialPlannerSkill",
-        preconditions=["observed resource patches", "existing factory footprint", "known near-term production goal"],
-        completion=["candidate site and reserved logistics corridors are selected"],
+        description="Diagnose inefficient site layout, site-to-site logistics gaps, and expansion parameters before building more.",
+        executor="FactoryLayoutImprovementSkill",
+        preconditions=["observed factory sites", "site-level logistics links", "known near-term production goal"],
+        completion=["layout issues and recommended improvement parameters are logged for the next executor"],
         llm_scope=(
-            "Choose relative factory placement, expansion direction, and logistics corridors. "
-            "Do not emit exact tile placements."
+            "Choose when layout correction is more important than raw expansion. "
+            "Use site graph, link status, distance, power, resource preservation, and corridor parameters; "
+            "do not emit exact tile placements."
         ),
     ),
     "plan_rail_network": SkillContract(
@@ -279,6 +286,7 @@ def make_strategy_payload(
         "production_targets": dict(sorted((production_targets or {}).items())),
         "factory_monitor": monitor,
         "spatial_planning": make_spatial_planning_context(observation),
+        "layout_improvement": make_layout_improvement_context(observation),
         "build_item_supply": make_build_item_supply_context(observation, monitor),
         "research_planning": make_research_planning_context(observation, monitor),
         "threats": make_threat_context(observation),
@@ -289,8 +297,47 @@ def make_strategy_payload(
             "Select exactly one high-level skill. Diagnose bottlenecks first. "
             "Evaluate electric supply per connected power network, not as a single global pool. "
             "For spatial work, choose districts, corridors, or rail topology only. "
+            "When urgent production, defense, research, and power work are satisfied, use idle LLM cycles "
+            "to improve factory site layout against reusable blueprint-style patterns. "
             "Do not emit tile-level movement, mining, building, rail, or signal actions."
         ),
+    }
+
+
+def make_layout_improvement_context(observation: dict[str, Any]) -> dict[str, Any]:
+    issues = factory_layout_issues(observation)
+    opportunities = factory_layout_opportunities(observation)
+    candidates = factory_layout_simulation_candidates(observation)
+    top_severity = max(
+        [int(item.get("severity") or 0) for item in issues + opportunities]
+        + [
+            int((item.get("simulation") if isinstance(item.get("simulation"), dict) else {}).get("score") or 0)
+            for item in candidates
+        ],
+        default=0,
+    )
+    return {
+        "llm_responsibility": (
+            "Use idle strategy cycles to compare current site graph against reusable blueprint-style patterns, "
+            "then choose whether layout cleanup, compaction, ratio correction, or corridor reservation should happen next."
+        ),
+        "executor_responsibility": (
+            "Translate approved improvement plans into safe, validated small build/move/rebuild operations; "
+            "do not demolish working production without a replacement path."
+        ),
+        "recommended_skill": "plan_factory_site" if top_severity >= 75 else None,
+        "site_structure": factory_layout_structure(observation),
+        "issues": issues,
+        "opportunities": opportunities,
+        "simulation_candidates": candidates,
+        "patterns": [
+            "parallel smelting columns with shared ore/fuel/input and plate output lanes",
+            "green circuit cells near iron/copper supply, roughly 3 cable assemblers per 2 circuit assemblers",
+            "starter mall row near iron, gear, and circuit supply with shared inputs and chest outputs",
+            "short lab daisy chain or science belt feed with room for later science colors",
+            "main bus or trunk corridors before dense consumer blocks",
+            "remote outpost plus rail corridor when belts or walking logistics become too long",
+        ],
     }
 
 
@@ -475,6 +522,10 @@ def heuristic_strategy(
     bottlenecks = monitor.get("bottlenecks") if isinstance(monitor.get("bottlenecks"), list) else []
     power_issue = _first_power_issue(monitor)
     threats = make_threat_context(observation)
+    layout = make_layout_improvement_context(observation)
+    layout_issues = layout.get("issues") if isinstance(layout.get("issues"), list) else []
+    layout_opportunities = layout.get("opportunities") if isinstance(layout.get("opportunities"), list) else []
+    top_layout_item = _top_layout_item(layout_issues, layout_opportunities)
     if threats["danger_level"] in {"critical", "high"} and int(threats.get("armed_gun_turret_count") or 0) <= 0:
         nearest = threats.get("nearest_enemy") if isinstance(threats.get("nearest_enemy"), dict) else {}
         return StrategicDecision(
@@ -603,6 +654,19 @@ def heuristic_strategy(
                 blockers=["logistics research"],
                 expected_effect="Feed the powered lab with automation science to unlock Logistics.",
             ).to_dict()
+        if top_layout_item is not None and int(top_layout_item.get("severity") or 0) >= 75:
+            return StrategicDecision(
+                selected_skill="plan_factory_site",
+                priority=min(83, int(top_layout_item.get("severity") or 75)),
+                reason=f"Urgent rocket prerequisites are not currently blocking progress, so use idle strategy time to improve factory layout: {top_layout_item.get('detail')}",
+                evidence=[
+                    f"layout_kind={top_layout_item.get('kind')}",
+                    f"severity={top_layout_item.get('severity')}",
+                    f"site_id={top_layout_item.get('site_id')}",
+                ],
+                blockers=[],
+                expected_effect="Generate a site-level improvement plan before placing more inefficient factory blocks.",
+            ).to_dict()
         return StrategicDecision(
             selected_skill="produce_automation_science_pack",
             priority=80,
@@ -620,8 +684,12 @@ def heuristic_strategy(
         selected = "produce_iron_plate"
         reason = "Default strategy found low iron plates."
     else:
-        selected = "produce_automation_science_pack"
-        reason = "Default strategy advances to first science after basic iron."
+        if top_layout_item is not None and int(top_layout_item.get("severity") or 0) >= 75:
+            selected = "plan_factory_site"
+            reason = f"Default strategy uses idle cycles to improve factory layout: {top_layout_item.get('kind')}"
+        else:
+            selected = "produce_automation_science_pack"
+            reason = "Default strategy advances to first science after basic iron."
     return StrategicDecision(
         selected_skill=selected,
         priority=50,
@@ -631,6 +699,13 @@ def heuristic_strategy(
         expected_effect=f"Run {selected} skill.",
         source="heuristic",
     ).to_dict()
+
+
+def _top_layout_item(issues: list[Any], opportunities: list[Any]) -> dict[str, Any] | None:
+    candidates = [item for item in issues + opportunities if isinstance(item, dict)]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: int(item.get("severity") or 0))
 
 
 def _bounded_int(value: Any, fallback: int, minimum: int, maximum: int) -> int:

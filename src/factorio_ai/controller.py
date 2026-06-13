@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
+import threading
 import time
 from typing import Any
 
@@ -18,6 +20,7 @@ from .models import (
     validate_action,
 )
 from .modless_lua import ModlessLuaController
+from .monitor import summarize_factory
 from .planner import (
     AutomationScienceSkill,
     BeltSmeltingLineSkill,
@@ -27,6 +30,7 @@ from .planner import (
     ElectronicCircuitSkill,
     ExpandCopperSmeltingSkill,
     ExpandIronSmeltingSkill,
+    FactoryLayoutImprovementSkill,
     IronPlateSkill,
     ResearchAutomationSkill,
     ResearchTechnologySkill,
@@ -120,6 +124,10 @@ class FactorioController:
         self.cfg = cfg
         self._remote_llm_status_cache: dict[str, Any] | None = None
         self._remote_llm_status_cache_until = 0.0
+        self._background_layout_task_name: str | None = None
+        self._background_layout_last_submit = 0.0
+        self._background_layout_thread: threading.Thread | None = None
+        self._background_layout_thread_result: dict[str, Any] | None = None
 
     def observe(self) -> dict[str, Any]:
         with self._client() as client:
@@ -474,6 +482,7 @@ class FactorioController:
                 selected_skill=selected,
                 strategy=strategy,
             )
+        config["objective"] = objective
         run = self._run_skill(**config)
         return StrategyStepSummary(
             ok=run.ok,
@@ -695,6 +704,15 @@ class FactorioController:
                 "max_steps": max_steps or 900,
                 "log_prefix": "strategy-starter-defense",
             }
+        if skill_name == "plan_factory_site":
+            return {
+                "skill": FactoryLayoutImprovementSkill(),
+                "target_item": "layout-plan",
+                "target": 1,
+                "goal": skill_name,
+                "max_steps": max_steps or 1,
+                "log_prefix": "strategy-layout-improvement",
+            }
         return None
 
     def _run_skill(
@@ -705,6 +723,7 @@ class FactorioController:
         goal: str,
         max_steps: int,
         log_prefix: str,
+        objective: str = "launch_rocket_program",
         log_path: Path | None = None,
     ) -> RunSummary:
         self.cfg.log_dir.mkdir(parents=True, exist_ok=True)
@@ -714,12 +733,15 @@ class FactorioController:
             for step in range(1, max_steps + 1):
                 self._wait_for_review_window()
                 observation = self.observe()
+                self._maybe_progress_background_layout_work(observation, objective, goal, step)
                 decision = skill.next_action(observation)
                 item_count = total_item_count(observation, target_item)
                 self._write_log(log_file, step, observation, decision, None)
                 if decision.done:
+                    self._maybe_progress_background_layout_work(observation, objective, goal, step, force_poll=True)
                     return RunSummary(True, decision.reason, step, item_count, log_path, target_item)
                 if decision.action is None:
+                    self._maybe_progress_background_layout_work(observation, objective, goal, step, force_poll=True)
                     return RunSummary(False, decision.reason, step, item_count, log_path, target_item)
 
                 action = self._maybe_apply_remote_hint(observation, decision, goal)
@@ -746,6 +768,7 @@ class FactorioController:
                     time.sleep(0.2)
 
         observation = self.observe()
+        self._maybe_progress_background_layout_work(observation, objective, goal, max_steps, force_poll=True)
         return RunSummary(
             False,
             f"max steps reached: {max_steps}",
@@ -754,6 +777,165 @@ class FactorioController:
             log_path,
             target_item,
         )
+
+    def _maybe_progress_background_layout_work(
+        self,
+        observation: dict[str, Any],
+        objective: str,
+        active_skill: str,
+        active_step: int,
+        *,
+        force_poll: bool = False,
+    ) -> None:
+        if not self.cfg.slurm_enabled or active_skill == "plan_factory_site":
+            return
+        if os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_ENABLED", "1").lower() in {"0", "false", "no", "off"}:
+            return
+        self.cfg.log_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            from . import remote_slurm
+
+            if self._background_layout_thread is not None:
+                if self._background_layout_thread.is_alive():
+                    return
+                thread_result = self._background_layout_thread_result or {}
+                self._write_background_layout_log(thread_result)
+                self._background_layout_thread = None
+                self._background_layout_thread_result = None
+
+            if self._background_layout_task_name:
+                state, data, raw = remote_slurm.read_task_state(self._background_layout_task_name)
+                if state in {"result", "failed", "missing", "unknown"} or force_poll:
+                    if state == "result" and data is not None:
+                        self._write_background_layout_log(
+                            {
+                                "event": "layout_result",
+                                "task": self._background_layout_task_name,
+                                "active_skill": active_skill,
+                                "active_step": active_step,
+                                "state": state,
+                                "result": data,
+                            }
+                        )
+                        self._background_layout_task_name = None
+                    elif state in {"failed", "missing", "unknown"}:
+                        self._write_background_layout_log(
+                            {
+                                "event": "layout_task_unavailable",
+                                "task": self._background_layout_task_name,
+                                "active_skill": active_skill,
+                                "active_step": active_step,
+                                "state": state,
+                                "data": data,
+                                "raw": raw[:500],
+                            }
+                        )
+                        self._background_layout_task_name = None
+
+            if self._background_layout_task_name:
+                return
+            if force_poll:
+                return
+            interval = float(os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS", "20"))
+            now = time.monotonic()
+            if now - self._background_layout_last_submit < interval:
+                return
+
+            targets = load_targets(self.cfg.runtime_dir, objective)
+            monitor = summarize_factory(observation, objective, production_targets=targets.per_minute)
+            self._background_layout_last_submit = now
+            mode = os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_MODE", "attach").strip().lower()
+            if mode in {"attach", "attached", "srun"}:
+                self._background_layout_thread_result = None
+                self._background_layout_thread = threading.Thread(
+                    target=self._background_layout_attached_worker,
+                    args=(objective, active_skill, active_step, observation, targets.per_minute, monitor),
+                    daemon=True,
+                )
+                self._background_layout_thread.start()
+                self._write_background_layout_log(
+                    {
+                        "event": "layout_attached_started",
+                        "active_skill": active_skill,
+                        "active_step": active_step,
+                    }
+                )
+            else:
+                task = {
+                    "type": "layout_improvement_request",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "payload": {
+                        "objective": objective,
+                        "active_skill": active_skill,
+                        "active_step": active_step,
+                        "observation": observation,
+                        "production_targets": targets.per_minute,
+                        "factory_monitor": monitor,
+                    },
+                }
+                self._background_layout_task_name = remote_slurm.submit_task(task)
+                self._write_background_layout_log(
+                    {
+                        "event": "layout_task_submitted",
+                        "task": self._background_layout_task_name,
+                        "active_skill": active_skill,
+                        "active_step": active_step,
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001
+            self._write_background_layout_log(
+                {
+                    "event": "layout_background_error",
+                    "active_skill": active_skill,
+                    "active_step": active_step,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+
+    def _background_layout_attached_worker(
+        self,
+        objective: str,
+        active_skill: str,
+        active_step: int,
+        observation: dict[str, Any],
+        production_targets: dict[str, float],
+        monitor: dict[str, Any],
+    ) -> None:
+        try:
+            from . import remote_slurm
+
+            result = remote_slurm.request_layout_improvement(
+                objective,
+                active_skill,
+                active_step,
+                observation,
+                production_targets=production_targets,
+                factory_monitor=monitor,
+                timeout_seconds=int(os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_TIMEOUT_SECONDS", "180")),
+                force_attached=True,
+            )
+            self._background_layout_thread_result = {
+                "event": "layout_result",
+                "mode": "attach",
+                "active_skill": active_skill,
+                "active_step": active_step,
+                "result": result,
+            }
+        except Exception as exc:  # noqa: BLE001
+            self._background_layout_thread_result = {
+                "event": "layout_background_error",
+                "mode": "attach",
+                "active_skill": active_skill,
+                "active_step": active_step,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    def _write_background_layout_log(self, payload: dict[str, Any]) -> None:
+        path = self.cfg.log_dir / "layout-improvement-background.jsonl"
+        row = {"time": datetime.now(timezone.utc).isoformat(), **payload}
+        with path.open("a", encoding="utf-8") as file:
+            json.dump(row, file, ensure_ascii=False, separators=(",", ":"))
+            file.write("\n")
 
     def _client(self) -> FactorioRconClient:
         return FactorioRconClient(self.cfg.rcon_host, self.cfg.rcon_port, self.cfg.rcon_password)

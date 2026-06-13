@@ -9,11 +9,14 @@ from factorio_ai.planner import (
     ElectronicCircuitSkill,
     ExpandCopperSmeltingSkill,
     ExpandIronSmeltingSkill,
+    FactoryLayoutImprovementSkill,
     IronPlateSkill,
     ResearchAutomationSkill,
     ResearchTechnologySkill,
     SetupPowerSkill,
     StarterDefenseSkill,
+    factory_layout_issues,
+    factory_layout_simulation_candidates,
 )
 
 
@@ -83,6 +86,70 @@ def power_site():
 
 
 class PlannerTests(unittest.TestCase):
+    def test_factory_layout_flags_remote_manual_power_site(self):
+        obs = base_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}}
+        obs["player"]["position"] = {"x": 0, "y": 0}
+        obs["entities"] = [
+            {"name": "boiler", "unit_number": 900, "position": {"x": 240, "y": 0}, "inventories": {}},
+        ]
+        issues = factory_layout_issues(obs)
+        kinds = {item["kind"] for item in issues}
+        self.assertIn("remote_power_block", kinds)
+        self.assertIn("manual_power_fuel", kinds)
+        decision = FactoryLayoutImprovementSkill().next_action(obs)
+        self.assertTrue(decision.done)
+        self.assertIn("layout improvement plan", decision.reason)
+
+    def test_factory_layout_flags_production_on_resource_patch(self):
+        obs = base_observation()
+        obs["entities"] = [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 901,
+                "position": {"x": 4, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        ]
+        obs["resources"] = [{"name": "iron-ore", "position": {"x": 4, "y": 0}}]
+        issues = factory_layout_issues(obs)
+        resource_issue = next(item for item in issues if item["kind"] == "resource_tile_blocked")
+        self.assertEqual(resource_issue["item"], "iron-ore")
+
+    def test_factory_layout_simulates_green_circuit_pattern_without_applying_it(self):
+        obs = base_observation()
+        obs["entities"] = [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 910,
+                "recipe": "electronic-circuit",
+                "position": {"x": 10, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        ]
+        candidates = factory_layout_simulation_candidates(obs)
+        candidate = next(item for item in candidates if item["candidate_id"] == "green-circuit-3-cable-2-circuit-cell")
+        self.assertTrue(candidate["simulation_only"])
+        self.assertTrue(candidate["not_applied"])
+        self.assertGreater(candidate["simulation"]["after"]["electronic_circuit_per_minute"], candidate["simulation"]["before"]["electronic_circuit_per_minute"])
+
+    def test_factory_layout_simulates_belt_capacity_bottleneck(self):
+        obs = base_observation()
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": i, "position": {"x": i * 2, "y": 0}, "inventories": {"1": {"coal": 1}}}
+            for i in range(40)
+        ] + [
+            {"name": "transport-belt", "position": {"x": 4, "y": 0}, "inventories": {}},
+            {"name": "stone-furnace", "unit_number": 999, "position": {"x": 8, "y": 0}, "inventories": {"1": {"coal": 1}}},
+        ]
+        obs["resources"] = [{"name": "iron-ore", "position": {"x": i * 2, "y": 0}} for i in range(40)]
+        candidates = factory_layout_simulation_candidates(obs)
+        belt_candidates = [item for item in candidates if item["candidate_id"] == "belt-capacity-iron-ore"]
+        self.assertTrue(belt_candidates)
+        self.assertTrue(belt_candidates[0]["simulation"]["delta"]["prevents_transport_bottleneck"])
+
     def test_done_when_target_reached(self):
         obs = base_observation()
         obs["inventory"]["iron-plate"] = 10
