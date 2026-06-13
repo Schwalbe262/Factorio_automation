@@ -19,6 +19,7 @@ IMPLEMENTED_SKILLS = {
     "research_automation": "ResearchAutomationSkill",
     "automate_electronic_circuit_line": "CircuitAutomationSkill",
     "research_logistics": "ResearchTechnologySkill",
+    "bootstrap_build_item_mall": "BuildItemMallSkill",
     "build_starter_defense": "StarterDefenseSkill",
 }
 

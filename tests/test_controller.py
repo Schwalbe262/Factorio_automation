@@ -72,6 +72,12 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(defense_config["goal"], "build_starter_defense")
             self.assertEqual(defense_config["target_item"], "gun-turret")
             self.assertEqual(defense_config["max_steps"], 999)
+            mall_config = controller._skill_run_config("bootstrap_build_item_mall", target_count=24, max_steps=1111)
+            self.assertIsNotNone(mall_config)
+            self.assertEqual(mall_config["goal"], "bootstrap_build_item_mall")
+            self.assertEqual(mall_config["target_item"], "transport-belt")
+            self.assertEqual(mall_config["target"], 24)
+            self.assertEqual(mall_config["max_steps"], 1111)
 
     def test_strategy_step_summary_serializes_run(self):
         run = RunSummary(

@@ -3,6 +3,7 @@ import unittest
 from factorio_ai.planner import (
     AutomationScienceSkill,
     BeltSmeltingLineSkill,
+    BuildItemMallSkill,
     CircuitAutomationSkill,
     CopperPlateSkill,
     ElectronicCircuitSkill,
@@ -946,6 +947,130 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.done)
         self.assertIsNone(decision.action)
 
+    def test_build_item_mall_builds_missing_pole_before_assembler(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {
+            "small-electric-pole": 1,
+            "assembling-machine-1": 1,
+        }
+        obs["automation_sites"][0].pop("pole_unit_number")
+        obs["automation_sites"][0]["source_pole_unit_number"] = 604
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "small-electric-pole")
+
+    def test_build_item_mall_crafts_assembler_when_missing(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {
+            "electronic-circuit": 3,
+            "iron-gear-wheel": 5,
+            "iron-plate": 9,
+        }
+        obs["craftable"] = {"assembling-machine-1": 1}
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+        self.assertEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["recipe"], "assembling-machine-1")
+
+    def test_build_item_mall_places_assembler_when_site_ready(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"assembling-machine-1": 1}
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "assembling-machine-1")
+        self.assertEqual(decision.action["position"], {"x": 2.0, "y": 2.0})
+
+    def test_build_item_mall_sets_recipe_on_existing_assembler(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 10, "iron-gear-wheel": 10}
+        obs["entities"].append(mall_assembler(recipe=None))
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+        self.assertEqual(decision.action["type"], "set_recipe")
+        self.assertEqual(decision.action["recipe"], "transport-belt")
+
+    def test_build_item_mall_recovers_unassigned_assembler_outside_planned_site(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 10, "iron-gear-wheel": 10}
+        obs["automation_sites"] = []
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 902,
+                "position": {"x": 88.5, "y": -3.5},
+                "distance": 90,
+                "recipe": None,
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+        self.assertEqual(decision.action["type"], "move_to")
+        self.assertEqual(decision.action["position"], {"x": 88.5, "y": -3.5})
+
+    def test_build_item_mall_inserts_recipe_ingredients(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 10, "iron-gear-wheel": 10}
+        obs["entities"].append(mall_assembler(recipe="transport-belt"))
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertIn(decision.action["item"], {"iron-gear-wheel", "iron-plate"})
+
+    def test_build_item_mall_takes_output(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["entities"].append(mall_assembler(recipe="transport-belt", inventory={"transport-belt": 20}))
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "transport-belt")
+
+    def test_build_item_mall_done_when_running_and_target_exists(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 20}
+        obs["entities"].append(mall_assembler(recipe="transport-belt", inventory={"iron-plate": 4, "iron-gear-wheel": 4}))
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
+
+    def test_expansion_prefers_high_coverage_patch_drill_position(self):
+        obs = base_observation()
+        obs["inventory"] = {
+            "coal": 12,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "burner-inserter": 1,
+            "transport-belt": 2,
+        }
+        obs["resources"] = [
+            {"name": "iron-ore", "position": {"x": 2, "y": 0}, "distance": 2},
+            {"name": "iron-ore", "position": {"x": 30, "y": 0}, "distance": 30},
+            {"name": "iron-ore", "position": {"x": 31, "y": 0}, "distance": 31},
+            {"name": "iron-ore", "position": {"x": 30, "y": 1}, "distance": 30.1},
+            {"name": "iron-ore", "position": {"x": 31, "y": 1}, "distance": 31.1},
+            {"name": "coal", "position": {"x": 0, "y": 2}, "distance": 2},
+        ]
+        decision = ExpandIronSmeltingSkill(target_rate_per_minute=37).next_action(obs)
+        self.assertEqual(decision.action["type"], "move_to")
+        self.assertGreater(decision.action["position"]["x"], 20)
+
+    def test_expansion_aligns_new_drill_with_existing_patch_line(self):
+        obs = base_observation()
+        obs["inventory"] = {
+            "coal": 12,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "burner-inserter": 1,
+            "transport-belt": 2,
+        }
+        obs["resources"] = [
+            {"name": "iron-ore", "position": {"x": 4, "y": 0}, "distance": 4},
+            {"name": "iron-ore", "position": {"x": 4, "y": 3}, "distance": 5},
+            {"name": "coal", "position": {"x": 0, "y": 2}, "distance": 2},
+        ]
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500)
+        decision = ExpandIronSmeltingSkill(target_rate_per_minute=37).next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertEqual(decision.action["position"], {"x": 6.0, "y": 3.0})
+
 
 def powered_research_observation():
     obs = base_observation()
@@ -1080,6 +1205,18 @@ def circuit_cell_entities(
             "inventories": {},
         },
     ]
+
+
+def mall_assembler(recipe="transport-belt", inventory=None, powered=True):
+    return {
+        "name": "assembling-machine-1",
+        "unit_number": 901,
+        "position": {"x": 2, "y": 2},
+        "distance": 2,
+        "recipe": recipe,
+        "electric_network_connected": powered,
+        "inventories": {"1": inventory or {}},
+    }
 
 
 def complete_belt_smelting_entities(drill_x, drill_y, base_unit, resource="iron-ore", product="iron-plate"):

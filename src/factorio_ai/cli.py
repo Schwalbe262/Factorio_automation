@@ -126,6 +126,14 @@ def main(argv: list[str] | None = None) -> None:
     )
     logistics_research_parser.add_argument("--max-steps", type=int, default=2200)
 
+    build_item_mall_parser = subparsers.add_parser(
+        "run-build-item-mall-mvp",
+        help="Build a powered assembler cell for recurring factory-expansion items",
+    )
+    build_item_mall_parser.add_argument("--item", default="transport-belt")
+    build_item_mall_parser.add_argument("--target", type=int, default=20)
+    build_item_mall_parser.add_argument("--max-steps", type=int, default=1200)
+
     subparsers.add_parser("slurm-deploy", help="Deploy project source to the Slurm remote directory")
     subparsers.add_parser("slurm-start-worker", help="Submit the persistent Slurm worker job")
     subparsers.add_parser("slurm-status", help="Print Slurm worker status")
@@ -398,6 +406,27 @@ def main(argv: list[str] | None = None) -> None:
                 "reason": summary.reason,
                 "steps": summary.steps,
                 "automationSciencePackCount": summary.item_count,
+                "logPath": str(summary.log_path),
+            }
+        )
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-build-item-mall-mvp":
+        summary = FactorioController(cfg).run_build_item_mall_mvp(
+            target_item=args.item,
+            target=args.target,
+            max_steps=args.max_steps,
+        )
+        print_json(
+            {
+                "ok": summary.ok,
+                "reason": summary.reason,
+                "steps": summary.steps,
+                "itemName": summary.item_name,
+                "itemCount": summary.item_count,
+                "target": args.target,
                 "logPath": str(summary.log_path),
             }
         )

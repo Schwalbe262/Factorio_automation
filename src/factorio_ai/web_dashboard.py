@@ -38,6 +38,8 @@ TEXT: dict[str, dict[str, str]] = {
         "strategic_recommendation": "Strategic Recommendation",
         "desired_targets": "Desired Production Targets",
         "estimated_production": "Estimated Production",
+        "factory_sites": "Factory Sites",
+        "logistics_links": "Logistics Links",
         "bottlenecks": "Target Deficits / Bottlenecks",
         "inventory": "Inventory / Machine Contents",
         "technology_chain": "Technology Chain",
@@ -52,6 +54,14 @@ TEXT: dict[str, dict[str, str]] = {
         "reason": "Reason",
         "stock": "Stock",
         "count": "Count",
+        "kind": "Kind",
+        "status": "Status",
+        "position": "Position",
+        "automation": "Automation",
+        "machines": "Machines",
+        "from": "From",
+        "to": "To",
+        "length": "Length",
         "technology": "Technology",
         "prerequisites": "Prerequisites",
         "unlocks": "Unlocks",
@@ -59,6 +69,8 @@ TEXT: dict[str, dict[str, str]] = {
         "priority": "priority",
         "blockers": "Blockers",
         "no_production": "No active producers inferred yet.",
+        "no_sites": "No factory sites inferred yet.",
+        "no_links": "No logistics links inferred yet.",
         "no_bottleneck": "No bottleneck inferred for the current objective.",
         "no_inventory": "No tracked inventory yet.",
         "no_tech": "No technology requirement inferred for this objective yet.",
@@ -298,6 +310,8 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     monitor = state.get("monitor") if isinstance(state.get("monitor"), dict) else {}
     strategy = state.get("strategy") if isinstance(state.get("strategy"), dict) else {}
     production = monitor.get("production") if isinstance(monitor.get("production"), list) else []
+    factory_sites = monitor.get("factory_sites") if isinstance(monitor.get("factory_sites"), list) else []
+    logistics_links = monitor.get("logistics_links") if isinstance(monitor.get("logistics_links"), list) else []
     bottlenecks = monitor.get("bottlenecks") if isinstance(monitor.get("bottlenecks"), list) else []
     inventory = monitor.get("inventory") if isinstance(monitor.get("inventory"), dict) else {}
     technologies = monitor.get("technology_chain") if isinstance(monitor.get("technology_chain"), list) else []
@@ -347,6 +361,17 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
       <div class="panel">
         <h2>{_t(lang, "bottlenecks")}</h2>
         {_bottleneck_table(bottlenecks, lang)}
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>{_t(lang, "factory_sites")}</h2>
+        {_factory_site_table(factory_sites, lang)}
+      </div>
+      <div class="panel">
+        <h2>{_t(lang, "logistics_links")}</h2>
+        {_logistics_link_table(logistics_links, lang)}
       </div>
     </section>
 
@@ -600,6 +625,52 @@ def _bottleneck_table(rows: list[Any], lang: str) -> str:
     )
 
 
+def _factory_site_table(rows: list[Any], lang: str) -> str:
+    if not rows:
+        return f"<p class=\"muted\">{_t(lang, 'no_sites')}</p>"
+    body = "".join(
+        "<tr>"
+        f"<td>{escape(str(row.get('kind') or ''))}</td>"
+        f"<td>{_item_cell(str(row.get('item') or '')) if row.get('item') else ''}</td>"
+        f"<td>{escape(str(row.get('status') or ''))}</td>"
+        f"<td>{escape(_position_text(row.get('position')))}</td>"
+        f"<td>{escape(str(row.get('automation_level') or ''))}</td>"
+        f"<td>{escape(', '.join(str(item) for item in row.get('machines', [])[:5]))}</td>"
+        "</tr>"
+        for row in rows[:80]
+        if isinstance(row, dict)
+    )
+    return (
+        f"<table><thead><tr><th>{_t(lang, 'kind')}</th><th>{_t(lang, 'item')}</th>"
+        f"<th>{_t(lang, 'status')}</th><th>{_t(lang, 'position')}</th>"
+        f"<th>{_t(lang, 'automation')}</th><th>{_t(lang, 'machines')}</th></tr></thead>"
+        f"<tbody>{body}</tbody></table>"
+    )
+
+
+def _logistics_link_table(rows: list[Any], lang: str) -> str:
+    if not rows:
+        return f"<p class=\"muted\">{_t(lang, 'no_links')}</p>"
+    body = "".join(
+        "<tr>"
+        f"<td>{escape(str(row.get('kind') or ''))}</td>"
+        f"<td>{_item_cell(str(row.get('item') or '')) if row.get('item') else ''}</td>"
+        f"<td>{escape(str(row.get('from_site') or ''))}</td>"
+        f"<td>{escape(str(row.get('to_site') or ''))}</td>"
+        f"<td>{escape(str(row.get('status') or ''))}</td>"
+        f"<td>{escape(str(row.get('length_tiles') or 0))}</td>"
+        "</tr>"
+        for row in rows[:80]
+        if isinstance(row, dict)
+    )
+    return (
+        f"<table><thead><tr><th>{_t(lang, 'kind')}</th><th>{_t(lang, 'item')}</th>"
+        f"<th>{_t(lang, 'from')}</th><th>{_t(lang, 'to')}</th>"
+        f"<th>{_t(lang, 'status')}</th><th>{_t(lang, 'length')}</th></tr></thead>"
+        f"<tbody>{body}</tbody></table>"
+    )
+
+
 def _target_form(targets: dict[str, Any], target_status: dict[str, Any], lang: str, objective: Any) -> str:
     status_rows = (
         {
@@ -699,6 +770,15 @@ def _item_cell(item: str) -> str:
         f"<span>{escape(item)}</span>"
         "</span>"
     )
+
+
+def _position_text(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    try:
+        return f"{float(value.get('x') or 0.0):.1f}, {float(value.get('y') or 0.0):.1f}"
+    except (TypeError, ValueError):
+        return ""
 
 
 def _t(lang: str, key: str) -> str:

@@ -19,6 +19,7 @@ from .models import (
 from .planner import (
     AutomationScienceSkill,
     BeltSmeltingLineSkill,
+    BuildItemMallSkill,
     CircuitAutomationSkill,
     CopperPlateSkill,
     ElectronicCircuitSkill,
@@ -253,6 +254,23 @@ class FactorioController:
             log_path=log_path,
         )
 
+    def run_build_item_mall_mvp(
+        self,
+        target_item: str = "transport-belt",
+        target: int = 20,
+        max_steps: int = 1200,
+        log_path: Path | None = None,
+    ) -> RunSummary:
+        return self._run_skill(
+            skill=BuildItemMallSkill(target_item, target),
+            target_item=target_item,
+            target=target,
+            goal="bootstrap_build_item_mall",
+            max_steps=max_steps,
+            log_prefix=f"build-item-mall-{target_item}",
+            log_path=log_path,
+        )
+
     def run_expand_iron_smelting_mvp(
         self,
         target_rate: int = 90,
@@ -470,6 +488,17 @@ class FactorioController:
                 "goal": skill_name,
                 "max_steps": max_steps or 2200,
                 "log_prefix": "strategy-logistics-research",
+            }
+        if skill_name == "bootstrap_build_item_mall":
+            target = target_count or 20
+            target_item = "transport-belt"
+            return {
+                "skill": BuildItemMallSkill(target_item, target),
+                "target_item": target_item,
+                "target": target,
+                "goal": skill_name,
+                "max_steps": max_steps or 1200,
+                "log_prefix": "strategy-build-item-mall",
             }
         if skill_name == "build_starter_defense":
             return {

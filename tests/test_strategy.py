@@ -109,9 +109,14 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(any(item["name"] == "research_logistics" for item in catalog))
         self.assertTrue(any(item["name"] == "build_starter_defense" for item in catalog))
         self.assertTrue(any(item["name"] == "build_rail_supply_line" for item in catalog))
+        self.assertTrue(any(item["name"] == "plan_oil_outpost" for item in catalog))
         self.assertEqual(
             next(item for item in catalog if item["name"] == "produce_electronic_circuit")["executor"],
             "ElectronicCircuitSkill",
+        )
+        self.assertEqual(
+            next(item for item in catalog if item["name"] == "bootstrap_build_item_mall")["executor"],
+            "BuildItemMallSkill",
         )
         self.assertTrue(all("llm_scope" in item for item in catalog))
 

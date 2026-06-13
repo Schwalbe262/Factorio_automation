@@ -70,6 +70,12 @@ class SkillRegistryTests(unittest.TestCase):
         self.assertEqual(status.executor, "StarterDefenseSkill")
         self.assertFalse(status.codex_required)
 
+    def test_build_item_mall_skill_is_implemented(self):
+        status = skill_status("bootstrap_build_item_mall")
+        self.assertTrue(status.implemented)
+        self.assertEqual(status.executor, "BuildItemMallSkill")
+        self.assertFalse(status.codex_required)
+
     def test_missing_skill_writes_backlog(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             runtime = Path(temp_dir)

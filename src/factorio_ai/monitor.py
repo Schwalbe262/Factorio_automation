@@ -51,6 +51,36 @@ class ConsumptionEstimate:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class FactorySiteEstimate:
+    site_id: str
+    kind: str
+    status: str
+    position: dict[str, float]
+    item: str | None
+    machines: list[str]
+    automation_level: str
+    notes: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class LogisticsLinkEstimate:
+    link_id: str
+    kind: str
+    item: str | None
+    from_site: str
+    to_site: str
+    status: str
+    length_tiles: float
+    notes: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 COMMON_ITEMS = [
     "iron-ore",
     "copper-ore",
@@ -116,6 +146,8 @@ def summarize_factory(
     target_status = production_target_status(production_targets or {}, production)
     dependency = dependency_tree_for_objective(objective, max_depth=5)
     technologies = technology_requirements_for_objective(objective)
+    factory_sites = estimate_factory_sites(observation)
+    logistics_links = estimate_logistics_links(observation)
     return {
         "objective": objective,
         "inventory": inventory,
@@ -127,6 +159,8 @@ def summarize_factory(
         "bottlenecks": [item.to_dict() for item in bottlenecks],
         "dependency_tree": dependency,
         "technology_chain": technologies,
+        "factory_sites": [item.to_dict() for item in factory_sites],
+        "logistics_links": [item.to_dict() for item in logistics_links],
     }
 
 
@@ -284,6 +318,170 @@ def estimate_bottlenecks(
     return sorted(bottlenecks, key=lambda item: (-item.severity, item.item))
 
 
+def estimate_factory_sites(observation: dict[str, Any]) -> list[FactorySiteEstimate]:
+    sites: list[FactorySiteEstimate] = []
+    seen_site_ids: set[str] = set()
+
+    for boiler in [item for item in _entities(observation) if item.get("name") == "boiler"]:
+        position = _position(boiler)
+        fuel_link = _fuel_feed_type(observation, position)
+        site = FactorySiteEstimate(
+            site_id=_entity_site_id("power", boiler),
+            kind="steam_power",
+            status="automated_fuel" if fuel_link == "belt" else "manual_fuel",
+            position=position,
+            item="electricity",
+            machines=_nearby_machine_names(observation, position, {"offshore-pump", "boiler", "steam-engine", "small-electric-pole"}, 8.0),
+            automation_level="bootstrap" if fuel_link == "manual" else "belt-fed",
+            notes=[
+                "boiler fuel should be upgraded from manual coal inserts to belt/inserter feed"
+                if fuel_link == "manual"
+                else "coal feed belt/inserter observed near boiler"
+            ],
+        )
+        sites.append(site)
+        seen_site_ids.add(site.site_id)
+
+    for layout in _deduped_belt_line_layouts(observation):
+        furnace = layout.get("furnace")
+        position = _position(furnace) if isinstance(furnace, dict) else _layout_center(layout)
+        resource_name = str(layout.get("resource_name") or "iron-ore")
+        product = _product_for_resource(resource_name)
+        complete = all(layout.get(key) is not None for key in ("belt1", "belt2", "inserter", "furnace", "drill"))
+        fueled = _belt_line_fueled(layout) if complete else False
+        site = FactorySiteEstimate(
+            site_id=_position_site_id("smelting", position),
+            kind="plate_smelting_line",
+            status="running" if fueled else ("built_unfueled" if complete else "incomplete"),
+            position=position,
+            item=product,
+            machines=[name for key in ("drill", "belt1", "belt2", "inserter", "furnace") if (name := _machine_name(layout.get(key)))],
+            automation_level="burner-bootstrap",
+            notes=[
+                "burner mining drill is an early bootstrap layout; replace with electric mining drills after power",
+                f"{resource_name} is moved by a short belt/inserter chain into a furnace",
+            ],
+        )
+        if site.site_id not in seen_site_ids:
+            sites.append(site)
+            seen_site_ids.add(site.site_id)
+
+    for assembler in [
+        item
+        for item in _entities(observation)
+        if str(item.get("name") or "") in ASSEMBLER_SPEEDS
+    ]:
+        recipe = assembler.get("recipe")
+        position = _position(assembler)
+        kind = "assembler_cell"
+        automation_level = "powered" if assembler.get("electric_network_connected") else "unpowered"
+        if recipe in {"transport-belt", "inserter", "burner-inserter", "burner-mining-drill", "stone-furnace", "assembling-machine-1", "small-electric-pole"}:
+            kind = "build_item_mall"
+        elif recipe in {"copper-cable", "electronic-circuit"}:
+            kind = "circuit_automation"
+        site = FactorySiteEstimate(
+            site_id=_entity_site_id(kind, assembler),
+            kind=kind,
+            status="running" if recipe and assembler.get("electric_network_connected") else ("unconfigured" if not recipe else "unpowered"),
+            position=position,
+            item=str(recipe) if isinstance(recipe, str) and recipe else None,
+            machines=[str(assembler.get("name") or "assembling-machine")],
+            automation_level=automation_level,
+            notes=[f"assembler recipe: {recipe or 'unset'}"],
+        )
+        sites.append(site)
+
+    for drill in [
+        item
+        for item in _entities(observation)
+        if str(item.get("name") or "") in MINER_RATES_PER_MINUTE
+    ]:
+        position = _position(drill)
+        resource = _nearest_resource(observation, position)
+        name = str(drill.get("name") or "")
+        electric = name == "electric-mining-drill"
+        site = FactorySiteEstimate(
+            site_id=_entity_site_id("mining_patch", drill),
+            kind="mining_patch",
+            status="powered" if electric and drill.get("electric_network_connected") else ("fueled" if entity_item_count(drill, "coal") > 0 else "needs_fuel"),
+            position=position,
+            item=str(resource.get("name")) if resource and resource.get("name") else None,
+            machines=[name],
+            automation_level="electric" if electric else "burner-bootstrap",
+            notes=[
+                "electric mining drill is the preferred post-power mining layer"
+                if electric
+                else "burner mining drill should be replaced by electric mining drill after power and green circuits stabilize"
+            ],
+        )
+        sites.append(site)
+
+    return sites
+
+
+def estimate_logistics_links(observation: dict[str, Any]) -> list[LogisticsLinkEstimate]:
+    links: list[LogisticsLinkEstimate] = []
+    seen: set[str] = set()
+
+    for layout in _deduped_belt_line_layouts(observation):
+        drill = layout.get("drill")
+        furnace = layout.get("furnace")
+        resource_name = str(layout.get("resource_name") or "iron-ore")
+        start = _position(drill) if isinstance(drill, dict) else layout.get("drill_position") or {"x": 0.0, "y": 0.0}
+        end = _position(furnace) if isinstance(furnace, dict) else _layout_center(layout)
+        complete = all(layout.get(key) is not None for key in ("belt1", "belt2", "inserter", "furnace", "drill"))
+        link = LogisticsLinkEstimate(
+            link_id=_link_id("belt", start, end, resource_name),
+            kind="belt",
+            item=resource_name,
+            from_site=_position_site_id("mining_patch", start),
+            to_site=_position_site_id("smelting", end),
+            status="complete" if complete else "incomplete",
+            length_tiles=round(distance(start, end), 2),
+            notes=["short bootstrap ore belt from drill output to furnace"],
+        )
+        if link.link_id not in seen:
+            links.append(link)
+            seen.add(link.link_id)
+
+    for boiler in [item for item in _entities(observation) if item.get("name") == "boiler"]:
+        position = _position(boiler)
+        kind = _fuel_feed_type(observation, position)
+        link = LogisticsLinkEstimate(
+            link_id=_entity_site_id("boiler_fuel", boiler),
+            kind=kind,
+            item="coal",
+            from_site="coal_supply",
+            to_site=_entity_site_id("power", boiler),
+            status="automated" if kind == "belt" else "bootstrap_manual",
+            length_tiles=0.0,
+            notes=[
+                "replace manual boiler fueling with coal belt and inserter feed"
+                if kind == "manual"
+                else "boiler coal belt/inserter feed observed"
+            ],
+        )
+        links.append(link)
+
+    rails = [item for item in _entities(observation) if item.get("name") in {"straight-rail", "curved-rail-a", "curved-rail-b", "half-diagonal-rail"}]
+    train_stops = [item for item in _entities(observation) if item.get("name") == "train-stop"]
+    if rails or train_stops:
+        links.append(
+            LogisticsLinkEstimate(
+                link_id="rail-network:observed",
+                kind="rail",
+                item=None,
+                from_site="rail_network",
+                to_site="rail_network",
+                status="observed",
+                length_tiles=float(len(rails)),
+                notes=[f"{len(rails)} rail entities and {len(train_stops)} train stops observed"],
+            )
+        )
+
+    return links
+
+
 def technology_requirements_for_objective(objective: str) -> list[dict[str, Any]]:
     seen: set[str] = set()
     output: list[dict[str, Any]] = []
@@ -297,6 +495,106 @@ def technology_requirements_for_objective(objective: str) -> list[dict[str, Any]
                 seen.add(name)
                 output.append(tech)
     return output
+
+
+def _deduped_belt_line_layouts(observation: dict[str, Any]) -> list[dict[str, Any]]:
+    layouts: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for belt in [item for item in _entities(observation) if item.get("name") == "transport-belt"]:
+        for layout in _belt_line_layouts_from_anchor(observation, belt):
+            key_position = (
+                _position(layout["furnace"])
+                if isinstance(layout.get("furnace"), dict)
+                else _layout_center(layout)
+            )
+            key = _position_site_id("belt_line", key_position)
+            if key in seen:
+                continue
+            seen.add(key)
+            layouts.append(layout)
+    return layouts
+
+
+def _fuel_feed_type(observation: dict[str, Any], target_position: dict[str, float]) -> str:
+    inserters = [
+        item
+        for item in _entities(observation)
+        if item.get("name") in {"burner-inserter", "inserter", "fast-inserter"}
+        and distance(_position(item), target_position) <= 3.0
+    ]
+    for inserter in inserters:
+        inserter_position = _position(inserter)
+        if _entity_near(observation, "transport-belt", inserter_position, 2.5) is not None:
+            return "belt"
+    return "manual"
+
+
+def _nearby_machine_names(
+    observation: dict[str, Any],
+    position: dict[str, float],
+    names: set[str],
+    radius: float,
+) -> list[str]:
+    output = sorted(
+        {
+            str(entity.get("name") or "")
+            for entity in _entities(observation)
+            if entity.get("name") in names and distance(position, _position(entity)) <= radius
+        }
+    )
+    return [item for item in output if item]
+
+
+def _layout_center(layout: dict[str, Any]) -> dict[str, float]:
+    positions = []
+    for key in ("drill_position", "belt1_position", "belt2_position", "inserter_position", "furnace_position"):
+        value = layout.get(key)
+        if isinstance(value, dict):
+            positions.append(_position({"position": value}))
+    for key in ("drill", "belt1", "belt2", "inserter", "furnace"):
+        value = layout.get(key)
+        if isinstance(value, dict):
+            positions.append(_position(value))
+    if not positions:
+        return {"x": 0.0, "y": 0.0}
+    return {
+        "x": round(sum(item["x"] for item in positions) / len(positions), 2),
+        "y": round(sum(item["y"] for item in positions) / len(positions), 2),
+    }
+
+
+def _machine_name(entity: Any) -> str | None:
+    if not isinstance(entity, dict):
+        return None
+    name = entity.get("name")
+    return str(name) if name else None
+
+
+def _entity_site_id(prefix: str, entity: dict[str, Any]) -> str:
+    unit_number = entity.get("unit_number")
+    if unit_number:
+        return f"{prefix}:{unit_number}"
+    return _position_site_id(prefix, _position(entity))
+
+
+def _position_site_id(prefix: str, position: dict[str, float]) -> str:
+    return f"{prefix}:{round(float(position.get('x') or 0.0), 1)},{round(float(position.get('y') or 0.0), 1)}"
+
+
+def _product_for_resource(resource_name: str) -> str | None:
+    return {
+        "iron-ore": "iron-plate",
+        "copper-ore": "copper-plate",
+        "stone": "stone-brick",
+    }.get(resource_name)
+
+
+def _link_id(kind: str, start: dict[str, float], end: dict[str, float], item: str | None) -> str:
+    return (
+        f"{kind}:{item or 'mixed'}:"
+        f"{round(float(start.get('x') or 0.0), 1)},{round(float(start.get('y') or 0.0), 1)}->"
+        f"{round(float(end.get('x') or 0.0), 1)},{round(float(end.get('y') or 0.0), 1)}"
+    )
 
 
 def _estimate_furnace(entity: dict[str, Any], speed: float) -> ProductionEstimate | None:
@@ -446,6 +744,11 @@ def _belt_line_layouts_from_anchor(observation: dict[str, Any], belt: dict[str, 
         output.append(
             {
                 "resource_name": str(resource.get("name")) if resource is not None and resource.get("name") else "iron-ore",
+                "drill_position": drill_position,
+                "belt1_position": belt_position,
+                "belt2_position": {"x": belt_position["x"] + dx, "y": belt_position["y"] + dy},
+                "inserter_position": {"x": belt_position["x"] + 2 * dx, "y": belt_position["y"] + 2 * dy},
+                "furnace_position": {"x": belt_position["x"] + 3 * dx, "y": belt_position["y"] + 3 * dy},
                 "belt1": belt,
                 "belt2": _entity_near(
                     observation,

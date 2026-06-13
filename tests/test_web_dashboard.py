@@ -37,6 +37,26 @@ class WebDashboardTests(unittest.TestCase):
                     "technology_chain": [],
                     "dependency_tree": [],
                     "target_status": {"all_satisfied": True, "items": []},
+                    "factory_sites": [
+                        {
+                            "kind": "build_item_mall",
+                            "item": "transport-belt",
+                            "status": "running",
+                            "position": {"x": 2, "y": 2},
+                            "automation_level": "powered",
+                            "machines": ["assembling-machine-1"],
+                        }
+                    ],
+                    "logistics_links": [
+                        {
+                            "kind": "belt",
+                            "item": "iron-ore",
+                            "from_site": "mining_patch:4,0",
+                            "to_site": "smelting:9,0",
+                            "status": "complete",
+                            "length_tiles": 5,
+                        }
+                    ],
                 },
                 "strategy": {"selected_skill": "produce_iron_plate", "priority": 95, "skill_status": {"implemented": True}},
             },
@@ -45,6 +65,8 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn('href="/factorio?objective=launch_rocket_program"', html)
         self.assertIn('href="/factorio?lang=ko&amp;objective=launch_rocket_program"', html)
         self.assertIn('/factorio/icon/iron-plate.png', html)
+        self.assertIn("build_item_mall", html)
+        self.assertIn("smelting:9,0", html)
         self.assertIn("팩토리오 AI 공장 모니터", html)
 
     def test_dashboard_urls_use_lan_hosts_for_wildcard_bind(self):

@@ -162,7 +162,7 @@ SKILL_CATALOG: dict[str, SkillContract] = {
     "bootstrap_build_item_mall": SkillContract(
         name="bootstrap_build_item_mall",
         description="Automate recurring factory-expansion items such as belts, inserters, furnaces, drills, poles, and assemblers.",
-        executor="future BuildItemMallSkill",
+        executor="BuildItemMallSkill",
         preconditions=[
             "automation researched",
             "electric power available",
@@ -221,6 +221,24 @@ SKILL_CATALOG: dict[str, SkillContract] = {
         llm_scope=(
             "Choose the supply route, served item, and station intent for remote resources. "
             "Do not place each rail segment, signal, train stop, or schedule entry directly."
+        ),
+    ),
+    "plan_oil_outpost": SkillContract(
+        name="plan_oil_outpost",
+        description="Plan pumpjack, pipe, power, and future rail layout for crude-oil or fluid-resource outposts.",
+        executor="future OilOutpostPlannerSkill",
+        preconditions=[
+            "oil processing or the relevant fluid extraction technology is near-term or unlocked",
+            "fluid resource patches are observed",
+            "pumpjacks, pipes, underground pipes, poles, and outpost logistics are available or planned",
+        ],
+        completion=[
+            "pumpjack targets, pipe collection tree, power coverage, and connection point are selected",
+            "the plan can be executed without installing an achievement-disabling mod",
+        ],
+        llm_scope=(
+            "Choose when oil becomes strategically necessary and which outpost should be developed. "
+            "Executor will adapt OilOutpostPlanner-style pumpjack/pipe/pole routing locally."
         ),
     ),
     "research_logistics": SkillContract(
