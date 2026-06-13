@@ -229,19 +229,33 @@ Or use the Windows helper:
 
 ```bat
 run_factorio_vanilla_gui.bat
+run_factorio_vanilla_freeplay.bat
 run_factorio_vanilla_probe.bat
+run_factorio_restore_steam_mods.bat
 ```
 
-This command uses Steam with an isolated `runtime\vanilla\mods` directory. That directory contains
-only a generated `mod-list.json` for the official Space Age set: `base`, `elevated-rails`,
-`quality`, and `space-age`. It deliberately ignores the user's global Factorio mod folder, because
-normal Steam launch would otherwise load enabled user mods and stop being a vanilla/achievement
-candidate. The vanilla executor must navigate the normal GUI, including New Game -> Freeplay
-(Space Age), with ordinary keyboard and mouse input. Any path using non-official mods, RCON, or Lua
-commands belongs to the development track and must not be used for achievement runs.
+Steam vanilla launch backs up `%APPDATA%\Factorio\mods\mod-list.json` under
+`runtime\vanilla\steam-mod-list-backups`, then writes a vanilla Space Age mod list containing only
+`base`, `elevated-rails`, `quality`, and `space-age`. This avoids passing custom launch arguments
+through Steam and prevents enabled user mods from stopping the run from being a vanilla/achievement
+candidate. `run_factorio_restore_steam_mods.bat` restores the latest backup when the user wants the
+normal mod setup back. The vanilla executor must navigate the normal GUI, including New Game ->
+Freeplay (Space Age), with ordinary keyboard and mouse input. Any path using non-official mods,
+RCON, or Lua commands belongs to the development track and must not be used for achievement runs.
 `launch-vanilla-gui` reports failure if the real `factorio.exe` game window is not detected, and
 `vanilla-window` includes diagnostics for false positives such as Steam's Factorio settings window
 or Factorio-owned error dialogs.
+
+To open a new vanilla Freeplay (Space Age) run from the main menu:
+
+```powershell
+factorio-ai vanilla-start-freeplay
+```
+
+This is a low-level menu executor. It assumes the vanilla main menu is visible and uses normal mouse
+clicks and keyboard input. The current verified path enters Single Player -> New Game -> Freeplay
+(Space Age), starts the map with default generation settings, presses `Tab` to skip the intro, and
+then leaves the player controllable in the actual game world.
 
 The vanilla track changes the low-level algorithm, not the whole AI:
 

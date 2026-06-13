@@ -11,7 +11,9 @@ from factorio_ai.vanilla_gui import (
     encode_bgra_bmp,
     is_factorio_game_window_title,
     is_factorio_process_path,
+    prepare_steam_vanilla_mod_list,
     prepare_vanilla_mod_directory,
+    restore_latest_steam_mod_list,
     validate_achievement_safe_args,
 )
 
@@ -45,6 +47,27 @@ class VanillaGuiTests(unittest.TestCase):
             with self.assertRaises(AchievementPolicyError):
                 prepare_vanilla_mod_directory(Path(temp_dir))
 
+    def test_prepares_and_restores_steam_vanilla_mod_list(self):
+        with tempfile.TemporaryDirectory() as runtime_dir, tempfile.TemporaryDirectory() as appdata_dir:
+            mod_dir = Path(appdata_dir) / "mods"
+            mod_dir.mkdir()
+            (mod_dir / "SomeUserMod_1.2.3.zip").write_text("zip placeholder", encoding="utf-8")
+            mod_list = mod_dir / "mod-list.json"
+            mod_list.write_text('{"mods":[{"name":"SomeUserMod","enabled":true}]}', encoding="utf-8")
+
+            prepared = prepare_steam_vanilla_mod_list(Path(runtime_dir), appdata_dir=Path(appdata_dir))
+            prepared_text = mod_list.read_text(encoding="utf-8")
+            self.assertIn('"name": "base"', prepared_text)
+            self.assertIn('"name": "space-age"', prepared_text)
+            self.assertIn('"name": "SomeUserMod"', prepared_text)
+            self.assertEqual(prepared["disabledInstalledModCount"], 1)
+            self.assertIn("SomeUserMod", prepared["disabledInstalledModsSample"])
+            self.assertTrue(Path(str(prepared["backupPath"])).exists())
+
+            restored = restore_latest_steam_mod_list(Path(runtime_dir), appdata_dir=Path(appdata_dir))
+            self.assertIn("SomeUserMod", mod_list.read_text(encoding="utf-8"))
+            self.assertEqual(restored["modListPath"], str(mod_list))
+
     def test_rejects_rcon(self):
         with self.assertRaises(AchievementPolicyError):
             validate_achievement_safe_args(["--rcon-port", "27015"])
@@ -60,6 +83,7 @@ class VanillaGuiTests(unittest.TestCase):
     def test_factorio_window_title_filter_rejects_browser_and_explorer(self):
         self.assertTrue(is_factorio_game_window_title("Factorio"))
         self.assertTrue(is_factorio_game_window_title("Factorio: Space Age 2.0.76"))
+        self.assertTrue(is_factorio_game_window_title("Factorio 2.0.76"))
         self.assertFalse(is_factorio_game_window_title("Factorio Prints - Chrome"))
         self.assertFalse(is_factorio_game_window_title("Factorio - File Explorer"))
 

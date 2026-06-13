@@ -6,11 +6,12 @@ import ctypes.wintypes
 import os
 from pathlib import Path
 import json
+import re
+import shutil
 import struct
 import subprocess
 import time
 from typing import Iterable
-import urllib.parse
 
 from .config import AppConfig
 
@@ -34,6 +35,8 @@ ACHIEVEMENT_SAFE_FLAGS: set[str] = set()
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_SCANCODE = 0x0008
+MAPVK_VK_TO_VSC = 0
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 SW_MINIMIZE = 6
 SW_RESTORE = 9
@@ -69,6 +72,7 @@ VK_KEYS = {
 }
 HBITMAP = ctypes.wintypes.HANDLE
 HGDIOBJ = ctypes.wintypes.HANDLE
+ULONG_PTR = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
 
 
 class AchievementPolicyError(ValueError):
@@ -178,6 +182,43 @@ class BITMAPINFO(ctypes.Structure):
     ]
 
 
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", ctypes.wintypes.WORD),
+        ("wScan", ctypes.wintypes.WORD),
+        ("dwFlags", ctypes.wintypes.DWORD),
+        ("time", ctypes.wintypes.DWORD),
+        ("dwExtraInfo", ULONG_PTR),
+    ]
+
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", ctypes.wintypes.LONG),
+        ("dy", ctypes.wintypes.LONG),
+        ("mouseData", ctypes.wintypes.DWORD),
+        ("dwFlags", ctypes.wintypes.DWORD),
+        ("time", ctypes.wintypes.DWORD),
+        ("dwExtraInfo", ULONG_PTR),
+    ]
+
+
+class HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [
+        ("uMsg", ctypes.wintypes.DWORD),
+        ("wParamL", ctypes.wintypes.WORD),
+        ("wParamH", ctypes.wintypes.WORD),
+    ]
+
+
+class INPUT_UNION(ctypes.Union):
+    _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT), ("hi", HARDWAREINPUT)]
+
+
+class INPUT(ctypes.Structure):
+    _fields_ = [("type", ctypes.wintypes.DWORD), ("union", INPUT_UNION)]
+
+
 def validate_achievement_safe_args(args: Iterable[str]) -> list[str]:
     normalized = [str(arg) for arg in args]
     expecting_value_for: str | None = None
@@ -207,18 +248,26 @@ def validate_achievement_safe_args(args: Iterable[str]) -> list[str]:
     return normalized
 
 
-def launch_vanilla_gui(cfg: AppConfig, *, via_steam: bool = True, args: Iterable[str] = ()) -> subprocess.Popen[bytes] | None:
+def launch_vanilla_gui(
+    cfg: AppConfig,
+    *,
+    via_steam: bool = True,
+    args: Iterable[str] = (),
+    prepare_steam_mod_list: bool = True,
+) -> subprocess.Popen[bytes] | None:
     safe_args = validate_achievement_safe_args(args)
-    mod_dir = prepare_vanilla_mod_directory(cfg.runtime_dir)
-    launch_args = [*safe_args, "--mod-directory", str(mod_dir)]
     if via_steam:
-        command_line = subprocess.list2cmdline(launch_args)
-        encoded_args = urllib.parse.quote(command_line, safe="")
-        os.startfile(f"steam://run/{FACTORIO_STEAM_APP_ID}//{encoded_args}")  # type: ignore[attr-defined]
+        if safe_args:
+            raise AchievementPolicyError("Steam vanilla launch must not include custom Factorio args")
+        if prepare_steam_mod_list:
+            prepare_steam_vanilla_mod_list(cfg.runtime_dir)
+        os.startfile(f"steam://rungameid/{FACTORIO_STEAM_APP_ID}")  # type: ignore[attr-defined]
         return None
 
     if not cfg.factorio_exe.exists():
         raise FileNotFoundError(f"Factorio executable not found: {cfg.factorio_exe}")
+    mod_dir = prepare_vanilla_mod_directory(cfg.runtime_dir)
+    launch_args = [*safe_args, "--mod-directory", str(mod_dir)]
     return subprocess.Popen([str(cfg.factorio_exe), *launch_args], cwd=str(Path.cwd()))
 
 
@@ -234,6 +283,80 @@ def prepare_vanilla_mod_directory(runtime_dir: Path) -> Path:
     payload = {"mods": [{"name": name, "enabled": True} for name in OFFICIAL_VANILLA_MODS]}
     (mod_dir / "mod-list.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return mod_dir
+
+
+def factorio_user_mod_list_path(appdata_dir: str | Path | None = None) -> Path:
+    root = Path(appdata_dir) if appdata_dir else Path(os.environ.get("APPDATA", "")) / "Factorio"
+    if not str(root):
+        raise AchievementPolicyError("APPDATA is not set; cannot locate Factorio user mod-list.json")
+    return root / "mods" / "mod-list.json"
+
+
+def official_vanilla_mod_list_payload(installed_mod_names: Iterable[str] = ()) -> dict[str, object]:
+    official = set(OFFICIAL_VANILLA_MODS)
+    names = sorted(official | {name for name in installed_mod_names if name})
+    return {"mods": [{"name": name, "enabled": name in official} for name in names]}
+
+
+def prepare_steam_vanilla_mod_list(runtime_dir: Path, *, appdata_dir: str | Path | None = None) -> dict[str, object]:
+    mod_list_path = factorio_user_mod_list_path(appdata_dir)
+    mod_list_path.parent.mkdir(parents=True, exist_ok=True)
+    backup_path = None
+    if mod_list_path.exists():
+        backup_dir = runtime_dir / "vanilla" / "steam-mod-list-backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        backup_path = backup_dir / f"mod-list-{timestamp}.json"
+        shutil.copy2(mod_list_path, backup_path)
+    payload = official_vanilla_mod_list_payload(_installed_user_mod_names(mod_list_path.parent))
+    mod_list_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    disabled = [
+        item["name"]
+        for item in payload["mods"]
+        if isinstance(item, dict) and not item.get("enabled")
+    ]
+    return {
+        "modListPath": str(mod_list_path),
+        "backupPath": str(backup_path) if backup_path else None,
+        "officialMods": list(OFFICIAL_VANILLA_MODS),
+        "disabledInstalledModCount": len(disabled),
+        "disabledInstalledModsSample": disabled[:10],
+    }
+
+
+def restore_latest_steam_mod_list(runtime_dir: Path, *, appdata_dir: str | Path | None = None) -> dict[str, object]:
+    backup_dir = runtime_dir / "vanilla" / "steam-mod-list-backups"
+    backups = sorted(backup_dir.glob("mod-list-*.json")) if backup_dir.exists() else []
+    if not backups:
+        raise FileNotFoundError(f"no Steam mod-list backup found under {backup_dir}")
+    latest = backups[-1]
+    mod_list_path = factorio_user_mod_list_path(appdata_dir)
+    mod_list_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(latest, mod_list_path)
+    return {"modListPath": str(mod_list_path), "restoredFrom": str(latest)}
+
+
+def _installed_user_mod_names(mod_dir: Path) -> list[str]:
+    names: set[str] = set()
+    if not mod_dir.exists():
+        return []
+    for child in mod_dir.iterdir():
+        if child.name == "mod-list.json":
+            continue
+        if child.is_file() and child.suffix.lower() == ".zip":
+            name = _mod_name_from_archive(child.stem)
+            if name:
+                names.add(name)
+        elif child.is_dir():
+            names.add(child.name)
+    return sorted(names)
+
+
+def _mod_name_from_archive(stem: str) -> str:
+    name, separator, version = stem.rpartition("_")
+    if separator and version[:1].isdigit():
+        return name
+    return stem
 
 
 class VanillaGuiDriver:
@@ -319,19 +442,47 @@ class VanillaGuiDriver:
         self.user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
         self.user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
+    def click_window_ratio(self, x_ratio: float, y_ratio: float) -> None:
+        window = self.find_factorio_window()
+        if window is None:
+            raise GuiAutomationError("Factorio window was not found")
+        hwnd, _title = window
+        rect = self._window_rect(hwnd)
+        self.click(rect.left + int(rect.width * x_ratio), rect.top + int(rect.height * y_ratio))
+
+    def start_space_age_freeplay_from_main_menu(self, *, skip_intro: bool = True) -> dict[str, object]:
+        if not self.activate_factorio(timeout_seconds=5.0):
+            raise GuiAutomationError("Factorio window was not found")
+        steps = []
+        sequence = [
+            ("single_player", 0.50, 0.405, 1.0),
+            ("new_game", 0.50, 0.470, 1.0),
+            ("freeplay_next", 0.80, 0.875, 1.0),
+            ("map_generator_play", 0.61, 0.975, 10.0),
+        ]
+        for name, x_ratio, y_ratio, delay in sequence:
+            self.click_window_ratio(x_ratio, y_ratio)
+            steps.append(name)
+            time.sleep(delay)
+        if skip_intro:
+            self.press_key("tab", duration_seconds=0.2)
+            steps.append("skip_intro_tab")
+            time.sleep(2.0)
+        return {"steps": steps, "skipIntro": skip_intro}
+
     def press(self, virtual_key: int, duration_seconds: float = 0.05) -> None:
-        self.user32.keybd_event(virtual_key, 0, 0, 0)
+        self._send_key(virtual_key, key_up=False)
         time.sleep(duration_seconds)
-        self.user32.keybd_event(virtual_key, 0, KEYEVENTF_KEYUP, 0)
+        self._send_key(virtual_key, key_up=True)
 
     def press_key(self, key: str, duration_seconds: float = 0.05) -> None:
         self.press(_virtual_key(key), duration_seconds=duration_seconds)
 
     def hold_key(self, key: str, duration_seconds: float) -> None:
         virtual_key = _virtual_key(key)
-        self.user32.keybd_event(virtual_key, 0, 0, 0)
+        self._send_key(virtual_key, key_up=False)
         time.sleep(max(0.0, duration_seconds))
-        self.user32.keybd_event(virtual_key, 0, KEYEVENTF_KEYUP, 0)
+        self._send_key(virtual_key, key_up=True)
 
     def post_key_to_factorio(self, key: str, duration_seconds: float = 0.05) -> bool:
         window = self.find_factorio_window()
@@ -505,6 +656,10 @@ class VanillaGuiDriver:
         self.user32.PrintWindow.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.HDC, ctypes.wintypes.UINT]
         self.user32.GetWindowThreadProcessId.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD)]
         self.user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
+        self.user32.MapVirtualKeyW.argtypes = [ctypes.wintypes.UINT, ctypes.wintypes.UINT]
+        self.user32.MapVirtualKeyW.restype = ctypes.wintypes.UINT
+        self.user32.SendInput.argtypes = [ctypes.wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+        self.user32.SendInput.restype = ctypes.wintypes.UINT
         self.kernel32 = ctypes.windll.kernel32
         self.kernel32.OpenProcess.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD]
         self.kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
@@ -545,6 +700,28 @@ class VanillaGuiDriver:
             ctypes.c_void_p,
             ctypes.wintypes.UINT,
         ]
+
+    def _send_key(self, virtual_key: int, *, key_up: bool) -> None:
+        scan_code = self.user32.MapVirtualKeyW(virtual_key, MAPVK_VK_TO_VSC)
+        if not scan_code:
+            self.user32.keybd_event(virtual_key, 0, KEYEVENTF_KEYUP if key_up else 0, 0)
+            return
+        flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if key_up else 0)
+        input_event = INPUT(
+            type=1,
+            union=INPUT_UNION(
+                ki=KEYBDINPUT(
+                    wVk=0,
+                    wScan=scan_code,
+                    dwFlags=flags,
+                    time=0,
+                    dwExtraInfo=0,
+                )
+            ),
+        )
+        sent = self.user32.SendInput(1, ctypes.byref(input_event), ctypes.sizeof(INPUT))
+        if sent != 1:
+            self.user32.keybd_event(virtual_key, 0, KEYEVENTF_KEYUP if key_up else 0, 0)
 
     def _window_process_path(self, hwnd: int) -> str | None:
         pid = ctypes.wintypes.DWORD()
@@ -693,7 +870,9 @@ def is_factorio_game_window_title(title: str) -> bool:
     normalized = title.strip()
     if normalized == "Factorio":
         return True
-    return normalized.startswith("Factorio:")
+    if normalized.startswith("Factorio:"):
+        return True
+    return re.match(r"^Factorio \d+\.\d+\.\d+(?:\b|$)", normalized) is not None
 
 
 def is_factorio_process_path(path: str | None) -> bool:

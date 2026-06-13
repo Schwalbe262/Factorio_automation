@@ -10,7 +10,13 @@ from .config import load_config
 from .controller import FactorioController
 from .factorio import create_save, install_mod, start_gui_client, start_save_gui, start_server, wait_for_rcon
 from . import remote_slurm
-from .vanilla_gui import VanillaGuiDriver, launch_vanilla_gui, prepare_vanilla_mod_directory
+from .vanilla_gui import (
+    VanillaGuiDriver,
+    launch_vanilla_gui,
+    prepare_steam_vanilla_mod_list,
+    prepare_vanilla_mod_directory,
+    restore_latest_steam_mod_list,
+)
 from .vanilla_perception import classify_bmp_file
 from .web_dashboard import FACTORIO_ROUTE, public_dashboard_urls, serve_dashboard
 
@@ -89,6 +95,12 @@ def main(argv: list[str] | None = None) -> None:
         help="Use experimental background PostMessage instead of foreground SendInput",
     )
 
+    vanilla_start_parser = subparsers.add_parser(
+        "vanilla-start-freeplay",
+        help="From the vanilla main menu, click through Single Player -> New Game -> Freeplay (Space Age)",
+    )
+    vanilla_start_parser.add_argument("--no-skip-intro", action="store_true", help="Do not press Tab after the map loads")
+
     vanilla_probe_parser = subparsers.add_parser(
         "vanilla-probe",
         help="Probe vanilla screen capture and background/minimized input capabilities",
@@ -96,6 +108,12 @@ def main(argv: list[str] | None = None) -> None:
     vanilla_probe_parser.add_argument("--output-dir", help="Directory for probe screenshots")
     vanilla_probe_parser.add_argument("--minimize-check", action="store_true", help="Temporarily minimize Factorio and try PrintWindow capture")
     vanilla_probe_parser.add_argument("--background-key", help="Post one key to the Factorio window without foreground activation")
+
+    subparsers.add_parser(
+        "prepare-steam-vanilla-mod-list",
+        help="Back up the user's Factorio mod-list and enable only official Space Age mods for Steam vanilla launch",
+    )
+    subparsers.add_parser("restore-steam-mod-list", help="Restore the latest backed-up Steam Factorio mod-list")
 
     confirm_parser = subparsers.add_parser("confirm-steam-launch", help="Click Steam's custom-arguments continue prompt")
     confirm_parser.add_argument("--timeout", type=float, default=15.0)
@@ -297,7 +315,13 @@ def main(argv: list[str] | None = None) -> None:
         launch_args: list[str] = []
         if args.window_size:
             launch_args.extend(["--window-size", args.window_size])
-        proc = launch_vanilla_gui(cfg, via_steam=not args.direct, args=launch_args)
+        steam_mod_list = prepare_steam_vanilla_mod_list(cfg.runtime_dir) if not args.direct else None
+        proc = launch_vanilla_gui(
+            cfg,
+            via_steam=not args.direct,
+            args=launch_args,
+            prepare_steam_mod_list=args.direct,
+        )
         driver = VanillaGuiDriver(cfg)
         prompt_clicked = False
         try:
@@ -311,7 +335,8 @@ def main(argv: list[str] | None = None) -> None:
             "ok": ok,
             "pid": proc.pid if proc else None,
             "viaSteam": not args.direct,
-            "isolatedModDirectory": str(prepare_vanilla_mod_directory(cfg.runtime_dir)),
+            "isolatedModDirectory": str(prepare_vanilla_mod_directory(cfg.runtime_dir)) if args.direct else None,
+            "steamModList": steam_mod_list,
             "steamPromptClicked": prompt_clicked,
             "windowReady": window_ready,
             "window": window_state,
@@ -322,6 +347,14 @@ def main(argv: list[str] | None = None) -> None:
         print_json(payload)
         if not ok:
             raise SystemExit(1)
+        return
+
+    if args.command == "prepare-steam-vanilla-mod-list":
+        print_json({"ok": True, "steamModList": prepare_steam_vanilla_mod_list(cfg.runtime_dir)})
+        return
+
+    if args.command == "restore-steam-mod-list":
+        print_json({"ok": True, "steamModList": restore_latest_steam_mod_list(cfg.runtime_dir)})
         return
 
     if args.command == "vanilla-window":
@@ -373,6 +406,11 @@ def main(argv: list[str] | None = None) -> None:
                 raise SystemExit(1)
             driver.press_key(args.key, duration_seconds=args.duration)
             print_json({"ok": True, "mode": "foreground", "key": args.key, "activated": activated})
+        return
+
+    if args.command == "vanilla-start-freeplay":
+        result = VanillaGuiDriver(cfg).start_space_age_freeplay_from_main_menu(skip_intro=not args.no_skip_intro)
+        print_json({"ok": True, "result": result})
         return
 
     if args.command == "vanilla-probe":
