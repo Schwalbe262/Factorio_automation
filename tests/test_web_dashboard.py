@@ -3,6 +3,7 @@ import unittest
 from factorio_ai.networking import dashboard_urls
 from factorio_ai.web_dashboard import (
     FACTORIO_ROUTE,
+    _token_usage_svg,
     dashboard_path,
     friendly_dashboard_error,
     is_factorio_route,
@@ -190,12 +191,27 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("Codex 토큰 사용량", html)
         self.assertIn("token-chart", html)
         self.assertIn("1,250", html)
+        self.assertIn("2026-06-13 09:01:00 KST", html)
         self.assertIn("LLM 판단 로그", html)
         self.assertIn("local_llm", html)
         self.assertIn("LLM unavailable", html)
+        self.assertIn("2026-06-13 09:02:00 KST", html)
         self.assertIn("AI 동작 위치", html)
         self.assertIn("copper-ore", html)
         self.assertIn("agent-map", html)
+
+    def test_token_usage_chart_uses_timestamp_spacing(self):
+        svg = _token_usage_svg(
+            [
+                {"timestamp": "2026-06-13T00:00:00+00:00", "tokens_used": 100},
+                {"timestamp": "2026-06-13T00:01:00+00:00", "tokens_used": 150},
+                {"timestamp": "2026-06-13T01:00:00+00:00", "tokens_used": 200},
+            ]
+        )
+        self.assertIn('cx="53.7"', svg)
+        self.assertIn('cx="744.0"', svg)
+        self.assertIn("06-13 09:00", svg)
+        self.assertIn("06-13 10:00", svg)
 
     def test_connection_refused_error_is_rendered_as_operator_guidance(self):
         message = friendly_dashboard_error(ConnectionRefusedError(10061, "actively refused"))

@@ -328,7 +328,7 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(lab_sites[0].automation_level, "daisy-chain")
         self.assertIn("lab x2", lab_sites[0].machines)
 
-    def test_logistics_links_include_belt_and_manual_boiler_feed(self):
+    def test_logistics_links_connect_producer_and_consumer_sites(self):
         observation = {
             "entities": [
                 {"name": "boiler", "unit_number": 10, "position": {"x": 12, "y": 10}, "inventories": {"1": {"coal": 1}}},
@@ -337,12 +337,58 @@ class MonitorTests(unittest.TestCase):
                 {"name": "transport-belt", "position": {"x": 7, "y": 0}, "inventories": {}},
                 {"name": "burner-inserter", "position": {"x": 8, "y": 0}, "inventories": {"1": {"coal": 1}}},
                 {"name": "stone-furnace", "unit_number": 2, "position": {"x": 9, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                {"name": "burner-mining-drill", "unit_number": 3, "position": {"x": 20, "y": 0}, "inventories": {"1": {"coal": 1}}},
             ],
-            "resources": [{"name": "iron-ore", "position": {"x": 4, "y": 0}}],
+            "resources": [
+                {"name": "iron-ore", "position": {"x": 4, "y": 0}},
+                {"name": "coal", "position": {"x": 20, "y": 0}},
+            ],
         }
         links = estimate_logistics_links(observation)
-        self.assertTrue(any(item.kind == "belt" and item.item == "iron-ore" for item in links))
-        self.assertTrue(any(item.kind == "manual" and item.item == "coal" for item in links))
+        iron_link = next(item for item in links if item.item == "iron-ore" and "plate_smelting_line" in item.to_site)
+        self.assertIn("mining_patch", iron_link.from_site)
+        self.assertEqual(iron_link.status, "route_observed")
+        coal_smelting = [
+            item
+            for item in links
+            if item.item == "coal" and "mining_patch" in item.from_site and "plate_smelting_line" in item.to_site
+        ]
+        coal_power = [
+            item
+            for item in links
+            if item.item == "coal" and "mining_patch" in item.from_site and "power" in item.to_site
+        ]
+        self.assertEqual(len(coal_smelting), 1)
+        self.assertEqual(len(coal_power), 1)
+        self.assertNotIn("manual", {item.kind for item in links})
+
+    def test_logistics_links_group_adjacent_sites_into_one_link(self):
+        observation = {
+            "entities": [
+                {"name": "burner-mining-drill", "unit_number": 1, "position": {"x": 4, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                {"name": "transport-belt", "position": {"x": 6, "y": 0}, "direction": 4, "inventories": {}},
+                {"name": "transport-belt", "position": {"x": 7, "y": 0}, "direction": 4, "inventories": {}},
+                {"name": "burner-inserter", "position": {"x": 8, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                {"name": "stone-furnace", "unit_number": 2, "position": {"x": 9, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                {"name": "burner-mining-drill", "unit_number": 3, "position": {"x": 4, "y": 3}, "inventories": {"1": {"coal": 1}}},
+                {"name": "transport-belt", "position": {"x": 6, "y": 3}, "direction": 4, "inventories": {}},
+                {"name": "transport-belt", "position": {"x": 7, "y": 3}, "direction": 4, "inventories": {}},
+                {"name": "burner-inserter", "position": {"x": 8, "y": 3}, "inventories": {"1": {"coal": 1}}},
+                {"name": "stone-furnace", "unit_number": 4, "position": {"x": 9, "y": 3}, "inventories": {"1": {"coal": 1}}},
+            ],
+            "resources": [
+                {"name": "iron-ore", "position": {"x": 4, "y": 0}},
+                {"name": "iron-ore", "position": {"x": 4, "y": 3}},
+            ],
+        }
+        links = [
+            item
+            for item in estimate_logistics_links(observation)
+            if item.item == "iron-ore" and "plate_smelting_line" in item.to_site
+        ]
+        self.assertEqual(len(links), 1)
+        self.assertIn("group:iron-ore", links[0].from_site)
+        self.assertIn("group:iron-plate", links[0].to_site)
 
     def test_summary_exposes_factory_sites_and_logistics_links(self):
         summary = summarize_factory(

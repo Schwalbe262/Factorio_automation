@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -29,6 +29,7 @@ API_ROUTE = "/api/factorio"
 DEFAULT_LANG = "en"
 SUPPORTED_LANGS = {"en", "ko"}
 DEFAULT_PUBLIC_DASHBOARD_BASE_URL = "http://27.115.156.173:8787"
+KST = timezone(timedelta(hours=9), "KST")
 
 
 TEXT: dict[str, dict[str, str]] = {
@@ -488,7 +489,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
       </div>
       <div>
         <span class="label">{_t(lang, "updated")}</span>
-        <strong>{escape(str(state.get("updated_at") or ""))}</strong>
+        <strong>{escape(_format_kst_timestamp(state.get("updated_at")))}</strong>
       </div>
       <div>
         <span class="label">Adapter</span>
@@ -1164,7 +1165,7 @@ def _token_usage_panel(value: Any, lang: str) -> str:
         f"{_metric(_t(lang, 'latest_tokens'), _format_int(usage.get('latest_tokens')))}"
         f"{_metric(_t(lang, 'total_delta_tokens'), _format_int(usage.get('total_delta_tokens')))}"
         f"{_metric(_t(lang, 'sample_count'), _format_int(usage.get('sample_count')))}"
-        f"{_metric(_t(lang, 'last_sample'), str(usage.get('updated_at') or ''))}"
+        f"{_metric(_t(lang, 'last_sample'), _format_kst_timestamp(usage.get('updated_at')))}"
         "</div>"
         f"{_token_usage_svg(samples)}"
         f"{_token_usage_table(samples[-8:], lang)}"
@@ -1184,7 +1185,7 @@ def _llm_decision_panel(value: Any, lang: str) -> str:
         )
     rows = "".join(
         "<tr>"
-        f"<td>{escape(str(row.get('timestamp') or ''))}</td>"
+        f"<td>{escape(_format_kst_timestamp(row.get('timestamp')))}</td>"
         f"<td>{escape(str(row.get('provider') or ''))}</td>"
         f"<td>{escape(str(row.get('source') or ''))}</td>"
         f"<td>{escape(str(row.get('selected_skill') or ''))}</td>"
@@ -1218,29 +1219,41 @@ def _metric(label: str, value: str) -> str:
 
 
 def _token_usage_svg(samples: list[Any]) -> str:
-    numeric = [
-        int(sample.get("tokens_used") or 0)
-        for sample in samples
-        if isinstance(sample, dict)
-    ]
-    if not numeric:
+    rows: list[tuple[int, float | None]] = []
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        try:
+            value = int(sample.get("tokens_used") or 0)
+        except (TypeError, ValueError):
+            continue
+        rows.append((value, _timestamp_seconds(sample.get("timestamp"))))
+    if not rows:
         return ""
+    numeric = [value for value, _timestamp in rows]
+    valid_times = [timestamp for _value, timestamp in rows if timestamp is not None]
     width = 760
-    height = 220
+    height = 240
     left = 42
     right = 16
     top = 16
-    bottom = 32
+    bottom = 46
     plot_width = width - left - right
     plot_height = height - top - bottom
     min_value = min(numeric)
     max_value = max(numeric)
     span = max(max_value - min_value, 1)
-    count = max(len(numeric) - 1, 1)
+    count = max(len(rows) - 1, 1)
+    min_time = min(valid_times) if len(valid_times) >= 2 else None
+    max_time = max(valid_times) if len(valid_times) >= 2 else None
+    time_span = (max_time - min_time) if min_time is not None and max_time is not None else 0
     points = []
     circles = []
-    for index, value in enumerate(numeric):
-        x = left + (plot_width * index / count)
+    for index, (value, timestamp) in enumerate(rows):
+        if min_time is not None and timestamp is not None and time_span > 0:
+            x = left + (plot_width * (timestamp - min_time) / time_span)
+        else:
+            x = left + (plot_width * index / count)
         y = top + plot_height - (plot_height * (value - min_value) / span)
         points.append(f"{x:.1f},{y:.1f}")
         circles.append(f"<circle class=\"usage-point\" cx=\"{x:.1f}\" cy=\"{y:.1f}\" r=\"3\" />")
@@ -1249,12 +1262,21 @@ def _token_usage_svg(samples: list[Any]) -> str:
         f"x2=\"{width - right}\" y2=\"{top + plot_height * step / 4:.1f}\" />"
         for step in range(5)
     )
+    axis_labels = ""
+    if min_time is not None and max_time is not None and time_span > 0:
+        axis_labels = (
+            f"<text x=\"{left}\" y=\"{height - 12}\" fill=\"#9aa4af\" font-size=\"11\">"
+            f"{escape(_format_chart_time(min_time))}</text>"
+            f"<text x=\"{width - right}\" y=\"{height - 12}\" fill=\"#9aa4af\" font-size=\"11\" text-anchor=\"end\">"
+            f"{escape(_format_chart_time(max_time))}</text>"
+        )
     return (
         f"<svg class=\"token-chart\" viewBox=\"0 0 {width} {height}\" role=\"img\" "
         "aria-label=\"Codex token usage line chart\">"
         f"{gridlines}"
-        f"<text x=\"{left}\" y=\"{height - 10}\" fill=\"#9aa4af\" font-size=\"11\">{escape(_format_int(min_value))}</text>"
+        f"<text x=\"{left}\" y=\"{top + plot_height - 4:.1f}\" fill=\"#9aa4af\" font-size=\"11\">{escape(_format_int(min_value))}</text>"
         f"<text x=\"{left}\" y=\"14\" fill=\"#9aa4af\" font-size=\"11\">{escape(_format_int(max_value))}</text>"
+        f"{axis_labels}"
         f"<polyline class=\"usage-line\" points=\"{' '.join(points)}\" />"
         f"{''.join(circles)}"
         "</svg>"
@@ -1264,7 +1286,7 @@ def _token_usage_svg(samples: list[Any]) -> str:
 def _token_usage_table(samples: list[Any], lang: str) -> str:
     body = "".join(
         "<tr>"
-        f"<td>{escape(str(row.get('timestamp') or ''))}</td>"
+        f"<td>{escape(_format_kst_timestamp(row.get('timestamp')))}</td>"
         f"<td>{escape(str(row.get('label') or ''))}</td>"
         f"<td>{escape(_format_int(row.get('delta_tokens')))}</td>"
         f"<td>{escape(_format_int(row.get('tokens_used')))}</td>"
@@ -1396,6 +1418,41 @@ def _position_pair(value: Any) -> tuple[float, float] | None:
         return float(value.get("x") or 0.0), float(value.get("y") or 0.0)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _format_kst_timestamp(value: Any) -> str:
+    parsed = _parse_datetime(value)
+    if parsed is None:
+        return str(value or "")
+    return parsed.astimezone(KST).strftime("%Y-%m-%d %H:%M:%S KST")
+
+
+def _timestamp_seconds(value: Any) -> float | None:
+    parsed = _parse_datetime(value)
+    if parsed is None:
+        return None
+    return parsed.timestamp()
+
+
+def _format_chart_time(seconds: float) -> str:
+    return datetime.fromtimestamp(seconds, KST).strftime("%m-%d %H:%M")
 
 
 def _format_int(value: Any) -> str:

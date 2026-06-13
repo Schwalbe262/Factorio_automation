@@ -1004,48 +1004,21 @@ def _gcd_float(left: float, right: float) -> float:
 
 
 def estimate_logistics_links(observation: dict[str, Any]) -> list[LogisticsLinkEstimate]:
+    sites = estimate_factory_sites(observation)
     links: list[LogisticsLinkEstimate] = []
     seen: set[str] = set()
+    sources_by_item: dict[str, list[FactorySiteEstimate]] = {}
+    for site in sites:
+        for item in _site_output_items(site):
+            sources_by_item.setdefault(item, []).append(site)
 
-    for layout in _deduped_belt_line_layouts(observation):
-        drill = layout.get("drill")
-        furnace = layout.get("furnace")
-        resource_name = str(layout.get("resource_name") or "iron-ore")
-        start = _position(drill) if isinstance(drill, dict) else layout.get("drill_position") or {"x": 0.0, "y": 0.0}
-        end = _position(furnace) if isinstance(furnace, dict) else _layout_center(layout)
-        complete = all(layout.get(key) is not None for key in ("belt1", "belt2", "inserter", "furnace", "drill"))
-        link = LogisticsLinkEstimate(
-            link_id=_link_id("belt", start, end, resource_name),
-            kind="belt",
-            item=resource_name,
-            from_site=_position_site_id("mining_patch", start),
-            to_site=_position_site_id("smelting", end),
-            status="complete" if complete else "incomplete",
-            length_tiles=round(distance(start, end), 2),
-            notes=["short bootstrap ore belt from drill output to furnace"],
-        )
-        if link.link_id not in seen:
-            links.append(link)
-            seen.add(link.link_id)
-
-    for boiler in [item for item in _entities(observation) if item.get("name") == "boiler"]:
-        position = _position(boiler)
-        kind = _fuel_feed_type(observation, position)
-        link = LogisticsLinkEstimate(
-            link_id=_entity_site_id("boiler_fuel", boiler),
-            kind=kind,
-            item="coal",
-            from_site="coal_supply",
-            to_site=_entity_site_id("power", boiler),
-            status="automated" if kind == "belt" else "bootstrap_manual",
-            length_tiles=0.0,
-            notes=[
-                "replace manual boiler fueling with coal belt and inserter feed"
-                if kind == "manual"
-                else "boiler coal belt/inserter feed observed"
-            ],
-        )
-        links.append(link)
+    for consumer in sites:
+        for required_item in _site_required_input_items(consumer):
+            source = _nearest_source_site(required_item, consumer, sources_by_item)
+            link = _site_logistics_link(observation, required_item, source, consumer)
+            if link.link_id not in seen:
+                links.append(link)
+                seen.add(link.link_id)
 
     rails = [item for item in _entities(observation) if item.get("name") in {"straight-rail", "curved-rail-a", "curved-rail-b", "half-diagonal-rail"}]
     train_stops = [item for item in _entities(observation) if item.get("name") == "train-stop"]
@@ -1064,6 +1037,100 @@ def estimate_logistics_links(observation: dict[str, Any]) -> list[LogisticsLinkE
         )
 
     return links
+
+
+def _site_output_items(site: FactorySiteEstimate) -> list[str]:
+    if not site.item:
+        return []
+    if site.kind in {"mining_patch", "plate_smelting_line", "build_item_mall", "assembler_cell", "circuit_automation"}:
+        return [site.item]
+    return []
+
+
+def _site_required_input_items(site: FactorySiteEstimate) -> list[str]:
+    required: list[str] = []
+    if site.kind == "plate_smelting_line":
+        if site.item == "iron-plate":
+            required.append("iron-ore")
+        elif site.item == "copper-plate":
+            required.append("copper-ore")
+        if _site_uses_burner_or_fuel(site):
+            required.append("coal")
+    elif site.kind == "steam_power":
+        required.append("coal")
+    elif site.kind in {"build_item_mall", "assembler_cell", "circuit_automation"} and site.item:
+        recipe = RECIPES.get(site.item)
+        if recipe:
+            required.extend(recipe.ingredients.keys())
+    return sorted(set(required))
+
+
+def _site_uses_burner_or_fuel(site: FactorySiteEstimate) -> bool:
+    text = " ".join(site.machines + [site.automation_level] + site.notes)
+    return any(token in text for token in ["burner", "stone-furnace", "boiler", "coal"])
+
+
+def _nearest_source_site(
+    item: str,
+    consumer: FactorySiteEstimate,
+    sources_by_item: dict[str, list[FactorySiteEstimate]],
+) -> FactorySiteEstimate | None:
+    candidates = [site for site in sources_by_item.get(item, []) if site.site_id != consumer.site_id]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda site: distance(site.position, consumer.position))
+
+
+def _site_logistics_link(
+    observation: dict[str, Any],
+    item: str,
+    source: FactorySiteEstimate | None,
+    consumer: FactorySiteEstimate,
+) -> LogisticsLinkEstimate:
+    source_id = source.site_id if source is not None else f"missing_source:{item}"
+    source_position = source.position if source is not None else consumer.position
+    route = _site_route_observed(observation, item, source, consumer)
+    kind = "belt" if route else "site_flow"
+    status = "route_observed" if route else ("missing_source" if source is None else "route_needed")
+    notes = [
+        "site-level logistics link inferred from producer and consumer sites",
+        "exact belt, train, inserter, and chest routing is executor-level detail",
+    ]
+    if consumer.kind == "plate_smelting_line" and item == "coal":
+        notes.append("stone furnace bootstrap smelting needs coal until electric furnaces or fuel automation replace it")
+    return LogisticsLinkEstimate(
+        link_id=f"site-link:{item}:{source_id}->{consumer.site_id}",
+        kind=kind,
+        item=item,
+        from_site=source_id,
+        to_site=consumer.site_id,
+        status=status,
+        length_tiles=round(distance(source_position, consumer.position), 2),
+        notes=notes,
+    )
+
+
+def _site_route_observed(
+    observation: dict[str, Any],
+    item: str,
+    source: FactorySiteEstimate | None,
+    consumer: FactorySiteEstimate,
+) -> bool:
+    if source is None:
+        return False
+    if item in {"iron-ore", "copper-ore"} and consumer.kind == "plate_smelting_line":
+        for layout in _deduped_belt_line_layouts(observation):
+            if str(layout.get("resource_name") or "") != item:
+                continue
+            start = _position(layout["drill"]) if isinstance(layout.get("drill"), dict) else layout.get("drill_position")
+            end = _position(layout["furnace"]) if isinstance(layout.get("furnace"), dict) else _layout_center(layout)
+            if not isinstance(start, dict) or not isinstance(end, dict):
+                continue
+            if distance(start, source.position) <= 48 and distance(end, consumer.position) <= 48:
+                return True
+    if item == "coal" and consumer.kind == "steam_power":
+        return any(_fuel_feed_type(observation, _position(entity)) == "belt" for entity in _entities(observation) if entity.get("name") == "boiler")
+    return False
 
 
 def technology_requirements_for_objective(objective: str) -> list[dict[str, Any]]:
