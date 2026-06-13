@@ -360,7 +360,31 @@ class MonitorTests(unittest.TestCase):
         ]
         self.assertEqual(len(coal_smelting), 1)
         self.assertEqual(len(coal_power), 1)
+        self.assertEqual(coal_smelting[0].status, "route_observed")
         self.assertNotIn("manual", {item.kind for item in links})
+
+    def test_coal_route_observed_requires_nearby_source(self):
+        observation = {
+            "entities": [
+                {"name": "burner-mining-drill", "unit_number": 1, "position": {"x": 4, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                {"name": "transport-belt", "position": {"x": 6, "y": 0}, "direction": 4, "inventories": {}},
+                {"name": "transport-belt", "position": {"x": 7, "y": 0}, "direction": 4, "inventories": {}},
+                {"name": "burner-inserter", "position": {"x": 8, "y": 0}, "direction": 12, "inventories": {"1": {"coal": 1}}},
+                {"name": "stone-furnace", "unit_number": 2, "position": {"x": 9, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                {"name": "burner-mining-drill", "unit_number": 3, "position": {"x": 200, "y": 0}, "inventories": {"1": {"coal": 1}}},
+            ],
+            "resources": [
+                {"name": "iron-ore", "position": {"x": 4, "y": 0}},
+                {"name": "coal", "position": {"x": 200, "y": 0}},
+            ],
+        }
+        links = estimate_logistics_links(observation)
+        coal_smelting = next(
+            item
+            for item in links
+            if item.item == "coal" and "mining_patch" in item.from_site and "smelting" in item.to_site
+        )
+        self.assertEqual(coal_smelting.status, "route_needed")
 
     def test_logistics_links_group_adjacent_sites_into_one_link(self):
         observation = {

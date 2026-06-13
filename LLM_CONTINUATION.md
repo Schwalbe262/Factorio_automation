@@ -266,6 +266,18 @@ The current no-mod observation has recently shown:
     reason `coal supply site is active with fueled burner mining drill and output belt`;
   - monitor saw one fueled coal `mining_patch` and site-level coal logistics
     links from that patch to nearby smelting/power consumers.
+- `connect_coal_fuel_feed` now completes the local coal fuel route from the
+  starter coal belt to a nearby fuel consumer:
+  - command:
+    `python -m factorio_ai.cli run-no-mod-strategy-step --objective launch_rocket_program --max-steps 35`;
+  - result:
+    `selectedSkill: connect_coal_fuel_feed`, `ok: true`, `steps: 11`,
+    reason `coal fuel feed is active: belt and burner inserter are feeding a furnace fuel inventory`;
+  - monitor now marks the close coal link as `route_observed`, while the far
+    iron-smelting and steam-power coal links remain `route_needed`.
+- After refueling the source coal drill with another strategy step, the next
+  no-mod strategy moved on to `produce_iron_plate`, proving the coal
+  supply/feed loop no longer traps the strategy layer.
 
 Next practical runtime check:
 

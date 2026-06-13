@@ -1128,7 +1128,13 @@ def _site_route_observed(
                 continue
             if distance(start, source.position) <= 48 and distance(end, consumer.position) <= 48:
                 return True
+    if item == "coal" and consumer.kind == "plate_smelting_line":
+        if distance(source.position, consumer.position) > 48:
+            return False
+        return _fuel_feed_type(observation, consumer.position) == "belt"
     if item == "coal" and consumer.kind == "steam_power":
+        if distance(source.position, consumer.position) > 48:
+            return False
         return any(_fuel_feed_type(observation, _position(entity)) == "belt" for entity in _entities(observation) if entity.get("name") == "boiler")
     return False
 

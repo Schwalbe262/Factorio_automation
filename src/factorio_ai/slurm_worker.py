@@ -608,6 +608,7 @@ def _skill_role_hint(name: str) -> str:
         "expand_copper_smelting": "increase copper-plate production rate",
         "build_belt_smelting_line": "build site-level ore-to-plate logistics",
         "setup_coal_supply": "build starter coal mining and output belt before scaling burner fuel demand",
+        "connect_coal_fuel_feed": "connect coal belt to nearby burner fuel consumers",
         "setup_power": "build or repair steam power before powered automation",
         "research_automation": "unlock assembling-machine automation",
         "automate_electronic_circuit_line": "build powered circuit assemblers for sustained green-circuit throughput",

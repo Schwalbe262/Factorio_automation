@@ -1518,6 +1518,111 @@ class CoalSupplySkill:
         )
 
 
+class CoalFuelFeedSkill:
+    """Connect a starter coal belt to a nearby burner fuel consumer."""
+
+    def __init__(self) -> None:
+        self.support_skill = BeltSmeltingLineSkill(target_count=20)
+
+    def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
+        player = player_position(observation)
+        layout = _coal_fuel_feed_layout(observation)
+        if layout is None:
+            supply = CoalSupplySkill(target_count=16).next_action(observation)
+            if not supply.done:
+                return supply
+            return PlannerDecision(None, "coal supply exists but no output belt is available for fuel feed")
+
+        need = _coal_fuel_feed_missing_item(observation, layout)
+        if need:
+            decision = self.support_skill._ensure_item(observation, player, need)
+            if decision is not None:
+                return decision
+
+        for name, key, direction_key in [
+            ("transport-belt", "belt2_position", "belt_direction"),
+            ("burner-inserter", "inserter_position", "inserter_direction"),
+            ("stone-furnace", "consumer_position", None),
+        ]:
+            existing_key = _coal_fuel_feed_entity_key(name)
+            if layout.get(existing_key) is not None:
+                continue
+            position = layout[key]
+            blocker = _blocking_obstacle_near(observation, position)
+            if blocker is not None:
+                blocker_position = _position(blocker)
+                if distance(player, blocker_position) > 8:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": blocker_position},
+                        f"move near blocking {blocker.get('name')} before placing coal fuel feed {name}",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "name": blocker.get("name"),
+                        "position": blocker_position,
+                        "count": 1,
+                    },
+                    f"clear blocking {blocker.get('name')} before placing coal fuel feed {name}",
+                )
+            if distance(player, position) > 20 or distance(player, position) < 2.0:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position, offset=3.0)},
+                    f"move near planned coal fuel feed {name}",
+                )
+            action: dict[str, Any] = {
+                "type": "build",
+                "name": name,
+                "position": position,
+                "allow_nearby": name == "stone-furnace",
+            }
+            direction = layout.get(direction_key) if direction_key else None
+            if direction is not None:
+                action["direction"] = direction
+            return PlannerDecision(action, f"place {name} for coal fuel feed")
+
+        inserter = layout.get("inserter")
+        if inserter and entity_item_count(inserter, "coal") < 1:
+            return _fuel_burner_line_entity(
+                observation,
+                player,
+                inserter,
+                entity_name="burner-inserter",
+                threshold=1,
+                insert_count=1,
+                context="coal fuel feed",
+                support_skill=IronPlateSkill(target_count=20),
+                far_fuel_reason="coal fuel feed needs local starter fuel before the burner inserter can move coal",
+            )
+
+        source_drill = layout.get("source_drill")
+        if source_drill and entity_item_count(source_drill, "coal") < 1:
+            return _fuel_burner_line_entity(
+                observation,
+                player,
+                source_drill,
+                entity_name="burner-mining-drill",
+                threshold=1,
+                insert_count=2,
+                context="coal fuel feed source drill",
+                support_skill=IronPlateSkill(target_count=20),
+                far_fuel_reason="coal fuel feed source drill needs local starter fuel before the feed can stay active",
+            )
+
+        consumer = layout.get("consumer")
+        if consumer and entity_item_count(consumer, "coal") > 0:
+            return PlannerDecision(
+                None,
+                "coal fuel feed is active: belt and burner inserter are feeding a furnace fuel inventory",
+                done=True,
+            )
+
+        return PlannerDecision(
+            {"type": "wait", "ticks": 180},
+            "wait for coal fuel feed inserter to move coal into the fuel consumer",
+        )
+
+
 class _ExpandPlateSmeltingSkill:
     """Incrementally add belt-fed plate smelting capacity."""
 
@@ -2192,6 +2297,62 @@ def _direction_to_orientation(direction: int) -> str:
     if direction == NORTH:
         return "north"
     return "east"
+
+
+def _coal_fuel_feed_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
+    supply = _find_coal_supply_layout(observation)
+    if supply is None or not isinstance(supply.get("output_belt"), dict):
+        return None
+    output_belt = supply["output_belt"]
+    output_position = _position(output_belt)
+    orientation = _direction_to_orientation(int(output_belt.get("direction") or supply.get("belt_direction") or EAST))
+    dx, dy, _drill_direction, belt_direction, inserter_direction = _smelting_orientation(orientation)
+    belt2_position = {"x": output_position["x"] + dx, "y": output_position["y"] + dy}
+    inserter_position = {"x": output_position["x"] + 2 * dx, "y": output_position["y"] + 2 * dy}
+    consumer_position = {"x": output_position["x"] + 3 * dx, "y": output_position["y"] + 3 * dy}
+    return {
+        "orientation": orientation,
+        "source_drill": supply.get("drill"),
+        "source_belt": output_belt,
+        "source_belt_position": output_position,
+        "belt2_position": belt2_position,
+        "inserter_position": inserter_position,
+        "consumer_position": consumer_position,
+        "belt_direction": belt_direction,
+        "inserter_direction": inserter_direction,
+        "belt2": _entity_near(observation, "transport-belt", belt2_position, radius=0.75),
+        "inserter": _entity_near(observation, "burner-inserter", inserter_position, radius=1.0),
+        "consumer": _nearest_fuel_consumer_near(observation, consumer_position),
+    }
+
+
+def _nearest_fuel_consumer_near(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:
+    candidates = []
+    for name in ("stone-furnace", "boiler"):
+        for entity in entities_named(observation, name):
+            if distance(_position(entity), position) <= 1.75:
+                candidates.append(entity)
+    return _nearest_to(candidates, position) if candidates else None
+
+
+def _coal_fuel_feed_missing_item(observation: dict[str, Any], layout: dict[str, Any]) -> str | None:
+    if layout.get("belt2") is None and inventory_count(observation, "transport-belt") <= 0:
+        return "transport-belt"
+    if layout.get("inserter") is None and inventory_count(observation, "burner-inserter") <= 0:
+        return "burner-inserter"
+    if layout.get("consumer") is None and inventory_count(observation, "stone-furnace") <= 0:
+        return "stone-furnace"
+    return None
+
+
+def _coal_fuel_feed_entity_key(entity_name: str) -> str:
+    if entity_name == "transport-belt":
+        return "belt2"
+    if entity_name == "burner-inserter":
+        return "inserter"
+    if entity_name in {"stone-furnace", "boiler"}:
+        return "consumer"
+    return entity_name
 
 
 def _ceil_div(value: int, divisor: int) -> int:

@@ -487,6 +487,12 @@ on a coal patch, places an output belt, primes the drill with starter fuel, and 
 coal site to the factory monitor as a `mining_patch`. Strategy guardrails can run it before more
 burner smelting or steam power expansion when coal is still hand-mined.
 
+`connect_coal_fuel_feed` extends that coal output into a local belt-fed fuel consumer. It places a
+short belt extension, burner inserter, and starter furnace fuel receiver, primes the burner inserter,
+and keeps the source drill fueled. The monitor marks the nearby coal link as `route_observed` only
+when the coal source is close enough to the consumer, so a local fuel feed is not mistaken for a
+409-tile or 481-tile long-haul route.
+
 ## Space Age Objective
 
 The long-term target extends past the first rocket. The AI should eventually launch rockets, build

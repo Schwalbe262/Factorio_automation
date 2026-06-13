@@ -119,6 +119,21 @@ SKILL_CATALOG: dict[str, SkillContract] = {
             "Executor validates exact coal patch tile, drill direction, output belt, and starter fuel."
         ),
     ),
+    "connect_coal_fuel_feed": SkillContract(
+        name="connect_coal_fuel_feed",
+        description="Connect a starter coal belt to nearby burner fuel consumers with belts and inserters.",
+        executor="CoalFuelFeedSkill",
+        preconditions=[
+            "fueled coal mining patch with output belt",
+            "nearby burner furnace or boiler fuel consumer, or room for a starter furnace fuel receiver",
+            "transport belt, burner inserter, and furnace available or craftable",
+        ],
+        completion=["coal route to the local fuel consumer is observed as belt-fed"],
+        llm_scope=(
+            "Choose this after coal mining exists but site-level coal links are still route_needed. "
+            "Executor places exact belt extension, burner inserter, and fuel consumer connection."
+        ),
+    ),
     "produce_copper_plate": SkillContract(
         name="produce_copper_plate",
         description="Create or replenish copper plate supply.",
@@ -551,6 +566,27 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
+    if selected in _COAL_DEPENDENT_SKILLS and _coal_fuel_feed_needed(observation, objective, production_targets):
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "connect_coal_fuel_feed"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 86)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            f"LLM selected {selected}, but a nearby coal logistics link is still route_needed."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["coal fuel feed route"]))
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            "coal_fuel_feed_route_needed=true",
+        ]
+        adjusted["expected_effect"] = "Connect the starter coal belt to local burner fuel consumers before scaling demand."
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": "connect_coal_fuel_feed",
+            "reason": guardrail_reason,
+        }
+        return adjusted
     if (
         selected == "produce_electronic_circuit"
         and _technology_researched(observation, "automation")
@@ -632,6 +668,16 @@ def heuristic_strategy(
             ],
             blockers=["automated coal fuel supply"],
             expected_effect="Build and fuel a burner coal drill with an output belt so smelting and power can be refueled locally.",
+        ).to_dict()
+
+    if _coal_fuel_feed_needed(observation, objective, production_targets, monitor=monitor):
+        return StrategicDecision(
+            selected_skill="connect_coal_fuel_feed",
+            priority=89,
+            reason="A fueled coal mining site exists, but a nearby coal consumer link is still route_needed.",
+            evidence=["coal_fuel_feed_route_needed=true"],
+            blockers=["coal fuel feed route"],
+            expected_effect="Build belt/inserter fuel feed from the coal supply belt to the nearby burner consumer.",
         ).to_dict()
 
     if power_issue:
@@ -907,6 +953,31 @@ def _coal_patch_is_near_player(observation: dict[str, Any]) -> bool:
             continue
         resource_position = resource.get("position") if isinstance(resource.get("position"), dict) else None
         if resource_position is not None and distance(position, resource_position) <= 32.0:
+            return True
+    return False
+
+
+def _coal_fuel_feed_needed(
+    observation: dict[str, Any],
+    objective: str,
+    production_targets: dict[str, float] | None = None,
+    *,
+    monitor: dict[str, Any] | None = None,
+) -> bool:
+    monitor = monitor or summarize_factory(observation, objective, production_targets=production_targets)
+    links = monitor.get("logistics_links") if isinstance(monitor.get("logistics_links"), list) else []
+    for link in links:
+        if not isinstance(link, dict) or link.get("item") != "coal":
+            continue
+        if link.get("status") != "route_needed":
+            continue
+        if "mining_patch" not in str(link.get("from_site") or ""):
+            continue
+        try:
+            length = float(link.get("length_tiles") or 999999.0)
+        except (TypeError, ValueError):
+            length = 999999.0
+        if length <= 32.0:
             return True
     return False
 

@@ -83,6 +83,22 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "setup_coal_supply")
         self.assertIn("automated coal fuel supply", result["blockers"])
 
+    def test_coal_fuel_feed_is_prioritized_after_coal_supply_exists(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "player": {"position": {"x": 0, "y": 0}},
+                "inventory": {"iron-plate": 20, "coal": 4},
+                "entities": [
+                    {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 4, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+                    {"name": "transport-belt", "unit_number": 21, "position": {"x": 6, "y": 0}, "direction": 4, "inventories": {}},
+                ],
+                "resources": [{"name": "coal", "position": {"x": 4, "y": 0}, "distance": 4}],
+            },
+        )
+        self.assertEqual(result["selected_skill"], "connect_coal_fuel_feed")
+        self.assertIn("coal fuel feed route", result["blockers"])
+
     def test_rocket_goal_researches_logistics_after_circuit_cell_ready(self):
         result = heuristic_strategy(
             "launch_rocket_program",
@@ -176,6 +192,33 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["guardrail_adjusted"]["from"], "expand_iron_smelting")
         self.assertIn("automated coal fuel supply", result["blockers"])
 
+    def test_reconcile_promotes_fuel_dependent_expansion_to_coal_feed_link(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "setup_power",
+                "priority": 80,
+                "reason": "Need power.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "player": {"position": {"x": 0, "y": 0}},
+                "inventory": {"coal": 4},
+                "entities": [
+                    {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 4, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+                    {"name": "transport-belt", "unit_number": 21, "position": {"x": 6, "y": 0}, "direction": 4, "inventories": {}},
+                ],
+                "resources": [{"name": "coal", "position": {"x": 4, "y": 0}, "distance": 4}],
+            },
+        )
+        self.assertEqual(result["selected_skill"], "connect_coal_fuel_feed")
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "setup_power")
+        self.assertIn("coal fuel feed route", result["blockers"])
+
     def test_copper_target_bottleneck_expands_copper_smelting(self):
         result = heuristic_strategy(
             "launch_rocket_program",
@@ -196,6 +239,7 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(any(item["name"] == "produce_electronic_circuit" for item in catalog))
         self.assertTrue(any(item["name"] == "build_belt_smelting_line" for item in catalog))
         self.assertTrue(any(item["name"] == "setup_coal_supply" for item in catalog))
+        self.assertTrue(any(item["name"] == "connect_coal_fuel_feed" for item in catalog))
         self.assertTrue(any(item["name"] == "expand_copper_smelting" for item in catalog))
         self.assertTrue(any(item["name"] == "research_automation" for item in catalog))
         self.assertTrue(any(item["name"] == "automate_electronic_circuit_line" for item in catalog))
@@ -215,6 +259,10 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(
             next(item for item in catalog if item["name"] == "setup_coal_supply")["executor"],
             "CoalSupplySkill",
+        )
+        self.assertEqual(
+            next(item for item in catalog if item["name"] == "connect_coal_fuel_feed")["executor"],
+            "CoalFuelFeedSkill",
         )
         self.assertTrue(all("llm_scope" in item for item in catalog))
 

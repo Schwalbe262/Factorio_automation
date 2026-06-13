@@ -325,6 +325,10 @@ Key constraints to preserve:
   machines. `setup_coal_supply` now builds the first dedicated coal mining
   site: burner mining drill on coal, output belt, starter fuel, and monitor
   visibility as a fueled `mining_patch`.
+- `connect_coal_fuel_feed` now extends that coal belt into a local belt-fed
+  fuel consumer and keeps the source drill fueled. Monitor coal route
+  detection checks source-consumer distance, so nearby fuel feed does not make
+  remote coal links look complete.
 - When the LLM has no urgent production/research/defense work, it should use
   idle cycles for site layout improvement.
 - `plan_factory_site` is a simulation/planning skill, not a build skill. It
@@ -391,6 +395,8 @@ Known checkpoints:
   token usage delta in `logs/token_usage.jsonl` is `339,226`.
 - Part 45 coal supply skill live test was recorded at `25,563,701` tokens;
   token usage delta in `logs/token_usage.jsonl` is `329,285`.
+- Part 46 coal fuel feed live test was recorded at `25,878,990` tokens;
+  token usage delta in `logs/token_usage.jsonl` is `315,289`.
 
 Update this section or final response with the latest delta after completing
 the current task.
