@@ -322,7 +322,9 @@ Key constraints to preserve:
 - Sites should be grouped by nearby entities, not listed as hundreds of
   individual machines.
 - Burner smelting expansion can recover surplus coal from nearby fueled
-  machines, but proper coal belt/cache/outpost automation is still a next step.
+  machines. `setup_coal_supply` now builds the first dedicated coal mining
+  site: burner mining drill on coal, output belt, starter fuel, and monitor
+  visibility as a fueled `mining_patch`.
 - When the LLM has no urgent production/research/defense work, it should use
   idle cycles for site layout improvement.
 - `plan_factory_site` is a simulation/planning skill, not a build skill. It
@@ -387,6 +389,8 @@ Known checkpoints:
 - Before creating this handoff file, `get_goal` reported `18,530,998` tokens.
 - Part 44 Codex-wait layout heartbeat was recorded at `25,234,416` tokens;
   token usage delta in `logs/token_usage.jsonl` is `339,226`.
+- Part 45 coal supply skill live test was recorded at `25,563,701` tokens;
+  token usage delta in `logs/token_usage.jsonl` is `329,285`.
 
 Update this section or final response with the latest delta after completing
 the current task.

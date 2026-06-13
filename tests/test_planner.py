@@ -5,6 +5,7 @@ from factorio_ai.planner import (
     BeltSmeltingLineSkill,
     BuildItemMallSkill,
     CircuitAutomationSkill,
+    CoalSupplySkill,
     CopperPlateSkill,
     ElectronicCircuitSkill,
     ExpandCopperSmeltingSkill,
@@ -86,6 +87,60 @@ def power_site():
 
 
 class PlannerTests(unittest.TestCase):
+    def test_coal_supply_places_output_belt_before_drill(self):
+        obs = base_observation()
+        obs["inventory"] = {"transport-belt": 1, "burner-mining-drill": 1, "coal": 8}
+        obs["resources"] = [{"name": "coal", "position": {"x": 6, "y": 0}, "distance": 6}]
+        decision = CoalSupplySkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertEqual(decision.action["position"], {"x": 8, "y": 0})
+        self.assertEqual(decision.action["direction"], 4)
+
+    def test_coal_supply_uses_existing_output_belt_then_places_drill(self):
+        obs = base_observation()
+        obs["inventory"] = {"transport-belt": 0, "burner-mining-drill": 1, "coal": 8}
+        obs["resources"] = [{"name": "coal", "position": {"x": 6, "y": 0}, "distance": 6}]
+        obs["entities"] = [
+            {"name": "transport-belt", "unit_number": 10, "position": {"x": 8, "y": 0}, "direction": 4, "inventories": {}},
+        ]
+        decision = CoalSupplySkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertEqual(decision.action["position"], {"x": 6, "y": 0})
+        self.assertEqual(decision.action["required_resource"], "coal")
+
+    def test_coal_supply_fuels_existing_drill(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 8}
+        obs["resources"] = [{"name": "coal", "position": {"x": 6, "y": 0}, "distance": 6}]
+        obs["entities"] = [
+            {"name": "transport-belt", "unit_number": 10, "position": {"x": 8, "y": 0}, "direction": 4, "inventories": {}},
+            {"name": "burner-mining-drill", "unit_number": 11, "position": {"x": 6, "y": 0}, "direction": 4, "inventories": {}},
+        ]
+        decision = CoalSupplySkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["unit_number"], 11)
+
+    def test_coal_supply_done_when_fueled_and_belted(self):
+        obs = base_observation()
+        obs["inventory"] = {}
+        obs["resources"] = [{"name": "coal", "position": {"x": 6, "y": 0}, "distance": 6}]
+        obs["entities"] = [
+            {"name": "transport-belt", "unit_number": 10, "position": {"x": 8, "y": 0}, "direction": 4, "inventories": {}},
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 11,
+                "position": {"x": 6, "y": 0},
+                "direction": 4,
+                "inventories": {"1": {"coal": 3}},
+            },
+        ]
+        decision = CoalSupplySkill().next_action(obs)
+        self.assertTrue(decision.done)
+        self.assertIn("coal supply site is active", decision.reason)
+
     def test_factory_layout_flags_remote_manual_power_site(self):
         obs = base_observation()
         obs["base"] = {"spawn_position": {"x": 0, "y": 0}}

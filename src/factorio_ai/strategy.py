@@ -5,7 +5,7 @@ from typing import Any
 
 from .knowledge import dependency_tree_for_objective
 from .monitor import recent_damage_events, summarize_factory
-from .models import entities_named, entity_item_count, inventory_count, total_item_count
+from .models import distance, entities_named, entity_item_count, inventory_count, total_item_count
 from .planner import (
     factory_layout_issues,
     factory_layout_opportunities,
@@ -102,6 +102,21 @@ SKILL_CATALOG: dict[str, SkillContract] = {
         llm_scope=(
             "Choose product, location, orientation, and throughput target. "
             "Executor places exact miners, belts, inserters, furnaces, and fuel/power connections."
+        ),
+    ),
+    "setup_coal_supply": SkillContract(
+        name="setup_coal_supply",
+        description="Build a starter coal mining site with a burner mining drill and output belt for fuel logistics.",
+        executor="CoalSupplySkill",
+        preconditions=[
+            "coal patch identified",
+            "burner mining drill and transport belt available or craftable",
+            "short-term hand fuel available to prime the first coal drill",
+        ],
+        completion=["coal is mined by a fueled burner mining drill and exposed on an output belt"],
+        llm_scope=(
+            "Choose this before scaling burner smelting or steam power when coal is still hand-mined. "
+            "Executor validates exact coal patch tile, drill direction, output belt, and starter fuel."
         ),
     ),
     "produce_copper_plate": SkillContract(
@@ -515,6 +530,27 @@ def reconcile_strategy_decision(
     """Apply deterministic safety/feasibility guardrails to an LLM strategy choice."""
 
     selected = str(decision.get("selected_skill") or decision.get("selected_goal") or "")
+    if selected in _COAL_DEPENDENT_SKILLS and _coal_supply_needed(observation):
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "setup_coal_supply"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 88)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            f"LLM selected {selected}, but burner smelting or steam power still lacks an automated coal supply site."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["automated coal fuel supply"]))
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            "coal_supply_ready=false",
+        ]
+        adjusted["expected_effect"] = "Prime a coal mining site before expanding fuel-dependent production."
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": "setup_coal_supply",
+            "reason": guardrail_reason,
+        }
+        return adjusted
     if (
         selected == "produce_electronic_circuit"
         and _technology_researched(observation, "automation")
@@ -583,6 +619,19 @@ def heuristic_strategy(
             ],
             blockers=["enemy threat"],
             expected_effect="Pause expansion and build armed gun turrets plus firearm-magazine supply around threatened factory sites.",
+        ).to_dict()
+
+    if _coal_supply_needed(observation):
+        return StrategicDecision(
+            selected_skill="setup_coal_supply",
+            priority=91,
+            reason="Fuel-dependent starter production is still relying on hand-mined coal; build a coal supply site before more burner expansion.",
+            evidence=[
+                f"coal_inventory={inventory_count(observation, 'coal')}",
+                "coal_supply_ready=false",
+            ],
+            blockers=["automated coal fuel supply"],
+            expected_effect="Build and fuel a burner coal drill with an output belt so smelting and power can be refueled locally.",
         ).to_dict()
 
     if power_issue:
@@ -776,6 +825,8 @@ def _first_power_issue(monitor: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _skill_for_bottleneck_item(item: str, observation: dict[str, Any]) -> str | None:
+    if item == "coal":
+        return "setup_coal_supply"
     if item in {"iron-plate", "iron-ore", "steel-plate"}:
         return "expand_iron_smelting"
     if item in {"copper-plate", "copper-ore", "copper-cable"}:
@@ -787,6 +838,77 @@ def _skill_for_bottleneck_item(item: str, observation: dict[str, Any]) -> str | 
             return "automate_electronic_circuit_line"
         return "produce_electronic_circuit"
     return None
+
+
+_COAL_DEPENDENT_SKILLS = {
+    "build_belt_smelting_line",
+    "expand_iron_smelting",
+    "expand_copper_smelting",
+    "setup_power",
+}
+
+
+def _coal_supply_needed(observation: dict[str, Any]) -> bool:
+    resources = observation.get("resources") if isinstance(observation.get("resources"), list) else []
+    if not any(isinstance(item, dict) and item.get("name") == "coal" for item in resources):
+        return False
+    if _coal_supply_ready(observation):
+        return False
+    if inventory_count(observation, "coal") >= 24:
+        return False
+    return _fuel_dependent_factory_exists(observation) or _coal_patch_is_near_player(observation)
+
+
+def _coal_supply_ready(observation: dict[str, Any]) -> bool:
+    coal_drills = [
+        entity
+        for entity in entities_named(observation, "burner-mining-drill") + entities_named(observation, "electric-mining-drill")
+        if _entity_on_resource(observation, entity, "coal")
+    ]
+    for drill in coal_drills:
+        name = str(drill.get("name") or "")
+        if name == "electric-mining-drill" and drill.get("electric_network_connected") is not False:
+            return True
+        if entity_item_count(drill, "coal") > 0:
+            return True
+    return False
+
+
+def _entity_on_resource(observation: dict[str, Any], entity: dict[str, Any], resource_name: str) -> bool:
+    position = entity.get("position") if isinstance(entity.get("position"), dict) else None
+    if position is None:
+        return False
+    resources = observation.get("resources") if isinstance(observation.get("resources"), list) else []
+    for resource in resources:
+        if not isinstance(resource, dict) or resource.get("name") != resource_name:
+            continue
+        resource_position = resource.get("position") if isinstance(resource.get("position"), dict) else None
+        if resource_position is not None and distance(position, resource_position) <= 4.5:
+            return True
+    return False
+
+
+def _fuel_dependent_factory_exists(observation: dict[str, Any]) -> bool:
+    for name in ("stone-furnace", "boiler", "burner-inserter"):
+        if entities_named(observation, name):
+            return True
+    for drill in entities_named(observation, "burner-mining-drill"):
+        if not _entity_on_resource(observation, drill, "coal"):
+            return True
+    return False
+
+
+def _coal_patch_is_near_player(observation: dict[str, Any]) -> bool:
+    player = observation.get("player") if isinstance(observation.get("player"), dict) else {}
+    position = player.get("position") if isinstance(player.get("position"), dict) else {"x": 0, "y": 0}
+    resources = observation.get("resources") if isinstance(observation.get("resources"), list) else []
+    for resource in resources:
+        if not isinstance(resource, dict) or resource.get("name") != "coal":
+            continue
+        resource_position = resource.get("position") if isinstance(resource.get("position"), dict) else None
+        if resource_position is not None and distance(position, resource_position) <= 32.0:
+            return True
+    return False
 
 
 def _target_deficit_exists(

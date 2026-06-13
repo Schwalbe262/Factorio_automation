@@ -254,6 +254,18 @@ The current no-mod observation has recently shown:
 - This is still not full coal logistics automation. The next implementation
   should build a coal belt/feed line, staged coal cache, or electric upgrade
   path so burner smelting expansion does not depend on repeated long coal walks.
+- `setup_coal_supply` now exists as the first dedicated fuel-logistics
+  executor. It builds an output belt and burner mining drill on a coal patch,
+  inserts starter coal, and lets the monitor classify the result as a fueled
+  `mining_patch` coal site.
+- Live no-mod verification:
+  - command:
+    `python -m factorio_ai.cli run-no-mod-strategy-step --objective launch_rocket_program --max-steps 30`;
+  - result:
+    `selectedSkill: setup_coal_supply`, `ok: true`, `steps: 13`,
+    reason `coal supply site is active with fueled burner mining drill and output belt`;
+  - monitor saw one fueled coal `mining_patch` and site-level coal logistics
+    links from that patch to nearby smelting/power consumers.
 
 Next practical runtime check:
 

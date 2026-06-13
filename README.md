@@ -482,6 +482,11 @@ Burner-era smelting expansion can also recover surplus coal from nearby fueled m
 falls back to a manual coal haul, which keeps under-fueled lines moving while proper coal logistics
 automation is still being built.
 
+`setup_coal_supply` is the first dedicated fuel-logistics executor. It builds a burner mining drill
+on a coal patch, places an output belt, primes the drill with starter fuel, and exposes the resulting
+coal site to the factory monitor as a `mining_patch`. Strategy guardrails can run it before more
+burner smelting or steam power expansion when coal is still hand-mined.
+
 ## Space Age Objective
 
 The long-term target extends past the first rocket. The AI should eventually launch rockets, build

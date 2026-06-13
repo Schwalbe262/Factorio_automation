@@ -68,6 +68,21 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "setup_power")
         self.assertIn("electric power network", result["blockers"])
 
+    def test_coal_supply_is_prioritized_before_more_burner_expansion(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "player": {"position": {"x": 0, "y": 0}},
+                "inventory": {"iron-plate": 20, "coal": 2},
+                "entities": [
+                    {"name": "stone-furnace", "position": {"x": 4, "y": 0}, "inventories": {}},
+                ],
+                "resources": [{"name": "coal", "position": {"x": 8, "y": 0}, "distance": 8}],
+            },
+        )
+        self.assertEqual(result["selected_skill"], "setup_coal_supply")
+        self.assertIn("automated coal fuel supply", result["blockers"])
+
     def test_rocket_goal_researches_logistics_after_circuit_cell_ready(self):
         result = heuristic_strategy(
             "launch_rocket_program",
@@ -135,6 +150,32 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["guardrail_adjusted"]["from"], "produce_electronic_circuit")
         self.assertIn("assembler-based electronic circuit production", result["blockers"])
 
+    def test_reconcile_promotes_fuel_dependent_expansion_to_coal_supply(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "expand_iron_smelting",
+                "priority": 80,
+                "reason": "Need more iron throughput.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "player": {"position": {"x": 0, "y": 0}},
+                "inventory": {"coal": 4},
+                "entities": [
+                    {"name": "stone-furnace", "position": {"x": 4, "y": 0}, "inventories": {}},
+                ],
+                "resources": [{"name": "coal", "position": {"x": 8, "y": 0}, "distance": 8}],
+            },
+        )
+        self.assertEqual(result["selected_skill"], "setup_coal_supply")
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "expand_iron_smelting")
+        self.assertIn("automated coal fuel supply", result["blockers"])
+
     def test_copper_target_bottleneck_expands_copper_smelting(self):
         result = heuristic_strategy(
             "launch_rocket_program",
@@ -154,6 +195,7 @@ class StrategyTests(unittest.TestCase):
         catalog = skill_catalog_payload()
         self.assertTrue(any(item["name"] == "produce_electronic_circuit" for item in catalog))
         self.assertTrue(any(item["name"] == "build_belt_smelting_line" for item in catalog))
+        self.assertTrue(any(item["name"] == "setup_coal_supply" for item in catalog))
         self.assertTrue(any(item["name"] == "expand_copper_smelting" for item in catalog))
         self.assertTrue(any(item["name"] == "research_automation" for item in catalog))
         self.assertTrue(any(item["name"] == "automate_electronic_circuit_line" for item in catalog))
@@ -169,6 +211,10 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(
             next(item for item in catalog if item["name"] == "bootstrap_build_item_mall")["executor"],
             "BuildItemMallSkill",
+        )
+        self.assertEqual(
+            next(item for item in catalog if item["name"] == "setup_coal_supply")["executor"],
+            "CoalSupplySkill",
         )
         self.assertTrue(all("llm_scope" in item for item in catalog))
 

@@ -26,6 +26,7 @@ from .planner import (
     BeltSmeltingLineSkill,
     BuildItemMallSkill,
     CircuitAutomationSkill,
+    CoalSupplySkill,
     CopperPlateSkill,
     ElectronicCircuitSkill,
     ExpandCopperSmeltingSkill,
@@ -664,6 +665,16 @@ class FactorioController:
                 "goal": skill_name,
                 "max_steps": max_steps or 700,
                 "log_prefix": "strategy-belt-smelting",
+            }
+        if skill_name == "setup_coal_supply":
+            target = target_count or 16
+            return {
+                "skill": CoalSupplySkill(target),
+                "target_item": "coal",
+                "target": target,
+                "goal": skill_name,
+                "max_steps": max_steps or 800,
+                "log_prefix": "strategy-coal-supply",
             }
         if skill_name == "expand_iron_smelting":
             target = target_count or 90

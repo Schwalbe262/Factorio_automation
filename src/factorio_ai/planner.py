@@ -1387,6 +1387,137 @@ class BeltSmeltingLineSkill:
         return entity_item_count(furnace, self.resource_name) > 0 or entity_item_count(furnace, self.product_name) > 0
 
 
+class CoalSupplySkill:
+    """Build a minimal burner coal supply site for early fuel logistics."""
+
+    def __init__(self, target_count: int = 16) -> None:
+        self.target_count = target_count
+        self.support_skill = BeltSmeltingLineSkill(target_count=20)
+
+    def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
+        player = player_position(observation)
+        layout = _find_coal_supply_layout(observation) or _select_coal_supply_layout(observation)
+        if layout is None:
+            return PlannerDecision(None, "cannot find open coal patch for coal supply site")
+
+        need = _coal_supply_missing_item(observation, layout)
+        if need:
+            decision = self.support_skill._ensure_item(observation, player, need)
+            if decision is not None:
+                return decision
+
+        belt = layout.get("output_belt")
+        if belt is None:
+            position = layout["output_position"]
+            blocker = _blocking_obstacle_near(observation, position)
+            if blocker is not None:
+                blocker_position = _position(blocker)
+                if distance(player, blocker_position) > 8:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": blocker_position},
+                        f"move near blocking {blocker.get('name')} before placing coal output belt",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "name": blocker.get("name"),
+                        "position": blocker_position,
+                        "count": 1,
+                    },
+                    f"clear blocking {blocker.get('name')} before placing coal output belt",
+                )
+            if distance(player, position) > 20 or distance(player, position) < 2.0:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position, offset=3.0)},
+                    "move near planned coal output belt",
+                )
+            return PlannerDecision(
+                {
+                    "type": "build",
+                    "name": "transport-belt",
+                    "position": position,
+                    "direction": layout["belt_direction"],
+                },
+                "place output belt for coal supply site",
+            )
+
+        drill = layout.get("drill")
+        if drill is None:
+            position = layout["drill_position"]
+            blocker = _blocking_obstacle_near(observation, position)
+            if blocker is not None:
+                blocker_position = _position(blocker)
+                if distance(player, blocker_position) > 8:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": blocker_position},
+                        f"move near blocking {blocker.get('name')} before placing coal drill",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "name": blocker.get("name"),
+                        "position": blocker_position,
+                        "count": 1,
+                    },
+                    f"clear blocking {blocker.get('name')} before placing coal drill",
+                )
+            if distance(player, position) > 20 or distance(player, position) < 2.0:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position, offset=3.0)},
+                    "move near planned coal burner mining drill",
+                )
+            return PlannerDecision(
+                {
+                    "type": "build",
+                    "name": "burner-mining-drill",
+                    "position": position,
+                    "direction": layout["drill_direction"],
+                    "required_resource": "coal",
+                    "allow_nearby": True,
+                },
+                "place burner mining drill on coal supply patch",
+            )
+
+        if entity_item_count(drill, "coal") < 3:
+            return _fuel_burner_line_entity(
+                observation,
+                player,
+                drill,
+                entity_name="burner-mining-drill",
+                threshold=3,
+                insert_count=5,
+                context="coal supply site",
+                support_skill=IronPlateSkill(target_count=20),
+                far_fuel_reason="coal supply site is too far from available hand fuel; build closer coal logistics first",
+            )
+
+        belt_coal = entity_item_count(belt, "coal")
+        if belt_coal > 0 and total_item_count(observation, "coal") < self.target_count:
+            belt_position = _position(belt)
+            if distance(player, belt_position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": belt_position},
+                    "move near coal supply output belt",
+                )
+            return PlannerDecision(
+                {
+                    "type": "take",
+                    "item": "coal",
+                    "count": min(16, belt_coal),
+                    "unit_number": belt.get("unit_number"),
+                    "name": "transport-belt",
+                    "position": belt_position,
+                },
+                "take coal from new supply belt for starter fuel stock",
+            )
+
+        return PlannerDecision(
+            None,
+            "coal supply site is active with fueled burner mining drill and output belt",
+            done=True,
+        )
+
+
 class _ExpandPlateSmeltingSkill:
     """Incrementally add belt-fed plate smelting capacity."""
 
@@ -1969,6 +2100,98 @@ def _resource_name_near_position(
 def _layout_matches_resource(layout: dict[str, Any], resource_name: str) -> bool:
     actual = layout.get("resource_name")
     return actual is None or actual == resource_name
+
+
+def _find_coal_supply_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
+    candidates: list[tuple[bool, float, dict[str, Any]]] = []
+    for drill in entities_named(observation, "burner-mining-drill"):
+        drill_position = _position(drill)
+        if _resource_name_near_position(observation, drill_position, radius=4.5) != "coal":
+            continue
+        direction = _direction_to_orientation(int(drill.get("direction") or EAST))
+        layout = _coal_supply_layout_from_drill_position(drill_position, orientation=direction)
+        layout["drill"] = drill
+        layout["output_belt"] = _entity_near(observation, "transport-belt", layout["output_position"], radius=0.75)
+        candidates.append(
+            (
+                layout["output_belt"] is not None,
+                float(drill.get("distance") or distance(player_position(observation), drill_position)),
+                layout,
+            )
+        )
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (not item[0], item[1]))
+    return candidates[0][2]
+
+
+def _select_coal_supply_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    for resource in _ranked_patch_drill_resources(observation, "coal"):
+        for orientation in ("east", "west", "south", "north"):
+            layout = _coal_supply_layout_from_drill_position(_position(resource), orientation=orientation)
+            layout["drill"] = _entity_near(observation, "burner-mining-drill", layout["drill_position"], radius=2.0)
+            layout["output_belt"] = _entity_near(observation, "transport-belt", layout["output_position"], radius=0.75)
+            if not _coal_supply_layout_blocked_by_factory_entities(layout, entities):
+                return layout
+    return None
+
+
+def _coal_supply_layout_from_drill_position(
+    drill_position: dict[str, float],
+    orientation: str = "east",
+) -> dict[str, Any]:
+    dx, dy, drill_direction, belt_direction, _inserter_direction = _smelting_orientation(orientation)
+    return {
+        "drill_position": drill_position,
+        "output_position": {"x": drill_position["x"] + 2 * dx, "y": drill_position["y"] + 2 * dy},
+        "orientation": orientation,
+        "resource_name": "coal",
+        "drill_direction": drill_direction,
+        "belt_direction": belt_direction,
+        "drill": None,
+        "output_belt": None,
+    }
+
+
+def _coal_supply_layout_blocked_by_factory_entities(layout: dict[str, Any], entities: list[Any]) -> bool:
+    layout_entities = {id(entity) for entity in (layout.get("drill"), layout.get("output_belt")) if isinstance(entity, dict)}
+    layout_units = {
+        entity.get("unit_number")
+        for entity in (layout.get("drill"), layout.get("output_belt"))
+        if isinstance(entity, dict) and entity.get("unit_number") is not None
+    }
+    footprint = [layout["drill_position"], layout["output_position"]]
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        if id(entity) in layout_entities or (entity.get("unit_number") is not None and entity.get("unit_number") in layout_units):
+            continue
+        name = str(entity.get("name") or "")
+        if name in {"character", "transport-belt", "burner-mining-drill"}:
+            entity_pos = _position(entity)
+            threshold = 3.0 if name == "burner-mining-drill" else 2.0
+            if any(distance(entity_pos, pos) < threshold for pos in footprint):
+                return True
+    return False
+
+
+def _coal_supply_missing_item(observation: dict[str, Any], layout: dict[str, Any]) -> str | None:
+    if layout.get("output_belt") is None and inventory_count(observation, "transport-belt") <= 0:
+        return "transport-belt"
+    if layout.get("drill") is None and inventory_count(observation, "burner-mining-drill") <= 0:
+        return "burner-mining-drill"
+    return None
+
+
+def _direction_to_orientation(direction: int) -> str:
+    if direction == WEST:
+        return "west"
+    if direction == SOUTH:
+        return "south"
+    if direction == NORTH:
+        return "north"
+    return "east"
 
 
 def _ceil_div(value: int, divisor: int) -> int:

@@ -272,6 +272,11 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(config["target_item"], "electronic-circuit")
             self.assertEqual(config["target"], 7)
             self.assertEqual(config["max_steps"], 123)
+            coal_config = controller._skill_run_config("setup_coal_supply", target_count=18, max_steps=456)
+            self.assertIsNotNone(coal_config)
+            self.assertEqual(coal_config["target_item"], "coal")
+            self.assertEqual(coal_config["target"], 18)
+            self.assertEqual(coal_config["max_steps"], 456)
 
     def test_strategy_runner_does_not_fake_automation_skill(self):
         with tempfile.TemporaryDirectory() as temp_dir:
