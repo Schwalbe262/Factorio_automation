@@ -33,6 +33,13 @@ RECIPES: dict[str, Recipe] = {
     "stone-brick": Recipe("stone-brick", 3.2, {"stone": 2}, {"stone-brick": 1}),
     "iron-gear-wheel": Recipe("iron-gear-wheel", 0.5, {"iron-plate": 2}, {"iron-gear-wheel": 1}),
     "copper-cable": Recipe("copper-cable", 0.5, {"copper-plate": 1}, {"copper-cable": 2}),
+    "firearm-magazine": Recipe("firearm-magazine", 1.0, {"iron-plate": 4}, {"firearm-magazine": 1}),
+    "gun-turret": Recipe(
+        "gun-turret",
+        8.0,
+        {"iron-plate": 10, "copper-plate": 5, "iron-gear-wheel": 10},
+        {"gun-turret": 1},
+    ),
     "stone-furnace": Recipe("stone-furnace", 0.5, {"stone": 5}, {"stone-furnace": 1}),
     "burner-mining-drill": Recipe(
         "burner-mining-drill",

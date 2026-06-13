@@ -9,6 +9,9 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertTrue(command.startswith("/silent-command "))
         self.assertIn("rcon.print", command)
         self.assertIn("mode = \"modless-rcon-lua\"", command)
+        self.assertIn("agent_marker", command)
+        self.assertIn("add_chart_tag", command)
+        self.assertIn("return ensure_server_agent()", command)
         self.assertNotIn("ai_observe", command)
         self.assertNotIn("factorio_ai_autoplayer", command)
 
@@ -27,6 +30,18 @@ class ModlessLuaTests(unittest.TestCase):
         command = build_modless_action_command({"type": "chart", "radius": 64})
         self.assertIn("agent.force.chart", command)
         self.assertIn("local radius = action.radius or 128", command)
+
+    def test_connect_power_action_is_allowlisted_and_uses_pole_wire_connector(self):
+        command = build_modless_action_command({"type": "connect_power", "unit_number": 10})
+        self.assertIn("action_connect_power", command)
+        self.assertIn("defines.wire_connector_id.pole_copper", command)
+        self.assertIn("connect_to", command)
+
+    def test_action_updates_agent_marker(self):
+        command = build_modless_action_command({"type": "mine", "position": {"x": 1, "y": 2}})
+        self.assertIn("remember_agent_marker", command)
+        self.assertIn("agent_marker", command)
+        self.assertIn("[AI]", command)
 
 
 if __name__ == "__main__":

@@ -594,14 +594,24 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["name"], "burner-mining-drill")
         self.assertEqual(decision.action["required_resource"], "copper-ore")
 
-    def test_starter_defense_places_turret_toward_nearest_enemy(self):
+    def test_starter_defense_places_turret_on_factory_perimeter_toward_nearest_enemy(self):
         obs = base_observation()
+        obs["player"] = {"position": {"x": 66, "y": 0}}
         obs["inventory"] = {"gun-turret": 1, "firearm-magazine": 10}
-        obs["enemies"] = [{"name": "small-biter", "type": "unit", "position": {"x": -20, "y": 0}, "distance": 20}]
+        obs["entities"] = [
+            {
+                "name": "stone-furnace",
+                "unit_number": 949,
+                "position": {"x": 50, "y": 0},
+                "distance": 16,
+                "inventories": {},
+            }
+        ]
+        obs["enemies"] = [{"name": "small-biter", "type": "unit", "position": {"x": 100, "y": 0}, "distance": 34}]
         decision = StarterDefenseSkill().next_action(obs)
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "gun-turret")
-        self.assertEqual(decision.action["position"], {"x": -8.0, "y": 0.0})
+        self.assertEqual(decision.action["position"], {"x": 68.0, "y": 0.0})
 
     def test_starter_defense_arms_existing_turret(self):
         obs = base_observation()
@@ -810,6 +820,34 @@ class PlannerTests(unittest.TestCase):
         decision = ResearchAutomationSkill().next_action(obs)
         self.assertEqual(decision.action["type"], "insert")
         self.assertEqual(decision.action["item"], "automation-science-pack")
+
+    def test_research_automation_distributes_science_to_empty_daisy_chain_lab(self):
+        obs = powered_research_observation()
+        obs["research"]["current"] = "automation"
+        obs["inventory"]["automation-science-pack"] = 10
+        obs["entities"].extend(
+            [
+                {
+                    "name": "lab",
+                    "unit_number": 701,
+                    "position": {"x": 13.5, "y": 6.5},
+                    "distance": 5,
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"automation-science-pack": 4}},
+                },
+                {
+                    "name": "lab",
+                    "unit_number": 702,
+                    "position": {"x": 17.5, "y": 6.5},
+                    "distance": 8,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+            ]
+        )
+        decision = ResearchAutomationSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["unit_number"], 702)
 
     def test_research_logistics_done_when_technology_researched(self):
         obs = powered_logistics_observation()

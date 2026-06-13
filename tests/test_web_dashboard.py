@@ -31,6 +31,16 @@ class WebDashboardTests(unittest.TestCase):
                 "updated_at": "now",
                 "observation_tick": 1,
                 "adapter": "no-mod-rcon-lua",
+                "player": {"name": "server", "kind": "server", "position": {"x": 1, "y": 2}},
+                "agent_marker": {
+                    "name": "server",
+                    "kind": "server",
+                    "position": {"x": 1, "y": 2},
+                    "target_position": {"x": 8, "y": 9},
+                    "last_action": "mine",
+                    "detail": "copper-ore",
+                    "tick": 1,
+                },
                 "targets": {"per_minute": {"iron-plate": 30.0}},
                 "monitor": {
                     "production": [{"item": "iron-plate", "per_minute": 30.0, "producers": 1, "confidence": 0.5}],
@@ -114,6 +124,26 @@ class WebDashboardTests(unittest.TestCase):
                     },
                 },
                 "strategy": {"selected_skill": "produce_iron_plate", "priority": 95, "skill_status": {"implemented": True}},
+                "llm_decisions": {
+                    "entries": [
+                        {
+                            "timestamp": "2026-06-13T00:02:00+00:00",
+                            "objective": "launch_rocket_program",
+                            "provider": "local_llm",
+                            "source": "heuristic",
+                            "ok": False,
+                            "selected_skill": "research_automation",
+                            "priority": 90,
+                            "reason": "LLM unavailable; fallback selected research",
+                            "blockers": ["automation research"],
+                            "expected_effect": "feed labs",
+                            "request_summary": {"tick": 1},
+                            "error": "LLM unavailable or invalid response; used heuristic fallback",
+                            "latency_ms": 12,
+                        }
+                    ],
+                    "entry_count": 1,
+                },
                 "token_usage": {
                     "samples": [
                         {
@@ -160,6 +190,12 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("Codex 토큰 사용량", html)
         self.assertIn("token-chart", html)
         self.assertIn("1,250", html)
+        self.assertIn("LLM 판단 로그", html)
+        self.assertIn("local_llm", html)
+        self.assertIn("LLM unavailable", html)
+        self.assertIn("AI 동작 위치", html)
+        self.assertIn("copper-ore", html)
+        self.assertIn("agent-map", html)
 
     def test_connection_refused_error_is_rendered_as_operator_guidance(self):
         message = friendly_dashboard_error(ConnectionRefusedError(10061, "actively refused"))

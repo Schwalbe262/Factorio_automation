@@ -12,6 +12,7 @@ OBSERVE_RADIUS = 512
 ALLOWED_ACTION_TYPES = {
     "build",
     "chart",
+    "connect_power",
     "craft",
     "insert",
     "mine",
@@ -290,6 +291,7 @@ local function find_agent(player_name)
     if named and named.valid then
       return {{ kind = "player", name = named.name, player = named, surface = named.surface, force = named.force, position = named.position, inventory = named.get_main_inventory(), character_valid = named.character ~= nil and named.character.valid or false }}
     end
+    return ensure_server_agent()
   end
   for _, player in pairs(game.connected_players) do
     if player and player.valid then
@@ -302,6 +304,69 @@ local function find_agent(player_name)
     end
   end
   return ensure_server_agent()
+end
+local function marker_position(value, fallback)
+  local position = normalize_position(value)
+  if position then return position end
+  return fallback
+end
+local function chart_area_around(agent, position)
+  if not agent or not agent.force or not agent.surface or not position then return end
+  pcall(function()
+    agent.force.chart(agent.surface, {{ {{ x = position.x - 32, y = position.y - 32 }}, {{ x = position.x + 32, y = position.y + 32 }} }})
+  end)
+end
+local function update_agent_chart_marker(agent, label, position)
+  if not agent or not agent.force or not agent.surface then return nil end
+  local target = marker_position(position, agent.position)
+  chart_area_around(agent, target)
+  pcall(function()
+    local tags = agent.force.find_chart_tags(agent.surface)
+    for _, tag in pairs(tags or {{}}) do
+      if tag and tag.valid and type(tag.text) == "string" and string.sub(tag.text, 1, 4) == "[AI]" then
+        tag.destroy()
+      end
+    end
+  end)
+  local tag_number = nil
+  pcall(function()
+    local tag = agent.force.add_chart_tag(agent.surface, {{ position = target, text = "[AI] " .. tostring(label or "idle") }})
+    if tag and tag.valid then tag_number = tag.tag_number end
+  end)
+  return tag_number
+end
+local function remember_agent_marker(agent, action_type, detail, target_position)
+  storage.factorio_ai_agent = storage.factorio_ai_agent or {{}}
+  local target = marker_position(target_position, agent.position)
+  local label = tostring(action_type or "idle")
+  if detail and detail ~= "" then label = label .. ": " .. tostring(detail) end
+  local marker = {{
+    name = agent.name,
+    kind = agent.kind,
+    surface = agent.surface and agent.surface.name or nil,
+    position = position_table(agent.position),
+    target_position = position_table(target),
+    last_action = tostring(action_type or "idle"),
+    detail = tostring(detail or ""),
+    tick = game.tick
+  }}
+  storage.factorio_ai_agent.last_marker = marker
+  marker.chart_tag_number = update_agent_chart_marker(agent, label, target)
+  return marker
+end
+local function agent_marker_snapshot(agent)
+  storage.factorio_ai_agent = storage.factorio_ai_agent or {{}}
+  local marker = storage.factorio_ai_agent.last_marker
+  if not marker then
+    marker = remember_agent_marker(agent, "idle", "waiting for strategy", agent.position)
+  else
+    marker.position = position_table(agent.position)
+    marker.kind = agent.kind
+    marker.name = agent.name
+    marker.surface = agent.surface and agent.surface.name or marker.surface
+    update_agent_chart_marker(agent, marker.last_action or "idle", marker.target_position or agent.position)
+  end
+  return marker
 end
 """
 
@@ -428,6 +493,7 @@ json_reply({
   tick = game.tick,
   player = { name = agent.name, kind = agent.kind, position = position_table(origin), surface = surface.name, character_valid = agent.character_valid, move = agent.move or { active = false } },
   inventory = inventory_contents(agent.inventory),
+  agent_marker = agent_marker_snapshot(agent),
   craftable = collect_craftable(),
   resources = collect_resources(),
   entities = collect_entities(),
@@ -477,6 +543,27 @@ local function set_server_agent_position(position)
   storage.factorio_ai_agent.surface_name = agent.surface.name
   agent.position = storage.factorio_ai_agent.position
 end
+local function action_marker_target(result)
+  if action.position then return normalize_position(action.position) end
+  if action.near then return normalize_position(action.near) end
+  if result and result.target then return normalize_position(result.target) end
+  if result and result.position then return normalize_position(result.position) end
+  return agent.position
+end
+local function action_marker_detail(result)
+  if action.name then return tostring(action.name) end
+  if action.item then return tostring(action.item) end
+  if action.recipe then return tostring(action.recipe) end
+  if action.technology then return tostring(action.technology) end
+  if result and result.reason then return tostring(result.reason) end
+  if result and result.status then return tostring(result.status) end
+  return ""
+end
+local function reply_action(result)
+  result = result or err("action returned no result")
+  result.agent_marker = remember_agent_marker(agent, action.type, action_marker_detail(result), action_marker_target(result))
+  json_reply(result)
+end
 local function walking_direction(dx, dy)
   local x = 0
   local y = 0
@@ -517,6 +604,28 @@ local function find_entity(surface, request)
   if not position then return nil end
   local found = surface.find_entities_filtered({ position = position, radius = request.radius or 1.0, name = request.name, limit = 1 })
   return found[1]
+end
+local function entity_wire_connector(entity)
+  if not entity or not entity.valid then return nil end
+  local ok, connector = pcall(function() return entity.get_wire_connector(defines.wire_connector_id.pole_copper, true) end)
+  if ok and connector and connector.valid then return connector end
+  return nil
+end
+local function connector_connection_count(connector)
+  if not connector or not connector.valid then return 0 end
+  local ok, count = pcall(function() return connector.real_connection_count end)
+  if ok and count then return count end
+  return 0
+end
+local function connectors_connected(a, b)
+  if not a or not b or not a.valid or not b.valid then return false end
+  local ok, connected = pcall(function() return a.is_connected_to(b) end)
+  return ok and connected == true
+end
+local function connectors_can_reach(a, b)
+  if not a or not b or not a.valid or not b.valid then return false end
+  local ok, can_reach = pcall(function() return a.can_wire_reach(b) end)
+  return ok and can_reach == true
 end
 local function nearest_resource_name(surface, position, radius)
   local found = surface.find_entities_filtered({ position = position, radius = radius or 4, type = "resource", limit = 80 })
@@ -702,6 +811,43 @@ local function action_set_recipe()
   if not set_ok or result == false then return err("set_recipe failed", { target = target.name, recipe = action.recipe }) end
   return ok({ action = "set_recipe", target = target.name, target_unit_number = target.unit_number, recipe = action.recipe })
 end
+local function action_connect_power()
+  local target = find_entity(agent.surface, action)
+  if not target or not target.valid then return err("connect_power target not found") end
+  if distance(agent.position, target.position) > (action.reach or 32) then return err("connect_power target out of reach") end
+  local target_connector = entity_wire_connector(target)
+  if not target_connector then return err("connect_power target has no electric pole connector", { target = target.name }) end
+  local candidates = agent.surface.find_entities_filtered({
+    position = target.position,
+    radius = action.radius or 16,
+    type = "electric-pole",
+    force = agent.force,
+  })
+  table.sort(candidates, function(a, b)
+    local a_count = connector_connection_count(entity_wire_connector(a))
+    local b_count = connector_connection_count(entity_wire_connector(b))
+    if a_count ~= b_count then return a_count > b_count end
+    return distance(target.position, a.position) < distance(target.position, b.position)
+  end)
+  for _, source in pairs(candidates) do
+    if source.valid and source ~= target then
+      local source_connector = entity_wire_connector(source)
+      if source_connector and connectors_can_reach(target_connector, source_connector) then
+        if connectors_connected(target_connector, source_connector) then
+          return ok({ action = "connect_power", status = "already_connected", target_unit_number = target.unit_number, source_unit_number = source.unit_number })
+        end
+        local connected_ok, connected = pcall(function() return target_connector.connect_to(source_connector, false, defines.wire_origin.player) end)
+        if connected_ok and (connected == true or connectors_connected(target_connector, source_connector)) then
+          return ok({ action = "connect_power", status = "connected", target_unit_number = target.unit_number, source_unit_number = source.unit_number })
+        end
+      end
+    end
+  end
+  if connector_connection_count(target_connector) > 0 then
+    return ok({ action = "connect_power", status = "already_connected", target_unit_number = target.unit_number })
+  end
+  return err("no reachable electric pole found for connect_power", { target = target.name, target_unit_number = target.unit_number })
+end
 local function action_research()
   if type(action.technology) ~= "string" then return err("research requires technology") end
   local technology = agent.force.technologies[action.technology]
@@ -712,51 +858,53 @@ local function action_research()
   return ok({ action = "research", technology = technology.name, current_research = technology.name })
 end
 if action.type == "wait" then
-  json_reply(ok({ action = "wait", ticks = action.ticks or 0 }))
+  reply_action(ok({ action = "wait", ticks = action.ticks or 0 }))
 elseif action.type == "print" then
   game.print(tostring(action.message or "[factorio-ai]"))
-  json_reply(ok({ action = "print" }))
+  reply_action(ok({ action = "print" }))
 elseif action.type == "chart" then
   local agent = find_agent(action.player_name or default_player_name)
   local radius = action.radius or 128
   local center = action.position or agent.position
   agent.force.chart(agent.surface, { { x = center.x - radius, y = center.y - radius }, { x = center.x + radius, y = center.y + radius } })
-  json_reply(ok({ action = "chart", radius = radius, position = position_table(center) }))
+  reply_action(ok({ action = "chart", radius = radius, position = position_table(center) }))
 elseif action.type == "set_walking_state" then
   local player = action_player()
   if not player or not player.character or not player.character.valid then
-    json_reply(err("connected player character not found"))
+    reply_action(err("connected player character not found"))
   else
     player.character.walking_state = { walking = action.walking ~= false, direction = directions[action.direction or "north"] or defines.direction.north }
-    json_reply(ok({ action = "set_walking_state", direction = action.direction or "north", walking = action.walking ~= false }))
+    reply_action(ok({ action = "set_walking_state", direction = action.direction or "north", walking = action.walking ~= false }))
   end
 elseif action.type == "stop_walking" then
   local player = action_player()
   if not player or not player.character or not player.character.valid then
-    json_reply(err("connected player character not found"))
+    reply_action(err("connected player character not found"))
   else
     player.character.walking_state = { walking = false, direction = defines.direction.north }
-    json_reply(ok({ action = "stop_walking" }))
+    reply_action(ok({ action = "stop_walking" }))
   end
 elseif action.type == "move_to" then
-  json_reply(action_move_to())
+  reply_action(action_move_to())
 elseif action.type == "stop" then
-  json_reply(action_stop())
+  reply_action(action_stop())
 elseif action.type == "mine" then
-  json_reply(action_mine())
+  reply_action(action_mine())
 elseif action.type == "craft" then
-  json_reply(action_craft())
+  reply_action(action_craft())
 elseif action.type == "build" then
-  json_reply(action_build())
+  reply_action(action_build())
 elseif action.type == "insert" then
-  json_reply(action_insert())
+  reply_action(action_insert())
 elseif action.type == "take" then
-  json_reply(action_take())
+  reply_action(action_take())
 elseif action.type == "set_recipe" then
-  json_reply(action_set_recipe())
+  reply_action(action_set_recipe())
+elseif action.type == "connect_power" then
+  reply_action(action_connect_power())
 elseif action.type == "research" then
-  json_reply(action_research())
+  reply_action(action_research())
 else
-  json_reply(err("action is not implemented", { action_type = action.type }))
+  reply_action(err("action is not implemented", { action_type = action.type }))
 end
 """

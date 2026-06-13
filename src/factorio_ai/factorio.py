@@ -13,6 +13,7 @@ from .vanilla_gui import prepare_vanilla_mod_directory
 
 MOD_NAME = "factorio_ai_autoplayer"
 NO_MOD_SAVE_NAME = "no-mod-rcon.zip"
+NO_MOD_MAP_GEN_SETTINGS_NAME = "safe-start-map-gen-settings.json"
 
 
 def install_mod(cfg: AppConfig) -> Path:
@@ -67,6 +68,44 @@ def write_server_settings(cfg: AppConfig) -> Path:
 
 def no_mod_save_path(cfg: AppConfig) -> Path:
     return cfg.runtime_dir / "vanilla" / "saves" / NO_MOD_SAVE_NAME
+
+
+def write_no_mod_map_gen_settings(cfg: AppConfig) -> Path:
+    settings_path = cfg.runtime_dir / "vanilla" / NO_MOD_MAP_GEN_SETTINGS_NAME
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "width": 0,
+        "height": 0,
+        "starting_area": 4,
+        "peaceful_mode": False,
+        "autoplace_controls": {
+            "coal": {"frequency": 1, "size": 1, "richness": 1},
+            "stone": {"frequency": 1, "size": 1, "richness": 1},
+            "copper-ore": {"frequency": 1, "size": 1, "richness": 1},
+            "iron-ore": {"frequency": 1, "size": 1, "richness": 1},
+            "uranium-ore": {"frequency": 1, "size": 1, "richness": 1},
+            "crude-oil": {"frequency": 1, "size": 1, "richness": 1},
+            "water": {"frequency": 1, "size": 1},
+            "trees": {"frequency": 1, "size": 1},
+            "enemy-base": {"frequency": 0.75, "size": 0.75},
+        },
+        "cliff_settings": {
+            "name": "cliff",
+            "cliff_elevation_0": 10,
+            "cliff_elevation_interval": 40,
+            "richness": 1,
+        },
+        "property_expression_names": {
+            "control:moisture:frequency": "1",
+            "control:moisture:bias": "0",
+            "control:aux:frequency": "1",
+            "control:aux:bias": "0",
+        },
+        "starting_points": [{"x": 0, "y": 0}],
+        "seed": None,
+    }
+    settings_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return settings_path
 
 
 def write_no_mod_server_settings(cfg: AppConfig) -> Path:
@@ -169,6 +208,7 @@ def create_save(cfg: AppConfig, overwrite: bool = False) -> Path:
 def build_create_no_mod_save_command(cfg: AppConfig, save_path: Path | None = None) -> list[str]:
     mod_dir = prepare_vanilla_mod_directory(cfg.runtime_dir)
     server_config = write_no_mod_server_config(cfg)
+    map_gen_settings = write_no_mod_map_gen_settings(cfg)
     target_save = save_path or no_mod_save_path(cfg)
     return [
         str(cfg.factorio_exe),
@@ -176,6 +216,8 @@ def build_create_no_mod_save_command(cfg: AppConfig, save_path: Path | None = No
         str(server_config),
         "--mod-directory",
         str(mod_dir),
+        "--map-gen-settings",
+        str(map_gen_settings),
         "--create",
         str(target_save),
     ]

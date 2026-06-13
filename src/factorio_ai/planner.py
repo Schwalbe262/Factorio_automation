@@ -801,7 +801,7 @@ class ExpandCopperSmeltingSkill(_ExpandPlateSmeltingSkill):
 
 
 class StarterDefenseSkill:
-    """Build a minimal firearm-magazine gun turret defense near the current threat vector."""
+    """Build a minimal firearm-magazine gun turret defense around the starter factory."""
 
     def __init__(self, magazine_target: int = 10) -> None:
         self.magazine_target = magazine_target
@@ -814,11 +814,12 @@ class StarterDefenseSkill:
             return PlannerDecision(None, "no observed enemies in threat radius", done=True)
 
         player = player_position(observation)
-        turret = _nearest_loaded_or_empty_turret(observation)
-        if turret and entity_item_count(turret, "firearm-magazine") >= 5:
+        factory_center = _factory_defense_center(observation)
+        turret = _nearest_loaded_or_empty_turret(observation, factory_center)
+        if turret and _is_factory_defense_turret(turret, factory_center) and entity_item_count(turret, "firearm-magazine") >= 5:
             return PlannerDecision(
                 None,
-                f"starter defense turret is armed against nearest enemy at {enemy.get('distance')} tiles",
+                f"starter factory perimeter has an armed gun turret; nearest enemy is {enemy.get('distance')} tiles away",
                 done=True,
             )
 
@@ -841,11 +842,11 @@ class StarterDefenseSkill:
                 decision = self._ensure_turret_item(observation)
                 if decision is not None:
                     return decision
-            position = _defense_position(player, _position(enemy))
+            position = _defense_position(observation, _position(enemy))
             if distance(player, position) > 20 or distance(player, position) < 2.0:
                 return PlannerDecision(
                     {"type": "move_to", "position": _stand_position(position, offset=-3.0)},
-                    "move near planned starter defense turret position",
+                    "move near planned starter factory perimeter turret position",
                 )
             return PlannerDecision(
                 {
@@ -854,14 +855,14 @@ class StarterDefenseSkill:
                     "position": position,
                     "allow_nearby": True,
                 },
-                "place starter defense gun turret between factory and enemies",
+                "place starter defense gun turret on the factory perimeter facing the threat",
             )
 
         turret_position = _position(turret)
         if distance(player, turret_position) > 20:
             return PlannerDecision(
                 {"type": "move_to", "position": turret_position},
-                "move near starter defense turret to insert ammunition",
+                "move near starter factory defense turret to insert ammunition",
             )
         return PlannerDecision(
             {
@@ -872,7 +873,7 @@ class StarterDefenseSkill:
                 "name": "gun-turret",
                 "position": turret_position,
             },
-            "arm starter defense turret with firearm magazines",
+            "arm starter factory perimeter turret with firearm magazines",
         )
 
     def _ensure_turret_item(self, observation: dict[str, Any]) -> PlannerDecision | None:
@@ -1161,21 +1162,66 @@ def _nearest_observed_enemy(observation: dict[str, Any]) -> dict[str, Any] | Non
     return min(candidates, key=lambda item: float(item.get("distance") or 999999))
 
 
-def _nearest_loaded_or_empty_turret(observation: dict[str, Any]) -> dict[str, Any] | None:
+_FACTORY_DEFENSE_ENTITY_NAMES = {
+    "assembling-machine-1",
+    "assembling-machine-2",
+    "assembling-machine-3",
+    "boiler",
+    "burner-inserter",
+    "burner-mining-drill",
+    "electric-mining-drill",
+    "inserter",
+    "lab",
+    "offshore-pump",
+    "small-electric-pole",
+    "steam-engine",
+    "stone-furnace",
+    "transport-belt",
+}
+_FACTORY_DEFENSE_RADIUS = 18.0
+_FACTORY_DEFENSE_TURRET_RADIUS = 32.0
+
+
+def _nearest_loaded_or_empty_turret(
+    observation: dict[str, Any],
+    center: dict[str, float] | None = None,
+) -> dict[str, Any] | None:
     turrets = entities_named(observation, "gun-turret")
     if not turrets:
         return None
-    player = player_position(observation)
-    return min(turrets, key=lambda item: distance(player, _position(item)))
+    target = center or player_position(observation)
+    return min(turrets, key=lambda item: distance(target, _position(item)))
 
 
-def _defense_position(player: dict[str, float], enemy: dict[str, float]) -> dict[str, float]:
-    dx = enemy["x"] - player["x"]
-    dy = enemy["y"] - player["y"]
+def _factory_defense_center(observation: dict[str, Any]) -> dict[str, float]:
+    entities = observation.get("entities")
+    if not isinstance(entities, list):
+        return player_position(observation)
+    positions = [
+        _position(item)
+        for item in entities
+        if isinstance(item, dict) and item.get("name") in _FACTORY_DEFENSE_ENTITY_NAMES
+    ]
+    if not positions:
+        return player_position(observation)
+    return {
+        "x": round(sum(item["x"] for item in positions) / len(positions), 2),
+        "y": round(sum(item["y"] for item in positions) / len(positions), 2),
+    }
+
+
+def _is_factory_defense_turret(turret: dict[str, Any], factory_center: dict[str, float]) -> bool:
+    return distance(_position(turret), factory_center) <= _FACTORY_DEFENSE_TURRET_RADIUS
+
+
+def _defense_position(observation: dict[str, Any], enemy: dict[str, float]) -> dict[str, float]:
+    center = _factory_defense_center(observation)
+    dx = enemy["x"] - center["x"]
+    dy = enemy["y"] - center["y"]
     length = max((dx * dx + dy * dy) ** 0.5, 0.001)
     return {
-        "x": round(player["x"] + 8.0 * dx / length, 2),
-        "y": round(player["y"] + 8.0 * dy / length, 2),
+        "x": round(center["x"] + _FACTORY_DEFENSE_RADIUS * dx / length, 2),
+        "y": round(center["y"] + _FACTORY_DEFENSE_RADIUS * dy / length, 2),
     }
 
 
@@ -1775,11 +1821,10 @@ class ResearchAutomationSkill:
         research_progress = _research_progress(observation)
         pack_goal = _research_pack_goal(observation, self.technology, pack_name)
         packs_needed = max(1, pack_goal - int(research_progress * pack_goal))
-        if lab_pack_count > 0:
-            return PlannerDecision({"type": "wait", "ticks": 600}, "wait for powered lab to consume science packs")
-
         inventory_packs = inventory_count(observation, pack_name)
         if inventory_packs > 0:
+            lab = _best_lab_for_pack_insert(observation, pack_name) or lab
+            lab_pack_count = entity_item_count(lab, pack_name)
             lab_position = _position(lab)
             if distance(player, lab_position) > 20:
                 return PlannerDecision(
@@ -1790,13 +1835,16 @@ class ResearchAutomationSkill:
                 {
                     "type": "insert",
                     "item": pack_name,
-                    "count": min(packs_needed, inventory_packs),
+                    "count": min(max(1, packs_needed - lab_pack_count), inventory_packs),
                     "unit_number": lab.get("unit_number"),
                     "name": "lab",
                     "position": lab_position,
                 },
                 "insert automation science packs into lab",
             )
+
+        if _any_lab_has_pack(observation, pack_name):
+            return PlannerDecision({"type": "wait", "ticks": 600}, "wait for powered lab chain to consume science packs")
 
         science_decision = AutomationScienceSkill(target_count=packs_needed).next_action(observation)
         if not science_decision.done:
@@ -1897,11 +1945,10 @@ class ResearchTechnologySkill:
             lab_pack_count = entity_item_count(lab, pack_name)
             pack_goal = _research_pack_goal(observation, self.technology, pack_name)
             packs_needed = max(1, pack_goal - int(research_progress * pack_goal))
-            if lab_pack_count > 0:
-                return PlannerDecision({"type": "wait", "ticks": 600}, f"wait for lab to consume {pack_name}")
-
             inventory_packs = inventory_count(observation, pack_name)
             if inventory_packs > 0:
+                lab = _best_lab_for_pack_insert(observation, pack_name) or lab
+                lab_pack_count = entity_item_count(lab, pack_name)
                 lab_position = _position(lab)
                 if distance(player, lab_position) > 20:
                     return PlannerDecision({"type": "move_to", "position": lab_position}, f"move near lab to insert {pack_name}")
@@ -1909,13 +1956,16 @@ class ResearchTechnologySkill:
                     {
                         "type": "insert",
                         "item": pack_name,
-                        "count": min(packs_needed, inventory_packs),
+                        "count": min(max(1, packs_needed - lab_pack_count), inventory_packs),
                         "unit_number": lab.get("unit_number"),
                         "name": "lab",
                         "position": lab_position,
                     },
                     f"insert {pack_name} into lab for {self.technology}",
                 )
+
+            if _any_lab_has_pack(observation, pack_name):
+                return PlannerDecision({"type": "wait", "ticks": 600}, f"wait for lab chain to consume {pack_name}")
 
             science_decision = AutomationScienceSkill(target_count=packs_needed).next_action(observation)
             if not science_decision.done:
@@ -2495,6 +2545,36 @@ def _find_research_lab(observation: dict[str, Any]) -> dict[str, Any] | None:
         )
     )
     return labs[0]
+
+
+def _research_labs(observation: dict[str, Any], *, powered_only: bool = False) -> list[dict[str, Any]]:
+    labs = entities_named(observation, "lab")
+    if powered_only:
+        labs = [lab for lab in labs if lab.get("electric_network_connected") is not False]
+    labs.sort(
+        key=lambda item: (
+            0 if item.get("electric_network_connected") else 1,
+            float(item.get("distance") or 999999),
+        )
+    )
+    return labs
+
+
+def _best_lab_for_pack_insert(observation: dict[str, Any], pack_name: str) -> dict[str, Any] | None:
+    labs = _research_labs(observation, powered_only=True)
+    if not labs:
+        return None
+    labs.sort(
+        key=lambda item: (
+            entity_item_count(item, pack_name),
+            float(item.get("distance") or 999999),
+        )
+    )
+    return labs[0]
+
+
+def _any_lab_has_pack(observation: dict[str, Any], pack_name: str) -> bool:
+    return any(entity_item_count(lab, pack_name) > 0 for lab in _research_labs(observation, powered_only=True))
 
 
 def _select_lab_site(observation: dict[str, Any]) -> dict[str, Any] | None:

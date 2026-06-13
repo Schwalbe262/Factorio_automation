@@ -680,6 +680,27 @@ def estimate_factory_sites(observation: dict[str, Any]) -> list[FactorySiteEstim
         )
         sites.append(site)
 
+    labs = [item for item in _entities(observation) if item.get("name") == "lab"]
+    lab_chain_links = _lab_chain_link_count(observation)
+    for lab in labs:
+        powered = lab.get("electric_network_connected") is not False
+        science_packs = sum(entity_item_count(lab, item) for item in COMMON_ITEMS if item.endswith("-science-pack"))
+        site = FactorySiteEstimate(
+            site_id=_entity_site_id("research_lab", lab),
+            kind="research_lab_block",
+            status="researching" if powered and science_packs > 0 else ("needs_science" if powered else "unpowered"),
+            position=_position(lab),
+            item="research",
+            machines=["lab"],
+            automation_level="daisy-chain" if lab_chain_links > 0 else "manual-feed",
+            notes=[
+                "labs can pass science packs to other labs through inserter daisy chains",
+                "keep early daisy chains short or split them into multiple feed points to avoid starving tail labs",
+            ]
+            + _entity_modification_notes(lab),
+        )
+        sites.append(site)
+
     for drill in [
         item
         for item in _entities(observation)
@@ -793,12 +814,15 @@ def _threat_danger_level(
         return "critical"
     if damage_events:
         return "high"
+    if max_spawner_pollution > 0:
+        return "high"
     nearest_distance = _enemy_distance(nearest_enemy)
+    nearest_type = str((nearest_enemy or {}).get("type") or "")
     if nearest_distance is not None and nearest_distance <= 32:
         return "critical"
-    if nearest_distance is not None and nearest_distance <= 96:
+    if nearest_type == "unit" and nearest_distance is not None and nearest_distance <= 64:
         return "high"
-    if max_spawner_pollution > 0:
+    if nearest_distance is not None and nearest_distance <= 128:
         return "medium"
     if nearest_enemy:
         return "low"
@@ -815,7 +839,7 @@ def _threat_recommendations(
 ) -> list[str]:
     recommendations: list[str] = []
     if danger_level in {"critical", "high"} and armed_gun_turret_count <= 0:
-        recommendations.append("run build_starter_defense before expanding production")
+        recommendations.append("run build_starter_defense to place armed gun turrets around factory sites before expanding")
     if recent_destroyed_count > 0:
         recommendations.append("queue factory repair/rebuild for destroyed entities")
     if spawner_count > 0 and max_spawner_pollution > 0:
@@ -832,6 +856,24 @@ def _layout_modification_notes(layout: dict[str, Any]) -> list[str]:
         if isinstance(entity, dict):
             notes.extend(_entity_modification_notes(entity))
     return sorted(set(notes))
+
+
+def _lab_chain_link_count(observation: dict[str, Any]) -> int:
+    labs = [item for item in _entities(observation) if item.get("name") == "lab"]
+    if len(labs) < 2:
+        return 0
+    inserters = [
+        item
+        for item in _entities(observation)
+        if str(item.get("name") or "") in {"inserter", "fast-inserter", "long-handed-inserter", "stack-inserter"}
+    ]
+    links = 0
+    for inserter in inserters:
+        pos = _position(inserter)
+        nearby_labs = [lab for lab in labs if distance(pos, _position(lab)) <= 4.5]
+        if len(nearby_labs) >= 2:
+            links += 1
+    return links
 
 
 def _entity_modification_notes(*entities: dict[str, Any]) -> list[str]:
@@ -879,7 +921,7 @@ def _group_factory_sites(sites: list[FactorySiteEstimate]) -> list[FactorySiteEs
 
 def _factory_site_group_key(site: FactorySiteEstimate) -> tuple[str, str | None, str]:
     item = site.item
-    if site.kind in {"assembler_cell", "build_item_mall", "circuit_automation"}:
+    if site.kind in {"assembler_cell", "build_item_mall", "circuit_automation", "research_lab_block"}:
         item = None
     return (site.kind, item, site.automation_level)
 
@@ -895,6 +937,8 @@ def _factory_site_group_radius(site: FactorySiteEstimate) -> float:
     if site.kind in {"assembler_cell", "build_item_mall", "circuit_automation"}:
         return 14.0
     if site.kind == "steam_power":
+        return 18.0
+    if site.kind == "research_lab_block":
         return 18.0
     return 16.0
 

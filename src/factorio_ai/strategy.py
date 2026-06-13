@@ -14,6 +14,8 @@ BUILD_ITEM_MALL_ITEMS = [
     "transport-belt",
     "inserter",
     "burner-inserter",
+    "firearm-magazine",
+    "gun-turret",
     "burner-mining-drill",
     "stone-furnace",
     "small-electric-pole",
@@ -180,13 +182,14 @@ SKILL_CATALOG: dict[str, SkillContract] = {
     ),
     "build_starter_defense": SkillContract(
         name="build_starter_defense",
-        description="Build early defenses when enemy units, spawners, or worms threaten the starter factory.",
+        description="Build early gun-turret and firearm-magazine defenses around the starter factory.",
         executor="StarterDefenseSkill",
-        preconditions=["enemy positions observed", "firearm magazines, gun turrets, walls, or military science path available"],
-        completion=["nearby hostile pressure is reduced or the factory perimeter has working defenses"],
+        preconditions=["enemy positions observed", "firearm magazines and gun turrets available or craftable"],
+        completion=["factory sites have armed gun turrets on the threatened perimeter"],
         llm_scope=(
-            "Choose whether to defend, clear nearby nests, or delay expansion. "
-            "Executor handles exact turret, ammo, wall, and combat movement validation."
+            "Choose when to pause expansion for static defense and ammo supply. "
+            "Do not choose early nest clearing unless artillery, combat automation, or a validated turret-push skill exists. "
+            "Executor handles exact turret placement, magazine crafting/insertion, and safe movement validation."
         ),
     ),
     "plan_factory_site": SkillContract(
@@ -277,6 +280,7 @@ def make_strategy_payload(
         "factory_monitor": monitor,
         "spatial_planning": make_spatial_planning_context(observation),
         "build_item_supply": make_build_item_supply_context(observation, monitor),
+        "research_planning": make_research_planning_context(observation, monitor),
         "threats": make_threat_context(observation),
         "power_networks": monitor.get("power_networks", []),
         "goal_dependency_tree": dependency_tree_for_objective(objective, max_depth=5),
@@ -322,6 +326,32 @@ def make_build_item_supply_context(observation: dict[str, Any], monitor: dict[st
             "do not keep hand-crafting common expansion items once automation and power are available",
             "place build-item production close to iron/circuit supply and future logistics corridors",
             "reserve room for belts, inserters, chests, assemblers, and later provider/requester logistics",
+        ],
+    }
+
+
+def make_research_planning_context(observation: dict[str, Any], monitor: dict[str, Any] | None = None) -> dict[str, Any]:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    labs = [item for item in entities if isinstance(item, dict) and item.get("name") == "lab"]
+    powered_labs = [item for item in labs if item.get("electric_network_connected") is not False]
+    sites = monitor.get("factory_sites") if isinstance(monitor, dict) and isinstance(monitor.get("factory_sites"), list) else []
+    lab_sites = [site for site in sites if isinstance(site, dict) and site.get("kind") == "research_lab_block"]
+    return {
+        "llm_responsibility": (
+            "Choose when research throughput needs more labs and science-pack logistics; "
+            "do not decide individual inserter ticks."
+        ),
+        "executor_responsibility": (
+            "Build labs, inserters, belts, chests, power poles, and science-pack insertion through validated skills."
+        ),
+        "lab_count": len(labs),
+        "powered_lab_count": len(powered_labs),
+        "lab_sites": lab_sites,
+        "layout_patterns": [
+            "early research can use short lab daisy chains because inserters can move science packs from one lab to another",
+            "split long daisy chains into multiple feed points or belt-fed rows so tail labs do not starve",
+            "leave belt lanes for multiple science-pack colors before placing dense lab blocks",
+            "keep lab blocks near science production and the main power network",
         ],
     }
 
@@ -388,6 +418,7 @@ def make_threat_context(observation: dict[str, Any]) -> dict[str, Any]:
     armed_gun_turret_count = _armed_gun_turret_count(observation)
     damage_events = recent_damage_events(observation, limit=10)
     recent_destroyed_count = sum(1 for item in damage_events if item.get("action") == "destroyed")
+    max_spawner_pollution = max([_safe_float(item.get("pollution")) for item in enemy_rows if item.get("type") == "unit-spawner"] or [0.0])
     return {
         "enemy_count": len(enemy_rows),
         "counts_by_type": dict(sorted(counts_by_type.items())),
@@ -398,10 +429,12 @@ def make_threat_context(observation: dict[str, Any]) -> dict[str, Any]:
         "armed_gun_turret_count": armed_gun_turret_count,
         "recent_enemy_damage_count": len(damage_events),
         "recent_destroyed_count": recent_destroyed_count,
-        "danger_level": _danger_level(nearest_distance, damage_events),
+        "max_spawner_pollution": round(max_spawner_pollution, 3),
+        "danger_level": _danger_level(nearest, nearest_distance, damage_events, max_spawner_pollution),
         "constraints": [
             "avoid expanding toward enemy nests without a defense plan",
             "prioritize defense when hostile units are close to the factory or player",
+            "early defense means gun turrets and firearm-magazine supply around factory sites, not clearing nests",
             "repair or rebuild damaged factory sites before treating old throughput estimates as reliable",
             "reserve space for turret lines, walls, ammo belts, and radar coverage",
         ],
@@ -447,7 +480,7 @@ def heuristic_strategy(
         return StrategicDecision(
             selected_skill="build_starter_defense",
             priority=98,
-            reason="Hostile entities are close enough to threaten factory expansion.",
+            reason="Hostile entities are close enough to threaten factory expansion; early response is factory-site defense, not nest clearing.",
             evidence=[
                 f"danger_level={threats['danger_level']}",
                 f"nearest_enemy={nearest.get('name')}",
@@ -455,7 +488,7 @@ def heuristic_strategy(
                 f"recent_enemy_damage_count={threats.get('recent_enemy_damage_count')}",
             ],
             blockers=["enemy threat"],
-            expected_effect="Pause expansion and build or plan starter defenses before continuing production growth.",
+            expected_effect="Pause expansion and build armed gun turrets plus firearm-magazine supply around threatened factory sites.",
         ).to_dict()
 
     if power_issue:
@@ -471,6 +504,16 @@ def heuristic_strategy(
             ],
             blockers=["electric power network"],
             expected_effect="Expand or connect the electric network before adding more electric machines.",
+        ).to_dict()
+
+    if ("rocket" in objective_lower or KOREAN_ROCKET in objective) and total_iron < 10:
+        return StrategicDecision(
+            selected_skill="produce_iron_plate",
+            priority=96,
+            reason="Rocket program starts with basic iron production; production target deficits wait until iron is established.",
+            evidence=[f"iron_plate_total={total_iron}", f"iron_plate_inventory={inventory_iron}"],
+            blockers=["basic iron supply"],
+            expected_effect="Bootstrap the first iron plates before expanding target-driven production.",
         ).to_dict()
 
     if bottlenecks:
@@ -736,19 +779,34 @@ def _enemy_distance(enemy: dict[str, Any] | None) -> float | None:
         return None
 
 
-def _danger_level(nearest_distance: float | None, damage_events: list[dict[str, Any]] | None = None) -> str:
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _danger_level(
+    nearest_enemy: dict[str, Any] | None,
+    nearest_distance: float | None,
+    damage_events: list[dict[str, Any]] | None = None,
+    max_spawner_pollution: float = 0.0,
+) -> str:
     damage_events = damage_events or []
     if any(item.get("action") == "destroyed" for item in damage_events):
         return "critical"
     if damage_events:
         return "high"
+    if max_spawner_pollution > 0:
+        return "high"
     if nearest_distance is None:
         return "none"
+    nearest_type = str((nearest_enemy or {}).get("type") or "")
     if nearest_distance <= 32:
         return "critical"
-    if nearest_distance <= 96:
+    if nearest_type == "unit" and nearest_distance <= 64:
         return "high"
-    if nearest_distance <= 192:
+    if nearest_distance <= 128:
         return "medium"
     return "low"
 

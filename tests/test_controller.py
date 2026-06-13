@@ -100,6 +100,48 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["run"]["itemName"], "electronic-circuit")
 
+    def test_autopilot_loop_records_each_cycle(self):
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.calls = 0
+
+            def run_strategy_step(self, **kwargs):
+                self.calls += 1
+                return StrategyStepSummary(
+                    ok=True,
+                    reason="done",
+                    objective=kwargs.get("objective", "launch_rocket_program"),
+                    selected_skill="produce_iron_plate",
+                    strategy={"selected_skill": "produce_iron_plate"},
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(test_config(Path(temp_dir)))
+            summary = controller.run_autopilot_loop(cycles=2, sleep_seconds=0)
+            lines = summary.log_path.read_text(encoding="utf-8").strip().splitlines()
+        self.assertTrue(summary.ok)
+        self.assertEqual(summary.cycles, 2)
+        self.assertEqual(controller.calls, 2)
+        self.assertEqual(len(lines), 2)
+
+    def test_finite_autopilot_loop_reports_failed_cycle(self):
+        class FakeController(FactorioController):
+            def run_strategy_step(self, **kwargs):
+                return StrategyStepSummary(
+                    ok=False,
+                    reason="executor missing",
+                    objective=kwargs.get("objective", "launch_rocket_program"),
+                    selected_skill="missing",
+                    strategy={},
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(test_config(Path(temp_dir)))
+            summary = controller.run_autopilot_loop(cycles=1, sleep_seconds=0)
+        self.assertFalse(summary.ok)
+        self.assertEqual(summary.failures, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -295,6 +295,39 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(assembler_sites[0].status, "unconfigured")
         self.assertIn("assembling-machine-1 x2", assembler_sites[0].machines)
 
+    def test_factory_sites_group_lab_daisy_chain_block(self):
+        sites = estimate_factory_sites(
+            {
+                "entities": [
+                    {
+                        "name": "lab",
+                        "unit_number": 10,
+                        "position": {"x": 0, "y": 0},
+                        "electric_network_connected": True,
+                        "inventories": {"1": {"automation-science-pack": 1}},
+                    },
+                    {
+                        "name": "lab",
+                        "unit_number": 11,
+                        "position": {"x": 4, "y": 0},
+                        "electric_network_connected": True,
+                        "inventories": {},
+                    },
+                    {
+                        "name": "inserter",
+                        "unit_number": 12,
+                        "position": {"x": 2, "y": 0},
+                        "electric_network_connected": True,
+                        "inventories": {},
+                    },
+                ]
+            }
+        )
+        lab_sites = [item for item in sites if item.kind == "research_lab_block"]
+        self.assertEqual(len(lab_sites), 1)
+        self.assertEqual(lab_sites[0].automation_level, "daisy-chain")
+        self.assertIn("lab x2", lab_sites[0].machines)
+
     def test_logistics_links_include_belt_and_manual_boiler_feed(self):
         observation = {
             "entities": [
@@ -395,6 +428,19 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(threats.danger_level, "high")
         self.assertEqual(threats.recent_damage_count, 1)
         self.assertIn("run build_starter_defense", " ".join(threats.recommended_actions))
+
+    def test_nearby_spawner_without_pollution_is_medium_not_active_attack(self):
+        threats = estimate_threats(
+            {
+                "entities": [],
+                "enemies": [
+                    {"name": "biter-spawner", "type": "unit-spawner", "distance": 80, "pollution": 0},
+                ],
+                "factory_events": [],
+            }
+        )
+        self.assertEqual(threats.danger_level, "medium")
+        self.assertNotIn("run build_starter_defense", " ".join(threats.recommended_actions))
 
 
 if __name__ == "__main__":

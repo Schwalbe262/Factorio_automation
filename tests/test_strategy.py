@@ -179,6 +179,25 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(items["transport-belt"]["needs_mall"])
         self.assertTrue(items["assembling-machine-1"]["needs_mall"])
 
+    def test_strategy_payload_exposes_research_daisy_chain_context(self):
+        payload = make_strategy_payload(
+            "launch_rocket_program",
+            {
+                "inventory": {"automation-science-pack": 10},
+                "entities": [
+                    {"name": "lab", "position": {"x": 0, "y": 0}, "electric_network_connected": True, "inventories": {}},
+                    {"name": "lab", "position": {"x": 4, "y": 0}, "electric_network_connected": True, "inventories": {}},
+                    {"name": "inserter", "position": {"x": 2, "y": 0}, "inventories": {}},
+                ],
+                "resources": [],
+            },
+        )
+        research = payload["research_planning"]
+        self.assertEqual(research["lab_count"], 2)
+        self.assertEqual(research["powered_lab_count"], 2)
+        self.assertTrue(any("daisy chains" in item for item in research["layout_patterns"]))
+        self.assertTrue(any(site["kind"] == "research_lab_block" for site in research["lab_sites"]))
+
     def test_strategy_payload_exposes_enemy_threat_context(self):
         payload = make_strategy_payload(
             "launch_rocket_program",
@@ -231,6 +250,30 @@ class StrategyTests(unittest.TestCase):
         )
         self.assertEqual(result["selected_skill"], "build_starter_defense")
         self.assertIn("recent_enemy_damage_count=1", result["evidence"])
+
+    def test_nearby_spawner_without_pollution_does_not_force_starter_defense(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 100},
+                "entities": [],
+                "enemies": [{"name": "biter-spawner", "type": "unit-spawner", "distance": 80, "pollution": 0}],
+            },
+        )
+        self.assertNotEqual(result["selected_skill"], "build_starter_defense")
+
+    def test_rocket_program_bootstraps_iron_before_target_bottlenecks(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "inventory": {},
+                "entities": [],
+                "resources": [],
+                "enemies": [],
+            },
+            production_targets={"copper-plate": 70.0, "iron-plate": 90.0},
+        )
+        self.assertEqual(result["selected_skill"], "produce_iron_plate")
 
     def test_armed_starter_turret_prevents_repeated_defense_loop(self):
         result = heuristic_strategy(

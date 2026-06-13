@@ -7,6 +7,7 @@ from pathlib import Path
 import time
 from typing import Any
 
+from .llm_log import record_llm_decision, strategy_request_summary
 from .config import AppConfig
 from .models import (
     ActionValidationError,
@@ -87,6 +88,30 @@ class StrategyStepSummary:
             "selectedSkill": self.selected_skill,
             "strategy": self.strategy,
             "run": self.run.to_dict() if self.run else None,
+        }
+
+
+@dataclass
+class AutopilotLoopSummary:
+    ok: bool
+    reason: str
+    objective: str
+    cycles: int
+    log_path: Path
+    last_step: StrategyStepSummary | None = None
+    failures: int = 0
+    interrupted: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "reason": self.reason,
+            "objective": self.objective,
+            "cycles": self.cycles,
+            "logPath": str(self.log_path),
+            "lastStep": self.last_step.to_dict() if self.last_step else None,
+            "failures": self.failures,
+            "interrupted": self.interrupted,
         }
 
 
@@ -322,8 +347,10 @@ class FactorioController:
     def strategy_decision(self, objective: str, require_llm: bool = False) -> dict[str, Any]:
         observation = self.observe()
         production_targets = load_targets(self.cfg.runtime_dir, objective).per_minute
+        request_summary = strategy_request_summary(observation, production_targets)
         result: dict[str, Any] | None = None
         if self.cfg.slurm_enabled:
+            started = time.monotonic()
             try:
                 from . import remote_slurm
 
@@ -334,21 +361,67 @@ class FactorioController:
                     available_skills=skill_catalog_payload(),
                     timeout_seconds=30,
                 )
-            except Exception:
+                record_llm_decision(
+                    self.cfg.log_dir,
+                    objective=objective,
+                    provider="remote_slurm",
+                    result=result,
+                    request_summary=request_summary,
+                    error="" if result.get("source") == "llm" else "remote Slurm returned non-LLM fallback result",
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                )
+            except Exception as exc:
+                record_llm_decision(
+                    self.cfg.log_dir,
+                    objective=objective,
+                    provider="remote_slurm",
+                    result=None,
+                    request_summary=request_summary,
+                    error=f"remote Slurm strategy request failed: {type(exc).__name__}: {exc}",
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                )
                 if require_llm:
                     raise
 
         if result is None:
+            started = time.monotonic()
             try:
                 from .slurm_worker import run_strategy_request
 
                 result = run_strategy_request(make_strategy_payload(objective, observation, production_targets))
-            except Exception:
+                record_llm_decision(
+                    self.cfg.log_dir,
+                    objective=objective,
+                    provider="local_llm",
+                    result=result,
+                    request_summary=request_summary,
+                    error="" if result.get("source") == "llm" else "LLM unavailable or invalid response; used heuristic fallback",
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                )
+            except Exception as exc:
+                record_llm_decision(
+                    self.cfg.log_dir,
+                    objective=objective,
+                    provider="local_llm",
+                    result=None,
+                    request_summary=request_summary,
+                    error=f"local LLM strategy request failed: {type(exc).__name__}: {exc}",
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                )
                 if require_llm:
                     raise
                 result = heuristic_strategy(objective, observation, production_targets)
                 result["source"] = "heuristic"
                 result["ok"] = True
+                record_llm_decision(
+                    self.cfg.log_dir,
+                    objective=objective,
+                    provider="heuristic_fallback",
+                    result=result,
+                    request_summary=request_summary,
+                    error="strategy fell back to local heuristic",
+                    latency_ms=0,
+                )
 
         if require_llm and result.get("source") != "llm":
             raise RuntimeError(f"LLM strategy was required but source was {result.get('source')}")
@@ -390,6 +463,84 @@ class FactorioController:
             selected_skill=selected,
             strategy=strategy,
             run=run,
+        )
+
+    def run_autopilot_loop(
+        self,
+        objective: str = "launch_rocket_program",
+        *,
+        require_llm: bool = False,
+        target_count: int | None = None,
+        max_steps: int | None = None,
+        cycles: int = 0,
+        sleep_seconds: float = 5.0,
+        continue_on_error: bool = True,
+        log_path: Path | None = None,
+    ) -> AutopilotLoopSummary:
+        self.cfg.log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_path or self.cfg.log_dir / f"autopilot-{_timestamp()}.jsonl"
+        completed = 0
+        failures = 0
+        last_step: StrategyStepSummary | None = None
+        interrupted = False
+        reason = "cycle limit reached" if cycles > 0 else "autopilot loop stopped"
+
+        try:
+            with log_path.open("a", encoding="utf-8") as log_file:
+                while cycles <= 0 or completed < cycles:
+                    started = time.monotonic()
+                    try:
+                        last_step = self.run_strategy_step(
+                            objective=objective,
+                            require_llm=require_llm,
+                            target_count=target_count,
+                            max_steps=max_steps,
+                        )
+                    except Exception as exc:
+                        last_step = StrategyStepSummary(
+                            ok=False,
+                            reason=f"strategy cycle failed: {type(exc).__name__}: {exc}",
+                            objective=objective,
+                            selected_skill="",
+                            strategy={},
+                        )
+                    completed += 1
+                    if not last_step.ok:
+                        failures += 1
+                    payload = {
+                        "time": datetime.now(timezone.utc).isoformat(),
+                        "cycle": completed,
+                        "objective": objective,
+                        "ok": last_step.ok,
+                        "duration_seconds": round(time.monotonic() - started, 3),
+                        "step": last_step.to_dict(),
+                    }
+                    json.dump(payload, log_file, ensure_ascii=False, separators=(",", ":"))
+                    log_file.write("\n")
+                    log_file.flush()
+                    if not last_step.ok and not continue_on_error:
+                        reason = last_step.reason
+                        break
+                    if cycles <= 0 or completed < cycles:
+                        time.sleep(max(0.0, sleep_seconds))
+        except KeyboardInterrupt:
+            interrupted = True
+            reason = "autopilot interrupted by user"
+
+        ok = failures == 0 or (continue_on_error and cycles <= 0 and not interrupted)
+        if cycles > 0 and completed >= cycles and failures == 0:
+            reason = "cycle limit reached"
+        elif failures > 0 and continue_on_error:
+            reason = f"completed with {failures} failed cycle(s); continuing is enabled"
+        return AutopilotLoopSummary(
+            ok=ok,
+            reason=reason,
+            objective=objective,
+            cycles=completed,
+            log_path=log_path,
+            last_step=last_step,
+            failures=failures,
+            interrupted=interrupted,
         )
 
     def _skill_run_config(

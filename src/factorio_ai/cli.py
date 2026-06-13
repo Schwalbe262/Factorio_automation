@@ -194,6 +194,30 @@ def main(argv: list[str] | None = None) -> None:
     no_mod_strategy_step_parser.add_argument("--target", type=int, help="Override the selected skill item target count")
     no_mod_strategy_step_parser.add_argument("--max-steps", type=int, help="Override the selected skill max step count")
 
+    autopilot_parser = subparsers.add_parser(
+        "run-autopilot",
+        help="Continuously ask the strategic layer for skills and execute them",
+    )
+    autopilot_parser.add_argument("--objective", default="launch_rocket_program")
+    autopilot_parser.add_argument("--require-llm", action="store_true")
+    autopilot_parser.add_argument("--target", type=int, help="Override the selected skill item target count")
+    autopilot_parser.add_argument("--max-steps", type=int, help="Override each selected skill max step count")
+    autopilot_parser.add_argument("--cycles", type=int, default=0, help="Number of strategy cycles; 0 means run until interrupted")
+    autopilot_parser.add_argument("--sleep-seconds", type=float, default=5.0)
+    autopilot_parser.add_argument("--stop-on-error", action="store_true")
+
+    no_mod_autopilot_parser = subparsers.add_parser(
+        "run-no-mod-autopilot",
+        help="Continuously run the strategic layer through no-custom-mod RCON/Lua",
+    )
+    no_mod_autopilot_parser.add_argument("--objective", default="launch_rocket_program")
+    no_mod_autopilot_parser.add_argument("--require-llm", action="store_true")
+    no_mod_autopilot_parser.add_argument("--target", type=int, help="Override the selected skill item target count")
+    no_mod_autopilot_parser.add_argument("--max-steps", type=int, help="Override each selected skill max step count")
+    no_mod_autopilot_parser.add_argument("--cycles", type=int, default=0, help="Number of strategy cycles; 0 means run until interrupted")
+    no_mod_autopilot_parser.add_argument("--sleep-seconds", type=float, default=5.0)
+    no_mod_autopilot_parser.add_argument("--stop-on-error", action="store_true")
+
     web_parser = subparsers.add_parser("web", help="Serve the Factorio production monitor at /factorio")
     web_parser.add_argument("--host", default="0.0.0.0")
     web_parser.add_argument("--port", type=int, default=18889)
@@ -311,6 +335,18 @@ def main(argv: list[str] | None = None) -> None:
     subparsers.add_parser("slurm-llm-status", help="Print Slurm AUTO LLM readiness")
     subparsers.add_parser("slurm-cancel", help="Cancel the Slurm worker job")
     subparsers.add_parser("slurm-submit-test", help="Submit a planner test task to the Slurm worker")
+    model_benchmark_parser = subparsers.add_parser(
+        "slurm-submit-model-benchmark",
+        help="Compare multiple OpenAI-compatible LLM model names on the current strategy payload",
+    )
+    model_benchmark_parser.add_argument("--objective", default="launch_rocket_program")
+    model_benchmark_parser.add_argument(
+        "--models",
+        default=os.getenv("FACTORIO_AI_LLM_BENCHMARK_MODELS")
+        or "Qwen/Qwen3.5-27B,Qwen/Qwen3.5-9B,Qwen/Qwen3.5-4B",
+        help="Comma-separated model names visible to the remote LLM server",
+    )
+    model_benchmark_parser.add_argument("--timeout", type=int, default=300)
 
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
@@ -624,6 +660,50 @@ def main(argv: list[str] | None = None) -> None:
             require_llm=require_llm,
             target_count=args.target,
             max_steps=args.max_steps,
+        )
+        payload = summary.to_dict()
+        payload["adapter"] = "no-mod-rcon-lua"
+        print_json(payload)
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-autopilot":
+        require_llm = args.require_llm or os.getenv("FACTORIO_AI_REQUIRE_LLM_STRATEGY", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        summary = FactorioController(cfg).run_autopilot_loop(
+            objective=args.objective,
+            require_llm=require_llm,
+            target_count=args.target,
+            max_steps=args.max_steps,
+            cycles=args.cycles,
+            sleep_seconds=args.sleep_seconds,
+            continue_on_error=not args.stop_on_error,
+        )
+        print_json(summary.to_dict())
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-no-mod-autopilot":
+        require_llm = args.require_llm or os.getenv("FACTORIO_AI_REQUIRE_LLM_STRATEGY", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        summary = ModlessFactorioController(cfg).run_autopilot_loop(
+            objective=args.objective,
+            require_llm=require_llm,
+            target_count=args.target,
+            max_steps=args.max_steps,
+            cycles=args.cycles,
+            sleep_seconds=args.sleep_seconds,
+            continue_on_error=not args.stop_on_error,
         )
         payload = summary.to_dict()
         payload["adapter"] = "no-mod-rcon-lua"
@@ -948,6 +1028,22 @@ def main(argv: list[str] | None = None) -> None:
             goal="produce_iron_plate",
             timeout_seconds=30,
         )
+        print_json(result)
+        return
+
+    if args.command == "slurm-submit-model-benchmark":
+        models = [item.strip() for item in args.models.split(",") if item.strip()]
+        try:
+            observation = ModlessFactorioController(cfg).observe()
+        except Exception:
+            observation = {"inventory": {}, "entities": [], "resources": [], "enemies": []}
+        payload = {
+            "objective": args.objective,
+            "observation": observation,
+            "production_targets": {},
+            "available_skills": [],
+        }
+        result = remote_slurm.request_strategy_model_benchmark(payload, models=models, timeout_seconds=args.timeout)
         print_json(result)
         return
 

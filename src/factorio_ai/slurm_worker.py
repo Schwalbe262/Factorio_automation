@@ -132,6 +132,8 @@ def execute_task(task: dict[str, Any]) -> dict[str, Any]:
         return run_planner_request(payload)
     if task_type == "strategy_request":
         return run_strategy_request(payload)
+    if task_type == "strategy_model_benchmark":
+        return run_strategy_model_benchmark(payload)
     raise ValueError(f"unsupported task type: {task_type}")
 
 
@@ -158,6 +160,41 @@ def run_strategy_request(payload: dict[str, Any]) -> dict[str, Any]:
     result["source"] = "heuristic"
     result["ok"] = True
     return result
+
+
+def run_strategy_model_benchmark(payload: dict[str, Any]) -> dict[str, Any]:
+    models = payload.get("models") if isinstance(payload.get("models"), list) else []
+    strategy_payload = payload.get("strategy_payload") if isinstance(payload.get("strategy_payload"), dict) else payload
+    original_model = os.getenv("FACTORIO_AI_LLM_MODEL")
+    rows = []
+    try:
+        for model in [str(item) for item in models if str(item).strip()]:
+            os.environ["FACTORIO_AI_LLM_MODEL"] = model
+            started = time.monotonic()
+            result = run_strategy_request(strategy_payload)
+            latency_ms = int((time.monotonic() - started) * 1000)
+            rows.append(
+                {
+                    "model": model,
+                    "latency_ms": latency_ms,
+                    "source": result.get("source"),
+                    "selected_skill": result.get("selected_skill"),
+                    "priority": result.get("priority"),
+                    "ok": bool(result.get("ok", True)),
+                    "reason": result.get("reason"),
+                }
+            )
+    finally:
+        if original_model is None:
+            os.environ.pop("FACTORIO_AI_LLM_MODEL", None)
+        else:
+            os.environ["FACTORIO_AI_LLM_MODEL"] = original_model
+    return {
+        "ok": True,
+        "type": "strategy_model_benchmark",
+        "base_url_configured": bool(os.getenv("FACTORIO_AI_LLM_BASE_URL")),
+        "models": rows,
+    }
 
 
 def try_llm_planner(payload: dict[str, Any]) -> dict[str, Any] | None:

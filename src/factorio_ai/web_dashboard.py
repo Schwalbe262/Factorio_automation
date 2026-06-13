@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 from .config import AppConfig
 from .controller import FactorioController
 from .item_icons import read_item_icon_png
+from .llm_log import llm_decision_summary
 from .monitor import summarize_factory
 from .networking import dashboard_urls
 from .modless_lua import ModlessLuaController
@@ -108,6 +109,12 @@ TEXT: dict[str, dict[str, str]] = {
         "last_sample": "Last Sample",
         "power_networks": "Power Networks",
         "no_power_networks": "No electric power networks inferred yet.",
+        "llm_decisions": "LLM Decision Log",
+        "no_llm_decisions": "No LLM strategy attempts recorded yet.",
+        "provider": "Provider",
+        "source": "Source",
+        "latency_ms": "Latency ms",
+        "error": "Error",
         "network": "Network",
         "generation_kw": "Generation kW",
         "demand_kw": "Demand kW",
@@ -161,6 +168,12 @@ TEXT: dict[str, dict[str, str]] = {
         "last_sample": "최근 기록",
         "power_networks": "전력망",
         "no_power_networks": "아직 추정된 전력망이 없습니다.",
+        "llm_decisions": "LLM 판단 로그",
+        "no_llm_decisions": "아직 기록된 LLM 전략 시도가 없습니다.",
+        "provider": "제공자",
+        "source": "소스",
+        "latency_ms": "지연 ms",
+        "error": "오류",
         "network": "전력망",
         "generation_kw": "발전 kW",
         "demand_kw": "수요 kW",
@@ -194,6 +207,13 @@ TEXT["en"].update(
         "cause": "Cause",
         "damage": "Damage",
         "health": "Health",
+        "agent_activity": "AI Activity",
+        "agent_kind": "Agent",
+        "agent_position": "Current Position",
+        "agent_target": "Target Position",
+        "last_action": "Last Action",
+        "last_detail": "Detail",
+        "no_agent_activity": "No AI agent marker has been recorded yet.",
     }
 )
 TEXT["ko"].update(
@@ -206,6 +226,13 @@ TEXT["ko"].update(
         "available": "Available",
         "actor": "Actor",
         "action": "Action",
+        "agent_activity": "AI 동작 위치",
+        "agent_kind": "Agent",
+        "agent_position": "현재 위치",
+        "agent_target": "목표 위치",
+        "last_action": "마지막 행동",
+        "last_detail": "상세",
+        "no_agent_activity": "아직 기록된 AI 위치 marker가 없습니다.",
     }
 )
 
@@ -348,6 +375,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
     timestamp = datetime.now(timezone.utc).isoformat()
     targets = load_targets(cfg.runtime_dir, objective)
     token_usage = token_usage_summary(cfg.log_dir)
+    llm_decisions = llm_decision_summary(cfg.log_dir)
     try:
         observation, adapter = observe_dashboard_state(cfg)
         monitor = summarize_factory(observation, objective, production_targets=targets.per_minute)
@@ -362,10 +390,12 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "targets": targets.to_dict(),
             "observation_tick": observation.get("tick"),
             "player": observation.get("player"),
+            "agent_marker": observation.get("agent_marker"),
             "adapter": adapter,
             "monitor": monitor,
             "strategy": strategy,
             "token_usage": token_usage,
+            "llm_decisions": llm_decisions,
         }
     except Exception as exc:  # noqa: BLE001
         return {
@@ -375,6 +405,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "targets": targets.to_dict(),
             "error": friendly_dashboard_error(exc),
             "token_usage": token_usage,
+            "llm_decisions": llm_decisions,
         }
 
 
@@ -415,6 +446,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
               <h2>{_t(lang, "connection")}</h2>
               <p class="error">{escape(str(state.get("error") or "unknown error"))}</p>
             </section>
+            {_llm_decision_panel(state.get("llm_decisions"), lang)}
             {_token_usage_panel(state.get("token_usage"), lang)}
             """,
             lang,
@@ -441,6 +473,8 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     targets = state.get("targets") if isinstance(state.get("targets"), dict) else {}
     targets_per_minute = targets.get("per_minute") if isinstance(targets.get("per_minute"), dict) else {}
     token_usage = state.get("token_usage") if isinstance(state.get("token_usage"), dict) else {}
+    llm_decisions = state.get("llm_decisions") if isinstance(state.get("llm_decisions"), dict) else {}
+    agent_marker = state.get("agent_marker") if isinstance(state.get("agent_marker"), dict) else {}
 
     body = f"""
     <section class="summary">
@@ -462,6 +496,8 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
       </div>
     </section>
 
+    {_agent_activity_panel(agent_marker, state.get("player"), lang)}
+
     <section class="panel">
       <h2>{_t(lang, "strategic_recommendation")}</h2>
       <div class="strategy">
@@ -473,6 +509,8 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
       {_skill_status(strategy.get("skill_status"), lang)}
       <p class="muted">{_target_satisfied_text(target_status, lang)}</p>
     </section>
+
+    {_llm_decision_panel(llm_decisions, lang)}
 
     <section class="panel">
       <h2>{_t(lang, "desired_targets")}</h2>
@@ -741,6 +779,44 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
       stroke: #101214;
       stroke-width: 1;
     }}
+    .agent-layout {{
+      display: grid;
+      grid-template-columns: 120px minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+    }}
+    .agent-map {{
+      width: 112px;
+      height: 112px;
+      border: 1px solid #2a3036;
+      border-radius: 4px;
+      background: #0c0e10;
+    }}
+    .agent-map rect {{
+      fill: #111820;
+      stroke: #2a3036;
+      stroke-width: 1;
+    }}
+    .agent-map line {{
+      stroke: #62788f;
+      stroke-width: 2;
+      stroke-dasharray: 4 3;
+    }}
+    .agent-map .agent-current {{
+      fill: #f0c46c;
+      stroke: #101214;
+      stroke-width: 1;
+    }}
+    .agent-map .agent-target {{
+      fill: #75b843;
+      stroke: #101214;
+      stroke-width: 1;
+    }}
+    .agent-map text {{
+      fill: #d8e0e8;
+      font-size: 9px;
+      font-weight: 700;
+    }}
     @media (max-width: 640px) {{
       main {{
         padding: 14px;
@@ -751,6 +827,9 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
       }}
       table {{
         font-size: 12px;
+      }}
+      .agent-layout {{
+        grid-template-columns: 1fr;
       }}
     }}
   </style>
@@ -990,6 +1069,84 @@ def _damage_event_table(rows: list[Any], lang: str) -> str:
     )
 
 
+def _agent_activity_panel(marker: dict[str, Any], player: Any, lang: str) -> str:
+    if not marker:
+        if isinstance(player, dict):
+            marker = {
+                "kind": player.get("kind"),
+                "name": player.get("name"),
+                "position": player.get("position"),
+                "target_position": player.get("position"),
+                "last_action": "observe",
+                "detail": "current observed agent position",
+            }
+        else:
+            return (
+                "<section class=\"panel\">"
+                f"<h2>{_t(lang, 'agent_activity')}</h2>"
+                f"<p class=\"muted\">{_t(lang, 'no_agent_activity')}</p>"
+                "</section>"
+            )
+    position = marker.get("position")
+    target = marker.get("target_position") or position
+    rows = [
+        (_t(lang, "agent_kind"), f"{marker.get('kind') or ''} {marker.get('name') or ''}".strip()),
+        (_t(lang, "agent_position"), _position_text(position)),
+        (_t(lang, "agent_target"), _position_text(target)),
+        (_t(lang, "last_action"), marker.get("last_action")),
+        (_t(lang, "last_detail"), marker.get("detail")),
+        (_t(lang, "tick"), marker.get("tick")),
+    ]
+    body = "".join(
+        f"<tr><th>{escape(str(label))}</th><td>{escape(str(value or ''))}</td></tr>"
+        for label, value in rows
+    )
+    return (
+        "<section class=\"panel agent-panel\">"
+        f"<h2>{_t(lang, 'agent_activity')}</h2>"
+        "<div class=\"agent-layout\">"
+        f"{_agent_activity_svg(position, target)}"
+        f"<table><tbody>{body}</tbody></table>"
+        "</div>"
+        "</section>"
+    )
+
+
+def _agent_activity_svg(position: Any, target: Any) -> str:
+    current = _position_pair(position)
+    goal = _position_pair(target)
+    if current is None and goal is None:
+        return ""
+    if current is None:
+        current = goal
+    if goal is None:
+        goal = current
+    assert current is not None and goal is not None
+    min_x = min(current[0], goal[0])
+    max_x = max(current[0], goal[0])
+    min_y = min(current[1], goal[1])
+    max_y = max(current[1], goal[1])
+    span_x = max(1.0, max_x - min_x)
+    span_y = max(1.0, max_y - min_y)
+
+    def scale(point: tuple[float, float]) -> tuple[float, float]:
+        x = 12 + ((point[0] - min_x) / span_x) * 76
+        y = 88 - ((point[1] - min_y) / span_y) * 76
+        return x, y
+
+    cx, cy = scale(current)
+    tx, ty = scale(goal)
+    return (
+        "<svg class=\"agent-map\" viewBox=\"0 0 100 100\" role=\"img\" aria-label=\"AI position map\">"
+        "<rect x=\"1\" y=\"1\" width=\"98\" height=\"98\" rx=\"4\"/>"
+        f"<line x1=\"{cx:.1f}\" y1=\"{cy:.1f}\" x2=\"{tx:.1f}\" y2=\"{ty:.1f}\"/>"
+        f"<circle class=\"agent-current\" cx=\"{cx:.1f}\" cy=\"{cy:.1f}\" r=\"5\"/>"
+        f"<circle class=\"agent-target\" cx=\"{tx:.1f}\" cy=\"{ty:.1f}\" r=\"4\"/>"
+        "<text x=\"8\" y=\"14\">AI</text>"
+        "</svg>"
+    )
+
+
 def _token_usage_panel(value: Any, lang: str) -> str:
     usage = value if isinstance(value, dict) else {}
     samples = usage.get("samples") if isinstance(usage.get("samples"), list) else []
@@ -1011,6 +1168,42 @@ def _token_usage_panel(value: Any, lang: str) -> str:
         "</div>"
         f"{_token_usage_svg(samples)}"
         f"{_token_usage_table(samples[-8:], lang)}"
+        "</section>"
+    )
+
+
+def _llm_decision_panel(value: Any, lang: str) -> str:
+    summary = value if isinstance(value, dict) else {}
+    entries = summary.get("entries") if isinstance(summary.get("entries"), list) else []
+    if not entries:
+        return (
+            "<section class=\"panel\">"
+            f"<h2>{_t(lang, 'llm_decisions')}</h2>"
+            f"<p class=\"muted\">{_t(lang, 'no_llm_decisions')}</p>"
+            "</section>"
+        )
+    rows = "".join(
+        "<tr>"
+        f"<td>{escape(str(row.get('timestamp') or ''))}</td>"
+        f"<td>{escape(str(row.get('provider') or ''))}</td>"
+        f"<td>{escape(str(row.get('source') or ''))}</td>"
+        f"<td>{escape(str(row.get('selected_skill') or ''))}</td>"
+        f"<td>{escape(str(row.get('priority') or ''))}</td>"
+        f"<td>{escape(str(row.get('reason') or ''))}</td>"
+        f"<td>{escape('; '.join(str(item) for item in row.get('blockers', [])[:4]))}</td>"
+        f"<td>{escape(str(row.get('error') or ''))}</td>"
+        f"<td>{escape(str(row.get('latency_ms') or 0))}</td>"
+        "</tr>"
+        for row in reversed(entries[-20:])
+        if isinstance(row, dict)
+    )
+    return (
+        "<section class=\"panel\">"
+        f"<h2>{_t(lang, 'llm_decisions')}</h2>"
+        f"<table><thead><tr><th>{_t(lang, 'updated')}</th><th>{_t(lang, 'provider')}</th>"
+        f"<th>{_t(lang, 'source')}</th><th>{_t(lang, 'executor')}</th><th>{_t(lang, 'priority')}</th>"
+        f"<th>{_t(lang, 'reason')}</th><th>{_t(lang, 'blockers')}</th><th>{_t(lang, 'error')}</th>"
+        f"<th>{_t(lang, 'latency_ms')}</th></tr></thead><tbody>{rows}</tbody></table>"
         "</section>"
     )
 
@@ -1194,6 +1387,15 @@ def _position_text(value: Any) -> str:
         return f"{float(value.get('x') or 0.0):.1f}, {float(value.get('y') or 0.0):.1f}"
     except (TypeError, ValueError):
         return ""
+
+
+def _position_pair(value: Any) -> tuple[float, float] | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        return float(value.get("x") or 0.0), float(value.get("y") or 0.0)
+    except (TypeError, ValueError):
+        return None
 
 
 def _format_int(value: Any) -> str:

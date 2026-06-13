@@ -51,6 +51,7 @@ class RemoteSlurmConfig:
     conda_env: str
     partition: str
     cpus_per_task: int
+    gpus_per_node: int
     time_limit: str
     setup_timeout_seconds: int
     task_timeout_seconds: int
@@ -71,6 +72,7 @@ def config() -> RemoteSlurmConfig:
         conda_env=os.getenv("FACTORIO_AI_SLURM_CONDA_ENV") or DEFAULT_CONDA_ENV,
         partition=os.getenv("FACTORIO_AI_SLURM_PARTITION") or "gpu4,gpu3,gpu2,gpu1,cpu2,cpu1",
         cpus_per_task=_int_env("FACTORIO_AI_SLURM_CPUS_PER_TASK", 8, 1),
+        gpus_per_node=min(3, _int_env("FACTORIO_AI_SLURM_GPUS_PER_NODE", 0, 0)),
         time_limit=os.getenv("FACTORIO_AI_SLURM_TIME") or "24:00:00",
         setup_timeout_seconds=_int_env("FACTORIO_AI_SLURM_SETUP_TIMEOUT_SECONDS", 1800, 60),
         task_timeout_seconds=_int_env("FACTORIO_AI_SLURM_TASK_TIMEOUT_SECONDS", 300, 5),
@@ -124,6 +126,7 @@ JOB_NAME={json.dumps(cfg.job_name)}
 ENV_NAME={json.dumps(cfg.conda_env)}
 PARTITION={json.dumps(cfg.partition)}
 CPUS={cfg.cpus_per_task}
+GPUS={cfg.gpus_per_node}
 TIME_LIMIT={json.dumps(cfg.time_limit)}
 mkdir -p "$REMOTE_DIR"/logs
 if squeue -h -u "$USER" -n "$JOB_NAME" -t R,PD | awk 'NF{{found=1}} END{{exit !found}}'; then
@@ -136,6 +139,7 @@ job_id="$(sbatch --parsable \\
   --nodes=1 \\
   --ntasks=1 \\
   --cpus-per-task="$CPUS" \\
+  $([[ "$GPUS" -gt 0 ]] && printf -- '--gres=gpu:%s ' "$GPUS") \\
   --time="$TIME_LIMIT" \\
   --partition="$PARTITION" \\
   --output="$REMOTE_DIR/logs/%x-%j.out" \\
@@ -433,6 +437,37 @@ def request_strategy(
             raise RemoteSlurmError(f"remote strategy task failed: {data}")
         time.sleep(2)
     raise TimeoutError(f"remote strategy task timed out: {task_name}")
+
+
+def request_strategy_model_benchmark(
+    strategy_payload: dict[str, Any],
+    models: list[str],
+    cfg: RemoteSlurmConfig | None = None,
+    timeout_seconds: int | None = None,
+) -> dict[str, Any]:
+    cfg = cfg or config()
+    task = {
+        "id": f"strategy-model-benchmark-{uuid.uuid4().hex}",
+        "type": "strategy_model_benchmark",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "payload": {
+            "models": models,
+            "strategy_payload": strategy_payload,
+        },
+    }
+    if _use_attached_srun(cfg):
+        return _request_task_via_attached_srun(task, cfg, timeout_seconds or max(cfg.task_timeout_seconds, 120))
+
+    task_name = submit_task(task, cfg)
+    deadline = time.monotonic() + (timeout_seconds or max(cfg.task_timeout_seconds, 120))
+    while time.monotonic() < deadline:
+        state, data, _raw = read_task_state(task_name, cfg)
+        if state == "result" and data is not None:
+            return data
+        if state == "failed":
+            raise RemoteSlurmError(f"remote strategy model benchmark failed: {data}")
+        time.sleep(2)
+    raise TimeoutError(f"remote strategy model benchmark timed out: {task_name}")
 
 
 def _use_attached_srun(cfg: RemoteSlurmConfig) -> bool:
