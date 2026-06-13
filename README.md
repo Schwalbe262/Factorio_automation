@@ -2,7 +2,14 @@
 
 Layered Factorio AI autoplayer MVP.
 
-The local machine runs Factorio and controls it through RCON. A Factorio Lua mod exposes a small command API:
+The local machine runs Factorio and controls it through RCON. There are two development adapters:
+
+1. No-custom-mod RCON/Lua for multiplayer-compatible vanilla servers. Other players do not need the
+   Factorio AI mod, but RCON `/silent-command` Lua disables achievements for that save.
+2. The older custom-mod development API, which is faster to iterate on but requires every multiplayer
+   client to have the same mod setup.
+
+The custom mod exposes a small command API:
 
 - `/ai_observe`
 - `/ai_action <json>`
@@ -104,6 +111,8 @@ run_factorio_non_gui.bat
 run_factorio_gui.bat
 run_factorio_review_gui.bat
 run_factorio_watch_gui.bat
+run_factorio_no_mod_server.bat
+run_factorio_no_mod_watch_gui.bat
 ```
 
 `run_factorio_non_gui.bat` starts the development server in a separate window and repeatedly executes
@@ -111,13 +120,45 @@ strategic steps. `run_factorio_gui.bat` opens the configured save for visual ins
 `run_factorio_review_gui.bat` is for interruptible manual inspection: it connects a GUI client to the
 current AI server, creates `runtime\review.lock` while the GUI is open, and the non-GUI loop waits on
 that lock before continuing. Close the Factorio window when inspection is done.
-`run_factorio_watch_gui.bat` is currently deferred. It is a development-only mod/RCON watch client,
-not public LAN multiplayer and not achievement-compatible. It only runs when
-`FACTORIO_AI_ALLOW_MODDED_WATCH=1` is set intentionally.
+`run_factorio_watch_gui.bat` now delegates to the no-custom-mod watch helper. It creates a
+vanilla-compatible save, starts a LAN/RCON server, and opens a GUI client connected to it. Other
+players can join the LAN server without installing the Factorio AI mod, assuming their official
+Factorio/Space Age content matches.
 
-The development server is still launched internally with `--start-server` plus GUI `--mp-connect`,
-but it is configured for one local review client by default. General multiplayer is on hold until the
-vanilla executor can control a normal game with ordinary keyboard/mouse input and no mod dependency.
+The older modded development server is still launched internally with `--start-server` plus GUI
+`--mp-connect`, but it is configured for one local review client by default. Use it for fast skill
+iteration only, not for public multiplayer compatibility.
+
+## No-Custom-Mod RCON/Lua Track
+
+This is now the preferred path when multiplayer compatibility matters more than Steam achievements.
+It runs with only official Factorio/Space Age mods enabled and uses trusted RCON `/silent-command`
+Lua for observation and allowlisted player/server actions.
+
+Create the save and start the LAN/RCON server:
+
+```powershell
+factorio-ai create-no-mod-save
+factorio-ai start-no-mod-server
+```
+
+Observe the current server state without the custom AI mod:
+
+```powershell
+factorio-ai no-mod-observe
+```
+
+Open a GUI client connected to the no-custom-mod server:
+
+```powershell
+factorio-ai launch-no-mod-gui
+```
+
+The no-mod observation currently reports tick, player/server focus, inventory, craftable recipes,
+nearby resources, factory entities, enemies, pollution, and key research technologies. Existing
+monitor/site/link estimation reads those observation fields directly, so human-built factory changes
+become visible as soon as they are inside the observation radius. The remaining work is to port each
+skill executor from the custom mod API to this no-mod adapter.
 
 In another terminal, run the iron plate MVP loop:
 

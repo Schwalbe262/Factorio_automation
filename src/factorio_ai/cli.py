@@ -8,7 +8,18 @@ from typing import Any
 
 from .config import load_config
 from .controller import FactorioController
-from .factorio import create_save, install_mod, start_gui_client, start_save_gui, start_server, wait_for_rcon
+from .factorio import (
+    create_no_mod_save,
+    create_save,
+    install_mod,
+    start_gui_client,
+    start_no_mod_gui_client,
+    start_no_mod_server,
+    start_save_gui,
+    start_server,
+    wait_for_rcon,
+)
+from .modless_lua import ModlessLuaController
 from . import remote_slurm
 from .vanilla_gui import (
     VanillaGuiDriver,
@@ -33,6 +44,26 @@ def main(argv: list[str] | None = None) -> None:
 
     start_server_parser = subparsers.add_parser("start-server", help="Start local Factorio server and wait")
     start_server_parser.add_argument("--no-wait-rcon", action="store_true")
+
+    create_no_mod_save_parser = subparsers.add_parser(
+        "create-no-mod-save",
+        help="Create a vanilla-compatible save without the custom AI mod",
+    )
+    create_no_mod_save_parser.add_argument("--overwrite", action="store_true")
+
+    start_no_mod_server_parser = subparsers.add_parser(
+        "start-no-mod-server",
+        help="Start a vanilla-compatible local/LAN server with RCON Lua enabled but no custom mod",
+    )
+    start_no_mod_server_parser.add_argument("--no-wait-rcon", action="store_true")
+
+    no_mod_gui_parser = subparsers.add_parser(
+        "launch-no-mod-gui",
+        help="Launch a no-custom-mod GUI client connected to the no-mod RCON server",
+    )
+    no_mod_gui_parser.add_argument("--window-size", default="1600x900")
+    no_mod_gui_parser.add_argument("--no-connect", action="store_true")
+    no_mod_gui_parser.add_argument("--confirm-timeout", type=float, default=20.0)
 
     launch_gui_parser = subparsers.add_parser("launch-gui", help="Launch a GUI Factorio client and connect to the local server")
     launch_gui_parser.add_argument("--window-size", default="1600x900")
@@ -119,6 +150,19 @@ def main(argv: list[str] | None = None) -> None:
     confirm_parser.add_argument("--timeout", type=float, default=15.0)
 
     subparsers.add_parser("observe", help="Print /ai_observe JSON")
+
+    no_mod_observe_parser = subparsers.add_parser(
+        "no-mod-observe",
+        help="Print observation JSON through vanilla /silent-command Lua over RCON",
+    )
+    no_mod_observe_parser.add_argument("--player", help="Preferred player name to observe")
+
+    no_mod_action_parser = subparsers.add_parser(
+        "no-mod-action",
+        help="Execute an allowlisted no-mod RCON/Lua action JSON",
+    )
+    no_mod_action_parser.add_argument("json_action")
+    no_mod_action_parser.add_argument("--player", help="Preferred player name for player-scoped actions")
 
     strategy_parser = subparsers.add_parser("strategy", help="Ask the strategic LLM layer for the next high-level skill")
     strategy_parser.add_argument("--objective", default="launch_rocket_program")
@@ -239,6 +283,34 @@ def main(argv: list[str] | None = None) -> None:
         except KeyboardInterrupt:
             proc.terminate()
             raise
+        return
+
+    if args.command == "create-no-mod-save":
+        path = create_no_mod_save(cfg, overwrite=args.overwrite)
+        print_json({"ok": True, "savePath": str(path), "mode": "no-mod-rcon-lua"})
+        return
+
+    if args.command == "start-no-mod-server":
+        proc = start_no_mod_server(cfg)
+        print_json({"ok": True, "pid": proc.pid, "mode": "no-mod-rcon-lua"})
+        if not args.no_wait_rcon:
+            wait_for_rcon(cfg)
+            print_json({"ok": True, "rconReady": True, "mode": "no-mod-rcon-lua"})
+        try:
+            proc.wait()
+        except KeyboardInterrupt:
+            proc.terminate()
+            raise
+        return
+
+    if args.command == "launch-no-mod-gui":
+        proc = start_no_mod_gui_client(cfg, window_size=args.window_size, connect=not args.no_connect)
+        clicked = False
+        try:
+            clicked = VanillaGuiDriver(cfg).click_steam_continue_prompt(timeout_seconds=args.confirm_timeout)
+        except Exception:
+            clicked = False
+        print_json({"ok": True, "pid": proc.pid, "mode": "no-mod-rcon-lua", "steamPromptClicked": clicked})
         return
 
     if args.command == "launch-gui":
@@ -433,6 +505,18 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "observe":
         print_json(FactorioController(cfg).observe())
+        return
+
+    if args.command == "no-mod-observe":
+        print_json(ModlessLuaController(cfg).observe(player_name=args.player))
+        return
+
+    if args.command == "no-mod-action":
+        try:
+            action = json.loads(args.json_action)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"invalid action JSON: {exc}") from exc
+        print_json(ModlessLuaController(cfg).act(action, player_name=args.player))
         return
 
     if args.command == "strategy":

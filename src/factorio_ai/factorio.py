@@ -8,9 +8,11 @@ from pathlib import Path
 
 from .config import AppConfig, REPO_ROOT
 from .rcon import FactorioRconClient, RconError
+from .vanilla_gui import prepare_vanilla_mod_directory
 
 
 MOD_NAME = "factorio_ai_autoplayer"
+NO_MOD_SAVE_NAME = "no-mod-rcon.zip"
 
 
 def install_mod(cfg: AppConfig) -> Path:
@@ -63,6 +65,37 @@ def write_server_settings(cfg: AppConfig) -> Path:
     return settings_path
 
 
+def no_mod_save_path(cfg: AppConfig) -> Path:
+    return cfg.runtime_dir / "vanilla" / "saves" / NO_MOD_SAVE_NAME
+
+
+def write_no_mod_server_settings(cfg: AppConfig) -> Path:
+    server_dir = cfg.runtime_dir / "vanilla"
+    server_dir.mkdir(parents=True, exist_ok=True)
+    settings_path = server_dir / "server-settings.json"
+    payload = {
+        "name": "Factorio AI No-Mod RCON",
+        "description": "Vanilla-compatible local/LAN server controlled by trusted RCON Lua commands.",
+        "tags": ["ai", "vanilla", "rcon"],
+        "max_players": 8,
+        "visibility": {"public": False, "lan": True},
+        "username": "",
+        "token": "",
+        "game_password": "",
+        "require_user_verification": False,
+        "max_upload_in_kilobytes_per_second": 0,
+        "ignore_player_limit_for_returning_players": True,
+        "allow_commands": "admins-only",
+        "autosave_interval": 10,
+        "autosave_slots": 5,
+        "afk_autokick_interval": 0,
+        "auto_pause": False,
+        "only_admins_can_pause_the_game": True,
+    }
+    settings_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return settings_path
+
+
 def write_client_config(cfg: AppConfig) -> Path:
     factorio_root = cfg.factorio_exe.parent.parent.parent
     read_data = factorio_root / "data"
@@ -70,6 +103,31 @@ def write_client_config(cfg: AppConfig) -> Path:
     write_data.mkdir(parents=True, exist_ok=True)
     cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
     config_path = cfg.runtime_dir / "client-config.ini"
+    config_path.write_text(
+        "\n".join(
+            [
+                "; version=13",
+                "[path]",
+                f"read-data={read_data.as_posix()}",
+                f"write-data={write_data.as_posix()}",
+                "",
+                "[general]",
+                "locale=auto",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def write_no_mod_server_config(cfg: AppConfig) -> Path:
+    factorio_root = cfg.factorio_exe.parent.parent.parent
+    read_data = factorio_root / "data"
+    write_data = cfg.runtime_dir / "vanilla" / "server-data"
+    write_data.mkdir(parents=True, exist_ok=True)
+    config_path = cfg.runtime_dir / "vanilla" / "server-config.ini"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(
         "\n".join(
             [
@@ -108,6 +166,34 @@ def create_save(cfg: AppConfig, overwrite: bool = False) -> Path:
     return cfg.save_path
 
 
+def build_create_no_mod_save_command(cfg: AppConfig, save_path: Path | None = None) -> list[str]:
+    mod_dir = prepare_vanilla_mod_directory(cfg.runtime_dir)
+    server_config = write_no_mod_server_config(cfg)
+    target_save = save_path or no_mod_save_path(cfg)
+    return [
+        str(cfg.factorio_exe),
+        "--config",
+        str(server_config),
+        "--mod-directory",
+        str(mod_dir),
+        "--create",
+        str(target_save),
+    ]
+
+
+def create_no_mod_save(cfg: AppConfig, overwrite: bool = False) -> Path:
+    if not cfg.factorio_exe.exists():
+        raise FileNotFoundError(f"Factorio executable not found: {cfg.factorio_exe}")
+    target_save = no_mod_save_path(cfg)
+    target_save.parent.mkdir(parents=True, exist_ok=True)
+    if target_save.exists() and not overwrite:
+        return target_save
+    if target_save.exists():
+        target_save.unlink()
+    subprocess.run(build_create_no_mod_save_command(cfg, target_save), check=True, cwd=str(REPO_ROOT))
+    return target_save
+
+
 def start_gui_client(
     cfg: AppConfig,
     window_size: str = "1600x900",
@@ -125,6 +211,30 @@ def start_gui_client(
         str(client_config),
         "--mod-directory",
         str(cfg.mod_runtime_dir),
+        "--disable-migration-window",
+        "--window-size",
+        window_size,
+    ]
+    if connect:
+        command.extend(["--mp-connect", f"{cfg.rcon_host}:{cfg.server_port}"])
+    return subprocess.Popen(command, cwd=str(REPO_ROOT))
+
+
+def start_no_mod_gui_client(
+    cfg: AppConfig,
+    window_size: str = "1600x900",
+    connect: bool = True,
+) -> subprocess.Popen[bytes]:
+    if not cfg.factorio_exe.exists():
+        raise FileNotFoundError(f"Factorio executable not found: {cfg.factorio_exe}")
+    client_config = write_client_config(cfg)
+    mod_dir = prepare_vanilla_mod_directory(cfg.runtime_dir)
+    command = [
+        str(cfg.factorio_exe),
+        "--config",
+        str(client_config),
+        "--mod-directory",
+        str(mod_dir),
         "--disable-migration-window",
         "--window-size",
         window_size,
@@ -182,6 +292,50 @@ def start_server(cfg: AppConfig) -> subprocess.Popen[bytes]:
         "--console-log",
         str(console_log),
     ]
+    return subprocess.Popen(command, cwd=str(REPO_ROOT))
+
+
+def build_start_no_mod_server_command(
+    cfg: AppConfig,
+    *,
+    save_path: Path | None = None,
+    server_settings: Path | None = None,
+    console_log: Path | None = None,
+) -> list[str]:
+    mod_dir = prepare_vanilla_mod_directory(cfg.runtime_dir)
+    server_config = write_no_mod_server_config(cfg)
+    target_save = save_path or no_mod_save_path(cfg)
+    settings = server_settings or write_no_mod_server_settings(cfg)
+    log_path = console_log or (cfg.log_dir / "factorio-no-mod-server.log")
+    return [
+        str(cfg.factorio_exe),
+        "--config",
+        str(server_config),
+        "--mod-directory",
+        str(mod_dir),
+        "--start-server",
+        str(target_save),
+        "--server-settings",
+        str(settings),
+        "--port",
+        str(cfg.server_port),
+        "--rcon-port",
+        str(cfg.rcon_port),
+        "--rcon-password",
+        cfg.rcon_password,
+        "--console-log",
+        str(log_path),
+    ]
+
+
+def start_no_mod_server(cfg: AppConfig) -> subprocess.Popen[bytes]:
+    if not cfg.factorio_exe.exists():
+        raise FileNotFoundError(f"Factorio executable not found: {cfg.factorio_exe}")
+    target_save = no_mod_save_path(cfg)
+    if not target_save.exists():
+        create_no_mod_save(cfg)
+    cfg.log_dir.mkdir(parents=True, exist_ok=True)
+    command = build_start_no_mod_server_command(cfg, save_path=target_save)
     return subprocess.Popen(command, cwd=str(REPO_ROOT))
 
 
