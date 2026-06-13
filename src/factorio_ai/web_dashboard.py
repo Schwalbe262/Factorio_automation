@@ -13,6 +13,7 @@ from .controller import FactorioController
 from .item_icons import read_item_icon_png
 from .monitor import summarize_factory
 from .networking import dashboard_urls
+from .modless_lua import ModlessLuaController
 from .skill_registry import annotate_strategy_with_skill_status
 from .strategy import heuristic_strategy
 from .targets import TARGET_ITEMS, load_targets, parse_target_form, save_targets
@@ -320,7 +321,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
     timestamp = datetime.now(timezone.utc).isoformat()
     targets = load_targets(cfg.runtime_dir, objective)
     try:
-        observation = FactorioController(cfg).observe()
+        observation, adapter = observe_dashboard_state(cfg)
         monitor = summarize_factory(observation, objective, production_targets=targets.per_minute)
         strategy = annotate_strategy_with_skill_status(
             heuristic_strategy(objective, observation, targets.per_minute),
@@ -333,6 +334,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "targets": targets.to_dict(),
             "observation_tick": observation.get("tick"),
             "player": observation.get("player"),
+            "adapter": adapter,
             "monitor": monitor,
             "strategy": strategy,
         }
@@ -342,8 +344,34 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "updated_at": timestamp,
             "objective": objective,
             "targets": targets.to_dict(),
-            "error": f"{type(exc).__name__}: {exc}",
+            "error": friendly_dashboard_error(exc),
         }
+
+
+def observe_dashboard_state(cfg: AppConfig) -> tuple[dict[str, Any], str]:
+    mod_error: Exception | None = None
+    try:
+        return FactorioController(cfg).observe(), "custom-mod-rcon"
+    except Exception as exc:  # noqa: BLE001
+        mod_error = exc
+    try:
+        return ModlessLuaController(cfg).observe(), "no-mod-rcon-lua"
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            "Factorio RCON is offline or neither the custom mod nor the no-mod Lua observation adapter responded. "
+            f"custom_mod={type(mod_error).__name__}: {mod_error}; "
+            f"no_mod={type(exc).__name__}: {exc}"
+        ) from exc
+
+
+def friendly_dashboard_error(exc: Exception) -> str:
+    text = f"{type(exc).__name__}: {exc}"
+    if "WinError 10061" in text or "Connection refused" in text or "actively refused" in text:
+        return (
+            "Factorio RCON server is not running. Start run_factorio_no_mod_server.bat "
+            "or run_factorio_watch_gui.bat, then refresh this page."
+        )
+    return text
 
 
 def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
@@ -394,6 +422,10 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
       <div>
         <span class="label">{_t(lang, "updated")}</span>
         <strong>{escape(str(state.get("updated_at") or ""))}</strong>
+      </div>
+      <div>
+        <span class="label">Adapter</span>
+        <strong>{escape(str(state.get("adapter") or ""))}</strong>
       </div>
     </section>
 

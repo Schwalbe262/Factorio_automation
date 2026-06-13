@@ -7,7 +7,7 @@ import sys
 from typing import Any
 
 from .config import load_config
-from .controller import FactorioController
+from .controller import FactorioController, ModlessFactorioController
 from .factorio import (
     create_no_mod_save,
     create_save,
@@ -188,6 +188,13 @@ def main(argv: list[str] | None = None) -> None:
     run_parser = subparsers.add_parser("run-iron-mvp", help="Run the iron plate MVP loop")
     run_parser.add_argument("--target", type=int, default=10)
     run_parser.add_argument("--max-steps", type=int, default=200)
+
+    no_mod_iron_parser = subparsers.add_parser(
+        "run-no-mod-iron-mvp",
+        help="Run the iron plate MVP loop through the no-custom-mod RCON/Lua adapter",
+    )
+    no_mod_iron_parser.add_argument("--target", type=int, default=10)
+    no_mod_iron_parser.add_argument("--max-steps", type=int, default=200)
 
     copper_parser = subparsers.add_parser("run-copper-mvp", help="Run the copper plate MVP loop")
     copper_parser.add_argument("--target", type=int, default=10)
@@ -579,6 +586,22 @@ def main(argv: list[str] | None = None) -> None:
                 "steps": summary.steps,
                 "ironPlateCount": summary.item_count,
                 "logPath": str(summary.log_path),
+            }
+        )
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-no-mod-iron-mvp":
+        summary = ModlessFactorioController(cfg).run_iron_mvp(target=args.target, max_steps=args.max_steps)
+        print_json(
+            {
+                "ok": summary.ok,
+                "reason": summary.reason,
+                "steps": summary.steps,
+                "ironPlateCount": summary.item_count,
+                "logPath": str(summary.log_path),
+                "mode": "no-mod-rcon-lua",
             }
         )
         if not summary.ok:

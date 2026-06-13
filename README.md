@@ -113,6 +113,7 @@ run_factorio_review_gui.bat
 run_factorio_watch_gui.bat
 run_factorio_no_mod_server.bat
 run_factorio_no_mod_watch_gui.bat
+run_factorio_no_mod_iron_mvp.bat
 ```
 
 `run_factorio_non_gui.bat` starts the development server in a separate window and repeatedly executes
@@ -154,11 +155,27 @@ Open a GUI client connected to the no-custom-mod server:
 factorio-ai launch-no-mod-gui
 ```
 
+Run the first no-custom-mod iron plate automation proof:
+
+```powershell
+factorio-ai run-no-mod-iron-mvp --target 10 --max-steps 120
+```
+
+Or use:
+
+```bat
+run_factorio_no_mod_iron_mvp.bat
+```
+
 The no-mod observation currently reports tick, player/server focus, inventory, craftable recipes,
 nearby resources, factory entities, enemies, pollution, and key research technologies. Existing
 monitor/site/link estimation reads those observation fields directly, so human-built factory changes
 become visible as soon as they are inside the observation radius. The remaining work is to port each
 skill executor from the custom mod API to this no-mod adapter.
+
+The web dashboard first tries the custom mod observation endpoint, then falls back to the no-mod
+RCON/Lua observer. If no Factorio RCON server is running, it now renders an operator-facing offline
+message instead of exposing a raw connection refused traceback.
 
 In another terminal, run the iron plate MVP loop:
 

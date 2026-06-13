@@ -16,6 +16,7 @@ from .models import (
     total_item_count,
     validate_action,
 )
+from .modless_lua import ModlessLuaController
 from .planner import (
     AutomationScienceSkill,
     BeltSmeltingLineSkill,
@@ -691,6 +692,29 @@ class FactorioController:
         json.dump(payload, log_file, ensure_ascii=False, separators=(",", ":"))
         log_file.write("\n")
         log_file.flush()
+
+
+class ModlessFactorioController(FactorioController):
+    """Reuse skill loops with the no-custom-mod RCON/Lua adapter."""
+
+    def __init__(self, cfg: AppConfig) -> None:
+        super().__init__(cfg)
+        self._modless = ModlessLuaController(cfg)
+
+    def observe(self) -> dict[str, Any]:
+        response = self._modless.observe()
+        if not response.get("ok"):
+            raise RuntimeError(f"no-mod observe failed: {response}")
+        return response
+
+    def act(self, action: dict[str, Any]) -> dict[str, Any]:
+        validate_action(action)
+        return self._modless.act(self._agent_action(action))
+
+    def wait(self, ticks: int) -> dict[str, Any]:
+        response = self.act({"type": "wait", "ticks": ticks})
+        time.sleep(max(0.05, ticks / 60.0))
+        return response
 
 
 def _timestamp() -> str:

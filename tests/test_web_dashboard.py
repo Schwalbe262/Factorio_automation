@@ -4,6 +4,7 @@ from factorio_ai.networking import dashboard_urls
 from factorio_ai.web_dashboard import (
     FACTORIO_ROUTE,
     dashboard_path,
+    friendly_dashboard_error,
     is_factorio_route,
     render_dashboard,
     request_language,
@@ -29,6 +30,7 @@ class WebDashboardTests(unittest.TestCase):
                 "objective": "launch_rocket_program",
                 "updated_at": "now",
                 "observation_tick": 1,
+                "adapter": "no-mod-rcon-lua",
                 "targets": {"per_minute": {"iron-plate": 30.0}},
                 "monitor": {
                     "production": [{"item": "iron-plate", "per_minute": 30.0, "producers": 1, "confidence": 0.5}],
@@ -113,6 +115,11 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("small-biter", html)
         self.assertIn("Recent Damage", html)
         self.assertIn("stone-furnace", html)
+        self.assertIn("no-mod-rcon-lua", html)
+
+    def test_connection_refused_error_is_rendered_as_operator_guidance(self):
+        message = friendly_dashboard_error(ConnectionRefusedError(10061, "actively refused"))
+        self.assertIn("Factorio RCON server is not running", message)
 
     def test_dashboard_urls_use_lan_hosts_for_wildcard_bind(self):
         urls = dashboard_urls("0.0.0.0", 18889, "/factorio", base_url="http://10.0.0.5:18889")
