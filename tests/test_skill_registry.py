@@ -47,6 +47,12 @@ class SkillRegistryTests(unittest.TestCase):
         self.assertEqual(status.executor, "CoalSupplySkill")
         self.assertFalse(status.codex_required)
 
+    def test_stone_supply_skill_is_implemented(self):
+        status = skill_status("setup_stone_supply")
+        self.assertTrue(status.implemented)
+        self.assertEqual(status.executor, "StoneSupplySkill")
+        self.assertFalse(status.codex_required)
+
     def test_coal_fuel_feed_skill_is_implemented(self):
         status = skill_status("connect_coal_fuel_feed")
         self.assertTrue(status.implemented)

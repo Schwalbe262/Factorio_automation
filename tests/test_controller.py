@@ -119,6 +119,73 @@ class ControllerTests(unittest.TestCase):
         request_plan.assert_not_called()
         self.assertEqual(action, {"type": "craft", "recipe": "iron-gear-wheel", "count": 1})
 
+    def test_slurm_auto_renewal_state_throttles_checks(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            controller = FactorioController(cfg)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES": "360",
+                        "FACTORIO_AI_SLURM_RENEW_CHECK_INTERVAL_SECONDS": "3600",
+                    },
+                ),
+                patch(
+                    "factorio_ai.remote_slurm.ensure_worker_job",
+                    return_value={"ok": True, "action": "pending_successor_exists"},
+                ) as ensure_worker,
+            ):
+                controller._maybe_ensure_slurm_worker(reason="first", force=True)
+                controller._maybe_ensure_slurm_worker(reason="second")
+
+            state = json.loads((cfg.runtime_dir / "slurm-renewal.json").read_text(encoding="utf-8"))
+            rows = [
+                json.loads(line)
+                for line in (cfg.log_dir / "slurm-renewal.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+
+        ensure_worker.assert_called_once_with(renew_before_minutes=360)
+        self.assertEqual(state["action"], "pending_successor_exists")
+        self.assertEqual(state["reason"], "first")
+        self.assertEqual(len(rows), 1)
+
+    def test_autopilot_loop_ensures_slurm_worker_before_strategy_cycle(self):
+        class FakeController(FactorioController):
+            def run_strategy_step(self, *args, **kwargs):
+                return StrategyStepSummary(
+                    ok=True,
+                    reason="test cycle complete",
+                    objective="launch_rocket_program",
+                    selected_skill="produce_iron_plate",
+                    strategy={"source": "llm"},
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            controller = FakeController(cfg)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES": "360",
+                        "FACTORIO_AI_SLURM_RENEW_CHECK_INTERVAL_SECONDS": "3600",
+                    },
+                ),
+                patch(
+                    "factorio_ai.remote_slurm.ensure_worker_job",
+                    return_value={"ok": True, "action": "renewal_not_needed"},
+                ) as ensure_worker,
+            ):
+                summary = controller.run_autopilot_loop(cycles=1, sleep_seconds=0)
+
+            state = json.loads((cfg.runtime_dir / "slurm-renewal.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(summary.ok)
+        ensure_worker.assert_called_once_with(renew_before_minutes=360)
+        self.assertEqual(state["reason"], "autopilot_start")
+        self.assertEqual(state["action"], "renewal_not_needed")
+
     def test_background_layout_work_submits_simulation_task_during_active_skill(self):
         observation = {
             "tick": 1,
@@ -275,6 +342,7 @@ class ControllerTests(unittest.TestCase):
                         "FACTORIO_AI_CODEX_WAIT_LAYOUT_AUTOSTART": "1",
                         "FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS": "0",
                         "FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "queue",
+                        "FACTORIO_AI_SLURM_AUTO_RENEW_ENABLED": "0",
                     },
                 ),
                 patch("factorio_ai.controller.subprocess.Popen", return_value=DummyProcess()) as popen,

@@ -14,8 +14,9 @@ set FACTORIO_AI_VLLM_ARGS=--max-model-len 32768 --gpu-memory-utilization 0.85 --
 set FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER=0
 set FACTORIO_AI_VLLM_PORT=8000
 set FACTORIO_AI_VLLM_STARTUP_SECONDS=240
+set FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES=360
 
-echo [factorio-ai] Starting or reusing 1-GPU Qwen 4B active Slurm worker...
-python -m factorio_ai.cli slurm-start-worker || exit /b 1
+echo [factorio-ai] Starting/reusing 1-GPU Qwen 4B worker and pre-queueing a successor before expiry...
+python -m factorio_ai.cli slurm-ensure-worker --renew-before-minutes %FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES% || exit /b 1
 python -m factorio_ai.cli slurm-status
 python -m factorio_ai.cli slurm-llm-status

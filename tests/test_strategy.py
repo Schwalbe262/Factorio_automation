@@ -19,7 +19,7 @@ class StrategyTests(unittest.TestCase):
                 "entities": [],
             },
         )
-        self.assertEqual(result["selected_skill"], "expand_iron_smelting")
+        self.assertEqual(result["selected_skill"], "produce_iron_plate")
         self.assertIn("iron plate throughput", result["blockers"])
 
     def test_rocket_goal_researches_automation_after_iron(self):
@@ -495,7 +495,14 @@ class StrategyTests(unittest.TestCase):
             "launch_rocket_program",
             {
                 "inventory": {"iron-plate": 20},
-                "entities": [],
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "transport-belt",
+                        "position": {"x": 2, "y": 2},
+                        "electric_network_connected": True,
+                    }
+                ],
                 "research": {"technologies": {"automation": {"researched": True}}},
             },
             production_targets={"iron-plate": 90.0},
@@ -530,6 +537,12 @@ class StrategyTests(unittest.TestCase):
                 "inventory": {"iron-plate": 20},
                 "entities": [
                     {"name": "stone-furnace", "position": {"x": 500, "y": 0}, "inventories": {"1": {"coal": 1}, "2": {"iron-ore": 1}}},
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "transport-belt",
+                        "position": {"x": 2, "y": 2},
+                        "electric_network_connected": True,
+                    },
                 ],
                 "resources": [{"name": "iron-ore", "position": {"x": 4, "y": 0}, "distance_from_base": 4}],
                 "research": {"technologies": {"automation": {"researched": True}}},
@@ -575,7 +588,14 @@ class StrategyTests(unittest.TestCase):
             {
                 "base": {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}},
                 "inventory": {"iron-plate": 20},
-                "entities": [],
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "transport-belt",
+                        "position": {"x": 2, "y": 2},
+                        "electric_network_connected": True,
+                    }
+                ],
                 "resources": [
                     {"name": "iron-ore", "position": {"x": 4, "y": 0}, "distance_from_base": 4},
                     {"name": "copper-ore", "position": {"x": 8, "y": 0}, "distance_from_base": 8},
@@ -615,12 +635,31 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "plan_factory_site")
         self.assertNotIn("guardrail_adjusted", result)
 
-    def test_copper_target_bottleneck_expands_copper_smelting(self):
+    def test_copper_target_bottleneck_uses_direct_bootstrap_before_belt_automation(self):
         result = heuristic_strategy(
             "launch_rocket_program",
             {
                 "inventory": {"iron-plate": 20, "copper-plate": 1},
                 "entities": [],
+            },
+            production_targets={"copper-plate": 45.0},
+        )
+        self.assertEqual(result["selected_skill"], "produce_copper_plate")
+
+    def test_copper_target_bottleneck_expands_copper_smelting_after_belt_automation(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 20, "copper-plate": 1},
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "transport-belt",
+                        "position": {"x": 2, "y": 2},
+                        "electric_network_connected": True,
+                    }
+                ],
+                "research": {"technologies": {"automation": {"researched": True}}},
             },
             production_targets={"copper-plate": 45.0},
         )
@@ -645,6 +684,7 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(any(item["name"] == "produce_electronic_circuit" for item in catalog))
         self.assertTrue(any(item["name"] == "build_belt_smelting_line" for item in catalog))
         self.assertTrue(any(item["name"] == "setup_coal_supply" for item in catalog))
+        self.assertTrue(any(item["name"] == "setup_stone_supply" for item in catalog))
         self.assertTrue(any(item["name"] == "connect_coal_fuel_feed" for item in catalog))
         self.assertTrue(any(item["name"] == "expand_copper_smelting" for item in catalog))
         self.assertTrue(any(item["name"] == "research_automation" for item in catalog))

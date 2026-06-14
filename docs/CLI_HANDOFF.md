@@ -1,6 +1,6 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-15 03:14 KST
+Last updated: 2026-06-15 03:50 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
@@ -65,6 +65,13 @@ Processes observed before this handoff:
 - Live verification found a starter-local steam layout around pump `{x:-45.5,y:19.5}` and `setup_power` completed in 7 steps. The resulting offshore pump, boiler, steam engine, and pole are working near the starter cluster.
 - The starting crashed spaceship/wreckage is protected by default. Mining it requires an explicit `allow_preserved_artifact=true` override; planner obstacle-removal code also skips protected starter artifacts.
 - Slurm continuity is now handled by `slurm-ensure-worker --renew-before-minutes <minutes>`, which queues a dependent successor job before the current one expires instead of waiting for the allocation to disappear.
+
+## Latest Part 84 Status
+
+- Slurm renewal is now part of the normal controller heartbeat, not a one-off manual command. Autopilot start, strategy decisions, idle layout start/cycles, and background layout submissions call `ensure_worker_job` with throttling.
+- The launchers set `FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES=360` and `FACTORIO_AI_SLURM_RENEW_CHECK_INTERVAL_SECONDS=1800`, so a successor should be queued up to 6 hours before the current 1-day job expires and rechecked every 30 minutes.
+- `CopperPlateSkill` no longer uses pickaxe mining for `copper-ore`. Before belt automation it builds a direct burner drill -> stone furnace copper cell; after a transport-belt assembler is observed, copper can move to belt smelting lines.
+- `StoneSupplySkill` is now implemented for the early burner drill -> chest stone pattern, so furnace/drill prerequisites can bootstrap stone without repeated hand stone mining.
 
 If the CLI session starts fresh, verify processes first:
 
@@ -871,11 +878,11 @@ $env:PYTHONPATH='src'
 python -m factorio_ai.cli run-no-mod-idle-layout-loop --objective launch_rocket_program --cycles 1 --sleep-seconds 0 --stale-seconds 0
 ```
 
-Ensure the active 4B Slurm worker has a running or queued successor before the 1-day allocation expires:
+Ensure the active 4B Slurm worker has a running or queued successor well before the 1-day allocation expires:
 
 ```powershell
 $env:PYTHONPATH='src'
-python -m factorio_ai.cli slurm-ensure-worker --renew-before-minutes 180
+python -m factorio_ai.cli slurm-ensure-worker --renew-before-minutes 360
 ```
 
 Open review GUI:
@@ -892,6 +899,8 @@ Open review GUI:
 - Production blocks must avoid covering starter ore/coal patches unless unavoidable.
 - Preserve starting crashed spaceship/wreckage like a protected landmark unless the operator explicitly requests removal.
 - Research automation must use assemblers and labs; hand-crafting science packs is not acceptable for sustained progress.
+- Iron/copper bootstrap must place/fuel direct burner mining drill -> stone furnace cells; repeated pickaxe mining of ore is not acceptable for normal plate supply.
+- Stone bootstrap should place a burner mining drill outputting into a wooden/iron chest when possible.
 - Labs usually need daisy chain or belt-fed science distribution.
 - Burner drills are only bootstrap; later replace with electric drills.
 - Boiler fuel should become coal belt plus inserter, not manual coal insertion.
@@ -902,6 +911,7 @@ Open review GUI:
 - Trains should be used for far resources/outposts once local logistics become too long.
 - Part 82 recovered the bad remote steam entities and verified that `SetupPowerSkill` now returns a remote-water blocker even when a full planning-site scan finds remote `power_sites`.
 - Part 83 fixed the nearest-water scan order, built working starter-local steam power, protected starting wreckage, and queued a dependent Slurm successor before the current 1-day job expired.
+- Part 84 moved Slurm renewal into launcher/controller heartbeats, added direct iron/copper smelting bootstrap, added stone drill->chest supply, and gates belt smelting expansion until transport-belt production is automated.
 
 ## LLM Model Direction
 

@@ -495,9 +495,12 @@ print(json.dumps({{
         f"{_attached_env_setup(remote_dir)}"
         f"python3 -c {shlex.quote(probe_runner)}"
     )
-    try:
-        output = _run_remote(
-            f"""set -euo pipefail
+    output = ""
+    last_status_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            output = _run_remote(
+                f"""set -euo pipefail
 JOB_NAME={json.dumps(cfg.job_name)}
 INNER_COMMAND={shlex.quote(inner_command)}
 JOBS="$(squeue -h -u "$USER" -n "$JOB_NAME" -t R,PD -o "%i|%T|%M|%L|%R|%b|%S" || true)"
@@ -532,15 +535,22 @@ PY
 fi
 srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/null
 """,
-            cfg,
-            timeout=90,
-        )
-    except Exception as exc:  # noqa: BLE001
+                cfg,
+                timeout=90,
+            )
+            last_status_error = None
+            break
+        except Exception as exc:  # noqa: BLE001
+            last_status_error = exc
+            if attempt == 0:
+                time.sleep(2)
+                continue
+    if last_status_error is not None:
         return {
             "ok": True,
             "remoteDir": remote_dir,
             "local_env": local_env,
-            "remote": {"job_running": False, "error": f"{type(exc).__name__}: {exc}"},
+            "remote": {"job_running": False, "error": f"{type(last_status_error).__name__}: {last_status_error}"},
             "llm_ready": False,
             "missing": ["running Slurm worker job with LLM env"],
             "remediation": _llm_status_remediation(["running Slurm worker job with LLM env"], cfg, False, None),

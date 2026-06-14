@@ -78,6 +78,7 @@ Do not confuse the Codex/handoff context with the local Slurm LLM prompt context
 - Execute allowlisted actions only.
 - Run a rule-based `produce_iron_plate` skill until at least 10 iron plates exist in inventory or machine outputs.
 - Run a reusable rule-based `produce_copper_plate` skill until copper plates exist in inventory or machine outputs.
+- Build direct burner mining drill -> stone furnace bootstrap cells for early iron/copper, and a burner drill -> chest cell for starter stone.
 - Run a rule-based `produce_automation_science_pack` skill until at least 5 automation science packs exist.
 - Run a rule-based `produce_electronic_circuit` skill for early hand-crafted green circuits.
 - Run one strategic step with `run-strategy-step`, which asks the strategic layer for a skill and executes it only if a local executor exists.
@@ -551,9 +552,10 @@ instead of faking rail construction.
 
 ## Automation Skill Boundary
 
-The first material skills can still hand-mine and hand-craft because they bootstrap a new world.
-That is not enough for rocket-scale play. Factory growth must move to automation skills that build
-working production blocks:
+The first material skills may hand-mine tiny one-off prerequisites because they bootstrap a new world,
+but normal ore supply should move to burner drills immediately. Early iron/copper use direct
+burner mining drill -> stone furnace cells; starter stone can use a burner drill outputting into a
+chest. Factory growth must then move to automation skills that build working production blocks:
 
 - miners extract ore;
 - belts move items between blocks;
@@ -563,9 +565,9 @@ working production blocks:
 - power poles and fuel keep the block running.
 
 For this reason, `expand_iron_smelting`, `build_belt_smelting_line`, `setup_power`, and
-`automate_electronic_circuit_line` are separate skill contracts. The first belt-smelting and steam
-power executors now exist; the remaining higher-throughput smelting and assembling-machine executors
-are still reported as missing instead of substituting a hand-crafting routine.
+`automate_electronic_circuit_line` are separate skill contracts. Belt-fed smelting is intentionally
+gated behind observed transport-belt automation, so scarce hand-crafted belts are not consumed by
+starter smelting before an assembler mall can replace them.
 Burner-era smelting expansion can also recover surplus coal from nearby fueled machines before it
 falls back to a manual coal haul, which keeps under-fueled lines moving while proper coal logistics
 automation is still being built.
@@ -574,6 +576,10 @@ automation is still being built.
 on a coal patch, places an output belt, primes the drill with starter fuel, and exposes the resulting
 coal site to the factory monitor as a `mining_patch`. Strategy guardrails can run it before more
 burner smelting or steam power expansion when coal is still hand-mined.
+
+`setup_stone_supply` builds the matching early stone pattern: a burner mining drill on stone with
+a wooden or iron chest at the output tile. Furnace and burner-drill prerequisite paths use this
+before falling back to repeated hand stone mining.
 
 `connect_coal_fuel_feed` extends that coal output into a local belt-fed fuel consumer. It places a
 short belt extension, burner inserter, and starter furnace fuel receiver, primes the burner inserter,
@@ -720,12 +726,17 @@ Keep a 1-day Slurm allocation from expiring without a successor:
 
 ```powershell
 $env:PYTHONPATH="src"
-python -m factorio_ai.cli slurm-ensure-worker --renew-before-minutes 180
+python -m factorio_ai.cli slurm-ensure-worker --renew-before-minutes 360
 ```
 
 If a worker is running and has less than the threshold remaining, this queues a dependent successor
 with `--dependency=afterany:<running-job-id>`. If a successor is already pending, it does not submit
 another one.
+
+The no-mod autopilot, real-player autopilot, idle layout loop, and 4B worker launchers set a 6-hour
+renewal threshold and the controller rechecks periodically during strategy/layout heartbeats. This is
+important on clusters where queued jobs may wait after submission; the successor must enter the
+queue before the current 1-day allocation ends.
 
 The larger 9B and 27B workers are kept as separate worker jobs so they can wait or run without
 blocking the active 4B worker:

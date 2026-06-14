@@ -46,6 +46,7 @@ from .planner import (
     ResearchAutomationSkill,
     ResearchTechnologySkill,
     SetupPowerSkill,
+    StoneSupplySkill,
     StarterDefenseSkill,
 )
 from .rcon import FactorioRconClient
@@ -453,6 +454,7 @@ class FactorioController:
         request_summary = strategy_request_summary(observation, production_targets)
         result: dict[str, Any] | None = None
         if self.cfg.slurm_enabled:
+            self._maybe_ensure_slurm_worker(reason="strategy_decision")
             started = time.monotonic()
             try:
                 status = self._remote_llm_status(refresh=True)
@@ -654,11 +656,13 @@ class FactorioController:
         last_step: StrategyStepSummary | None = None
         interrupted = False
         reason = "cycle limit reached" if cycles > 0 else "autopilot loop stopped"
+        self._maybe_ensure_slurm_worker(reason="autopilot_start", force=True)
         self._write_autopilot_heartbeat(objective, "starting", cycle=0, reason=reason)
 
         try:
             with log_path.open("a", encoding="utf-8") as log_file:
                 while cycles <= 0 or completed < cycles:
+                    self._maybe_ensure_slurm_worker(reason="autopilot_cycle")
                     self._write_autopilot_heartbeat(objective, "cycle_start", cycle=completed + 1)
                     self._maybe_progress_codex_wait_layout(objective)
                     started = time.monotonic()
@@ -824,6 +828,7 @@ class FactorioController:
     ) -> IdleLayoutLoopSummary:
         self.cfg.log_dir.mkdir(parents=True, exist_ok=True)
         log_path = self.cfg.log_dir / "layout-improvement-background.jsonl"
+        self._maybe_ensure_slurm_worker(reason="idle_layout_start", force=True)
         process_path = self._idle_layout_process_path()
         existing = _read_json_file(process_path)
         existing_pid = _int_or_none(existing.get("pid")) if isinstance(existing, dict) else None
@@ -865,6 +870,7 @@ class FactorioController:
 
         try:
             while cycles <= 0 or completed < cycles:
+                self._maybe_ensure_slurm_worker(reason="idle_layout_cycle")
                 idle, idle_reason, heartbeat = self._autopilot_idle_for_layout(stale_seconds)
                 completed += 1
                 if idle:
@@ -1091,6 +1097,16 @@ class FactorioController:
                 "goal": skill_name,
                 "max_steps": _max_steps(max_steps, 800),
                 "log_prefix": "strategy-coal-supply",
+            }
+        if skill_name == "setup_stone_supply":
+            target = target_count or 16
+            return {
+                "skill": StoneSupplySkill(target),
+                "target_item": "stone",
+                "target": target,
+                "goal": skill_name,
+                "max_steps": _max_steps(max_steps, 800),
+                "log_prefix": "strategy-stone-supply",
             }
         if skill_name == "connect_coal_fuel_feed":
             return {
@@ -1574,6 +1590,7 @@ class FactorioController:
             return
         self.cfg.log_dir.mkdir(parents=True, exist_ok=True)
         try:
+            self._maybe_ensure_slurm_worker(reason="background_layout_work")
             from . import remote_slurm
 
             if self._background_layout_thread is not None:
@@ -1893,6 +1910,50 @@ class FactorioController:
         self._remote_llm_status_cache = status
         self._remote_llm_status_cache_until = now + 30.0
         return status
+
+    def _slurm_renewal_state_path(self) -> Path:
+        return self.cfg.runtime_dir / "slurm-renewal.json"
+
+    def _slurm_renewal_log_path(self) -> Path:
+        return self.cfg.log_dir / "slurm-renewal.jsonl"
+
+    def _maybe_ensure_slurm_worker(self, *, reason: str, force: bool = False) -> None:
+        if not self.cfg.slurm_enabled:
+            return
+        if os.getenv("FACTORIO_AI_SLURM_AUTO_RENEW_ENABLED", "1").strip().lower() in {"0", "false", "no", "off"}:
+            return
+        interval_seconds = max(60.0, _float_env("FACTORIO_AI_SLURM_RENEW_CHECK_INTERVAL_SECONDS", 1800.0))
+        self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self.cfg.log_dir.mkdir(parents=True, exist_ok=True)
+        state_path = self._slurm_renewal_state_path()
+        state = _read_json_file(state_path)
+        now = datetime.now(timezone.utc)
+        checked_at = _parse_datetime(state.get("checked_at"))
+        if not force and checked_at is not None and (now - checked_at).total_seconds() < interval_seconds:
+            return
+        renew_before_minutes = _int_or_none(os.getenv("FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES"))
+        payload: dict[str, Any] = {
+            "event": "slurm_worker_renewal_check",
+            "checked_at": now.isoformat(),
+            "reason": reason,
+            "renew_before_minutes": renew_before_minutes,
+            "interval_seconds": interval_seconds,
+        }
+        try:
+            from . import remote_slurm
+
+            result = remote_slurm.ensure_worker_job(renew_before_minutes=renew_before_minutes)
+            payload["ok"] = bool(result.get("ok"))
+            payload["action"] = result.get("action")
+            payload["result"] = result
+        except Exception as exc:  # noqa: BLE001
+            payload["ok"] = False
+            payload["error"] = f"{type(exc).__name__}: {exc}"
+        with state_path.open("w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False, indent=2)
+        with self._slurm_renewal_log_path().open("a", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False, separators=(",", ":"))
+            file.write("\n")
 
     @staticmethod
     def _remote_llm_unready_reason(status: dict[str, Any]) -> str:

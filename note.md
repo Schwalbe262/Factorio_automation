@@ -2334,3 +2334,1093 @@
 - Failure reason: None.
 - Next action: Commit Part 83 and push to GitHub.
 - Token usage: active goal counter observed at 4,227,903 tokens / weekly quota unavailable. `logs/token_usage.jsonl` sample recorded for Part 83; recorder delta is 0 because older stored samples belong to a larger previous counter.
+## 2026-06-15 03:19:06 +09:00 - Loop 114
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:19:37 +09:00 - Loop 115
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 2.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:20:07 +09:00 - Loop 116
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 3.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:20:33 +09:00 - Loop 117
+- Part: skill
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: Running `research_automation` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_automation` for up to 1500 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-181932.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Target item candidate: `automation-science-pack` target `10`.
+- Metrics:
+  - Steps: 10.
+  - Status: failed.
+  - Duration: 61.422s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-181932.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1500,"target":10}`.
+- Result: Loop stopped: missing iron gear wheels and cannot craft them
+- Failure reason: missing iron gear wheels and cannot craft them
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:20:34 +09:00 - Loop 118
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 1.
+  - Selected `research_automation` with priority `90` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Strategy priority: `90`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 87.015s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":1,"priority":90,"strategy_source":"llm"}`.
+- Result: Loop stopped: missing iron gear wheels and cannot craft them
+- Failure reason: missing iron gear wheels and cannot craft them
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:20:39 +09:00 - Loop 119
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_state_is_sleeping
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_state_is_sleeping`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_state_is_sleeping`.
+- Metrics:
+  - Steps: 4.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot state is sleeping
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:21:06 +09:00 - Loop 120
+- Part: skill
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: Running `research_automation` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_automation` for up to 1500 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-182104.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Target item candidate: `automation-science-pack` target `10`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 2.125s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-182104.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1500,"target":10}`.
+- Result: Loop stopped: missing iron gear wheels and cannot craft them
+- Failure reason: missing iron gear wheels and cannot craft them
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:21:06 +09:00 - Loop 121
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 2.
+  - Selected `research_automation` with priority `90` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Strategy priority: `90`.
+- Metrics:
+  - Steps: 2.
+  - Status: failed.
+  - Duration: 27.218s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":2,"priority":90,"strategy_source":"llm"}`.
+- Result: Loop stopped: missing iron gear wheels and cannot craft them
+- Failure reason: missing iron gear wheels and cannot craft them
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:21:11 +09:00 - Loop 122
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_state_is_sleeping
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_state_is_sleeping`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_state_is_sleeping`.
+- Metrics:
+  - Steps: 5.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot state is sleeping
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:21:17 +09:00 - Loop 123
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 3.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 3.
+  - Status: failed.
+  - Duration: 6.047s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":3,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: running Slurm worker job with LLM env
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: running Slurm worker job with LLM env
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:21:27 +09:00 - Loop 124
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 4.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 4.
+  - Status: failed.
+  - Duration: 4.969s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":4,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: running Slurm worker job with LLM env
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: running Slurm worker job with LLM env
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:21:37 +09:00 - Loop 125
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 5.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 5.
+  - Status: failed.
+  - Duration: 4.671s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":5,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: Slurm worker job pending GPU allocation; GPU allocation; job 678192 PENDING (None) N/A
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: Slurm worker job pending GPU allocation; GPU allocation; job 678192 PENDING (None) N/A
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:21:43 +09:00 - Loop 126
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_state_is_sleeping
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_state_is_sleeping`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_state_is_sleeping`.
+- Metrics:
+  - Steps: 6.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot state is sleeping
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:21:47 +09:00 - Loop 127
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 6.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 6.
+  - Status: failed.
+  - Duration: 5.094s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":6,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: Slurm worker job pending GPU allocation; GPU allocation; job 678192 PENDING (None) N/A
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: Slurm worker job pending GPU allocation; GPU allocation; job 678192 PENDING (None) N/A
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:21:57 +09:00 - Loop 128
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 7.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 7.
+  - Status: failed.
+  - Duration: 5.016s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":7,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: Slurm worker job pending GPU allocation; GPU allocation; job 678192 PENDING (None) N/A
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: Slurm worker job pending GPU allocation; GPU allocation; job 678192 PENDING (None) N/A
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:22:08 +09:00 - Loop 129
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 8.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 8.
+  - Status: failed.
+  - Duration: 6.328s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":8,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:28:16 +09:00 - Loop 141
+- Part: Part 84 - Slurm pre-queue watchdog and direct bootstrap cells
+- Goal: Prevent Slurm LLM gaps caused by late job submission, and stop the agent from pickaxe-mining ore for normal starter plate production.
+- Hypothesis: If Slurm renewal is checked by the normal autopilot/layout heartbeat and launchers use a 6-hour renewal threshold, a successor job enters the queue before the current 1-day allocation disappears. If iron/copper production uses direct burner-drill -> furnace cells before belt automation, the player should not hand-mine ore once a drill/furnace cell can be built.
+- Actions:
+  - Stopped the old hidden no-mod autopilot/idle layout processes that were repeatedly failing while the new Slurm job had GPU allocation but vLLM was not serving yet.
+  - Added controller-level Slurm renewal checks at autopilot start, strategy decision, idle layout start/cycles, and background layout submission.
+  - Updated no-mod autopilot, real-player autopilot, idle layout, and 4B worker launchers to call `slurm-ensure-worker --renew-before-minutes 360`.
+  - Recorded that the observed direct furnace was created by the user, not the agent, and treated it as an operator intervention pattern for future training data.
+  - Changed iron/copper bootstrap so `IronPlateSkill` and `CopperPlateSkill` use direct burner mining drill -> stone furnace cells before belt automation instead of hand-mining ore.
+  - Added `StoneSupplySkill`, which places a burner mining drill on stone and a wooden/iron chest at the output tile.
+  - Gated copper belt smelting and strategy smelting expansion so belt-fed smelting starts after a transport-belt assembler is observed.
+  - Updated strategy and docs to state that direct bootstrap comes first, and belt smelting expansion starts once belt production is automated.
+- Candidates:
+  - Submit a new Slurm job only after `slurm-status` reports no running job: rejected because queue wait can create a long LLM outage.
+  - One manual `slurm-ensure-worker` command: rejected because it depends on Codex/operator attention.
+  - Controller/launcher renewal heartbeat with throttling: selected.
+  - Continue using a loose furnace plus hand-mined copper ore: rejected because it violates automation-first gameplay.
+  - Use scarce hand-crafted belts for earliest smelting: rejected until a transport-belt assembler/mall exists.
+  - User-made direct furnace pattern: selected as a valid supervised example, but not counted as an agent-built improvement.
+- Metrics:
+  - Live Slurm status during this loop: successor job `678192` is RUNNING with GPU allocation, but `/v1/models` initially returned connection refused while vLLM started.
+  - Targeted tests: `206 passed` for planner/strategy/modless/registry checks and `2 passed` for controller Slurm renewal checks.
+  - Full test suite: later verified as `395 passed`.
+- Result: Implementation and targeted verification completed; full-suite verification later passed and GitHub push remains.
+- Failure reason: Live autopilot could not resume yet because the new Slurm job's LLM endpoint was still starting.
+- Next action: Run the full test suite, verify Slurm LLM readiness, restart no-mod autopilot with the new watchdog code, commit Part 84, and push to GitHub.
+- Token usage: active goal counter observed at 5,237,863 tokens / weekly quota unavailable.
+
+## 2026-06-15 03:22:13 +09:00 - Loop 130
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 7.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:22:19 +09:00 - Loop 131
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 9.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 9.
+  - Status: failed.
+  - Duration: 6.110s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":9,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:22:30 +09:00 - Loop 132
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 10.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 10.
+  - Status: failed.
+  - Duration: 6.109s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":10,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:22:42 +09:00 - Loop 133
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 11.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 11.
+  - Status: failed.
+  - Duration: 6.250s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":11,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:22:46 +09:00 - Loop 134
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_state_is_sleeping
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_state_is_sleeping`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_state_is_sleeping`.
+- Metrics:
+  - Steps: 8.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot state is sleeping
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:22:53 +09:00 - Loop 135
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 12.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 12.
+  - Status: failed.
+  - Duration: 6.188s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":12,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:23:04 +09:00 - Loop 136
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 13.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 13.
+  - Status: failed.
+  - Duration: 6.219s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":13,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:23:15 +09:00 - Loop 137
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 14.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 14.
+  - Status: failed.
+  - Duration: 6.000s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":14,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:23:18 +09:00 - Loop 138
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_state_is_sleeping
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_state_is_sleeping`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_state_is_sleeping`.
+- Metrics:
+  - Steps: 9.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot state is sleeping
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:23:26 +09:00 - Loop 139
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 15.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 15.
+  - Status: failed.
+  - Duration: 6.047s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":15,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:23:37 +09:00 - Loop 140
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 16.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 16.
+  - Status: failed.
+  - Duration: 6.062s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":16,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:23:48 +09:00 - Loop 141
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 17.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 17.
+  - Status: failed.
+  - Duration: 5.875s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":17,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:23:51 +09:00 - Loop 142
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_state_is_sleeping
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_state_is_sleeping`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_state_is_sleeping`.
+- Metrics:
+  - Steps: 10.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot state is sleeping
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:23:59 +09:00 - Loop 143
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 18.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 18.
+  - Status: failed.
+  - Duration: 6.062s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":18,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:24:10 +09:00 - Loop 144
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 19.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 19.
+  - Status: failed.
+  - Duration: 6.047s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-181906.jsonl`.
+  - Metadata: `{"cycle":19,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: LLM endpoint
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:24:21 +09:00 - Loop 145
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 11.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:50:04 +09:00 - Loop 146
+- Part: Part 84 final verification - direct bootstrap, stone supply, and Slurm renewal
+- Goal: Finalize the code/documentation changes so local Qwen can direct early automation without Codex manually driving ore/furnace loops.
+- Hypothesis: Encoding the user-made direct furnace pattern as deterministic behavior, adding stone drill->chest supply, and gating belt smelting until belt automation will reduce early manual ore carrying while preserving later belt-smelting growth.
+- Actions:
+  - Preserved the user-built direct furnace as an operator intervention example, not as an agent-built result.
+  - Implemented direct iron/copper burner mining drill -> stone furnace bootstrap cells.
+  - Implemented `StoneSupplySkill` for burner mining drill -> output chest stone collection and exposed it through strategy/controller/registry.
+  - Added no-mod observe support and virtual recipes for wooden/iron chests.
+  - Added strategy guardrails so `expand_*_smelting` and `build_belt_smelting_line` wait for observed transport-belt automation; before that, plate bottlenecks use direct bootstrap or build the belt mall.
+  - Updated docs and tests for the direct-bootstrap-before-belt policy.
+- Candidates:
+  - Keep using belt smelting immediately: rejected for extreme early game because belts are scarce before a transport-belt assembler exists.
+  - Remove belt smelting entirely: rejected because belt-fed smelting should be used once belt production is automated.
+  - Direct bootstrap first, belt smelting after transport-belt automation: selected.
+- Metrics:
+  - Targeted tests: planner/strategy/modless/registry `206 passed`; controller Slurm renewal `2 passed`.
+  - Full suite: `395 passed`.
+  - Restarted hidden processes: autopilot cmd PID `4036` / Python PID `35888`; idle layout cmd PID `19536` / Python PID `36412`.
+- Result: Part 84 implementation and verification completed. Slurm LLM readiness check reported job `678192` running with `llm_ready=true`; hidden no-mod AI autopilot and idle layout loops were restarted without GUI movement.
+- Failure reason: None for code/tests. The prior failed background loops were caused by the Slurm job running before the vLLM endpoint was ready.
+- Next action: Commit/push Part 84, then monitor the hidden no-mod autopilot logs and note the next gameplay blocker.
+- Token usage: active goal counter not yet re-read for this loop / weekly quota unavailable.
+
+## 2026-06-15 03:51:54 +09:00 - Loop 147
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_1655_9s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_1655_9s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_1655_9s`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 1655.9s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:51:59 +09:00 - Loop 148
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 2.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:52:02 +09:00 - Loop 149
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 1.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 4.844s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-185141.jsonl`.
+  - Metadata: `{"cycle":1,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: running Slurm worker job with LLM env
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: running Slurm worker job with LLM env
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:52:06 +09:00 - Loop 150
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_state_is_sleeping
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_state_is_sleeping`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_state_is_sleeping`.
+- Metrics:
+  - Steps: 3.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot state is sleeping
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:52:11 +09:00 - Loop 151
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 4.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:52:12 +09:00 - Loop 152
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 2.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 2.
+  - Status: failed.
+  - Duration: 4.984s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-185141.jsonl`.
+  - Metadata: `{"cycle":2,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: running Slurm worker job with LLM env
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: running Slurm worker job with LLM env
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:52:19 +09:00 - Loop 153
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_state_is_sleeping
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_state_is_sleeping`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_state_is_sleeping`.
+- Metrics:
+  - Steps: 5.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot state is sleeping
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:52:23 +09:00 - Loop 154
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 3.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 3.
+  - Status: failed.
+  - Duration: 6.329s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-185141.jsonl`.
+  - Metadata: `{"cycle":3,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: running Slurm worker job with LLM env
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: running Slurm worker job with LLM env
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:52:26 +09:00 - Loop 155
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_state_is_sleeping
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_state_is_sleeping`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_state_is_sleeping`.
+- Metrics:
+  - Steps: 6.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot state is sleeping
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:52:32 +09:00 - Loop 156
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 7.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:52:34 +09:00 - Loop 157
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 4.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 4.
+  - Status: failed.
+  - Duration: 5.281s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-185141.jsonl`.
+  - Metadata: `{"cycle":4,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: running Slurm worker job with LLM env
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: running Slurm worker job with LLM env
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:52:39 +09:00 - Loop 158
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_state_is_sleeping
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_state_is_sleeping`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_state_is_sleeping`.
+- Metrics:
+  - Steps: 8.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot state is sleeping
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:52:44 +09:00 - Loop 159
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 5.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 5.
+  - Status: failed.
+  - Duration: 5.250s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-185141.jsonl`.
+  - Metadata: `{"cycle":5,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: running Slurm worker job with LLM env
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: running Slurm worker job with LLM env
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:52:47 +09:00 - Loop 160
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_state_is_sleeping
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_state_is_sleeping`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_state_is_sleeping`.
+- Metrics:
+  - Steps: 9.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot state is sleeping
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:52:52 +09:00 - Loop 161
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 10.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:52:54 +09:00 - Loop 162
+- Part: autopilot_cycle
+- Goal: launch_rocket_program /
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 6.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 6.
+  - Status: failed.
+  - Duration: 5.063s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-185141.jsonl`.
+  - Metadata: `{"cycle":6,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: running Slurm worker job with LLM env
+- Failure reason: strategy cycle failed: RuntimeError: remote Slurm LLM not ready: running Slurm worker job with LLM env
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:54:29 +09:00 - Loop 163
+- Part: skill
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: Running `research_automation` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_automation` for up to 1 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-185427.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Target item candidate: `automation-science-pack` target `10`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 2.750s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-185427.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1,"target":10}`.
+- Result: Loop stopped: missing iron gear wheels and cannot craft them
+- Failure reason: missing iron gear wheels and cannot craft them
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:56:26 +09:00 - Loop 164
+- Part: skill
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: Running `research_automation` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_automation` for up to 1 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-185619.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Target item candidate: `automation-science-pack` target `10`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 6.359s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-185619.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1,"target":10}`.
+- Result: Loop stopped: max steps reached: 1
+- Failure reason: max steps reached: 1
+- Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 03:59:48 +09:00 - Loop 165
+- Part: Part 84 follow-up - live research gear blocker and Slurm attach retry
+- Goal: Remove the immediate live `research_automation` blocker and make Slurm LLM readiness checks robust enough for background execution.
+- Hypothesis: If `AutomationScienceSkill` refills inventory iron before declaring missing gears, research can proceed toward gear/science crafting instead of stopping. If Slurm LLM status retries one transient attach failure, autopilot and layout processes are less likely to misclassify a ready worker as unavailable during srun contention.
+- Actions:
+  - Updated `AutomationScienceSkill` to call iron production for inventory iron when iron gear wheels are missing and gear crafting is not currently craftable.
+  - Added a regression test for replenishing inventory iron before failing on missing gears.
+  - Added a one-retry guard around Slurm LLM status attached probes.
+  - Added a regression test for transient Slurm attach/status failure recovery.
+  - Re-ran a live no-mod strategy step with `--max-steps 1`; the previous `missing iron gear wheels and cannot craft them` blocker changed to a valid `take iron-plate from starter furnace output` action before the artificial max-step stop.
+- Candidates:
+  - Let autopilot keep retrying the same research failure: rejected because it creates noisy logs and no progress.
+  - Treat missing gears as a strategy-only issue: rejected because the deterministic science executor already has enough context to replenish iron first.
+  - Fix prerequisite handling inside `AutomationScienceSkill`: selected.
+- Metrics:
+  - Targeted tests: new planner gear test `1 passed`; new Slurm retry test `1 passed`.
+  - Full suite: `395 passed`.
+  - Live verification: `research_automation` no longer failed with missing gears; it selected `take iron-plate from starter furnace output`.
+- Result: Follow-up implementation and verification completed.
+- Failure reason: None for code/tests. The live one-step run stopped only because `--max-steps 1` was intentionally used.
+- Next action: Commit/push Part 84, then restart no-mod autopilot without simultaneous idle layout until Slurm attach contention is observed stable.
+- Token usage: active goal counter observed at 5,237,863 tokens / weekly quota unavailable.
+
+## 2026-06-15 04:05:00 +09:00 - Loop 166
+- Part: Part 84 final verification - token usage/Web UI counter reset handling
+- Goal: Keep Part 84 records chronological and make the Web UI token usage panel robust when the Codex token counter resets.
+- Hypothesis: If raw token counters can reset between sessions, the dashboard should track cumulative display tokens and reset count instead of plotting a misleading drop to a smaller raw value.
+- Actions:
+  - Moved the manual Loop 165 follow-up record after the automatically appended loops to preserve chronological order.
+  - Updated `token_usage_summary` to compute cumulative display tokens across counter resets and expose raw latest tokens separately.
+  - Updated the Web UI token usage panel/table/chart to display cumulative tokens and show reset count.
+  - Added regression tests for token counter resets in summary, chart, and table rendering.
+  - Re-ran `git diff --check` and the full pytest suite.
+- Candidates:
+  - Keep raw counter values only: rejected because a reset makes usage charts and totals look like usage disappeared.
+  - Preserve raw values while adding cumulative display values and reset metadata: selected.
+- Metrics:
+  - `git diff --check`: clean aside from Git CRLF warnings.
+  - Full suite: `398 passed`.
+  - Token usage counter: active goal observed at 5,398,866 tokens / weekly quota unavailable.
+- Result: Final Part 84 verification completed; records and Web UI usage accounting are ready to commit.
+- Failure reason: None.
+- Next action: Commit/push Part 84, then restart hidden no-mod autopilot without simultaneous idle layout until Slurm attach contention is stable.
+- Token usage: 5,398,866 tokens / weekly quota unavailable.

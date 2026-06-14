@@ -66,7 +66,7 @@ class SlurmWorkerTests(unittest.TestCase):
             task_path.write_text(json.dumps(task), encoding="utf-8")
             result = run_task_file(task_path, result_path)
             self.assertTrue(result["ok"])
-            self.assertEqual(result["selected_skill"], "expand_iron_smelting")
+            self.assertEqual(result["selected_skill"], "produce_iron_plate")
             self.assertEqual(result["source"], "heuristic")
 
     def test_strategy_request_guardrail_promotes_hand_circuit_llm_choice_to_red_science_research(self):

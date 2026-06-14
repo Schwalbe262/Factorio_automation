@@ -152,3 +152,43 @@
 - After: `slurm-ensure-worker --renew-before-minutes 180` queued successor job `678192` with dependency on `677569`.
 - Evidence: `{"source_loop":113,"action":"submitted_dependent_successor","dependencyJobId":"677569","submitted_job_id":"678192","timeLeftSeconds":556}`
 - Remaining risk: Site policy may still delay pending jobs; the ensure command should be run periodically by the launcher or scheduler, not only manually.
+
+## 2026-06-15 03:28:16 +09:00 - Insight 18
+- Source loop: Loop 141
+- Improvement: Slurm renewal is now a controller/launcher heartbeat instead of a manual one-shot command.
+- Before: A successor was submitted only after manual intervention, and submitting after the running job ended could leave a long queue-induced LLM gap.
+- After: Autopilot, strategy decisions, idle layout loops, background layout submissions, and launchers call `ensure_worker_job` with a 6-hour renewal threshold and throttled 30-minute rechecks.
+- Evidence: `{"source_loop":141,"tests":"controller/remote_slurm targeted 25 passed","launcher_threshold_minutes":360,"check_interval_seconds":1800}`
+- Remaining risk: If the pending successor is delayed by cluster policy, vLLM can still be temporarily unavailable; the queue must stay pre-filled before expiry.
+
+## 2026-06-15 03:28:16 +09:00 - Insight 19
+- Source loop: Loop 141
+- Improvement: The user-made direct furnace pattern is now encoded as the normal pre-belt iron/copper bootstrap executor behavior.
+- Before: Copper bootstrap could fall back to pickaxe-mining `copper-ore`, and early belt smelting could spend scarce hand-crafted belts before a belt assembler existed.
+- After: Iron/copper bootstrap builds direct burner mining drill -> stone furnace cells before belt automation; belt smelting expansion is gated until a transport-belt assembler is observed.
+- Evidence: `{"source_loop":141,"operator_pattern":"direct furnace was manually built by the user, not the agent","tests":"planner/strategy targeted 206 passed","policy":"no hand-mine ore for normal starter plate production before direct drill/furnace cells"}`
+- Remaining risk: This is still a deterministic bootstrap pattern; later electric miners, steel/electric furnaces, modules, and beaconed layouts need separate upgrade executors.
+
+## 2026-06-15 03:50:04 +09:00 - Insight 20
+- Source loop: Loop 146
+- Improvement: Starter stone can now be automated with a burner drill output chest instead of repeated hand stone mining.
+- Before: Furnace and burner-drill prerequisites could fall back to hand-mining stone, so early loops might repeatedly mine stone instead of creating a reusable stone source.
+- After: `StoneSupplySkill` builds burner mining drill -> wooden/iron chest stone supply, no-mod observe includes chest entities/recipes, and furnace/drill prerequisite paths call the stone supply skill first.
+- Evidence: `{"source_loop":146,"tests":"395 passed","new_skill":"setup_stone_supply","pattern":"burner-mining-drill -> output chest"}`
+- Remaining risk: A missing first burner drill can still require tiny bootstrap hand mining/crafting; later electric miner and bot logistics upgrades need separate executors.
+
+## 2026-06-15 03:59:48 +09:00 - Insight 21
+- Source loop: Loop 165
+- Improvement: `research_automation` no longer stops immediately when gear wheels are missing but inventory iron can be replenished, and transient Slurm attach failures are retried before declaring the local LLM unavailable.
+- Before: A live no-mod research step failed with `missing iron gear wheels and cannot craft them`, and concurrent background checks could misclassify a running ready Slurm worker as unavailable after one attached probe failure.
+- After: The same research path selected `take iron-plate from starter furnace output` before the intentional one-step stop, and Slurm LLM status retries one transient attached probe failure.
+- Evidence: `{"source_loop":165,"tests":"395 passed","live_after_action":"take iron-plate from starter furnace output","previous_failure":"missing iron gear wheels and cannot craft them","slurm_status_retry":true}`
+- Remaining risk: Autopilot and idle layout should not be restarted simultaneously until Slurm attach contention is observed stable under the retry path.
+
+## 2026-06-15 04:05:00 +09:00 - Insight 22
+- Source loop: Loop 166
+- Improvement: The Web UI token usage panel now preserves cumulative display tokens and exposes counter reset count when the raw Codex counter resets.
+- Before: A reset from a higher raw token counter to a smaller value could make the summary, chart, or table look like token usage dropped or disappeared.
+- After: The summary exposes `latest_raw_tokens`, cumulative `latest_tokens`, `counter_reset_count`, and `latest_counter_reset`; the chart/table render cumulative tokens while retaining raw deltas.
+- Evidence: `{"source_loop":166,"tests":"398 passed","regressions":["test_counter_reset_continues_cumulative_display_tokens","test_token_usage_chart_uses_cumulative_tokens_after_counter_reset","test_token_usage_table_uses_cumulative_tokens_after_counter_reset"]}`
+- Remaining risk: Weekly percentage still cannot be computed unless `FACTORIO_AI_WEEKLY_TOKEN_QUOTA` is provided.

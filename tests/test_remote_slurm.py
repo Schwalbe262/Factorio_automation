@@ -13,6 +13,7 @@ from factorio_ai.remote_slurm import (
     compare_strategy_workers,
     config,
     ensure_worker_job,
+    llm_status,
     parse_strategy_worker_specs,
     request_strategy,
 )
@@ -82,6 +83,49 @@ class RemoteSlurmTests(unittest.TestCase):
         )
         self.assertTrue(remediation["required_gpu_allocation"]["needed"])
         self.assertIn("FACTORIO_AI_SLURM_GPUS_PER_NODE=1", remediation["required_gpu_allocation"]["factorio_worker_env"])
+
+    def test_llm_status_retries_transient_attach_failure(self):
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="AUTO",
+            conda_env="factorio-ai",
+            partition="gpu",
+            cpus_per_task=8,
+            gpus_per_node=1,
+            gres="gpu:1",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        remote_payload = {
+            "env": {"FACTORIO_AI_LLM_BASE_URL": True, "FACTORIO_AI_LLM_MODEL": True},
+            "env_values": {
+                "FACTORIO_AI_LLM_BASE_URL": "http://127.0.0.1:8000/v1",
+                "FACTORIO_AI_LLM_MODEL": "Qwen/Qwen3.5-4B",
+            },
+            "vllm_command": False,
+            "factorio_ai_deployed": True,
+            "llm_endpoint": {"configured": True, "models_ok": True, "model_visible": True},
+            "gpu": {"count": 1, "env": {"CUDA_VISIBLE_DEVICES": "0"}},
+        }
+        with (
+            patch(
+                "factorio_ai.remote_slurm._run_remote",
+                side_effect=["/home/user/factorio-ai-worker", RuntimeError("temporary srun busy"), json.dumps(remote_payload)],
+            ),
+            patch("factorio_ai.remote_slurm.time.sleep") as sleep,
+        ):
+            status = llm_status(cfg)
+
+        self.assertTrue(status["llm_ready"])
+        sleep.assert_called_once_with(2)
 
     def test_llm_status_remediation_marks_pending_gpu_allocation(self):
         cfg = RemoteSlurmConfig(
@@ -288,11 +332,33 @@ class RemoteSlurmTests(unittest.TestCase):
 
         payload = {
             "objective": "launch_rocket_program",
-            "observation": {"inventory": {}, "entities": [], "enemies": []},
+            "observation": {
+                "inventory": {},
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "transport-belt",
+                        "electric_network_connected": True,
+                    }
+                ],
+                "enemies": [],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
             "production_targets": {"copper-plate": 70.0},
             "strategy_payload": {
                 "objective": "launch_rocket_program",
-                "observation": {"inventory": {}, "entities": [], "enemies": []},
+                "observation": {
+                    "inventory": {},
+                    "entities": [
+                        {
+                            "name": "assembling-machine-1",
+                            "recipe": "transport-belt",
+                            "electric_network_connected": True,
+                        }
+                    ],
+                    "enemies": [],
+                    "research": {"technologies": {"automation": {"researched": True}}},
+                },
                 "production_targets": {"copper-plate": 70.0},
                 "factory_monitor": {
                     "target_status": {

@@ -16,7 +16,11 @@ set FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER=0
 set FACTORIO_AI_VLLM_PORT=8000
 set FACTORIO_AI_VLLM_STARTUP_SECONDS=240
 set FACTORIO_AI_REQUIRE_LLM_STRATEGY=1
+set FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES=360
+set FACTORIO_AI_SLURM_RENEW_CHECK_INTERVAL_SECONDS=1800
 
+echo [factorio-ai] Ensuring active Qwen 4B Slurm LLM worker has a queued successor before expiry...
+python -m factorio_ai.cli slurm-ensure-worker --renew-before-minutes %FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES% || exit /b 1
 echo [factorio-ai] Checking active Qwen 4B Slurm LLM worker...
 python -m factorio_ai.cli slurm-llm-status || exit /b 1
 

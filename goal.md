@@ -42,12 +42,15 @@
 - A fresh no-mod world is now running with Nauvis cliffs disabled (`cliff_settings.richness = 0`), starter inventory only, and initial strategy `produce_iron_plate`.
 - Next live objective: bootstrap iron, coal, copper, and steam power as compact starter-local sites. Do not place remote starter steam power unless the dependent factory site is co-located there or a reachable power/logistics corridor already exists; an isolated remote pump cannot power the starter base. After the first bootstrap phase, repeated inputs must move through site-to-site logistics lines rather than player inventory shuttle loops.
 - Preserve the crashed spaceship/wreckage near the starting point by default. It is technically mineable, but the autoplayer should treat it as a protected landmark unless the operator explicitly overrides that rule.
+- Iron and copper bootstrap must use direct burner mining drill -> stone furnace smelting cells, not repeated pickaxe mining of ore. Hand mining is reserved for unavoidable starter materials or one-off bootstrap fuel, not ongoing ore supply.
+- Starter stone should use a burner mining drill outputting into a chest once a drill/chest can be built. Direct hand stone mining is only a fallback to bootstrap that stone supply.
 
 ## Factory Quality Criteria
 
 - Compact footprint: prefer high output per tile and avoid scattered starter-era blocks.
 - Throughput: no unresolved input, output, belt, inserter, or later train loading bottlenecks.
 - Automation-first logistics: after the first bootstrap phase, repeated production must use belts, inserters, chests, pipes, trains, or later bots instead of player inventory shuttle loops.
+- Ore extraction: copper and iron production should move to mining drills as soon as the relevant drill can be crafted or placed; do not continue pickaxe mining ore for normal plate production.
 - Site adjacency: related producer/consumer sites should be close enough for short local belts until a main bus, trunk line, or rail network exists.
 - Power and pollution: prefer lower power draw and pollution for equivalent throughput, especially before defense is mature.
 - Expansion: leave clear lanes for belts, power, rails, modules, beacons, and replacement with higher-tier machines.
@@ -62,7 +65,7 @@
 - Convert successful and failed layout/strategy traces into fine-tuning examples for a Factorio-specialized local Qwen LoRA.
 - Keep exact gameplay execution deterministic even after prompt tuning or fine-tuning.
 - Treat accepted human interventions as supervised improvement examples only when before/after evidence shows an actual factory-quality gain.
-- Do not build repeated site-to-site belt paths before `transport-belt` production is automated by an assembler mall; use scarce bootstrap belts only for local cells or wait for belt automation.
+- Do not build repeated site-to-site belt paths or belt-fed smelting expansions before `transport-belt` production is automated by an assembler mall. Use direct miner-to-furnace/chest bootstrap cells first, then switch to belt smelting once belts are produced by assemblers.
 
 ## Later Milestones
 

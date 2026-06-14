@@ -150,6 +150,8 @@ local VIRTUAL_RECIPES = {{
   ["firearm-magazine"] = {{ ingredients = {{ ["iron-plate"] = 4 }}, results = {{ ["firearm-magazine"] = 1 }} }},
   ["gun-turret"] = {{ ingredients = {{ ["iron-plate"] = 10, ["copper-plate"] = 5, ["iron-gear-wheel"] = 10 }}, results = {{ ["gun-turret"] = 1 }} }},
   ["stone-furnace"] = {{ ingredients = {{ stone = 5 }}, results = {{ ["stone-furnace"] = 1 }} }},
+  ["wooden-chest"] = {{ ingredients = {{ wood = 2 }}, results = {{ ["wooden-chest"] = 1 }} }},
+  ["iron-chest"] = {{ ingredients = {{ ["iron-plate"] = 8 }}, results = {{ ["iron-chest"] = 1 }} }},
   ["iron-gear-wheel"] = {{ ingredients = {{ ["iron-plate"] = 2 }}, results = {{ ["iron-gear-wheel"] = 1 }} }},
   ["copper-cable"] = {{ ingredients = {{ ["copper-plate"] = 1 }}, results = {{ ["copper-cable"] = 2 }} }},
   ["transport-belt"] = {{ ingredients = {{ ["iron-plate"] = 1, ["iron-gear-wheel"] = 1 }}, results = {{ ["transport-belt"] = 2 }} }},
@@ -520,6 +522,7 @@ local function collect_entities()
   local seen = {}
   local names = {
     "burner-mining-drill", "electric-mining-drill", "stone-furnace", "steel-furnace", "electric-furnace",
+    "wooden-chest", "iron-chest", "steel-chest",
     "assembling-machine-1", "assembling-machine-2", "assembling-machine-3", "lab",
     "boiler", "steam-engine", "steam-turbine", "offshore-pump", "solar-panel", "accumulator",
     "pipe", "pipe-to-ground", "pump", "storage-tank",
@@ -539,6 +542,7 @@ local function collect_entities()
   end
   local global_force_names = {
     "burner-mining-drill", "electric-mining-drill", "stone-furnace", "steel-furnace", "electric-furnace",
+    "wooden-chest", "iron-chest", "steel-chest",
     "assembling-machine-1", "assembling-machine-2", "assembling-machine-3", "lab",
     "boiler", "steam-engine", "steam-turbine", "offshore-pump", "solar-panel", "accumulator",
     "transport-belt", "fast-transport-belt", "express-transport-belt",

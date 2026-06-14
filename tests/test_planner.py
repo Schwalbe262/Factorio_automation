@@ -18,6 +18,7 @@ from factorio_ai.planner import (
     ResearchAutomationSkill,
     ResearchTechnologySkill,
     SetupPowerSkill,
+    StoneSupplySkill,
     StarterDefenseSkill,
     factory_layout_issues,
     factory_layout_simulation_candidates,
@@ -184,6 +185,48 @@ class PlannerTests(unittest.TestCase):
         decision = CoalSupplySkill().next_action(obs)
         self.assertTrue(decision.done)
         self.assertIn("coal supply site is active", decision.reason)
+
+    def test_stone_supply_places_output_chest_before_drill(self):
+        obs = base_observation()
+        obs["inventory"] = {"wooden-chest": 1, "burner-mining-drill": 1, "coal": 8}
+        obs["resources"] = [{"name": "stone", "position": {"x": 6, "y": 0}, "distance": 6}]
+        decision = StoneSupplySkill(target_count=8).next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "wooden-chest")
+        self.assertEqual(decision.action["position"], {"x": 8.0, "y": 0.0})
+
+    def test_stone_supply_places_drill_after_chest(self):
+        obs = base_observation()
+        obs["inventory"] = {"burner-mining-drill": 1, "coal": 8}
+        obs["resources"] = [{"name": "stone", "position": {"x": 6, "y": 0}, "distance": 6}]
+        obs["entities"] = [
+            {"name": "wooden-chest", "unit_number": 10, "position": {"x": 8, "y": 0}, "inventories": {}},
+        ]
+        decision = StoneSupplySkill(target_count=8).next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertEqual(decision.action["position"], {"x": 6.0, "y": 0.0})
+        self.assertEqual(decision.action["required_resource"], "stone")
+
+    def test_stone_supply_takes_stone_from_output_chest(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 8}
+        obs["resources"] = [{"name": "stone", "position": {"x": 6, "y": 0}, "distance": 6}]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 11,
+                "position": {"x": 6, "y": 0},
+                "direction": 4,
+                "mining_target": "stone",
+                "inventories": {"1": {"coal": 3}},
+            },
+            {"name": "wooden-chest", "unit_number": 10, "position": {"x": 8, "y": 0}, "inventories": {"1": {"stone": 12}}},
+        ]
+        decision = StoneSupplySkill(target_count=16).next_action(obs)
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "stone")
+        self.assertEqual(decision.action["unit_number"], 10)
 
     def test_coal_fuel_feed_extends_coal_output_belt(self):
         obs = base_observation()
@@ -575,7 +618,7 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "move_to")
         self.assertIn("iron ore", decision.reason)
 
-    def test_iron_skill_hand_smelts_when_no_drill_is_available(self):
+    def test_iron_skill_refuses_hand_smelting_when_no_drill_is_available(self):
         obs = base_observation()
         obs["inventory"] = {"coal": 8, "stone-furnace": 1}
         obs["resources"] = [
@@ -583,10 +626,11 @@ class PlannerTests(unittest.TestCase):
             {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 2},
         ]
         decision = IronPlateSkill(target_count=5).next_action(obs, target_count=5, inventory_only=True)
-        self.assertEqual(decision.action["type"], "move_to")
-        self.assertIn("hand-smelting furnace", decision.reason)
+        self.assertIsNone(decision.action)
+        self.assertNotIn("hand-smelting", decision.reason)
+        self.assertNotIn("iron-ore", decision.reason)
 
-    def test_mines_ore_when_drill_and_furnace_exist(self):
+    def test_iron_skill_completes_direct_furnace_instead_of_hand_mining_ore(self):
         obs = base_observation()
         obs["inventory"].pop("burner-mining-drill")
         obs["entities"] = [
@@ -606,8 +650,33 @@ class PlannerTests(unittest.TestCase):
             },
         ]
         decision = IronPlateSkill(target_count=10).next_action(obs)
-        self.assertEqual(decision.action["type"], "mine")
-        self.assertEqual(decision.action["name"], "iron-ore")
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "stone-furnace")
+        self.assertEqual(decision.action["position"], {"x": 7.0, "y": 0.0})
+
+    def test_iron_skill_waits_for_direct_furnace_instead_of_hand_mining_ore(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 8}
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 101,
+                "position": {"x": 4, "y": 0},
+                "direction": 4,
+                "distance": 4,
+                "inventories": {"1": {"coal": 3}},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 102,
+                "position": {"x": 7, "y": 0},
+                "distance": 7,
+                "inventories": {"1": {"coal": 3}},
+            },
+        ]
+        decision = IronPlateSkill(target_count=10).next_action(obs)
+        self.assertEqual(decision.action["type"], "wait")
+        self.assertNotIn("iron ore", decision.reason.lower())
 
     def test_iron_skill_ignores_distant_empty_furnace(self):
         obs = base_observation()
@@ -666,10 +735,19 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "craft")
         self.assertEqual(decision.action["recipe"], "automation-science-pack")
 
-    def test_science_skill_builds_second_furnace_for_copper(self):
+    def test_science_skill_replenishes_inventory_iron_before_missing_gears(self):
+        obs = base_observation()
+        obs["inventory"] = {"iron-plate": 1, "coal": 8, "burner-mining-drill": 1, "stone-furnace": 1}
+        obs["craftable"] = {}
+        decision = AutomationScienceSkill(target_count=5).next_action(obs)
+        self.assertIn(decision.action["type"], {"build", "insert", "take", "wait", "move_to"})
+        self.assertNotIn("missing iron gear wheels", decision.reason)
+
+    def test_science_skill_builds_direct_copper_drill_before_furnace(self):
         obs = base_observation()
         obs["inventory"] = {
             "iron-plate": 10,
+            "burner-mining-drill": 1,
             "stone-furnace": 1,
             "coal": 8,
         }
@@ -684,7 +762,8 @@ class PlannerTests(unittest.TestCase):
         ]
         decision = AutomationScienceSkill(target_count=1).next_action(obs)
         self.assertEqual(decision.action["type"], "build")
-        self.assertEqual(decision.action["name"], "stone-furnace")
+        self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertEqual(decision.action["required_resource"], "copper-ore")
 
     def test_science_skill_takes_copper_from_furnace_before_waiting(self):
         obs = base_observation()
@@ -714,42 +793,100 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.done)
         self.assertIsNone(decision.action)
 
-    def test_copper_skill_uses_single_empty_furnace(self):
+    def test_copper_skill_starts_direct_smelting_cell_instead_of_hand_mining_ore(self):
         obs = base_observation()
-        obs["inventory"] = {"coal": 8, "copper-ore": 8}
-        obs["entities"] = [
-            {
-                "name": "stone-furnace",
-                "unit_number": 301,
-                "position": {"x": 9, "y": 0},
-                "distance": 9,
-                "inventories": {},
-            }
-        ]
+        obs["inventory"] = {
+            "coal": 8,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+        }
         decision = CopperPlateSkill(target_count=5).next_action(obs)
-        self.assertEqual(decision.action["type"], "insert")
-        self.assertEqual(decision.action["item"], "copper-ore")
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertEqual(decision.action["required_resource"], "copper-ore")
+        self.assertNotEqual(decision.action.get("type"), "mine")
 
-    def test_copper_skill_builds_furnace_when_only_iron_furnace_exists(self):
+    def test_copper_skill_places_furnace_at_direct_drill_output(self):
         obs = base_observation()
-        obs["inventory"] = {"iron-plate": 10, "stone-furnace": 1, "coal": 8}
+        obs["inventory"] = {"coal": 8, "stone-furnace": 1}
         obs["entities"] = [
             {
-                "name": "stone-furnace",
-                "unit_number": 302,
-                "position": {"x": 4, "y": 0},
-                "distance": 4,
-                "inventories": {"2": {"iron-ore": 4}},
+                "name": "burner-mining-drill",
+                "unit_number": 701,
+                "position": {"x": 8, "y": 0},
+                "direction": 4,
+                "distance": 8,
+                "mining_target": "copper-ore",
+                "inventories": {"1": {"coal": 3}},
             }
         ]
         decision = CopperPlateSkill(target_count=5).next_action(obs)
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "stone-furnace")
+        self.assertEqual(decision.action["position"], {"x": 11.0, "y": 0.0})
+
+    def test_copper_skill_waits_for_direct_cell_instead_of_hand_mining_ore(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 8}
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 701,
+                "position": {"x": 8, "y": 0},
+                "direction": 4,
+                "distance": 8,
+                "mining_target": "copper-ore",
+                "inventories": {"1": {"coal": 3}},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 702,
+                "position": {"x": 11, "y": 0},
+                "distance": 11,
+                "inventories": {"1": {"coal": 3}},
+            },
+        ]
+        decision = CopperPlateSkill(target_count=5).next_action(obs)
+        self.assertEqual(decision.action["type"], "wait")
+
+    def test_copper_skill_uses_belt_line_after_belt_automation_is_ready(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {
+            "coal": 8,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "burner-inserter": 1,
+            "transport-belt": 2,
+        }
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 8, "y": 0}, "distance": 8},
+            {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 2},
+        ]
+        obs["entities"].append(mall_assembler(recipe="transport-belt"))
+        decision = CopperPlateSkill(target_count=5).next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertEqual(decision.action["position"], {"x": 10.0, "y": 0.0})
+
+    def test_copper_skill_places_missing_burner_drill_on_copper_line_after_belt_automation(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"coal": 8, "burner-mining-drill": 1}
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 8, "y": 0}, "distance": 8},
+            {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 2},
+        ]
+        obs["entities"].append(mall_assembler(recipe="transport-belt"))
+        obs["entities"].extend(complete_belt_smelting_entities(8, 0, 700, resource="copper-ore", product="copper-plate"))
+        obs["entities"] = [entity for entity in obs["entities"] if entity["name"] != "burner-mining-drill"]
+        decision = CopperPlateSkill(target_count=5).next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertEqual(decision.action["required_resource"], "copper-ore")
 
     def test_copper_skill_ignores_remote_furnace_output_before_rail(self):
         obs = base_observation()
         obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
-        obs["inventory"] = {"coal": 8, "stone-furnace": 1}
+        obs["inventory"] = {"coal": 8, "stone-furnace": 1, "burner-mining-drill": 1}
         obs["entities"] = [
             {
                 "name": "stone-furnace",
@@ -805,7 +942,7 @@ class PlannerTests(unittest.TestCase):
 
     def test_electronic_circuit_skill_requests_copper_plate_when_cable_cannot_be_crafted(self):
         obs = base_observation()
-        obs["inventory"] = {"iron-plate": 5, "coal": 8, "stone-furnace": 1}
+        obs["inventory"] = {"iron-plate": 5, "coal": 8, "stone-furnace": 1, "burner-mining-drill": 1}
         decision = ElectronicCircuitSkill(target_count=5).next_action(obs)
         self.assertIn(decision.action["type"], {"build", "mine", "move_to", "insert", "take", "wait"})
 

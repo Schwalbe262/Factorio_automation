@@ -68,9 +68,10 @@ SKILL_CATALOG: dict[str, SkillContract] = {
     ),
     "expand_iron_smelting": SkillContract(
         name="expand_iron_smelting",
-        description="Build additional iron ore mining and smelting capacity with drills, furnaces, inserters, and belts.",
+        description="Build additional belt-fed iron ore mining and smelting capacity after belt production is automated.",
         executor="ExpandIronSmeltingSkill",
         preconditions=[
+            "Automation researched and transport-belt production automated",
             "iron ore patch identified",
             "fuel or power available",
             "furnaces, drills, inserters, and belts craftable or available",
@@ -80,9 +81,10 @@ SKILL_CATALOG: dict[str, SkillContract] = {
     ),
     "expand_copper_smelting": SkillContract(
         name="expand_copper_smelting",
-        description="Build additional copper ore mining and smelting capacity with drills, furnaces, inserters, and belts.",
+        description="Build additional belt-fed copper ore mining and smelting capacity after belt production is automated.",
         executor="ExpandCopperSmeltingSkill",
         preconditions=[
+            "Automation researched and transport-belt production automated",
             "copper ore patch identified",
             "fuel or power available",
             "furnaces, drills, inserters, and belts craftable or available",
@@ -95,6 +97,7 @@ SKILL_CATALOG: dict[str, SkillContract] = {
         description="Build a belt-fed smelting line using miners, belts, inserters, and furnaces.",
         executor="BeltSmeltingLineSkill",
         preconditions=[
+            "transport belts are automated or explicitly available for this line",
             "ore patch and coal or power source identified",
             "transport belts, inserters, miners, and furnaces available or craftable",
             "site selected with room for input/output belts and future expansion",
@@ -120,6 +123,21 @@ SKILL_CATALOG: dict[str, SkillContract] = {
             "Executor validates exact coal patch tile, drill direction, output belt, and starter fuel."
         ),
     ),
+    "setup_stone_supply": SkillContract(
+        name="setup_stone_supply",
+        description="Build a starter stone mining site with a burner mining drill outputting into a chest.",
+        executor="StoneSupplySkill",
+        preconditions=[
+            "stone patch identified",
+            "burner mining drill and wooden or iron chest available or craftable",
+            "short-term hand fuel available to prime the first stone drill",
+        ],
+        completion=["stone is mined by a fueled burner mining drill and buffered in an output chest"],
+        llm_scope=(
+            "Choose this when furnaces or burner drills are blocked by repeated stone collection. "
+            "Executor places the exact drill/chest pair and starter fuel."
+        ),
+    ),
     "connect_coal_fuel_feed": SkillContract(
         name="connect_coal_fuel_feed",
         description="Connect a starter coal belt to nearby burner fuel consumers with belts and inserters.",
@@ -137,11 +155,11 @@ SKILL_CATALOG: dict[str, SkillContract] = {
     ),
     "produce_copper_plate": SkillContract(
         name="produce_copper_plate",
-        description="Create or replenish copper plate supply.",
+        description="Create or replenish copper plate supply with a direct burner-drill smelting cell before belt automation.",
         executor="CopperPlateSkill",
-        preconditions=["reachable copper ore", "fuel or power available", "furnace available or craftable"],
-        completion=["copper plates exist in player inventory or furnace output"],
-        llm_scope="Choose this when circuits, science, or cable are blocked by copper.",
+        preconditions=["reachable copper ore", "fuel or power available", "burner drill and furnace available or craftable"],
+        completion=["copper plates exist in player inventory or automated copper smelting output"],
+        llm_scope="Choose this when circuits, science, or cable are blocked by copper; the executor must not hand-mine copper ore.",
     ),
     "produce_automation_science_pack": SkillContract(
         name="produce_automation_science_pack",
@@ -708,6 +726,40 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
+    if selected in {"build_belt_smelting_line", "expand_iron_smelting", "expand_copper_smelting"} and not _transport_belt_automation_ready(observation):
+        adjusted = dict(decision)
+        automation_researched = _technology_researched(observation, "automation")
+        if automation_researched:
+            target_skill = "bootstrap_build_item_mall"
+        elif selected == "expand_copper_smelting":
+            target_skill = "produce_copper_plate"
+        else:
+            target_skill = "produce_iron_plate"
+        adjusted["selected_skill"] = target_skill
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 86)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            "LLM selected belt-fed smelting before transport-belt production is automated; "
+            "use direct burner-drill bootstrap cells first, then expand with belts after the belt mall exists."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(
+            set(_string_list(decision.get("blockers")) + ["transport-belt automation before belt smelting expansion"])
+        )
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            "transport_belt_automation_ready=false",
+            f"automation_researched={str(automation_researched).lower()}",
+        ]
+        adjusted["expected_effect"] = (
+            "Avoid spending early hand-crafted belts on smelting; establish direct plate supply or automate belts first."
+        )
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": target_skill,
+            "reason": guardrail_reason,
+        }
+        return adjusted
     if (
         selected in _COAL_DEPENDENT_SKILLS
         and _coal_fuel_feed_needed(observation, objective, production_targets)
@@ -1027,22 +1079,24 @@ def heuristic_strategy(
 
     if "electronic" in objective_lower or "circuit" in objective_lower or KOREAN_ELECTRONIC_CIRCUIT in objective:
         if total_iron < 20:
+            skill = _plate_smelting_skill("iron", observation)
             return StrategicDecision(
-                selected_skill="expand_iron_smelting",
+                selected_skill=skill,
                 priority=90,
                 reason="Electronic circuits require steady iron plates; current iron supply is below the circuit threshold.",
                 evidence=[f"iron_plate_total={total_iron}", f"iron_plate_inventory={inventory_iron}"],
                 blockers=["iron plate throughput"],
-                expected_effect="Increase iron plate supply before circuit assembly.",
+                expected_effect=f"Run {skill} before circuit assembly.",
             ).to_dict()
         if total_copper < 20:
+            skill = _plate_smelting_skill("copper", observation)
             return StrategicDecision(
-                selected_skill="expand_copper_smelting",
+                selected_skill=skill,
                 priority=85,
                 reason="Electronic circuits also need copper cable; copper plates are below the circuit threshold.",
                 evidence=[f"copper_plate_total={total_copper}"],
                 blockers=["copper plate throughput"],
-                expected_effect="Increase copper plate supply for cable production.",
+                expected_effect=f"Run {skill} for cable production.",
             ).to_dict()
         return StrategicDecision(
             selected_skill="produce_electronic_circuit",
@@ -1211,10 +1265,12 @@ def _first_power_issue(monitor: dict[str, Any]) -> dict[str, Any] | None:
 def _skill_for_bottleneck_item(item: str, observation: dict[str, Any]) -> str | None:
     if item == "coal":
         return "setup_coal_supply"
+    if item == "stone":
+        return "setup_stone_supply"
     if item in {"iron-plate", "iron-ore", "steel-plate"}:
-        return "expand_iron_smelting"
+        return _plate_smelting_skill("iron", observation)
     if item in {"copper-plate", "copper-ore", "copper-cable"}:
-        return "expand_copper_smelting"
+        return _plate_smelting_skill("copper", observation)
     if item == "automation-science-pack":
         return "produce_automation_science_pack"
     if item == "electronic-circuit":
@@ -1222,6 +1278,14 @@ def _skill_for_bottleneck_item(item: str, observation: dict[str, Any]) -> str | 
             return "automate_electronic_circuit_line"
         return "produce_electronic_circuit"
     return None
+
+
+def _plate_smelting_skill(kind: str, observation: dict[str, Any]) -> str:
+    if _transport_belt_automation_ready(observation):
+        return "expand_copper_smelting" if kind == "copper" else "expand_iron_smelting"
+    if _technology_researched(observation, "automation"):
+        return "bootstrap_build_item_mall"
+    return "produce_copper_plate" if kind == "copper" else "produce_iron_plate"
 
 
 _COAL_DEPENDENT_SKILLS = {
@@ -1373,6 +1437,11 @@ def _first_actionable_target_deficit(
         skill = _skill_for_bottleneck_item(item, observation)
         if not skill:
             continue
+        if skill == "bootstrap_build_item_mall":
+            if item in {"iron-plate", "iron-ore", "steel-plate"} and not _starter_resource_available(observation, "iron-ore"):
+                continue
+            if item in {"copper-plate", "copper-ore", "copper-cable"} and not _starter_resource_available(observation, "copper-ore"):
+                continue
         if not _skill_has_starter_inputs(skill, observation):
             continue
         target = float(row.get("target_per_minute") or 0.0)
@@ -1408,8 +1477,14 @@ def _skill_has_starter_inputs(skill: str, observation: dict[str, Any]) -> bool:
         return _starter_resource_available(observation, "iron-ore")
     if skill == "expand_copper_smelting":
         return _starter_resource_available(observation, "copper-ore")
+    if skill == "produce_iron_plate":
+        return _starter_resource_available(observation, "iron-ore")
+    if skill == "produce_copper_plate":
+        return _starter_resource_available(observation, "copper-ore")
     if skill == "setup_coal_supply":
         return _starter_resource_available(observation, "coal")
+    if skill == "setup_stone_supply":
+        return _starter_resource_available(observation, "stone")
     return True
 
 

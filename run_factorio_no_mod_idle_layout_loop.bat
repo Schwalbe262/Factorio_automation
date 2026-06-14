@@ -18,7 +18,11 @@ set FACTORIO_AI_VLLM_STARTUP_SECONDS=240
 set FACTORIO_AI_BACKGROUND_LAYOUT_ENABLED=1
 set FACTORIO_AI_BACKGROUND_LAYOUT_MODE=attach
 set FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS=0
+set FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES=360
+set FACTORIO_AI_SLURM_RENEW_CHECK_INTERVAL_SECONDS=1800
 
 echo [factorio-ai] Running opportunistic no-mod layout loop.
 echo [factorio-ai] It submits simulation-only site layout work whenever autopilot is idle, stopped, or stale.
+echo [factorio-ai] Ensuring Qwen Slurm worker renewal before idle layout work.
+python -m factorio_ai.cli slurm-ensure-worker --renew-before-minutes %FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES% || exit /b 1
 python -m factorio_ai.cli run-no-mod-idle-layout-loop --objective launch_rocket_program --cycles 0 --sleep-seconds 5 --stale-seconds 15 --min-submit-interval-seconds 0

@@ -1967,183 +1967,14 @@ class IronPlateSkill:
         iron_total = inventory_count(observation, "iron-plate") if inventory_only else total_item_count(observation, "iron-plate")
         if iron_total >= target:
             return PlannerDecision(None, f"iron plate target reached: {iron_total}/{target}", done=True)
-
-        furnace = _select_iron_furnace(observation)
-        drill = _select_mining_drill_for_resource(observation, "iron-ore")
-        player = player_position(observation)
-
-        if furnace and entity_item_count(furnace, "iron-plate") > 0:
-            furnace_pos = _position(furnace)
-            if distance(player, furnace_pos) > 20:
-                return PlannerDecision(
-                    {"type": "move_to", "position": furnace_pos},
-                    "move near furnace to take produced iron plates",
-                )
-            return PlannerDecision(
-                {
-                    "type": "take",
-                    "item": "iron-plate",
-                    "count": min(50, entity_item_count(furnace, "iron-plate")),
-                    "unit_number": furnace.get("unit_number"),
-                    "name": "stone-furnace",
-                    "position": _position(furnace),
-                },
-                "take produced iron plates from furnace",
-            )
-
-        if inventory_count(observation, "coal") < 6:
-            coal = nearest_resource(observation, "coal")
-            if coal is None:
-                return PlannerDecision(None, "cannot find nearby coal")
-            return self._mine_resource(player, coal, "coal", 8)
-
-        if furnace is None and inventory_count(observation, "stone-furnace") <= 0:
-            if craftable_count(observation, "stone-furnace") > 0:
-                return PlannerDecision(
-                    {"type": "craft", "recipe": "stone-furnace", "count": 1},
-                    "craft stone furnace",
-                )
-            stone = nearest_resource(observation, "stone")
-            if stone is not None:
-                return self._mine_resource(player, stone, "stone", 8)
-
-        if drill is None and inventory_count(observation, "burner-mining-drill") <= 0:
-            if craftable_count(observation, "burner-mining-drill") > 0:
-                return PlannerDecision(
-                    {"type": "craft", "recipe": "burner-mining-drill", "count": 1},
-                    "craft burner mining drill",
-                )
-            if furnace is None and inventory_count(observation, "stone-furnace") > 0:
-                iron = nearest_resource(observation, "iron-ore")
-                if iron is None:
-                    return PlannerDecision(None, "cannot find nearby iron ore")
-                iron_pos = _position(iron)
-                furnace_pos = {"x": iron_pos["x"] + 3, "y": iron_pos["y"]}
-                if distance(player, furnace_pos) > 20:
-                    return PlannerDecision(
-                        {"type": "move_to", "position": _stand_position(furnace_pos)},
-                        "move near iron ore before placing hand-smelting furnace",
-                    )
-                return PlannerDecision(
-                    {
-                        "type": "build",
-                        "name": "stone-furnace",
-                        "position": furnace_pos,
-                        "allow_nearby": True,
-                    },
-                    "place hand-smelting furnace near iron ore",
-                )
-            if furnace is None:
-                return PlannerDecision(None, "missing burner mining drill and cannot craft it from current inventory")
-
-        if drill is None and inventory_count(observation, "burner-mining-drill") > 0:
-            iron = nearest_resource(observation, "iron-ore")
-            if iron is None:
-                return PlannerDecision(None, "cannot find nearby iron ore")
-            iron_pos = _position(iron)
-            stand_pos = _stand_position(iron_pos)
-            if distance(player, stand_pos) > 20:
-                return PlannerDecision(
-                    {"type": "move_to", "position": stand_pos},
-                    "move near iron ore before placing burner mining drill",
-                )
-            return PlannerDecision(
-                {
-                    "type": "build",
-                    "name": "burner-mining-drill",
-                    "position": iron_pos,
-                    "direction": EAST,
-                    "allow_nearby": True,
-                    "required_resource": "iron-ore",
-                },
-                "place burner mining drill on iron ore",
-            )
-
-        if furnace is None:
-            drill_pos = _position(drill)
-            furnace_pos = {"x": drill_pos["x"] + 3, "y": drill_pos["y"]}
-            stand_pos = _stand_position(furnace_pos)
-            if distance(player, stand_pos) > 20:
-                return PlannerDecision(
-                    {"type": "move_to", "position": stand_pos},
-                    "move near drill before placing furnace",
-                )
-            return PlannerDecision(
-                {
-                    "type": "build",
-                    "name": "stone-furnace",
-                    "position": furnace_pos,
-                    "allow_nearby": True,
-                },
-                "place furnace at drill output",
-            )
-
-        if furnace and entity_item_count(furnace, "iron-ore") < 5 and inventory_count(observation, "iron-ore") <= 0:
-            iron = nearest_resource(observation, "iron-ore")
-            if iron is None:
-                return PlannerDecision(None, "cannot find nearby iron ore for furnace input")
-            return self._mine_resource(player, iron, "iron-ore", 10)
-
-        if furnace and inventory_count(observation, "iron-ore") > 0 and entity_item_count(furnace, "iron-ore") < 5:
-            furnace_pos = _position(furnace)
-            if distance(player, furnace_pos) > 20:
-                return PlannerDecision(
-                    {"type": "move_to", "position": furnace_pos},
-                    "move near furnace to insert iron ore",
-                )
-            return PlannerDecision(
-                {
-                    "type": "insert",
-                    "item": "iron-ore",
-                    "count": min(10, inventory_count(observation, "iron-ore")),
-                    "unit_number": furnace.get("unit_number"),
-                    "name": "stone-furnace",
-                    "position": _position(furnace),
-                },
-                "insert iron ore into furnace",
-            )
-
-        if drill and inventory_count(observation, "coal") > 0 and entity_item_count(drill, "coal") < 3:
-            drill_pos = _position(drill)
-            if distance(player, drill_pos) > 20:
-                return PlannerDecision(
-                    {"type": "move_to", "position": drill_pos},
-                    "move near drill to insert coal",
-                )
-            return PlannerDecision(
-                {
-                    "type": "insert",
-                    "item": "coal",
-                    "count": min(5, inventory_count(observation, "coal")),
-                    "unit_number": drill.get("unit_number"),
-                    "name": "burner-mining-drill",
-                    "position": _position(drill),
-                },
-                "fuel burner mining drill",
-            )
-
-        if furnace and inventory_count(observation, "coal") > 0 and entity_item_count(furnace, "coal") < 3:
-            furnace_pos = _position(furnace)
-            if distance(player, furnace_pos) > 20:
-                return PlannerDecision(
-                    {"type": "move_to", "position": furnace_pos},
-                    "move near furnace to insert coal",
-                )
-            return PlannerDecision(
-                {
-                    "type": "insert",
-                    "item": "coal",
-                    "count": min(5, inventory_count(observation, "coal")),
-                    "unit_number": furnace.get("unit_number"),
-                    "name": "stone-furnace",
-                    "position": _position(furnace),
-                },
-                "fuel stone furnace",
-            )
-
-        return PlannerDecision(
-            {"type": "wait", "ticks": 300},
-            "wait for miner/furnace production",
+        return _direct_plate_smelting_decision(
+            observation,
+            target_count=target,
+            resource_name="iron-ore",
+            product_name="iron-plate",
+            support_skill=self,
+            inventory_only=inventory_only,
+            allow_support_plate=False,
         )
 
     def _mine_resource(
@@ -2219,6 +2050,17 @@ class AutomationScienceSkill:
                 "craft iron gear wheels for automation science",
             )
 
+        if gear_total < science_needed:
+            required_iron_for_gears = 2 * (science_needed - gear_total)
+            if inventory_count(observation, "iron-plate") < required_iron_for_gears:
+                decision = self.iron_skill.next_action(
+                    observation,
+                    target_count=required_iron_for_gears,
+                    inventory_only=True,
+                )
+                if not decision.done:
+                    return decision
+
         if copper_plate_inventory < science_needed:
             decision = self.copper_skill.next_action(observation, target_count=science_needed, inventory_only=True)
             if not decision.done:
@@ -2234,7 +2076,7 @@ class AutomationScienceSkill:
 
 
 class CopperPlateSkill:
-    """Reusable early-game skill that produces copper plates with hand mining and a stone furnace."""
+    """Reusable skill that bootstraps copper directly, then allows belt smelting after belt automation."""
 
     def __init__(self, target_count: int = 10) -> None:
         self.target_count = target_count
@@ -2251,114 +2093,180 @@ class CopperPlateSkill:
         if copper_total >= target:
             return PlannerDecision(None, f"copper plate target reached: {copper_total}/{target}", done=True)
 
+        if _belt_smelting_ready(observation):
+            return BeltSmeltingLineSkill(
+                target_count=target,
+                resource_name="copper-ore",
+                product_name="copper-plate",
+                inventory_only=inventory_only,
+            ).next_action(observation)
+
+        return _direct_plate_smelting_decision(
+            observation,
+            target_count=target,
+            resource_name="copper-ore",
+            product_name="copper-plate",
+            support_skill=self.support_skill,
+            inventory_only=inventory_only,
+            allow_support_plate=True,
+        )
+
+
+class StoneSupplySkill:
+    """Build a starter stone drill with an output chest instead of repeated hand stone mining."""
+
+    def __init__(self, target_count: int = 16) -> None:
+        self.target_count = target_count
+        self.support_skill = IronPlateSkill(target_count=20)
+
+    def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
+        stone_total = inventory_count(observation, "stone")
+        if stone_total >= self.target_count:
+            return PlannerDecision(None, f"stone target reached: {stone_total}/{self.target_count}", done=True)
+
         player = player_position(observation)
-        copper_furnace = _select_copper_furnace(observation)
-        copper = nearest_resource(observation, "copper-ore")
-        if copper is None:
-            return PlannerDecision(None, "cannot find nearby copper ore")
+        layout = _find_stone_supply_layout(observation) or _select_stone_supply_layout(observation)
+        if layout is None:
+            stone = nearest_resource(observation, "stone")
+            if stone is None:
+                return PlannerDecision(None, "cannot find stone for starter stone supply")
+            return self.support_skill._mine_resource(player, stone, "stone", max(8, self.target_count - stone_total))
 
-        if inventory_count(observation, "coal") < 6:
-            coal = nearest_resource(observation, "coal")
-            if coal is None:
-                return PlannerDecision(None, "cannot find nearby coal for copper smelting")
-            return self.support_skill._mine_resource(player, coal, "coal", 8)
-
-        if copper_furnace is None:
-            furnaces = _entities_within_starter_area(observation, entities_named(observation, "stone-furnace"))
-            free_furnaces = [item for item in furnaces if not _is_iron_busy_furnace(item)]
-            if free_furnaces:
-                copper_furnace = _nearest_to(free_furnaces, _position(copper))
-            else:
-                if inventory_count(observation, "stone-furnace") <= 0:
-                    if craftable_count(observation, "stone-furnace") > 0:
-                        return PlannerDecision(
-                            {"type": "craft", "recipe": "stone-furnace", "count": 1},
-                            "craft stone furnace for copper smelting",
-                        )
-                    stone = nearest_resource(observation, "stone")
-                    if stone is None:
-                        return PlannerDecision(None, "cannot find stone for copper furnace")
-                    return self.support_skill._mine_resource(player, stone, "stone", 8)
-                copper_pos = _position(copper)
-                furnace_pos = {"x": copper_pos["x"] + 3, "y": copper_pos["y"]}
-                if distance(player, furnace_pos) > 20:
-                    return PlannerDecision(
-                        {"type": "move_to", "position": furnace_pos},
-                        "move near copper patch before placing copper furnace",
-                    )
+        chest = layout.get("output_chest")
+        if chest is not None and entity_item_count(chest, "stone") > 0:
+            chest_pos = _position(chest)
+            if distance(player, chest_pos) > 20:
                 return PlannerDecision(
-                    {
-                        "type": "build",
-                        "name": "stone-furnace",
-                        "position": furnace_pos,
-                        "allow_nearby": True,
-                    },
-                    "place furnace for copper smelting",
-                )
-
-        if copper_furnace and entity_item_count(copper_furnace, "copper-plate") > 0:
-            furnace_pos = _position(copper_furnace)
-            if distance(player, furnace_pos) > 20:
-                return PlannerDecision(
-                    {"type": "move_to", "position": furnace_pos},
-                    "move near copper furnace to take copper plates",
+                    {"type": "move_to", "position": chest_pos},
+                    "move near stone output chest",
                 )
             return PlannerDecision(
                 {
                     "type": "take",
-                    "item": "copper-plate",
-                    "count": min(50, entity_item_count(copper_furnace, "copper-plate")),
-                    "unit_number": copper_furnace.get("unit_number"),
-                    "name": "stone-furnace",
-                    "position": furnace_pos,
+                    "item": "stone",
+                    "count": min(50, entity_item_count(chest, "stone")),
+                    "unit_number": chest.get("unit_number"),
+                    "name": chest.get("name") or "wooden-chest",
+                    "position": chest_pos,
                 },
-                "take produced copper plates from furnace",
+                "take stone from starter stone supply chest",
             )
 
-        if inventory_count(observation, "copper-ore") <= 0:
-            return self.support_skill._mine_resource(player, copper, "copper-ore", max(8, target - copper_total))
+        missing = _stone_supply_missing_item(observation, layout)
+        if missing:
+            decision = self._ensure_item(observation, player, missing)
+            if decision is not None:
+                return decision
 
-        furnace_pos = _position(copper_furnace)
-        if entity_item_count(copper_furnace, "copper-ore") < target:
-            if distance(player, furnace_pos) > 20:
+        if chest is None:
+            chest_name = _available_stone_output_chest_name(observation)
+            if chest_name is None:
+                return PlannerDecision(None, "missing output chest for starter stone supply")
+            position = layout["output_position"]
+            if distance(player, position) > 20 or distance(player, position) < 2.0:
                 return PlannerDecision(
-                    {"type": "move_to", "position": furnace_pos},
-                    "move near copper furnace to insert copper ore",
+                    {"type": "move_to", "position": _stand_position(position, offset=3.0)},
+                    "move near planned stone output chest",
                 )
             return PlannerDecision(
                 {
-                    "type": "insert",
-                    "item": "copper-ore",
-                    "count": min(max(8, target - copper_total), inventory_count(observation, "copper-ore")),
-                    "unit_number": copper_furnace.get("unit_number"),
-                    "name": "stone-furnace",
-                    "position": furnace_pos,
+                    "type": "build",
+                    "name": chest_name,
+                    "position": position,
                 },
-                "insert copper ore into copper furnace",
+                "place output chest for starter stone supply",
             )
 
-        if entity_item_count(copper_furnace, "coal") < 3:
-            if distance(player, furnace_pos) > 20:
+        drill = layout.get("drill")
+        if drill is None:
+            position = layout["drill_position"]
+            if distance(player, position) > 20 or distance(player, position) < 2.0:
                 return PlannerDecision(
-                    {"type": "move_to", "position": furnace_pos},
-                    "move near copper furnace to insert coal",
+                    {"type": "move_to", "position": _stand_position(position, offset=3.0)},
+                    "move near planned stone burner mining drill",
                 )
             return PlannerDecision(
                 {
-                    "type": "insert",
-                    "item": "coal",
-                    "count": min(5, inventory_count(observation, "coal")),
-                    "unit_number": copper_furnace.get("unit_number"),
-                    "name": "stone-furnace",
-                    "position": furnace_pos,
+                    "type": "build",
+                    "name": "burner-mining-drill",
+                    "position": position,
+                    "direction": layout["drill_direction"],
+                    "required_resource": "stone",
+                    "allow_nearby": True,
                 },
-                "fuel copper furnace",
+                "place burner mining drill for starter stone supply",
+            )
+
+        if entity_item_count(drill, "coal") < 3:
+            return _fuel_burner_line_entity(
+                observation,
+                player,
+                drill,
+                entity_name="burner-mining-drill",
+                threshold=3,
+                insert_count=5,
+                context="starter stone supply",
+                support_skill=self.support_skill,
+                far_fuel_reason="starter stone supply needs local fuel before the drill can run",
             )
 
         return PlannerDecision(
-            {"type": "wait", "ticks": 300},
-            "wait for copper plates",
+            {"type": "wait", "ticks": 240},
+            "wait for starter stone drill to fill the output chest",
         )
+
+    def _ensure_item(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        item: str,
+    ) -> PlannerDecision | None:
+        if item == "burner-mining-drill":
+            if craftable_count(observation, "burner-mining-drill") > 0:
+                return PlannerDecision(
+                    {"type": "craft", "recipe": "burner-mining-drill", "count": 1},
+                    "craft burner mining drill for starter stone supply",
+                )
+            if inventory_count(observation, "stone") < 5:
+                stone = nearest_resource(observation, "stone")
+                if stone is None:
+                    return PlannerDecision(None, "cannot find bootstrap stone for burner drill")
+                return self.support_skill._mine_resource(player, stone, "stone", 8)
+            if inventory_count(observation, "iron-gear-wheel") < 3 and craftable_count(observation, "iron-gear-wheel") > 0:
+                return PlannerDecision(
+                    {
+                        "type": "craft",
+                        "recipe": "iron-gear-wheel",
+                        "count": min(3 - inventory_count(observation, "iron-gear-wheel"), craftable_count(observation, "iron-gear-wheel")),
+                    },
+                    "craft gears for stone supply drill",
+                )
+            return self.support_skill.next_action(observation, target_count=20, inventory_only=True)
+
+        if item in {"wooden-chest", "iron-chest"}:
+            if craftable_count(observation, item) > 0:
+                return PlannerDecision({"type": "craft", "recipe": item, "count": 1}, f"craft {item} for stone output")
+            if item == "wooden-chest" and inventory_count(observation, "wood") < 2:
+                tree = _nearest_tree(observation)
+                if tree is None:
+                    if craftable_count(observation, "iron-chest") > 0:
+                        return PlannerDecision({"type": "craft", "recipe": "iron-chest", "count": 1}, "craft iron chest for stone output")
+                    return self.support_skill.next_action(observation, target_count=8, inventory_only=True)
+                tree_pos = _position(tree)
+                if distance(player, tree_pos) > 8:
+                    return PlannerDecision({"type": "move_to", "position": tree_pos}, "move near tree for stone output chest")
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "name": tree.get("name"),
+                        "position": tree_pos,
+                        "count": 1,
+                    },
+                    "mine tree for stone output chest",
+                )
+            if item == "iron-chest":
+                return self.support_skill.next_action(observation, target_count=8, inventory_only=True)
+        return None
 
 
 class ElectronicCircuitSkill:
@@ -2439,16 +2347,22 @@ class BeltSmeltingLineSkill:
         target_count: int = 10,
         resource_name: str = "iron-ore",
         product_name: str = "iron-plate",
+        inventory_only: bool = False,
     ) -> None:
         self.target_count = target_count
         self.resource_name = resource_name
         self.product_name = product_name
+        self.inventory_only = inventory_only
         self.support_skill = IronPlateSkill(target_count=20)
 
     def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
         line = _find_belt_smelting_line(observation, self.resource_name)
         line_furnace = line.get("furnace") if line else None
-        total_product = total_item_count(observation, self.product_name)
+        total_product = (
+            inventory_count(observation, self.product_name)
+            if self.inventory_only
+            else total_item_count(observation, self.product_name)
+        )
         if line_furnace and self._line_has_started(line_furnace) and total_product >= self.target_count:
             return PlannerDecision(
                 None,
@@ -2549,10 +2463,13 @@ class BeltSmeltingLineSkill:
         if item == "stone-furnace":
             if craftable_count(observation, "stone-furnace") > 0:
                 return PlannerDecision({"type": "craft", "recipe": "stone-furnace", "count": 1}, "craft furnace for line")
-            stone = nearest_resource(observation, "stone")
-            if stone is None:
-                return PlannerDecision(None, "cannot find stone for line furnace")
-            return self.support_skill._mine_resource(player, stone, "stone", 8)
+            decision = StoneSupplySkill(target_count=8).next_action(observation)
+            if decision.done:
+                return PlannerDecision(
+                    {"type": "wait", "ticks": 60},
+                    "stone supply is ready; wait for furnace craftability to refresh",
+                )
+            return decision
 
         if item == "burner-mining-drill":
             if craftable_count(observation, "burner-mining-drill") > 0:
@@ -2561,10 +2478,9 @@ class BeltSmeltingLineSkill:
                     "craft burner mining drill for line",
                 )
             if inventory_count(observation, "stone") < 5:
-                stone = nearest_resource(observation, "stone")
-                if stone is None:
-                    return PlannerDecision(None, "cannot find stone for line drill")
-                return self.support_skill._mine_resource(player, stone, "stone", 8)
+                decision = StoneSupplySkill(target_count=8).next_action(observation)
+                if not decision.done:
+                    return decision
             if inventory_count(observation, "iron-gear-wheel") < 3 and craftable_count(observation, "iron-gear-wheel") > 0:
                 return PlannerDecision(
                     {
@@ -3216,10 +3132,13 @@ class SetupPowerSkill:
         if item == "stone-furnace":
             if craftable_count(observation, "stone-furnace") > 0:
                 return PlannerDecision({"type": "craft", "recipe": "stone-furnace", "count": 1}, "craft furnace for boiler")
-            stone = nearest_resource(observation, "stone")
-            if stone is None:
-                return PlannerDecision(None, "cannot find stone for boiler furnace prerequisite")
-            return self.iron_skill._mine_resource(player, stone, "stone", 8)
+            decision = StoneSupplySkill(target_count=8).next_action(observation)
+            if decision.done:
+                return PlannerDecision(
+                    {"type": "wait", "ticks": 60},
+                    "stone supply is ready; wait for boiler furnace craftability to refresh",
+                )
+            return decision
         if item == "small-electric-pole":
             if inventory_count(observation, "wood") < 1:
                 tree = _nearest_tree(observation)
@@ -3573,6 +3492,400 @@ def _resource_name_near_position(
 def _layout_matches_resource(layout: dict[str, Any], resource_name: str) -> bool:
     actual = layout.get("resource_name")
     return actual is None or actual == resource_name
+
+
+def _direct_plate_smelting_decision(
+    observation: dict[str, Any],
+    *,
+    target_count: int,
+    resource_name: str,
+    product_name: str,
+    support_skill: IronPlateSkill,
+    inventory_only: bool = False,
+    allow_support_plate: bool = True,
+) -> PlannerDecision:
+    total_product = inventory_count(observation, product_name) if inventory_only else total_item_count(observation, product_name)
+    if total_product >= target_count:
+        return PlannerDecision(None, f"{product_name} target reached: {total_product}/{target_count}", done=True)
+
+    player = player_position(observation)
+    output_furnace = _select_plate_output_furnace(observation, resource_name, product_name)
+    if output_furnace and entity_item_count(output_furnace, product_name) > 0:
+        furnace_pos = _position(output_furnace)
+        if distance(player, furnace_pos) > 20:
+            return PlannerDecision(
+                {"type": "move_to", "position": furnace_pos},
+                f"move near starter {product_name} furnace output",
+            )
+        return PlannerDecision(
+            {
+                "type": "take",
+                "item": product_name,
+                "count": min(50, entity_item_count(output_furnace, product_name)),
+                "unit_number": output_furnace.get("unit_number"),
+                "name": "stone-furnace",
+                "position": furnace_pos,
+            },
+            f"take {product_name} from starter furnace output",
+        )
+
+    layout = _find_direct_smelting_cell(observation, resource_name) or _select_direct_smelting_layout(observation, resource_name)
+    if layout is None:
+        return PlannerDecision(None, f"cannot find open {resource_name} site for direct burner-drill smelting cell")
+
+    furnace = layout.get("furnace")
+    if furnace and entity_item_count(furnace, product_name) > 0:
+        furnace_pos = _position(furnace)
+        if distance(player, furnace_pos) > 20:
+            return PlannerDecision(
+                {"type": "move_to", "position": furnace_pos},
+                f"move near direct {product_name} furnace output",
+            )
+        return PlannerDecision(
+            {
+                "type": "take",
+                "item": product_name,
+                "count": min(50, entity_item_count(furnace, product_name)),
+                "unit_number": furnace.get("unit_number"),
+                "name": "stone-furnace",
+                "position": furnace_pos,
+            },
+            f"take {product_name} from direct burner-drill smelting cell",
+        )
+
+    if inventory_count(observation, "coal") < 6:
+        coal = nearest_resource(observation, "coal")
+        if coal is None:
+            return PlannerDecision(None, f"cannot find nearby coal for direct {product_name} smelting")
+        return support_skill._mine_resource(player, coal, "coal", 8)
+
+    missing = _direct_smelting_missing_item(observation, layout)
+    if missing:
+        decision = _ensure_direct_smelting_item(
+            observation,
+            player,
+            missing,
+            support_skill=support_skill,
+            allow_support_plate=allow_support_plate,
+        )
+        if decision is not None:
+            return decision
+
+    drill = layout.get("drill")
+    if drill is None:
+        position = layout["drill_position"]
+        if distance(player, position) > 20:
+            return PlannerDecision(
+                {"type": "move_to", "position": _stand_position(position)},
+                f"move near {resource_name.replace('-', ' ')} before placing direct burner mining drill",
+            )
+        return PlannerDecision(
+            {
+                "type": "build",
+                "name": "burner-mining-drill",
+                "position": position,
+                "direction": layout["drill_direction"],
+                "allow_nearby": True,
+                "required_resource": resource_name,
+            },
+            f"place burner mining drill for direct {product_name} smelting cell",
+        )
+
+    if furnace is None:
+        position = layout["furnace_position"]
+        if distance(player, position) > 20:
+            return PlannerDecision(
+                {"type": "move_to", "position": _stand_position(position)},
+                f"move near direct {product_name} furnace position",
+            )
+        return PlannerDecision(
+            {
+                "type": "build",
+                "name": "stone-furnace",
+                "position": position,
+                "allow_nearby": True,
+            },
+            f"place furnace at {resource_name} drill output",
+        )
+
+    for entity_name, layout_key in [
+        ("burner-mining-drill", "drill"),
+        ("stone-furnace", "furnace"),
+    ]:
+        entity = layout.get(layout_key)
+        if entity and entity_item_count(entity, "coal") < 3:
+            return _fuel_burner_line_entity(
+                observation,
+                player,
+                entity,
+                entity_name=entity_name,
+                threshold=3,
+                insert_count=5,
+                context=f"direct {product_name} smelting cell",
+                support_skill=support_skill,
+                far_fuel_reason=f"direct {product_name} smelting needs local fuel before it can run",
+            )
+
+    return PlannerDecision(
+        {"type": "wait", "ticks": 300},
+        f"wait for direct {product_name} burner-drill smelting cell",
+    )
+
+
+def _ensure_direct_smelting_item(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    item: str,
+    *,
+    support_skill: IronPlateSkill,
+    allow_support_plate: bool = True,
+) -> PlannerDecision | None:
+    if item == "stone-furnace":
+        if craftable_count(observation, "stone-furnace") > 0:
+            return PlannerDecision({"type": "craft", "recipe": "stone-furnace", "count": 1}, "craft furnace for direct smelting")
+        decision = StoneSupplySkill(target_count=8).next_action(observation)
+        if decision.done:
+            return PlannerDecision(
+                {"type": "wait", "ticks": 60},
+                "stone supply is ready; wait for direct smelting furnace craftability to refresh",
+            )
+        return decision
+
+    if item == "burner-mining-drill":
+        if craftable_count(observation, "burner-mining-drill") > 0:
+            return PlannerDecision(
+                {"type": "craft", "recipe": "burner-mining-drill", "count": 1},
+                "craft burner mining drill for direct smelting",
+            )
+        if inventory_count(observation, "stone") < 5:
+            decision = StoneSupplySkill(target_count=8).next_action(observation)
+            if not decision.done:
+                return decision
+        if inventory_count(observation, "iron-gear-wheel") < 3 and craftable_count(observation, "iron-gear-wheel") > 0:
+            return PlannerDecision(
+                {
+                    "type": "craft",
+                    "recipe": "iron-gear-wheel",
+                    "count": min(3 - inventory_count(observation, "iron-gear-wheel"), craftable_count(observation, "iron-gear-wheel")),
+                },
+                "craft gears for direct smelting drill",
+            )
+        if not allow_support_plate:
+            return PlannerDecision(None, "missing burner mining drill and cannot bootstrap another iron drill from current inventory")
+        return support_skill.next_action(observation, target_count=20, inventory_only=True)
+
+    return None
+
+
+def _select_plate_output_furnace(observation: dict[str, Any], resource_name: str, product_name: str) -> dict[str, Any] | None:
+    if resource_name == "iron-ore" and product_name == "iron-plate":
+        return _select_iron_furnace(observation)
+    if resource_name == "copper-ore" and product_name == "copper-plate":
+        return _select_copper_furnace(observation)
+    furnaces = _entities_within_starter_area(observation, entities_named(observation, "stone-furnace"))
+    for furnace in furnaces:
+        if entity_item_count(furnace, product_name) > 0 or entity_item_count(furnace, resource_name) > 0:
+            return furnace
+    return None
+
+
+def _direct_smelting_missing_item(observation: dict[str, Any], layout: dict[str, Any]) -> str | None:
+    if layout.get("drill") is None and inventory_count(observation, "burner-mining-drill") <= 0:
+        return "burner-mining-drill"
+    if layout.get("furnace") is None and inventory_count(observation, "stone-furnace") <= 0:
+        return "stone-furnace"
+    return None
+
+
+def _find_direct_smelting_cell(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
+    candidates: list[tuple[bool, float, dict[str, Any]]] = []
+    for drill in entities_named(observation, "burner-mining-drill"):
+        drill_position = _position(drill)
+        target_resource = _entity_resource_name(observation, drill, radius=4.5)
+        if target_resource != resource_name:
+            continue
+        if not _within_starter_logistics_area(observation, drill_position):
+            continue
+        orientation = _direction_to_orientation(int(drill.get("direction") or EAST))
+        layout = _direct_smelting_layout_from_drill_position(drill_position, resource_name=resource_name, orientation=orientation)
+        layout["drill"] = drill
+        layout["furnace"] = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=1.5)
+        candidates.append(
+            (
+                layout["furnace"] is not None,
+                float(drill.get("distance") or distance(player_position(observation), drill_position)),
+                layout,
+            )
+        )
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (not item[0], item[1]))
+    return candidates[0][2]
+
+
+def _select_direct_smelting_layout(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    for resource in _ranked_patch_drill_resources(observation, resource_name):
+        for orientation in ("east", "west", "south", "north"):
+            layout = _direct_smelting_layout_from_drill_position(_position(resource), resource_name=resource_name, orientation=orientation)
+            layout["drill"] = _entity_near(observation, "burner-mining-drill", layout["drill_position"], radius=2.0)
+            layout["furnace"] = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=1.5)
+            if not _direct_smelting_layout_blocked_by_factory_entities(layout, entities):
+                return layout
+    return None
+
+
+def _direct_smelting_layout_from_drill_position(
+    drill_position: dict[str, float],
+    resource_name: str,
+    orientation: str = "east",
+) -> dict[str, Any]:
+    dx, dy, drill_direction, _belt_direction, _inserter_direction = _smelting_orientation(orientation)
+    return {
+        "drill_position": drill_position,
+        "furnace_position": {"x": drill_position["x"] + 3 * dx, "y": drill_position["y"] + 3 * dy},
+        "orientation": orientation,
+        "resource_name": resource_name,
+        "drill_direction": drill_direction,
+        "drill": None,
+        "furnace": None,
+    }
+
+
+def _direct_smelting_layout_blocked_by_factory_entities(layout: dict[str, Any], entities: list[Any]) -> bool:
+    layout_entities = {id(entity) for entity in (layout.get("drill"), layout.get("furnace")) if isinstance(entity, dict)}
+    layout_units = {
+        entity.get("unit_number")
+        for entity in (layout.get("drill"), layout.get("furnace"))
+        if isinstance(entity, dict) and entity.get("unit_number") is not None
+    }
+    footprint = [layout["drill_position"], layout["furnace_position"]]
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        if id(entity) in layout_entities or (entity.get("unit_number") is not None and entity.get("unit_number") in layout_units):
+            continue
+        name = str(entity.get("name") or "")
+        if name in {"character", "stone-furnace", "burner-mining-drill"}:
+            entity_pos = _position(entity)
+            threshold = 3.0 if name in {"stone-furnace", "burner-mining-drill"} else 2.0
+            if any(distance(entity_pos, pos) < threshold for pos in footprint):
+                return True
+    return False
+
+
+def _belt_smelting_ready(observation: dict[str, Any]) -> bool:
+    if not bool(_technology_state(observation, "automation").get("researched")):
+        return False
+    for name in ("assembling-machine-1", "assembling-machine-2", "assembling-machine-3"):
+        for assembler in entities_named(observation, name):
+            recipe = str(assembler.get("recipe") or assembler.get("recipe_name") or "")
+            if recipe != "transport-belt":
+                continue
+            if assembler.get("electric_network_connected") is False:
+                continue
+            return True
+    return False
+
+
+def _find_stone_supply_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
+    candidates: list[tuple[bool, float, dict[str, Any]]] = []
+    for drill in entities_named(observation, "burner-mining-drill"):
+        drill_position = _position(drill)
+        target_resource = _entity_resource_name(observation, drill, radius=4.5)
+        if target_resource != "stone":
+            continue
+        orientation = _direction_to_orientation(int(drill.get("direction") or EAST))
+        layout = _stone_supply_layout_from_drill_position(drill_position, orientation=orientation)
+        layout["drill"] = drill
+        layout["output_chest"] = _stone_output_chest_near(observation, layout["output_position"])
+        candidates.append(
+            (
+                layout["output_chest"] is not None,
+                float(drill.get("distance") or distance(player_position(observation), drill_position)),
+                layout,
+            )
+        )
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (not item[0], item[1]))
+    return candidates[0][2]
+
+
+def _select_stone_supply_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    for resource in _ranked_patch_drill_resources(observation, "stone"):
+        for orientation in ("east", "west", "south", "north"):
+            layout = _stone_supply_layout_from_drill_position(_position(resource), orientation=orientation)
+            layout["drill"] = _entity_near(observation, "burner-mining-drill", layout["drill_position"], radius=2.0)
+            layout["output_chest"] = _stone_output_chest_near(observation, layout["output_position"])
+            if not _stone_supply_layout_blocked_by_factory_entities(layout, entities):
+                return layout
+    return None
+
+
+def _stone_supply_layout_from_drill_position(
+    drill_position: dict[str, float],
+    orientation: str = "east",
+) -> dict[str, Any]:
+    dx, dy, drill_direction, _belt_direction, _inserter_direction = _smelting_orientation(orientation)
+    return {
+        "drill_position": drill_position,
+        "output_position": {"x": drill_position["x"] + 2 * dx, "y": drill_position["y"] + 2 * dy},
+        "orientation": orientation,
+        "resource_name": "stone",
+        "drill_direction": drill_direction,
+        "drill": None,
+        "output_chest": None,
+    }
+
+
+def _stone_supply_layout_blocked_by_factory_entities(layout: dict[str, Any], entities: list[Any]) -> bool:
+    layout_entities = {id(entity) for entity in (layout.get("drill"), layout.get("output_chest")) if isinstance(entity, dict)}
+    layout_units = {
+        entity.get("unit_number")
+        for entity in (layout.get("drill"), layout.get("output_chest"))
+        if isinstance(entity, dict) and entity.get("unit_number") is not None
+    }
+    footprint = [layout["drill_position"], layout["output_position"]]
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        if id(entity) in layout_entities or (entity.get("unit_number") is not None and entity.get("unit_number") in layout_units):
+            continue
+        name = str(entity.get("name") or "")
+        if name in {"character", "burner-mining-drill", "wooden-chest", "iron-chest", "steel-chest"}:
+            entity_pos = _position(entity)
+            threshold = 3.0 if name == "burner-mining-drill" else 1.5
+            if any(distance(entity_pos, pos) < threshold for pos in footprint):
+                return True
+    return False
+
+
+def _stone_supply_missing_item(observation: dict[str, Any], layout: dict[str, Any]) -> str | None:
+    if layout.get("output_chest") is None and _available_stone_output_chest_name(observation) is None:
+        if craftable_count(observation, "wooden-chest") > 0 or inventory_count(observation, "wood") >= 2 or _nearest_tree(observation) is not None:
+            return "wooden-chest"
+        return "iron-chest"
+    if layout.get("drill") is None and inventory_count(observation, "burner-mining-drill") <= 0:
+        return "burner-mining-drill"
+    return None
+
+
+def _available_stone_output_chest_name(observation: dict[str, Any]) -> str | None:
+    for name in ("wooden-chest", "iron-chest", "steel-chest"):
+        if inventory_count(observation, name) > 0:
+            return name
+    return None
+
+
+def _stone_output_chest_near(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:
+    candidates = []
+    for name in ("wooden-chest", "iron-chest", "steel-chest"):
+        entity = _entity_near(observation, name, position, radius=0.9)
+        if entity is not None:
+            candidates.append(entity)
+    return _nearest_to(candidates, position) if candidates else None
 
 
 def _find_coal_supply_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
