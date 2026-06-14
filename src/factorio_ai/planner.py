@@ -2155,7 +2155,7 @@ class IronPlateSkill:
         pos = _position(resource)
         if distance(player, pos) > 8:
             return PlannerDecision(
-                {"type": "move_to", "position": pos},
+                {"type": "move_to", "position": pos, "tolerance": 7.5},
                 f"move near {name}",
             )
         return PlannerDecision(

@@ -1164,6 +1164,7 @@ class PlannerTests(unittest.TestCase):
         decision = ExpandCopperSmeltingSkill(target_rate_per_minute=18).next_action(obs)
         self.assertEqual(decision.action["type"], "move_to")
         self.assertEqual(decision.action["position"], {"x": 80, "y": 0})
+        self.assertEqual(decision.action["tolerance"], 7.5)
         self.assertIn("move near coal", decision.reason)
 
     def test_expand_smelting_stops_when_fuel_logistics_are_too_far(self):

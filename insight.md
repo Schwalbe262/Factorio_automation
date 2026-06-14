@@ -105,3 +105,11 @@
 - After: the same research loop progressed through coal mining, copper mining, copper furnace insert/take, burner drill fueling, and continued toward the next coal requirement.
 - Evidence: `{"after":{"foreground":true,"inventory":{"coal":4,"copper-plate":8,"wood":1},"movement_smoke":"x 79.61 -> 81.24","strategy_log":"strategy-automation-research-20260614-163058.jsonl reached step 6","tests":"359 passed"},"before":{"failures":["move made no progress; remaining distance 20.04","move_to timed out; remaining distance 3.95"]},"source_loop":52}`
 - Remaining risk: The bootstrap loop is still long and may expose more missing deterministic executors before Automation is researched.
+
+## 2026-06-15 01:43:20 +09:00 - Insight 12
+- Source loop: Loop 72
+- Improvement: Resource-gathering movement now stops at mining range and immediately continues with the mine action instead of requiring exact resource tile arrival.
+- Before: background `research_automation` stopped at `move_to timed out; remaining distance 13.97` even though the player was close enough to mine coal.
+- After: planner selected `mine coal` with `radius=8` from the current live position.
+- Evidence: `{"after":{"action":"mine coal","radius":8,"tests":"359 passed"},"before":{"failure":"move_to timed out; remaining distance 13.97"},"source_loop":72}`
+- Remaining risk: Other non-resource move targets may still need action-specific tolerance if future loops expose exact-position stalls.
