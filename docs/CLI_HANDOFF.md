@@ -1,10 +1,10 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-14 19:55 KST
+Last updated: 2026-06-14 20:07 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
-Latest Part 66 feature commit at this handoff: `c3f7c5b Part 66: sandbox validate layout candidates`
+Part 67 baseline before this handoff update: `59d31ef Part 66: clarify handoff commit reference`
 
 ## Goal
 
@@ -135,6 +135,43 @@ Current Part 66 live finding:
   - inserters still waited for source items, so pickup lane, inserter orientation, or belt side is likely unreachable.
   - Do not mark this green-circuit candidate build-ready until a revised layout passes sandbox ticks.
 
+Part 67 fixes the green-circuit candidate with the Part 66 sandbox feedback:
+
+- `src/factorio_ai/planner.py`
+  - Corrected green-circuit inserter directions to match live Factorio semantics: inserter `direction` points toward the pickup side, not the drop side.
+  - Corrected static validation endpoint modeling so static validation no longer masks reversed inserters.
+  - The generated `green-circuit-3-cable-2-circuit-cell` now produces electronic circuits in sandbox ticks.
+
+- `src/factorio_ai/layout_validation.py`
+  - Improved sandbox belt feeding by preloading multiple transport-line positions with `LuaTransportLine.insert_at(...)`, which better approximates a supplied input belt than one-time `insert_at_back(...)`.
+  - Normalizes empty Lua arrays such as `reasons` and `build_failures` back to JSON lists in Python.
+  - Treats intermittent `waiting_for_source_items` as a warning when expected outputs were actually observed, not as a hard failure.
+
+- `src/factorio_ai/slurm_worker.py`
+  - Compact Slurm layout payload now includes sandbox `warnings` as well as `reasons`.
+
+- `tests/test_planner.py`
+  - Added assertions for the corrected green-circuit inserter directions so this bug does not regress.
+
+Current Part 67 live finding:
+
+- `green-circuit-3-cable-2-circuit-cell` sandbox validation now passes.
+- Latest successful smoke:
+
+  ```powershell
+  $env:PYTHONPATH='src'
+  python -m factorio_ai.cli validate-layout-candidate --candidate-id green-circuit-3-cable-2-circuit-cell --variant after --ticks 1200 --player r1jae
+  ```
+
+- Result:
+  - `sandbox_validation.status`: `pass`
+  - `observed_outputs.electronic-circuit`: `95`
+  - `checked_machines`: `5`
+  - `powered_machines`: `5`
+  - `checked_inserters`: `12`
+  - `powered_inserters`: `12`
+  - warning remains: intermittent source-item waits may indicate supply/belt-side risk, but the candidate did produce expected output.
+
 ## Verification Already Run
 
 Focused tests:
@@ -185,6 +222,24 @@ pytest -q
 
 Result: `317 passed`
 
+Part 67 focused tests:
+
+```powershell
+$env:PYTHONPATH='src'
+pytest -q tests\test_layout_validation.py tests\test_slurm_worker.py tests\test_web_dashboard.py tests\test_planner.py::PlannerTests::test_factory_layout_simulates_green_circuit_pattern_without_applying_it
+```
+
+Result: `20 passed`
+
+Part 67 full test suite:
+
+```powershell
+$env:PYTHONPATH='src'
+pytest -q
+```
+
+Result: `317 passed`
+
 Part 66 token usage sample:
 
 ```powershell
@@ -193,6 +248,15 @@ python -m factorio_ai.cli record-token-usage --tokens-used 35141439 --label "par
 ```
 
 Result: appended `delta_tokens=234991` to `logs/token_usage.jsonl`, which is read by the web dashboard token graph.
+
+Part 67 token usage sample:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli record-token-usage --tokens-used 35232450 --label "part67 green circuit sandbox pass"
+```
+
+Result: appended `delta_tokens=91011` to `logs/token_usage.jsonl`, which is read by the web dashboard token graph.
 
 ## Live Smoke Checks Already Run
 
@@ -267,17 +331,27 @@ git commit -m "Part 66: sandbox validate layout candidates"
 git push origin master
 ```
 
-Then use the new sandbox feedback to fix the green-circuit candidate itself:
+Part 67 should be committed/pushed if not already done:
 
-1. Revise `green-circuit-3-cable-2-circuit-cell` so source belts, belt sides, inserter pickup positions, direct/belt cable transfer, output inserters, and power coverage actually produce `electronic-circuit` in sandbox ticks.
-2. Rerun:
+```powershell
+git add src/factorio_ai/planner.py src/factorio_ai/layout_validation.py src/factorio_ai/slurm_worker.py tests/test_planner.py docs/CLI_HANDOFF.md
+git commit -m "Part 67: fix green circuit sandbox validation"
+git push origin master
+```
+
+Then use the sandbox-passing candidate carefully:
+
+1. Treat `green-circuit-3-cable-2-circuit-cell` as sandbox-proven, not automatically site-ready.
+2. Add a site-specific pre-build gate that checks collision, nearby resource preservation, power reach, available build items, and logistics connection to real iron/copper supply.
+3. Consider exporting `logs/layout-validation-feedback.jsonl` rows into Qwen fine-tuning examples later.
+4. Rerun before any future build-ready claim:
 
 ```powershell
 $env:PYTHONPATH='src'
 python -m factorio_ai.cli validate-layout-candidate --candidate-id green-circuit-3-cable-2-circuit-cell --variant after --ticks 3600 --player r1jae
 ```
 
-3. Only mark the candidate build-ready after sandbox validation passes.
+5. Only mark the candidate build-ready after both sandbox validation and site-specific checks pass.
 
 ## Core Commands
 

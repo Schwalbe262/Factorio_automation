@@ -67,6 +67,9 @@ def validate_layout_candidate(
         inspected = execute_json_lua_command(client, build_sandbox_inspect_command(inspect_payload))
 
     sandbox_validation = inspected.get("sandbox_validation") if isinstance(inspected.get("sandbox_validation"), dict) else {}
+    for key in ("reasons", "warnings", "build_failures", "machine_statuses", "inserter_statuses"):
+        if key in sandbox_validation and not isinstance(sandbox_validation.get(key), list):
+            sandbox_validation[key] = []
     if inspected.get("surface_name") and "surface_name" not in sandbox_validation:
         sandbox_validation["surface_name"] = inspected.get("surface_name")
     feedback = layout_validation_feedback_row(
@@ -327,8 +330,8 @@ def _assembler_output_belt_lanes(entities: list[dict[str, Any]], belts: dict[tup
         direction = int(inserter.get("direction") or 0)
         vector = _DIRECTION_VECTORS.get(direction, (0.0, -1.0))
         position = inserter["position"]
-        pickup = {"x": position["x"] - vector[0], "y": position["y"] - vector[1]}
-        drop = {"x": position["x"] + vector[0], "y": position["y"] + vector[1]}
+        pickup = {"x": position["x"] + vector[0], "y": position["y"] + vector[1]}
+        drop = {"x": position["x"] - vector[0], "y": position["y"] - vector[1]}
         if any(_near_machine(pickup, assembler["position"]) for assembler in assemblers):
             drop_key = _position_key(drop)
             if drop_key in belts:
@@ -346,10 +349,10 @@ def _source_belts_for_assembler(
         direction = int(inserter.get("direction") or 0)
         vector = _DIRECTION_VECTORS.get(direction, (0.0, -1.0))
         position = inserter["position"]
-        drop = {"x": position["x"] + vector[0], "y": position["y"] + vector[1]}
+        drop = {"x": position["x"] - vector[0], "y": position["y"] - vector[1]}
         if not _near_machine(drop, assembler["position"]):
             continue
-        pickup = {"x": position["x"] - vector[0], "y": position["y"] - vector[1]}
+        pickup = {"x": position["x"] + vector[0], "y": position["y"] + vector[1]}
         source = belts.get(_position_key(pickup))
         if source:
             sources.append(source)
@@ -551,15 +554,19 @@ for _, belt in pairs(surface.find_entities_filtered({ type = "transport-belt" })
     if matches then
       for line_index = 1, 2 do
         local line = belt.get_transport_line(line_index)
-        for _ = 1, (feed.count_per_belt_line or 2) do
+        local inserted_here = 0
+        for slot = 0, 8 do
+          local offset = slot / 10
           local inserted = false
-          local ok = pcall(function() inserted = line.insert_at_back(feed.item) end)
+          local ok = pcall(function() inserted = line.insert_at(offset, feed.item) end)
           if not ok or not inserted then
             ok = pcall(function() inserted = line.insert_at_back({ name = feed.item, count = 1 }) end)
           end
           if ok and inserted then
             input_insertions[feed.item] = (input_insertions[feed.item] or 0) + 1
+            inserted_here = inserted_here + 1
           end
+          if inserted_here >= (feed.count_per_belt_line or 6) then break end
         end
       end
     end
@@ -643,6 +650,7 @@ for _, entity in pairs(surface.find_entities_filtered({})) do
   end
 end
 local reasons = {}
+local warnings = {}
 for _, failure in pairs(state.build_failures or {}) do
   table.insert(reasons, failure)
 end
@@ -667,13 +675,23 @@ for _, row in pairs(inserter_statuses) do
   if row.status == "waiting_for_source_items" then waiting_source_inserters = waiting_source_inserters + 1 end
 end
 if fed_input_count > 0 and waiting_source_inserters > 0 then
-  table.insert(reasons, "sandbox fed input items, but inserters still waited for source items; pickup lane, inserter orientation, or belt side is likely unreachable")
+  local message = "sandbox fed input items, but some inserters still waited for source items; this may indicate intermittent supply, pickup lane, inserter orientation, or belt-side risk"
+  local any_expected_output = false
+  for _, item in pairs(payload.expected_outputs or state.expected_outputs or {}) do
+    if (observed_outputs[item] or 0) > 0 then any_expected_output = true end
+  end
+  if any_expected_output then
+    table.insert(warnings, message)
+  else
+    table.insert(reasons, message)
+  end
 end
 local status = "pass"
 if #reasons > 0 then status = "fail" end
 local result = {
   status = status,
   reasons = reasons,
+  warnings = warnings,
   observed_outputs = observed_outputs,
   ticks = math.max(0, game.tick - (state.started_tick or game.tick)),
   requested_ticks = payload.ticks,

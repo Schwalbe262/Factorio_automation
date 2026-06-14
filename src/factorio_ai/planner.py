@@ -735,13 +735,13 @@ def _green_circuit_blueprint_entities(groups: int) -> list[dict[str, Any]]:
             _add_entity(entities, "transport-belt", 9, y + offset, direction=SOUTH)
         for offset in (0, 4, 8):
             _add_entity(entities, "assembling-machine-1", 0, y + offset, recipe="copper-cable")
-            _add_entity(entities, "inserter", -2, y + offset, direction=EAST)
-            _add_entity(entities, "inserter", 2, y + offset, direction=EAST)
+            _add_entity(entities, "inserter", -2, y + offset, direction=WEST)
+            _add_entity(entities, "inserter", 2, y + offset, direction=WEST)
         for offset in (1, 7):
             _add_entity(entities, "assembling-machine-1", 6, y + offset, recipe="electronic-circuit")
-            _add_entity(entities, "inserter", 4, y + offset, direction=EAST)
-            _add_entity(entities, "inserter", 8, y + offset, direction=WEST)
-            _add_entity(entities, "inserter", 6, y + offset + 2, direction=SOUTH)
+            _add_entity(entities, "inserter", 4, y + offset, direction=WEST)
+            _add_entity(entities, "inserter", 8, y + offset, direction=EAST)
+            _add_entity(entities, "inserter", 6, y + offset + 2, direction=NORTH)
             _add_entity(entities, "iron-chest", 6, y + offset + 3)
         _add_entity(entities, "small-electric-pole", 2, y + 4)
         _add_entity(entities, "small-electric-pole", 7, y + 4)
@@ -1104,8 +1104,8 @@ def _inserter_endpoints(entity: dict[str, Any]) -> tuple[dict[str, float], dict[
     x = float(position.get("x") or 0.0)
     y = float(position.get("y") or 0.0)
     dx, dy = vector
-    pickup = {"x": x - dx, "y": y - dy}
-    drop = {"x": x + dx, "y": y + dy}
+    pickup = {"x": x + dx, "y": y + dy}
+    drop = {"x": x - dx, "y": y - dy}
     return pickup, drop
 
 

@@ -357,6 +357,16 @@ class PlannerTests(unittest.TestCase):
                 for entity in entities
             )
         )
+        inserter_directions = {
+            (entity["position"]["x"], entity["position"]["y"]): entity.get("direction")
+            for entity in entities
+            if entity["name"] == "inserter"
+        }
+        self.assertEqual(inserter_directions[(-2.0, 0.0)], 12)
+        self.assertEqual(inserter_directions[(2.0, 0.0)], 12)
+        self.assertEqual(inserter_directions[(4.0, 1.0)], 12)
+        self.assertEqual(inserter_directions[(8.0, 1.0)], 4)
+        self.assertEqual(inserter_directions[(6.0, 3.0)], 0)
 
     def test_green_circuit_before_blueprint_does_not_pull_adjacent_power_site(self):
         obs = base_observation()
