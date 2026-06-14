@@ -4685,7 +4685,7 @@ def _iron_plate_line_segments(
     waypoints = [{"x": start_x, "y": start_y}]
     if end_x < start_x - 0.25:
         detour_x = start_x + 1.0
-        detour_y = start_y + (3.0 if end_y >= start_y else -3.0)
+        detour_y = _select_iron_plate_line_detour_y(observation, start_x, start_y, end_x, end_y, detour_x)
         waypoints.extend(
             [
                 {"x": detour_x, "y": start_y},
@@ -4695,23 +4695,7 @@ def _iron_plate_line_segments(
         )
     waypoints.append({"x": end_x, "y": end_y})
 
-    positions: list[tuple[dict[str, float], int]] = []
-    current = dict(waypoints[0])
-    for waypoint in waypoints[1:]:
-        waypoint_x = float(waypoint["x"])
-        waypoint_y = float(waypoint["y"])
-        if abs(current["x"] - waypoint_x) > 0.25:
-            direction = EAST if waypoint_x > current["x"] else WEST
-            while abs(current["x"] - waypoint_x) > 0.25:
-                positions.append((dict(current), direction))
-                step = min(1.0, abs(waypoint_x - current["x"]))
-                current["x"] += step if waypoint_x > current["x"] else -step
-        if abs(current["y"] - waypoint_y) > 0.25:
-            direction = SOUTH if waypoint_y > current["y"] else NORTH
-            while abs(current["y"] - waypoint_y) > 0.25:
-                positions.append((dict(current), direction))
-                step = min(1.0, abs(waypoint_y - current["y"]))
-                current["y"] += step if waypoint_y > current["y"] else -step
+    positions = _axis_route_positions(waypoints)
     if not positions:
         positions.append(({"x": end_x, "y": end_y}, EAST))
     elif distance(positions[-1][0], {"x": end_x, "y": end_y}) > 0.25:
@@ -4733,6 +4717,58 @@ def _iron_plate_line_segments(
             }
         )
     return segments
+
+
+def _axis_route_positions(waypoints: list[dict[str, float]]) -> list[tuple[dict[str, float], int]]:
+    positions: list[tuple[dict[str, float], int]] = []
+    current = dict(waypoints[0])
+    for waypoint in waypoints[1:]:
+        waypoint_x = float(waypoint["x"])
+        waypoint_y = float(waypoint["y"])
+        if abs(current["x"] - waypoint_x) > 0.25:
+            direction = EAST if waypoint_x > current["x"] else WEST
+            while abs(current["x"] - waypoint_x) > 0.25:
+                positions.append((dict(current), direction))
+                step = min(1.0, abs(waypoint_x - current["x"]))
+                current["x"] += step if waypoint_x > current["x"] else -step
+        if abs(current["y"] - waypoint_y) > 0.25:
+            direction = SOUTH if waypoint_y > current["y"] else NORTH
+            while abs(current["y"] - waypoint_y) > 0.25:
+                positions.append((dict(current), direction))
+                step = min(1.0, abs(waypoint_y - current["y"]))
+                current["y"] += step if waypoint_y > current["y"] else -step
+    return positions
+
+
+def _select_iron_plate_line_detour_y(
+    observation: dict[str, Any],
+    start_x: float,
+    start_y: float,
+    end_x: float,
+    end_y: float,
+    detour_x: float,
+) -> float:
+    sign = 1.0 if end_y >= start_y else -1.0
+    offsets = [3.0 * sign, -3.0 * sign, 5.0 * sign, -5.0 * sign, 7.0 * sign, -7.0 * sign, 9.0 * sign, -9.0 * sign]
+    candidates: list[tuple[int, float, float]] = []
+    for offset in offsets:
+        detour_y = start_y + offset
+        waypoints = [
+            {"x": start_x, "y": start_y},
+            {"x": detour_x, "y": start_y},
+            {"x": detour_x, "y": detour_y},
+            {"x": end_x, "y": detour_y},
+            {"x": end_x, "y": end_y},
+        ]
+        blocker_score = 0
+        for position, _direction in _axis_route_positions(waypoints):
+            blocker = _belt_line_position_blocker(observation, position)
+            if blocker is None:
+                continue
+            blocker_score += 10 if str(blocker.get("name") or "") in ASSEMBLER_ENTITY_NAMES else 4
+        candidates.append((blocker_score, abs(offset), detour_y))
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return candidates[0][2] if candidates else start_y + (3.0 * sign)
 
 
 def _belt_line_position_blocker(

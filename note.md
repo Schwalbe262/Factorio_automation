@@ -6092,3 +6092,69 @@
 - Next action: Commit/push Part 99, then restart headless no-mod autopilot.
 - Token usage: cumulative 57,075,671; current raw counter 9,392,271; delta 64,429 / weekly quota unavailable
 
+## 2026-06-15 08:50:24 +09:00 - Loop 288
+- Part: Part 100 - detour blocker scoring for iron-plate logistics
+- Goal: Avoid routing the iron-plate belt line through productive machines when a nearby detour lane is available.
+- Hypothesis: A fixed three-tile dogleg can still cross drills or other factory entities; scoring several detour y-offsets by blocker count should preserve more existing site machinery.
+- Actions:
+  - Stopped the restarted headless autopilot after the line advanced but mined burner mining drill unit `40` on the fixed y=-62 detour.
+  - Refactored `_iron_plate_line_segments` through `_axis_route_positions`.
+  - Added `_select_iron_plate_line_detour_y` to score candidate offsets and prefer lower-blocker routes.
+  - Strengthened `test_iron_plate_logistic_line_does_not_mine_source_furnace_as_blocker` with a blocker on the default detour lane and verified generated segments avoid it.
+  - Verified current strategy no longer forces the iron-line skill once belt inventory and belt-mall output are exhausted; Qwen's `plan_factory_site` was reconciled to `automate_electronic_circuit_line`.
+- Candidates:
+  - Bad live trace: `strategy-iron-plate-gear-mall-logistics-20260614-234516.jsonl` progressed the line but mined burner mining drill unit `40`.
+  - Regression route candidate: default detour lane with blocker vs alternative offset lane with lower blocker score.
+- Metrics:
+  - Tests: `python -m unittest discover tests` -> 440 passed.
+  - Strategy after belt exhaustion: selected `automate_electronic_circuit_line` from `llm` via plan-site guardrail, not `build_iron_plate_logistic_line_to_gear_mall`.
+  - Token usage sample: cumulative 57,112,738, current raw counter 9,429,338, delta 37,067 since prior sample, weekly quota unavailable.
+- Result: Iron-plate logistics route generation now chooses a lower-blocker detour lane instead of a fixed offset.
+- Failure reason: None for the patch; live state already contains the earlier mined drill and partially built y=-62 route.
+- Next action: Commit/push Part 100, then restart headless no-mod autopilot and monitor whether circuit automation or power repair is selected next.
+- Token usage: cumulative 57,112,738; current raw counter 9,429,338; delta 37,067 / weekly quota unavailable
+
+## 2026-06-15 08:45:57 +09:00 - Loop 288
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 7 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260614-234516.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 10.
+  - Status: failed.
+  - Duration: 40.937s.
+  - transport-belt: 7 -> 0 (delta -7).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260614-234516.jsonl`.
+  - Metadata: `{"delta_item_count":-7,"final_item_count":0,"initial_item_count":7,"max_steps":1200,"target":40}`.
+- Result: Loop stopped: iron-plate logistics line needs transport belts from the belt mall; refusing gear handcraft or iron-plate hand-carry
+- Failure reason: iron-plate logistics line needs transport belts from the belt mall; refusing gear handcraft or iron-plate hand-carry
+- Next action: Plan or build the missing site-to-site logistic line before repeating the consumer loop.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 08:45:57 +09:00 - Loop 289
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 1.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 71.094s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-234443.jsonl`.
+  - Metadata: `{"cycle":1,"priority":92,"strategy_source":"llm"}`.
+- Result: Loop stopped: iron-plate logistics line needs transport belts from the belt mall; refusing gear handcraft or iron-plate hand-carry
+- Failure reason: iron-plate logistics line needs transport belts from the belt mall; refusing gear handcraft or iron-plate hand-carry
+- Next action: Plan or build the missing site-to-site logistic line before repeating the consumer loop.
+- Token usage: not recorded for this loop / weekly quota unavailable
+

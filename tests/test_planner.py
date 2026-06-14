@@ -3110,9 +3110,23 @@ class PlannerTests(unittest.TestCase):
                     "direction": 4,
                     "inventories": {},
                 },
+                {
+                    "name": "burner-mining-drill",
+                    "unit_number": 952,
+                    "position": {"x": 7, "y": -1},
+                    "direction": 4,
+                    "inventories": {},
+                },
             ]
         )
 
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+        self.assertFalse(
+            any(
+                abs(segment["position"]["x"] - 7.0) < 0.1 and abs(segment["position"]["y"] + 1.0) < 0.1
+                for segment in layout["segments"]
+            )
+        )
         decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
 
         self.assertNotEqual(decision.action.get("type"), "mine")

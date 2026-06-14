@@ -344,3 +344,11 @@
 - After: Direct live build at `{x:92,y:-65}` created unit `418` at `{x:92.5,y:-64.5}` with SOUTH direction, and planner dry check advanced to the next segment `{x:92,y:-64}`.
 - Evidence: `{"source_loop":287,"tests":"440 passed","bad_trace":"strategy-iron-plate-gear-mall-logistics-20260614-234054.jsonl already_exists unit 417 for adjacent tile","fixed_live_build":{"unit":418,"position":{"x":92.5,"y":-64.5},"direction":8},"next_dry_action":{"type":"build","name":"transport-belt","position":{"x":92,"y":-64},"direction":8}}`
 - Remaining risk: The full 150-tile route still needs to be completed; build-item supply and gear/belt mall power remain downstream blockers.
+
+## 2026-06-15 08:50:24 +09:00 - Insight 42
+- Source loop: Loop 288
+- Improvement: Iron-plate logistics detours now score multiple y-offsets and avoid the default lane when it crosses a blocking factory entity.
+- Before: `strategy-iron-plate-gear-mall-logistics-20260614-234516.jsonl` advanced beyond the first dogleg but mined burner mining drill unit `40` because the fixed y=-62 lane crossed it.
+- After: `_select_iron_plate_line_detour_y` evaluates several offsets and the regression layout avoids the blocker on the default detour lane.
+- Evidence: `{"source_loop":288,"tests":"440 passed","bad_trace":"strategy-iron-plate-gear-mall-logistics-20260614-234516.jsonl mined burner-mining-drill unit 40","regression":"test_iron_plate_logistic_line_does_not_mine_source_furnace_as_blocker blocks default detour and verifies alternate segments"}`
+- Remaining risk: Existing live belts already follow the earlier y=-62 partial route; future longer route completion still needs more belts and may need a proper pathfinder if the corridor gets dense.
