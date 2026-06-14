@@ -397,6 +397,7 @@ TEXT["en"].update(
         "latest_delta_tokens": "Latest Delta",
         "weekly_quota": "Weekly Quota",
         "weekly_percent": "Weekly %",
+        "counter_resets": "Counter Resets",
         "trace_archives": "Training Trace Archives",
         "no_trace_archives": "No training trace archive has been created yet.",
         "archive": "Archive",
@@ -417,6 +418,7 @@ TEXT["ko"].update(
         "latest_delta_tokens": "Latest Delta",
         "weekly_quota": "Weekly Quota",
         "weekly_percent": "Weekly %",
+        "counter_resets": "카운터 리셋",
         "trace_archives": "Training Trace Archives",
         "no_trace_archives": "No training trace archive has been created yet.",
         "archive": "Archive",
@@ -2759,6 +2761,7 @@ def _token_usage_panel(value: Any, lang: str) -> str:
         f"{_metric(_t(lang, 'weekly_quota'), _format_int_or_unknown(usage.get('weekly_quota_tokens')))}"
         f"{_metric(_t(lang, 'weekly_percent'), _format_percent_or_unknown(usage.get('latest_weekly_percent')))}"
         f"{_metric(_t(lang, 'sample_count'), _format_int(usage.get('sample_count')))}"
+        f"{_metric(_t(lang, 'counter_resets'), _format_int(usage.get('counter_reset_count')))}"
         f"{_metric(_t(lang, 'last_sample'), _format_kst_timestamp(usage.get('updated_at')))}"
         "</div>"
         f"{_token_usage_svg(samples)}"
@@ -2856,7 +2859,7 @@ def _token_usage_svg(samples: list[Any]) -> str:
         if not isinstance(sample, dict):
             continue
         try:
-            value = int(sample.get("tokens_used") or 0)
+            value = _token_usage_display_value(sample)
         except (TypeError, ValueError):
             continue
         rows.append((value, _timestamp_seconds(sample.get("timestamp"))))
@@ -2927,7 +2930,7 @@ def _token_usage_table(samples: list[Any], lang: str) -> str:
             f"<td>{escape(_format_int(row.get('delta_tokens')))}</td>"
             f"<td>{escape(_format_percent_or_unknown(row.get('weekly_percent')))}</td>"
             f"<td>{escape(_format_token_rate_per_hour(row, previous))}</td>"
-            f"<td>{escape(_format_int(row.get('tokens_used')))}</td>"
+            f"<td>{escape(_format_int(_token_usage_display_value(row)))}</td>"
             "</tr>"
         )
     return (
@@ -2953,6 +2956,10 @@ def _format_token_rate_per_hour(row: dict[str, Any], previous: dict[str, Any] | 
     if delta is None:
         return ""
     return _format_int(round(delta * 3600.0 / elapsed_seconds))
+
+
+def _token_usage_display_value(row: dict[str, Any]) -> int:
+    return int(row.get("cumulative_tokens") or row.get("tokens_used") or 0)
 
 
 def _token_delta(row: dict[str, Any], previous: dict[str, Any]) -> int | None:

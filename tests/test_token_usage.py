@@ -40,6 +40,30 @@ class TokenUsageTests(unittest.TestCase):
             self.assertIsNone(summary_without_quota["weekly_quota_tokens"])
             self.assertIsNone(summary_without_quota["latest_weekly_percent"])
 
+    def test_counter_reset_continues_cumulative_display_tokens(self):
+        with TemporaryDirectory() as root:
+            log_dir = Path(root)
+            record_token_usage(log_dir, 1000, label="start", timestamp="2026-06-13T00:00:00+00:00")
+            record_token_usage(log_dir, 1250, label="first work", timestamp="2026-06-13T00:01:00+00:00")
+            reset = record_token_usage(
+                log_dir,
+                100,
+                label="new counter work",
+                timestamp="2026-06-13T00:02:00+00:00",
+            )
+
+            self.assertEqual(reset.delta_tokens, 100)
+
+            summary = token_usage_summary(log_dir)
+            self.assertEqual(summary["latest_raw_tokens"], 100)
+            self.assertEqual(summary["latest_tokens"], 1350)
+            self.assertEqual(summary["total_delta_tokens"], 350)
+            self.assertEqual(summary["latest_delta_tokens"], 100)
+            self.assertEqual(summary["counter_reset_count"], 1)
+            self.assertTrue(summary["latest_counter_reset"])
+            self.assertEqual(summary["samples"][-1]["cumulative_tokens"], 1350)
+            self.assertEqual(summary["samples"][-1]["tokens_used"], 100)
+
 
 if __name__ == "__main__":
     unittest.main()

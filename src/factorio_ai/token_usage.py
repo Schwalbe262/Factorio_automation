@@ -40,7 +40,7 @@ def record_token_usage(
     path = token_usage_path(log_dir)
     previous = load_token_usage(log_dir)
     last_tokens = previous[-1].tokens_used if previous else tokens_used
-    delta = max(0, tokens_used - last_tokens)
+    delta = _sample_delta_tokens(tokens_used, last_tokens)
     sample = TokenUsageSample(
         timestamp=timestamp or datetime.now(timezone.utc).isoformat(),
         tokens_used=int(tokens_used),
@@ -90,7 +90,6 @@ def load_token_usage(log_dir: Path, *, limit: int | None = None) -> list[TokenUs
 
 def token_usage_summary(log_dir: Path, *, limit: int = 120) -> dict[str, Any]:
     all_samples = load_token_usage(log_dir)
-    samples = all_samples[-limit:] if limit >= 0 else all_samples
     weekly_quota = _weekly_token_quota()
     if not all_samples:
         return {
@@ -101,24 +100,35 @@ def token_usage_summary(log_dir: Path, *, limit: int = 120) -> dict[str, Any]:
             "latest_delta_tokens": 0,
             "weekly_quota_tokens": weekly_quota,
             "latest_weekly_percent": None,
+            "counter_reset_count": 0,
+            "latest_counter_reset": False,
             "updated_at": None,
             "log_path": str(token_usage_path(log_dir)),
         }
-    first = all_samples[0]
-    latest = all_samples[-1]
-    total_delta = max(0, latest.tokens_used - first.tokens_used)
-    latest_delta = max(0, latest.delta_tokens)
+    enriched = _samples_with_context(all_samples, weekly_quota)
+    latest_enriched = enriched[-1]
+    total_delta = sum(max(0, int(sample.get("delta_tokens") or 0)) for sample in enriched)
+    latest_delta = max(0, int(latest_enriched.get("delta_tokens") or 0))
     return {
-        "samples": [_sample_with_weekly_percent(sample, weekly_quota) for sample in samples],
+        "samples": enriched[-limit:] if limit >= 0 else enriched,
         "sample_count": len(all_samples),
-        "latest_tokens": latest.tokens_used,
+        "latest_tokens": int(latest_enriched.get("cumulative_tokens") or 0),
+        "latest_raw_tokens": all_samples[-1].tokens_used,
         "total_delta_tokens": total_delta,
         "latest_delta_tokens": latest_delta,
         "weekly_quota_tokens": weekly_quota,
         "latest_weekly_percent": _weekly_percent(latest_delta, weekly_quota),
-        "updated_at": latest.timestamp,
+        "counter_reset_count": sum(1 for sample in enriched if sample.get("counter_reset")),
+        "latest_counter_reset": bool(latest_enriched.get("counter_reset")),
+        "updated_at": all_samples[-1].timestamp,
         "log_path": str(token_usage_path(log_dir)),
     }
+
+
+def _sample_delta_tokens(tokens_used: int, last_tokens: int) -> int:
+    if tokens_used < last_tokens:
+        return tokens_used
+    return tokens_used - last_tokens
 
 
 def _weekly_token_quota() -> int | None:
@@ -132,10 +142,31 @@ def _weekly_token_quota() -> int | None:
     return quota if quota > 0 else None
 
 
-def _sample_with_weekly_percent(sample: TokenUsageSample, weekly_quota: int | None) -> dict[str, Any]:
-    data = sample.to_dict()
-    data["weekly_percent"] = _weekly_percent(max(0, sample.delta_tokens), weekly_quota)
-    return data
+def _samples_with_context(samples: list[TokenUsageSample], weekly_quota: int | None) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    session_index = 0
+    previous_tokens: int | None = None
+    cumulative_tokens: int | None = None
+    for sample in samples:
+        counter_reset = previous_tokens is not None and sample.tokens_used < previous_tokens
+        if counter_reset:
+            session_index += 1
+        delta = max(0, int(sample.delta_tokens))
+        if delta == 0 and previous_tokens is not None:
+            delta = _sample_delta_tokens(sample.tokens_used, previous_tokens)
+        if cumulative_tokens is None:
+            cumulative_tokens = sample.tokens_used
+        else:
+            cumulative_tokens += delta
+        data = sample.to_dict()
+        data["delta_tokens"] = delta
+        data["cumulative_tokens"] = cumulative_tokens
+        data["counter_reset"] = counter_reset
+        data["counter_session"] = session_index
+        data["weekly_percent"] = _weekly_percent(delta, weekly_quota)
+        enriched.append(data)
+        previous_tokens = sample.tokens_used
+    return enriched
 
 
 def _weekly_percent(delta_tokens: int, weekly_quota: int | None) -> float | None:

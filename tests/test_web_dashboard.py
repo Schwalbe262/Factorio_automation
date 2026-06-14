@@ -652,6 +652,32 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("06-13 09:00", svg)
         self.assertIn("06-13 10:00", svg)
 
+    def test_token_usage_chart_uses_cumulative_tokens_after_counter_reset(self):
+        svg = _token_usage_svg(
+            [
+                {
+                    "timestamp": "2026-06-13T00:00:00+00:00",
+                    "tokens_used": 1000,
+                    "cumulative_tokens": 1000,
+                },
+                {
+                    "timestamp": "2026-06-13T00:01:00+00:00",
+                    "tokens_used": 1250,
+                    "cumulative_tokens": 1250,
+                },
+                {
+                    "timestamp": "2026-06-13T00:02:00+00:00",
+                    "tokens_used": 100,
+                    "cumulative_tokens": 1350,
+                    "counter_reset": True,
+                },
+            ]
+        )
+
+        self.assertIn(">1,000<", svg)
+        self.assertIn(">1,350<", svg)
+        self.assertNotIn(">100<", svg)
+
     def test_token_usage_table_includes_hourly_rate(self):
         html = _token_usage_table(
             [
@@ -677,6 +703,32 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn(">500<", html)
         self.assertIn("Weekly %", html)
         self.assertIn("2.5000%", html)
+
+    def test_token_usage_table_uses_cumulative_tokens_after_counter_reset(self):
+        html = _token_usage_table(
+            [
+                {
+                    "timestamp": "2026-06-13T00:00:00+00:00",
+                    "tokens_used": 1250,
+                    "cumulative_tokens": 1250,
+                    "delta_tokens": 250,
+                    "label": "before reset",
+                    "weekly_percent": None,
+                },
+                {
+                    "timestamp": "2026-06-13T00:30:00+00:00",
+                    "tokens_used": 100,
+                    "cumulative_tokens": 1350,
+                    "delta_tokens": 100,
+                    "label": "after reset",
+                    "weekly_percent": None,
+                },
+            ],
+            "en",
+        )
+
+        self.assertIn(">1,350<", html)
+        self.assertIn("after reset</td><td>100</td><td>unknown</td><td>200</td><td>1,350</td>", html)
 
     def test_dashboard_renders_goal_notes_and_insights(self):
         html = render_dashboard(
