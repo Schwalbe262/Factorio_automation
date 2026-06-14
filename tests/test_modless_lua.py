@@ -131,6 +131,8 @@ class ModlessLuaTests(unittest.TestCase):
         action_build = command[command.index("local function action_build") :]
 
         self.assertIn("existing_built_entity", command)
+        self.assertIn("expected_build_positions", command)
+        self.assertIn("distance(entity.position, probe) <= 0.25", command)
         self.assertIn('status = "already_exists"', command)
         self.assertLess(action_build.index("existing_built_entity(agent.surface"), action_build.index("inventory.get_item_count"))
 

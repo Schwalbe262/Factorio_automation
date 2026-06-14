@@ -1063,10 +1063,25 @@ local function build_candidate_valid(surface, force, request, position, directio
   end
   return true
 end
+local function expected_build_positions(position)
+  local positions = { position }
+  local rounded_x = math.floor(position.x + 0.5)
+  local rounded_y = math.floor(position.y + 0.5)
+  if math.abs(position.x - rounded_x) < 0.001 and math.abs(position.y - rounded_y) < 0.001 then
+    table.insert(positions, { x = position.x + 0.5, y = position.y + 0.5 })
+  end
+  return positions
+end
 local function existing_built_entity(surface, force, name, position)
-  local found = surface.find_entities_filtered({ position = position, radius = 0.75, name = name, force = force, limit = 1 })
-  local entity = found[1]
-  if entity and entity.valid then return entity end
+  local found = surface.find_entities_filtered({ position = position, radius = 1.25, name = name, force = force, limit = 16 })
+  local probes = expected_build_positions(position)
+  for _, entity in pairs(found) do
+    if entity.valid then
+      for _, probe in pairs(probes) do
+        if distance(entity.position, probe) <= 0.25 then return entity end
+      end
+    end
+  end
   return nil
 end
 local function virtual_craft(recipe_name, count)

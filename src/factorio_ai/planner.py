@@ -4607,6 +4607,29 @@ def _entity_near(
     return _nearest_to(candidates, position)
 
 
+def _entity_at_build_position(
+    observation: dict[str, Any],
+    name: str,
+    position: dict[str, float],
+    radius: float = 0.25,
+) -> dict[str, Any] | None:
+    probe_positions = [position]
+    try:
+        x = float(position["x"])
+        y = float(position["y"])
+    except (KeyError, TypeError, ValueError):
+        x = 0.0
+        y = 0.0
+    if abs(x - round(x)) < 0.001 and abs(y - round(y)) < 0.001:
+        probe_positions.append({"x": x + 0.5, "y": y + 0.5})
+    candidates: list[dict[str, Any]] = []
+    for entity in entities_named(observation, name):
+        entity_position = _position(entity)
+        if any(distance(entity_position, probe) <= radius for probe in probe_positions):
+            candidates.append(entity)
+    return _nearest_to(candidates, position) if candidates else None
+
+
 def _find_iron_plate_logistic_line_to_gear_mall_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
     gear_layout = _find_gear_belt_mall_logistics_layout(observation)
     if gear_layout is None:
@@ -4706,7 +4729,7 @@ def _iron_plate_line_segments(
             {
                 "position": rounded,
                 "direction": direction,
-                "entity": _entity_near(observation, "transport-belt", rounded, radius=0.75),
+                "entity": _entity_at_build_position(observation, "transport-belt", rounded),
             }
         )
     return segments

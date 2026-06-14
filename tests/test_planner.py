@@ -3106,7 +3106,7 @@ class PlannerTests(unittest.TestCase):
                 {
                     "name": "transport-belt",
                     "unit_number": 951,
-                    "position": {"x": 10, "y": 2},
+                    "position": {"x": 10.5, "y": 2.5},
                     "direction": 4,
                     "inventories": {},
                 },

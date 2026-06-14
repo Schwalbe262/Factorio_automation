@@ -336,3 +336,11 @@
 - After: The source was restored as furnace unit `395`; the patched route mined only stale misoriented belt unit `394` and rebuilt transport belt unit `396` with EAST direction while leaving source furnace unit `395` working.
 - Evidence: `{"source_loop":285,"tests":"440 passed","bad_trace":"strategy-iron-plate-gear-mall-logistics-20260614-232509.jsonl mined source furnace unit 43","fixed_trace":"strategy-iron-plate-gear-mall-logistics-20260614-233210.jsonl","restored_source":{"unit":395,"recipe":"iron-plate","status":"working"},"fixed_actions":["mine transport-belt unit 394","build transport-belt unit 396 direction EAST"],"bad_actions_absent_after_patch":["mine source furnace","craft iron-gear-wheel"]}`
 - Remaining risk: The full belt route and endpoint inserters still need to be completed, and the gear/belt mall power shortage remains a follow-up blocker.
+
+## 2026-06-15 08:43:29 +09:00 - Insight 41
+- Source loop: Loop 287
+- Improvement: The no-mod build executor no longer treats adjacent belt tiles as the same existing entity, so the iron-plate logistics route can advance past the first dogleg belt.
+- Before: Loop 286 / `strategy-iron-plate-gear-mall-logistics-20260614-234054.jsonl` repeatedly requested a belt at `{x:92,y:-65}`, but `existing_built_entity` returned adjacent unit `417` at `{x:91.5,y:-64.5}` as `already_exists`.
+- After: Direct live build at `{x:92,y:-65}` created unit `418` at `{x:92.5,y:-64.5}` with SOUTH direction, and planner dry check advanced to the next segment `{x:92,y:-64}`.
+- Evidence: `{"source_loop":287,"tests":"440 passed","bad_trace":"strategy-iron-plate-gear-mall-logistics-20260614-234054.jsonl already_exists unit 417 for adjacent tile","fixed_live_build":{"unit":418,"position":{"x":92.5,"y":-64.5},"direction":8},"next_dry_action":{"type":"build","name":"transport-belt","position":{"x":92,"y":-64},"direction":8}}`
+- Remaining risk: The full 150-tile route still needs to be completed; build-item supply and gear/belt mall power remain downstream blockers.

@@ -6045,3 +6045,50 @@
 - Next action: Commit/push Part 98, then restart headless no-mod autopilot so Qwen can continue the protected logistics route.
 - Token usage: cumulative 57,011,242; current raw counter 9,327,842; delta 102,590 / weekly quota unavailable
 
+## 2026-06-15 08:41:14 +09:00 - Loop 286
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 4 step(s).
+  - Tracked `transport-belt` from 8 to 8.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260614-234054.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 4.
+  - Status: failed.
+  - Duration: 19.984s.
+  - transport-belt: 8 -> 8 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260614-234054.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":8,"initial_item_count":8,"max_steps":4,"target":40}`.
+- Result: Loop stopped: max steps reached: 4
+- Failure reason: max steps reached: 4
+- Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 08:43:29 +09:00 - Loop 287
+- Part: Part 99 - narrow no-mod existing build matching
+- Goal: Stop the no-mod executor from treating an adjacent transport belt as the requested new belt tile.
+- Hypothesis: `existing_built_entity` used a 0.75 radius around the requested build position, so a belt centered at `{x:91.5,y:-64.5}` could be returned as already existing for the next requested tile `{x:92,y:-65}`.
+- Actions:
+  - Added `_entity_at_build_position` in planner so belt segment matching accepts only the requested build position or the Factorio center of an integer tile.
+  - Updated the iron-plate logistics regression test to use live-style `+0.5` belt centers.
+  - Narrowed no-mod Lua `existing_built_entity` to `expected_build_positions` with `distance <= 0.25`.
+  - Added `test_build_action_is_idempotent_for_existing_entities` assertions for the new narrow matcher.
+  - Live-verified direct build at `{x:92,y:-65}` created new transport belt unit `418` instead of returning `already_exists` for unit `417`.
+  - Verified planner dry next action advanced to `{x:92,y:-64}` after unit `418`.
+- Candidates:
+  - Bad trace: `strategy-iron-plate-gear-mall-logistics-20260614-234054.jsonl` repeatedly requested `{x:92,y:-65}` and got `already_exists` for unit `417`.
+  - Fixed live state: unit `417` at `{x:91.5,y:-64.5}` direction EAST, unit `418` at `{x:92.5,y:-64.5}` direction SOUTH.
+- Metrics:
+  - Tests: `python -m unittest discover tests` -> 440 passed.
+  - Live direct build: response `unit_number=418`, no `already_exists`.
+  - Dry next action: build `transport-belt` at `{x:92,y:-64}` direction SOUTH.
+  - Token usage sample: cumulative 57,075,671, current raw counter 9,392,271, delta 64,429 since prior sample, weekly quota unavailable.
+- Result: Adjacent belt tiles are no longer collapsed into the same existing entity match.
+- Failure reason: None for the patch; the prior Loop 286 failure was caused by broad no-mod existing-entity matching.
+- Next action: Commit/push Part 99, then restart headless no-mod autopilot.
+- Token usage: cumulative 57,075,671; current raw counter 9,392,271; delta 64,429 / weekly quota unavailable
+
