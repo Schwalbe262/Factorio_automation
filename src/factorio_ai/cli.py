@@ -34,6 +34,7 @@ from .vanilla_gui import (
 from .vanilla_perception import classify_bmp_file
 from .web_dashboard import FACTORIO_ROUTE, public_dashboard_urls, serve_dashboard
 from .token_usage import record_token_usage, token_usage_summary
+from .run_journal import run_journal_summary
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -300,6 +301,7 @@ def main(argv: list[str] | None = None) -> None:
     token_parser.add_argument("--timestamp")
 
     subparsers.add_parser("token-usage-summary", help="Print the recorded Codex token usage summary")
+    subparsers.add_parser("run-journal-summary", help="Print goal, loop note, and insight journal summary")
 
     action_parser = subparsers.add_parser("action", help="Execute /ai_action JSON")
     action_parser.add_argument("json_action")
@@ -943,6 +945,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "token-usage-summary":
         print_json({"ok": True, "token_usage": token_usage_summary(cfg.log_dir)})
+        return
+
+    if args.command == "run-journal-summary":
+        print_json({"ok": True, "run_journal": run_journal_summary(cfg.log_dir)})
         return
 
     if args.command == "action":

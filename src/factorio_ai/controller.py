@@ -24,6 +24,12 @@ from .models import (
 )
 from .modless_lua import ModlessLuaController
 from .monitor import summarize_factory
+from .run_journal import (
+    record_autopilot_cycle_journal,
+    record_layout_loop_journal,
+    record_layout_result_insight,
+    record_skill_run_journal,
+)
 from .planner import (
     AutomationScienceSkill,
     BeltSmeltingLineSkill,
@@ -649,17 +655,30 @@ class FactorioController:
                     completed += 1
                     if not last_step.ok:
                         failures += 1
+                    duration_seconds = round(time.monotonic() - started, 3)
                     payload = {
                         "time": datetime.now(timezone.utc).isoformat(),
                         "cycle": completed,
                         "objective": objective,
                         "ok": last_step.ok,
-                        "duration_seconds": round(time.monotonic() - started, 3),
+                        "duration_seconds": duration_seconds,
                         "step": last_step.to_dict(),
                     }
                     json.dump(payload, log_file, ensure_ascii=False, separators=(",", ":"))
                     log_file.write("\n")
                     log_file.flush()
+                    record_autopilot_cycle_journal(
+                        self.cfg.log_dir,
+                        objective=objective,
+                        cycle=completed,
+                        selected_skill=last_step.selected_skill,
+                        ok=last_step.ok,
+                        reason=last_step.reason,
+                        duration_seconds=duration_seconds,
+                        strategy=last_step.strategy,
+                        log_path=log_path,
+                        repo_root=self._journal_repo_root(),
+                    )
                     self._write_autopilot_heartbeat(
                         objective,
                         "cycle_complete" if last_step.ok else "cycle_failed",
@@ -728,6 +747,18 @@ class FactorioController:
                 self._maybe_progress_codex_wait_layout(wait_objective, phase="wait_loop")
                 completed += 1
                 reason = "cycle limit reached" if cycles > 0 and completed >= cycles else "Codex wait layout loop running"
+                record_layout_loop_journal(
+                    self.cfg.log_dir,
+                    loop_type="codex_wait_layout_cycle",
+                    objective=wait_objective,
+                    cycle=completed,
+                    active_skill=active_skill,
+                    ok=True,
+                    reason=reason,
+                    log_path=log_path,
+                    metadata={"wait_active": True},
+                    repo_root=self._journal_repo_root(),
+                )
                 if cycles > 0 and completed >= cycles:
                     break
                 time.sleep(max(0.0, sleep_seconds))
@@ -819,6 +850,18 @@ class FactorioController:
                                 "error": f"{type(exc).__name__}: {exc}",
                             }
                         )
+                        record_layout_loop_journal(
+                            self.cfg.log_dir,
+                            loop_type="idle_layout_cycle",
+                            objective=objective,
+                            cycle=completed,
+                            active_skill="idle:observe_failed",
+                            ok=False,
+                            reason=f"observe failed: {type(exc).__name__}: {exc}",
+                            log_path=log_path,
+                            metadata={"idle_reason": idle_reason},
+                            repo_root=self._journal_repo_root(),
+                        )
                     else:
                         active_skill = f"idle:{_slugify_reason(idle_reason)}"
                         self._write_background_layout_log(
@@ -829,6 +872,18 @@ class FactorioController:
                                 "idle_reason": idle_reason,
                                 "heartbeat": heartbeat,
                             }
+                        )
+                        record_layout_loop_journal(
+                            self.cfg.log_dir,
+                            loop_type="idle_layout_cycle",
+                            objective=objective,
+                            cycle=completed,
+                            active_skill=active_skill,
+                            ok=True,
+                            reason=idle_reason,
+                            log_path=log_path,
+                            metadata={"idle": True},
+                            repo_root=self._journal_repo_root(),
                         )
                         self._maybe_progress_background_layout_work(
                             observation,
@@ -847,6 +902,18 @@ class FactorioController:
                             "idle_reason": idle_reason,
                             "heartbeat": heartbeat,
                         }
+                    )
+                    record_layout_loop_journal(
+                        self.cfg.log_dir,
+                        loop_type="idle_layout_cycle",
+                        objective=objective,
+                        cycle=completed,
+                        active_skill="autopilot",
+                        ok=True,
+                        reason=idle_reason,
+                        log_path=log_path,
+                        metadata={"idle": False},
+                        repo_root=self._journal_repo_root(),
                     )
                 reason = "cycle limit reached" if cycles > 0 and completed >= cycles else "idle layout loop running"
                 if cycles > 0 and completed >= cycles:
@@ -1100,27 +1167,54 @@ class FactorioController:
     ) -> RunSummary:
         self.cfg.log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_path or self.cfg.log_dir / f"{log_prefix}-{_timestamp()}.jsonl"
+        started_at = time.monotonic()
+        initial_item_count: int | None = None
+
+        def finish(ok: bool, reason: str, step: int, observation: dict[str, Any]) -> RunSummary:
+            nonlocal initial_item_count
+            final_item_count = total_item_count(observation, target_item)
+            if initial_item_count is None:
+                initial_item_count = final_item_count
+            summary = RunSummary(ok, reason, step, final_item_count, log_path, target_item)
+            record_skill_run_journal(
+                self.cfg.log_dir,
+                objective=objective,
+                goal=goal,
+                ok=ok,
+                reason=reason,
+                steps=step,
+                item_name=target_item,
+                initial_item_count=initial_item_count,
+                final_item_count=final_item_count,
+                target=target,
+                max_steps=max_steps,
+                log_path=log_path,
+                duration_seconds=time.monotonic() - started_at,
+                repo_root=self._journal_repo_root(),
+            )
+            return summary
 
         with log_path.open("a", encoding="utf-8") as log_file:
             for step in range(1, max_steps + 1):
                 self._wait_for_review_window()
                 observation = self.observe()
+                if initial_item_count is None:
+                    initial_item_count = total_item_count(observation, target_item)
                 self._maybe_progress_background_layout_work(observation, objective, goal, step)
                 decision = skill.next_action(observation)
-                item_count = total_item_count(observation, target_item)
                 self._write_log(log_file, step, observation, decision, None)
                 if decision.done:
                     self._maybe_progress_background_layout_work(observation, objective, goal, step, force_poll=True)
-                    return RunSummary(True, decision.reason, step, item_count, log_path, target_item)
+                    return finish(True, decision.reason, step, observation)
                 if decision.action is None:
                     self._maybe_progress_background_layout_work(observation, objective, goal, step, force_poll=True)
-                    return RunSummary(False, decision.reason, step, item_count, log_path, target_item)
+                    return finish(False, decision.reason, step, observation)
 
                 action = self._maybe_apply_remote_hint(observation, decision, goal)
                 response = self.act(action)
                 self._write_log(log_file, step, observation, decision, response)
                 if not response.get("ok"):
-                    return RunSummary(False, f"action failed: {response.get('reason')}", step, item_count, log_path, target_item)
+                    return finish(False, f"action failed: {response.get('reason')}", step, observation)
                 if action.get("type") == "wait":
                     ticks = int(action.get("ticks") or 60)
                     time.sleep(max(0.05, ticks / 60.0))
@@ -1128,27 +1222,13 @@ class FactorioController:
                     arrived, reason = self._wait_for_move(action)
                     if not arrived:
                         observation = self.observe()
-                        return RunSummary(
-                            False,
-                            reason,
-                            step,
-                            total_item_count(observation, target_item),
-                            log_path,
-                            target_item,
-                        )
+                        return finish(False, reason, step, observation)
                 else:
                     time.sleep(0.2)
 
         observation = self.observe()
         self._maybe_progress_background_layout_work(observation, objective, goal, max_steps, force_poll=True)
-        return RunSummary(
-            False,
-            f"max steps reached: {max_steps}",
-            max_steps,
-            total_item_count(observation, target_item),
-            log_path,
-            target_item,
-        )
+        return finish(False, f"max steps reached: {max_steps}", max_steps, observation)
 
     def _autopilot_heartbeat_path(self) -> Path:
         return self.cfg.runtime_dir / "autopilot-heartbeat.json"
@@ -1465,6 +1545,7 @@ class FactorioController:
                             {
                                 "event": "layout_result",
                                 "task": self._background_layout_task_name,
+                                "objective": objective,
                                 "active_skill": active_skill,
                                 "active_step": active_step,
                                 "state": state,
@@ -1592,6 +1673,7 @@ class FactorioController:
             self._background_layout_thread_result = {
                 "event": "layout_result",
                 "mode": "attach",
+                "objective": objective,
                 "active_skill": active_skill,
                 "active_step": active_step,
                 "result": result,
@@ -1612,6 +1694,21 @@ class FactorioController:
         with path.open("a", encoding="utf-8") as file:
             json.dump(row, file, ensure_ascii=False, separators=(",", ":"))
             file.write("\n")
+        result = row.get("result") if isinstance(row.get("result"), dict) else {}
+        if row.get("event") == "layout_result" and result:
+            record_layout_result_insight(
+                self.cfg.log_dir,
+                objective=str(row.get("objective") or "launch_rocket_program"),
+                active_skill=str(row.get("active_skill") or ""),
+                result=result,
+                repo_root=self._journal_repo_root(),
+            )
+
+    def _journal_repo_root(self) -> Path:
+        runtime_dir = Path(self.cfg.runtime_dir)
+        if runtime_dir.name == "runtime":
+            return runtime_dir.parent
+        return REPO_ROOT
 
     def _client(self) -> FactorioRconClient:
         return FactorioRconClient(self.cfg.rcon_host, self.cfg.rcon_port, self.cfg.rcon_password)

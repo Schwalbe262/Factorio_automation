@@ -1,6 +1,6 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-14 22:18 KST
+Last updated: 2026-06-14 23:35 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
@@ -646,6 +646,89 @@ Browser verification:
 
 - The in-app Browser plugin was attempted again.
 - `iab` was unavailable (`Browser is not available: iab`), so no visual screenshot/click automation was captured.
+
+Part 73 verification:
+
+```powershell
+$env:PYTHONPATH='src'
+pytest -q tests\test_run_journal.py tests\test_token_usage.py tests\test_web_dashboard.py tests\test_controller.py
+```
+
+Result: `50 passed`
+
+```powershell
+$env:PYTHONPATH='src'
+pytest -q
+```
+
+Result: `341 passed`
+
+Dashboard smoke after restarting the web process:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:18889/factorio?lang=en&objective=launch_rocket_program'
+Invoke-WebRequest -UseBasicParsing 'http://27.115.156.173:8787/factorio?lang=en&objective=launch_rocket_program'
+```
+
+Result:
+
+- both returned HTTP `200`.
+- both contained `Goal Plan`, `Recent Loop Notes`, `Recent Insights`, and `Weekly %`.
+
+Part 73 token usage sample:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli record-token-usage --tokens-used 38675003 --label "part73 goal journal and dashboard" --source codex
+```
+
+Result: appended `delta_tokens=243637` to `logs/token_usage.jsonl`. `FACTORIO_AI_WEEKLY_TOKEN_QUOTA` was not set, so weekly percent is `unknown`.
+
+Part 73 adds goal and loop journal tracking:
+
+- Root Markdown files:
+  - `goal.md` now stores the long-term rocket/Space Age roadmap, current sprint, factory quality criteria, and learning roadmap.
+  - `note.md` is the human-readable loop execution journal.
+  - `insight.md` is the human-readable improvement journal and is only appended when a loop produces meaningful progress.
+
+- `src/factorio_ai/run_journal.py`
+  - New structured source logs: `logs/run-notes.jsonl` and `logs/run-insights.jsonl`.
+  - Appends Markdown summaries to `note.md` and `insight.md`.
+  - Provides `run_journal_summary(...)` for CLI and dashboard consumption.
+
+- `src/factorio_ai/controller.py`
+  - Skill loops append one note per skill execution and insight rows for item-count increases or successful skill completion.
+  - Autopilot cycles append one note per strategy cycle.
+  - Idle and Codex-wait layout cycles append notes.
+  - Layout results append insights when they produce a selected candidate or next simulation focus.
+
+- `src/factorio_ai/token_usage.py`
+  - Token summaries now include `latest_delta_tokens`, optional `FACTORIO_AI_WEEKLY_TOKEN_QUOTA`, and weekly percentage fields.
+  - If the weekly quota env var is unset, percentage renders as `unknown`.
+
+- `src/factorio_ai/web_dashboard.py`
+  - Dashboard now renders Goal Plan, Recent Loop Notes, Recent Insights, and weekly token percentage.
+
+- `src/factorio_ai/cli.py`
+  - Adds `run-journal-summary`.
+
+- Tests added/updated:
+  - `tests/test_run_journal.py`
+  - `tests/test_token_usage.py`
+  - `tests/test_web_dashboard.py`
+
+Part 73 smoke:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli run-no-mod-idle-layout-loop --objective launch_rocket_program --cycles 1 --sleep-seconds 0 --stale-seconds 0 --min-submit-interval-seconds 9999
+```
+
+Result:
+
+- `ok: true`
+- one `idle_layout_cycle` note was appended to `note.md` and `logs/run-notes.jsonl`.
+- no `insight.md` entry was appended because the smoke did not improve the factory.
 
 ## Important Caveat: Blueprint Validation
 

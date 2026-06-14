@@ -625,6 +625,14 @@ cannot silently slide onto iron ore when `allow_nearby` is used.
 
 The model should improve over time instead of relying only on a commercial LLM forever.
 
+Human-readable operating files:
+
+- `goal.md` records the long-term rocket/Space Age roadmap, current sprint, factory quality criteria, and learning roadmap.
+- `note.md` records loop execution summaries.
+- `insight.md` records meaningful improvements only.
+
+Structured journal sources are written to `logs/run-notes.jsonl` and `logs/run-insights.jsonl`. The dashboard renders these as Goal Plan, Recent Loop Notes, and Recent Insights.
+
 Data sources to save:
 
 - strategic decisions: observation, selected skill, reason, blockers, result;

@@ -18,6 +18,7 @@ from .llm_log import llm_decision_summary
 from .monitor import summarize_factory
 from .networking import dashboard_urls
 from .modless_lua import ModlessLuaController
+from .run_journal import run_journal_summary
 from .skill_registry import annotate_strategy_with_skill_status
 from .site_selection import (
     clear_selected_improvement_site,
@@ -365,6 +366,34 @@ TEXT["ko"].update(
         "clear_improvement_site": "\ucde8\uc18c",
     }
 )
+TEXT["en"].update(
+    {
+        "goal_plan": "Goal Plan",
+        "recent_run_notes": "Recent Loop Notes",
+        "recent_run_insights": "Recent Insights",
+        "no_goal_plan": "No goal.md has been created yet.",
+        "no_run_notes": "No loop notes have been recorded yet.",
+        "no_run_insights": "No improvement insights have been recorded yet.",
+        "loop_type": "Loop",
+        "latest_delta_tokens": "Latest Delta",
+        "weekly_quota": "Weekly Quota",
+        "weekly_percent": "Weekly %",
+    }
+)
+TEXT["ko"].update(
+    {
+        "goal_plan": "Goal Plan",
+        "recent_run_notes": "Recent Loop Notes",
+        "recent_run_insights": "Recent Insights",
+        "no_goal_plan": "No goal.md has been created yet.",
+        "no_run_notes": "No loop notes have been recorded yet.",
+        "no_run_insights": "No improvement insights have been recorded yet.",
+        "loop_type": "Loop",
+        "latest_delta_tokens": "Latest Delta",
+        "weekly_quota": "Weekly Quota",
+        "weekly_percent": "Weekly %",
+    }
+)
 
 
 def serve_dashboard(
@@ -704,6 +733,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
     worker_comparison = strategy_worker_comparison_summary(cfg.log_dir)
     layout_background = layout_background_summary(cfg.log_dir)
     layout_validation_feedback = layout_validation_feedback_summary(cfg.log_dir)
+    run_journal = run_journal_summary(cfg.log_dir)
     try:
         observation, adapter = observe_dashboard_state(cfg)
         monitor = summarize_factory(observation, objective, production_targets=targets.per_minute)
@@ -742,6 +772,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "token_usage": token_usage,
             "llm_decisions": llm_decisions,
             "strategy_worker_comparison": worker_comparison,
+            "run_journal": run_journal,
         }
     except Exception as exc:  # noqa: BLE001
         return {
@@ -756,6 +787,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "token_usage": token_usage,
             "llm_decisions": llm_decisions,
             "strategy_worker_comparison": worker_comparison,
+            "run_journal": run_journal,
         }
 
 
@@ -850,6 +882,9 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
               <h2>{_t(lang, "layout_background")}</h2>
               {_layout_background_panel(state.get("layout_background"), lang)}
             </section>
+            {_goal_panel(state.get("run_journal"), lang)}
+            {_run_notes_panel(state.get("run_journal"), lang)}
+            {_run_insights_panel(state.get("run_journal"), lang)}
             {_token_usage_panel(state.get("token_usage"), lang)}
             """,
             lang,
@@ -884,6 +919,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     execution = state.get("execution") if isinstance(state.get("execution"), dict) else {}
     layout_improvement = state.get("layout_improvement") if isinstance(state.get("layout_improvement"), dict) else {}
     layout_background = state.get("layout_background") if isinstance(state.get("layout_background"), dict) else {}
+    run_journal = state.get("run_journal") if isinstance(state.get("run_journal"), dict) else {}
     selected_improvement_site = (
         state.get("selected_improvement_site") if isinstance(state.get("selected_improvement_site"), dict) else {}
     )
@@ -909,6 +945,8 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     </section>
 
     {_agent_activity_panel(agent_marker, state.get("player"), execution, lang)}
+
+    {_goal_panel(run_journal, lang)}
 
     <section class="panel">
       <h2>{_t(lang, "strategic_recommendation")}</h2>
@@ -979,6 +1017,10 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
       <h2>{_t(lang, "layout_background")}</h2>
       {_layout_background_panel(layout_background, lang)}
     </section>
+
+    {_run_notes_panel(run_journal, lang)}
+
+    {_run_insights_panel(run_journal, lang)}
 
     <section class="panel">
       <h2>{_t(lang, "factory_events")}</h2>
@@ -1979,6 +2021,96 @@ def _layout_background_panel(value: Any, lang: str) -> str:
     )
 
 
+def _goal_panel(value: Any, lang: str) -> str:
+    summary = value if isinstance(value, dict) else {}
+    goal = summary.get("goal") if isinstance(summary.get("goal"), dict) else {}
+    if not goal.get("exists"):
+        return (
+            "<section class=\"panel\">"
+            f"<h2>{_t(lang, 'goal_plan')}</h2>"
+            f"<p class=\"muted\">{_t(lang, 'no_goal_plan')}</p>"
+            "</section>"
+        )
+    rows = "".join(
+        f"<li>{escape(str(item))}</li>"
+        for item in (goal.get("summary") if isinstance(goal.get("summary"), list) else [])[:8]
+    )
+    title = str(goal.get("title") or "goal.md")
+    path = str(goal.get("path") or "")
+    return (
+        "<section class=\"panel\">"
+        f"<h2>{_t(lang, 'goal_plan')}</h2>"
+        f"<p><strong>{escape(title)}</strong></p>"
+        f"<ul>{rows}</ul>"
+        f"<p class=\"muted\">{escape(path)}</p>"
+        "</section>"
+    )
+
+
+def _run_notes_panel(value: Any, lang: str) -> str:
+    summary = value if isinstance(value, dict) else {}
+    rows = summary.get("notes") if isinstance(summary.get("notes"), list) else []
+    if not rows:
+        return (
+            "<section class=\"panel\">"
+            f"<h2>{_t(lang, 'recent_run_notes')}</h2>"
+            f"<p class=\"muted\">{_t(lang, 'no_run_notes')}</p>"
+            "</section>"
+        )
+    body = "".join(
+        "<tr>"
+        f"<td>{escape(_format_kst_timestamp(row.get('timestamp')))}</td>"
+        f"<td>{escape(str(row.get('loop_type') or ''))}</td>"
+        f"<td>{escape(str(row.get('goal') or ''))}</td>"
+        f"<td>{escape(_yes_no(row.get('ok'), lang))}</td>"
+        f"<td>{escape(str(row.get('steps') or ''))}</td>"
+        f"<td>{escape(str(row.get('reason') or ''))}</td>"
+        f"<td>{escape(str(row.get('log_path') or ''))}</td>"
+        "</tr>"
+        for row in reversed(rows[-12:])
+        if isinstance(row, dict)
+    )
+    return (
+        "<section class=\"panel\">"
+        f"<h2>{_t(lang, 'recent_run_notes')}</h2>"
+        f"<table><thead><tr><th>{_t(lang, 'updated')}</th><th>{_t(lang, 'loop_type')}</th>"
+        f"<th>{_t(lang, 'executor')}</th><th>{_t(lang, 'status')}</th><th>{_t(lang, 'count')}</th>"
+        f"<th>{_t(lang, 'reason')}</th><th>Log</th></tr></thead><tbody>{body}</tbody></table>"
+        "</section>"
+    )
+
+
+def _run_insights_panel(value: Any, lang: str) -> str:
+    summary = value if isinstance(value, dict) else {}
+    rows = summary.get("insights") if isinstance(summary.get("insights"), list) else []
+    if not rows:
+        return (
+            "<section class=\"panel\">"
+            f"<h2>{_t(lang, 'recent_run_insights')}</h2>"
+            f"<p class=\"muted\">{_t(lang, 'no_run_insights')}</p>"
+            "</section>"
+        )
+    body = "".join(
+        "<tr>"
+        f"<td>{escape(_format_kst_timestamp(row.get('timestamp')))}</td>"
+        f"<td>{escape(str(row.get('kind') or ''))}</td>"
+        f"<td>{escape(str(row.get('goal') or ''))}</td>"
+        f"<td>{escape(str(row.get('detail') or ''))}</td>"
+        f"<td>{escape(_compact_json_text(row.get('evidence') or {}))}</td>"
+        "</tr>"
+        for row in reversed(rows[-12:])
+        if isinstance(row, dict)
+    )
+    return (
+        "<section class=\"panel\">"
+        f"<h2>{_t(lang, 'recent_run_insights')}</h2>"
+        f"<table><thead><tr><th>{_t(lang, 'updated')}</th><th>{_t(lang, 'kind')}</th>"
+        f"<th>{_t(lang, 'executor')}</th><th>{_t(lang, 'reason')}</th><th>Evidence</th>"
+        f"</tr></thead><tbody>{body}</tbody></table>"
+        "</section>"
+    )
+
+
 def _compact_json_text(value: Any) -> str:
     text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     return text if len(text) <= 180 else text[:177] + "..."
@@ -2462,6 +2594,9 @@ def _token_usage_panel(value: Any, lang: str) -> str:
         "<div class=\"metrics\">"
         f"{_metric(_t(lang, 'latest_tokens'), _format_int(usage.get('latest_tokens')))}"
         f"{_metric(_t(lang, 'total_delta_tokens'), _format_int(usage.get('total_delta_tokens')))}"
+        f"{_metric(_t(lang, 'latest_delta_tokens'), _format_int(usage.get('latest_delta_tokens')))}"
+        f"{_metric(_t(lang, 'weekly_quota'), _format_int_or_unknown(usage.get('weekly_quota_tokens')))}"
+        f"{_metric(_t(lang, 'weekly_percent'), _format_percent_or_unknown(usage.get('latest_weekly_percent')))}"
         f"{_metric(_t(lang, 'sample_count'), _format_int(usage.get('sample_count')))}"
         f"{_metric(_t(lang, 'last_sample'), _format_kst_timestamp(usage.get('updated_at')))}"
         "</div>"
@@ -2629,13 +2764,15 @@ def _token_usage_table(samples: list[Any], lang: str) -> str:
             f"<td>{escape(_format_kst_timestamp(row.get('timestamp')))}</td>"
             f"<td>{escape(str(row.get('label') or ''))}</td>"
             f"<td>{escape(_format_int(row.get('delta_tokens')))}</td>"
+            f"<td>{escape(_format_percent_or_unknown(row.get('weekly_percent')))}</td>"
             f"<td>{escape(_format_token_rate_per_hour(row, previous))}</td>"
             f"<td>{escape(_format_int(row.get('tokens_used')))}</td>"
             "</tr>"
         )
     return (
         f"<table><thead><tr><th>{_t(lang, 'updated')}</th><th>{_t(lang, 'reason')}</th>"
-        f"<th>{_t(lang, 'total_delta_tokens')}</th><th>{_t(lang, 'tokens_per_hour')}</th>"
+        f"<th>{_t(lang, 'total_delta_tokens')}</th><th>{_t(lang, 'weekly_percent')}</th>"
+        f"<th>{_t(lang, 'tokens_per_hour')}</th>"
         f"<th>{_t(lang, 'latest_tokens')}</th></tr></thead>"
         f"<tbody>{''.join(body_parts)}</tbody></table>"
     )
@@ -2833,6 +2970,21 @@ def _format_int(value: Any) -> str:
         return f"{int(value or 0):,}"
     except (TypeError, ValueError):
         return "0"
+
+
+def _format_int_or_unknown(value: Any) -> str:
+    if value is None or value == "":
+        return "unknown"
+    return _format_int(value)
+
+
+def _format_percent_or_unknown(value: Any) -> str:
+    if value is None or value == "":
+        return "unknown"
+    try:
+        return f"{float(value):.4f}%"
+    except (TypeError, ValueError):
+        return "unknown"
 
 
 def _yes_no(value: Any, lang: str) -> str:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -90,23 +91,54 @@ def load_token_usage(log_dir: Path, *, limit: int | None = None) -> list[TokenUs
 def token_usage_summary(log_dir: Path, *, limit: int = 120) -> dict[str, Any]:
     all_samples = load_token_usage(log_dir)
     samples = all_samples[-limit:] if limit >= 0 else all_samples
+    weekly_quota = _weekly_token_quota()
     if not all_samples:
         return {
             "samples": [],
             "sample_count": 0,
             "latest_tokens": 0,
             "total_delta_tokens": 0,
+            "latest_delta_tokens": 0,
+            "weekly_quota_tokens": weekly_quota,
+            "latest_weekly_percent": None,
             "updated_at": None,
             "log_path": str(token_usage_path(log_dir)),
         }
     first = all_samples[0]
     latest = all_samples[-1]
     total_delta = max(0, latest.tokens_used - first.tokens_used)
+    latest_delta = max(0, latest.delta_tokens)
     return {
-        "samples": [sample.to_dict() for sample in samples],
+        "samples": [_sample_with_weekly_percent(sample, weekly_quota) for sample in samples],
         "sample_count": len(all_samples),
         "latest_tokens": latest.tokens_used,
         "total_delta_tokens": total_delta,
+        "latest_delta_tokens": latest_delta,
+        "weekly_quota_tokens": weekly_quota,
+        "latest_weekly_percent": _weekly_percent(latest_delta, weekly_quota),
         "updated_at": latest.timestamp,
         "log_path": str(token_usage_path(log_dir)),
     }
+
+
+def _weekly_token_quota() -> int | None:
+    raw = os.getenv("FACTORIO_AI_WEEKLY_TOKEN_QUOTA")
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        quota = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return quota if quota > 0 else None
+
+
+def _sample_with_weekly_percent(sample: TokenUsageSample, weekly_quota: int | None) -> dict[str, Any]:
+    data = sample.to_dict()
+    data["weekly_percent"] = _weekly_percent(max(0, sample.delta_tokens), weekly_quota)
+    return data
+
+
+def _weekly_percent(delta_tokens: int, weekly_quota: int | None) -> float | None:
+    if weekly_quota is None or weekly_quota <= 0:
+        return None
+    return round((max(0, delta_tokens) / weekly_quota) * 100.0, 4)

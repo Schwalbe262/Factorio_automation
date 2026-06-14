@@ -494,6 +494,23 @@ placing unvalidated external blueprints.
 
 The dashboard should remain bilingual EN/KR where practical.
 
+## Goal And Run Journal
+
+Root Markdown files now define the human-readable operating layer:
+
+- `goal.md`: long-term rocket/Space Age roadmap, current sprint, factory quality criteria, and learning roadmap.
+- `note.md`: chronological loop execution journal.
+- `insight.md`: chronological improvement journal. Append here only when a loop causes or discovers meaningful progress.
+
+Structured sources live under logs:
+
+- `logs/run-notes.jsonl`
+- `logs/run-insights.jsonl`
+
+The controller appends notes for skill runs, autopilot cycles, idle layout cycles, and Codex-wait layout cycles. It appends insights for item-count increases, completed skills, and layout work that produces a selected candidate or next simulation focus.
+
+The dashboard renders Goal Plan, Recent Loop Notes, Recent Insights, and weekly token percentage. Weekly token percentage is based on `FACTORIO_AI_WEEKLY_TOKEN_QUOTA`; if the env var is unset, the dashboard and summaries report `unknown` rather than inventing a denominator.
+
 ## Training And Fine-Tuning Direction
 
 Do not start by fine-tuning raw gameplay. First collect structured training

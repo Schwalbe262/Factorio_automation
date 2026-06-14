@@ -632,12 +632,14 @@ class WebDashboardTests(unittest.TestCase):
                     "tokens_used": 1000,
                     "delta_tokens": 0,
                     "label": "start",
+                    "weekly_percent": None,
                 },
                 {
                     "timestamp": "2026-06-13T00:30:00+00:00",
                     "tokens_used": 1250,
                     "delta_tokens": 250,
                     "label": "ui work",
+                    "weekly_percent": 2.5,
                 },
             ],
             "en",
@@ -645,6 +647,63 @@ class WebDashboardTests(unittest.TestCase):
 
         self.assertIn("Tokens / hour", html)
         self.assertIn(">500<", html)
+        self.assertIn("Weekly %", html)
+        self.assertIn("2.5000%", html)
+
+    def test_dashboard_renders_goal_notes_and_insights(self):
+        html = render_dashboard(
+            {
+                "ok": False,
+                "objective": "launch_rocket_program",
+                "updated_at": "2026-06-13T00:00:00+00:00",
+                "error": "offline",
+                "layout_background": {"entries": []},
+                "token_usage": {
+                    "samples": [],
+                    "sample_count": 0,
+                    "latest_tokens": 0,
+                    "total_delta_tokens": 0,
+                    "latest_delta_tokens": 0,
+                    "weekly_quota_tokens": None,
+                    "latest_weekly_percent": None,
+                },
+                "llm_decisions": {"entries": []},
+                "strategy_worker_comparison": {"latest": {}},
+                "run_journal": {
+                    "goal": {
+                        "exists": True,
+                        "title": "Factorio Autoplayer Goal",
+                        "summary": ["Launch the first rocket."],
+                        "path": "goal.md",
+                    },
+                    "notes": [
+                        {
+                            "timestamp": "2026-06-13T00:00:00+00:00",
+                            "loop_type": "skill",
+                            "goal": "research_logistics",
+                            "ok": True,
+                            "steps": 3,
+                            "reason": "done",
+                            "log_path": "logs/skill.jsonl",
+                        }
+                    ],
+                    "insights": [
+                        {
+                            "timestamp": "2026-06-13T00:01:00+00:00",
+                            "kind": "skill_completed",
+                            "goal": "research_logistics",
+                            "detail": "research progressed",
+                            "evidence": {"steps": 3},
+                        }
+                    ],
+                },
+            },
+            "en",
+        )
+        self.assertIn("Goal Plan", html)
+        self.assertIn("Recent Loop Notes", html)
+        self.assertIn("Recent Insights", html)
+        self.assertIn("research_logistics", html)
 
     def test_connection_refused_error_is_rendered_as_operator_guidance(self):
         message = friendly_dashboard_error(ConnectionRefusedError(10061, "actively refused"))
