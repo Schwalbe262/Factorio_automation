@@ -2243,6 +2243,22 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "craft")
         self.assertEqual(decision.action["recipe"], "assembling-machine-1")
 
+    def test_circuit_automation_uses_gear_mall_before_handcrafting_assembler_prerequisite(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {
+            "electronic-circuit": 6,
+            "iron-plate": 18,
+            "inserter": 1,
+        }
+        obs["craftable"] = {"iron-gear-wheel": 5}
+        obs["entities"].append(mall_assembler(recipe="iron-gear-wheel", inventory={"iron-gear-wheel": 5}))
+
+        decision = CircuitAutomationSkill().next_action(obs)
+
+        self.assertNotEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+
     def test_circuit_automation_places_cable_assembler_first(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"assembling-machine-1": 2, "inserter": 1}

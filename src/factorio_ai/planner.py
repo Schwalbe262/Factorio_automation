@@ -5381,15 +5381,6 @@ class CircuitAutomationSkill:
     ) -> PlannerDecision | None:
         if inventory_count(observation, item) >= quantity:
             return None
-        if craftable_count(observation, item) > 0:
-            return PlannerDecision(
-                {
-                    "type": "craft",
-                    "recipe": item,
-                    "count": min(quantity - inventory_count(observation, item), craftable_count(observation, item)),
-                },
-                f"craft {item} for circuit automation",
-            )
 
         if item == "assembling-machine-1":
             for prerequisite, count in [
@@ -5400,6 +5391,18 @@ class CircuitAutomationSkill:
                 decision = self._ensure_item_quantity(observation, player, prerequisite, count)
                 if decision is not None:
                     return decision
+            if craftable_count(observation, "assembling-machine-1") > 0:
+                return PlannerDecision(
+                    {
+                        "type": "craft",
+                        "recipe": "assembling-machine-1",
+                        "count": min(
+                            quantity - inventory_count(observation, "assembling-machine-1"),
+                            craftable_count(observation, "assembling-machine-1"),
+                        ),
+                    },
+                    "craft assembling-machine-1 for circuit automation bootstrap",
+                )
             return None
 
         if item == "inserter":
@@ -5411,6 +5414,15 @@ class CircuitAutomationSkill:
                 decision = self._ensure_item_quantity(observation, player, prerequisite, count)
                 if decision is not None:
                     return decision
+            if craftable_count(observation, "inserter") > 0:
+                return PlannerDecision(
+                    {
+                        "type": "craft",
+                        "recipe": "inserter",
+                        "count": min(quantity - inventory_count(observation, "inserter"), craftable_count(observation, "inserter")),
+                    },
+                    "craft inserter for circuit automation bootstrap",
+                )
             return None
 
         if item == "electronic-circuit":
@@ -5420,6 +5432,11 @@ class CircuitAutomationSkill:
             return None
 
         if item == "iron-gear-wheel":
+            if bool(_technology_state(observation, "automation").get("researched")):
+                decision = BuildItemMallSkill("iron-gear-wheel", max(quantity, 4)).next_action(observation)
+                if not decision.done:
+                    return decision
+                return None
             if craftable_count(observation, "iron-gear-wheel") > 0:
                 return PlannerDecision(
                     {
@@ -5445,6 +5462,16 @@ class CircuitAutomationSkill:
 
         if item == "small-electric-pole":
             return self.power_skill._ensure_item_quantity(observation, player, item, quantity)
+
+        if craftable_count(observation, item) > 0:
+            return PlannerDecision(
+                {
+                    "type": "craft",
+                    "recipe": item,
+                    "count": min(quantity - inventory_count(observation, item), craftable_count(observation, item)),
+                },
+                f"craft {item} for circuit automation",
+            )
 
         return PlannerDecision(None, f"missing {item} and no circuit automation prerequisite path is implemented")
 

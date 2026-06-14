@@ -240,3 +240,11 @@
 - After: A live Slurm/Qwen strategy call still proposed `plan_factory_site`, but reconciliation returned `selected_skill=automate_electronic_circuit_line` with `guardrail_adjusted.to=automate_electronic_circuit_line`.
 - Evidence: `{"source_loop":220,"tests":"409 passed","live_strategy":{"llm_selected":"plan_factory_site","final_selected":"automate_electronic_circuit_line","guardrail_from":"plan_factory_site","guardrail_to":"automate_electronic_circuit_line"}}`
 - Remaining risk: The redirect is verified at strategy selection level; the circuit automation executor still needs a post-restart live run to verify placement and no new hand-carry fallback.
+
+## 2026-06-15 05:38:09 +09:00 - Insight 29
+- Source loop: Loop 221
+- Improvement: `CircuitAutomationSkill` now uses gear mall output for `iron-gear-wheel` prerequisites instead of hand-crafting gears after Automation is researched.
+- Before: `strategy-circuit-automation-20260614-203509.jsonl` step 1 used `craft iron-gear-wheel for circuit automation`.
+- After: The regression path returns `take iron-gear-wheel from build item mall assembler`, and full tests pass with the no-hand gear branch.
+- Evidence: `{"source_loop":221,"tests":"410 passed","bad_trace":"strategy-circuit-automation-20260614-203509.jsonl step 1 craft iron-gear-wheel","regression_decision":"take iron-gear-wheel from build item mall assembler"}`
+- Remaining risk: The previous live run already consumed the bad craft before the fix; a fresh post-restart autopilot run should verify the circuit automation trace no longer contains gear craft actions.

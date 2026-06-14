@@ -4625,3 +4625,27 @@
 - Failure reason: None for the strategy redirect. The actual circuit automation executor still needs live autopilot verification after restart.
 - Next action: Commit and push Part 88, then restart hidden autopilot on the latest code and confirm it enters `automate_electronic_circuit_line`.
 - Token usage: 6,617,306 tokens / weekly quota unavailable.
+
+## 2026-06-15 05:38:09 +09:00 - Loop 221
+- Part: circuit automation no-hand-gear guardrail
+- Goal: Remove the remaining `craft iron-gear-wheel` path inside `CircuitAutomationSkill`.
+- Hypothesis: Circuit automation was still hand-crafting gear because its prerequisite resolver checked generic `craftable_count(item)` before the special `iron-gear-wheel` branch.
+- Actions:
+  - Stopped the latest hidden autopilot immediately after `strategy-circuit-automation-20260614-203509.jsonl` showed `craft iron-gear-wheel for circuit automation` at step 1.
+  - Moved `CircuitAutomationSkill._ensure_item_quantity` generic craft fallback after item-specific prerequisite branches.
+  - Added an Automation-era `iron-gear-wheel` branch that delegates to `BuildItemMallSkill("iron-gear-wheel")` instead of hand-crafting gears.
+  - Preserved bootstrap crafting for `assembling-machine-1` and `inserter` only after their prerequisites have been gathered.
+  - Added a regression test where circuit automation takes gears from an existing gear mall assembler instead of crafting them.
+  - Recorded a Codex token usage sample with label `part89 circuit automation no hand gear`.
+- Candidates:
+  - Bad trace retained for training: `strategy-circuit-automation-20260614-203509.jsonl` step 1 crafted two `iron-gear-wheel`.
+  - Selected fix: circuit automation asks the build-item mall/gear mall for gear prerequisites after Automation is researched.
+- Metrics:
+  - Planner tests: `python -m unittest tests.test_planner` -> 140 passed.
+  - Full tests: `python -m unittest discover -s tests` -> 410 passed.
+  - Regression decision: `CircuitAutomationSkill` returned `take iron-gear-wheel from build item mall assembler`, not `craft`.
+  - Token usage sample: `6,670,698` tokens; weekly quota unavailable.
+- Result: Circuit automation no longer uses the observed direct gear craft prerequisite path under Automation.
+- Failure reason: None in tests. Live autopilot still needs a fresh post-fix run because the previous run already executed the bad craft before this patch.
+- Next action: Commit and push Part 89, then restart hidden autopilot on the latest code.
+- Token usage: 6,670,698 tokens / weekly quota unavailable.
