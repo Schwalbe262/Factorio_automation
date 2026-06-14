@@ -5954,3 +5954,94 @@
 - Next action: Mark the Codex wait blocker resolved, commit/push Part 97, then restart headless no-mod autopilot under Qwen control.
 - Token usage: cumulative 56,908,652; current raw counter 9,225,252; delta 474,223 / weekly quota unavailable
 
+## 2026-06-15 08:25:30 +09:00 - Loop 282
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 8 to 8.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260614-232509.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 4.
+  - Status: failed.
+  - Duration: 21.328s.
+  - transport-belt: 8 -> 8 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260614-232509.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":8,"initial_item_count":8,"max_steps":1200,"target":40}`.
+- Result: Loop stopped: cannot find both an iron-plate source furnace and a powered iron-gear mall assembler
+- Failure reason: cannot find both an iron-plate source furnace and a powered iron-gear mall assembler
+- Next action: Inspect the raw log and patch planner/site selection before retrying the same loop.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 08:25:30 +09:00 - Loop 283
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 1.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 50.610s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-232437.jsonl`.
+  - Metadata: `{"cycle":1,"priority":92,"strategy_source":"llm"}`.
+- Result: Loop stopped: cannot find both an iron-plate source furnace and a powered iron-gear mall assembler
+- Failure reason: cannot find both an iron-plate source furnace and a powered iron-gear mall assembler
+- Next action: Inspect the raw log and patch planner/site selection before retrying the same loop.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 08:32:21 +09:00 - Loop 284
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 2 step(s).
+  - Tracked `transport-belt` from 8 to 8.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260614-233210.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 2.
+  - Status: failed.
+  - Duration: 10.985s.
+  - transport-belt: 8 -> 8 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260614-233210.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":8,"initial_item_count":8,"max_steps":2,"target":40}`.
+- Result: Loop stopped: max steps reached: 2
+- Failure reason: max steps reached: 2
+- Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 08:32:55 +09:00 - Loop 285
+- Part: Part 98 - protect iron source furnace during plate logistics routing
+- Goal: Fix the live failure where the iron-plate logistics executor treated the source furnace as a belt-line blocker and mined it.
+- Hypothesis: A route from an east-output furnace to a west/north gear mall must dogleg around the furnace instead of drawing a straight belt line back through the source entity.
+- Actions:
+  - Stopped the restarted headless autopilot after Loop 283 exposed the source-furnace mining bug.
+  - Added a detour route in `_iron_plate_line_segments` when the target is west of the source output.
+  - Added protected source unit handling to `_belt_line_position_blocker`.
+  - Added regression test `test_iron_plate_logistic_line_does_not_mine_source_furnace_as_blocker`.
+  - Restored the mistakenly mined source furnace at `{x:89,y:-65}` as unit `395`, inserted 3 coal and 5 iron ore, and verified it returned to `recipe=iron-plate` / `status=working`.
+  - Ran a live 2-step Qwen strategy verification after the patch.
+- Candidates:
+  - Bad trace: `strategy-iron-plate-gear-mall-logistics-20260614-232509.jsonl` mined source furnace unit `43`.
+  - Fixed trace: `strategy-iron-plate-gear-mall-logistics-20260614-233210.jsonl` mined only misoriented belt unit `394` and rebuilt transport belt unit `396` with direction EAST.
+- Metrics:
+  - Tests: `python -m unittest discover tests` -> 440 passed.
+  - Live source restored: furnace unit `395`, recipe `iron-plate`, status `working`, inventories included coal, iron ore, and iron plate.
+  - Fixed trace scan: no `craft`, no `iron-gear-wheel`, no source furnace mine.
+  - Token usage sample: cumulative 57,011,242, current raw counter 9,327,842, delta 102,590 since prior sample, weekly quota unavailable.
+- Result: Source furnace protection and dogleg routing are implemented and live-verified.
+- Failure reason: None for the patch; the live verification was intentionally capped at 2 steps and stopped with `max steps reached: 2`.
+- Next action: Commit/push Part 98, then restart headless no-mod autopilot so Qwen can continue the protected logistics route.
+- Token usage: cumulative 57,011,242; current raw counter 9,327,842; delta 102,590 / weekly quota unavailable
+

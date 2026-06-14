@@ -4655,24 +4655,41 @@ def _iron_plate_line_segments(
     start: dict[str, float],
     end: dict[str, float],
 ) -> list[dict[str, Any]]:
-    positions: list[tuple[dict[str, float], int]] = []
-    current = {"x": float(start["x"]), "y": float(start["y"])}
+    start_x = float(start["x"])
+    start_y = float(start["y"])
     end_x = float(end["x"])
     end_y = float(end["y"])
-    if abs(current["x"] - end_x) > 0.25:
-        direction = EAST if end_x > current["x"] else WEST
-        while abs(current["x"] - end_x) > 0.25:
-            positions.append((dict(current), direction))
-            step = min(1.0, abs(end_x - current["x"]))
-            current["x"] += step if end_x > current["x"] else -step
-    vertical_direction = SOUTH if end_y > current["y"] else NORTH
-    if abs(current["y"] - end_y) > 0.25:
-        while abs(current["y"] - end_y) > 0.25:
-            positions.append((dict(current), vertical_direction))
-            step = min(1.0, abs(end_y - current["y"]))
-            current["y"] += step if end_y > current["y"] else -step
-        positions.append(({"x": end_x, "y": end_y}, vertical_direction))
-    elif not positions:
+    waypoints = [{"x": start_x, "y": start_y}]
+    if end_x < start_x - 0.25:
+        detour_x = start_x + 1.0
+        detour_y = start_y + (3.0 if end_y >= start_y else -3.0)
+        waypoints.extend(
+            [
+                {"x": detour_x, "y": start_y},
+                {"x": detour_x, "y": detour_y},
+                {"x": end_x, "y": detour_y},
+            ]
+        )
+    waypoints.append({"x": end_x, "y": end_y})
+
+    positions: list[tuple[dict[str, float], int]] = []
+    current = dict(waypoints[0])
+    for waypoint in waypoints[1:]:
+        waypoint_x = float(waypoint["x"])
+        waypoint_y = float(waypoint["y"])
+        if abs(current["x"] - waypoint_x) > 0.25:
+            direction = EAST if waypoint_x > current["x"] else WEST
+            while abs(current["x"] - waypoint_x) > 0.25:
+                positions.append((dict(current), direction))
+                step = min(1.0, abs(waypoint_x - current["x"]))
+                current["x"] += step if waypoint_x > current["x"] else -step
+        if abs(current["y"] - waypoint_y) > 0.25:
+            direction = SOUTH if waypoint_y > current["y"] else NORTH
+            while abs(current["y"] - waypoint_y) > 0.25:
+                positions.append((dict(current), direction))
+                step = min(1.0, abs(waypoint_y - current["y"]))
+                current["y"] += step if waypoint_y > current["y"] else -step
+    if not positions:
         positions.append(({"x": end_x, "y": end_y}, EAST))
     elif distance(positions[-1][0], {"x": end_x, "y": end_y}) > 0.25:
         positions.append(({"x": end_x, "y": end_y}, positions[-1][1]))
@@ -4695,13 +4712,24 @@ def _iron_plate_line_segments(
     return segments
 
 
-def _belt_line_position_blocker(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:
+def _belt_line_position_blocker(
+    observation: dict[str, Any],
+    position: dict[str, float],
+    *,
+    protected_unit_numbers: set[int] | None = None,
+) -> dict[str, Any] | None:
     entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
     large_entities = ASSEMBLER_ENTITY_NAMES | {"lab", "stone-furnace", "burner-mining-drill", "boiler", "steam-engine"}
+    protected_unit_numbers = protected_unit_numbers or set()
     blockers: list[dict[str, Any]] = []
     for entity in entities:
         if not isinstance(entity, dict) or not isinstance(entity.get("position"), dict):
             continue
+        try:
+            if int(entity.get("unit_number")) in protected_unit_numbers:
+                continue
+        except (TypeError, ValueError):
+            pass
         name = str(entity.get("name") or "")
         if name in {"character", "transport-belt"}:
             continue
@@ -6046,6 +6074,9 @@ class IronPlateLogisticLineToGearMallSkill:
                 "iron-plate logistics line needs transport belts from the belt mall; refusing gear handcraft or iron-plate hand-carry",
             )
 
+        protected_units = {
+            int(layout["source"].get("unit_number"))
+        } if isinstance(layout.get("source"), dict) and layout["source"].get("unit_number") is not None else set()
         for segment in layout["segments"]:
             existing = segment.get("entity")
             if isinstance(existing, dict):
@@ -6066,7 +6097,11 @@ class IronPlateLogisticLineToGearMallSkill:
                         "remove misoriented transport belt from the iron-plate logistics line",
                     )
                 continue
-            blocker = _belt_line_position_blocker(observation, segment["position"])
+            blocker = _belt_line_position_blocker(
+                observation,
+                segment["position"],
+                protected_unit_numbers=protected_units,
+            )
             if blocker is not None:
                 blocker_position = _position(blocker)
                 if distance(player, blocker_position) > 8:

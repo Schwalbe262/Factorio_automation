@@ -328,3 +328,11 @@
 - After: `no-mod-strategy --require-llm` selected `build_iron_plate_logistic_line_to_gear_mall` via guardrail from Qwen's `bootstrap_build_item_mall`; live 1-step trace moved virtually to belt mall output and contained no `craft`, no `iron-gear-wheel`, and no `take iron-gear-wheel` actions.
 - Evidence: `{"source_loop":281,"tests":"439 passed","strategy_guardrail":{"from":"bootstrap_build_item_mall","to":"build_iron_plate_logistic_line_to_gear_mall","source":"llm"},"live_evidence":["gear_assembler_unit=318","iron_source_unit=43","source_distance_tiles=152.5","gear_assembler_status=no_power","transport_belts_available_for_mall_logistics=true","gear_handcraft_blocked=true"],"live_trace":"strategy-iron-plate-gear-mall-logistics-20260614-232108.jsonl","trace_counts":{"craft":0,"iron_gear_wheel":0,"take_iron_gear_wheel":0}}`
 - Remaining risk: The route is only partially built; continued autopilot still needs to collect belt output, extend the full plate route, place endpoint inserters, and then resolve the mall power shortage.
+
+## 2026-06-15 08:32:55 +09:00 - Insight 40
+- Source loop: Loop 285
+- Improvement: The iron-plate logistics route now protects its source furnace and doglegs around it instead of mining it as a belt-line blocker.
+- Before: Loop 282 / `strategy-iron-plate-gear-mall-logistics-20260614-232509.jsonl` took belt output, moved to the iron source, mined source furnace unit `43`, and then failed because no iron-plate source furnace remained.
+- After: The source was restored as furnace unit `395`; the patched route mined only stale misoriented belt unit `394` and rebuilt transport belt unit `396` with EAST direction while leaving source furnace unit `395` working.
+- Evidence: `{"source_loop":285,"tests":"440 passed","bad_trace":"strategy-iron-plate-gear-mall-logistics-20260614-232509.jsonl mined source furnace unit 43","fixed_trace":"strategy-iron-plate-gear-mall-logistics-20260614-233210.jsonl","restored_source":{"unit":395,"recipe":"iron-plate","status":"working"},"fixed_actions":["mine transport-belt unit 394","build transport-belt unit 396 direction EAST"],"bad_actions_absent_after_patch":["mine source furnace","craft iron-gear-wheel"]}`
+- Remaining risk: The full belt route and endpoint inserters still need to be completed, and the gear/belt mall power shortage remains a follow-up blocker.

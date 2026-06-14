@@ -3090,6 +3090,37 @@ class PlannerTests(unittest.TestCase):
         self.assertNotIn(decision.action.get("item"), {"iron-plate", "iron-gear-wheel"})
         self.assertNotEqual(decision.action.get("recipe"), "iron-gear-wheel")
 
+    def test_iron_plate_logistic_line_does_not_mine_source_furnace_as_blocker(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 4}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].extend(
+            [
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": 8, "y": 2},
+                    "recipe": "iron-plate",
+                    "inventories": {"3": {"iron-plate": 20}},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 951,
+                    "position": {"x": 10, "y": 2},
+                    "direction": 4,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
+
+        self.assertNotEqual(decision.action.get("type"), "mine")
+        self.assertNotEqual(decision.action.get("unit_number"), 950)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertGreater(decision.action["position"]["x"], 10)
+
     def test_iron_plate_logistic_line_reports_missing_belts_without_gear_handcraft(self):
         obs = powered_automation_observation()
         obs["inventory"] = {}
