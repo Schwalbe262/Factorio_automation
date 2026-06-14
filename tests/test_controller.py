@@ -13,6 +13,7 @@ from factorio_ai.controller import (
     ModlessFactorioController,
     RunSummary,
     StrategyStepSummary,
+    _guard_post_automation_handcraft,
     _move_detour_action,
 )
 from factorio_ai.llm_log import llm_decision_log_path
@@ -37,6 +38,39 @@ def make_test_config(root: Path) -> AppConfig:
 
 
 class ControllerTests(unittest.TestCase):
+    def test_guard_blocks_gear_handcraft_after_automation(self):
+        observation = {
+            "research": {
+                "technologies": {
+                    "automation": {"researched": True},
+                }
+            }
+        }
+        decision = PlannerDecision(
+            action={"type": "craft", "recipe": "iron-gear-wheel", "count": 1},
+            reason="test",
+        )
+
+        guarded = _guard_post_automation_handcraft(observation, decision)
+
+        self.assertEqual(guarded.action, {"type": "wait", "ticks": 120})
+        self.assertIn("blocked direct iron-gear-wheel handcraft", guarded.reason)
+
+    def test_guard_allows_bootstrap_gear_handcraft_before_automation(self):
+        observation = {
+            "research": {
+                "technologies": {
+                    "automation": {"researched": False},
+                }
+            }
+        }
+        decision = PlannerDecision(
+            action={"type": "craft", "recipe": "iron-gear-wheel", "count": 1},
+            reason="test",
+        )
+
+        self.assertIs(_guard_post_automation_handcraft(observation, decision), decision)
+
     def test_required_remote_llm_pending_does_not_submit_strategy_task(self):
         class FakeController(FactorioController):
             def observe(self):

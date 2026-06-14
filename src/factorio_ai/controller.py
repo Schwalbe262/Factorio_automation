@@ -212,6 +212,32 @@ def _planning_site_cache_seconds() -> float:
         return DEFAULT_PLANNING_SITE_CACHE_SECONDS
 
 
+def _automation_researched_in_observation(observation: dict[str, Any]) -> bool:
+    research = observation.get("research")
+    if not isinstance(research, dict):
+        return False
+    technologies = research.get("technologies")
+    if not isinstance(technologies, dict):
+        return False
+    automation = technologies.get("automation")
+    return bool(isinstance(automation, dict) and automation.get("researched"))
+
+
+def _guard_post_automation_handcraft(observation: dict[str, Any], decision: PlannerDecision) -> PlannerDecision:
+    action = decision.action
+    if (
+        isinstance(action, dict)
+        and action.get("type") == "craft"
+        and action.get("recipe") == "iron-gear-wheel"
+        and _automation_researched_in_observation(observation)
+    ):
+        return PlannerDecision(
+            {"type": "wait", "ticks": 120},
+            "blocked direct iron-gear-wheel handcraft after Automation; use gear mall or a logistic line instead",
+        )
+    return decision
+
+
 class FactorioController:
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
@@ -1254,6 +1280,7 @@ class FactorioController:
                 self._maybe_progress_background_layout_work(observation, objective, goal, step)
                 decision = skill.next_action(observation)
                 observation, decision = self._maybe_retry_skill_with_planning_sites(skill, observation, decision)
+                decision = _guard_post_automation_handcraft(observation, decision)
                 self._write_log(log_file, step, observation, decision, None)
                 if decision.done:
                     self._maybe_progress_background_layout_work(observation, objective, goal, step, force_poll=True)

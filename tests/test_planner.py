@@ -2311,8 +2311,8 @@ class PlannerTests(unittest.TestCase):
         decision = CircuitAutomationSkill().next_action(obs)
 
         self.assertNotEqual(decision.action["type"], "craft")
-        self.assertEqual(decision.action["type"], "take")
-        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertEqual(decision.action["type"], "wait")
+        self.assertIn("refusing player collection of iron gear wheels", decision.reason)
 
     def test_circuit_automation_places_cable_assembler_first(self):
         obs = powered_automation_observation()
@@ -2393,13 +2393,55 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "take")
         self.assertEqual(decision.action["item"], "copper-cable")
 
+    def test_circuit_automation_scaling_waits_for_transfer_inserter_instead_of_taking_cable(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["entities"].extend(
+            circuit_cell_entities(
+                cable_inventory={"copper-cable": 40},
+                circuit_inventory={"iron-plate": 4},
+            )
+        )
+        decision = CircuitAutomationSkill(target_count=50).next_action(obs)
+        self.assertEqual(decision.action["type"], "wait")
+        self.assertIn("transfer inserter", decision.reason)
+        self.assertNotEqual(decision.action.get("type"), "take")
+
+    def test_circuit_automation_scaling_refuses_manual_cable_seed(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"copper-cable": 12}
+        obs["entities"].extend(circuit_cell_entities(circuit_inventory={"iron-plate": 4}))
+        decision = CircuitAutomationSkill(target_count=50).next_action(obs)
+        self.assertEqual(decision.action["type"], "wait")
+        self.assertIn("refusing hand-seeded cable", decision.reason)
+
+    def test_circuit_automation_scaling_refuses_manual_iron_input_when_belts_ready(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 8}
+        obs["entities"].extend(circuit_cell_entities(cable_inventory={"copper-cable": 40}))
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 980,
+                "position": {"x": 12, "y": 2},
+                "distance": 12,
+                "recipe": "transport-belt",
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
+        decision = CircuitAutomationSkill(target_count=50).next_action(obs)
+        self.assertIsNone(decision.action)
+        self.assertIn("automated iron-plate input line", decision.reason)
+        self.assertIn("refusing repeated player hand-carry", decision.reason)
+
     def test_circuit_automation_takes_output_from_circuit_assembler(self):
         obs = powered_automation_observation()
         obs["inventory"] = {}
         obs["entities"].extend(circuit_cell_entities(circuit_inventory={"electronic-circuit": 5}))
         decision = CircuitAutomationSkill().next_action(obs)
-        self.assertEqual(decision.action["type"], "take")
-        self.assertEqual(decision.action["item"], "electronic-circuit")
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
 
     def test_circuit_automation_done_when_cell_is_running_and_target_exists(self):
         obs = powered_automation_observation()
@@ -2565,9 +2607,19 @@ class PlannerTests(unittest.TestCase):
 
         decision = BuildItemMallSkill("automation-science-pack", 20).next_action(obs)
 
-        self.assertEqual(decision.action["type"], "take")
-        self.assertEqual(decision.action["item"], "iron-gear-wheel")
-        self.assertEqual(decision.action["unit_number"], 902)
+        self.assertEqual(decision.action["type"], "wait")
+        self.assertIn("refusing player collection of iron gear wheels", decision.reason)
+
+    def test_build_item_mall_refuses_player_gear_output_collection_after_automation(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["craftable"] = {"iron-gear-wheel": 5}
+        obs["entities"].append(mall_assembler(recipe="iron-gear-wheel", inventory={"iron-gear-wheel": 4}))
+
+        decision = BuildItemMallSkill("iron-gear-wheel", 4).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "wait")
+        self.assertIn("refusing player collection of iron gear wheels", decision.reason)
 
     def test_build_item_mall_repurposes_existing_assembler_for_gears_before_handcrafting(self):
         obs = powered_automation_observation()

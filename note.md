@@ -5076,3 +5076,73 @@
 - Failure reason: Live verification intentionally stopped at 20 steps, so the skill reported `max steps reached: 20` before reaching 50.
 - Next action: Commit/push Part 93, restart hidden autopilot, then implement a true green-circuit transfer/layout executor to remove repeated cable take/insert shuttling.
 - Token usage: 7,241,795 tokens / weekly quota unavailable.
+## 2026-06-15 06:24:36 +09:00 - Loop 241
+- Part: skill
+- Goal: launch_rocket_program / automate_electronic_circuit_line
+- Hypothesis: Running `automate_electronic_circuit_line` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `automate_electronic_circuit_line` for up to 5 step(s).
+  - Tracked `electronic-circuit` from 20 to 20.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-circuit-automation-20260614-212357.jsonl`.
+- Candidates:
+  - Selected goal/skill: `automate_electronic_circuit_line`.
+  - Target item candidate: `electronic-circuit` target `50`.
+- Metrics:
+  - Steps: 5.
+  - Status: failed.
+  - Duration: 39.438s.
+  - electronic-circuit: 20 -> 20 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-circuit-automation-20260614-212357.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":20,"initial_item_count":20,"max_steps":5,"target":50}`.
+- Result: Loop stopped: max steps reached: 5
+- Failure reason: max steps reached: 5
+- Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 06:33:35 +09:00 - Loop 242
+- Part: skill
+- Goal: launch_rocket_program / automate_electronic_circuit_line
+- Hypothesis: Running `automate_electronic_circuit_line` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `automate_electronic_circuit_line` for up to 5 step(s).
+  - Tracked `electronic-circuit` from 20 to 20.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-circuit-automation-20260614-213245.jsonl`.
+- Candidates:
+  - Selected goal/skill: `automate_electronic_circuit_line`.
+  - Target item candidate: `electronic-circuit` target `50`.
+- Metrics:
+  - Steps: 5.
+  - Status: failed.
+  - Duration: 50.000s.
+  - electronic-circuit: 20 -> 20 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-circuit-automation-20260614-213245.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":20,"initial_item_count":20,"max_steps":5,"target":50}`.
+- Result: Loop stopped: max steps reached: 5
+- Failure reason: max steps reached: 5
+- Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 06:34:46 +09:00 - Loop 243
+- Part: post-Automation gear handcraft guardrail
+- Goal: Stop the agent from directly making or manually collecting `iron-gear-wheel` after Automation is researched.
+- Hypothesis: A controller-level post-Automation craft guard plus a planner-level gear mall output guard will prevent direct player gear crafting and the observed `take iron-gear-wheel from assembler` loop, while preserving pre-Automation bootstrap crafting.
+- Actions:
+  - Added a controller guard that rewrites post-Automation `craft iron-gear-wheel` actions into a wait action before execution.
+  - Changed `BuildItemMallSkill("iron-gear-wheel")` so mall output is not collected by the player after Automation.
+  - Kept pre-Automation bootstrap gear crafting legal for the very early game.
+  - Added controller and planner regression tests.
+  - Ran the full unit test suite.
+  - Ran a live no-mod strategy verification loop for 5 steps.
+- Candidates:
+  - Rejected behavior: direct `craft iron-gear-wheel` after Automation.
+  - Rejected behavior: `take iron-gear-wheel` from the gear assembler as a sustained mall output path.
+  - Next required executor: gear/belt mall output and input logistics, preferably assembler-to-assembler or chest/belt output without player transfer.
+- Metrics:
+  - Tests: `python -m unittest discover -s tests` -> 420 passed.
+  - Live trace: `logs/strategy-circuit-automation-20260614-213245.jsonl`.
+  - Live trace counts: `craft` 0, `recipe=iron-gear-wheel` 0, `item=iron-gear-wheel` 0, `take iron-gear-wheel` 0, `take/insert iron-plate` 0, `take/insert copper-cable` 0.
+  - Live item delta: electronic-circuit 20 -> 20 in the intentionally capped 5-step run.
+- Result: Confirmed that the bad gear direct-production/collection actions are blocked in the live trace.
+- Failure reason: The skill now waits because deterministic gear/belt mall logistics are not implemented yet; this is a correct block, not factory progress.
+- Next action: Implement gear/belt mall logistics so recurring gear consumers receive gears through inserters/belts/chests instead of player inventory.
+- Token usage: 7,680,925 tokens / weekly quota unavailable.

@@ -5158,6 +5158,7 @@ class CircuitAutomationSkill:
 
     def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
         player = player_position(observation)
+        scaling_mode = self.target_count > 5
         if not bool(_technology_state(observation, "automation").get("researched")):
             decision = self.research_skill.next_action(observation)
             if decision.done:
@@ -5242,8 +5243,20 @@ class CircuitAutomationSkill:
         if circuit_assembler and circuit_assembler.get("recipe") != "electronic-circuit":
             return self._set_recipe_decision(player, circuit_assembler, "electronic-circuit")
 
+        if _circuit_cell_ready(line) and total_item_count(observation, "electronic-circuit") >= self.target_count:
+            return PlannerDecision(
+                None,
+                f"circuit automation cell is running and target reached: {total_item_count(observation, 'electronic-circuit')}/{self.target_count}",
+                done=True,
+            )
+
         circuit_output = entity_item_count(circuit_assembler, "electronic-circuit") if circuit_assembler else 0
         if circuit_output > 0:
+            if scaling_mode:
+                return PlannerDecision(
+                    {"type": "wait", "ticks": 300},
+                    "wait for circuit assembler output to accumulate; refusing player-output collection during scaled circuit automation",
+                )
             circuit_pos = _position(circuit_assembler)
             if distance(player, circuit_pos) > 20:
                 return PlannerDecision(
@@ -5262,14 +5275,12 @@ class CircuitAutomationSkill:
                 "take electronic circuits from assembler output",
             )
 
-        if _circuit_cell_ready(line) and total_item_count(observation, "electronic-circuit") >= self.target_count:
-            return PlannerDecision(
-                None,
-                f"circuit automation cell is running and target reached: {total_item_count(observation, 'electronic-circuit')}/{self.target_count}",
-                done=True,
-            )
-
         if circuit_assembler and entity_item_count(circuit_assembler, "copper-cable") < 6 and inventory_count(observation, "copper-cable") > 0:
+            if scaling_mode:
+                return PlannerDecision(
+                    {"type": "wait", "ticks": 300},
+                    "wait for transfer inserter to move copper cable; refusing hand-seeded cable during scaled circuit automation",
+                )
             circuit_pos = _position(circuit_assembler)
             if distance(player, circuit_pos) > 20:
                 return PlannerDecision({"type": "move_to", "position": circuit_pos}, "move near circuit assembler to seed copper cable")
@@ -5286,6 +5297,10 @@ class CircuitAutomationSkill:
             )
 
         if circuit_assembler and entity_item_count(circuit_assembler, "iron-plate") < 4:
+            if scaling_mode:
+                blocker = self._scaled_input_blocker(observation, "iron-plate")
+                if blocker is not None:
+                    return blocker
             if inventory_count(observation, "iron-plate") > 0:
                 circuit_pos = _position(circuit_assembler)
                 if distance(player, circuit_pos) > 20:
@@ -5311,6 +5326,11 @@ class CircuitAutomationSkill:
             and entity_item_count(circuit_assembler, "copper-cable") < 6
             and entity_item_count(cable_assembler, "copper-cable") > 0
         ):
+            if scaling_mode:
+                return PlannerDecision(
+                    {"type": "wait", "ticks": 300},
+                    "wait for transfer inserter to move cable from cable assembler to circuit assembler",
+                )
             cable_pos = _position(cable_assembler)
             if distance(player, cable_pos) > 20:
                 return PlannerDecision({"type": "move_to", "position": cable_pos}, "move near cable assembler to collect copper cable")
@@ -5327,6 +5347,10 @@ class CircuitAutomationSkill:
             )
 
         if cable_assembler and entity_item_count(cable_assembler, "copper-plate") < 4:
+            if scaling_mode:
+                blocker = self._scaled_input_blocker(observation, "copper-plate")
+                if blocker is not None:
+                    return blocker
             if inventory_count(observation, "copper-plate") < 8:
                 decision = self.copper_skill.next_action(observation, target_count=8, inventory_only=True)
                 if not decision.done:
@@ -5349,6 +5373,19 @@ class CircuitAutomationSkill:
         return PlannerDecision(
             {"type": "wait", "ticks": 600},
             "wait for assembler cell to make copper cable and electronic circuits",
+        )
+
+    def _scaled_input_blocker(self, observation: dict[str, Any], item: str) -> PlannerDecision | None:
+        if not _belt_smelting_ready(observation):
+            decision = BuildItemMallSkill("transport-belt", 20).next_action(observation)
+            if decision is not None:
+                return decision
+        return PlannerDecision(
+            None,
+            (
+                f"scaled circuit automation needs an automated {item} input line; "
+                "refusing repeated player hand-carry into the circuit assemblers"
+            ),
         )
 
     def _set_recipe_decision(
@@ -5591,6 +5628,14 @@ class BuildItemMallSkill:
 
         output_count = entity_item_count(assembler, self.target_item)
         if output_count > 0:
+            if _block_player_mall_output_collection_after_automation(observation, self.target_item):
+                return PlannerDecision(
+                    {"type": "wait", "ticks": 300},
+                    (
+                        f"wait for {self.target_item} mall output logistics; "
+                        "refusing player collection of iron gear wheels after Automation"
+                    ),
+                )
             assembler_position = _position(assembler)
             if distance(player, assembler_position) > 20:
                 return PlannerDecision({"type": "move_to", "position": assembler_position}, f"move near mall assembler to collect {self.target_item}")
@@ -6554,6 +6599,10 @@ def _build_item_mall_batch_count(product_count: float, target_count: int) -> int
     except (TypeError, ValueError):
         per_batch = 1
     return max(1, min(4, _ceil_div(max(1, target_count), per_batch)))
+
+
+def _block_player_mall_output_collection_after_automation(observation: dict[str, Any], target_item: str) -> bool:
+    return target_item == "iron-gear-wheel" and _automation_researched(observation)
 
 
 def _manual_site_input_logistics_blocker(

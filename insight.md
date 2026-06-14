@@ -296,3 +296,11 @@
 - After: Loop 239 used target 50 and made live progress from electronic-circuit 5 -> 12 before the intentionally capped 20-step verification stopped.
 - Evidence: `{"source_loop":240,"verification_loop":239,"tests":"414 passed","before_loops":[235,237],"before_target":5,"after_target":50,"after_delta":7,"live_trace":"strategy-circuit-automation-20260614-211038.jsonl","craft_counts":{"total":0,"iron_gear_wheel":0,"transport_belt":0}}`
 - Remaining risk: The circuit executor still relies on manual-style cable take/insert actions; a true inserter/belt transfer and 3:2 layout expansion remains required.
+
+## 2026-06-15 06:34:46 +09:00 - Insight 36
+- Source loop: Loop 243
+- Improvement: Post-Automation gear handling now blocks both direct `craft iron-gear-wheel` actions and player collection of gear mall output.
+- Before: `strategy-circuit-automation-20260614-212357.jsonl` moved iron plates into the gear assembler and then used `take iron-gear-wheel from build item mall assembler`, leaving a sustained player-mediated gear path.
+- After: `strategy-circuit-automation-20260614-213245.jsonl` executed only wait actions with reason `refusing player collection of iron gear wheels after Automation`; trace counts for `craft`, `recipe=iron-gear-wheel`, `item=iron-gear-wheel`, and `take iron-gear-wheel` are all 0.
+- Evidence: `{"source_loop":243,"verification_loop":242,"tests":"420 passed","before_trace":"strategy-circuit-automation-20260614-212357.jsonl","after_trace":"strategy-circuit-automation-20260614-213245.jsonl","after_counts":{"craft":0,"recipe_iron_gear_wheel":0,"item_iron_gear_wheel":0,"take_iron_gear_wheel":0,"take_iron_plate":0,"insert_iron_plate":0,"take_copper_cable":0,"insert_copper_cable":0}}`
+- Remaining risk: This is a behavior-quality improvement, not production progress; gear/belt mall input-output logistics still need a deterministic executor so the agent can continue without player transfer.
