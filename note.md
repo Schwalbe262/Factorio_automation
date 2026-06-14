@@ -5367,3 +5367,146 @@
 - Next action: Clear the Codex wait block for `build_gear_belt_mall_logistics`, then continue with sustained iron-plate logistics into the gear/belt mall and belt output handling.
 - Token usage: 186,641 Codex tokens for this implementation turn / weekly quota unavailable.
 
+## 2026-06-15 07:24:44 +09:00 - Loop 254
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / unknown_skill
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 1.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 23.125s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-222418.jsonl`.
+  - Metadata: `{"cycle":1,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: LLM strategy was required but source was heuristic
+- Failure reason: strategy cycle failed: RuntimeError: LLM strategy was required but source was heuristic
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 07:25:10 +09:00 - Loop 255
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / unknown_skill
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 2.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 2.
+  - Status: failed.
+  - Duration: 22.625s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-222418.jsonl`.
+  - Metadata: `{"cycle":2,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: LLM strategy was required but source was heuristic
+- Failure reason: strategy cycle failed: RuntimeError: LLM strategy was required but source was heuristic
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 07:25:35 +09:00 - Loop 256
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / unknown_skill
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 3.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 3.
+  - Status: failed.
+  - Duration: 22.406s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-222418.jsonl`.
+  - Metadata: `{"cycle":3,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: LLM strategy was required but source was heuristic
+- Failure reason: strategy cycle failed: RuntimeError: LLM strategy was required but source was heuristic
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 07:26:00 +09:00 - Loop 257
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / unknown_skill
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 4.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 4.
+  - Status: failed.
+  - Duration: 22.297s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-222418.jsonl`.
+  - Metadata: `{"cycle":4,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: LLM strategy was required but source was heuristic
+- Failure reason: strategy cycle failed: RuntimeError: LLM strategy was required but source was heuristic
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 07:26:26 +09:00 - Loop 258
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / unknown_skill
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 5.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 5.
+  - Status: failed.
+  - Duration: 22.375s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-222418.jsonl`.
+  - Metadata: `{"cycle":5,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: LLM strategy was required but source was heuristic
+- Failure reason: strategy cycle failed: RuntimeError: LLM strategy was required but source was heuristic
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 07:26:52 +09:00 - Loop 259
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / unknown_skill
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 6.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 6.
+  - Status: failed.
+  - Duration: 22.875s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-222418.jsonl`.
+  - Metadata: `{"cycle":6,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: RuntimeError: LLM strategy was required but source was heuristic
+- Failure reason: strategy cycle failed: RuntimeError: LLM strategy was required but source was heuristic
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 07:31:07 +09:00 - Loop 260
+- Part: autopilot restart audit
+- Goal: Restart autonomous play after implementing `build_gear_belt_mall_logistics` without allowing bad hand-carry traces to accumulate.
+- Hypothesis: If Qwen/Slurm strategy is usable, `run-no-mod-autopilot --require-llm` should advance beyond heuristic fallback; if not, fallback autopilot must still avoid repeated manual site-to-site item shuttling.
+- Actions:
+  - Started require-LLM no-mod autopilot, then stopped it after repeated Loops 254-259 failed with `LLM strategy was required but source was heuristic`.
+  - Confirmed Slurm job `678192` is running with about 19h 53m remaining and `slurm-llm-status` reports `llm_ready=true`.
+  - Started fallback no-mod autopilot without `--require-llm`, observed `strategy-circuit-automation-20260614-222731.jsonl`, then stopped it because it began moving `iron-plate` from a distant direct furnace to the gear assembler by player take/insert.
+  - Preserved the trace as a bad example for future fine-tuning and planner guardrails.
+- Candidates:
+  - Require-LLM autopilot: rejected because it failed every cycle before selecting a skill.
+  - Heuristic autopilot: rejected for now because it produced site-to-site player hand-carry of `iron-plate`.
+- Metrics:
+  - Require-LLM failure log: `logs/autopilot-20260614-222418.jsonl`.
+  - Bad hand-carry trace: `logs/strategy-circuit-automation-20260614-222731.jsonl`.
+  - Bad trace direct gear counts: `craft=0`, `recipe=iron-gear-wheel=0`, `take iron-gear-wheel=0`, `insert iron-gear-wheel=0`.
+  - Bad trace hand-carry evidence: `take iron-plate from starter furnace output` followed by `insert iron-plate into iron-gear-wheel mall assembler`.
+  - Slurm LLM status: `llm_ready=true`, remote model configured as `Qwen/Qwen3.5-4B`, job `678192` running.
+- Result: Autopilot was intentionally stopped to avoid accumulating low-quality manual-transfer data.
+- Failure reason: Qwen strategy path is not being accepted as `source=llm` in autopilot, and the heuristic path still permits long-distance `iron-plate` hand-carry.
+- Next action: Add a planner/strategy guardrail for sustained `iron-plate` logistics into the gear/belt mall, then fix the Slurm/Qwen strategy source issue before restarting require-LLM autopilot.
+- Token usage: included in Loop 253 implementation token record / weekly quota unavailable.
+
