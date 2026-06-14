@@ -29,6 +29,7 @@ from .site_selection import (
 from .strategy import heuristic_strategy, make_layout_improvement_context
 from .targets import TARGET_ITEMS, load_targets, parse_target_form, save_targets
 from .token_usage import token_usage_summary
+from .trace_archive import trace_archive_summary
 
 
 FACTORIO_ROUTE = "/factorio"
@@ -378,6 +379,12 @@ TEXT["en"].update(
         "latest_delta_tokens": "Latest Delta",
         "weekly_quota": "Weekly Quota",
         "weekly_percent": "Weekly %",
+        "trace_archives": "Training Trace Archives",
+        "no_trace_archives": "No training trace archive has been created yet.",
+        "archive": "Archive",
+        "archive_root": "Archive Root",
+        "high_value": "High Value",
+        "categories": "Categories",
     }
 )
 TEXT["ko"].update(
@@ -392,6 +399,12 @@ TEXT["ko"].update(
         "latest_delta_tokens": "Latest Delta",
         "weekly_quota": "Weekly Quota",
         "weekly_percent": "Weekly %",
+        "trace_archives": "Training Trace Archives",
+        "no_trace_archives": "No training trace archive has been created yet.",
+        "archive": "Archive",
+        "archive_root": "Archive Root",
+        "high_value": "High Value",
+        "categories": "Categories",
     }
 )
 
@@ -734,6 +747,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
     layout_background = layout_background_summary(cfg.log_dir)
     layout_validation_feedback = layout_validation_feedback_summary(cfg.log_dir)
     run_journal = run_journal_summary(cfg.log_dir)
+    trace_archives = trace_archive_summary(cfg.runtime_dir / "trace_archives")
     try:
         observation, adapter = observe_dashboard_state(cfg)
         monitor = summarize_factory(observation, objective, production_targets=targets.per_minute)
@@ -773,6 +787,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "llm_decisions": llm_decisions,
             "strategy_worker_comparison": worker_comparison,
             "run_journal": run_journal,
+            "trace_archives": trace_archives,
         }
     except Exception as exc:  # noqa: BLE001
         return {
@@ -788,6 +803,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "llm_decisions": llm_decisions,
             "strategy_worker_comparison": worker_comparison,
             "run_journal": run_journal,
+            "trace_archives": trace_archives,
         }
 
 
@@ -885,6 +901,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
             {_goal_panel(state.get("run_journal"), lang)}
             {_run_notes_panel(state.get("run_journal"), lang)}
             {_run_insights_panel(state.get("run_journal"), lang)}
+            {_trace_archive_panel(state.get("trace_archives"), lang)}
             {_token_usage_panel(state.get("token_usage"), lang)}
             """,
             lang,
@@ -920,6 +937,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     layout_improvement = state.get("layout_improvement") if isinstance(state.get("layout_improvement"), dict) else {}
     layout_background = state.get("layout_background") if isinstance(state.get("layout_background"), dict) else {}
     run_journal = state.get("run_journal") if isinstance(state.get("run_journal"), dict) else {}
+    trace_archives = state.get("trace_archives") if isinstance(state.get("trace_archives"), dict) else {}
     selected_improvement_site = (
         state.get("selected_improvement_site") if isinstance(state.get("selected_improvement_site"), dict) else {}
     )
@@ -1021,6 +1039,8 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     {_run_notes_panel(run_journal, lang)}
 
     {_run_insights_panel(run_journal, lang)}
+
+    {_trace_archive_panel(trace_archives, lang)}
 
     <section class="panel">
       <h2>{_t(lang, "factory_events")}</h2>
@@ -2107,6 +2127,40 @@ def _run_insights_panel(value: Any, lang: str) -> str:
         f"<table><thead><tr><th>{_t(lang, 'updated')}</th><th>{_t(lang, 'kind')}</th>"
         f"<th>{_t(lang, 'executor')}</th><th>{_t(lang, 'reason')}</th><th>Evidence</th>"
         f"</tr></thead><tbody>{body}</tbody></table>"
+        "</section>"
+    )
+
+
+def _trace_archive_panel(value: Any, lang: str) -> str:
+    summary = value if isinstance(value, dict) else {}
+    rows = summary.get("archives") if isinstance(summary.get("archives"), list) else []
+    if not rows:
+        return (
+            "<section class=\"panel\">"
+            f"<h2>{_t(lang, 'trace_archives')}</h2>"
+            f"<p class=\"muted\">{_t(lang, 'no_trace_archives')}</p>"
+            f"<p class=\"muted\">{escape(str(summary.get('archive_root') or ''))}</p>"
+            "</section>"
+        )
+    body = "".join(
+        "<tr>"
+        f"<td>{escape(_format_kst_timestamp(row.get('created_at')) or str(row.get('created_at_kst') or ''))}</td>"
+        f"<td>{escape(str(row.get('label') or ''))}</td>"
+        f"<td>{escape(str(row.get('source_count') or 0))}</td>"
+        f"<td>{escape(str(row.get('high_value_files') or 0))}</td>"
+        f"<td>{escape(_compact_json_text(row.get('category_counts') or {}))}</td>"
+        f"<td>{escape(str(row.get('archive_dir') or ''))}</td>"
+        "</tr>"
+        for row in rows[:8]
+        if isinstance(row, dict)
+    )
+    return (
+        "<section class=\"panel\">"
+        f"<h2>{_t(lang, 'trace_archives')}</h2>"
+        f"<p class=\"muted\">{_t(lang, 'archive_root')}: {escape(str(summary.get('archive_root') or ''))}</p>"
+        f"<table><thead><tr><th>{_t(lang, 'updated')}</th><th>{_t(lang, 'archive')}</th>"
+        f"<th>{_t(lang, 'count')}</th><th>{_t(lang, 'high_value')}</th>"
+        f"<th>{_t(lang, 'categories')}</th><th>Path</th></tr></thead><tbody>{body}</tbody></table>"
         "</section>"
     )
 

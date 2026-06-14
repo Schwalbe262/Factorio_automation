@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 import sys
 from typing import Any
 
@@ -34,6 +35,7 @@ from .vanilla_gui import (
 from .vanilla_perception import classify_bmp_file
 from .web_dashboard import FACTORIO_ROUTE, public_dashboard_urls, serve_dashboard
 from .token_usage import record_token_usage, token_usage_summary
+from .trace_archive import archive_training_traces, trace_archive_summary
 from .run_journal import run_journal_summary
 
 
@@ -302,6 +304,18 @@ def main(argv: list[str] | None = None) -> None:
 
     subparsers.add_parser("token-usage-summary", help="Print the recorded Codex token usage summary")
     subparsers.add_parser("run-journal-summary", help="Print goal, loop note, and insight journal summary")
+    archive_parser = subparsers.add_parser(
+        "archive-training-traces",
+        help="Archive local logs/notes/insights into a fine-tuning trace bundle",
+    )
+    archive_parser.add_argument("--label", default="")
+    archive_parser.add_argument("--output-root", help="Archive root directory; defaults to runtime/trace_archives")
+    archive_parser.add_argument("--no-copy-raw", action="store_true", help="Write manifest/index only without raw copies")
+    archive_parser.add_argument("--no-text-logs", action="store_true", help="Skip .log/.err/.out runtime diagnostics")
+    archive_parser.add_argument("--limit", type=int, help="Limit source file count for testing or dry runs")
+    summary_parser = subparsers.add_parser("trace-archive-summary", help="Print local training trace archive summary")
+    summary_parser.add_argument("--output-root", help="Archive root directory; defaults to runtime/trace_archives")
+    summary_parser.add_argument("--limit", type=int, default=5)
 
     action_parser = subparsers.add_parser("action", help="Execute /ai_action JSON")
     action_parser.add_argument("json_action")
@@ -949,6 +963,24 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "run-journal-summary":
         print_json({"ok": True, "run_journal": run_journal_summary(cfg.log_dir)})
+        return
+
+    if args.command == "archive-training-traces":
+        output_root = Path(args.output_root) if args.output_root else cfg.runtime_dir / "trace_archives"
+        result = archive_training_traces(
+            cfg.log_dir,
+            output_root,
+            label=args.label,
+            copy_raw=not args.no_copy_raw,
+            include_text_logs=not args.no_text_logs,
+            limit=args.limit,
+        )
+        print_json({"ok": True, "trace_archive": result})
+        return
+
+    if args.command == "trace-archive-summary":
+        output_root = Path(args.output_root) if args.output_root else cfg.runtime_dir / "trace_archives"
+        print_json({"ok": True, "trace_archive": trace_archive_summary(output_root, limit=args.limit)})
         return
 
     if args.command == "action":

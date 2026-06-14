@@ -6,6 +6,8 @@
 - Keep the LLM at the strategic layer: choose goals, diagnose bottlenecks, critique layouts, and propose safe candidates.
 - Keep deterministic skills responsible for movement, mining, crafting, building, recipes, power, belts, inserters, validation, and rollback decisions.
 - Use the web dashboard as the operator surface for monitoring, manual correction, selected site improvement targets, token usage, and LLM/layout evidence.
+- Use Codex-like implementation assistance only as the bootstrap engineering layer while deterministic skills and UI controls are still missing.
+- Converge toward an autoplayer that can run the game with the local Qwen LLM as the only strategic model, using saved traces, tuned prompts, and Factorio-specific fine-tuning.
 
 ## Current Sprint
 
@@ -13,7 +15,25 @@
 - Stabilize automation science production and lab feeding before expanding the green-circuit line.
 - Keep idle GPU cycles busy with simulation-only factory-site optimization while the player or deterministic executor is busy.
 - Record every strategy/autopilot/layout loop in `note.md` and append only meaningful improvements to `insight.md`.
+- Preserve layout, strategy, LLM decision, validation, and operator-intervention traces for GEPA prompt tuning and future Qwen LoRA fine-tuning.
 - Preserve no-custom-mod compatibility for the primary development path.
+- When Codex adds missing functions, keep the new capability deterministic, logged, test-covered, and exposed to the local Qwen strategy layer instead of leaving it as an operator-only shortcut.
+
+## Autonomy Roadmap
+
+- Bootstrap phase: Codex may add missing deterministic skills, planner checks, validation gates, trace exporters, and web UI controls because the local agent does not yet have enough tools to complete the rocket path alone.
+- Transition phase: each Codex-added capability must become an ordinary tool the local Qwen strategy layer can select, evaluate, and retry through structured payloads.
+- Target phase: the local Qwen model chooses the next objective, diagnoses blockers, proposes layout improvements, and keeps the game progressing without Codex deciding gameplay actions.
+- Fine-tuning path: use preserved strategy traces, layout validation records, human intervention comparisons, notes, and confirmed insights to build Factorio-specific Qwen LoRA training data.
+- Safety boundary: even after prompt tuning or LoRA fine-tuning, direct world mutation stays inside deterministic skills with validation and rollback evidence.
+
+## Human Intervention Learning
+
+- A real human player may add new factory blocks, move entities, repair production, or modify an agent-built site during a run.
+- Human changes are not automatically assumed to be better; the agent should compare the previous agent design and the human-modified design using the same factory quality criteria below.
+- If the human intervention improves measurable quality such as throughput, footprint, power use, pollution, bottleneck removal, site adjacency, expansion clearance, or robustness, record it as an accepted insight.
+- If the intervention degrades the layout or only works because of manual carrying, record it in `note.md` as evidence but do not promote it to `insight.md`.
+- Preserve before/after layout traces from human interventions because they are high-value examples for GEPA prompt optimization and Qwen fine-tuning.
 
 ## Current Status
 
@@ -35,9 +55,11 @@
 ## Learning Roadmap
 
 - Collect structured traces from LLM decisions, strategy outcomes, layout candidates, sandbox validation, notes, insights, and operator interventions.
+- Compare human/operator factory edits against the agent's previous site layout; accept them as reusable insights only when objective metrics improve.
 - Use GEPA prompt optimization offline against saved traces before adding any live-mutating optimizer.
 - Convert successful and failed layout/strategy traces into fine-tuning examples for a Factorio-specialized local Qwen LoRA.
 - Keep exact gameplay execution deterministic even after prompt tuning or fine-tuning.
+- Treat accepted human interventions as supervised improvement examples only when before/after evidence shows an actual factory-quality gain.
 
 ## Later Milestones
 

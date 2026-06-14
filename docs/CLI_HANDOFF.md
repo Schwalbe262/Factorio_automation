@@ -902,6 +902,28 @@ Dashboard should include:
 - Codex token usage graph with true time-axis spacing and KST timestamps.
 - Layout issues, opportunities, simulation candidates, and before/after blueprint copy buttons.
 - Candidate validation status, sandbox validation results, site pre-build gate, placement search status, and build-ready blockers.
+- Latest training trace archive summary, especially high-value layout/strategy/operator-intervention traces.
+
+## Training Trace Archive
+
+Raw logs and generated archives are local runtime data and are ignored by Git. Before resetting maps, pruning logs, or starting a major new sprint, preserve the current traces:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli archive-training-traces --label "partXX-short-description"
+python -m factorio_ai.cli trace-archive-summary
+```
+
+Default output is `runtime/trace_archives/YYYYMMDD-HHMMSS-<label>/` with `manifest.json`, `index.jsonl`, `README.md`, and raw copied logs. The exporter prioritizes:
+
+- layout background loops
+- sandbox layout validation feedback
+- layout/strategy JSONL runs
+- LLM decision logs
+- `note.md` and `insight.md`
+- future human/operator intervention comparisons
+
+Human edits to an agent-built factory site should be treated as data, not automatically accepted. Compare the agent's previous layout snapshot against the human-modified layout and only append an `insight.md` entry when metrics improve, such as throughput per tile, bottleneck removal, lower power/pollution, shorter logistics distance, or a sandbox validation pass.
 
 ## Git Hygiene
 

@@ -314,6 +314,29 @@ class WebDashboardTests(unittest.TestCase):
                     "total_delta_tokens": 250,
                     "updated_at": "2026-06-13T00:01:00+00:00",
                 },
+                "trace_archives": {
+                    "archive_root": "runtime/trace_archives",
+                    "archive_count": 1,
+                    "latest": {
+                        "label": "part75-scattered-map-traces",
+                        "source_count": 12,
+                        "high_value_files": 8,
+                    },
+                    "archives": [
+                        {
+                            "created_at": "2026-06-15T00:20:00+00:00",
+                            "label": "part75-scattered-map-traces",
+                            "source_count": 12,
+                            "high_value_files": 8,
+                            "category_counts": {
+                                "layout_background": 1,
+                                "layout_validation": 1,
+                                "strategy_run": 4,
+                            },
+                            "archive_dir": "runtime/trace_archives/20260615-002000-part75-scattered-map-traces",
+                        }
+                    ],
+                },
             },
             lang="ko",
         )
@@ -385,6 +408,10 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("codex_wait:bootstrap_build_item_mall", html)
         self.assertIn("compact-green-circuit-cell", html)
         self.assertIn("Reduce footprint", html)
+        self.assertIn("Training Trace Archives", html)
+        self.assertIn("part75-scattered-map-traces", html)
+        self.assertIn("layout_background", html)
+        self.assertIn("runtime/trace_archives/20260615-002000-part75-scattered-map-traces", html)
 
     def test_dashboard_marks_selected_improvement_site(self):
         html = render_dashboard(

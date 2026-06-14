@@ -158,3 +158,28 @@
 - Failure reason: 없음.
 - Next action: commit/push 후 새 맵에서 compact iron/coal/copper bootstrap을 시작한다.
 - Token usage: 925,375 / 주간 할당량 분모 미제공.
+
+## 2026-06-15 00:31:51 +09:00 - Loop 7
+- Part: Part 75 - training trace preservation
+- Goal: launch_rocket_program / preserve_scattered_map_layout_and_strategy_traces
+- Hypothesis: Layout improvement logs, failed strategy traces, LLM decisions, and human intervention comparisons are future GEPA/Qwen LoRA data and should be archived before map resets or log churn hide them.
+- Actions:
+  - Added archive-training-traces and trace-archive-summary CLI commands.
+  - Added trace archive manifest/index generation with raw log copies under runtime/trace_archives.
+  - Added dashboard summary for latest training trace archives.
+  - Documented operator intervention before/after comparison rules for future human layout edits.
+  - Exported current logs and Markdown journals into a local archive bundle.
+- Candidates:
+  - Leave raw logs only in logs/: rejected because ignored logs are easy to lose during map/runtime changes.
+  - Commit raw logs to Git: rejected because logs/runtime are large local artifacts.
+  - Local archive with tracked exporter and docs: selected.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\runtime\trace_archives\20260615-003151-part75-scattered-map-traces\manifest.json`.
+  - Metadata: `{"actions":["Added archive-training-traces and trace-archive-summary CLI commands.","Added trace archive manifest/index generation with raw log copies under runtime/trace_archives.","Added dashboard summary for latest training trace archives.","Documented operator intervention before/after comparison rules for future human layout edits.","Exported current logs and Markdown journals into a local archive bundle."],"archive_dir":"C:\\Users\\NEC\\Documents\\Factorio\\runtime\\trace_archives\\20260615-003151-part75-scattered-map-traces","candidates":["Leave raw logs only in logs/: rejected because ignored logs are easy to lose during map/runtime changes.","Commit raw logs to Git: rejected because logs/runtime are large local artifacts.","Local archive with tracked exporter and docs: selected."],"high_value_files":61,"hypothesis":"Layout improvement logs, failed strategy traces, LLM decisions, and human intervention comparisons are future GEPA/Qwen LoRA data and should be archived before map resets or log churn hide them.","next_action":"Use the archive index for GEPA prompt eval extraction and add automatic before/after snapshot comparison for human factory edits.","part":"Part 75 - training trace preservation","source_count":158}`.
+- Result: Completed: created local training trace archive before further map/runtime churn
+- Failure reason: None
+- Next action: Use the archive index for GEPA prompt eval extraction and add automatic before/after snapshot comparison for human factory edits.
+- Token usage: 252,093 / 주간 할당량 분모 미제공.
+
