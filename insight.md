@@ -192,6 +192,7 @@
 - After: The summary exposes `latest_raw_tokens`, cumulative `latest_tokens`, `counter_reset_count`, and `latest_counter_reset`; the chart/table render cumulative tokens while retaining raw deltas.
 - Evidence: `{"source_loop":166,"tests":"398 passed","regressions":["test_counter_reset_continues_cumulative_display_tokens","test_token_usage_chart_uses_cumulative_tokens_after_counter_reset","test_token_usage_table_uses_cumulative_tokens_after_counter_reset"]}`
 - Remaining risk: Weekly percentage still cannot be computed unless `FACTORIO_AI_WEEKLY_TOKEN_QUOTA` is provided.
+
 ## 2026-06-15 04:17:36 +09:00 - Insight 23
 - Source loop: Loop 167 / Loop 168
 - Improvement: The hidden no-mod autopilot completed Automation research under the 4B Slurm LLM strategy path.
@@ -199,3 +200,11 @@
 - After: `research_automation` ran 13 deterministic skill steps, inserted 10 automation science packs, waited through lab progress, and ended with `automation research completed`; the following LLM decision selected `bootstrap_build_item_mall`.
 - Evidence: `{"source_loops":[167,168],"strategy_source":"llm","selected_skill":"research_automation","steps":13,"result":"automation research completed","next_skill":"bootstrap_build_item_mall","log":"strategy-automation-research-20260614-191520.jsonl","model":"Qwen/Qwen3.5-4B"}`
 - Remaining risk: The next phase must minimize hand crafting by moving from tiny bootstrap crafting into assembler/belt-based site automation now that Automation is researched.
+
+## 2026-06-15 04:27:38 +09:00 - Insight 24
+- Source loop: Loop 170
+- Improvement: Direct burner mining drill -> stone furnace smelting cells now place the furnace directly against the drill output and reject one-tile-gap furnaces.
+- Before: The live copper pair used drill unit `294` at `{x:49,y:-30}` and furnace unit `295` at `{x:52,y:-30}`, leaving a one-tile gap; the drill was blocked with `waiting_for_space_in_destination`.
+- After: The layout offset is `2 * direction`, direct furnace matching radius is `0.75`, exact furnace placement disables nearby fallback, and the live pair was rebuilt with furnace unit `316` at `{x:51,y:-30}`; both drill and furnace reported `working`.
+- Evidence: `{"source_loop":170,"tests":"400 passed","live_before":{"drill_unit":294,"furnace_unit":295,"drill_position":{"x":49,"y":-30},"furnace_position":{"x":52,"y":-30},"drill_status":"waiting_for_space_in_destination"},"live_after":{"drill_unit":294,"furnace_unit":316,"drill_position":{"x":49,"y":-30},"furnace_position":{"x":51,"y":-30},"drill_status":"working","furnace_status":"working","furnace_inventory":{"copper-ore":3,"copper-plate":3}}}`
+- Remaining risk: Existing historical traces with the offset-3 layout should be labeled as bad examples, not successful direct smelting examples, if used for fine-tuning.

@@ -3493,3 +3493,29 @@
 - Failure reason: None for final state. Intermediate hidden-launch failures were caused by unquoted Windows `set` commands adding trailing spaces to env values.
 - Next action: Watch `bootstrap_build_item_mall` and ensure it transitions from tiny bootstrap crafting toward assembler/belt-based site automation now that Automation is researched.
 - Token usage: 5,552,689 tokens / weekly quota unavailable.
+
+## 2026-06-15 04:27:38 +09:00 - Loop 170
+- Part: Part 86 direct smelting adjacency correction
+- Goal: Fix the extreme-early burner mining drill -> stone furnace direct pair so the furnace is placed directly against the drill output, not one tile away.
+- Hypothesis: The direct smelting layout used a furnace center offset of `3 * direction`, which leaves one tile of gap for 2x2 drill/furnace entities. The correct center offset is `2 * direction`; direct furnace placement must also reject nearby fallback placement.
+- Actions:
+  - Stopped the hidden no-mod autopilot before it could place more bad direct pairs.
+  - Inspected the live copper pair: burner mining drill unit `294` at `{x:49,y:-30}`, stone furnace unit `295` at `{x:52,y:-30}`, with the drill stuck at `waiting_for_space_in_destination`.
+  - Changed direct smelting furnace layout from `drill_position + 3 * direction` to `drill_position + 2 * direction`.
+  - Tightened direct furnace matching radius from `1.5` to `0.75` so a one-tile-gap furnace is not accepted as a valid direct cell.
+  - Disabled `allow_nearby` for direct furnace placement so the executor fails instead of silently placing an offset furnace.
+  - Added regression tests for east/west/south/north direct furnace offsets and for rejecting a one-tile-gap copper direct furnace.
+  - Recovered the live bad furnace: moved to `{x:52,y:-30}`, mined furnace unit `295`, rebuilt stone furnace unit `316` at `{x:51,y:-30}`, and inserted coal.
+- Candidates:
+  - Leave the bad furnace and only fix future layouts: rejected because the live drill was blocked and the bad example would pollute later training traces.
+  - Treat offset-3 furnace as acceptable: rejected because burner drill direct output requires the furnace to touch the output side.
+  - Correct the layout and live pair immediately: selected.
+- Metrics:
+  - Targeted direct smelting tests: `7 passed`.
+  - Full suite: `400 passed`.
+  - Live before: drill `294` status `waiting_for_space_in_destination`, furnace `295` at `{x:52,y:-30}`.
+  - Live after: drill `294` status `working`, furnace `316` at `{x:51,y:-30}` status `working`, furnace inventory included `copper-ore:3` and `copper-plate:3`.
+- Result: Direct copper pair is now physically adjacent and producing; future direct iron/copper pairs use exact adjacent furnace placement.
+- Failure reason: None for final state. The previous failure was an off-by-one center offset for 2x2 direct smelting entities.
+- Next action: Commit/push Part 86, then restart hidden no-mod autopilot and monitor `bootstrap_build_item_mall`.
+- Token usage: 5,692,665 tokens / weekly quota unavailable.

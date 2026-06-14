@@ -3603,7 +3603,7 @@ def _direct_plate_smelting_decision(
                 "type": "build",
                 "name": "stone-furnace",
                 "position": position,
-                "allow_nearby": True,
+                "allow_nearby": False,
             },
             f"place furnace at {resource_name} drill output",
         )
@@ -3709,7 +3709,7 @@ def _find_direct_smelting_cell(observation: dict[str, Any], resource_name: str) 
         orientation = _direction_to_orientation(int(drill.get("direction") or EAST))
         layout = _direct_smelting_layout_from_drill_position(drill_position, resource_name=resource_name, orientation=orientation)
         layout["drill"] = drill
-        layout["furnace"] = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=1.5)
+        layout["furnace"] = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=0.75)
         candidates.append(
             (
                 layout["furnace"] is not None,
@@ -3729,7 +3729,7 @@ def _select_direct_smelting_layout(observation: dict[str, Any], resource_name: s
         for orientation in ("east", "west", "south", "north"):
             layout = _direct_smelting_layout_from_drill_position(_position(resource), resource_name=resource_name, orientation=orientation)
             layout["drill"] = _entity_near(observation, "burner-mining-drill", layout["drill_position"], radius=2.0)
-            layout["furnace"] = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=1.5)
+            layout["furnace"] = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=0.75)
             if not _direct_smelting_layout_blocked_by_factory_entities(layout, entities):
                 return layout
     return None
@@ -3743,7 +3743,7 @@ def _direct_smelting_layout_from_drill_position(
     dx, dy, drill_direction, _belt_direction, _inserter_direction = _smelting_orientation(orientation)
     return {
         "drill_position": drill_position,
-        "furnace_position": {"x": drill_position["x"] + 3 * dx, "y": drill_position["y"] + 3 * dy},
+        "furnace_position": {"x": drill_position["x"] + 2 * dx, "y": drill_position["y"] + 2 * dy},
         "orientation": orientation,
         "resource_name": resource_name,
         "drill_direction": drill_direction,

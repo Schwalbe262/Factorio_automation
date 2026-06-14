@@ -652,7 +652,7 @@ class PlannerTests(unittest.TestCase):
         decision = IronPlateSkill(target_count=10).next_action(obs)
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "stone-furnace")
-        self.assertEqual(decision.action["position"], {"x": 7.0, "y": 0.0})
+        self.assertEqual(decision.action["position"], {"x": 6.0, "y": 0.0})
 
     def test_iron_skill_waits_for_direct_furnace_instead_of_hand_mining_ore(self):
         obs = base_observation()
@@ -669,8 +669,8 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "stone-furnace",
                 "unit_number": 102,
-                "position": {"x": 7, "y": 0},
-                "distance": 7,
+                "position": {"x": 6, "y": 0},
+                "distance": 6,
                 "inventories": {"1": {"coal": 3}},
             },
         ]
@@ -703,7 +703,7 @@ class PlannerTests(unittest.TestCase):
         decision = IronPlateSkill(target_count=10).next_action(obs)
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "stone-furnace")
-        self.assertEqual(decision.action["position"], {"x": 103.0, "y": 0.0})
+        self.assertEqual(decision.action["position"], {"x": 102.0, "y": 0.0})
 
     def test_iron_skill_ignores_remote_furnace_output_before_rail(self):
         obs = base_observation()
@@ -823,7 +823,51 @@ class PlannerTests(unittest.TestCase):
         decision = CopperPlateSkill(target_count=5).next_action(obs)
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "stone-furnace")
-        self.assertEqual(decision.action["position"], {"x": 11.0, "y": 0.0})
+        self.assertEqual(decision.action["position"], {"x": 10.0, "y": 0.0})
+        self.assertFalse(decision.action["allow_nearby"])
+
+    def test_direct_smelting_layout_keeps_furnace_touching_drill_output(self):
+        cases = {
+            "east": {"x": 10.0, "y": 0.0},
+            "west": {"x": 6.0, "y": 0.0},
+            "south": {"x": 8.0, "y": 2.0},
+            "north": {"x": 8.0, "y": -2.0},
+        }
+        for orientation, expected in cases.items():
+            with self.subTest(orientation=orientation):
+                layout = planner_module._direct_smelting_layout_from_drill_position(
+                    {"x": 8, "y": 0},
+                    "copper-ore",
+                    orientation=orientation,
+                )
+                self.assertEqual(layout["furnace_position"], expected)
+
+    def test_copper_skill_does_not_accept_one_tile_gap_direct_furnace(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 8, "stone-furnace": 1}
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 701,
+                "position": {"x": 8, "y": 0},
+                "direction": 4,
+                "distance": 8,
+                "mining_target": "copper-ore",
+                "inventories": {"1": {"coal": 3}},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 702,
+                "position": {"x": 11, "y": 0},
+                "distance": 11,
+                "inventories": {"1": {"coal": 3}},
+            },
+        ]
+        decision = CopperPlateSkill(target_count=5).next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "stone-furnace")
+        self.assertEqual(decision.action["position"], {"x": 10.0, "y": 0.0})
+        self.assertFalse(decision.action["allow_nearby"])
 
     def test_copper_skill_waits_for_direct_cell_instead_of_hand_mining_ore(self):
         obs = base_observation()
@@ -841,8 +885,8 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "stone-furnace",
                 "unit_number": 702,
-                "position": {"x": 11, "y": 0},
-                "distance": 11,
+                "position": {"x": 10, "y": 0},
+                "distance": 10,
                 "inventories": {"1": {"coal": 3}},
             },
         ]
