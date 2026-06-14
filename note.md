@@ -2216,3 +2216,75 @@
 - Failure reason: None for this implementation loop. The previous `research_automation` run still exposed a live execution blocker that must be retried after this build-idempotency fix.
 - Next action: Restart Web UI on the updated code, verify the World Map Memory panel, commit/push Part 81, then resume finite no-mod strategy execution as virtual `AI`.
 - Token usage: active goal counter observed at 3,240,728 tokens / weekly quota unavailable.
+
+## 2026-06-15 02:42:07 +09:00 - Loop 109
+- Part: skill
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: Running `research_automation` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_automation` for up to 80 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-173956.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Target item candidate: `automation-science-pack` target `10`.
+- Metrics:
+  - Steps: 80.
+  - Status: failed.
+  - Duration: 130.578s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-173956.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":80,"target":10}`.
+- Result: Loop stopped: max steps reached: 80
+- Failure reason: max steps reached: 80
+- Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 02:44:39 +09:00 - Loop 110
+- Part: skill
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: Running `research_automation` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_automation` for up to 30 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-174429.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Target item candidate: `automation-science-pack` target `10`.
+- Metrics:
+  - Steps: 4.
+  - Status: failed.
+  - Duration: 9.875s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-174429.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":30,"target":10}`.
+- Result: Loop stopped: action failed: cannot place entity
+- Failure reason: action failed: cannot place entity
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 02:54:25 +09:00 - Loop 111
+- Part: Part 82 - starter-local power guardrail and AI vision chart
+- Goal: Prevent unusable remote starter steam power placement, recover the bad remote power entities, and make the virtual AI location visible through shared force charting.
+- Hypothesis: A remote water site should not be treated as starter power unless a connected power/logistics corridor or co-located remote factory plan exists. If the planner rejects those sites before issuing build actions, it will stop scattering pumps that cannot power the starter base.
+- Actions:
+  - Changed `SetupPowerSkill` so `_select_power_layout` only returns starter-local water sites; remote `power_sites` now produce an explicit no-action blocker instead of a build action.
+  - Kept existing partially built local steam blocks recoverable by merging observed entities into the selected layout, so a pump already built at a valid local site is not built again.
+  - Increased no-mod AI chart radius and charted both the AI current position and action target for shared force visibility.
+  - Updated `goal.md` to remove the old nearest-remote-water bootstrap exception and state that isolated remote pumps cannot power the starter base.
+  - Recovered the bad live remote entities using virtual `AI` only: boiler at `{x:49.5,y:-821}`, offshore pumps at `{x:51.5,y:-822.5}`, `{x:55.5,y:-814.5}`, and `{x:143.5,y:-821.5}`.
+  - Moved virtual `AI` back to the starter factory area near `{x:100,y:-30}` and sent a chart action with radius `128`.
+- Candidates:
+  - Keep remote water as one-time bootstrap: rejected because the current map proved it creates an isolated power block that cannot feed the starter base.
+  - Allow remote power only when a dependent remote factory site is co-located or a reachable corridor already exists: selected.
+  - Restart the map immediately: deferred; the code guardrail now prevents this specific failure from worsening the current map.
+- Metrics:
+  - Targeted tests: `137 passed` for `tests/test_planner.py tests/test_modless_lua.py`.
+  - Full tests: `377 passed`.
+  - Live cleanup result: recovered `boiler=1`, `offshore-pump=3`; live `power_entities=[]` after cleanup.
+  - Live planning scan after cleanup: `power_site_count=20`, but `SetupPowerSkill` returned `action=None` with reason `cannot use remote water for starter steam power until a connected power corridor or co-located remote factory site exists`.
+  - Live AI state after cleanup: virtual server agent at `{x:100,y:-30}`, no connected observer control.
+- Result: Remote starter water sites are now blocked before construction, the bad remote power entities were recovered, and the virtual AI location is charted without moving the observer player or foregrounding the GUI.
+- Failure reason: None for this implementation loop. Rocket progression is still blocked until a starter-local/connectable power plan, a co-located remote factory plan, or a better map start is selected.
+- Next action: Resume strategy only after the planner can choose a connectable power/site plan; do not build isolated remote pumps for starter power.
+- Token usage: active goal counter observed at 3,739,532 tokens / weekly quota unavailable.

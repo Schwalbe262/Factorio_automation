@@ -129,3 +129,11 @@
 - After: A live lightweight observe with 2,616 resource samples and 208 entities produced a 10,412-byte `runtime/world-map-memory.json` containing 15 resource patches, 3 factory zones, 13 sparse index cells, and 18 indexed features.
 - Evidence: `{"source_loop":108,"tests":"375 passed","live_observe":{"resources":2616,"entities":208,"planning_cached_from":null},"world_memory":{"encoding":"sparse_feature_graph","bytes":10412,"resource_patches":15,"factory_zones":3,"sparse_index_cells":13,"sparse_index_features":18},"full_water_scan_run":false}`
 - Remaining risk: Water anchors are only populated after a legitimate full planning-site scan; stale memory is guarded by TTL and final placement must still pass live `can_place_entity` validation.
+
+## 2026-06-15 02:54:25 +09:00 - Insight 15
+- Source loop: Loop 111
+- Improvement: Starter steam power planning no longer places isolated remote water blocks that cannot connect back to the starter factory.
+- Before: Live `research_automation` placed offshore pumps at `{x:55.5,y:-814.5}`, `{x:51.5,y:-822.5}`, and `{x:143.5,y:-821.5}`, plus a boiler at `{x:49.5,y:-821}`, even though those sites were hundreds of tiles from the starter factory and could not power it with available poles.
+- After: The bad remote entities were recovered, a live full planning-site observe still found `power_site_count=20`, but `SetupPowerSkill` returned `action=None` with the explicit remote-water blocker instead of building another pump.
+- Evidence: `{"source_loop":111,"tests":"377 passed","cleanup":{"boiler":1,"offshore_pump":3,"power_entities_after":[]},"planner_after":{"power_site_count":20,"action":null,"reason":"cannot use remote water for starter steam power until a connected power corridor or co-located remote factory site exists"}}`
+- Remaining risk: The current map may still lack a practical starter-local water source; progress now requires a connectable power corridor, a co-located remote factory plan, or a better start rather than isolated remote steam.

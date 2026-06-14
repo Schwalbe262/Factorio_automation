@@ -3122,7 +3122,13 @@ class SetupPowerSkill:
         player = player_position(observation)
         layout = block or _select_power_layout(observation)
         if layout is None:
-            return PlannerDecision(None, "cannot find a buildable water site for steam power")
+            if _has_remote_power_site(observation):
+                return PlannerDecision(
+                    None,
+                    "cannot use remote water for starter steam power until a connected power corridor or co-located remote factory site exists",
+                )
+            return PlannerDecision(None, "cannot find a buildable water site near the starter logistics area for steam power")
+        layout = _power_layout_with_existing_entities(observation, layout)
 
         missing = _missing_power_item(observation, layout)
         if missing:
@@ -4266,7 +4272,6 @@ def _select_power_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(sites, list):
         return None
     local_candidates: list[tuple[float, dict[str, Any]]] = []
-    remote_candidates: list[tuple[float, dict[str, Any]]] = []
     for site in sites:
         if not isinstance(site, dict):
             continue
@@ -4277,17 +4282,26 @@ def _select_power_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
         distance_to_area = _distance_to_starter_logistics_area(observation, position)
         if _within_starter_logistics_area(observation, position, radius=STARTER_POWER_SITE_RADIUS):
             local_candidates.append((distance_to_area, layout))
-            continue
-        remote_layout = dict(layout)
-        remote_layout["remote_bootstrap_power"] = True
-        remote_candidates.append((distance_to_area, remote_layout))
     if local_candidates:
         local_candidates.sort(key=lambda item: item[0])
         return local_candidates[0][1]
-    if remote_candidates:
-        remote_candidates.sort(key=lambda item: item[0])
-        return remote_candidates[0][1]
     return None
+
+
+def _has_remote_power_site(observation: dict[str, Any]) -> bool:
+    sites = observation.get("power_sites")
+    if not isinstance(sites, list):
+        return False
+    for site in sites:
+        if not isinstance(site, dict):
+            continue
+        layout = _layout_from_power_site(site)
+        if layout is None:
+            continue
+        position = _power_layout_position(layout)
+        if not _within_starter_logistics_area(observation, position, radius=STARTER_POWER_SITE_RADIUS):
+            return True
+    return False
 
 
 def _layout_from_power_site(site: dict[str, Any]) -> dict[str, Any] | None:
@@ -4381,6 +4395,25 @@ def _power_layout_from_specs(specs: dict[str, dict[str, Any]]) -> dict[str, Any]
         layout[key] = None
         layout[f"{key}_spec"] = spec
     return layout
+
+
+def _power_layout_with_existing_entities(observation: dict[str, Any], layout: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(layout)
+    for key in ("offshore_pump", "boiler", "steam_engine", "small_electric_pole"):
+        if merged.get(key) is not None:
+            continue
+        spec = merged.get(f"{key}_spec")
+        if not isinstance(spec, dict) or not isinstance(spec.get("position"), dict):
+            continue
+        existing = _entity_near(
+            observation,
+            str(spec.get("name") or _power_spec_name(key)),
+            _xy_position(spec["position"]),
+            radius=1.0,
+        )
+        if existing is not None:
+            merged[key] = existing
+    return merged
 
 
 def _find_steam_power_block(

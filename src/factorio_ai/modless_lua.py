@@ -139,6 +139,7 @@ local LAB_SITE_RADIUS = 96
 local POLE_WIRE_REACH = 7.5
 local STARTER_POLE_SUPPLY_REACH = 2.5
 local GLOBAL_FORCE_ENTITY_LIMIT = 240
+local AGENT_VISION_CHART_RADIUS = 96
 local VIRTUAL_STARTER_ITEMS = {{
   ["burner-mining-drill"] = 1,
   ["stone-furnace"] = 1
@@ -391,13 +392,15 @@ local function marker_position(value, fallback)
 end
 local function chart_area_around(agent, position)
   if not agent or not agent.force or not agent.surface or not position then return end
+  local radius = AGENT_VISION_CHART_RADIUS
   pcall(function()
-    agent.force.chart(agent.surface, {{ {{ x = position.x - 32, y = position.y - 32 }}, {{ x = position.x + 32, y = position.y + 32 }} }})
+    agent.force.chart(agent.surface, {{ {{ x = position.x - radius, y = position.y - radius }}, {{ x = position.x + radius, y = position.y + radius }} }})
   end)
 end
 local function update_agent_chart_marker(agent, label, position)
   if not agent or not agent.force or not agent.surface then return nil end
   local target = marker_position(position, agent.position)
+  chart_area_around(agent, agent.position)
   chart_area_around(agent, target)
   pcall(function()
     local tags = agent.force.find_chart_tags(agent.surface)

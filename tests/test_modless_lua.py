@@ -16,6 +16,7 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("lab_sites = collect_lab_sites", command)
         self.assertIn("automation_sites = collect_automation_sites", command)
         self.assertIn("GLOBAL_FORCE_ENTITY_LIMIT", command)
+        self.assertIn("AGENT_VISION_CHART_RADIUS = 96", command)
         self.assertIn("force = agent.force", command)
         self.assertIn("base = { anchor_position", command)
         self.assertIn("clear_of_resources", command)
@@ -98,6 +99,7 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("agent_marker", command)
         self.assertIn("result.execution", command)
         self.assertIn("[AI]", command)
+        self.assertIn("chart_area_around(agent, agent.position)", command)
 
     def test_action_handles_virtual_lab_trigger_research(self):
         command = build_modless_action_command({"type": "craft", "recipe": "lab", "count": 1})

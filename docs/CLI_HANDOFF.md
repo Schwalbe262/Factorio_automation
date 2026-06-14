@@ -872,7 +872,7 @@ Open review GUI:
 ## Known Design Issues To Keep In Mind
 
 - Factory sites have historically been too scattered. Site placement must prefer starter-local clusters until rail logistics exist.
-- Power should prefer starter-local water; if no buildable starter-local water exists, the nearest remote water steam block is allowed as a one-time bootstrap exception and must not be treated as permission to scatter normal factory sites.
+- Power must prefer starter-local or already connected water. Do not build isolated remote starter steam power; a remote water block is only valid when the dependent factory site is co-located there or a reachable power/logistics corridor already exists.
 - Production blocks must avoid covering starter ore/coal patches unless unavoidable.
 - Research automation must use assemblers and labs; hand-crafting science packs is not acceptable for sustained progress.
 - Labs usually need daisy chain or belt-fed science distribution.
@@ -883,6 +883,7 @@ Open review GUI:
 - Logistics links are site-to-site links, not individual belt segment links.
 - Do not spend scarce hand-crafted belts on site-to-site paths before `transport-belt` production is automated by a mall assembler. Bootstrap-local direct insertion is allowed; repeated site links should wait for belt automation.
 - Trains should be used for far resources/outposts once local logistics become too long.
+- Part 82 recovered the bad remote steam entities and verified that `SetupPowerSkill` now returns a remote-water blocker even when a full planning-site scan finds remote `power_sites`.
 
 ## LLM Model Direction
 
