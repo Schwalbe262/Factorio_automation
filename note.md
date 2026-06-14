@@ -4943,3 +4943,136 @@
 - Failure reason: None for this patch. Remaining automation-quality issue: the current circuit executor still moves copper cable/circuit outputs by take/insert and does not yet rebuild a full 3-cable/2-circuit layout.
 - Next action: Restart hidden autopilot on the patched code, then implement the actual green-circuit 3:2 expansion/logistic transfer executor and remove remaining manual-style cable/plate shuttles.
 - Token usage: 7,186,227 tokens / weekly quota unavailable.
+## 2026-06-15 06:07:08 +09:00 - Loop 235
+- Part: skill
+- Goal: launch_rocket_program / automate_electronic_circuit_line
+- Hypothesis: Running `automate_electronic_circuit_line` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `automate_electronic_circuit_line` for up to 1800 step(s).
+  - Tracked `electronic-circuit` from 5 to 5.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-circuit-automation-20260614-210706.jsonl`.
+- Candidates:
+  - Selected goal/skill: `automate_electronic_circuit_line`.
+  - Target item candidate: `electronic-circuit` target `5`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 2.407s.
+  - electronic-circuit: 5 -> 5 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-circuit-automation-20260614-210706.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":5,"initial_item_count":5,"max_steps":1800,"target":5}`.
+- Result: Completed: circuit automation cell is running and target reached: 5/5
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 06:07:08 +09:00 - Loop 236
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / automate_electronic_circuit_line
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 1.
+  - Selected `automate_electronic_circuit_line` with priority `84` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `automate_electronic_circuit_line`.
+  - Strategy priority: `84`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 33.922s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-210632.jsonl`.
+  - Metadata: `{"cycle":1,"priority":84,"strategy_source":"llm"}`.
+- Result: Completed: circuit automation cell is running and target reached: 5/5
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 06:07:45 +09:00 - Loop 237
+- Part: skill
+- Goal: launch_rocket_program / automate_electronic_circuit_line
+- Hypothesis: Running `automate_electronic_circuit_line` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `automate_electronic_circuit_line` for up to 1800 step(s).
+  - Tracked `electronic-circuit` from 5 to 5.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-circuit-automation-20260614-210743.jsonl`.
+- Candidates:
+  - Selected goal/skill: `automate_electronic_circuit_line`.
+  - Target item candidate: `electronic-circuit` target `5`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 2.422s.
+  - electronic-circuit: 5 -> 5 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-circuit-automation-20260614-210743.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":5,"initial_item_count":5,"max_steps":1800,"target":5}`.
+- Result: Completed: circuit automation cell is running and target reached: 5/5
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 06:07:45 +09:00 - Loop 238
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / automate_electronic_circuit_line
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 2.
+  - Selected `automate_electronic_circuit_line` with priority `84` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `automate_electronic_circuit_line`.
+  - Strategy priority: `84`.
+- Metrics:
+  - Steps: 2.
+  - Status: ok.
+  - Duration: 31.734s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-210632.jsonl`.
+  - Metadata: `{"cycle":2,"priority":84,"strategy_source":"llm"}`.
+- Result: Completed: circuit automation cell is running and target reached: 5/5
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 06:12:31 +09:00 - Loop 239
+- Part: skill
+- Goal: launch_rocket_program / automate_electronic_circuit_line
+- Hypothesis: Running `automate_electronic_circuit_line` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `automate_electronic_circuit_line` for up to 20 step(s).
+  - Tracked `electronic-circuit` from 5 to 12.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-circuit-automation-20260614-211038.jsonl`.
+- Candidates:
+  - Selected goal/skill: `automate_electronic_circuit_line`.
+  - Target item candidate: `electronic-circuit` target `50`.
+- Metrics:
+  - Steps: 20.
+  - Status: failed.
+  - Duration: 112.265s.
+  - electronic-circuit: 5 -> 12 (delta 7).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-circuit-automation-20260614-211038.jsonl`.
+  - Metadata: `{"delta_item_count":7,"final_item_count":12,"initial_item_count":5,"max_steps":20,"target":50}`.
+- Result: Partial progress despite loop stop: max steps reached: 20
+- Failure reason: max steps reached: 20
+- Next action: Continue only if the next decision still respects automation and site-logistics guardrails.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 06:12:52 +09:00 - Loop 240
+- Part: circuit automation strategy target
+- Goal: Stop the post-Logistics autopilot from repeatedly selecting `automate_electronic_circuit_line` only to finish immediately at the tiny bootstrap target of 5 circuits.
+- Hypothesis: Raising the strategy-run default target for `automate_electronic_circuit_line` from 5 to 50 will convert the repeated 5/5 done loop into actual circuit stock growth while the fuller 3:2 layout executor is still pending.
+- Actions:
+  - Changed the strategy runner default target for `automate_electronic_circuit_line` to 50 while preserving explicit target overrides.
+  - Added a controller regression test for the new default target and existing override behavior.
+  - Ran the full test suite.
+  - Ran a live no-mod strategy step with `--max-steps 20` to verify it no longer exits immediately at 5/5.
+- Candidates:
+  - Previous repeated target: `electronic-circuit` target 5.
+  - New strategy target: `electronic-circuit` target 50.
+  - Pending better candidate: actual green-circuit 3-cable/2-circuit expansion executor.
+- Metrics:
+  - Tests: `python -m unittest discover -s tests` -> 414 passed.
+  - Live trace: `logs/strategy-circuit-automation-20260614-211038.jsonl`.
+  - Live item delta: electronic-circuit 5 -> 12 in 20 capped steps.
+  - Live trace craft counts: total craft 0, `iron-gear-wheel` craft 0, `transport-belt` craft 0.
+- Result: The immediate 5/5 completion loop is broken; the capped verification run made partial circuit stock progress toward target 50.
+- Failure reason: Live verification intentionally stopped at 20 steps, so the skill reported `max steps reached: 20` before reaching 50.
+- Next action: Commit/push Part 93, restart hidden autopilot, then implement a true green-circuit transfer/layout executor to remove repeated cable take/insert shuttling.
+- Token usage: 7,241,795 tokens / weekly quota unavailable.

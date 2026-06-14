@@ -1156,7 +1156,7 @@ class FactorioController:
                 "log_prefix": "strategy-automation-research",
             }
         if skill_name == "automate_electronic_circuit_line":
-            target = target_count or 5
+            target = target_count or 50
             return {
                 "skill": CircuitAutomationSkill(target),
                 "target_item": "electronic-circuit",

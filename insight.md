@@ -280,3 +280,19 @@
 - After: Regression tests cover the gear-mall-done edge case and the post-Logistics layout-ratio redirect; live Slurm/Qwen strategy still proposed `plan_factory_site`, but final execution selected `automate_electronic_circuit_line` and `strategy-circuit-automation-20260614-210152.jsonl` had zero craft actions.
 - Evidence: `{"source_loop":234,"verification_loop":233,"tests":"414 passed","live_strategy":{"llm_selected":"plan_factory_site","final_selected":"automate_electronic_circuit_line","layout_executable_fallback":"rebalance_green_circuit_ratio"},"live_trace":"strategy-circuit-automation-20260614-210152.jsonl","craft_counts":{"total":0,"iron_gear_wheel":0,"transport_belt":0},"electronic_circuit_delta":5}`
 - Remaining risk: The circuit executor still uses take/insert to shuttle copper cable and circuit outputs and does not yet build the full 3-cable/2-circuit optimized layout.
+
+## 2026-06-15 06:12:31 +09:00 - Insight 34
+- Source loop: Loop 239
+- Improvement: electronic-circuit increased by 7 during automate_electronic_circuit_line.
+- Before: electronic-circuit = 5
+- After: electronic-circuit = 12
+- Evidence: `{"delta":7,"final":12,"initial":5,"item":"electronic-circuit","source_loop":239,"target":50}`
+- Remaining risk: Target is not complete yet: 12/50.
+
+## 2026-06-15 06:12:52 +09:00 - Insight 35
+- Source loop: Loop 240
+- Improvement: The strategy-run circuit automation target now uses 50 circuits instead of the 5-circuit bootstrap target, preventing repeated immediate 5/5 completion cycles.
+- Before: Loops 235-238 selected `automate_electronic_circuit_line` but ended immediately with electronic-circuit 5 -> 5 and target 5.
+- After: Loop 239 used target 50 and made live progress from electronic-circuit 5 -> 12 before the intentionally capped 20-step verification stopped.
+- Evidence: `{"source_loop":240,"verification_loop":239,"tests":"414 passed","before_loops":[235,237],"before_target":5,"after_target":50,"after_delta":7,"live_trace":"strategy-circuit-automation-20260614-211038.jsonl","craft_counts":{"total":0,"iron_gear_wheel":0,"transport_belt":0}}`
+- Remaining risk: The circuit executor still relies on manual-style cable take/insert actions; a true inserter/belt transfer and 3:2 layout expansion remains required.
