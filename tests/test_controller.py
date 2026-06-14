@@ -7,7 +7,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from factorio_ai.config import AppConfig
-from factorio_ai.controller import FactorioController, ModlessFactorioController, RunSummary, StrategyStepSummary
+from factorio_ai.controller import (
+    FactorioController,
+    ModlessFactorioController,
+    RunSummary,
+    StrategyStepSummary,
+    _move_detour_action,
+)
 from factorio_ai.llm_log import llm_decision_log_path
 from factorio_ai.models import PlannerDecision
 from factorio_ai.site_selection import save_selected_improvement_site
@@ -670,6 +676,92 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(arrived, reason)
         self.assertTrue(controller.stopped)
         self.assertTrue(any(action["type"] == "move_to" for action in controller.actions))
+
+    def test_wait_for_move_default_tolerance_accepts_interaction_range(self):
+        class NearbyController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.actions = []
+                self.stopped = False
+
+            def observe(self):
+                return {
+                    "player": {
+                        "name": "r1jae",
+                        "kind": "player",
+                        "position": {"x": 0.0, "y": 0.0},
+                        "character_valid": True,
+                        "move": {"active": False},
+                    }
+                }
+
+            def act(self, action):
+                self.actions.append(action)
+                return {"ok": True, "action": action.get("type")}
+
+            def stop_agent(self):
+                self.stopped = True
+                return {"ok": True, "action": "stop"}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = NearbyController(make_test_config(Path(temp_dir)))
+            arrived, reason = controller._wait_for_move({"type": "move_to", "position": {"x": 0.0, "y": 3.5}})
+
+        self.assertTrue(arrived, reason)
+        self.assertTrue(controller.stopped)
+        self.assertEqual(controller.actions, [])
+
+    def test_wait_for_move_tries_perpendicular_detour_on_stall(self):
+        class DetourController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.positions = [
+                    {"x": 0.0, "y": 0.0},
+                    {"x": 0.0, "y": 0.0},
+                    {"x": 4.0, "y": 0.0},
+                    {"x": 0.0, "y": 10.0},
+                ]
+                self.actions = []
+                self.stopped = False
+
+            def observe(self):
+                position = self.positions.pop(0) if self.positions else {"x": 0.0, "y": 10.0}
+                return {
+                    "player": {
+                        "name": "r1jae",
+                        "kind": "player",
+                        "position": position,
+                        "character_valid": True,
+                        "move": {"active": True},
+                    }
+                }
+
+            def act(self, action):
+                self.actions.append(action)
+                return {"ok": True, "action": action.get("type")}
+
+            def stop_agent(self):
+                self.stopped = True
+                return {"ok": True, "action": "stop"}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = DetourController(make_test_config(Path(temp_dir)))
+            with patch("factorio_ai.controller.time.sleep", return_value=None):
+                arrived, reason = controller._wait_for_move(
+                    {"type": "move_to", "position": {"x": 0.0, "y": 10.0}, "stall_timeout_seconds": -1}
+                )
+
+        self.assertTrue(arrived, reason)
+        self.assertTrue(controller.stopped)
+        self.assertEqual(controller.actions[0]["position"], {"x": 4.0, "y": 0.0})
+        self.assertEqual(controller.actions[0]["max_detour_attempts"], 0)
+
+    def test_move_detour_action_offsets_perpendicular_to_main_axis(self):
+        vertical = _move_detour_action({"x": 10.0, "y": 0.0}, {"x": 10.0, "y": 20.0}, 0)
+        horizontal = _move_detour_action({"x": 0.0, "y": 10.0}, {"x": 20.0, "y": 10.0}, 1)
+
+        self.assertEqual(vertical["position"], {"x": 14.0, "y": 0.0})
+        self.assertEqual(horizontal["position"], {"x": 0.0, "y": 6.0})
 
     def test_no_mod_move_to_can_use_gui_keyboard_executor(self):
         class FakeController(ModlessFactorioController):

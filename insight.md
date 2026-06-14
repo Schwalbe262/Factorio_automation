@@ -97,3 +97,11 @@
 - After: live observe `power_sites_count=20`; planner next action moved to coal prerequisite collection instead of water-site failure.
 - Evidence: `{"after":{"first_power_site_distance":787.87,"first_power_site_distance_from_agent":723.47,"planner_action":"move_to near coal","power_sites_count":20,"qwen_selected_skill":"research_automation","tests":"356 passed"},"before":{"failure":"cannot find a buildable water site for steam power","power_sites_count":0},"source_loop":33}`
 - Remaining risk: The first water source is far from spawn, so this exception should not justify scattering normal production sites before rail or robust logistics.
+
+## 2026-06-15 01:37:38 +09:00 - Insight 11
+- Source loop: Loop 52
+- Improvement: Real-player GUI movement now verifies the Factorio foreground window, can detour around straight-line movement stalls, and treats close interaction range as successful movement.
+- Before: `research_automation` reached movement but stopped at `move made no progress; remaining distance 20.04` and then `move_to timed out; remaining distance 3.95`.
+- After: the same research loop progressed through coal mining, copper mining, copper furnace insert/take, burner drill fueling, and continued toward the next coal requirement.
+- Evidence: `{"after":{"foreground":true,"inventory":{"coal":4,"copper-plate":8,"wood":1},"movement_smoke":"x 79.61 -> 81.24","strategy_log":"strategy-automation-research-20260614-163058.jsonl reached step 6","tests":"359 passed"},"before":{"failures":["move made no progress; remaining distance 20.04","move_to timed out; remaining distance 3.95"]},"source_loop":52}`
+- Remaining risk: The bootstrap loop is still long and may expose more missing deterministic executors before Automation is researched.

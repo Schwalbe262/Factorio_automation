@@ -1741,13 +1741,15 @@ class FactorioController:
         first_observation = self.observe()
         start_position = player_position(first_observation)
         initial_distance = distance(start_position, target)
-        tolerance = float(action.get("tolerance") or 0.75)
+        tolerance = float(action.get("tolerance") or 4.0)
         timeout_seconds = min(240.0, max(20.0, initial_distance * 3.0 + 10.0))
         stall_timeout_seconds = float(action.get("stall_timeout_seconds") or 8.0)
         deadline = time.monotonic() + timeout_seconds
         last_distance = initial_distance
         best_distance = initial_distance
         last_progress_at = time.monotonic()
+        detour_attempts = 0
+        max_detour_attempts = int(action.get("max_detour_attempts") or 8)
 
         while time.monotonic() < deadline:
             if self._review_lock_active():
@@ -1764,8 +1766,23 @@ class FactorioController:
 
             if current_distance < best_distance - 0.15:
                 best_distance = current_distance
+                detour_attempts = 0
                 last_progress_at = time.monotonic()
             elif time.monotonic() - last_progress_at > stall_timeout_seconds:
+                if detour_attempts < max_detour_attempts:
+                    detour = _move_detour_action(current_position, target, detour_attempts)
+                    detour_attempts += 1
+                    refresh = self.act(detour)
+                    if not refresh.get("ok"):
+                        self.stop_agent()
+                        return False, f"move detour failed: {refresh.get('reason')}"
+                    time.sleep(0.5)
+                    detour_observation = self.observe()
+                    detour_position = player_position(detour_observation)
+                    if distance(detour_position, current_position) > 0.2:
+                        last_progress_at = time.monotonic()
+                        last_distance = distance(detour_position, target)
+                        continue
                 self.stop_agent()
                 return False, f"move made no progress; remaining distance {current_distance:.2f}"
 
@@ -2034,13 +2051,13 @@ class ModlessFactorioController(FactorioController):
         keys = _movement_keys(current, target_position)
         if not keys:
             return {"ok": False, "reason": "move_to could not derive movement keys", "mode": "gui-input"}
-        duration = float(action.get("duration_seconds") or min(0.35, max(0.08, remaining / 8.0)))
+        duration = float(action.get("duration_seconds") or min(0.9, max(0.12, remaining / 12.0)))
         try:
             from .vanilla_gui import VanillaGuiDriver
 
             driver = VanillaGuiDriver(self.cfg)
             if not driver.activate_factorio(timeout_seconds=2.0):
-                return {"ok": False, "reason": "Factorio GUI window was not found for movement", "mode": "gui-input"}
+                return {"ok": False, "reason": "Factorio GUI window could not be activated for movement", "mode": "gui-input"}
             driver.click_window_ratio(0.5, 0.5)
             time.sleep(0.05)
             driver.hold_keys(keys, duration)
@@ -2094,6 +2111,25 @@ def _movement_keys(current: dict[str, float], target: dict[str, float]) -> list[
     elif dx > 0.2:
         keys.append("d")
     return keys
+
+
+def _move_detour_action(current: dict[str, float], target: dict[str, float], attempt: int) -> dict[str, Any]:
+    dx = float(target.get("x") or 0.0) - float(current.get("x") or 0.0)
+    dy = float(target.get("y") or 0.0) - float(current.get("y") or 0.0)
+    sign = 1.0 if attempt % 2 == 0 else -1.0
+    offset = min(12.0, 4.0 + float(attempt // 2) * 2.0)
+    position = {"x": float(current.get("x") or 0.0), "y": float(current.get("y") or 0.0)}
+    if abs(dy) >= abs(dx):
+        position["x"] += sign * offset
+    else:
+        position["y"] += sign * offset
+    return {
+        "type": "move_to",
+        "position": position,
+        "duration_seconds": 0.8,
+        "tolerance": 1.5,
+        "max_detour_attempts": 0,
+    }
 
 
 def _real_player_enemy_action_threat(observation: dict[str, Any], action: dict[str, Any]) -> str:

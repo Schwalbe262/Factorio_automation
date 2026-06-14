@@ -40,6 +40,11 @@ MAPVK_VK_TO_VSC = 0
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 SW_MINIMIZE = 6
 SW_RESTORE = 9
+HWND_TOPMOST = -1
+HWND_NOTOPMOST = -2
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_SHOWWINDOW = 0x0040
 SRCCOPY = 0x00CC0020
 DIB_RGB_COLORS = 0
 BI_RGB = 0
@@ -379,9 +384,13 @@ class VanillaGuiDriver:
             window = self.find_factorio_window()
             if window:
                 hwnd, _title = window
-                self.user32.ShowWindow(hwnd, SW_RESTORE)
-                self.user32.SetForegroundWindow(hwnd)
-                return True
+                self._raise_window(hwnd)
+                if self.is_foreground_window(hwnd):
+                    return True
+                self.press_key("alt", duration_seconds=0.02)
+                self._raise_window(hwnd)
+                if self.is_foreground_window(hwnd):
+                    return True
             time.sleep(0.5)
         return False
 
@@ -396,6 +405,7 @@ class VanillaGuiDriver:
             "hwnd": hwnd,
             "title": title,
             "minimized": self.is_minimized(hwnd),
+            "foreground": self.is_foreground_window(hwnd),
             "rect": _rect_dict(rect),
         }
 
@@ -447,6 +457,7 @@ class VanillaGuiDriver:
         if window is None:
             raise GuiAutomationError("Factorio window was not found")
         hwnd, _title = window
+        self._raise_window(hwnd)
         rect = self._window_rect(hwnd)
         self.click(rect.left + int(rect.width * x_ratio), rect.top + int(rect.height * y_ratio))
 
@@ -517,6 +528,9 @@ class VanillaGuiDriver:
 
     def is_minimized(self, hwnd: int) -> bool:
         return bool(self.user32.IsIconic(hwnd))
+
+    def is_foreground_window(self, hwnd: int) -> bool:
+        return _hwnd_value(self.user32.GetForegroundWindow()) == _hwnd_value(hwnd)
 
     def capture_factorio_window(
         self,
@@ -662,6 +676,23 @@ class VanillaGuiDriver:
             ctypes.wintypes.LPARAM,
         ]
         self.user32.PrintWindow.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.HDC, ctypes.wintypes.UINT]
+        self.user32.GetForegroundWindow.restype = ctypes.wintypes.HWND
+        self.user32.BringWindowToTop.argtypes = [ctypes.wintypes.HWND]
+        self.user32.BringWindowToTop.restype = ctypes.wintypes.BOOL
+        self.user32.SetActiveWindow.argtypes = [ctypes.wintypes.HWND]
+        self.user32.SetActiveWindow.restype = ctypes.wintypes.HWND
+        self.user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]
+        self.user32.SetForegroundWindow.restype = ctypes.wintypes.BOOL
+        self.user32.SetWindowPos.argtypes = [
+            ctypes.wintypes.HWND,
+            ctypes.wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.wintypes.UINT,
+        ]
+        self.user32.SetWindowPos.restype = ctypes.wintypes.BOOL
         self.user32.GetWindowThreadProcessId.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD)]
         self.user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
         self.user32.MapVirtualKeyW.argtypes = [ctypes.wintypes.UINT, ctypes.wintypes.UINT]
@@ -730,6 +761,30 @@ class VanillaGuiDriver:
         sent = self.user32.SendInput(1, ctypes.byref(input_event), ctypes.sizeof(INPUT))
         if sent != 1:
             self.user32.keybd_event(virtual_key, 0, KEYEVENTF_KEYUP if key_up else 0, 0)
+
+    def _raise_window(self, hwnd: int) -> None:
+        self.user32.ShowWindow(hwnd, SW_RESTORE)
+        self.user32.SetWindowPos(
+            hwnd,
+            ctypes.wintypes.HWND(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+        )
+        self.user32.SetWindowPos(
+            hwnd,
+            ctypes.wintypes.HWND(HWND_NOTOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+        )
+        self.user32.BringWindowToTop(hwnd)
+        self.user32.SetActiveWindow(hwnd)
+        self.user32.SetForegroundWindow(hwnd)
 
     def _window_process_path(self, hwnd: int) -> str | None:
         pid = ctypes.wintypes.DWORD()
@@ -899,6 +954,13 @@ def _rect_dict(rect: WindowRect) -> dict[str, int]:
         "width": rect.width,
         "height": rect.height,
     }
+
+
+def _hwnd_value(hwnd: object) -> int:
+    if hwnd is None:
+        return 0
+    value = getattr(hwnd, "value", hwnd)
+    return int(value or 0)
 
 
 def _capture_method(method: str, *, minimized: bool) -> str:

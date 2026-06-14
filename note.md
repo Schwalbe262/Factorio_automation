@@ -721,3 +721,393 @@
 - Next action: Commit/push Part 77 and restart strict real-player Qwen autopilot with the 4B Slurm worker.
 - Token usage: exact cumulative Codex token sample unavailable; active goal counter observed at 1,947,789 tokens / weekly quota unavailable.
 
+## 2026-06-15 01:09:43 +09:00 - Loop 34
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:09:48 +09:00 - Loop 35
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 2.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:09:53 +09:00 - Loop 36
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 3.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:10:01 +09:00 - Loop 37
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_15_3s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_15_3s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_15_3s`.
+- Metrics:
+  - Steps: 4.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 15.3s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:10:09 +09:00 - Loop 38
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_22_9s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_22_9s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_22_9s`.
+- Metrics:
+  - Steps: 5.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 22.9s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:10:17 +09:00 - Loop 39
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_31_4s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_31_4s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_31_4s`.
+- Metrics:
+  - Steps: 6.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 31.4s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:10:24 +09:00 - Loop 40
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_38_9s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_38_9s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_38_9s`.
+- Metrics:
+  - Steps: 7.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 38.9s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:10:32 +09:00 - Loop 41
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_46_4s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_46_4s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_46_4s`.
+- Metrics:
+  - Steps: 8.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 46.4s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:10:39 +09:00 - Loop 42
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_54_0s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_54_0s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_54_0s`.
+- Metrics:
+  - Steps: 9.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 54.0s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:10:41 +09:00 - Loop 43
+- Part: skill
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: Running `research_automation` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_automation` for up to 1500 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-161005.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Target item candidate: `automation-science-pack` target `10`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 36.188s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-161005.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1500,"target":10}`.
+- Result: Loop stopped: move made no progress; remaining distance 86.39
+- Failure reason: move made no progress; remaining distance 86.39
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:10:41 +09:00 - Loop 44
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 1.
+  - Selected `research_automation` with priority `90` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Strategy priority: `90`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 58.016s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-160943.jsonl`.
+  - Metadata: `{"cycle":1,"priority":90,"strategy_source":"llm"}`.
+- Result: Loop stopped: move made no progress; remaining distance 86.39
+- Failure reason: move made no progress; remaining distance 86.39
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:10:47 +09:00 - Loop 45
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_state_is_sleeping
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_state_is_sleeping`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_state_is_sleeping`.
+- Metrics:
+  - Steps: 10.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot state is sleeping
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:10:52 +09:00 - Loop 46
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 11.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:10:57 +09:00 - Loop 47
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 12.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:19:02 +09:00 - Loop 48
+- Part: skill
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: Running `research_automation` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_automation` for up to 1500 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-161539.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Target item candidate: `automation-science-pack` target `10`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 202.406s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-161539.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1500,"target":10}`.
+- Result: Loop stopped: move made no progress; remaining distance 20.04
+- Failure reason: move made no progress; remaining distance 20.04
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:19:02 +09:00 - Loop 49
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 1.
+  - Selected `research_automation` with priority `90` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Strategy priority: `90`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 223.344s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-161518.jsonl`.
+  - Metadata: `{"cycle":1,"priority":90,"strategy_source":"llm"}`.
+- Result: Loop stopped: move made no progress; remaining distance 20.04
+- Failure reason: move made no progress; remaining distance 20.04
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:29:11 +09:00 - Loop 50
+- Part: skill
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: Running `research_automation` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_automation` for up to 1500 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-162317.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Target item candidate: `automation-science-pack` target `10`.
+- Metrics:
+  - Steps: 5.
+  - Status: failed.
+  - Duration: 354.328s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-162317.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1500,"target":10}`.
+- Result: Loop stopped: move_to timed out; remaining distance 3.95
+- Failure reason: move_to timed out; remaining distance 3.95
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:29:11 +09:00 - Loop 51
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 1.
+  - Selected `research_automation` with priority `90` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Strategy priority: `90`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 380.109s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-162251.jsonl`.
+  - Metadata: `{"cycle":1,"priority":90,"strategy_source":"llm"}`.
+- Result: Loop stopped: move_to timed out; remaining distance 3.95
+- Failure reason: move_to timed out; remaining distance 3.95
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 01:37:38 +09:00 - Loop 52
+- Part: Part 78 - real-player movement recovery
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: After water-site recovery, the next blocker is not strategy but GUI movement reliability: foreground focus can send keys to the wrong window, direct movement can stall against map obstacles, and exact tile arrival is stricter than Factorio interaction range.
+- Actions:
+  - Added foreground verification to the vanilla GUI driver and raised the Factorio window before click/keyboard movement.
+  - Added `GetForegroundWindow` handling and window foreground state to `vanilla-window`.
+  - Increased long-distance GUI movement hold duration.
+  - Added perpendicular detour actions when `move_to` stalls against an obstacle.
+  - Relaxed default `move_to` completion tolerance to interaction range so the next insert/build/mine action can proceed when close enough.
+  - Added controller tests for default interaction tolerance and detour generation.
+  - Verified small real-player GUI movement changed x position from `79.61` to `81.24`.
+  - Verified strict Qwen `research_automation` advanced past the previous movement blockers into coal mining, copper mining, furnace insert/take, and drill fueling.
+- Candidates:
+  - Keep exact-coordinate movement: rejected because resource/entity collision can make the exact tile unreachable while interaction is already possible.
+  - Only increase timeouts: rejected because it would keep waiting on blocked straight-line movement.
+  - Foreground verification plus detour plus interaction-range tolerance: selected.
+- Metrics:
+  - Controller tests: `32 passed`.
+  - Full tests: `359 passed`.
+  - Foreground smoke: `vanilla-window --activate` returned `activated=true`, `foreground=true`.
+  - Small movement smoke: player x `79.61 -> 81.24`.
+  - Before: `research_automation` stopped at `move made no progress; remaining distance 20.04`, then `move_to timed out; remaining distance 3.95`.
+  - After: `strategy-automation-research-20260614-163058.jsonl` reached step 6, inserted copper ore, mined copper ore, took 8 copper plates, fueled a burner mining drill, and continued toward coal.
+  - Current observed inventory after validation: `wood=1`, `coal=4`, `copper-plate=8`.
+- Result: Real-player movement is materially more reliable; the current blocker moved from immediate movement failure to a longer running research bootstrap loop.
+- Failure reason: None for the implemented executor fix; the one-cycle validation was manually stopped after exceeding the tool timeout while still progressing.
+- Next action: Commit/push Part 78, then restart strict Qwen autopilot in the background.
+- Token usage: exact cumulative Codex token sample unavailable; active goal counter observed at 2,178,933 tokens / weekly quota unavailable.
+
