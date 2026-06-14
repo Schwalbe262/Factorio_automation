@@ -3519,3 +3519,25 @@
 - Failure reason: None for final state. The previous failure was an off-by-one center offset for 2x2 direct smelting entities.
 - Next action: Commit/push Part 86, then restart hidden no-mod autopilot and monitor `bootstrap_build_item_mall`.
 - Token usage: 5,692,665 tokens / weekly quota unavailable.
+
+## 2026-06-15 04:29:56 +09:00 - Loop 171
+- Part: Part 86 post-fix autopilot restart
+- Goal: Resume the no-GUI autopilot after fixing and live-correcting the direct copper smelting pair.
+- Hypothesis: With the direct pair repaired and tests passing, the hidden autopilot can safely continue from the post-Automation `bootstrap_build_item_mall` phase.
+- Actions:
+  - Pushed Part 85 and Part 86 to GitHub.
+  - Restarted hidden no-mod autopilot without starting the idle layout loop.
+  - Verified Slurm worker renewal check returned `renewal_not_needed` for job `678192`.
+  - Verified Web UI remains running on PID `84176`.
+  - Verified hidden autopilot is running as cmd PID `81740` and python PID `80476`.
+- Candidates:
+  - Start autopilot and idle layout together: rejected until Slurm attach contention remains stable.
+  - Start hidden no-mod autopilot only: selected.
+- Metrics:
+  - New autopilot trace: `logs/autopilot-20260614-192914.jsonl`.
+  - Initial trace length: `0` bytes because the first strategy cycle was still running at the check time.
+  - Slurm time left at restart: about `22:52:50`.
+- Result: Hidden autopilot resumed without GUI movement.
+- Failure reason: None.
+- Next action: Monitor the first post-fix `bootstrap_build_item_mall` cycle and verify it does not create another offset direct smelting pair.
+- Token usage: 5,709,685 tokens / weekly quota unavailable.
