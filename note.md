@@ -183,3 +183,96 @@
 - Next action: Use the archive index for GEPA prompt eval extraction and add automatic before/after snapshot comparison for human factory edits.
 - Token usage: 252,093 / 주간 할당량 분모 미제공.
 
+## 2026-06-15 00:38:07 +09:00 - Loop 8
+- Part: skill
+- Goal: launch_rocket_program / produce_iron_plate
+- Hypothesis: Running `produce_iron_plate` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `produce_iron_plate` for up to 120 step(s).
+  - Tracked `iron-plate` from 7 to 11.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-20260614-153557.jsonl`.
+- Candidates:
+  - Selected goal/skill: `produce_iron_plate`.
+  - Target item candidate: `iron-plate` target `10`.
+- Metrics:
+  - Steps: 20.
+  - Status: ok.
+  - Duration: 130.640s.
+  - iron-plate: 7 -> 11 (delta 4).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-20260614-153557.jsonl`.
+  - Metadata: `{"delta_item_count":4,"final_item_count":11,"initial_item_count":7,"max_steps":120,"target":10}`.
+- Result: Completed: iron plate target reached: 11/10
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 00:40:19 +09:00 - Loop 9
+- Part: skill
+- Goal: launch_rocket_program / setup_coal_supply
+- Hypothesis: Running `setup_coal_supply` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `setup_coal_supply` for up to 160 step(s).
+  - Tracked `coal` from 12 to 25.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-coal-supply-20260614-153837.jsonl`.
+- Candidates:
+  - Selected goal/skill: `setup_coal_supply`.
+  - Target item candidate: `coal` target `16`.
+- Metrics:
+  - Steps: 17.
+  - Status: ok.
+  - Duration: 101.922s.
+  - coal: 12 -> 25 (delta 13).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-coal-supply-20260614-153837.jsonl`.
+  - Metadata: `{"delta_item_count":13,"final_item_count":25,"initial_item_count":12,"max_steps":160,"target":16}`.
+- Result: Completed: coal supply site is active with fueled burner mining drill and output belt
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 00:42:08 +09:00 - Loop 10
+- Part: skill
+- Goal: launch_rocket_program / connect_coal_fuel_feed
+- Hypothesis: Running `connect_coal_fuel_feed` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `connect_coal_fuel_feed` for up to 120 step(s).
+  - Tracked `coal` from 24 to 26.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-coal-fuel-feed-20260614-154045.jsonl`.
+- Candidates:
+  - Selected goal/skill: `connect_coal_fuel_feed`.
+  - Target item candidate: `coal` target `1`.
+- Metrics:
+  - Steps: 14.
+  - Status: ok.
+  - Duration: 82.704s.
+  - coal: 24 -> 26 (delta 2).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-coal-fuel-feed-20260614-154045.jsonl`.
+  - Metadata: `{"delta_item_count":2,"final_item_count":26,"initial_item_count":24,"max_steps":120,"target":1}`.
+- Result: Completed: coal fuel feed is active: belt and burner inserter are feeding a furnace fuel inventory
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 00:49:45 +09:00 - Loop 11
+- Part: Part 76 - Qwen autopilot guardrails
+- Goal: launch_rocket_program / qwen_autopilot_guardrails_before_belt_paths
+- Hypothesis: Gameplay should be driven by the local/remote Qwen autopilot, but deterministic guardrails must prevent it from selecting impossible mall work before Automation or site-to-site belt links before belt production is automated.
+- Actions:
+  - Stopped treating manual Codex strategy-step calls as the normal control path.
+  - Verified the remote Slurm Qwen worker is ready and can answer no-mod strategy requests.
+  - Added a guardrail that redirects bootstrap_build_item_mall to research_automation until Automation is researched.
+  - Added a guardrail that blocks connect_coal_fuel_feed before transport-belt production is automated by an assembler mall.
+  - Updated handoff/goal docs so normal operation uses the continuous Qwen autopilot and Codex only fills missing functions.
+- Candidates:
+  - Keep manually invoking run-no-mod-strategy-step from Codex: rejected because the game idles while Codex does other work.
+  - Let Qwen choose any implemented skill: rejected because it selected bootstrap_build_item_mall before Automation.
+  - Continuous Qwen autopilot plus deterministic feasibility guardrails: selected.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\llm_decisions.jsonl`.
+  - Metadata: `{"actions":["Stopped treating manual Codex strategy-step calls as the normal control path.","Verified the remote Slurm Qwen worker is ready and can answer no-mod strategy requests.","Added a guardrail that redirects bootstrap_build_item_mall to research_automation until Automation is researched.","Added a guardrail that blocks connect_coal_fuel_feed before transport-belt production is automated by an assembler mall.","Updated handoff/goal docs so normal operation uses the continuous Qwen autopilot and Codex only fills missing functions."],"candidates":["Keep manually invoking run-no-mod-strategy-step from Codex: rejected because the game idles while Codex does other work.","Let Qwen choose any implemented skill: rejected because it selected bootstrap_build_item_mall before Automation.","Continuous Qwen autopilot plus deterministic feasibility guardrails: selected."],"hypothesis":"Gameplay should be driven by the local/remote Qwen autopilot, but deterministic guardrails must prevent it from selecting impossible mall work before Automation or site-to-site belt links before belt production is automated.","metrics":{"guardrail_adjusted_from":"bootstrap_build_item_mall","live_strategy_after_guardrail":"research_automation","pytest":"354 passed","remote_model":"Qwen/Qwen3.5-4B","slurm_llm_ready":true,"strategy_tests":"42 passed"},"next_action":"Start the real-player no-mod Qwen autopilot background runner after commit/push and let Codex only address future missing executors or guardrail failures.","part":"Part 76 - Qwen autopilot guardrails","token_usage":"150,004 / weekly quota unavailable"}`.
+- Result: Completed: remote Qwen strategy now passes through deterministic guardrails that block premature belt mall and site-link choices
+- Failure reason: None
+- Next action: Start the real-player no-mod Qwen autopilot background runner after commit/push and let Codex only address future missing executors or guardrail failures.
+- Token usage: 150,004 / weekly quota unavailable
+

@@ -123,12 +123,36 @@ class StrategyTests(unittest.TestCase):
                 "entities": [
                     {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 4, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
                     {"name": "transport-belt", "unit_number": 21, "position": {"x": 6, "y": 0}, "direction": 4, "inventories": {}},
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "transport-belt",
+                        "position": {"x": 1, "y": 3},
+                        "electric_network_connected": True,
+                    },
                 ],
                 "resources": [{"name": "coal", "position": {"x": 4, "y": 0}, "distance": 4}],
+                "research": {"technologies": {"automation": {"researched": True}}},
             },
         )
         self.assertEqual(result["selected_skill"], "connect_coal_fuel_feed")
         self.assertIn("coal fuel feed route", result["blockers"])
+
+    def test_coal_fuel_feed_waits_for_belt_automation(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "player": {"position": {"x": 0, "y": 0}},
+                "inventory": {"iron-plate": 20, "coal": 4},
+                "entities": [
+                    {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 4, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+                    {"name": "transport-belt", "unit_number": 21, "position": {"x": 6, "y": 0}, "direction": 4, "inventories": {}},
+                ],
+                "resources": [{"name": "coal", "position": {"x": 4, "y": 0}, "distance": 4}],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
+        )
+        self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
+        self.assertIn("transport-belt automation before site links", result["blockers"])
 
     def test_coal_supply_ready_uses_mining_target_when_resource_list_is_remote(self):
         result = heuristic_strategy(
@@ -390,14 +414,72 @@ class StrategyTests(unittest.TestCase):
                 "entities": [
                     {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 4, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
                     {"name": "transport-belt", "unit_number": 21, "position": {"x": 6, "y": 0}, "direction": 4, "inventories": {}},
+                    {
+                        "name": "assembling-machine-1",
+                        "recipe": "transport-belt",
+                        "position": {"x": 1, "y": 3},
+                        "electric_network_connected": True,
+                    },
                 ],
                 "resources": [{"name": "coal", "position": {"x": 4, "y": 0}, "distance": 4}],
+                "research": {"technologies": {"automation": {"researched": True}}},
             },
         )
         self.assertEqual(result["selected_skill"], "connect_coal_fuel_feed")
         self.assertEqual(result["source"], "llm")
         self.assertEqual(result["guardrail_adjusted"]["from"], "setup_power")
         self.assertIn("coal fuel feed route", result["blockers"])
+
+    def test_reconcile_blocks_direct_coal_feed_before_belt_mall(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "connect_coal_fuel_feed",
+                "priority": 90,
+                "reason": "Connect coal to furnace.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "player": {"position": {"x": 0, "y": 0}},
+                "inventory": {"coal": 4},
+                "entities": [
+                    {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 4, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+                    {"name": "transport-belt", "unit_number": 21, "position": {"x": 6, "y": 0}, "direction": 4, "inventories": {}},
+                ],
+                "resources": [{"name": "coal", "position": {"x": 4, "y": 0}, "distance": 4}],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
+        )
+        self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "connect_coal_fuel_feed")
+        self.assertIn("transport-belt automation before site links", result["blockers"])
+
+    def test_reconcile_blocks_item_mall_before_automation_research(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "bootstrap_build_item_mall",
+                "priority": 50,
+                "reason": "Build missing expansion items.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 20},
+                "entities": [],
+                "research": {"technologies": {"automation": {"researched": False}}},
+            },
+        )
+        self.assertEqual(result["selected_skill"], "research_automation")
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "bootstrap_build_item_mall")
+        self.assertIn("automation research", result["blockers"])
 
     def test_reconcile_promotes_layout_planning_to_actionable_target_deficit(self):
         result = reconcile_strategy_decision(

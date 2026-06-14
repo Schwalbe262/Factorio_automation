@@ -841,12 +841,20 @@ $env:PYTHONPATH='src'
 python -m factorio_ai.cli no-mod-strategy --objective launch_rocket_program
 ```
 
-Run one no-mod autopilot loop:
+Run one no-mod strategy step for diagnosis only:
 
 ```powershell
 $env:PYTHONPATH='src'
-python -m factorio_ai.cli run-no-mod-strategy --objective launch_rocket_program --max-steps 1
+python -m factorio_ai.cli run-no-mod-strategy-step --objective launch_rocket_program --max-steps 1
 ```
+
+Normal gameplay should not depend on Codex manually invoking strategy steps. Keep the LLM autopilot running and let Codex work only on missing executors, guardrails, tests, UI, and documentation:
+
+```powershell
+.\run_factorio_no_mod_real_player_llm_autopilot.bat
+```
+
+That batch enables `FACTORIO_AI_SLURM_ENABLED=1`, requires LLM strategy, uses the Qwen Slurm worker, opens/uses the real player client, and starts the idle layout loop in parallel.
 
 Run idle layout loop once:
 
@@ -873,6 +881,7 @@ Open review GUI:
 - Defense must build gun turrets plus firearm magazine supply around factory sites before trying to clear nests.
 - Threat logic should distinguish nearby nests, pollution-triggered attacks, recent damage, and actual factory danger.
 - Logistics links are site-to-site links, not individual belt segment links.
+- Do not spend scarce hand-crafted belts on site-to-site paths before `transport-belt` production is automated by a mall assembler. Bootstrap-local direct insertion is allowed; repeated site links should wait for belt automation.
 - Trains should be used for far resources/outposts once local logistics become too long.
 
 ## LLM Model Direction

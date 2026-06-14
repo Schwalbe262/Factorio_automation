@@ -50,3 +50,43 @@
 - Evidence: `{"archive_dir":"C:\\Users\\NEC\\Documents\\Factorio\\runtime\\trace_archives\\20260615-003151-part75-scattered-map-traces","categories":{"layout_background":1,"layout_strategy":1,"layout_validation":1,"llm_decisions":1,"strategy_run":53},"high_value_files":61,"source_count":158,"source_loop":7}`
 - Remaining risk: Needs continued validation in later loops.
 
+## 2026-06-15 00:38:07 +09:00 - Insight 5
+- Source loop: Loop 8
+- Improvement: iron-plate increased by 4 during produce_iron_plate.
+- Before: iron-plate = 7
+- After: iron-plate = 11
+- Evidence: `{"delta":4,"final":11,"initial":7,"item":"iron-plate","source_loop":8,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-15 00:38:07 +09:00 - Insight 6
+- Source loop: Loop 8
+- Improvement: produce_iron_plate completed after 20 step(s): iron plate target reached: 11/10
+- Before: not recorded
+- After: iron-plate = 11
+- Evidence: `{"item":"iron-plate","item_count":11,"source_loop":8,"steps":20,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-15 00:40:19 +09:00 - Insight 7
+- Source loop: Loop 9
+- Improvement: coal increased by 13 during setup_coal_supply.
+- Before: coal = 12
+- After: coal = 25
+- Evidence: `{"delta":13,"final":25,"initial":12,"item":"coal","source_loop":9,"target":16}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-15 00:40:19 +09:00 - Insight 8
+- Source loop: Loop 9
+- Improvement: setup_coal_supply completed after 17 step(s): coal supply site is active with fueled burner mining drill and output belt
+- Before: not recorded
+- After: coal = 25
+- Evidence: `{"item":"coal","item_count":25,"source_loop":9,"steps":17,"target":16}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-15 00:49:45 +09:00 - Insight 9
+- Source loop: Loop 11
+- Improvement: Remote Qwen can now drive strategy while deterministic reconciliation blocks impossible item-mall work before Automation and blocks site-to-site coal belt feeds before transport-belt automation.
+- Before: not recorded
+- After: not recorded
+- Evidence: `{"after":"no-mod-strategy --require-llm returned research_automation with guardrail_adjusted.from=bootstrap_build_item_mall","before":"remote Qwen selected bootstrap_build_item_mall while Automation was not researched","belt_path_guardrail":"connect_coal_fuel_feed is redirected until a transport-belt assembler mall is observed","source_loop":11,"tests":{"pytest":"354 passed","strategy":"42 passed"}}`
+- Remaining risk: Needs continued validation in later loops.
+

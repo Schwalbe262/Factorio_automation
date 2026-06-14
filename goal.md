@@ -18,6 +18,7 @@
 - Preserve layout, strategy, LLM decision, validation, and operator-intervention traces for GEPA prompt tuning and future Qwen LoRA fine-tuning.
 - Preserve no-custom-mod compatibility for the primary development path.
 - When Codex adds missing functions, keep the new capability deterministic, logged, test-covered, and exposed to the local Qwen strategy layer instead of leaving it as an operator-only shortcut.
+- Keep the no-mod LLM autopilot running under local/remote Qwen whenever possible; Codex should diagnose and add missing functions, not manually drive each gameplay loop.
 
 ## Autonomy Roadmap
 
@@ -60,6 +61,7 @@
 - Convert successful and failed layout/strategy traces into fine-tuning examples for a Factorio-specialized local Qwen LoRA.
 - Keep exact gameplay execution deterministic even after prompt tuning or fine-tuning.
 - Treat accepted human interventions as supervised improvement examples only when before/after evidence shows an actual factory-quality gain.
+- Do not build repeated site-to-site belt paths before `transport-belt` production is automated by an assembler mall; use scarce bootstrap belts only for local cells or wait for belt automation.
 
 ## Later Milestones
 

@@ -656,7 +656,59 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
-    if selected in _COAL_DEPENDENT_SKILLS and _coal_fuel_feed_needed(observation, objective, production_targets):
+    if selected == "bootstrap_build_item_mall" and not _technology_researched(observation, "automation"):
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "research_automation"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 90)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            "LLM selected the build-item mall, but assembling-machine automation is not researched yet."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["automation research"]))
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            "guardrail_adjusted_from=bootstrap_build_item_mall",
+            "automation_researched=false",
+        ]
+        adjusted["expected_effect"] = "Research Automation before attempting assembler-based item mall production."
+        adjusted["guardrail_adjusted"] = {
+            "from": "bootstrap_build_item_mall",
+            "to": "research_automation",
+            "reason": guardrail_reason,
+        }
+        return adjusted
+    if selected == "connect_coal_fuel_feed" and not _transport_belt_automation_ready(observation):
+        adjusted = dict(decision)
+        automation_researched = _technology_researched(observation, "automation")
+        target_skill = "bootstrap_build_item_mall" if automation_researched else "research_automation"
+        adjusted["selected_skill"] = target_skill
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 87)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            "LLM selected a site-to-site coal belt feed before transport-belt production is automated."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(
+            set(_string_list(decision.get("blockers")) + ["transport-belt automation before site links"])
+        )
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            "guardrail_adjusted_from=connect_coal_fuel_feed",
+            "transport_belt_automation_ready=false",
+        ]
+        adjusted["expected_effect"] = (
+            "Automate belt production before spending scarce bootstrap items on site-to-site fuel paths."
+        )
+        adjusted["guardrail_adjusted"] = {
+            "from": "connect_coal_fuel_feed",
+            "to": target_skill,
+            "reason": guardrail_reason,
+        }
+        return adjusted
+    if (
+        selected in _COAL_DEPENDENT_SKILLS
+        and _coal_fuel_feed_needed(observation, objective, production_targets)
+        and _transport_belt_automation_ready(observation)
+    ):
         adjusted = dict(decision)
         adjusted["selected_skill"] = "connect_coal_fuel_feed"
         adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 86)
@@ -853,14 +905,32 @@ def heuristic_strategy(
         ).to_dict()
 
     if _coal_fuel_feed_needed(observation, objective, production_targets, monitor=monitor):
-        return StrategicDecision(
-            selected_skill="connect_coal_fuel_feed",
-            priority=89,
-            reason="A fueled coal mining site exists, but a nearby coal consumer link is still route_needed.",
-            evidence=["coal_fuel_feed_route_needed=true"],
-            blockers=["coal fuel feed route"],
-            expected_effect="Build belt/inserter fuel feed from the coal supply belt to the nearby burner consumer.",
-        ).to_dict()
+        if not _transport_belt_automation_ready(observation):
+            if automation_researched:
+                return StrategicDecision(
+                    selected_skill="bootstrap_build_item_mall",
+                    priority=87,
+                    reason=(
+                        "A coal consumer link is route_needed, but transport-belt production is not automated; "
+                        "build the belt mall before adding site-to-site paths."
+                    ),
+                    evidence=[
+                        "coal_fuel_feed_route_needed=true",
+                        "transport_belt_automation_ready=false",
+                        "automation_researched=true",
+                    ],
+                    blockers=["transport-belt automation before site links"],
+                    expected_effect="Automate transport belts so future site logistics can be built without hand-crafting each path.",
+                ).to_dict()
+        else:
+            return StrategicDecision(
+                selected_skill="connect_coal_fuel_feed",
+                priority=89,
+                reason="A fueled coal mining site exists, but a nearby coal consumer link is still route_needed.",
+                evidence=["coal_fuel_feed_route_needed=true", "transport_belt_automation_ready=true"],
+                blockers=["coal fuel feed route"],
+                expected_effect="Build belt/inserter fuel feed from the coal supply belt to the nearby burner consumer.",
+            ).to_dict()
 
     if power_issue:
         return StrategicDecision(
@@ -1254,6 +1324,24 @@ def _coal_fuel_feed_needed(
             length = 999999.0
         if length <= 32.0:
             return True
+    return False
+
+
+def _transport_belt_automation_ready(observation: dict[str, Any]) -> bool:
+    assemblers = (
+        entities_named(observation, "assembling-machine-1")
+        + entities_named(observation, "assembling-machine-2")
+        + entities_named(observation, "assembling-machine-3")
+    )
+    for assembler in assemblers:
+        recipe = str(assembler.get("recipe") or assembler.get("recipe_name") or "")
+        if recipe != "transport-belt":
+            continue
+        if assembler.get("electric_network_connected") is False:
+            continue
+        if _entity_status_is(assembler, "no_power", 3):
+            continue
+        return True
     return False
 
 
