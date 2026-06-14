@@ -44,6 +44,7 @@ SMELTING_LINE_FUEL_INSERT = {
 ASSEMBLER_ENTITY_NAMES = {"assembling-machine-1", "assembling-machine-2", "assembling-machine-3"}
 POWER_CONNECTOR_NAMES = {"small-electric-pole", "medium-electric-pole", "big-electric-pole", "substation"}
 PROTECTED_RESOURCE_NAMES = {"iron-ore", "copper-ore", "coal", "stone", "uranium-ore"}
+PRESERVED_STARTER_ARTIFACT_KEYWORDS = ("crash", "wreck", "spaceship")
 SITE_GATE_INPUT_STOCK_FALLBACK = 20
 SITE_GATE_LOCAL_LOGISTICS_RADIUS = 96.0
 SITE_PLACEMENT_SEARCH_STEP = 8
@@ -4039,12 +4040,25 @@ def _blocking_obstacle_near(observation: dict[str, Any], position: dict[str, flo
             continue
         entity_type = str(entity.get("type") or "")
         name = str(entity.get("name") or "")
+        if _is_preserved_starter_artifact(observation, entity):
+            continue
         if entity_type not in {"simple-entity", "tree", "cliff"} and not name.endswith("rock"):
             continue
         entity_position = _position(entity)
         if distance(entity_position, position) <= 4.0:
             blockers.append(entity)
     return _nearest_to(blockers, position) if blockers else None
+
+
+def _is_preserved_starter_artifact(observation: dict[str, Any], entity: dict[str, Any]) -> bool:
+    name = str(entity.get("name") or "").lower()
+    if not any(keyword in name for keyword in PRESERVED_STARTER_ARTIFACT_KEYWORDS):
+        return False
+    return _within_starter_logistics_area(
+        observation,
+        _position(entity),
+        radius=STARTER_ENTITY_CLUSTER_RADIUS,
+    )
 
 
 def _layout_has_unrelated_blocker(observation: dict[str, Any], layout: dict[str, Any]) -> bool:

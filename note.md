@@ -2288,3 +2288,49 @@
 - Failure reason: None for this implementation loop. Rocket progression is still blocked until a starter-local/connectable power plan, a co-located remote factory plan, or a better map start is selected.
 - Next action: Resume strategy only after the planner can choose a connectable power/site plan; do not build isolated remote pumps for starter power.
 - Token usage: active goal counter observed at 3,739,532 tokens / weekly quota unavailable.
+## 2026-06-15 03:02:11 +09:00 - Loop 112
+- Part: live setup_power verification after nearby-water diagnosis
+- Goal: Build a usable starter-local steam block instead of placing another isolated remote water site.
+- Hypothesis: The map has nearby water, but the full `POWER_SITE_RADIUS=1024` scan was clipping the water sample before sorting by distance. If nearby water is scanned first, `setup_power` should choose the starter-local lake and finish.
+- Actions:
+  - Compared the previous full planning-site result, which returned remote water around `{x:140.5,y:-826.5}`, with direct RCON scans around the starter area.
+  - Verified direct local candidates around pump `{x:-45.5,y:19.5}` within about 50 tiles of the starter cluster.
+  - Ran deterministic `setup_power` for up to 20 steps using virtual `AI`.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\power-mvp-20260614-180137.jsonl`.
+- Candidates:
+  - Remote water site near `{x:140.5,y:-826.5}`: rejected because it cannot power the starter base with available poles.
+  - Starter-local lake near `{x:-45.5,y:19.5}`: selected.
+- Metrics:
+  - Setup steps: 7.
+  - Setup status: ok.
+  - Duration: 33.859s.
+  - Built live entities: offshore pump at `{x:-45.5,y:19.5}`, boiler at `{x:-43.5,y:19}`, steam engine at `{x:-43.5,y:15.5}`, small electric pole at `{x:-45.5,y:15.5}`.
+  - Live status after completion: pump working, boiler full output with coal/water/steam, steam engine working and connected to an electric network.
+  - The raw `steam` item counter stayed `0` because steam is a fluid, not an inventory item; the entity/fluid status is the correct completion evidence.
+- Result: Completed: starter-local steam power block is producing usable steam power.
+- Failure reason: None.
+- Next action: Fix the power-site scan ordering in code so nearby water remains preferred, then resume the red-science/Automation path.
+- Token usage: not recorded for this loop / weekly quota unavailable.
+
+## 2026-06-15 03:14:11 +09:00 - Loop 113
+- Part: Part 83 - nearest water scan, Slurm renewal, and starter artifact protection
+- Goal: Turn the live diagnosis into durable code, documentation, tests, and operational safeguards.
+- Hypothesis: Staged water scans will preserve nearest-water ordering, a Slurm renewal command will prevent Qwen downtime before 1-day jobs expire, and default protection for starter wreckage will stop the agent from removing culturally preserved crash-site entities.
+- Actions:
+  - Changed no-mod power-site discovery to scan radii in stages before considering the full 1024-tile radius.
+  - Added `slurm-ensure-worker --renew-before-minutes`, which queues a dependent successor when the running worker is close to expiration and avoids duplicate submissions when one is already pending.
+  - Submitted a live dependent successor before the active 4B Qwen worker expired.
+  - Added default mining protection for starting crash/wreck/spaceship artifacts, plus planner-side obstacle-removal protection.
+  - Updated `goal.md`, `docs/CLI_HANDOFF.md`, and `README.md` with the nearest-water cause, Slurm renewal command, and starter-wreckage preservation rule.
+- Candidates:
+  - Increase `POWER_SITE_WATER_TILE_LIMIT`: rejected because it would keep the expensive scan and still depend on undefined sample ordering.
+  - Staged radius scan: selected because it is cheaper, deterministic enough for nearest-water preference, and still falls back to remote water only after local tiers fail.
+  - Automatically remove starter wreckage if it blocks compact layouts: rejected; default behavior is preservation unless the operator explicitly overrides it.
+- Metrics:
+  - Live Slurm renewal: running job `677569` had about 9 minutes left; queued successor `678192` with dependency on `677569`.
+  - Targeted tests before full suite: `162 passed` for remote Slurm, modless Lua, and planner coverage.
+  - Full test suite: `382 passed`.
+- Result: Implementation, docs, and full-suite verification completed; GitHub push remains.
+- Failure reason: None.
+- Next action: Commit Part 83 and push to GitHub.
+- Token usage: active goal counter observed at 4,227,903 tokens / weekly quota unavailable. `logs/token_usage.jsonl` sample recorded for Part 83; recorder delta is 0 because older stored samples belong to a larger previous counter.

@@ -25,6 +25,8 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("REMOTE_RESOURCE_TILE_LIMIT", command)
         self.assertIn("POWER_SITE_RADIUS = 1024", command)
         self.assertIn("POWER_SITE_WATER_TILE_LIMIT = 1600", command)
+        self.assertIn("POWER_SITE_SCAN_RADII", command)
+        self.assertIn("for _, scan_radius in pairs(POWER_SITE_SCAN_RADII)", command)
         self.assertIn("table.sort(water_tiles", command)
         self.assertIn("local include_planning_sites = true", command)
         self.assertIn("if include_planning_sites then", command)
@@ -100,6 +102,14 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("result.execution", command)
         self.assertIn("[AI]", command)
         self.assertIn("chart_area_around(agent, agent.position)", command)
+
+    def test_mine_action_protects_starter_crash_site_artifacts_by_default(self):
+        command = build_modless_action_command({"type": "mine", "position": {"x": 1, "y": 2}})
+
+        self.assertIn("PRESERVED_STARTER_ARTIFACT_RADIUS = 192", command)
+        self.assertIn("is_preserved_starter_artifact", command)
+        self.assertIn("preserved starter artifact is protected", command)
+        self.assertIn("allow_preserved_artifact", command)
 
     def test_action_handles_virtual_lab_trigger_research(self):
         command = build_modless_action_command({"type": "craft", "recipe": "lab", "count": 1})

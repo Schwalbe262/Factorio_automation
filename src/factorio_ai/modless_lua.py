@@ -135,11 +135,13 @@ local STARTER_RESOURCE_TILE_LIMIT = 1200
 local REMOTE_RESOURCE_TILE_LIMIT = 220
 local POWER_SITE_RADIUS = 1024
 local POWER_SITE_WATER_TILE_LIMIT = 1600
+local POWER_SITE_SCAN_RADII = {{ 96, 160, 224, 384, 640, POWER_SITE_RADIUS }}
 local LAB_SITE_RADIUS = 96
 local POLE_WIRE_REACH = 7.5
 local STARTER_POLE_SUPPLY_REACH = 2.5
 local GLOBAL_FORCE_ENTITY_LIMIT = 240
 local AGENT_VISION_CHART_RADIUS = 96
+local PRESERVED_STARTER_ARTIFACT_RADIUS = 192
 local VIRTUAL_STARTER_ITEMS = {{
   ["burner-mining-drill"] = 1,
   ["stone-furnace"] = 1
@@ -672,38 +674,44 @@ end
 local function collect_power_sites(surface, position, force, player_position)
   local sites = {}
   local checked = {}
-  local water_tiles = surface.find_tiles_filtered({
-    position = position,
-    radius = POWER_SITE_RADIUS,
-    name = { "water", "deepwater", "water-green", "deepwater-green" },
-    limit = POWER_SITE_WATER_TILE_LIMIT
-  })
-  table.sort(water_tiles, function(a, b) return distance(position, a.position) < distance(position, b.position) end)
-  for _, tile in pairs(water_tiles) do
-    local tile_position = tile.position
-    for dx = -7, 7 do
-      for dy = -7, 7 do
-        local pump_position = { x = tile_position.x + dx + 0.5, y = tile_position.y + dy + 0.5 }
-        for _, direction in pairs({ defines.direction.west, defines.direction.north, defines.direction.east, defines.direction.south }) do
-          local key = tostring(pump_position.x) .. "," .. tostring(pump_position.y) .. ":" .. tostring(direction)
-          if not checked[key] then
-            checked[key] = true
-            local layout = power_layout(pump_position, direction)
-            if power_layout_can_place(surface, force, layout) then
-              table.insert(sites, {
-                distance = round(distance(position, pump_position)),
-                distance_from_agent = player_position and round(distance(player_position, pump_position)) or nil,
-                anchor_position = position_table(position),
-                layout = layout
-              })
-              if #sites >= 20 then
-                table.sort(sites, function(a, b) return a.distance < b.distance end)
-                return sites
+  for _, scan_radius in pairs(POWER_SITE_SCAN_RADII) do
+    local water_tiles = surface.find_tiles_filtered({
+      position = position,
+      radius = scan_radius,
+      name = { "water", "deepwater", "water-green", "deepwater-green" },
+      limit = POWER_SITE_WATER_TILE_LIMIT
+    })
+    table.sort(water_tiles, function(a, b) return distance(position, a.position) < distance(position, b.position) end)
+    for _, tile in pairs(water_tiles) do
+      local tile_position = tile.position
+      for dx = -7, 7 do
+        for dy = -7, 7 do
+          local pump_position = { x = tile_position.x + dx + 0.5, y = tile_position.y + dy + 0.5 }
+          for _, direction in pairs({ defines.direction.west, defines.direction.north, defines.direction.east, defines.direction.south }) do
+            local key = tostring(pump_position.x) .. "," .. tostring(pump_position.y) .. ":" .. tostring(direction)
+            if not checked[key] then
+              checked[key] = true
+              local layout = power_layout(pump_position, direction)
+              if power_layout_can_place(surface, force, layout) then
+                table.insert(sites, {
+                  distance = round(distance(position, pump_position)),
+                  distance_from_agent = player_position and round(distance(player_position, pump_position)) or nil,
+                  anchor_position = position_table(position),
+                  layout = layout
+                })
+                if #sites >= 20 then
+                  table.sort(sites, function(a, b) return a.distance < b.distance end)
+                  return sites
+                end
               end
             end
           end
         end
       end
+    end
+    if #sites > 0 then
+      table.sort(sites, function(a, b) return a.distance < b.distance end)
+      return sites
     end
   end
   table.sort(sites, function(a, b) return a.distance < b.distance end)
@@ -1033,6 +1041,15 @@ local function nearest_resource_name(surface, position, radius)
   end
   return nearest and nearest.name or nil
 end
+local function is_preserved_starter_artifact(agent, entity)
+  if not entity or not entity.valid then return false end
+  local name = string.lower(tostring(entity.name or ""))
+  if not (string.find(name, "crash", 1, true) or string.find(name, "wreck", 1, true) or string.find(name, "spaceship", 1, true)) then
+    return false
+  end
+  local spawn = force_spawn_position(entity.surface or agent.surface, agent.force)
+  return distance(spawn, entity.position) <= PRESERVED_STARTER_ARTIFACT_RADIUS
+end
 local function build_candidate_valid(surface, force, request, position, direction)
   if not surface.can_place_entity({ name = request.name, position = position, direction = direction, force = force, build_check_type = defines.build_check_type.manual }) then
     return false
@@ -1115,6 +1132,7 @@ local function action_mine()
   local target = nil
   if action.target == "resource" or action.resource then target = find_resource(agent.surface, action) else target = find_entity(agent.surface, action) end
   if not target or not target.valid then return err("mine target not found") end
+  if action.allow_preserved_artifact ~= true and is_preserved_starter_artifact(agent, target) then return err("preserved starter artifact is protected from default mining", { target = target.name }) end
   if distance(agent.position, target.position) > (action.reach or 10) then return err("mine target out of reach") end
   local inventory = main_inventory(agent)
   if not inventory or not inventory.valid then return err("agent inventory is not valid") end

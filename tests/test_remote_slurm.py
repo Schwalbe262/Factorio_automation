@@ -7,10 +7,12 @@ from factorio_ai.remote_slurm import (
     _attached_env_setup,
     _gpu_allocation_visible,
     _llm_status_remediation,
+    _slurm_time_left_seconds,
     _status_needs_local_gpu,
     _worker_env_values,
     compare_strategy_workers,
     config,
+    ensure_worker_job,
     parse_strategy_worker_specs,
     request_strategy,
 )
@@ -164,6 +166,85 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertTrue(_gpu_allocation_visible({"count": 1, "env": {}}))
         self.assertTrue(_gpu_allocation_visible({"count": 0, "env": {"SLURM_JOB_GPUS": "0"}}))
         self.assertFalse(_gpu_allocation_visible({"count": 0, "env": {"CUDA_VISIBLE_DEVICES": "none"}}))
+
+    def test_slurm_time_left_parser_supports_squeue_formats(self):
+        self.assertEqual(_slurm_time_left_seconds("13:29"), 809)
+        self.assertEqual(_slurm_time_left_seconds("01:02:03"), 3723)
+        self.assertEqual(_slurm_time_left_seconds("1-00:00:05"), 86405)
+        self.assertIsNone(_slurm_time_left_seconds("UNLIMITED"))
+
+    def test_ensure_worker_submits_dependent_successor_near_expiration(self):
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="factorio-ai-worker",
+            conda_env="factorio-ai",
+            partition="gpu4",
+            cpus_per_task=8,
+            gpus_per_node=1,
+            gres="gpu:1",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        calls = []
+
+        def fake_run_remote(script, _cfg, timeout=0):
+            calls.append(script)
+            if "squeue" in script:
+                return "677569|RUNNING|23:46:31|13:29|n053|gres/gpu:1\n"
+            return "submitted_job_id=677600\n"
+
+        with (
+            patch("factorio_ai.remote_slurm.deploy", return_value={"ok": True}),
+            patch("factorio_ai.remote_slurm._run_remote", side_effect=fake_run_remote),
+        ):
+            result = ensure_worker_job(cfg, renew_before_minutes=180)
+
+        self.assertEqual(result["action"], "submitted_dependent_successor")
+        self.assertEqual(result["dependencyJobId"], "677569")
+        self.assertIn("--dependency=afterany:677569", calls[-1])
+
+    def test_ensure_worker_does_not_submit_when_pending_successor_exists(self):
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="factorio-ai-worker",
+            conda_env="factorio-ai",
+            partition="gpu4",
+            cpus_per_task=8,
+            gpus_per_node=1,
+            gres="gpu:1",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        with (
+            patch("factorio_ai.remote_slurm.deploy") as deploy,
+            patch(
+                "factorio_ai.remote_slurm._run_remote",
+                return_value=(
+                    "677569|RUNNING|23:46:31|13:29|n053|gres/gpu:1\n"
+                    "677600|PENDING|0:00|1-00:00:00|Dependency|gres/gpu:1\n"
+                ),
+            ),
+        ):
+            result = ensure_worker_job(cfg, renew_before_minutes=180)
+
+        self.assertEqual(result["action"], "pending_successor_exists")
+        deploy.assert_not_called()
 
     def test_local_gpu_needed_for_vllm_or_loopback_endpoint(self):
         self.assertTrue(_status_needs_local_gpu({"FACTORIO_AI_VLLM_MODEL": "Qwen/Qwen3.5-4B"}))

@@ -41,6 +41,7 @@
 - 2026-06-15 00:12 KST: the previous live map was backed up because the factory sites were too scattered for the automation-first logistics goal.
 - A fresh no-mod world is now running with Nauvis cliffs disabled (`cliff_settings.richness = 0`), starter inventory only, and initial strategy `produce_iron_plate`.
 - Next live objective: bootstrap iron, coal, copper, and steam power as compact starter-local sites. Do not place remote starter steam power unless the dependent factory site is co-located there or a reachable power/logistics corridor already exists; an isolated remote pump cannot power the starter base. After the first bootstrap phase, repeated inputs must move through site-to-site logistics lines rather than player inventory shuttle loops.
+- Preserve the crashed spaceship/wreckage near the starting point by default. It is technically mineable, but the autoplayer should treat it as a protected landmark unless the operator explicitly overrides that rule.
 
 ## Factory Quality Criteria
 
@@ -50,7 +51,7 @@
 - Site adjacency: related producer/consumer sites should be close enough for short local belts until a main bus, trunk line, or rail network exists.
 - Power and pollution: prefer lower power draw and pollution for equivalent throughput, especially before defense is mature.
 - Expansion: leave clear lanes for belts, power, rails, modules, beacons, and replacement with higher-tier machines.
-- Site safety: avoid starter resource patches, enemy pressure, disconnected power grids, and unvalidated remote logistics before rail.
+- Site safety: avoid starter resource patches, enemy pressure, disconnected power grids, preserved starting wreckage, and unvalidated remote logistics before rail.
 - New world setup: for future Nauvis starts, disable cliffs because they make compact factory placement and corridor planning unnecessarily brittle.
 
 ## Learning Roadmap

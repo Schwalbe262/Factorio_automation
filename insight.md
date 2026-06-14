@@ -137,3 +137,18 @@
 - After: The bad remote entities were recovered, a live full planning-site observe still found `power_site_count=20`, but `SetupPowerSkill` returned `action=None` with the explicit remote-water blocker instead of building another pump.
 - Evidence: `{"source_loop":111,"tests":"377 passed","cleanup":{"boiler":1,"offshore_pump":3,"power_entities_after":[]},"planner_after":{"power_site_count":20,"action":null,"reason":"cannot use remote water for starter steam power until a connected power corridor or co-located remote factory site exists"}}`
 - Remaining risk: The current map may still lack a practical starter-local water source; progress now requires a connectable power corridor, a co-located remote factory plan, or a better start rather than isolated remote steam.
+## 2026-06-15 03:02:11 +09:00 - Insight 16
+- Source loop: Loop 112
+- Improvement: Nearby-water recognition is fixed for starter steam planning, and the live factory now has working starter-local steam power.
+- Before: The full planning scan reported remote buildable water first, around `{x:140.5,y:-826.5}` at about 838 tiles from the starter anchor, even though the map had a visible nearby lake.
+- After: Direct local scanning found a buildable starter steam layout at pump `{x:-45.5,y:19.5}` about 50 tiles from the starter cluster, and `setup_power` built it successfully.
+- Evidence: `{"source_loop":112,"before":{"first_power_site":{"x":140.5,"y":-826.5},"distance":838.36,"cause":"large-radius limited water sample sorted after clipping"},"after":{"pump":{"x":-45.5,"y":19.5},"boiler":{"x":-43.5,"y":19},"steam_engine":{"x":-43.5,"y":15.5},"small_electric_pole":{"x":-45.5,"y":15.5},"steps":7,"status":"steam power block is producing usable steam power"}}`
+- Remaining risk: Future planning scans must keep staged nearest-water ordering and avoid repeating expensive full scans unless a planner genuinely needs refreshed candidates.
+
+## 2026-06-15 03:14:11 +09:00 - Insight 17
+- Source loop: Loop 113
+- Improvement: The active Slurm Qwen worker now has an automatic renewal path before the 1-day allocation expires.
+- Before: Job `677569` had only about 9 minutes left and no dependent successor was queued, so the local LLM could disappear before the next planning loop.
+- After: `slurm-ensure-worker --renew-before-minutes 180` queued successor job `678192` with dependency on `677569`.
+- Evidence: `{"source_loop":113,"action":"submitted_dependent_successor","dependencyJobId":"677569","submitted_job_id":"678192","timeLeftSeconds":556}`
+- Remaining risk: Site policy may still delay pending jobs; the ensure command should be run periodically by the launcher or scheduler, not only manually.

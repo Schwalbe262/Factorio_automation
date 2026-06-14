@@ -1,5 +1,6 @@
 import unittest
 
+from factorio_ai import planner as planner_module
 from factorio_ai.blueprints import decode_blueprint_string
 from factorio_ai.planner import (
     AutomationScienceSkill,
@@ -1402,6 +1403,22 @@ class PlannerTests(unittest.TestCase):
         decision = StarterDefenseSkill().next_action(obs)
         self.assertTrue(decision.done)
         self.assertIsNone(decision.action)
+
+    def test_blocking_obstacle_skips_starter_crash_site_artifact(self):
+        obs = base_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["entities"] = [
+            {
+                "name": "crash-site-spaceship-wreck-big-1",
+                "type": "simple-entity",
+                "position": {"x": 4, "y": 0},
+                "distance": 4,
+            }
+        ]
+
+        blocker = planner_module._blocking_obstacle_near(obs, {"x": 4, "y": 0})
+
+        self.assertIsNone(blocker)
 
     def test_setup_power_skill_places_offshore_pump_first_when_parts_exist(self):
         obs = base_observation()

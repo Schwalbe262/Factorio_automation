@@ -1,6 +1,6 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-15 00:12 KST
+Last updated: 2026-06-15 03:14 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
@@ -57,6 +57,14 @@ Processes observed before this handoff:
   - The red science mall can recover a lab-adjacent powered unassigned assembler.
   - Automation-era repeated hand-carry between distant sites is blocked; strategy now raises missing site-to-site logistic lines to `plan_factory_site`.
 - Next priority on the fresh map: bootstrap compact starter-local iron/coal/copper/power, then build research and mall sites close enough for short belts or explicit logistic lines.
+
+## Latest Part 83 Status
+
+- Nearby water was present on the fresh map but the earlier full power-site scan missed it because `find_tiles_filtered(... radius=1024, limit=1600)` clipped the water sample before sorting by distance.
+- Power-site discovery now scans staged radii (`96`, `160`, `224`, `384`, `640`, then `1024`) and returns the nearest buildable tier before considering far water.
+- Live verification found a starter-local steam layout around pump `{x:-45.5,y:19.5}` and `setup_power` completed in 7 steps. The resulting offshore pump, boiler, steam engine, and pole are working near the starter cluster.
+- The starting crashed spaceship/wreckage is protected by default. Mining it requires an explicit `allow_preserved_artifact=true` override; planner obstacle-removal code also skips protected starter artifacts.
+- Slurm continuity is now handled by `slurm-ensure-worker --renew-before-minutes <minutes>`, which queues a dependent successor job before the current one expires instead of waiting for the allocation to disappear.
 
 If the CLI session starts fresh, verify processes first:
 
@@ -863,6 +871,13 @@ $env:PYTHONPATH='src'
 python -m factorio_ai.cli run-no-mod-idle-layout-loop --objective launch_rocket_program --cycles 1 --sleep-seconds 0 --stale-seconds 0
 ```
 
+Ensure the active 4B Slurm worker has a running or queued successor before the 1-day allocation expires:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m factorio_ai.cli slurm-ensure-worker --renew-before-minutes 180
+```
+
 Open review GUI:
 
 ```powershell
@@ -873,7 +888,9 @@ Open review GUI:
 
 - Factory sites have historically been too scattered. Site placement must prefer starter-local clusters until rail logistics exist.
 - Power must prefer starter-local or already connected water. Do not build isolated remote starter steam power; a remote water block is only valid when the dependent factory site is co-located there or a reachable power/logistics corridor already exists.
+- Full water/site scans must preserve nearest-water ordering. Use staged radius scans or cached spatial memory; do not sort only after a large limited sample has already discarded nearby tiles.
 - Production blocks must avoid covering starter ore/coal patches unless unavoidable.
+- Preserve starting crashed spaceship/wreckage like a protected landmark unless the operator explicitly requests removal.
 - Research automation must use assemblers and labs; hand-crafting science packs is not acceptable for sustained progress.
 - Labs usually need daisy chain or belt-fed science distribution.
 - Burner drills are only bootstrap; later replace with electric drills.
@@ -884,6 +901,7 @@ Open review GUI:
 - Do not spend scarce hand-crafted belts on site-to-site paths before `transport-belt` production is automated by a mall assembler. Bootstrap-local direct insertion is allowed; repeated site links should wait for belt automation.
 - Trains should be used for far resources/outposts once local logistics become too long.
 - Part 82 recovered the bad remote steam entities and verified that `SetupPowerSkill` now returns a remote-water blocker even when a full planning-site scan finds remote `power_sites`.
+- Part 83 fixed the nearest-water scan order, built working starter-local steam power, protected starting wreckage, and queued a dependent Slurm successor before the current 1-day job expired.
 
 ## LLM Model Direction
 

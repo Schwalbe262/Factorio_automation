@@ -85,6 +85,7 @@ Do not confuse the Codex/handoff context with the local Slurm LLM prompt context
 - Build the first steam power block with `setup_power`: offshore pump, boiler, steam engine, and small electric pole.
 - Ask the strategic layer for the next high-level skill with `factorio-ai strategy`.
 - Submit planner tasks to a Slurm worker queue when configured, with local rule-based fallback.
+- Preserve the starting crashed spaceship/wreckage by default; explicit operator override is required before mining protected starter artifacts.
 
 ## Requirements
 
@@ -714,6 +715,17 @@ $env:FACTORIO_AI_VLLM_ARGS="--max-model-len 32768 --gpu-memory-utilization 0.85 
 $env:FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER="0"
 factorio-ai slurm-start-worker
 ```
+
+Keep a 1-day Slurm allocation from expiring without a successor:
+
+```powershell
+$env:PYTHONPATH="src"
+python -m factorio_ai.cli slurm-ensure-worker --renew-before-minutes 180
+```
+
+If a worker is running and has less than the threshold remaining, this queues a dependent successor
+with `--dependency=afterany:<running-job-id>`. If a successor is already pending, it does not submit
+another one.
 
 The larger 9B and 27B workers are kept as separate worker jobs so they can wait or run without
 blocking the active 4B worker:

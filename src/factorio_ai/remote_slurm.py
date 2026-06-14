@@ -193,10 +193,38 @@ printf '%s\\n' "$REMOTE_DIR"
     return {"ok": True, "remoteDir": remote_dir, "output": output}
 
 
+def _worker_submit_command(
+    cfg: RemoteSlurmConfig,
+    remote_dir: str,
+    *,
+    dependency_job_id: str | None = None,
+) -> str:
+    dependency_arg = (
+        f'  --dependency=afterany:{shlex.quote(str(dependency_job_id))} \\\n'
+        if dependency_job_id
+        else ""
+    )
+    return f"""job_id="$(sbatch --parsable \\
+  --job-name="$JOB_NAME" \\
+  --nodes=1 \\
+  --ntasks=1 \\
+  --cpus-per-task="$CPUS" \\
+  $([[ -n "$GRES" ]] && printf -- '--gres=%s ' "$GRES") \\
+{dependency_arg}  --time="$TIME_LIMIT" \\
+  --partition="$PARTITION" \\
+  --output="$REMOTE_DIR/logs/%x-%j.out" \\
+  --error="$REMOTE_DIR/logs/%x-%j.err" \\
+  --export=ALL,ROOT="$REMOTE_DIR",FACTORIO_AI_SLURM_CONDA_ENV="$ENV_NAME" \\
+  "$REMOTE_DIR/factorio-ai/slurm/run-factorio-ai-worker.sh")"
+echo "submitted_job_id=$job_id"
+"""
+
+
 def submit_worker_job(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
     cfg = cfg or config()
     remote_dir = resolve_remote_dir(cfg)
     deploy(cfg)
+    submit_command = _worker_submit_command(cfg, remote_dir)
     output = _run_remote(
         f"""set -euo pipefail
 REMOTE_DIR={json.dumps(remote_dir)}
@@ -213,24 +241,148 @@ if squeue -h -u "$USER" -n "$JOB_NAME" -t R,PD | awk 'NF{{found=1}} END{{exit !f
   squeue -h -u "$USER" -n "$JOB_NAME" -t R,PD -o "%i|%T|%M|%L|%R"
   exit 0
 fi
-job_id="$(sbatch --parsable \\
-  --job-name="$JOB_NAME" \\
-  --nodes=1 \\
-  --ntasks=1 \\
-  --cpus-per-task="$CPUS" \\
-  $([[ -n "$GRES" ]] && printf -- '--gres=%s ' "$GRES") \\
-  --time="$TIME_LIMIT" \\
-  --partition="$PARTITION" \\
-  --output="$REMOTE_DIR/logs/%x-%j.out" \\
-  --error="$REMOTE_DIR/logs/%x-%j.err" \\
-  --export=ALL,ROOT="$REMOTE_DIR",FACTORIO_AI_SLURM_CONDA_ENV="$ENV_NAME" \\
-  "$REMOTE_DIR/factorio-ai/slurm/run-factorio-ai-worker.sh")"
-echo "submitted_job_id=$job_id"
+{submit_command}
 """,
         cfg,
         timeout=60,
     )
     return {"ok": True, "remoteDir": remote_dir, "output": output}
+
+
+def ensure_worker_job(
+    cfg: RemoteSlurmConfig | None = None,
+    *,
+    renew_before_minutes: int | None = None,
+) -> dict[str, Any]:
+    cfg = cfg or config()
+    remote_dir = resolve_remote_dir(cfg)
+    threshold_minutes = (
+        renew_before_minutes
+        if renew_before_minutes is not None
+        else _int_env("FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES", 180, 1)
+    )
+    threshold_seconds = max(60, int(threshold_minutes) * 60)
+    jobs_output = _run_remote(
+        f"""set -euo pipefail
+JOB_NAME={json.dumps(cfg.job_name)}
+squeue -h -u "$USER" -n "$JOB_NAME" -t R,PD -o "%i|%T|%M|%L|%R|%b" || true
+""",
+        cfg,
+        timeout=45,
+    )
+    jobs = _parse_squeue_jobs(jobs_output)
+    running_jobs = [job for job in jobs if job.get("state") == "RUNNING"]
+    pending_jobs = [job for job in jobs if job.get("state") == "PENDING"]
+    if pending_jobs:
+        return {
+            "ok": True,
+            "remoteDir": remote_dir,
+            "action": "pending_successor_exists",
+            "renewBeforeSeconds": threshold_seconds,
+            "jobs": jobs,
+        }
+    if not running_jobs:
+        submitted = submit_worker_job(cfg)
+        return {
+            "ok": True,
+            "remoteDir": remote_dir,
+            "action": "submitted_missing_worker",
+            "renewBeforeSeconds": threshold_seconds,
+            "jobs": jobs,
+            "submit": submitted,
+        }
+    running = min(
+        running_jobs,
+        key=lambda job: _slurm_time_left_seconds(str(job.get("time_left") or "")) or 10**12,
+    )
+    time_left_seconds = _slurm_time_left_seconds(str(running.get("time_left") or ""))
+    if time_left_seconds is None or time_left_seconds > threshold_seconds:
+        return {
+            "ok": True,
+            "remoteDir": remote_dir,
+            "action": "renewal_not_needed",
+            "renewBeforeSeconds": threshold_seconds,
+            "timeLeftSeconds": time_left_seconds,
+            "jobs": jobs,
+        }
+    deploy(cfg)
+    dependency_job_id = str(running.get("id") or "").strip()
+    submit_command = _worker_submit_command(cfg, remote_dir, dependency_job_id=dependency_job_id)
+    output = _run_remote(
+        f"""set -euo pipefail
+REMOTE_DIR={json.dumps(remote_dir)}
+JOB_NAME={json.dumps(cfg.job_name)}
+ENV_NAME={json.dumps(cfg.conda_env)}
+PARTITION={json.dumps(cfg.partition)}
+CPUS={cfg.cpus_per_task}
+GPUS={cfg.gpus_per_node}
+GRES={json.dumps(cfg.gres)}
+TIME_LIMIT={json.dumps(cfg.time_limit)}
+mkdir -p "$REMOTE_DIR"/logs
+{submit_command}
+""",
+        cfg,
+        timeout=60,
+    )
+    return {
+        "ok": True,
+        "remoteDir": remote_dir,
+        "action": "submitted_dependent_successor",
+        "renewBeforeSeconds": threshold_seconds,
+        "timeLeftSeconds": time_left_seconds,
+        "dependencyJobId": dependency_job_id,
+        "jobs": jobs,
+        "output": output,
+    }
+
+
+def _parse_squeue_jobs(output: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for line in output.splitlines():
+        parts = line.strip().split("|")
+        if len(parts) < 2 or not parts[0]:
+            continue
+        rows.append(
+            {
+                "id": parts[0],
+                "state": parts[1],
+                "elapsed": parts[2] if len(parts) > 2 else "",
+                "time_left": parts[3] if len(parts) > 3 else "",
+                "reason": parts[4] if len(parts) > 4 else "",
+                "gres": parts[5] if len(parts) > 5 else "",
+            }
+        )
+    return rows
+
+
+def _slurm_time_left_seconds(value: str) -> int | None:
+    text = value.strip()
+    if not text or text.upper() in {"UNLIMITED", "NOT_SET", "INVALID"}:
+        return None
+    days = 0
+    if "-" in text:
+        day_text, text = text.split("-", 1)
+        try:
+            days = int(day_text)
+        except ValueError:
+            return None
+    parts = text.split(":")
+    try:
+        numbers = [int(part) for part in parts]
+    except ValueError:
+        return None
+    if len(numbers) == 3:
+        hours, minutes, seconds = numbers
+    elif len(numbers) == 2:
+        hours = 0
+        minutes, seconds = numbers
+    elif len(numbers) == 1:
+        hours = 0
+        minutes = 0
+        seconds = numbers[0]
+    else:
+        return None
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds
 
 
 def status(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:

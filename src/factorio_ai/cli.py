@@ -468,6 +468,16 @@ def main(argv: list[str] | None = None) -> None:
 
     subparsers.add_parser("slurm-deploy", help="Deploy project source to the Slurm remote directory")
     subparsers.add_parser("slurm-start-worker", help="Submit the persistent Slurm worker job")
+    slurm_ensure_parser = subparsers.add_parser(
+        "slurm-ensure-worker",
+        help="Ensure a Slurm worker is running or queued before the current allocation expires",
+    )
+    slurm_ensure_parser.add_argument(
+        "--renew-before-minutes",
+        type=int,
+        default=None,
+        help="Queue a dependent successor when the running worker has less than this many minutes left",
+    )
     subparsers.add_parser("slurm-status", help="Print Slurm worker status")
     subparsers.add_parser("slurm-llm-status", help="Print Slurm worker LLM readiness")
     subparsers.add_parser("slurm-cancel", help="Cancel the Slurm worker job")
@@ -1334,6 +1344,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "slurm-start-worker":
         print_json(remote_slurm.submit_worker_job())
+        return
+
+    if args.command == "slurm-ensure-worker":
+        print_json(remote_slurm.ensure_worker_job(renew_before_minutes=args.renew_before_minutes))
         return
 
     if args.command == "slurm-status":
