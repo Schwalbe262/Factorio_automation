@@ -236,6 +236,26 @@ def main(argv: list[str] | None = None) -> None:
     no_mod_codex_wait_layout_parser.add_argument("--cycles", type=int, default=0, help="Number of pulses; 0 means run until the wait state clears")
     no_mod_codex_wait_layout_parser.add_argument("--sleep-seconds", type=float, default=20.0)
 
+    idle_layout_parser = subparsers.add_parser(
+        "run-idle-layout-loop",
+        help="Keep GPUs busy with simulation-only layout improvement whenever autopilot is idle or stale",
+    )
+    idle_layout_parser.add_argument("--objective", default="launch_rocket_program")
+    idle_layout_parser.add_argument("--cycles", type=int, default=0, help="Number of pulses; 0 means run until interrupted")
+    idle_layout_parser.add_argument("--sleep-seconds", type=float, default=5.0)
+    idle_layout_parser.add_argument("--stale-seconds", type=float, default=15.0)
+    idle_layout_parser.add_argument("--min-submit-interval-seconds", type=float, default=0.0)
+
+    no_mod_idle_layout_parser = subparsers.add_parser(
+        "run-no-mod-idle-layout-loop",
+        help="No-custom-mod idle GPU filler layout loop",
+    )
+    no_mod_idle_layout_parser.add_argument("--objective", default="launch_rocket_program")
+    no_mod_idle_layout_parser.add_argument("--cycles", type=int, default=0, help="Number of pulses; 0 means run until interrupted")
+    no_mod_idle_layout_parser.add_argument("--sleep-seconds", type=float, default=5.0)
+    no_mod_idle_layout_parser.add_argument("--stale-seconds", type=float, default=15.0)
+    no_mod_idle_layout_parser.add_argument("--min-submit-interval-seconds", type=float, default=0.0)
+
     begin_codex_parser = subparsers.add_parser(
         "begin-codex-work",
         help="Mark a missing executor as being implemented by Codex and keep LLM layout work running",
@@ -814,6 +834,34 @@ def main(argv: list[str] | None = None) -> None:
             objective=args.objective,
             cycles=args.cycles,
             sleep_seconds=args.sleep_seconds,
+        )
+        payload = summary.to_dict()
+        payload["adapter"] = "no-mod-rcon-lua"
+        print_json(payload)
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-idle-layout-loop":
+        summary = FactorioController(cfg).run_idle_layout_loop(
+            objective=args.objective,
+            cycles=args.cycles,
+            sleep_seconds=args.sleep_seconds,
+            stale_seconds=args.stale_seconds,
+            min_submit_interval_seconds=args.min_submit_interval_seconds,
+        )
+        print_json(summary.to_dict())
+        if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command == "run-no-mod-idle-layout-loop":
+        summary = ModlessFactorioController(cfg).run_idle_layout_loop(
+            objective=args.objective,
+            cycles=args.cycles,
+            sleep_seconds=args.sleep_seconds,
+            stale_seconds=args.stale_seconds,
+            min_submit_interval_seconds=args.min_submit_interval_seconds,
         )
         payload = summary.to_dict()
         payload["adapter"] = "no-mod-rcon-lua"

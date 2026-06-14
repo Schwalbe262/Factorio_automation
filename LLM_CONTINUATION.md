@@ -406,6 +406,21 @@ heartbeat before asking for another strategy step. This means that if a
 LLM should continue simulation-only site layout improvement until the executor
 exists and the wait state is cleared.
 
+There is also an opportunistic idle loop for keeping GPUs busy whenever the
+game executor is not actively making progress:
+
+```text
+run_factorio_no_mod_idle_layout_loop.bat
+python -m factorio_ai.cli run-no-mod-idle-layout-loop --objective launch_rocket_program
+```
+
+Autopilot writes `runtime/autopilot-heartbeat.json`. The idle loop submits
+layout-improvement tasks when that heartbeat is missing, stopped, sleeping,
+failed, or older than `--stale-seconds` (default 15s). Fresh `cycle_start` style
+heartbeats are treated as busy and pause new idle submissions. This loop is a
+GPU filler: it must not apply builds to the map; it only produces simulated
+site candidates and logs them to the dashboard.
+
 Environment:
 
 ```powershell
@@ -469,9 +484,11 @@ Dashboard areas:
 - Codex token usage;
 - layout improvement issues, opportunities, and candidates.
 
-Current grouped factory sites expose a blueprint copy button. The site blueprint is reconstructed
-from observed nearby machines and fetched through `/api/factorio/blueprint?site_id=<site-id>`; do not
-render the raw blueprint string in the dashboard HTML. This lets a later Codex/CLI/Claude session
+Current grouped factory sites expose a blueprint copy button. Simulation candidates expose separate
+`variant=before` and `variant=after` copy buttons so model-evaluation jobs can compare the observed
+current footprint with the proposed replacement footprint. The site/candidate blueprint is fetched
+through `/factorio/blueprint?...` first, with `/api/factorio/blueprint?...` kept as a local fallback;
+do not render the raw blueprint string in dashboard HTML. This lets a later Codex/CLI/Claude session
 copy or collect successful AI-built site layouts for review and fine-tuning examples without blindly
 placing unvalidated external blueprints.
 

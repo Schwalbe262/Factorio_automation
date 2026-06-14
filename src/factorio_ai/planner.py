@@ -4,7 +4,7 @@ from collections import Counter
 from math import ceil
 from typing import Any
 
-from .blueprints import encode_blueprint_entities
+from .blueprints import decode_blueprint_string, encode_blueprint_entities
 from .knowledge import RECIPES
 from .monitor import estimate_factory_sites, estimate_logistics_links
 from .models import (
@@ -345,7 +345,22 @@ def factory_layout_simulation_candidates(observation: dict[str, Any]) -> list[di
 
     opportunity_kinds = {str(item.get("kind") or "") for item in opportunities}
     if {"rebalance_green_circuit_ratio", "complete_green_circuit_block_pattern"} & opportunity_kinds:
-        candidates.append(_green_circuit_layout_candidate(recipe_counts))
+        current_circuit_sites = [
+            site
+            for site in sites
+            if site.get("kind") in {"circuit_automation", "assembler_cell"}
+            and (site.get("item") in {None, "copper-cable", "electronic-circuit"} or site.get("kind") == "circuit_automation")
+        ]
+        candidates.append(
+            _with_blueprint_variants(
+                _green_circuit_layout_candidate(recipe_counts),
+                _combined_site_blueprint(
+                    "before-green-circuit-block",
+                    current_circuit_sites,
+                    "Observed current green-circuit/cable machine footprint before ratio rebalance.",
+                ),
+            )
+        )
 
     smelting_items = sorted(
         {
@@ -357,7 +372,16 @@ def factory_layout_simulation_candidates(observation: dict[str, Any]) -> list[di
     for item in smelting_items:
         rows = [site for site in sites if site.get("kind") == "plate_smelting_line" and site.get("item") == item]
         if len(rows) >= 2:
-            candidates.append(_smelting_standardization_candidate(item, rows))
+            candidates.append(
+                _with_blueprint_variants(
+                    _smelting_standardization_candidate(item, rows),
+                    _combined_site_blueprint(
+                        f"before-{item}-smelting-sites",
+                        rows,
+                        "Observed current smelting footprint before standardization.",
+                    ),
+                )
+            )
 
     for link in links:
         if not isinstance(link, dict):
@@ -375,11 +399,29 @@ def factory_layout_simulation_candidates(observation: dict[str, Any]) -> list[di
     if lab_count > 0:
         lab_sites = [site for site in sites if site.get("kind") == "research_lab_block"]
         if any("manual" in str(site.get("automation_level") or "") for site in lab_sites):
-            candidates.append(_lab_daisy_chain_candidate(lab_count))
+            candidates.append(
+                _with_blueprint_variants(
+                    _lab_daisy_chain_candidate(lab_count),
+                    _combined_site_blueprint(
+                        "before-research-lab-feed",
+                        lab_sites,
+                        "Observed current research lab footprint before daisy-chain feed improvement.",
+                    ),
+                )
+            )
 
     mall_sites = [site for site in sites if site.get("kind") == "build_item_mall"]
     if len(mall_sites) >= 4:
-        candidates.append(_mall_compaction_candidate(mall_sites))
+        candidates.append(
+            _with_blueprint_variants(
+                _mall_compaction_candidate(mall_sites),
+                _combined_site_blueprint(
+                    "before-starter-mall-sites",
+                    mall_sites,
+                    "Observed current starter mall footprint before row compaction.",
+                ),
+            )
+        )
 
     candidates = [candidate for candidate in candidates if candidate]
     candidates.sort(
@@ -387,6 +429,78 @@ def factory_layout_simulation_candidates(observation: dict[str, Any]) -> list[di
         reverse=True,
     )
     return candidates[:8]
+
+
+def _with_blueprint_variants(
+    candidate: dict[str, Any],
+    before_blueprint: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not candidate:
+        return candidate
+    output = dict(candidate)
+    after_blueprint = output.get("after_blueprint")
+    if not isinstance(after_blueprint, dict):
+        after_blueprint = output.get("blueprint") if isinstance(output.get("blueprint"), dict) else None
+    if isinstance(before_blueprint, dict):
+        output["before_blueprint"] = before_blueprint
+    if isinstance(after_blueprint, dict):
+        output["after_blueprint"] = after_blueprint
+        output.setdefault("blueprint", after_blueprint)
+    return output
+
+
+def _combined_site_blueprint(
+    label: str,
+    sites: list[dict[str, Any]],
+    description: str,
+) -> dict[str, Any] | None:
+    absolute_entities: list[dict[str, Any]] = []
+    for site in sites:
+        if not isinstance(site, dict) or not isinstance(site.get("position"), dict):
+            continue
+        blueprint = site.get("blueprint") if isinstance(site.get("blueprint"), dict) else {}
+        exchange_string = blueprint.get("exchange_string")
+        if not isinstance(exchange_string, str) or not exchange_string:
+            continue
+        try:
+            payload = decode_blueprint_string(exchange_string)
+        except Exception:
+            continue
+        raw_entities = payload.get("blueprint", {}).get("entities")
+        if not isinstance(raw_entities, list):
+            continue
+        site_position = site["position"]
+        for entity in raw_entities:
+            if not isinstance(entity, dict) or not isinstance(entity.get("position"), dict):
+                continue
+            position = entity["position"]
+            row: dict[str, Any] = {
+                "name": str(entity.get("name") or ""),
+                "position": {
+                    "x": float(site_position.get("x") or 0.0) + float(position.get("x") or 0.0),
+                    "y": float(site_position.get("y") or 0.0) + float(position.get("y") or 0.0),
+                },
+            }
+            if entity.get("direction") is not None:
+                row["direction"] = int(entity.get("direction") or 0)
+            if isinstance(entity.get("recipe"), str):
+                row["recipe"] = entity["recipe"]
+            if isinstance(entity.get("items"), dict):
+                row["items"] = entity["items"]
+            absolute_entities.append(row)
+    if not absolute_entities:
+        return None
+    center = _centroid([entity["position"] for entity in absolute_entities]) or {"x": 0.0, "y": 0.0}
+    normalized_entities: list[dict[str, Any]] = []
+    for entity in absolute_entities:
+        position = entity["position"]
+        normalized = dict(entity)
+        normalized["position"] = {
+            "x": round(float(position.get("x") or 0.0) - float(center.get("x") or 0.0), 3),
+            "y": round(float(position.get("y") or 0.0) - float(center.get("y") or 0.0), 3),
+        }
+        normalized_entities.append(normalized)
+    return _blueprint_export(label, normalized_entities, description)
 
 
 def _layout_issue(
@@ -769,6 +883,7 @@ def _site_production_estimate_by_item(sites: list[dict[str, Any]]) -> dict[str, 
 def _lab_daisy_chain_candidate(lab_count: int) -> dict[str, Any]:
     before_effective = lab_count * 0.5
     after_effective = lab_count * 0.85
+    after_labs = max(1, lab_count)
     return {
         "candidate_id": "lab-short-daisy-chain-feed",
         "simulation_only": True,
@@ -776,6 +891,11 @@ def _lab_daisy_chain_candidate(lab_count: int) -> dict[str, Any]:
         "source": "research feed pattern heuristic",
         "target_pattern": "short lab daisy chain or multi-feed science belt",
         "requires_build_command": True,
+        "blueprint": _blueprint_export(
+            "lab-short-daisy-chain-feed",
+            _lab_daisy_chain_blueprint_entities(after_labs),
+            "Simulation-only lab daisy-chain feed pattern. Validate science input belt and power before applying.",
+        ),
         "simulation": {
             "before": {"labs": lab_count, "effective_lab_utilization": 0.5, "effective_labs": round(before_effective, 2)},
             "after": {"labs": lab_count, "effective_lab_utilization": 0.85, "effective_labs": round(after_effective, 2)},
@@ -783,6 +903,20 @@ def _lab_daisy_chain_candidate(lab_count: int) -> dict[str, Any]:
             "score": round(62.0 + min(18.0, lab_count * 2.0), 1),
         },
     }
+
+
+def _lab_daisy_chain_blueprint_entities(lab_count: int) -> list[dict[str, Any]]:
+    entities: list[dict[str, Any]] = []
+    count = max(1, min(8, lab_count))
+    for index in range(count):
+        x = index * 4
+        _add_entity(entities, "lab", x, 0)
+        _add_entity(entities, "small-electric-pole", x, -3)
+        _add_entity(entities, "transport-belt", x, 3, direction=EAST)
+        _add_entity(entities, "inserter", x, 2, direction=NORTH)
+        if index < count - 1:
+            _add_entity(entities, "inserter", x + 2, 0, direction=EAST)
+    return entities
 
 
 def _mall_compaction_candidate(mall_sites: list[dict[str, Any]]) -> dict[str, Any]:
@@ -797,6 +931,11 @@ def _mall_compaction_candidate(mall_sites: list[dict[str, Any]]) -> dict[str, An
         "source": "blueprint-pattern heuristic",
         "target_pattern": "starter mall row with shared iron/gear/circuit inputs and chest outputs",
         "requires_build_command": True,
+        "blueprint": _blueprint_export(
+            "starter-mall-row-compaction",
+            _starter_mall_row_blueprint_entities(len(mall_sites)),
+            "Simulation-only starter mall row. Validate input belts, recipes, power, and chest positions before applying.",
+        ),
         "simulation": {
             "before": {"cells": len(mall_sites), "footprint_area": round(before_area, 1)},
             "after": {"cells": len(mall_sites), "estimated_footprint_area": round(after_area, 1)},
@@ -804,6 +943,30 @@ def _mall_compaction_candidate(mall_sites: list[dict[str, Any]]) -> dict[str, An
             "score": round(60.0 + min(22.0, max(0.0, before_area - after_area) / 16.0), 1),
         },
     }
+
+
+def _starter_mall_row_blueprint_entities(cell_count: int) -> list[dict[str, Any]]:
+    recipes = [
+        "transport-belt",
+        "inserter",
+        "burner-inserter",
+        "stone-furnace",
+        "burner-mining-drill",
+        "assembling-machine-1",
+        "small-electric-pole",
+    ]
+    entities: list[dict[str, Any]] = []
+    count = max(1, min(len(recipes), cell_count or len(recipes)))
+    for index, recipe in enumerate(recipes[:count]):
+        x = index * 4
+        _add_entity(entities, "assembling-machine-1", x, 0, recipe=recipe)
+        _add_entity(entities, "inserter", x, -2, direction=SOUTH)
+        _add_entity(entities, "transport-belt", x, -3, direction=EAST)
+        _add_entity(entities, "inserter", x, 2, direction=NORTH)
+        _add_entity(entities, "wooden-chest", x, 3)
+        if index % 2 == 0:
+            _add_entity(entities, "small-electric-pole", x + 1, 1)
+    return entities
 
 
 def _machine_count(site: dict[str, Any], machine: str) -> int:

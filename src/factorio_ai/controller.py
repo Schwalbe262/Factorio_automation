@@ -147,6 +147,30 @@ class CodexWaitLayoutLoopSummary:
         }
 
 
+@dataclass
+class IdleLayoutLoopSummary:
+    ok: bool
+    reason: str
+    objective: str
+    cycles: int
+    idle_cycles: int
+    busy_cycles: int
+    log_path: Path
+    interrupted: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "reason": self.reason,
+            "objective": self.objective,
+            "cycles": self.cycles,
+            "idleCycles": self.idle_cycles,
+            "busyCycles": self.busy_cycles,
+            "logPath": str(self.log_path),
+            "interrupted": self.interrupted,
+        }
+
+
 class FactorioController:
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
@@ -576,10 +600,12 @@ class FactorioController:
         last_step: StrategyStepSummary | None = None
         interrupted = False
         reason = "cycle limit reached" if cycles > 0 else "autopilot loop stopped"
+        self._write_autopilot_heartbeat(objective, "starting", cycle=0, reason=reason)
 
         try:
             with log_path.open("a", encoding="utf-8") as log_file:
                 while cycles <= 0 or completed < cycles:
+                    self._write_autopilot_heartbeat(objective, "cycle_start", cycle=completed + 1)
                     self._maybe_progress_codex_wait_layout(objective)
                     started = time.monotonic()
                     try:
@@ -598,6 +624,12 @@ class FactorioController:
                             strategy={},
                         )
                         self._maybe_progress_codex_wait_layout(objective, phase="cycle_error")
+                        self._write_autopilot_heartbeat(
+                            objective,
+                            "cycle_error",
+                            cycle=completed + 1,
+                            reason=last_step.reason,
+                        )
                     completed += 1
                     if not last_step.ok:
                         failures += 1
@@ -612,20 +644,39 @@ class FactorioController:
                     json.dump(payload, log_file, ensure_ascii=False, separators=(",", ":"))
                     log_file.write("\n")
                     log_file.flush()
+                    self._write_autopilot_heartbeat(
+                        objective,
+                        "cycle_complete" if last_step.ok else "cycle_failed",
+                        cycle=completed,
+                        reason=last_step.reason,
+                    )
                     if not last_step.ok and not continue_on_error:
                         reason = last_step.reason
                         break
                     if cycles <= 0 or completed < cycles:
+                        self._write_autopilot_heartbeat(
+                            objective,
+                            "sleeping",
+                            cycle=completed,
+                            reason=f"sleeping {sleep_seconds} seconds before next strategy cycle",
+                        )
                         time.sleep(max(0.0, sleep_seconds))
         except KeyboardInterrupt:
             interrupted = True
             reason = "autopilot interrupted by user"
+            self._write_autopilot_heartbeat(objective, "interrupted", cycle=completed, reason=reason)
 
         ok = failures == 0 or (continue_on_error and cycles <= 0 and not interrupted)
         if cycles > 0 and completed >= cycles and failures == 0:
             reason = "cycle limit reached"
         elif failures > 0 and continue_on_error:
             reason = f"completed with {failures} failed cycle(s); continuing is enabled"
+        self._write_autopilot_heartbeat(
+            objective,
+            "stopped" if not interrupted else "interrupted",
+            cycle=completed,
+            reason=reason,
+        )
         return AutopilotLoopSummary(
             ok=ok,
             reason=reason,
@@ -680,6 +731,130 @@ class FactorioController:
             log_path=log_path,
             active_skill=active_skill,
             wait_active=wait_active,
+            interrupted=interrupted,
+        )
+
+    def run_idle_layout_loop(
+        self,
+        objective: str = "launch_rocket_program",
+        *,
+        cycles: int = 0,
+        sleep_seconds: float = 5.0,
+        stale_seconds: float = 15.0,
+        min_submit_interval_seconds: float = 0.0,
+    ) -> IdleLayoutLoopSummary:
+        self.cfg.log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = self.cfg.log_dir / "layout-improvement-background.jsonl"
+        process_path = self._idle_layout_process_path()
+        existing = _read_json_file(process_path)
+        existing_pid = _int_or_none(existing.get("pid")) if isinstance(existing, dict) else None
+        if existing_pid and existing_pid != os.getpid() and _pid_is_running(existing_pid):
+            self._write_background_layout_log(
+                {
+                    "event": "layout_idle_loop_already_running",
+                    "pid": existing_pid,
+                    "objective": objective,
+                }
+            )
+            return IdleLayoutLoopSummary(
+                ok=True,
+                reason="idle layout loop already running",
+                objective=objective,
+                cycles=0,
+                idle_cycles=0,
+                busy_cycles=0,
+                log_path=log_path,
+            )
+        self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+        with process_path.open("w", encoding="utf-8") as file:
+            json.dump(
+                {
+                    "pid": os.getpid(),
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                    "objective": objective,
+                    "state": "running",
+                },
+                file,
+                ensure_ascii=False,
+                indent=2,
+            )
+        completed = 0
+        idle_cycles = 0
+        busy_cycles = 0
+        interrupted = False
+        reason = "idle layout loop running"
+
+        try:
+            while cycles <= 0 or completed < cycles:
+                idle, idle_reason, heartbeat = self._autopilot_idle_for_layout(stale_seconds)
+                completed += 1
+                if idle:
+                    idle_cycles += 1
+                    try:
+                        observation = self.observe()
+                    except Exception as exc:  # noqa: BLE001
+                        self._write_background_layout_log(
+                            {
+                                "event": "layout_idle_observe_failed",
+                                "active_skill": "idle:observe_failed",
+                                "active_step": 0,
+                                "idle_reason": idle_reason,
+                                "heartbeat": heartbeat,
+                                "error": f"{type(exc).__name__}: {exc}",
+                            }
+                        )
+                    else:
+                        active_skill = f"idle:{_slugify_reason(idle_reason)}"
+                        self._write_background_layout_log(
+                            {
+                                "event": "layout_idle_scheduler_heartbeat",
+                                "active_skill": active_skill,
+                                "active_step": 0,
+                                "idle_reason": idle_reason,
+                                "heartbeat": heartbeat,
+                            }
+                        )
+                        self._maybe_progress_background_layout_work(
+                            observation,
+                            objective,
+                            active_skill,
+                            0,
+                            minimum_interval_seconds=min_submit_interval_seconds,
+                        )
+                else:
+                    busy_cycles += 1
+                    self._write_background_layout_log(
+                        {
+                            "event": "layout_idle_scheduler_busy",
+                            "active_skill": "autopilot",
+                            "active_step": 0,
+                            "idle_reason": idle_reason,
+                            "heartbeat": heartbeat,
+                        }
+                    )
+                reason = "cycle limit reached" if cycles > 0 and completed >= cycles else "idle layout loop running"
+                if cycles > 0 and completed >= cycles:
+                    break
+                time.sleep(max(0.0, sleep_seconds))
+        except KeyboardInterrupt:
+            interrupted = True
+            reason = "idle layout loop interrupted by user"
+
+        final_state = _read_json_file(process_path)
+        if _int_or_none(final_state.get("pid")) == os.getpid():
+            final_state["state"] = "stopped" if not interrupted else "interrupted"
+            final_state["stopped_at"] = datetime.now(timezone.utc).isoformat()
+            with process_path.open("w", encoding="utf-8") as file:
+                json.dump(final_state, file, ensure_ascii=False, indent=2)
+
+        return IdleLayoutLoopSummary(
+            ok=not interrupted,
+            reason=reason,
+            objective=objective,
+            cycles=completed,
+            idle_cycles=idle_cycles,
+            busy_cycles=busy_cycles,
+            log_path=log_path,
             interrupted=interrupted,
         )
 
@@ -959,6 +1134,53 @@ class FactorioController:
             target_item,
         )
 
+    def _autopilot_heartbeat_path(self) -> Path:
+        return self.cfg.runtime_dir / "autopilot-heartbeat.json"
+
+    def _idle_layout_process_path(self) -> Path:
+        return self.cfg.runtime_dir / "idle-layout-loop.json"
+
+    def _write_autopilot_heartbeat(
+        self,
+        objective: str,
+        state: str,
+        *,
+        cycle: int,
+        reason: str = "",
+    ) -> None:
+        self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "active": state not in {"stopped", "interrupted"},
+            "state": state,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "objective": objective,
+            "cycle": cycle,
+            "reason": reason,
+            "pid": os.getpid(),
+        }
+        with self._autopilot_heartbeat_path().open("w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False, indent=2)
+
+    def _read_autopilot_heartbeat(self) -> dict[str, Any]:
+        return _read_json_file(self._autopilot_heartbeat_path())
+
+    def _autopilot_idle_for_layout(self, stale_seconds: float) -> tuple[bool, str, dict[str, Any]]:
+        heartbeat = self._read_autopilot_heartbeat()
+        if not heartbeat:
+            return True, "autopilot heartbeat missing", {}
+        state = str(heartbeat.get("state") or "")
+        if state in {"sleeping", "stopped", "interrupted", "cycle_failed", "cycle_error"}:
+            return True, f"autopilot state is {state}", heartbeat
+        updated_at = _parse_datetime(heartbeat.get("updated_at"))
+        if updated_at is None:
+            return True, "autopilot heartbeat has no valid timestamp", heartbeat
+        age_seconds = (datetime.now(timezone.utc) - updated_at).total_seconds()
+        heartbeat = dict(heartbeat)
+        heartbeat["age_seconds"] = round(max(0.0, age_seconds), 3)
+        if age_seconds >= stale_seconds:
+            return True, f"autopilot heartbeat stale for {age_seconds:.1f}s", heartbeat
+        return False, f"autopilot is active: {state}", heartbeat
+
     def _codex_wait_path(self) -> Path:
         return self.cfg.runtime_dir / "codex-wait.json"
 
@@ -1201,6 +1423,7 @@ class FactorioController:
         active_step: int,
         *,
         force_poll: bool = False,
+        minimum_interval_seconds: float | None = None,
     ) -> None:
         if not self.cfg.slurm_enabled or active_skill == "plan_factory_site":
             return
@@ -1251,7 +1474,11 @@ class FactorioController:
                 return
             if force_poll:
                 return
-            interval = float(os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS", "20"))
+            interval = (
+                float(minimum_interval_seconds)
+                if minimum_interval_seconds is not None
+                else float(os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS", "20"))
+            )
             now = time.monotonic()
             if now - self._background_layout_last_submit < interval:
                 return
@@ -1870,6 +2097,29 @@ def _float_env(name: str, default: float) -> float:
         return float(os.getenv(name, ""))
     except (TypeError, ValueError):
         return default
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _slugify_reason(value: str) -> str:
+    output = []
+    for char in value.lower():
+        if char.isalnum():
+            output.append(char)
+        elif output and output[-1] != "_":
+            output.append("_")
+    text = "".join(output).strip("_")
+    return text[:80] or "idle"
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:

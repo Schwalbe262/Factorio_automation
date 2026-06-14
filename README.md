@@ -448,10 +448,12 @@ The intended planner flow is:
 5. Execute only validated skill/build actions through the active executor.
 
 The dashboard also reconstructs the currently observed factory sites as Factorio blueprint exchange
-strings. Each grouped site gets a copy button in the Factory Sites table. The raw blueprint string is
-not embedded in the HTML; `/api/factorio/blueprint?site_id=<site-id>` returns it only when the user
-clicks the button. This is meant for reviewing or manually reusing the AI-built footprint, and for
-feeding successful site blocks into later layout-learning/fine-tuning data.
+strings. Each grouped site gets a copy button in the Factory Sites table. Simulation candidates expose
+separate "before" and "after" blueprint buttons so the current observed layout can be compared with
+the proposed replacement layout. Raw blueprint strings are not embedded in the HTML; the dashboard
+fetches them on click through `/factorio/blueprint?...` first, falling back to
+`/api/factorio/blueprint?...` for direct local access. This avoids public reverse-proxy route
+collisions and gives later layout-learning/fine-tuning jobs both sides of the design comparison.
 
 ## Layout Improvement Simulation
 
@@ -464,6 +466,19 @@ has no deterministic executor yet. In that case the active skill is logged as `c
 candidates while Codex implements the missing build logic. Autopilot cycles pulse this wait state even
 if the next strategy request fails, so layout work does not stop just because a build-item executor is
 still being written.
+
+For continuous GPU utilization, run the opportunistic idle layout loop alongside autopilot:
+
+```bat
+run_factorio_no_mod_idle_layout_loop.bat
+```
+
+The loop watches `runtime/autopilot-heartbeat.json`. If autopilot is missing, stopped, sleeping,
+failed, or stale for more than `--stale-seconds`, it immediately submits simulation-only layout
+improvement work. A fresh active autopilot heartbeat pauses new layout submissions, but existing
+background layout results are still logged when they finish. The no-mod LLM autopilot BAT files start
+this idle loop in a separate window so Slurm GPUs can keep generating and evaluating site designs
+while the game executor is blocked, between strategy cycles, or not running.
 
 For a standalone Codex wait, manually mark the missing executor before starting the coding work.
 This is the path to use when the user asks Codex to implement a build-item or site executor and

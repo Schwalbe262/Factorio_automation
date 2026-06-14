@@ -23,6 +23,9 @@ set FACTORIO_AI_REQUIRE_LLM_STRATEGY=1
 echo [factorio-ai] Checking active Qwen 4B Slurm LLM worker...
 python -m factorio_ai.cli slurm-llm-status || exit /b 1
 
+echo [factorio-ai] Starting opportunistic layout loop in a separate window...
+start "Factorio AI Idle Layout Loop" cmd /k "cd /d ""%~dp0"" && run_factorio_no_mod_idle_layout_loop.bat"
+
 echo [factorio-ai] Checking no-custom-mod RCON server...
 python -m factorio_ai.cli no-mod-observe >nul 2>nul
 if errorlevel 1 (

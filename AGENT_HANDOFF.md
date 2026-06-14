@@ -335,6 +335,10 @@ Key constraints to preserve:
   reconstructs the observed nearby machines into a Factorio blueprint exchange
   string, and the web UI fetches it via `/api/factorio/blueprint?site_id=...`
   only when the copy button is clicked.
+- Simulation candidates should expose both `variant=before` and
+  `variant=after` blueprints. Use `/factorio/blueprint?...` as the public
+  dashboard-safe route; `/api/factorio/blueprint?...` may collide with other
+  reverse-proxy API routes on the public `:8787` service.
 - Burner smelting expansion can recover surplus coal from nearby fueled
   machines. `setup_coal_supply` now builds the first dedicated coal mining
   site: burner mining drill on coal, output belt, starter fuel, and monitor

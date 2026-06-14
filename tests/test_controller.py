@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -851,6 +852,162 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(any(row["event"] == "layout_codex_wait_heartbeat" for row in rows))
         self.assertTrue(any(row["event"] == "layout_result" for row in rows))
         self.assertEqual(rows[-1]["event"], "layout_task_submitted")
+
+    def test_idle_layout_loop_submits_when_autopilot_heartbeat_missing(self):
+        observation = {
+            "tick": 4,
+            "inventory": {},
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 40,
+                    "recipe": "transport-belt",
+                    "position": {"x": 10, "y": 4},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                }
+            ],
+            "resources": [],
+            "research": {"technologies": {}},
+        }
+
+        class IdleController(FactorioController):
+            def observe(self):
+                return observation
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            controller = IdleController(cfg)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "queue",
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS": "999",
+                    },
+                ),
+                patch("factorio_ai.remote_slurm.submit_task", return_value="layout-idle.json") as submit_task,
+                patch("factorio_ai.remote_slurm.read_task_state", return_value=("running", None, "")),
+            ):
+                summary = controller.run_idle_layout_loop(cycles=1, sleep_seconds=0, min_submit_interval_seconds=0)
+
+            rows = [
+                json.loads(line)
+                for line in (cfg.log_dir / "layout-improvement-background.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(summary.idle_cycles, 1)
+        self.assertEqual(summary.busy_cycles, 0)
+        submit_task.assert_called_once()
+        submitted = submit_task.call_args.args[0]
+        self.assertIn("idle:autopilot_heartbeat_missing", submitted["payload"]["active_skill"])
+        self.assertTrue(any(row["event"] == "layout_idle_scheduler_heartbeat" for row in rows))
+        self.assertTrue(any(row["event"] == "layout_task_submitted" for row in rows))
+
+    def test_idle_layout_loop_submits_when_autopilot_heartbeat_is_stale(self):
+        observation = {
+            "tick": 5,
+            "inventory": {},
+            "entities": [],
+            "resources": [],
+            "research": {"technologies": {}},
+        }
+
+        class IdleController(FactorioController):
+            def observe(self):
+                return observation
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+            (cfg.runtime_dir / "autopilot-heartbeat.json").write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "state": "cycle_start",
+                        "updated_at": (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat(),
+                        "objective": "launch_rocket_program",
+                        "cycle": 3,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            controller = IdleController(cfg)
+            with (
+                patch.dict("os.environ", {"FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "queue"}),
+                patch("factorio_ai.remote_slurm.submit_task", return_value="layout-stale.json") as submit_task,
+                patch("factorio_ai.remote_slurm.read_task_state", return_value=("running", None, "")),
+            ):
+                summary = controller.run_idle_layout_loop(
+                    cycles=1,
+                    sleep_seconds=0,
+                    stale_seconds=15,
+                    min_submit_interval_seconds=0,
+                )
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(summary.idle_cycles, 1)
+        submit_task.assert_called_once()
+        submitted = submit_task.call_args.args[0]
+        self.assertIn("autopilot_heartbeat_stale", submitted["payload"]["active_skill"])
+
+    def test_idle_layout_loop_skips_when_autopilot_heartbeat_is_fresh_busy(self):
+        class BusyController(FactorioController):
+            def observe(self):
+                raise AssertionError("fresh busy autopilot should not be observed by idle layout loop")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+            (cfg.runtime_dir / "autopilot-heartbeat.json").write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "state": "cycle_start",
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                        "objective": "launch_rocket_program",
+                        "cycle": 3,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            controller = BusyController(cfg)
+            with patch("factorio_ai.remote_slurm.submit_task") as submit_task:
+                summary = controller.run_idle_layout_loop(cycles=1, sleep_seconds=0, stale_seconds=15)
+
+            rows = [
+                json.loads(line)
+                for line in (cfg.log_dir / "layout-improvement-background.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(summary.idle_cycles, 0)
+        self.assertEqual(summary.busy_cycles, 1)
+        submit_task.assert_not_called()
+        self.assertTrue(any(row["event"] == "layout_idle_scheduler_busy" for row in rows))
+
+    def test_autopilot_loop_writes_heartbeat(self):
+        class OneStepController(FactorioController):
+            def run_strategy_step(self, **kwargs):
+                return StrategyStepSummary(
+                    ok=True,
+                    reason="test cycle complete",
+                    objective=kwargs.get("objective", "launch_rocket_program"),
+                    selected_skill="produce_iron_plate",
+                    strategy={"selected_skill": "produce_iron_plate"},
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = make_test_config(Path(temp_dir))
+            controller = OneStepController(cfg)
+            summary = controller.run_autopilot_loop(cycles=1, sleep_seconds=0)
+            heartbeat = json.loads((cfg.runtime_dir / "autopilot-heartbeat.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(heartbeat["state"], "stopped")
+        self.assertEqual(heartbeat["cycle"], 1)
+        self.assertEqual(heartbeat["objective"], "launch_rocket_program")
 
     def test_strategy_runner_maps_implemented_material_skills(self):
         with tempfile.TemporaryDirectory() as temp_dir:

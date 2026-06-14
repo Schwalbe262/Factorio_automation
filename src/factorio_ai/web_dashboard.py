@@ -29,6 +29,7 @@ FACTORIO_ROUTES = {FACTORIO_ROUTE, LEGACY_FACTORIO_ROUTE}
 ICON_ROUTE_PREFIX = "/factorio/icon/"
 API_ROUTE = "/api/factorio"
 BLUEPRINT_API_ROUTE = "/api/factorio/blueprint"
+FACTORIO_BLUEPRINT_ROUTE = "/factorio/blueprint"
 DEFAULT_LANG = "en"
 SUPPORTED_LANGS = {"en", "ko"}
 DEFAULT_PUBLIC_DASHBOARD_BASE_URL = "http://27.115.156.173:8787"
@@ -281,8 +282,12 @@ TEXT["en"].update(
         "not_applied": "Not Applied",
         "blueprint": "Blueprint",
         "copy_blueprint": "Copy blueprint",
+        "copy_before_blueprint": "Copy before",
+        "copy_after_blueprint": "Copy after",
         "copied": "Copied",
         "copy_failed": "Copy failed",
+        "manual_copy": "Manual copy opened",
+        "close": "Close",
     }
 )
 TEXT["ko"].update(
@@ -305,8 +310,12 @@ TEXT["ko"].update(
         "not_applied": "\ubbf8\uc801\uc6a9",
         "blueprint": "\ube14\ub8e8\ud504\ub9b0\ud2b8",
         "copy_blueprint": "\ube14\ub8e8\ud504\ub9b0\ud2b8 \ubcf5\uc0ac",
+        "copy_before_blueprint": "\uac1c\uc120 \uc804 \ubcf5\uc0ac",
+        "copy_after_blueprint": "\uac1c\uc120 \ud6c4 \ubcf5\uc0ac",
         "copied": "\ubcf5\uc0ac\ub428",
         "copy_failed": "\ubcf5\uc0ac \uc2e4\ud328",
+        "manual_copy": "\uc218\ub3d9 \ubcf5\uc0ac \ucc3d \uc5f4\ub9bc",
+        "close": "\ub2eb\uae30",
     }
 )
 
@@ -380,12 +389,13 @@ def make_dashboard_handler(cfg: AppConfig, default_objective: str) -> type[BaseH
                 )
                 return
 
-            if path == BLUEPRINT_API_ROUTE:
+            if path in {BLUEPRINT_API_ROUTE, FACTORIO_BLUEPRINT_ROUTE}:
                 state = build_dashboard_state_cached(cfg, objective)
                 response = _blueprint_response(
                     state,
                     candidate_id=query.get("candidate_id", [""])[0],
                     site_id=query.get("site_id", [""])[0],
+                    variant=query.get("variant", ["after"])[0],
                 )
                 status = 200 if response.get("ok") else 404
                 self._send(
@@ -477,33 +487,50 @@ def _blueprint_response(
     *,
     candidate_id: str = "",
     site_id: str = "",
+    variant: str = "after",
 ) -> dict[str, Any]:
     if site_id:
         return _site_blueprint_response(state, site_id)
-    return _candidate_blueprint_response(state, candidate_id)
+    return _candidate_blueprint_response(state, candidate_id, variant=variant)
 
 
-def _candidate_blueprint_response(state: dict[str, Any], candidate_id: str) -> dict[str, Any]:
+def _candidate_blueprint_response(
+    state: dict[str, Any],
+    candidate_id: str,
+    *,
+    variant: str = "after",
+) -> dict[str, Any]:
     layout = state.get("layout_improvement") if isinstance(state.get("layout_improvement"), dict) else {}
     candidates = layout.get("simulation_candidates") if isinstance(layout.get("simulation_candidates"), list) else []
+    variant = "before" if str(variant).lower() in {"before", "current"} else "after"
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
         if str(candidate.get("candidate_id") or "") != candidate_id:
             continue
-        blueprint = candidate.get("blueprint") if isinstance(candidate.get("blueprint"), dict) else {}
+        blueprint = _candidate_blueprint_for_variant(candidate, variant)
         exchange_string = blueprint.get("exchange_string")
         if not isinstance(exchange_string, str) or not exchange_string:
             break
         return {
             "ok": True,
             "candidate_id": candidate_id,
+            "variant": variant,
             "label": str(blueprint.get("label") or candidate_id),
             "format": str(blueprint.get("format") or "factorio-blueprint-string"),
             "entity_count": int(blueprint.get("entity_count") or 0),
             "blueprint": exchange_string,
         }
-    return {"ok": False, "error": "blueprint candidate not found", "candidate_id": candidate_id}
+    return {"ok": False, "error": f"{variant} blueprint candidate not found", "candidate_id": candidate_id}
+
+
+def _candidate_blueprint_for_variant(candidate: dict[str, Any], variant: str) -> dict[str, Any]:
+    keys = ["before_blueprint"] if variant == "before" else ["after_blueprint", "blueprint"]
+    for key in keys:
+        blueprint = candidate.get(key)
+        if isinstance(blueprint, dict):
+            return blueprint
+    return {}
 
 
 def _site_blueprint_response(state: dict[str, Any], site_id: str) -> dict[str, Any]:
@@ -1058,6 +1085,120 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
       padding: 6px 9px;
       font-size: 12px;
     }}
+    .layout-candidate-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 12px;
+    }}
+    .layout-candidate-card {{
+      border: 1px solid #2a3036;
+      border-radius: 6px;
+      background: #101419;
+      padding: 12px;
+      min-width: 0;
+    }}
+    .layout-candidate-head {{
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }}
+    .layout-candidate-id {{
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }}
+    .layout-candidate-score {{
+      color: #f0c46c;
+      white-space: nowrap;
+      font-weight: 700;
+    }}
+    .layout-candidate-pattern {{
+      margin: 0 0 10px;
+      color: #c8d1da;
+      overflow-wrap: anywhere;
+    }}
+    .layout-candidate-metrics {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }}
+    .layout-metric-box {{
+      border: 1px solid #252c33;
+      border-radius: 4px;
+      padding: 8px;
+      background: #0c0f13;
+      min-width: 0;
+    }}
+    .layout-metric-box strong {{
+      display: block;
+      color: #9aa4af;
+      font-size: 12px;
+      margin-bottom: 6px;
+    }}
+    .metric-row {{
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      border-top: 1px solid #1f252b;
+      padding-top: 5px;
+      margin-top: 5px;
+      font-size: 12px;
+    }}
+    .metric-row:first-of-type {{
+      border-top: 0;
+      padding-top: 0;
+      margin-top: 0;
+    }}
+    .metric-key, .metric-value {{
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }}
+    .metric-key {{
+      color: #9aa4af;
+    }}
+    .layout-candidate-footer {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 10px;
+    }}
+    .blueprint-actions {{
+      display: inline-flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 6px;
+    }}
+    .manual-copy-overlay {{
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: rgba(0, 0, 0, 0.68);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }}
+    .manual-copy-box {{
+      width: min(760px, 100%);
+      border: 1px solid #3a424c;
+      border-radius: 6px;
+      background: #171b20;
+      padding: 14px;
+      box-shadow: 0 16px 40px rgba(0,0,0,0.45);
+    }}
+    .manual-copy-box textarea {{
+      width: 100%;
+      height: 240px;
+      box-sizing: border-box;
+      margin: 10px 0;
+      border: 1px solid #3a424c;
+      border-radius: 4px;
+      background: #0c0e10;
+      color: #f2f2f2;
+      font: 12px ui-monospace, SFMono-Regular, Consolas, monospace;
+    }}
     .actions {{
       margin-top: 12px;
       display: flex;
@@ -1184,22 +1325,73 @@ def _language_switch(lang: str, objective: str) -> str:
 def _copy_blueprint_script(lang: str) -> str:
     copied = json.dumps(_t(lang, "copied"))
     failed = json.dumps(_t(lang, "copy_failed"))
+    manual = json.dumps(_t(lang, "manual_copy"))
+    close = json.dumps(_t(lang, "close"))
+    copy_label = json.dumps(_t(lang, "copy_blueprint"))
     return f"""<script>
 (() => {{
+  const showManualCopyDialog = (text) => {{
+    const previous = document.querySelector(".manual-copy-overlay");
+    if (previous) {{
+      previous.remove();
+    }}
+    const overlay = document.createElement("div");
+    overlay.className = "manual-copy-overlay";
+    const box = document.createElement("div");
+    box.className = "manual-copy-box";
+    const title = document.createElement("strong");
+    title.textContent = {copy_label};
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    const closeButton = document.createElement("button");
+    closeButton.type = "button";
+    closeButton.textContent = {close};
+    closeButton.addEventListener("click", () => overlay.remove());
+    box.appendChild(title);
+    box.appendChild(textarea);
+    box.appendChild(closeButton);
+    overlay.appendChild(box);
+    overlay.addEventListener("click", (event) => {{
+      if (event.target === overlay) {{
+        overlay.remove();
+      }}
+    }});
+    document.body.appendChild(overlay);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, text.length);
+  }};
   const copyText = async (text) => {{
     if (navigator.clipboard && window.isSecureContext) {{
-      await navigator.clipboard.writeText(text);
-      return;
+      try {{
+        await navigator.clipboard.writeText(text);
+        return "clipboard";
+      }} catch (error) {{
+        // Fall through to the legacy path. HTTP dashboards on LAN/public IPs
+        // often have the Clipboard API disabled even after a user click.
+      }}
     }}
     const area = document.createElement("textarea");
     area.value = text;
     area.setAttribute("readonly", "");
     area.style.position = "fixed";
-    area.style.left = "-9999px";
+    area.style.left = "0";
+    area.style.top = "0";
+    area.style.width = "1px";
+    area.style.height = "1px";
+    area.style.opacity = "0";
     document.body.appendChild(area);
+    area.focus();
     area.select();
-    document.execCommand("copy");
+    area.setSelectionRange(0, text.length);
+    const copied = document.execCommand("copy");
     document.body.removeChild(area);
+    if (copied) {{
+      return "execCommand";
+    }}
+    showManualCopyDialog(text);
+    return "manual";
   }};
   document.addEventListener("click", async (event) => {{
     const button = event.target.closest(".copy-blueprint");
@@ -1209,6 +1401,7 @@ def _copy_blueprint_script(lang: str) -> str:
     event.preventDefault();
     const candidateId = button.getAttribute("data-candidate-id") || "";
     const siteId = button.getAttribute("data-site-id") || "";
+    const variant = button.getAttribute("data-variant") || "";
     const params = new URLSearchParams(window.location.search);
     const apiParams = new URLSearchParams();
     if (candidateId) {{
@@ -1217,24 +1410,45 @@ def _copy_blueprint_script(lang: str) -> str:
     if (siteId) {{
       apiParams.set("site_id", siteId);
     }}
+    if (variant) {{
+      apiParams.set("variant", variant);
+    }}
     const objective = params.get("objective");
     if (objective) {{
       apiParams.set("objective", objective);
     }}
     const original = button.textContent;
+    const originalTitle = button.getAttribute("title") || "";
     try {{
-      const response = await fetch("{BLUEPRINT_API_ROUTE}?" + apiParams.toString(), {{ cache: "no-store" }});
-      const data = await response.json();
-      if (!response.ok || !data.ok || !data.blueprint) {{
-        throw new Error(data.error || "blueprint unavailable");
+      const endpoints = ["{FACTORIO_BLUEPRINT_ROUTE}", "{BLUEPRINT_API_ROUTE}"];
+      let data = null;
+      let lastError = null;
+      for (const endpoint of endpoints) {{
+        try {{
+          const response = await fetch(endpoint + "?" + apiParams.toString(), {{ cache: "no-store" }});
+          const candidate = await response.json();
+          if (response.ok && candidate.ok && candidate.blueprint) {{
+            data = candidate;
+            break;
+          }}
+          lastError = new Error(candidate.error || ("blueprint unavailable at " + endpoint));
+        }} catch (error) {{
+          lastError = error;
+        }}
       }}
-      await copyText(data.blueprint);
-      button.textContent = {copied};
+      if (!data || !data.blueprint) {{
+        throw lastError || new Error("blueprint unavailable");
+      }}
+      const mode = await copyText(data.blueprint);
+      button.textContent = mode === "manual" ? {manual} : {copied};
+      button.setAttribute("title", mode === "manual" ? "Clipboard API blocked; blueprint text is selected in the manual copy dialog." : originalTitle);
     }} catch (error) {{
       button.textContent = {failed};
+      button.setAttribute("title", error && error.message ? error.message : "copy failed");
     }} finally {{
       window.setTimeout(() => {{
         button.textContent = original;
+        button.setAttribute("title", originalTitle);
       }}, 1500);
     }}
   }});
@@ -1375,24 +1589,50 @@ def _layout_candidate_table(rows: list[Any], lang: str) -> str:
         if not isinstance(row, dict):
             continue
         simulation = row.get("simulation") if isinstance(row.get("simulation"), dict) else {}
+        status = _t(lang, "not_applied") if row.get("not_applied") else ""
         body += (
-            "<tr>"
-            f"<td>{escape(str(row.get('candidate_id') or ''))}</td>"
-            f"<td>{escape(str(row.get('target_pattern') or ''))}</td>"
-            f"<td>{escape(str(simulation.get('score') or 0))}</td>"
-            f"<td>{escape(_compact_json_text(simulation.get('before')))}</td>"
-            f"<td>{escape(_compact_json_text(simulation.get('after')))}</td>"
-            f"<td>{escape(_compact_json_text(simulation.get('delta')))}</td>"
-            f"<td>{escape(_t(lang, 'not_applied') if row.get('not_applied') else '')}</td>"
-            f"<td>{_blueprint_copy_cell(row, lang)}</td>"
-            "</tr>"
+            "<article class=\"layout-candidate-card\">"
+            "<div class=\"layout-candidate-head\">"
+            f"<span class=\"layout-candidate-id\">{escape(str(row.get('candidate_id') or ''))}</span>"
+            f"<span class=\"layout-candidate-score\">{escape(str(simulation.get('score') or 0))}</span>"
+            "</div>"
+            f"<p class=\"layout-candidate-pattern\">{escape(str(row.get('target_pattern') or ''))}</p>"
+            "<div class=\"layout-candidate-metrics\">"
+            f"{_layout_metric_box(_t(lang, 'before'), simulation.get('before'))}"
+            f"{_layout_metric_box(_t(lang, 'after'), simulation.get('after'))}"
+            f"{_layout_metric_box(_t(lang, 'delta'), simulation.get('delta'))}"
+            "</div>"
+            "<div class=\"layout-candidate-footer\">"
+            f"<span class=\"muted\">{escape(status)}</span>"
+            f"{_candidate_blueprint_copy_cells(row, lang)}"
+            "</div>"
+            "</article>"
         )
-    return (
-        f"<table><thead><tr><th>{_t(lang, 'candidate')}</th><th>{_t(lang, 'pattern')}</th>"
-        f"<th>{_t(lang, 'score')}</th><th>{_t(lang, 'before')}</th><th>{_t(lang, 'after')}</th>"
-        f"<th>{_t(lang, 'delta')}</th><th>{_t(lang, 'status')}</th><th>{_t(lang, 'blueprint')}</th>"
-        f"</tr></thead><tbody>{body}</tbody></table>"
-    )
+    return f"<div class=\"layout-candidate-grid\">{body}</div>"
+
+
+def _layout_metric_box(title: str, value: Any) -> str:
+    return f"<div class=\"layout-metric-box\"><strong>{escape(title)}</strong>{_layout_metric_rows(value)}</div>"
+
+
+def _layout_metric_rows(value: Any) -> str:
+    if not isinstance(value, dict) or not value:
+        return f"<div class=\"metric-row\"><span class=\"metric-value\">{escape(_compact_json_text(value))}</span></div>"
+    body = ""
+    for key, row_value in list(value.items())[:6]:
+        body += (
+            "<div class=\"metric-row\">"
+            f"<span class=\"metric-key\">{escape(str(key).replace('_', ' '))}</span>"
+            f"<span class=\"metric-value\">{escape(_compact_json_text(row_value))}</span>"
+            "</div>"
+        )
+    if len(value) > 6:
+        body += (
+            "<div class=\"metric-row\">"
+            f"<span class=\"metric-key\">...</span><span class=\"metric-value\">+{len(value) - 6}</span>"
+            "</div>"
+        )
+    return body
 
 
 def _blueprint_copy_cell(row: dict[str, Any], lang: str) -> str:
@@ -1408,6 +1648,30 @@ def _blueprint_copy_cell(row: dict[str, Any], lang: str) -> str:
         f"data-candidate-id=\"{escape(candidate_id, quote=True)}\" "
         f"title=\"{escape(label, quote=True)}\">{escape(_t(lang, 'copy_blueprint'))}</button>"
     )
+
+
+def _candidate_blueprint_copy_cells(row: dict[str, Any], lang: str) -> str:
+    candidate_id = str(row.get("candidate_id") or "")
+    if not candidate_id:
+        return ""
+    buttons: list[str] = []
+    for variant, key, label_key in [
+        ("before", "before_blueprint", "copy_before_blueprint"),
+        ("after", "after_blueprint", "copy_after_blueprint"),
+    ]:
+        blueprint = row.get(key) if isinstance(row.get(key), dict) else None
+        if blueprint is None and variant == "after":
+            blueprint = row.get("blueprint") if isinstance(row.get("blueprint"), dict) else None
+        if not isinstance(blueprint, dict) or not blueprint.get("exchange_string"):
+            continue
+        label = str(blueprint.get("label") or f"{candidate_id}:{variant}")
+        buttons.append(
+            f"<button type=\"button\" class=\"copy-blueprint\" "
+            f"data-candidate-id=\"{escape(candidate_id, quote=True)}\" "
+            f"data-variant=\"{escape(variant, quote=True)}\" "
+            f"title=\"{escape(label, quote=True)}\">{escape(_t(lang, label_key))}</button>"
+        )
+    return "<span class=\"blueprint-actions\">" + "".join(buttons) + "</span>" if buttons else ""
 
 
 def _layout_background_panel(value: Any, lang: str) -> str:

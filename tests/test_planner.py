@@ -333,6 +333,15 @@ class PlannerTests(unittest.TestCase):
         self.assertGreater(candidate["simulation"]["after"]["electronic_circuit_per_minute"], candidate["simulation"]["before"]["electronic_circuit_per_minute"])
         blueprint = candidate["blueprint"]
         self.assertEqual(blueprint["format"], "factorio-blueprint-string")
+        self.assertEqual(candidate["after_blueprint"]["exchange_string"], blueprint["exchange_string"])
+        self.assertEqual(candidate["before_blueprint"]["format"], "factorio-blueprint-string")
+        before_entities = decode_blueprint_string(candidate["before_blueprint"]["exchange_string"])["blueprint"]["entities"]
+        self.assertTrue(
+            any(
+                entity["name"] == "assembling-machine-1" and entity.get("recipe") == "electronic-circuit"
+                for entity in before_entities
+            )
+        )
         decoded = decode_blueprint_string(blueprint["exchange_string"])
         entities = decoded["blueprint"]["entities"]
         self.assertTrue(

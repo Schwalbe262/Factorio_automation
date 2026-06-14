@@ -7,6 +7,7 @@ from unittest.mock import patch
 from factorio_ai.networking import dashboard_urls
 from factorio_ai.web_dashboard import (
     FACTORIO_ROUTE,
+    FACTORIO_BLUEPRINT_ROUTE,
     _candidate_blueprint_response,
     _site_blueprint_response,
     _token_usage_svg,
@@ -158,6 +159,18 @@ class WebDashboardTests(unittest.TestCase):
                             "candidate_id": "green-circuit-3-cable-2-circuit-cell",
                             "target_pattern": "3 copper-cable assemblers feeding 2 electronic-circuit assemblers",
                             "not_applied": True,
+                            "before_blueprint": {
+                                "label": "before-green-circuit",
+                                "format": "factorio-blueprint-string",
+                                "entity_count": 1,
+                                "exchange_string": "0BEFOREBLUEPRINTSTRING",
+                            },
+                            "after_blueprint": {
+                                "label": "green-circuit-3-cable-2-circuit-cell",
+                                "format": "factorio-blueprint-string",
+                                "entity_count": 2,
+                                "exchange_string": "0SECRETBLUEPRINTSTRING",
+                            },
                             "blueprint": {
                                 "label": "green-circuit-3-cable-2-circuit-cell",
                                 "format": "factorio-blueprint-string",
@@ -295,8 +308,18 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("agent-map", html)
         self.assertIn("green-circuit-3-cable-2-circuit-cell", html)
         self.assertIn("copy-blueprint", html)
+        self.assertIn("layout-candidate-grid", html)
+        self.assertIn("layout-candidate-card", html)
+        self.assertIn("manual-copy-overlay", html)
+        self.assertIn(FACTORIO_BLUEPRINT_ROUTE, html)
         self.assertIn('data-site-id="build_item_mall:2,2"', html)
+        self.assertIn('data-candidate-id="green-circuit-3-cable-2-circuit-cell"', html)
+        self.assertIn('data-variant="before"', html)
+        self.assertIn('data-variant="after"', html)
+        self.assertIn("개선 전 복사", html)
+        self.assertIn("개선 후 복사", html)
         self.assertNotIn("0SECRETBLUEPRINTSTRING", html)
+        self.assertNotIn("0BEFOREBLUEPRINTSTRING", html)
         self.assertNotIn("0SITEBLUEPRINTSTRING", html)
         self.assertIn("rebalance_green_circuit_ratio", html)
         self.assertIn("3 copper-cable assemblers", html)
@@ -317,6 +340,12 @@ class WebDashboardTests(unittest.TestCase):
                                 "entity_count": 2,
                                 "exchange_string": "0SECRETBLUEPRINTSTRING",
                             },
+                            "before_blueprint": {
+                                "label": "before-green-circuit",
+                                "format": "factorio-blueprint-string",
+                                "entity_count": 1,
+                                "exchange_string": "0BEFOREBLUEPRINTSTRING",
+                            },
                         }
                     ]
                 }
@@ -328,6 +357,36 @@ class WebDashboardTests(unittest.TestCase):
         self.assertEqual(response["format"], "factorio-blueprint-string")
         self.assertEqual(response["entity_count"], 2)
         self.assertEqual(response["blueprint"], "0SECRETBLUEPRINTSTRING")
+
+        before = _candidate_blueprint_response(
+            {
+                "layout_improvement": {
+                    "simulation_candidates": [
+                        {
+                            "candidate_id": "green-circuit-3-cable-2-circuit-cell",
+                            "blueprint": {
+                                "label": "green-circuit-3-cable-2-circuit-cell",
+                                "format": "factorio-blueprint-string",
+                                "entity_count": 2,
+                                "exchange_string": "0SECRETBLUEPRINTSTRING",
+                            },
+                            "before_blueprint": {
+                                "label": "before-green-circuit",
+                                "format": "factorio-blueprint-string",
+                                "entity_count": 1,
+                                "exchange_string": "0BEFOREBLUEPRINTSTRING",
+                            },
+                        }
+                    ]
+                }
+            },
+            "green-circuit-3-cable-2-circuit-cell",
+            variant="before",
+        )
+        self.assertTrue(before["ok"])
+        self.assertEqual(before["variant"], "before")
+        self.assertEqual(before["entity_count"], 1)
+        self.assertEqual(before["blueprint"], "0BEFOREBLUEPRINTSTRING")
 
     def test_site_blueprint_response_returns_copy_payload(self):
         response = _site_blueprint_response(
