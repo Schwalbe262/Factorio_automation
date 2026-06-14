@@ -447,6 +447,12 @@ The intended planner flow is:
 4. Ask the Slurm LLM worker to rank designs against the current game state.
 5. Execute only validated skill/build actions through the active executor.
 
+The dashboard also reconstructs the currently observed factory sites as Factorio blueprint exchange
+strings. Each grouped site gets a copy button in the Factory Sites table. The raw blueprint string is
+not embedded in the HTML; `/api/factorio/blueprint?site_id=<site-id>` returns it only when the user
+clicks the button. This is meant for reviewing or manually reusing the AI-built footprint, and for
+feeding successful site blocks into later layout-learning/fine-tuning data.
+
 ## Layout Improvement Simulation
 
 `plan_factory_site` is implemented as a safe planning skill. It does not demolish or build anything.

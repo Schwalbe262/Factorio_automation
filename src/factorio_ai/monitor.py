@@ -4,6 +4,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from .blueprints import encode_blueprint_entities
 from .knowledge import (
     RAW_RESOURCES,
     RECIPES,
@@ -63,6 +64,7 @@ class FactorySiteEstimate:
     machines: list[str]
     automation_level: str
     notes: list[str]
+    blueprint: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -751,7 +753,7 @@ def estimate_factory_sites(observation: dict[str, Any]) -> list[FactorySiteEstim
         )
         sites.append(site)
 
-    return _group_factory_sites(sites)
+    return _attach_site_blueprints(observation, _group_factory_sites(sites))
 
 
 def recent_factory_events(observation: dict[str, Any], limit: int = 40) -> list[dict[str, Any]]:
@@ -988,6 +990,136 @@ def _merge_factory_site_cluster(cluster: list[FactorySiteEstimate]) -> FactorySi
         automation_level=automation_levels.most_common(1)[0][0] if len(automation_levels) == 1 else _summarize_site_values(automation_levels.elements()),
         notes=notes,
     )
+
+
+def _attach_site_blueprints(
+    observation: dict[str, Any],
+    sites: list[FactorySiteEstimate],
+) -> list[FactorySiteEstimate]:
+    return [
+        FactorySiteEstimate(
+            site_id=site.site_id,
+            kind=site.kind,
+            status=site.status,
+            position=site.position,
+            item=site.item,
+            machines=site.machines,
+            automation_level=site.automation_level,
+            notes=site.notes,
+            blueprint=_site_blueprint_export(observation, site),
+        )
+        for site in sites
+    ]
+
+
+_SITE_BLUEPRINT_ENTITY_NAMES = {
+    "assembling-machine-1",
+    "assembling-machine-2",
+    "assembling-machine-3",
+    "beacon",
+    "big-electric-pole",
+    "boiler",
+    "burner-inserter",
+    "burner-mining-drill",
+    "chemical-plant",
+    "electric-furnace",
+    "electric-mining-drill",
+    "express-splitter",
+    "express-transport-belt",
+    "express-underground-belt",
+    "fast-inserter",
+    "fast-splitter",
+    "fast-transport-belt",
+    "fast-underground-belt",
+    "gun-turret",
+    "inserter",
+    "iron-chest",
+    "lab",
+    "long-handed-inserter",
+    "medium-electric-pole",
+    "offshore-pump",
+    "oil-refinery",
+    "pipe",
+    "pipe-to-ground",
+    "pump",
+    "pumpjack",
+    "radar",
+    "rocket-silo",
+    "small-electric-pole",
+    "solar-panel",
+    "splitter",
+    "steam-engine",
+    "steel-chest",
+    "steel-furnace",
+    "stone-furnace",
+    "substation",
+    "transport-belt",
+    "underground-belt",
+    "wooden-chest",
+}
+
+
+def _site_blueprint_export(observation: dict[str, Any], site: FactorySiteEstimate) -> dict[str, Any] | None:
+    entities = _site_blueprint_entities(observation, site)
+    if not entities:
+        return None
+    label_item = site.item or "mixed"
+    label = f"{site.kind}:{label_item}@{site.position['x']},{site.position['y']}"
+    description = (
+        "Exported from the Factorio AI factory monitor. "
+        "This reconstructs the observed machine/site footprint for review or manual reuse."
+    )
+    exchange_string = encode_blueprint_entities(label, entities, description=description)
+    return {
+        "label": label,
+        "format": "factorio-blueprint-string",
+        "entity_count": len(entities),
+        "exchange_string": exchange_string,
+    }
+
+
+def _site_blueprint_entities(observation: dict[str, Any], site: FactorySiteEstimate) -> list[dict[str, Any]]:
+    center = site.position
+    radius = _site_blueprint_radius(site)
+    rows: list[dict[str, Any]] = []
+    for entity in _entities(observation):
+        name = str(entity.get("name") or "")
+        if name not in _SITE_BLUEPRINT_ENTITY_NAMES:
+            continue
+        position = _position(entity)
+        if distance(position, center) > radius:
+            continue
+        rows.append(_entity_to_relative_blueprint_row(entity, center))
+    return sorted(rows, key=lambda item: (item["position"]["y"], item["position"]["x"], item["name"]))
+
+
+def _site_blueprint_radius(site: FactorySiteEstimate) -> float:
+    if site.kind in {"mining_patch", "plate_smelting_line"}:
+        return 42.0
+    if site.kind == "steam_power":
+        return 24.0
+    if site.kind in {"build_item_mall", "assembler_cell", "circuit_automation", "research_lab_block"}:
+        return 18.0
+    return 18.0
+
+
+def _entity_to_relative_blueprint_row(
+    entity: dict[str, Any],
+    center: dict[str, float],
+) -> dict[str, Any]:
+    position = _position(entity)
+    row: dict[str, Any] = {
+        "name": str(entity.get("name") or ""),
+        "position": {
+            "x": round(float(position.get("x") or 0.0) - float(center.get("x") or 0.0), 3),
+            "y": round(float(position.get("y") or 0.0) - float(center.get("y") or 0.0), 3),
+        },
+    }
+    if entity.get("direction") is not None:
+        row["direction"] = int(entity.get("direction") or 0)
+    if isinstance(entity.get("recipe"), str) and entity.get("recipe"):
+        row["recipe"] = str(entity["recipe"])
+    return row
 
 
 def _centroid(positions: list[dict[str, float]]) -> dict[str, float]:

@@ -1,5 +1,6 @@
 import unittest
 
+from factorio_ai.blueprints import decode_blueprint_string
 from factorio_ai.monitor import (
     estimate_bottlenecks,
     estimate_factory_sites,
@@ -415,6 +416,27 @@ class MonitorTests(unittest.TestCase):
         self.assertIn("burner-mining-drill x2", smelting_sites[0].machines)
         self.assertIn("stone-furnace x2", smelting_sites[0].machines)
         self.assertIn("grouped", smelting_sites[0].notes[0])
+
+    def test_factory_site_exports_observed_site_blueprint(self):
+        sites = estimate_factory_sites(
+            {
+                "entities": [
+                    {"name": "burner-mining-drill", "unit_number": 1, "position": {"x": 4, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "transport-belt", "position": {"x": 6, "y": 0}, "direction": 4, "inventories": {}},
+                    {"name": "burner-inserter", "position": {"x": 8, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+                    {"name": "stone-furnace", "unit_number": 2, "position": {"x": 9, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "small-biter", "unit_number": 99, "position": {"x": 10, "y": 0}},
+                ],
+                "resources": [{"name": "iron-ore", "position": {"x": 4, "y": 0}}],
+            }
+        )
+        smelting = next(item for item in sites if item.kind == "plate_smelting_line" and item.item == "iron-plate")
+        self.assertIsNotNone(smelting.blueprint)
+        payload = decode_blueprint_string(smelting.blueprint["exchange_string"])
+        names = [entity["name"] for entity in payload["blueprint"]["entities"]]
+        self.assertIn("burner-mining-drill", names)
+        self.assertIn("stone-furnace", names)
+        self.assertNotIn("small-biter", names)
 
     def test_factory_sites_group_adjacent_assembler_cells(self):
         sites = estimate_factory_sites(

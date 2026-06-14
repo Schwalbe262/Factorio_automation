@@ -469,6 +469,12 @@ Dashboard areas:
 - Codex token usage;
 - layout improvement issues, opportunities, and candidates.
 
+Current grouped factory sites expose a blueprint copy button. The site blueprint is reconstructed
+from observed nearby machines and fetched through `/api/factorio/blueprint?site_id=<site-id>`; do not
+render the raw blueprint string in the dashboard HTML. This lets a later Codex/CLI/Claude session
+copy or collect successful AI-built site layouts for review and fine-tuning examples without blindly
+placing unvalidated external blueprints.
+
 The dashboard should remain bilingual EN/KR where practical.
 
 ## Training And Fine-Tuning Direction

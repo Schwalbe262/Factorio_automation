@@ -8,6 +8,7 @@ from factorio_ai.networking import dashboard_urls
 from factorio_ai.web_dashboard import (
     FACTORIO_ROUTE,
     _candidate_blueprint_response,
+    _site_blueprint_response,
     _token_usage_svg,
     build_dashboard_state_cached,
     clear_dashboard_state_cache,
@@ -88,6 +89,13 @@ class WebDashboardTests(unittest.TestCase):
                             "position": {"x": 2, "y": 2},
                             "automation_level": "powered",
                             "machines": ["assembling-machine-1"],
+                            "site_id": "build_item_mall:2,2",
+                            "blueprint": {
+                                "label": "build item mall",
+                                "format": "factorio-blueprint-string",
+                                "entity_count": 1,
+                                "exchange_string": "0SITEBLUEPRINTSTRING",
+                            },
                         }
                     ],
                     "logistics_links": [
@@ -287,7 +295,9 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("agent-map", html)
         self.assertIn("green-circuit-3-cable-2-circuit-cell", html)
         self.assertIn("copy-blueprint", html)
+        self.assertIn('data-site-id="build_item_mall:2,2"', html)
         self.assertNotIn("0SECRETBLUEPRINTSTRING", html)
+        self.assertNotIn("0SITEBLUEPRINTSTRING", html)
         self.assertIn("rebalance_green_circuit_ratio", html)
         self.assertIn("3 copper-cable assemblers", html)
         self.assertIn("codex_wait:bootstrap_build_item_mall", html)
@@ -318,6 +328,31 @@ class WebDashboardTests(unittest.TestCase):
         self.assertEqual(response["format"], "factorio-blueprint-string")
         self.assertEqual(response["entity_count"], 2)
         self.assertEqual(response["blueprint"], "0SECRETBLUEPRINTSTRING")
+
+    def test_site_blueprint_response_returns_copy_payload(self):
+        response = _site_blueprint_response(
+            {
+                "monitor": {
+                    "factory_sites": [
+                        {
+                            "site_id": "build_item_mall:2,2",
+                            "blueprint": {
+                                "label": "build item mall",
+                                "format": "factorio-blueprint-string",
+                                "entity_count": 1,
+                                "exchange_string": "0SITEBLUEPRINTSTRING",
+                            },
+                        }
+                    ]
+                }
+            },
+            "build_item_mall:2,2",
+        )
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["format"], "factorio-blueprint-string")
+        self.assertEqual(response["entity_count"], 1)
+        self.assertEqual(response["blueprint"], "0SITEBLUEPRINTSTRING")
 
     def test_token_usage_chart_uses_timestamp_spacing(self):
         svg = _token_usage_svg(

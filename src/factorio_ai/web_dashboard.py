@@ -382,7 +382,11 @@ def make_dashboard_handler(cfg: AppConfig, default_objective: str) -> type[BaseH
 
             if path == BLUEPRINT_API_ROUTE:
                 state = build_dashboard_state_cached(cfg, objective)
-                response = _candidate_blueprint_response(state, query.get("candidate_id", [""])[0])
+                response = _blueprint_response(
+                    state,
+                    candidate_id=query.get("candidate_id", [""])[0],
+                    site_id=query.get("site_id", [""])[0],
+                )
                 status = 200 if response.get("ok") else 404
                 self._send(
                     status,
@@ -468,6 +472,17 @@ def public_dashboard_urls(host: str, port: int, lang: str = DEFAULT_LANG) -> lis
     return dashboard_urls(host, port, route, base_url=base_url)
 
 
+def _blueprint_response(
+    state: dict[str, Any],
+    *,
+    candidate_id: str = "",
+    site_id: str = "",
+) -> dict[str, Any]:
+    if site_id:
+        return _site_blueprint_response(state, site_id)
+    return _candidate_blueprint_response(state, candidate_id)
+
+
 def _candidate_blueprint_response(state: dict[str, Any], candidate_id: str) -> dict[str, Any]:
     layout = state.get("layout_improvement") if isinstance(state.get("layout_improvement"), dict) else {}
     candidates = layout.get("simulation_candidates") if isinstance(layout.get("simulation_candidates"), list) else []
@@ -489,6 +504,29 @@ def _candidate_blueprint_response(state: dict[str, Any], candidate_id: str) -> d
             "blueprint": exchange_string,
         }
     return {"ok": False, "error": "blueprint candidate not found", "candidate_id": candidate_id}
+
+
+def _site_blueprint_response(state: dict[str, Any], site_id: str) -> dict[str, Any]:
+    monitor = state.get("monitor") if isinstance(state.get("monitor"), dict) else {}
+    sites = monitor.get("factory_sites") if isinstance(monitor.get("factory_sites"), list) else []
+    for site in sites:
+        if not isinstance(site, dict):
+            continue
+        if str(site.get("site_id") or "") != site_id:
+            continue
+        blueprint = site.get("blueprint") if isinstance(site.get("blueprint"), dict) else {}
+        exchange_string = blueprint.get("exchange_string")
+        if not isinstance(exchange_string, str) or not exchange_string:
+            break
+        return {
+            "ok": True,
+            "site_id": site_id,
+            "label": str(blueprint.get("label") or site_id),
+            "format": str(blueprint.get("format") or "factorio-blueprint-string"),
+            "entity_count": int(blueprint.get("entity_count") or 0),
+            "blueprint": exchange_string,
+        }
+    return {"ok": False, "error": "blueprint site not found", "site_id": site_id}
 
 
 def clear_dashboard_state_cache() -> None:
@@ -1170,8 +1208,15 @@ def _copy_blueprint_script(lang: str) -> str:
     }}
     event.preventDefault();
     const candidateId = button.getAttribute("data-candidate-id") || "";
+    const siteId = button.getAttribute("data-site-id") || "";
     const params = new URLSearchParams(window.location.search);
-    const apiParams = new URLSearchParams({{ candidate_id: candidateId }});
+    const apiParams = new URLSearchParams();
+    if (candidateId) {{
+      apiParams.set("candidate_id", candidateId);
+    }}
+    if (siteId) {{
+      apiParams.set("site_id", siteId);
+    }}
     const objective = params.get("objective");
     if (objective) {{
       apiParams.set("objective", objective);
@@ -1420,6 +1465,7 @@ def _factory_site_table(rows: list[Any], lang: str) -> str:
         f"<td>{escape(_position_text(row.get('position')))}</td>"
         f"<td>{escape(str(row.get('automation_level') or ''))}</td>"
         f"<td>{escape(', '.join(str(item) for item in row.get('machines', [])[:5]))}</td>"
+        f"<td>{_site_blueprint_copy_cell(row, lang)}</td>"
         "</tr>"
         for row in rows[:80]
         if isinstance(row, dict)
@@ -1427,8 +1473,24 @@ def _factory_site_table(rows: list[Any], lang: str) -> str:
     return (
         f"<table><thead><tr><th>{_t(lang, 'kind')}</th><th>{_t(lang, 'item')}</th>"
         f"<th>{_t(lang, 'status')}</th><th>{_t(lang, 'position')}</th>"
-        f"<th>{_t(lang, 'automation')}</th><th>{_t(lang, 'machines')}</th></tr></thead>"
+        f"<th>{_t(lang, 'automation')}</th><th>{_t(lang, 'machines')}</th>"
+        f"<th>{_t(lang, 'blueprint')}</th></tr></thead>"
         f"<tbody>{body}</tbody></table>"
+    )
+
+
+def _site_blueprint_copy_cell(row: dict[str, Any], lang: str) -> str:
+    blueprint = row.get("blueprint") if isinstance(row.get("blueprint"), dict) else {}
+    if not isinstance(blueprint.get("exchange_string"), str) or not blueprint.get("exchange_string"):
+        return ""
+    site_id = str(row.get("site_id") or "")
+    if not site_id:
+        return ""
+    label = str(blueprint.get("label") or site_id)
+    return (
+        f"<button type=\"button\" class=\"copy-blueprint\" "
+        f"data-site-id=\"{escape(site_id, quote=True)}\" "
+        f"title=\"{escape(label, quote=True)}\">{escape(_t(lang, 'copy_blueprint'))}</button>"
     )
 
 

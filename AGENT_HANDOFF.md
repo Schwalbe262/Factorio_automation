@@ -331,6 +331,10 @@ Key constraints to preserve:
 - Logistic links should be between sites, not individual belts.
 - Sites should be grouped by nearby entities, not listed as hundreds of
   individual machines.
+- Grouped sites now have dashboard blueprint copy support. The monitor
+  reconstructs the observed nearby machines into a Factorio blueprint exchange
+  string, and the web UI fetches it via `/api/factorio/blueprint?site_id=...`
+  only when the copy button is clicked.
 - Burner smelting expansion can recover surplus coal from nearby fueled
   machines. `setup_coal_supply` now builds the first dedicated coal mining
   site: burner mining drill on coal, output belt, starter fuel, and monitor
