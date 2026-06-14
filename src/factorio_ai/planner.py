@@ -2599,6 +2599,8 @@ def _fuel_burner_line_entity(
 ) -> PlannerDecision:
     position = _position(entity)
     inventory_coal = inventory_count(observation, "coal")
+    current_fuel = entity_item_count(entity, "coal")
+    desired_insert = min(insert_count, max(1, threshold - current_fuel))
     if inventory_coal <= 0:
         coal = _nearest_resource_to_position(observation, position, "coal")
         excluded_units = set(exclude_source_units or set())
@@ -2607,6 +2609,14 @@ def _fuel_burner_line_entity(
         source_surplus = _surplus_fuel_count(source) if source is not None else 0
         if coal is not None and distance(position, _position(coal)) <= WALK_FUEL_LOGISTICS_LIMIT and source_surplus < 8:
             return support_skill._mine_resource(player, coal, "coal", 16)
+        local_coal = _nearest_resource_to_position(observation, player, "coal")
+        if (
+            local_coal is not None
+            and distance(player, _position(local_coal)) <= 16.0
+            and distance(player, position) > 20.0
+            and source_surplus < max(8, desired_insert)
+        ):
+            return support_skill._mine_resource(player, local_coal, "coal", max(16, desired_insert))
         if source is not None:
             source_position = _position(source)
             if distance(player, source_position) > 20:
@@ -2632,6 +2642,11 @@ def _fuel_burner_line_entity(
             return PlannerDecision(None, far_fuel_reason)
         return support_skill._mine_resource(player, coal, "coal", 16)
 
+    if inventory_coal < desired_insert and distance(player, position) > 20.0:
+        local_coal = _nearest_resource_to_position(observation, player, "coal")
+        if local_coal is not None and distance(player, _position(local_coal)) <= 16.0:
+            return support_skill._mine_resource(player, local_coal, "coal", max(16, desired_insert - inventory_coal))
+
     if distance(player, position) > 20:
         return PlannerDecision(
             {"type": "move_to", "position": position},
@@ -2641,7 +2656,7 @@ def _fuel_burner_line_entity(
         {
             "type": "insert",
             "item": "coal",
-            "count": min(insert_count, inventory_coal, max(1, threshold - entity_item_count(entity, "coal"))),
+            "count": min(insert_count, inventory_coal, desired_insert),
             "unit_number": entity.get("unit_number"),
             "name": entity_name,
             "position": position,

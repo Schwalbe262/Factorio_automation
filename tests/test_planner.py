@@ -872,6 +872,20 @@ class PlannerTests(unittest.TestCase):
         self.assertIsNone(decision.action)
         self.assertIn("fuel logistics", decision.reason)
 
+    def test_expand_smelting_mines_batch_coal_before_long_refuel_trip(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 270, "y": 0}}
+        obs["inventory"] = {"coal": 2}
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 4, "y": 0}, "distance": 266},
+            {"name": "coal", "position": {"x": 270, "y": 0}, "distance": 0},
+        ]
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, resource="copper-ore", product="copper-plate")
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=18).next_action(obs)
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "coal")
+        self.assertEqual(decision.action["count"], 16)
+
     def test_expand_smelting_mines_walkable_coal_instead_of_tiny_surplus_trips(self):
         obs = base_observation()
         obs["player"] = {"position": {"x": 0, "y": 0}}
