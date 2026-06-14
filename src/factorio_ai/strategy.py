@@ -545,6 +545,18 @@ def reconcile_strategy_decision(
     """Apply deterministic safety/feasibility guardrails to an LLM strategy choice."""
 
     selected = str(decision.get("selected_skill") or decision.get("selected_goal") or "")
+    remote_guardrail = decision.get("guardrail_adjusted") if isinstance(decision.get("guardrail_adjusted"), dict) else {}
+    if remote_guardrail.get("from") == "plan_factory_site" and selected == remote_guardrail.get("to"):
+        # Remote Slurm workers may run slightly older source. Recompute plan-site guardrails
+        # locally so target deficits use the current monitor semantics.
+        decision = dict(decision)
+        decision["selected_skill"] = "plan_factory_site"
+        decision["reason"] = ""
+        decision["blockers"] = []
+        decision["evidence"] = []
+        decision["expected_effect"] = ""
+        decision.pop("guardrail_adjusted", None)
+        selected = "plan_factory_site"
     if selected in _COAL_DEPENDENT_SKILLS and _coal_supply_needed(observation):
         adjusted = dict(decision)
         adjusted["selected_skill"] = "setup_coal_supply"
@@ -597,14 +609,14 @@ def reconcile_strategy_decision(
             original_reason = str(decision.get("reason") or "").strip()
             guardrail_reason = (
                 f"LLM selected simulation-only layout planning, but {item} still has a target production deficit "
-                f"({deficit_per_minute}/min missing, estimated {estimated}/min)."
+                f"({deficit_per_minute}/min missing, starter-usable estimated {estimated}/min)."
             )
             adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
             adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + [item]))
             adjusted["evidence"] = _string_list(decision.get("evidence")) + [
                 "guardrail_adjusted_from=plan_factory_site",
                 f"{item}_target_deficit={deficit_per_minute}",
-                f"{item}_estimated_per_minute={estimated}",
+                f"{item}_starter_usable_per_minute={estimated}",
             ]
             adjusted["expected_effect"] = f"Run {skill} before spending the main strategy cycle on simulation-only layout work."
             adjusted["guardrail_adjusted"] = {
@@ -1032,6 +1044,7 @@ def _first_actionable_target_deficit(
         target_rows = target_status.get("items") if isinstance(target_status.get("items"), list) else []
     else:
         target_rows = target_status if isinstance(target_status, list) else []
+    candidates: list[tuple[int, float, float, str, str, float]] = []
     for row in target_rows:
         if not isinstance(row, dict):
             continue
@@ -1044,8 +1057,32 @@ def _first_actionable_target_deficit(
             continue
         if not _skill_has_starter_inputs(skill, observation):
             continue
-        return item, skill, float(row.get("estimated_per_minute") or 0.0), deficit
+        target = float(row.get("target_per_minute") or 0.0)
+        deficit_ratio = deficit / max(target, 0.001)
+        candidates.append(
+            (
+                _target_deficit_priority(item),
+                deficit_ratio,
+                deficit,
+                item,
+                skill,
+                float(row.get("estimated_per_minute") or 0.0),
+            )
+        )
+    if candidates:
+        candidates.sort(reverse=True)
+        _, _, deficit, item, skill, estimated = candidates[0]
+        return item, skill, estimated, deficit
     return None
+
+
+def _target_deficit_priority(item: str) -> int:
+    return {
+        "iron-plate": 100,
+        "copper-plate": 90,
+        "electronic-circuit": 80,
+        "automation-science-pack": 70,
+    }.get(item, 50)
 
 
 def _skill_has_starter_inputs(skill: str, observation: dict[str, Any]) -> bool:

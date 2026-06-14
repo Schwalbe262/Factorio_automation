@@ -59,8 +59,10 @@ TEXT: dict[str, dict[str, str]] = {
         "dependency_tree": "Dependency Tree",
         "item": "Item",
         "per_min": "/ min",
+        "usable_per_min": "Usable / min",
         "target_per_min": "Target / min",
         "estimated_per_min": "Estimated / min",
+        "isolated_per_min": "Isolated / min",
         "deficit_per_min": "Deficit / min",
         "producers": "Producers",
         "confidence": "Confidence",
@@ -144,8 +146,10 @@ TEXT: dict[str, dict[str, str]] = {
         "dependency_tree": "의존성 트리",
         "item": "품목",
         "per_min": "분당",
+        "usable_per_min": "사용 가능 / 분",
         "target_per_min": "목표 / 분",
         "estimated_per_min": "추정 / 분",
+        "isolated_per_min": "고립 / 분",
         "deficit_per_min": "부족 / 분",
         "producers": "생산기",
         "confidence": "신뢰도",
@@ -1151,6 +1155,7 @@ def _production_table(rows: list[Any], lang: str) -> str:
         "<tr>"
         f"<td>{_item_cell(str(row.get('item') or ''))}</td>"
         f"<td>{escape(str(row.get('per_minute') or 0))}</td>"
+        f"<td>{escape(str(row.get('usable_per_minute') if row.get('usable_per_minute') is not None else row.get('per_minute') or 0))}</td>"
         f"<td>{escape(str(row.get('producers') or 0))}</td>"
         f"<td>{escape(str(row.get('confidence') or 0))}</td>"
         "</tr>"
@@ -1159,6 +1164,7 @@ def _production_table(rows: list[Any], lang: str) -> str:
     )
     return (
         f"<table><thead><tr><th>{_t(lang, 'item')}</th><th>{_t(lang, 'per_min')}</th>"
+        f"<th>{_t(lang, 'usable_per_min')}</th>"
         f"<th>{_t(lang, 'producers')}</th><th>{_t(lang, 'confidence')}</th></tr></thead>"
         f"<tbody>{body}</tbody></table>"
     )
@@ -1726,12 +1732,14 @@ def _target_form(targets: dict[str, Any], target_status: dict[str, Any], lang: s
         target = float(targets.get(item) or 0.0)
         status = status_rows.get(item, {})
         estimated = status.get("estimated_per_minute", 0)
+        isolated = status.get("isolated_per_minute", 0)
         deficit = status.get("deficit_per_minute", 0)
         rows.append(
             "<tr>"
             f"<td>{_item_cell(item)}</td>"
             f"<td><input name=\"{escape(item)}\" type=\"number\" min=\"0\" step=\"1\" value=\"{escape(str(target))}\"></td>"
             f"<td>{escape(str(estimated))}</td>"
+            f"<td>{escape(str(isolated))}</td>"
             f"<td>{escape(str(deficit))}</td>"
             "</tr>"
         )
@@ -1740,7 +1748,8 @@ def _target_form(targets: dict[str, Any], target_status: dict[str, Any], lang: s
         f"<input type=\"hidden\" name=\"lang\" value=\"{escape(lang)}\">"
         f"<input type=\"hidden\" name=\"objective\" value=\"{escape(str(objective or ''))}\">"
         f"<table><thead><tr><th>{_t(lang, 'item')}</th><th>{_t(lang, 'target_per_min')}</th>"
-        f"<th>{_t(lang, 'estimated_per_min')}</th><th>{_t(lang, 'deficit_per_min')}</th></tr></thead>"
+        f"<th>{_t(lang, 'estimated_per_min')}</th><th>{_t(lang, 'isolated_per_min')}</th>"
+        f"<th>{_t(lang, 'deficit_per_min')}</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
         f"<div class=\"actions\"><button type=\"submit\">{_t(lang, 'save_targets')}</button></div>"
         "</form>"

@@ -291,6 +291,72 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["source"], "llm")
         self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
         self.assertIn("iron-plate", result["blockers"])
+        self.assertIn("starter-usable estimated", result["reason"])
+        self.assertTrue(any("iron-plate_starter_usable_per_minute" in item for item in result["evidence"]))
+
+    def test_reconcile_recomputes_stale_remote_plan_guardrail(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "expand_iron_smelting",
+                "priority": 90,
+                "reason": "old remote guardrail said estimated 75/min",
+                "evidence": ["iron-plate_target_deficit=15.0", "iron-plate_estimated_per_minute=75.0"],
+                "blockers": ["iron-plate"],
+                "expected_effect": "",
+                "source": "llm",
+                "guardrail_adjusted": {
+                    "from": "plan_factory_site",
+                    "to": "expand_iron_smelting",
+                    "reason": "old remote guardrail",
+                },
+            },
+            "launch_rocket_program",
+            {
+                "base": {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}},
+                "inventory": {"iron-plate": 20},
+                "entities": [
+                    {"name": "stone-furnace", "position": {"x": 500, "y": 0}, "inventories": {"1": {"coal": 1}, "2": {"iron-ore": 1}}},
+                ],
+                "resources": [{"name": "iron-ore", "position": {"x": 4, "y": 0}, "distance_from_base": 4}],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
+            production_targets={"iron-plate": 90.0},
+        )
+
+        self.assertEqual(result["selected_skill"], "expand_iron_smelting")
+        self.assertIn("starter-usable estimated 0.0/min", result["reason"])
+        self.assertNotIn("estimated 75/min", result["reason"])
+        self.assertFalse(any(item == "iron-plate_target_deficit=15.0" for item in result["evidence"]))
+        self.assertFalse(any(item == "iron-plate_estimated_per_minute=75.0" for item in result["evidence"]))
+        self.assertTrue(any(item == "iron-plate_starter_usable_per_minute=0.0" for item in result["evidence"]))
+
+    def test_reconcile_prioritizes_iron_deficit_before_copper_deficit(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 50,
+                "reason": "Layout can be improved.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "base": {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}},
+                "inventory": {"iron-plate": 20},
+                "entities": [],
+                "resources": [
+                    {"name": "iron-ore", "position": {"x": 4, "y": 0}, "distance_from_base": 4},
+                    {"name": "copper-ore", "position": {"x": 8, "y": 0}, "distance_from_base": 8},
+                ],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
+            production_targets={"copper-plate": 70.0, "iron-plate": 90.0},
+        )
+
+        self.assertEqual(result["selected_skill"], "expand_iron_smelting")
+        self.assertIn("iron-plate", result["reason"])
 
     def test_reconcile_keeps_layout_planning_when_starter_resource_is_remote(self):
         result = reconcile_strategy_decision(

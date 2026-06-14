@@ -22,6 +22,7 @@ class ProductionEstimate:
     producers: int
     confidence: float
     notes: list[str]
+    usable_per_minute: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -263,20 +264,25 @@ def inventory_summary(observation: dict[str, Any], objective: str) -> dict[str, 
 def estimate_production(observation: dict[str, Any]) -> list[ProductionEstimate]:
     rates: dict[str, ProductionEstimate] = {}
     busy_plate_furnaces = {"iron-plate": 0, "copper-plate": 0}
+    usable_busy_plate_furnaces = {"iron-plate": 0, "copper-plate": 0}
     for entity in _entities(observation):
         name = str(entity.get("name") or "")
         if name in FURNACE_SPEEDS:
-            estimate = _estimate_furnace(entity, FURNACE_SPEEDS[name])
+            estimate = _estimate_furnace(observation, entity, FURNACE_SPEEDS[name])
             if estimate and estimate.item in busy_plate_furnaces:
                 busy_plate_furnaces[estimate.item] += 1
+                if _usable_rate(estimate) > 0:
+                    usable_busy_plate_furnaces[estimate.item] += 1
             _add_estimate(rates, estimate)
         elif name in MINER_RATES_PER_MINUTE:
             _add_estimate(rates, _estimate_miner(entity, observation, MINER_RATES_PER_MINUTE[name]))
         elif name in ASSEMBLER_SPEEDS:
-            _add_estimate(rates, _estimate_assembler(entity, ASSEMBLER_SPEEDS[name]))
+            _add_estimate(rates, _estimate_assembler(observation, entity, ASSEMBLER_SPEEDS[name]))
     for product, resource in [("iron-plate", "iron-ore"), ("copper-plate", "copper-ore")]:
         complete_lines = _complete_belt_line_count(observation, resource)
+        usable_complete_lines = _complete_belt_line_count(observation, resource, starter_usable_only=True)
         extra_lines = max(0, complete_lines - busy_plate_furnaces[product])
+        usable_extra_lines = max(0, usable_complete_lines - usable_busy_plate_furnaces[product])
         if extra_lines:
             _add_estimate(
                 rates,
@@ -285,7 +291,12 @@ def estimate_production(observation: dict[str, Any]) -> list[ProductionEstimate]
                     per_minute=round(extra_lines * 18.75, 3),
                     producers=extra_lines,
                     confidence=0.5,
-                    notes=[f"inferred from complete burner {resource} belt smelting lines"],
+                    notes=_starter_usability_notes(
+                        complete_lines,
+                        usable_complete_lines,
+                        f"inferred from complete burner {resource} belt smelting lines",
+                    ),
+                    usable_per_minute=round(usable_extra_lines * 18.75, 3),
                 ),
             )
     return sorted(rates.values(), key=lambda item: (-item.per_minute, item.item))
@@ -526,11 +537,13 @@ def production_target_status(
     production_targets: dict[str, float],
     production: list[ProductionEstimate],
 ) -> dict[str, Any]:
-    rate_by_item = {item.item: item.per_minute for item in production}
+    actual_rate_by_item = {item.item: item.per_minute for item in production}
+    usable_rate_by_item = {item.item: _usable_rate(item) for item in production}
     rows = []
     all_satisfied = bool(production_targets)
     for item, target in sorted(production_targets.items()):
-        estimated = float(rate_by_item.get(item) or 0.0)
+        actual = float(actual_rate_by_item.get(item) or 0.0)
+        estimated = float(usable_rate_by_item.get(item) or 0.0)
         satisfied = estimated >= target
         all_satisfied = all_satisfied and satisfied
         rows.append(
@@ -538,6 +551,8 @@ def production_target_status(
                 "item": item,
                 "target_per_minute": target,
                 "estimated_per_minute": round(estimated, 3),
+                "observed_per_minute": round(actual, 3),
+                "isolated_per_minute": round(max(0.0, actual - estimated), 3),
                 "deficit_per_minute": round(max(0.0, target - estimated), 3),
                 "satisfied": satisfied,
             }
@@ -556,19 +571,24 @@ def estimate_bottlenecks(
 ) -> list[BottleneckEstimate]:
     production = production or estimate_production(observation)
     production_targets = production_targets or {}
-    rate_by_item = {item.item: item.per_minute for item in production}
+    actual_rate_by_item = {item.item: item.per_minute for item in production}
+    rate_by_item = {item.item: _usable_rate(item) for item in production}
     required = required_items_for_objective(objective, max_depth=5)
     dependents = _dependents(required)
     bottlenecks: list[BottleneckEstimate] = []
     for item, target in sorted(production_targets.items()):
         rate = float(rate_by_item.get(item) or 0.0)
+        actual_rate = float(actual_rate_by_item.get(item) or 0.0)
         if target > 0 and rate < target:
             stock = total_item_count(observation, item)
             deficit = round(target - rate, 3)
+            reason = f"target deficit: needs {target}/min, starter-usable estimated {rate}/min"
+            if actual_rate > rate:
+                reason += f" ({actual_rate}/min observed but isolated or remote)"
             bottlenecks.append(
                 BottleneckEstimate(
                     item=item,
-                    reason=f"target deficit: needs {target}/min, estimated {rate}/min",
+                    reason=reason,
                     stock=stock,
                     estimated_per_minute=rate,
                     required_by=dependents.get(item, []),
@@ -1265,7 +1285,10 @@ def _electric_network_key(entity: dict[str, Any]) -> str:
     return str(raw)
 
 
-def _estimate_furnace(entity: dict[str, Any], speed: float) -> ProductionEstimate | None:
+STARTER_USABLE_RADIUS = 224.0
+
+
+def _estimate_furnace(observation: dict[str, Any], entity: dict[str, Any], speed: float) -> ProductionEstimate | None:
     name = str(entity.get("name") or "")
     if name in {"stone-furnace", "steel-furnace"} and entity_item_count(entity, "coal") <= 0:
         return None
@@ -1285,12 +1308,18 @@ def _estimate_furnace(entity: dict[str, Any], speed: float) -> ProductionEstimat
         return None
     count = float(recipe.products.get(product) or 1.0)
     per_minute = 60.0 * speed * count / recipe.time_seconds
+    usable = _starter_usable_rate(observation, entity, per_minute)
     return ProductionEstimate(
         item=product,
         per_minute=round(per_minute, 3),
         producers=1,
         confidence=0.65,
-        notes=[f"inferred from {entity.get('name')} inventories"],
+        notes=_starter_usability_notes_for_entity(
+            observation,
+            entity,
+            f"inferred from {entity.get('name')} inventories",
+        ),
+        usable_per_minute=round(usable, 3),
     )
 
 
@@ -1315,7 +1344,12 @@ def _estimate_miner(
         per_minute=round(per_minute, 3),
         producers=1,
         confidence=0.55,
-        notes=[f"inferred from {entity.get('name')} near resource patch"],
+        notes=_starter_usability_notes_for_entity(
+            observation,
+            entity,
+            f"inferred from {entity.get('name')} near resource patch",
+        ),
+        usable_per_minute=round(_starter_usable_rate(observation, entity, per_minute), 3),
     )
 
 
@@ -1328,7 +1362,7 @@ def _entity_status_is(entity: dict[str, Any], status_name: str, status_code: int
         return False
 
 
-def _estimate_assembler(entity: dict[str, Any], crafting_speed: float) -> ProductionEstimate | None:
+def _estimate_assembler(observation: dict[str, Any], entity: dict[str, Any], crafting_speed: float) -> ProductionEstimate | None:
     recipe_name = entity.get("recipe")
     if not isinstance(recipe_name, str) or not recipe_name:
         return None
@@ -1346,7 +1380,12 @@ def _estimate_assembler(entity: dict[str, Any], crafting_speed: float) -> Produc
                 per_minute=round(per_minute, 3),
                 producers=1,
                 confidence=0.6,
-                notes=[f"inferred from {entity.get('name')} recipe {recipe_name}"],
+                notes=_starter_usability_notes_for_entity(
+                    observation,
+                    entity,
+                    f"inferred from {entity.get('name')} recipe {recipe_name}",
+                ),
+                usable_per_minute=round(_starter_usable_rate(observation, entity, per_minute), 3),
             )
         )
     return estimates[0] if estimates else None
@@ -1365,7 +1404,41 @@ def _add_estimate(rates: dict[str, ProductionEstimate], estimate: ProductionEsti
         producers=current.producers + estimate.producers,
         confidence=round(min(current.confidence, estimate.confidence), 3),
         notes=sorted(set(current.notes + estimate.notes)),
+        usable_per_minute=round(_usable_rate(current) + _usable_rate(estimate), 3),
     )
+
+
+def _usable_rate(estimate: ProductionEstimate) -> float:
+    if estimate.usable_per_minute is None:
+        return estimate.per_minute
+    return float(estimate.usable_per_minute)
+
+
+def _starter_usable_rate(observation: dict[str, Any], entity: dict[str, Any], per_minute: float) -> float:
+    return per_minute if _is_starter_usable_position(observation, _position(entity)) else 0.0
+
+
+def _starter_usability_notes_for_entity(
+    observation: dict[str, Any],
+    entity: dict[str, Any],
+    note: str,
+) -> list[str]:
+    if _is_starter_usable_position(observation, _position(entity)):
+        return [note]
+    return [note, "not counted toward starter production targets until rail or a validated logistics link connects it"]
+
+
+def _starter_usability_notes(
+    total_count: int,
+    usable_count: int,
+    note: str,
+) -> list[str]:
+    if usable_count >= total_count:
+        return [note]
+    return [
+        note,
+        f"{max(0, total_count - usable_count)} remote or isolated line(s) are not counted toward starter production targets",
+    ]
 
 
 def _add_consumption(rates: dict[str, ConsumptionEstimate], estimate: ConsumptionEstimate) -> None:
@@ -1431,11 +1504,18 @@ def _nearest_resource(observation: dict[str, Any], position: dict[str, float]) -
     return nearest
 
 
-def _complete_belt_line_count(observation: dict[str, Any], resource_name: str) -> int:
+def _complete_belt_line_count(
+    observation: dict[str, Any],
+    resource_name: str,
+    *,
+    starter_usable_only: bool = False,
+) -> int:
     furnace_positions: set[tuple[float, float]] = set()
     for belt in [item for item in _entities(observation) if item.get("name") == "transport-belt"]:
         for layout in _belt_line_layouts_from_anchor(observation, belt):
             if layout["resource_name"] != resource_name:
+                continue
+            if starter_usable_only and not _is_starter_usable_position(observation, _layout_center(layout)):
                 continue
             if all(layout.get(key) is not None for key in ("belt1", "belt2", "inserter", "furnace", "drill")) and _belt_line_fueled(layout):
                 furnace_position = _position(layout["furnace"])
@@ -1539,6 +1619,31 @@ def _entity_near(observation: dict[str, Any], name: str, position: dict[str, flo
 def _position(entity: dict[str, Any]) -> dict[str, float]:
     raw = entity.get("position") if isinstance(entity.get("position"), dict) else {}
     return {"x": float(raw.get("x") or 0.0), "y": float(raw.get("y") or 0.0)}
+
+
+def _is_starter_usable_position(observation: dict[str, Any], position: dict[str, float]) -> bool:
+    anchor = _base_anchor_position(observation)
+    if anchor is None:
+        return True
+    if _technology_researched(observation, "railway"):
+        return True
+    return distance(anchor, position) <= STARTER_USABLE_RADIUS
+
+
+def _base_anchor_position(observation: dict[str, Any]) -> dict[str, float] | None:
+    base = observation.get("base") if isinstance(observation.get("base"), dict) else {}
+    for key in ("anchor_position", "spawn_position"):
+        value = base.get(key)
+        if isinstance(value, dict) and isinstance(value.get("x"), (int, float)) and isinstance(value.get("y"), (int, float)):
+            return {"x": float(value["x"]), "y": float(value["y"])}
+    return None
+
+
+def _technology_researched(observation: dict[str, Any], technology: str) -> bool:
+    research = observation.get("research") if isinstance(observation.get("research"), dict) else {}
+    technologies = research.get("technologies") if isinstance(research.get("technologies"), dict) else {}
+    state = technologies.get(technology)
+    return bool(isinstance(state, dict) and state.get("researched"))
 
 
 def _dependents(required: set[str]) -> dict[str, list[str]]:

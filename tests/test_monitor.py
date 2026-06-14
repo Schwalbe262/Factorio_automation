@@ -27,6 +27,24 @@ class MonitorTests(unittest.TestCase):
         self.assertTrue(rows["iron-plate"]["satisfied"])
         self.assertEqual(rows["copper-plate"]["deficit_per_minute"], 10.0)
 
+    def test_target_status_uses_starter_usable_rate(self):
+        production = [
+            ProductionEstimate(
+                "iron-plate",
+                75.0,
+                4,
+                0.6,
+                ["some production is remote"],
+                usable_per_minute=18.75,
+            )
+        ]
+        status = production_target_status({"iron-plate": 90.0}, production)
+        row = status["items"][0]
+        self.assertEqual(row["observed_per_minute"], 75.0)
+        self.assertEqual(row["estimated_per_minute"], 18.75)
+        self.assertEqual(row["isolated_per_minute"], 56.25)
+        self.assertEqual(row["deficit_per_minute"], 71.25)
+
     def test_bottleneck_includes_target_deficit(self):
         bottlenecks = estimate_bottlenecks(
             "launch_rocket_program",
@@ -265,6 +283,45 @@ class MonitorTests(unittest.TestCase):
         self.assertIn("iron-plate", by_item)
         self.assertEqual(by_item["iron-plate"].per_minute, 18.75)
         self.assertNotIn("copper-plate", by_item)
+
+    def test_remote_belt_smelting_is_not_starter_usable_before_rail(self):
+        estimates = estimate_production(
+            {
+                "base": {"anchor_position": {"x": 0, "y": 0}, "spawn_position": {"x": 0, "y": 0}},
+                "entities": [
+                    {"name": "burner-mining-drill", "position": {"x": 500, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "transport-belt", "position": {"x": 502, "y": 0}, "inventories": {}},
+                    {"name": "transport-belt", "position": {"x": 503, "y": 0}, "inventories": {}},
+                    {"name": "burner-inserter", "position": {"x": 504, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "stone-furnace", "position": {"x": 505, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                ],
+                "resources": [{"name": "iron-ore", "position": {"x": 500, "y": 0}}],
+                "research": {"technologies": {}},
+            }
+        )
+        iron = next(item for item in estimates if item.item == "iron-plate")
+        self.assertEqual(iron.per_minute, 18.75)
+        self.assertEqual(iron.usable_per_minute, 0.0)
+        self.assertIn("remote", " ".join(iron.notes))
+
+    def test_remote_belt_smelting_counts_after_railway_research(self):
+        estimates = estimate_production(
+            {
+                "base": {"anchor_position": {"x": 0, "y": 0}, "spawn_position": {"x": 0, "y": 0}},
+                "entities": [
+                    {"name": "burner-mining-drill", "position": {"x": 500, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "transport-belt", "position": {"x": 502, "y": 0}, "inventories": {}},
+                    {"name": "transport-belt", "position": {"x": 503, "y": 0}, "inventories": {}},
+                    {"name": "burner-inserter", "position": {"x": 504, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "stone-furnace", "position": {"x": 505, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                ],
+                "resources": [{"name": "iron-ore", "position": {"x": 500, "y": 0}}],
+                "research": {"technologies": {"railway": {"researched": True}}},
+            }
+        )
+        iron = next(item for item in estimates if item.item == "iron-plate")
+        self.assertEqual(iron.per_minute, 18.75)
+        self.assertEqual(iron.usable_per_minute, 18.75)
 
     def test_ignores_unfueled_complete_belt_smelting_line(self):
         estimates = estimate_production(
