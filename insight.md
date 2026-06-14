@@ -232,3 +232,11 @@
 - After: `strategy-logistics-research-20260614-201014.jsonl` has no `iron-gear-wheel` or `transport-belt` craft action; it sets assembler unit `318` to `iron-gear-wheel`, inserts iron plates, moves gears through the science assembler, and feeds the lab.
 - Evidence: `{"source_loop":211,"tests":"408 passed","bad_trace":"strategy-logistics-research-20260614-200524.jsonl step 10 craft gear for transport-belt","verified_trace":"strategy-logistics-research-20260614-201014.jsonl","craft_grep_after":{"iron_gear_wheel":0,"transport_belt":0,"other_craft":["stone-furnace"]}}`
 - Remaining risk: This fixes the observed gear/belt hand-craft paths, but early fuel/coal maintenance can still involve manual-style fallback actions and should be automated separately.
+
+## 2026-06-15 05:32:26 +09:00 - Insight 28
+- Source loop: Loop 220
+- Improvement: After Logistics research, Qwen's repeated diagnostic-only `plan_factory_site` selections are redirected to the executable green-circuit automation step.
+- Before: The hidden autopilot completed Logistics and then repeatedly ran `plan_factory_site` with `not_applied=true`, leaving the factory in diagnostic loops.
+- After: A live Slurm/Qwen strategy call still proposed `plan_factory_site`, but reconciliation returned `selected_skill=automate_electronic_circuit_line` with `guardrail_adjusted.to=automate_electronic_circuit_line`.
+- Evidence: `{"source_loop":220,"tests":"409 passed","live_strategy":{"llm_selected":"plan_factory_site","final_selected":"automate_electronic_circuit_line","guardrail_from":"plan_factory_site","guardrail_to":"automate_electronic_circuit_line"}}`
+- Remaining risk: The redirect is verified at strategy selection level; the circuit automation executor still needs a post-restart live run to verify placement and no new hand-carry fallback.

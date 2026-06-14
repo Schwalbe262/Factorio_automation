@@ -4513,3 +4513,115 @@
 - Failure reason: None
 - Next action: Advance to the next highest-priority goal from `goal.md`.
 - Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 05:28:56 +09:00 - Loop 216
+- Part: skill
+- Goal: launch_rocket_program / plan_factory_site
+- Hypothesis: Running `plan_factory_site` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `plan_factory_site` for up to 1 step(s).
+  - Tracked `layout-plan` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260614-202854.jsonl`.
+- Candidates:
+  - Selected goal/skill: `plan_factory_site`.
+  - Target item candidate: `layout-plan` target `1`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 2.047s.
+  - layout-plan: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260614-202854.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1,"target":1}`.
+- Result: Completed: layout improvement plan: manual_power_fuel(76): route coal belt/inserter fuel feed to boiler before scaling electric machines; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; upgrade_lab_feed_pattern(66): use a short lab daisy chain or multi-feed science belt before expanding research throughput; best_candidate=lab-short-daisy-chain-feed score=64.0 not_applied=true
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 05:28:56 +09:00 - Loop 217
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / plan_factory_site
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 1.
+  - Selected `plan_factory_site` with priority `50` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `plan_factory_site`.
+  - Strategy priority: `50`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 25.109s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-202828.jsonl`.
+  - Metadata: `{"cycle":1,"priority":50,"strategy_source":"llm"}`.
+- Result: Completed: layout improvement plan: manual_power_fuel(76): route coal belt/inserter fuel feed to boiler before scaling electric machines; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; upgrade_lab_feed_pattern(66): use a short lab daisy chain or multi-feed science belt before expanding research throughput; best_candidate=lab-short-daisy-chain-feed score=64.0 not_applied=true
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 05:29:24 +09:00 - Loop 218
+- Part: skill
+- Goal: launch_rocket_program / plan_factory_site
+- Hypothesis: Running `plan_factory_site` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `plan_factory_site` for up to 1 step(s).
+  - Tracked `layout-plan` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260614-202922.jsonl`.
+- Candidates:
+  - Selected goal/skill: `plan_factory_site`.
+  - Target item candidate: `layout-plan` target `1`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 2.109s.
+  - layout-plan: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260614-202922.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1,"target":1}`.
+- Result: Completed: layout improvement plan: manual_power_fuel(76): route coal belt/inserter fuel feed to boiler before scaling electric machines; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; upgrade_lab_feed_pattern(66): use a short lab daisy chain or multi-feed science belt before expanding research throughput; best_candidate=lab-short-daisy-chain-feed score=64.0 not_applied=true
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 05:29:24 +09:00 - Loop 219
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / plan_factory_site
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 2.
+  - Selected `plan_factory_site` with priority `50` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `plan_factory_site`.
+  - Strategy priority: `50`.
+- Metrics:
+  - Steps: 2.
+  - Status: ok.
+  - Duration: 23.000s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-202828.jsonl`.
+  - Metadata: `{"cycle":2,"priority":50,"strategy_source":"llm"}`.
+- Result: Completed: layout improvement plan: manual_power_fuel(76): route coal belt/inserter fuel feed to boiler before scaling electric machines; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; upgrade_lab_feed_pattern(66): use a short lab daisy chain or multi-feed science belt before expanding research throughput; best_candidate=lab-short-daisy-chain-feed score=64.0 not_applied=true
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 05:32:26 +09:00 - Loop 220
+- Part: post-Logistics diagnostic-plan guardrail
+- Goal: Stop the main Qwen autopilot from repeating simulation-only `plan_factory_site` loops after Logistics is researched when an executable next automation step exists.
+- Hypothesis: The deterministic heuristic can identify a concrete next implemented skill after Logistics, so `reconcile_strategy_decision` can keep Qwen's LLM context while redirecting diagnostic-only planning to real factory progress.
+- Actions:
+  - Stopped the latest hidden autopilot after it restarted on current code but repeatedly selected `plan_factory_site`.
+  - Verified the heuristic no-LLM strategy currently selects `automate_electronic_circuit_line`.
+  - Added a post-Logistics guardrail that converts LLM-selected `plan_factory_site` to the heuristic executable skill when production targets are empty and the heuristic is not also `plan_factory_site`.
+  - Added a regression test for the post-Logistics diagnostic-plan redirect.
+  - Verified the live Slurm/Qwen strategy call still returned an LLM `plan_factory_site` proposal, but the reconciled final skill became `automate_electronic_circuit_line`.
+  - Recorded a Codex token usage sample with label `part88 post logistics plan guardrail`.
+- Candidates:
+  - Rejected: keep running not-applied layout diagnostics as the main autopilot loop after Logistics.
+  - Selected: preserve Qwen's reasoning in the decision record, but run the deterministic heuristic's executable next automation step.
+- Metrics:
+  - Strategy tests: `python -m unittest tests.test_strategy` -> 47 passed.
+  - Full tests: `python -m unittest discover -s tests` -> 409 passed.
+  - Live strategy check: final `selected_skill=automate_electronic_circuit_line`, `guardrail_adjusted.from=plan_factory_site`, `guardrail_adjusted.to=automate_electronic_circuit_line`.
+  - Token usage sample: `6,617,306` tokens; weekly quota unavailable.
+- Result: Post-Logistics Qwen plan-site loops now redirect to the implemented green-circuit automation executor instead of spending main cycles on diagnostic-only plans.
+- Failure reason: None for the strategy redirect. The actual circuit automation executor still needs live autopilot verification after restart.
+- Next action: Commit and push Part 88, then restart hidden autopilot on the latest code and confirm it enters `automate_electronic_circuit_line`.
+- Token usage: 6,617,306 tokens / weekly quota unavailable.

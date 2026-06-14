@@ -609,6 +609,35 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "plan_factory_site")
         self.assertNotIn("guardrail_adjusted", result)
 
+    def test_reconcile_promotes_post_logistics_diagnostic_plan_to_executable_heuristic_step(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 50,
+                "reason": "Layout diagnostics look severe after Logistics.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 20, "electronic-circuit": 7},
+                "entities": [],
+                "research": {
+                    "technologies": {
+                        "automation": {"researched": True},
+                        "logistics": {"researched": True},
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertIn("logistics_researched=true", result["evidence"])
+        self.assertIn("heuristic_selected_skill=automate_electronic_circuit_line", result["evidence"])
+
     def test_reconcile_recomputes_stale_remote_plan_guardrail(self):
         result = reconcile_strategy_decision(
             {

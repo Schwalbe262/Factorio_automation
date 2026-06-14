@@ -880,6 +880,41 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
+    if (
+        rocket_objective
+        and selected == "plan_factory_site"
+        and _technology_researched(observation, "logistics")
+        and not production_targets
+    ):
+        fallback_decision = heuristic_strategy(objective, observation, production_targets)
+        fallback_skill = str(fallback_decision.get("selected_skill") or "")
+        if fallback_skill != "plan_factory_site":
+            adjusted = dict(decision)
+            adjusted["selected_skill"] = fallback_skill
+            adjusted["priority"] = max(
+                _bounded_int(decision.get("priority"), 50, 0, 100),
+                _bounded_int(fallback_decision.get("priority"), 50, 0, 100),
+            )
+            original_reason = str(decision.get("reason") or "").strip()
+            guardrail_reason = (
+                "LLM selected simulation-only layout planning after Logistics, but the deterministic strategy "
+                f"has an executable next automation step: {fallback_skill}."
+            )
+            adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+            adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + _string_list(fallback_decision.get("blockers"))))
+            adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+                "guardrail_adjusted_from=plan_factory_site",
+                "logistics_researched=true",
+                f"heuristic_selected_skill={fallback_skill}",
+                *_string_list(fallback_decision.get("evidence")),
+            ]
+            adjusted["expected_effect"] = str(fallback_decision.get("expected_effect") or f"Run {fallback_skill} before more diagnostic-only layout work.")
+            adjusted["guardrail_adjusted"] = {
+                "from": "plan_factory_site",
+                "to": fallback_skill,
+                "reason": guardrail_reason,
+            }
+            return adjusted
     if selected == "plan_factory_site":
         deficit = _first_actionable_target_deficit(objective, observation, production_targets)
         if deficit is not None:
