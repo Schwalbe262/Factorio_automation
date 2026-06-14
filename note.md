@@ -4649,3 +4649,27 @@
 - Failure reason: None in tests. Live autopilot still needs a fresh post-fix run because the previous run already executed the bad craft before this patch.
 - Next action: Commit and push Part 89, then restart hidden autopilot on the latest code.
 - Token usage: 6,670,698 tokens / weekly quota unavailable.
+
+## 2026-06-15 05:40:52 +09:00 - Loop 222
+- Part: circuit automation post-fix live verification
+- Goal: Verify the fresh Part 89 autopilot run no longer emits `craft iron-gear-wheel` inside circuit automation.
+- Hypothesis: With circuit gear prerequisites delegated to the gear mall, the new circuit automation trace should insert iron plates into the gear assembler or take produced gears instead of crafting gears by hand.
+- Actions:
+  - Restarted the hidden no-mod autopilot on commit `af8c9ce`.
+  - Confirmed the active Slurm worker `678192` was still running and renewal was not needed.
+  - Inspected `strategy-circuit-automation-20260614-203950.jsonl`.
+  - Grepped the fresh trace for `recipe=iron-gear-wheel`, `craft iron-gear-wheel`, and `craft gears`; no matches were found.
+  - Observed the fresh trace moving to the gear mall, inserting `iron-plate` into assembler unit `318`, and then collecting starter furnace iron plates for more automated gear supply.
+  - Stopped the autopilot briefly so this verification could be committed without racing new journal writes.
+  - Recorded a Codex token usage sample with label `part90 circuit no hand gear live verification`.
+- Candidates:
+  - Bad trace: `strategy-circuit-automation-20260614-203509.jsonl` step 1 crafted `iron-gear-wheel`.
+  - Verified trace: `strategy-circuit-automation-20260614-203950.jsonl` has no gear craft and feeds the gear assembler.
+- Metrics:
+  - Fresh trace gear-craft grep: zero matches.
+  - Fresh trace actions observed: `move_to` gear mall, `insert iron-plate` into `iron-gear-wheel` assembler unit `318`, `take iron-plate` from starter furnace output.
+  - Token usage sample: `6,689,547` tokens; weekly quota unavailable.
+- Result: Live post-fix circuit automation no longer hand-crafts iron gear wheels in the fresh trace.
+- Failure reason: None for gear crafting. The trace still shows manual-style iron plate collection and previous runs showed manual coal mining; those are separate automation-quality issues.
+- Next action: Restart hidden autopilot on the latest code and continue monitoring for remaining manual fallback actions.
+- Token usage: 6,689,547 tokens / weekly quota unavailable.

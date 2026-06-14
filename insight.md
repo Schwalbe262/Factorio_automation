@@ -245,6 +245,6 @@
 - Source loop: Loop 221
 - Improvement: `CircuitAutomationSkill` now uses gear mall output for `iron-gear-wheel` prerequisites instead of hand-crafting gears after Automation is researched.
 - Before: `strategy-circuit-automation-20260614-203509.jsonl` step 1 used `craft iron-gear-wheel for circuit automation`.
-- After: The regression path returns `take iron-gear-wheel from build item mall assembler`, and full tests pass with the no-hand gear branch.
-- Evidence: `{"source_loop":221,"tests":"410 passed","bad_trace":"strategy-circuit-automation-20260614-203509.jsonl step 1 craft iron-gear-wheel","regression_decision":"take iron-gear-wheel from build item mall assembler"}`
-- Remaining risk: The previous live run already consumed the bad craft before the fix; a fresh post-restart autopilot run should verify the circuit automation trace no longer contains gear craft actions.
+- After: The regression path returns `take iron-gear-wheel from build item mall assembler`; fresh live trace `strategy-circuit-automation-20260614-203950.jsonl` has no gear craft matches and feeds assembler unit `318` with iron plates.
+- Evidence: `{"source_loop":221,"verification_loop":222,"tests":"410 passed","bad_trace":"strategy-circuit-automation-20260614-203509.jsonl step 1 craft iron-gear-wheel","verified_trace":"strategy-circuit-automation-20260614-203950.jsonl","fresh_trace_gear_craft_matches":0,"regression_decision":"take iron-gear-wheel from build item mall assembler"}`
+- Remaining risk: This fixes gear hand-crafting in circuit automation; manual-style iron plate collection and coal mining remain separate automation-quality issues.
