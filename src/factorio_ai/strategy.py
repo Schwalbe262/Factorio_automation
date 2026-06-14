@@ -528,7 +528,7 @@ def normalize_strategy_response(raw: dict[str, Any], fallback_objective: str = "
     return StrategicDecision(
         selected_skill=selected,
         priority=priority,
-        reason=str(raw.get("reason") or ""),
+        reason=str(raw.get("reason") or raw.get("justification") or raw.get("recommendation") or ""),
         evidence=evidence,
         blockers=blockers,
         expected_effect=str(raw.get("expected_effect") or ""),
@@ -587,6 +587,32 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
+    if selected == "plan_factory_site":
+        deficit = _first_actionable_target_deficit(objective, observation, production_targets)
+        if deficit is not None:
+            item, skill, estimated, deficit_per_minute = deficit
+            adjusted = dict(decision)
+            adjusted["selected_skill"] = skill
+            adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 90)
+            original_reason = str(decision.get("reason") or "").strip()
+            guardrail_reason = (
+                f"LLM selected simulation-only layout planning, but {item} still has a target production deficit "
+                f"({deficit_per_minute}/min missing, estimated {estimated}/min)."
+            )
+            adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+            adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + [item]))
+            adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+                "guardrail_adjusted_from=plan_factory_site",
+                f"{item}_target_deficit={deficit_per_minute}",
+                f"{item}_estimated_per_minute={estimated}",
+            ]
+            adjusted["expected_effect"] = f"Run {skill} before spending the main strategy cycle on simulation-only layout work."
+            adjusted["guardrail_adjusted"] = {
+                "from": "plan_factory_site",
+                "to": skill,
+                "reason": guardrail_reason,
+            }
+            return adjusted
     if (
         selected == "produce_electronic_circuit"
         and _technology_researched(observation, "automation")
@@ -989,6 +1015,64 @@ def _coal_fuel_feed_needed(
         except (TypeError, ValueError):
             length = 999999.0
         if length <= 32.0:
+            return True
+    return False
+
+
+def _first_actionable_target_deficit(
+    objective: str,
+    observation: dict[str, Any],
+    production_targets: dict[str, float] | None,
+) -> tuple[str, str, float, float] | None:
+    if not production_targets:
+        return None
+    monitor = summarize_factory(observation, objective, production_targets=production_targets)
+    target_status = monitor.get("target_status")
+    if isinstance(target_status, dict):
+        target_rows = target_status.get("items") if isinstance(target_status.get("items"), list) else []
+    else:
+        target_rows = target_status if isinstance(target_status, list) else []
+    for row in target_rows:
+        if not isinstance(row, dict):
+            continue
+        deficit = float(row.get("deficit_per_minute") or 0.0)
+        if deficit <= 0.0:
+            continue
+        item = str(row.get("item") or "")
+        skill = _skill_for_bottleneck_item(item, observation)
+        if not skill:
+            continue
+        if not _skill_has_starter_inputs(skill, observation):
+            continue
+        return item, skill, float(row.get("estimated_per_minute") or 0.0), deficit
+    return None
+
+
+def _skill_has_starter_inputs(skill: str, observation: dict[str, Any]) -> bool:
+    if skill == "expand_iron_smelting":
+        return _starter_resource_available(observation, "iron-ore")
+    if skill == "expand_copper_smelting":
+        return _starter_resource_available(observation, "copper-ore")
+    if skill == "setup_coal_supply":
+        return _starter_resource_available(observation, "coal")
+    return True
+
+
+def _starter_resource_available(observation: dict[str, Any], resource_name: str, max_distance: float = 192.0) -> bool:
+    base = observation.get("base") if isinstance(observation.get("base"), dict) else {}
+    anchor = base.get("anchor_position") or base.get("spawn_position")
+    if not isinstance(anchor, dict):
+        return True
+    resources = observation.get("resources") if isinstance(observation.get("resources"), list) else []
+    for resource in resources:
+        if not isinstance(resource, dict) or resource.get("name") != resource_name:
+            continue
+        try:
+            distance_from_base = float(resource.get("distance_from_base"))
+        except (TypeError, ValueError):
+            position = resource.get("position") if isinstance(resource.get("position"), dict) else None
+            distance_from_base = _distance(anchor, position) if position else None
+        if distance_from_base is not None and distance_from_base <= max_distance:
             return True
     return False
 

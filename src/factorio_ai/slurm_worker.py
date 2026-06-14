@@ -387,7 +387,9 @@ def try_llm_strategy_with_diagnostics(payload: dict[str, Any]) -> tuple[dict[str
     objective = str(payload.get("objective") or payload.get("goal") or "launch_rocket_program")
     observation = payload.get("observation") if isinstance(payload.get("observation"), dict) else {}
     production_targets = payload.get("production_targets") if isinstance(payload.get("production_targets"), dict) else {}
-    base_payload = make_strategy_payload(objective, observation, production_targets)
+    base_payload = payload.get("strategy_payload") if isinstance(payload.get("strategy_payload"), dict) else None
+    if base_payload is None:
+        base_payload = make_strategy_payload(objective, observation, production_targets)
     if isinstance(payload.get("available_skills"), list):
         base_payload["available_skills"] = payload["available_skills"]
     base_payload = compact_strategy_payload(base_payload)

@@ -689,6 +689,9 @@ def request_strategy(
     timeout_seconds: int | None = None,
 ) -> dict[str, Any]:
     cfg = cfg or config()
+    from .strategy import make_strategy_payload
+
+    targets = production_targets or {}
     task = {
         "id": f"strategy-{uuid.uuid4().hex}",
         "type": "strategy_request",
@@ -696,7 +699,8 @@ def request_strategy(
         "payload": {
             "objective": objective,
             "observation": observation,
-            "production_targets": production_targets or {},
+            "production_targets": targets,
+            "strategy_payload": make_strategy_payload(objective, observation, targets),
             "available_skills": available_skills or [],
         },
     }

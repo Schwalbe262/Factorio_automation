@@ -445,13 +445,32 @@ local function collect_craftable()
   end
   return craftable
 end
-local function collect_resources()
+local function collect_resources(anchor_position)
   local resources = {}
+  local seen = {}
+  local source_positions = { origin }
+  if anchor_position and distance(origin, anchor_position) > 1 then
+    table.insert(source_positions, anchor_position)
+  end
   for _, resource_name in pairs({ "iron-ore", "coal", "stone", "copper-ore", "uranium-ore", "crude-oil" }) do
-    local found = surface.find_entities_filtered({ position = origin, radius = OBSERVE_RADIUS, type = "resource", name = resource_name, limit = 160 })
-    for _, entity in pairs(found) do
-      if not entity.amount or entity.amount > 0 then
-        table.insert(resources, { unit_number = entity.unit_number, name = entity.name, amount = entity.amount, position = position_table(entity.position), distance = round(distance(origin, entity.position)) })
+    for _, source_position in pairs(source_positions) do
+      local found = surface.find_entities_filtered({ position = source_position, radius = OBSERVE_RADIUS, type = "resource", name = resource_name, limit = 160 })
+      for _, entity in pairs(found) do
+        if not entity.amount or entity.amount > 0 then
+          local key = tostring(entity.unit_number or "") .. ":" .. entity.name .. ":" .. tostring(entity.position.x) .. "," .. tostring(entity.position.y)
+          if not seen[key] then
+            seen[key] = true
+            table.insert(resources, {
+              unit_number = entity.unit_number,
+              name = entity.name,
+              amount = entity.amount,
+              position = position_table(entity.position),
+              distance = round(distance(origin, entity.position)),
+              distance_from_agent = round(distance(origin, entity.position)),
+              distance_from_base = anchor_position and round(distance(anchor_position, entity.position)) or nil
+            })
+          end
+        end
       end
     end
   end
@@ -815,7 +834,7 @@ json_reply({
   inventory = inventory_contents(agent.inventory),
   agent_marker = agent_marker_snapshot(agent),
   craftable = collect_craftable(),
-  resources = collect_resources(),
+  resources = collect_resources(base_anchor),
   entities = collect_entities(),
   enemies = collect_enemies(),
   power_sites = collect_power_sites(surface, base_anchor, agent.force, origin),

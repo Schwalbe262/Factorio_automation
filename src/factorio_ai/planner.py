@@ -26,6 +26,9 @@ SOUTH = 8
 WEST = 12
 FURNACE_RESOURCE_RADIUS = 12.0
 WALK_FUEL_LOGISTICS_LIMIT = 160.0
+STARTER_SITE_RADIUS = 192.0
+STARTER_POWER_SITE_RADIUS = 160.0
+STARTER_ENTITY_CLUSTER_RADIUS = 224.0
 SMELTING_LINE_FUEL_RESERVE = {
     "drill": 8,
     "inserter": 4,
@@ -107,6 +110,18 @@ def factory_layout_issues(observation: dict[str, Any]) -> list[dict[str, Any]]:
         automation = str(site.get("automation_level") or "")
         machines_text = " ".join(str(item) for item in site.get("machines", []))
         position = site.get("position") if isinstance(site.get("position"), dict) else None
+        if position and kind in {"plate_smelting_line", "build_item_mall", "assembler_cell", "circuit_automation", "research_lab_block"}:
+            spawn_distance = distance(anchor, position)
+            if spawn_distance > STARTER_SITE_RADIUS:
+                issues.append(
+                    _layout_issue(
+                        "remote_starter_site",
+                        90,
+                        site,
+                        f"{kind} is {spawn_distance:.0f} tiles from the starter base before rail logistics are available",
+                        "stop expanding this remote block; build the next starter site near the base cluster or plan a rail outpost first",
+                    )
+                )
         if kind == "steam_power" and position:
             spawn_distance = distance(anchor, position)
             player_distance = distance(player, position)
@@ -2155,6 +2170,70 @@ def _nearest_resource_to_position(
     return _nearest_to(candidates, position) if candidates else None
 
 
+def _base_anchor_position(observation: dict[str, Any]) -> dict[str, float] | None:
+    base = observation.get("base") if isinstance(observation.get("base"), dict) else {}
+    for key in ("anchor_position", "spawn_position"):
+        value = base.get(key)
+        if isinstance(value, dict) and isinstance(value.get("x"), (int, float)) and isinstance(value.get("y"), (int, float)):
+            return _xy_position(value)
+    return None
+
+
+def _starter_logistics_anchors(observation: dict[str, Any]) -> list[dict[str, float]]:
+    base_anchor = _base_anchor_position(observation)
+    anchors: list[dict[str, float]] = [base_anchor] if base_anchor is not None else [player_position(observation)]
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    local_positions = [
+        _position(entity)
+        for entity in entities
+        if isinstance(entity, dict)
+        and str(entity.get("name") or "") in _FACTORY_DEFENSE_ENTITY_NAMES
+        and (
+            base_anchor is None
+            or distance(base_anchor, _position(entity)) <= STARTER_ENTITY_CLUSTER_RADIUS
+        )
+    ]
+    if local_positions:
+        centroid = _centroid(local_positions)
+        if centroid is not None:
+            anchors.append(centroid)
+    return anchors
+
+
+def _within_starter_logistics_area(
+    observation: dict[str, Any],
+    position: dict[str, float],
+    *,
+    radius: float = STARTER_SITE_RADIUS,
+) -> bool:
+    return any(distance(anchor, position) <= radius for anchor in _starter_logistics_anchors(observation))
+
+
+def _distance_to_starter_logistics_area(observation: dict[str, Any], position: dict[str, float]) -> float:
+    return min((distance(anchor, position) for anchor in _starter_logistics_anchors(observation)), default=999999.0)
+
+
+def _layout_center_position(layout: dict[str, Any]) -> dict[str, float]:
+    for key in ("furnace_position", "drill_position", "belt1_position"):
+        value = layout.get(key)
+        if isinstance(value, dict):
+            return _xy_position(value)
+    for key in ("furnace", "drill", "belt1"):
+        value = layout.get(key)
+        if isinstance(value, dict):
+            return _position(value)
+    return player_position({})
+
+
+def _layout_within_starter_area(
+    observation: dict[str, Any],
+    layout: dict[str, Any],
+    *,
+    radius: float = STARTER_SITE_RADIUS,
+) -> bool:
+    return _within_starter_logistics_area(observation, _layout_center_position(layout), radius=radius)
+
+
 def _select_mining_drill_for_resource(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
     drills = [
         item
@@ -2443,6 +2522,8 @@ def _find_belt_smelting_line(observation: dict[str, Any], resource_name: str = "
         for layout in _belt_layouts_from_anchor(observation, belt):
             if not _layout_matches_resource(layout, resource_name):
                 continue
+            if not _layout_within_starter_area(observation, layout):
+                continue
             score = sum(1 for key in ("belt1", "belt2", "inserter", "furnace", "drill") if layout.get(key) is not None)
             candidates.append((score, layout))
     if not candidates:
@@ -2456,6 +2537,8 @@ def _find_incomplete_belt_smelting_line(observation: dict[str, Any], resource_na
     for belt in entities_named(observation, "transport-belt"):
         for layout in _belt_layouts_from_anchor(observation, belt):
             if not _layout_matches_resource(layout, resource_name):
+                continue
+            if not _layout_within_starter_area(observation, layout):
                 continue
             if _layout_has_unrelated_blocker(observation, layout):
                 continue
@@ -2474,6 +2557,8 @@ def _find_unfueled_belt_smelting_line(observation: dict[str, Any], resource_name
         for layout in _belt_layouts_from_anchor(observation, belt):
             if not _layout_matches_resource(layout, resource_name):
                 continue
+            if not _layout_within_starter_area(observation, layout):
+                continue
             if all(layout.get(key) is not None for key in ("belt1", "belt2", "inserter", "furnace", "drill")) and not _belt_line_fueled(layout):
                 candidates.append((float(belt.get("distance") or 999999), layout))
     if not candidates:
@@ -2487,6 +2572,8 @@ def _find_low_fuel_belt_smelting_line(observation: dict[str, Any], resource_name
     for belt in entities_named(observation, "transport-belt"):
         for layout in _belt_layouts_from_anchor(observation, belt):
             if not _layout_matches_resource(layout, resource_name):
+                continue
+            if not _layout_within_starter_area(observation, layout):
                 continue
             if not all(layout.get(key) is not None for key in ("belt1", "belt2", "inserter", "furnace", "drill")):
                 continue
@@ -2569,6 +2656,8 @@ def _complete_belt_smelting_line_count(observation: dict[str, Any], resource_nam
     for belt in entities_named(observation, "transport-belt"):
         for layout in _belt_layouts_from_anchor(observation, belt):
             if not _layout_matches_resource(layout, resource_name):
+                continue
+            if not _layout_within_starter_area(observation, layout):
                 continue
             if all(layout.get(key) is not None for key in ("belt1", "belt2", "inserter", "furnace", "drill")) and _belt_line_fueled(layout):
                 furnace_pos = _position(layout["furnace"])
@@ -2780,6 +2869,15 @@ def _ranked_patch_drill_resources(observation: dict[str, Any], resource_name: st
     ]
     if not candidates:
         return []
+    starter_candidates = [
+        item
+        for item in candidates
+        if _within_starter_logistics_area(observation, _position(item))
+    ]
+    if starter_candidates:
+        candidates = starter_candidates
+    elif _base_anchor_position(observation) is not None:
+        return []
 
     existing_drills = [
         item
@@ -2791,7 +2889,7 @@ def _ranked_patch_drill_resources(observation: dict[str, Any], resource_name: st
         pos = _position(resource)
         return (
             -_patch_drill_candidate_score(observation, resource, existing_drills),
-            float(resource.get("distance") or distance(player_position(observation), pos)),
+            _distance_to_starter_logistics_area(observation, pos),
         )
 
     return sorted(candidates, key=rank)
@@ -2811,7 +2909,7 @@ def _patch_drill_candidate_score(
     if nearest_drill_distance < 2.5:
         return -10000.0
 
-    distance_penalty = float(resource.get("distance") or distance(player_position(observation), position)) * 0.05
+    distance_penalty = _distance_to_starter_logistics_area(observation, position) * 0.05
     alignment_bonus = _existing_patch_line_alignment_bonus(position, existing_drills)
     return coverage * 20.0 + alignment_bonus - distance_penalty
 
@@ -2940,13 +3038,21 @@ def _select_power_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
     sites = observation.get("power_sites")
     if not isinstance(sites, list):
         return None
+    candidates: list[tuple[float, dict[str, Any]]] = []
     for site in sites:
         if not isinstance(site, dict):
             continue
         layout = _layout_from_power_site(site)
-        if layout is not None:
-            return layout
-    return None
+        if layout is None:
+            continue
+        position = _power_layout_position(layout)
+        if not _within_starter_logistics_area(observation, position, radius=STARTER_POWER_SITE_RADIUS):
+            continue
+        candidates.append((_distance_to_starter_logistics_area(observation, position), layout))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
 
 
 def _layout_from_power_site(site: dict[str, Any]) -> dict[str, Any] | None:
@@ -2964,6 +3070,16 @@ def _layout_from_power_site(site: dict[str, Any]) -> dict[str, Any] | None:
             "direction": int(raw_spec.get("direction") or NORTH),
         }
     return _power_layout_from_specs(specs)
+
+
+def _power_layout_position(layout: dict[str, Any]) -> dict[str, float]:
+    pump = layout.get("offshore_pump")
+    if isinstance(pump, dict):
+        return _position(pump)
+    spec = layout.get("offshore_pump_spec")
+    if isinstance(spec, dict) and isinstance(spec.get("position"), dict):
+        return _xy_position(spec["position"])
+    return player_position({})
 
 
 def _power_layout_from_pump_position(position: dict[str, float], direction: int = WEST) -> dict[str, Any]:
@@ -3035,6 +3151,8 @@ def _power_layout_from_specs(specs: dict[str, dict[str, Any]]) -> dict[str, Any]
 def _find_steam_power_block(observation: dict[str, Any]) -> dict[str, Any] | None:
     candidates: list[tuple[int, dict[str, Any]]] = []
     for pump in entities_named(observation, "offshore-pump"):
+        if not _within_starter_logistics_area(observation, _position(pump), radius=STARTER_POWER_SITE_RADIUS):
+            continue
         layout = _power_layout_from_pump_position(_position(pump), int(pump.get("direction") or WEST))
         layout["offshore_pump"] = pump
         layout["boiler"] = _entity_near(observation, "boiler", layout["boiler_spec"]["position"], radius=1.0)

@@ -87,6 +87,34 @@ def power_site():
     }
 
 
+def power_site_at(x, y, distance_value):
+    return {
+        "distance": distance_value,
+        "layout": {
+            "offshore_pump": {
+                "name": "offshore-pump",
+                "position": {"x": x, "y": y},
+                "direction": 12,
+            },
+            "boiler": {
+                "name": "boiler",
+                "position": {"x": x + 2, "y": y - 1},
+                "direction": 0,
+            },
+            "steam_engine": {
+                "name": "steam-engine",
+                "position": {"x": x + 2, "y": y - 4},
+                "direction": 0,
+            },
+            "small_electric_pole": {
+                "name": "small-electric-pole",
+                "position": {"x": x, "y": y - 4},
+                "direction": 0,
+            },
+        },
+    }
+
+
 class PlannerTests(unittest.TestCase):
     def test_coal_supply_places_output_belt_before_drill(self):
         obs = base_observation()
@@ -258,6 +286,16 @@ class PlannerTests(unittest.TestCase):
         decision = FactoryLayoutImprovementSkill().next_action(obs)
         self.assertTrue(decision.done)
         self.assertIn("layout improvement plan", decision.reason)
+
+    def test_factory_layout_flags_remote_starter_smelting_site(self):
+        obs = base_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["entities"] = complete_belt_smelting_entities(260, 0, 910, resource="copper-ore", product="copper-plate")
+        obs["resources"] = [{"name": "copper-ore", "position": {"x": 260, "y": 0}, "distance": 260}]
+        issues = factory_layout_issues(obs)
+        issue = next(item for item in issues if item["kind"] == "remote_starter_site")
+        self.assertEqual(issue["item"], "copper-plate")
+        self.assertIn("before rail logistics", issue["detail"])
 
     def test_factory_layout_flags_production_on_resource_patch(self):
         obs = base_observation()
@@ -920,6 +958,77 @@ class PlannerTests(unittest.TestCase):
         self.assertIsNone(decision.action)
         self.assertIn("fuel logistics", decision.reason)
 
+    def test_expansion_uses_base_local_resource_when_agent_is_at_remote_patch(self):
+        obs = base_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["player"] = {"position": {"x": 620, "y": -420}}
+        obs["inventory"] = {
+            "coal": 12,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "burner-inserter": 1,
+            "transport-belt": 2,
+        }
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 6, "y": 0}, "distance": 744},
+            {"name": "copper-ore", "position": {"x": 620, "y": -420}, "distance": 0},
+            {"name": "coal", "position": {"x": 0, "y": 4}, "distance": 748},
+        ]
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=37).next_action(obs)
+        self.assertEqual(decision.action["type"], "move_to")
+        self.assertLess(abs(decision.action["position"]["x"]), 20)
+        self.assertLess(abs(decision.action["position"]["y"]), 20)
+
+    def test_expansion_ignores_remote_incomplete_line_before_rail_outposts(self):
+        obs = base_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["player"] = {"position": {"x": 620, "y": -420}}
+        obs["inventory"] = {
+            "coal": 12,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "burner-inserter": 1,
+            "transport-belt": 2,
+        }
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 6, "y": 0}, "distance": 744},
+            {"name": "copper-ore", "position": {"x": 620, "y": -420}, "distance": 0},
+            {"name": "coal", "position": {"x": 0, "y": 4}, "distance": 748},
+        ]
+        obs["entities"] = [
+            {
+                "name": "transport-belt",
+                "unit_number": 900,
+                "position": {"x": 622, "y": -420},
+                "direction": 4,
+                "distance": 2,
+                "inventories": {},
+            }
+        ]
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=37).next_action(obs)
+        self.assertEqual(decision.action["type"], "move_to")
+        self.assertLess(abs(decision.action["position"]["x"]), 20)
+        self.assertLess(abs(decision.action["position"]["y"]), 20)
+
+    def test_expansion_refuses_remote_only_starter_resource_without_rail(self):
+        obs = base_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["player"] = {"position": {"x": 620, "y": -420}}
+        obs["inventory"] = {
+            "coal": 12,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "burner-inserter": 1,
+            "transport-belt": 2,
+        }
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 620, "y": -420}, "distance": 0},
+            {"name": "coal", "position": {"x": 0, "y": 4}, "distance": 748},
+        ]
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=37).next_action(obs)
+        self.assertIsNone(decision.action)
+        self.assertIn("cannot find open copper-ore site", decision.reason)
+
     def test_expand_iron_smelting_clears_blocking_rock(self):
         obs = base_observation()
         obs["inventory"] = {
@@ -1084,6 +1193,25 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "offshore-pump")
         self.assertEqual(decision.action["direction"], 12)
+
+    def test_setup_power_skill_prefers_base_local_water_site(self):
+        obs = base_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["inventory"] = {
+            "coal": 10,
+            "offshore-pump": 1,
+            "boiler": 1,
+            "steam-engine": 1,
+            "small-electric-pole": 1,
+        }
+        obs["power_sites"] = [
+            power_site_at(320.5, -240.5, 400),
+            power_site_at(10.5, 10.5, 15),
+        ]
+        decision = SetupPowerSkill().next_action(obs)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "offshore-pump")
+        self.assertLess(decision.action["position"]["x"], 40)
 
     def test_setup_power_skill_mines_tree_when_pole_needs_wood(self):
         obs = base_observation()

@@ -10,6 +10,7 @@ from factorio_ai.remote_slurm import (
     _status_needs_local_gpu,
     _worker_env_values,
     config,
+    request_strategy,
 )
 from factorio_ai.slurm_worker import compact_strategy_payload, parse_json_object_from_content, run_strategy_model_benchmark
 from factorio_ai.strategy import make_strategy_payload, skill_catalog_payload
@@ -184,6 +185,53 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertTrue(all(row["source"] == "heuristic" for row in result["models"]))
         self.assertTrue(all(row["llm_error"] for row in result["models"]))
         self.assertTrue(all(row["llm_prompt_chars"] for row in result["models"]))
+
+    def test_request_strategy_sends_locally_computed_strategy_payload(self):
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="factorio-ai-worker",
+            conda_env="factorio-ai",
+            partition="gpu4",
+            cpus_per_task=8,
+            gpus_per_node=1,
+            gres="gpu:1",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        observation = {
+            "inventory": {},
+            "entities": [
+                {"name": "stone-furnace", "inventories": {"1": {"coal": 1}, "2": {"copper-ore": 1}}},
+            ],
+            "resources": [],
+            "research": {"technologies": {}},
+        }
+        with (
+            patch("factorio_ai.remote_slurm._use_attached_srun", return_value=True),
+            patch("factorio_ai.remote_slurm._request_task_via_attached_srun", return_value={"ok": True}) as request,
+        ):
+            request_strategy(
+                "launch_rocket_program",
+                observation,
+                production_targets={"copper-plate": 10.0},
+                available_skills=skill_catalog_payload(),
+                cfg=cfg,
+                timeout_seconds=1,
+            )
+
+        task = request.call_args.args[0]
+        payload = task["payload"]
+        self.assertIn("strategy_payload", payload)
+        self.assertEqual(payload["strategy_payload"]["factory_monitor"]["target_status"]["items"][0]["item"], "copper-plate")
+        self.assertEqual(payload["strategy_payload"]["factory_monitor"]["target_status"]["items"][0]["estimated_per_minute"], 18.75)
 
     def test_llm_content_parser_extracts_json_object_from_text(self):
         parsed = parse_json_object_from_content(

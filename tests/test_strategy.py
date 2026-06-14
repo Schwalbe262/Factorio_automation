@@ -267,6 +267,58 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["guardrail_adjusted"]["from"], "setup_power")
         self.assertIn("coal fuel feed route", result["blockers"])
 
+    def test_reconcile_promotes_layout_planning_to_actionable_target_deficit(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 50,
+                "reason": "Layout can be improved.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 20},
+                "entities": [],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
+            production_targets={"iron-plate": 90.0},
+        )
+
+        self.assertEqual(result["selected_skill"], "expand_iron_smelting")
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertIn("iron-plate", result["blockers"])
+
+    def test_reconcile_keeps_layout_planning_when_starter_resource_is_remote(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 50,
+                "reason": "Remote starter sites need layout repair.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "base": {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}},
+                "inventory": {"iron-plate": 20},
+                "entities": [],
+                "resources": [
+                    {"name": "iron-ore", "position": {"x": 480, "y": -290}, "distance_from_base": 560}
+                ],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
+            production_targets={"iron-plate": 90.0},
+        )
+
+        self.assertEqual(result["selected_skill"], "plan_factory_site")
+        self.assertNotIn("guardrail_adjusted", result)
+
     def test_copper_target_bottleneck_expands_copper_smelting(self):
         result = heuristic_strategy(
             "launch_rocket_program",
@@ -281,6 +333,16 @@ class StrategyTests(unittest.TestCase):
     def test_normalize_rejects_unknown_skill(self):
         result = normalize_strategy_response({"selected_skill": "teleport_to_rocket", "priority": 100})
         self.assertEqual(result["selected_skill"], "launch_rocket_program")
+
+    def test_normalize_uses_llm_justification_as_reason(self):
+        result = normalize_strategy_response(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 50,
+                "justification": "Remote starter sites need layout repair before expansion.",
+            }
+        )
+        self.assertEqual(result["reason"], "Remote starter sites need layout repair before expansion.")
 
     def test_catalog_exposes_llm_scope(self):
         catalog = skill_catalog_payload()

@@ -4,6 +4,7 @@ cd /d "%~dp0"
 
 set PYTHONPATH=src
 set FACTORIO_AI_SLURM_ENABLED=1
+set FACTORIO_AI_SLURM_MODE=attach
 set FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker
 set FACTORIO_AI_SLURM_JOB_NAME=factorio-ai-worker
 set FACTORIO_AI_SLURM_GPUS_PER_NODE=1

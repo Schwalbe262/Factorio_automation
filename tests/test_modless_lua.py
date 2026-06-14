@@ -20,6 +20,8 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("base = { anchor_position", command)
         self.assertIn("clear_of_resources", command)
         self.assertIn("distance_from_agent", command)
+        self.assertIn("distance_from_base", command)
+        self.assertIn("resources = collect_resources(base_anchor)", command)
         self.assertNotIn("ai_observe", command)
         self.assertNotIn("factorio_ai_autoplayer", command)
 
