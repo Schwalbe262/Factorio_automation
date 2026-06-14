@@ -2243,6 +2243,35 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "craft")
         self.assertEqual(decision.action["recipe"], "assembling-machine-1")
 
+    def test_circuit_automation_uses_existing_mall_assembler_for_assembler_bootstrap(self):
+        obs = powered_automation_observation()
+        obs["player"]["position"] = {"x": -40.5, "y": 15.5}
+        obs["inventory"] = {
+            "electronic-circuit": 6,
+            "iron-gear-wheel": 10,
+            "iron-plate": 18,
+            "inserter": 1,
+        }
+        obs["craftable"] = {"assembling-machine-1": 2}
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 918,
+                "position": {"x": -40.5, "y": 15.5},
+                "distance": 43,
+                "recipe": "iron-gear-wheel",
+                "electric_network_connected": True,
+                "inventories": {"1": {}},
+            }
+        )
+
+        decision = CircuitAutomationSkill().next_action(obs)
+
+        self.assertNotEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["type"], "set_recipe")
+        self.assertEqual(decision.action["recipe"], "assembling-machine-1")
+        self.assertEqual(decision.action["unit_number"], 918)
+
     def test_circuit_automation_uses_gear_mall_before_handcrafting_assembler_prerequisite(self):
         obs = powered_automation_observation()
         obs["inventory"] = {

@@ -4673,3 +4673,26 @@
 - Failure reason: None for gear crafting. The trace still shows manual-style iron plate collection and previous runs showed manual coal mining; those are separate automation-quality issues.
 - Next action: Restart hidden autopilot on the latest code and continue monitoring for remaining manual fallback actions.
 - Token usage: 6,689,547 tokens / weekly quota unavailable.
+
+## 2026-06-15 05:47:32 +09:00 - Loop 223
+- Part: assembler bootstrap mall production
+- Goal: Avoid hand-crafting `assembling-machine-1` during circuit automation when a powered mall assembler can be temporarily repurposed.
+- Hypothesis: The fresh circuit automation trace reached `craft assembling-machine-1 for circuit automation bootstrap` because `CircuitAutomationSkill` still produced missing assemblers by hand after gathering prerequisites.
+- Actions:
+  - Stopped the running autopilot that had been started before this patch.
+  - Changed `CircuitAutomationSkill._ensure_item_quantity("assembling-machine-1")` to gather electronic circuits, gears, and iron first, then delegate to `BuildItemMallSkill("assembling-machine-1")` before falling back to hand craft.
+  - Extended `_find_build_item_mall_cell` so `BuildItemMallSkill("assembling-machine-1")` can reuse a powered non-circuit assembler when no spare assembler exists.
+  - Added a regression test where circuit automation switches an existing powered gear assembler to `assembling-machine-1` instead of crafting assemblers by hand.
+  - Recorded a Codex token usage sample with label `part91 assembler bootstrap mall production`.
+- Candidates:
+  - Bad trace: `strategy-circuit-automation-20260614-204234.jsonl` step 15 crafted two `assembling-machine-1`.
+  - Selected fix: use an existing powered mall assembler as the temporary assembler-production machine.
+- Metrics:
+  - Planner tests: `python -m unittest tests.test_planner` -> 141 passed.
+  - Full tests: `python -m unittest discover -s tests` -> 411 passed.
+  - Regression decision: `set_recipe assembling-machine-1` on existing powered mall assembler unit `918`, not `craft`.
+  - Token usage sample: `6,927,582` tokens; weekly quota unavailable.
+- Result: Circuit automation now has an assembler-based path for missing `assembling-machine-1` before using hand craft fallback.
+- Failure reason: None in tests. Fresh live verification is still needed after restart.
+- Next action: Commit and push Part 91, then restart hidden autopilot and inspect the new circuit automation trace for `craft assembling-machine-1`.
+- Token usage: 6,927,582 tokens / weekly quota unavailable.

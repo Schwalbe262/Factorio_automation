@@ -248,3 +248,11 @@
 - After: The regression path returns `take iron-gear-wheel from build item mall assembler`; fresh live trace `strategy-circuit-automation-20260614-203950.jsonl` has no gear craft matches and feeds assembler unit `318` with iron plates.
 - Evidence: `{"source_loop":221,"verification_loop":222,"tests":"410 passed","bad_trace":"strategy-circuit-automation-20260614-203509.jsonl step 1 craft iron-gear-wheel","verified_trace":"strategy-circuit-automation-20260614-203950.jsonl","fresh_trace_gear_craft_matches":0,"regression_decision":"take iron-gear-wheel from build item mall assembler"}`
 - Remaining risk: This fixes gear hand-crafting in circuit automation; manual-style iron plate collection and coal mining remain separate automation-quality issues.
+
+## 2026-06-15 05:47:32 +09:00 - Insight 30
+- Source loop: Loop 223
+- Improvement: Circuit automation can now produce missing `assembling-machine-1` through a powered mall assembler before hand-crafting fallback.
+- Before: `strategy-circuit-automation-20260614-204234.jsonl` step 15 used `craft assembling-machine-1 for circuit automation bootstrap`.
+- After: The regression path switches an existing powered gear assembler to `assembling-machine-1` with `set_recipe`, so assembler bootstrap can be machine-produced.
+- Evidence: `{"source_loop":223,"tests":"411 passed","bad_trace":"strategy-circuit-automation-20260614-204234.jsonl step 15 craft assembling-machine-1","regression_decision":"set_recipe assembling-machine-1 on existing powered mall assembler"}`
+- Remaining risk: The assembler-production path is test-verified; a fresh live autopilot run should confirm the circuit automation trace no longer reaches hand-crafted assembler bootstrap.

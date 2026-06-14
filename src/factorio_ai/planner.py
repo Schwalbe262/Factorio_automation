@@ -5391,6 +5391,10 @@ class CircuitAutomationSkill:
                 decision = self._ensure_item_quantity(observation, player, prerequisite, count)
                 if decision is not None:
                     return decision
+            if bool(_technology_state(observation, "automation").get("researched")):
+                decision = BuildItemMallSkill("assembling-machine-1", quantity).next_action(observation)
+                if not decision.done:
+                    return decision
             if craftable_count(observation, "assembling-machine-1") > 0:
                 return PlannerDecision(
                     {
@@ -6178,6 +6182,19 @@ def _find_build_item_mall_cell(
             )
         ]
     if not candidates and target_item == "iron-gear-wheel" and inventory_count(observation, "assembling-machine-1") <= 0:
+        candidates = [
+            item
+            for item in assemblers
+            if item.get("electric_network_connected")
+            and item.get("recipe") not in {"copper-cable", "electronic-circuit"}
+            and _within_allowed_factory_area(
+                observation,
+                _position(item),
+                allow_existing_remote=allow_existing_remote,
+                reference_position=reference_position,
+            )
+        ]
+    if not candidates and target_item == "assembling-machine-1" and inventory_count(observation, "assembling-machine-1") <= 0:
         candidates = [
             item
             for item in assemblers
