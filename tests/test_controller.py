@@ -71,6 +71,43 @@ class ControllerTests(unittest.TestCase):
 
         self.assertIs(_guard_post_automation_handcraft(observation, decision), decision)
 
+    def test_guard_blocks_gear_handcraft_when_assembler_exists_even_if_research_missing(self):
+        observation = {
+            "research": {"technologies": {"automation": {"researched": False}}},
+            "inventory": {},
+            "entities": [{"name": "assembling-machine-1", "position": {"x": 0, "y": 0}}],
+        }
+        decision = PlannerDecision(
+            action={"type": "craft", "recipe": "iron-gear-wheel", "count": 1},
+            reason="test",
+        )
+
+        guarded = _guard_post_automation_handcraft(observation, decision)
+
+        self.assertEqual(guarded.action, {"type": "wait", "ticks": 120})
+        self.assertIn("blocked direct iron-gear-wheel handcraft", guarded.reason)
+
+    def test_no_mod_action_blocks_direct_gear_handcraft_after_automation(self):
+        class FakeController(ModlessFactorioController):
+            def observe(self):
+                return {
+                    "ok": True,
+                    "tick": 1,
+                    "inventory": {},
+                    "entities": [],
+                    "research": {"technologies": {"automation": {"researched": True}}},
+                    "player": {"name": "AI"},
+                    "execution": {"mode": "player"},
+                    "enemies": [],
+                }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            response = controller.act({"type": "craft", "recipe": "iron-gear-wheel", "count": 1})
+
+        self.assertFalse(response["ok"])
+        self.assertIn("blocked direct iron-gear-wheel handcraft", response["reason"])
+
     def test_required_remote_llm_pending_does_not_submit_strategy_task(self):
         class FakeController(FactorioController):
             def observe(self):

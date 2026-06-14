@@ -467,8 +467,8 @@ def run_strategy_model_benchmark(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def try_llm_planner(payload: dict[str, Any]) -> dict[str, Any] | None:
-    base_url = os.getenv("FACTORIO_AI_LLM_BASE_URL", "").rstrip("/")
-    model = os.getenv("FACTORIO_AI_LLM_MODEL", "")
+    base_url = "".join(os.getenv("FACTORIO_AI_LLM_BASE_URL", "").split()).rstrip("/")
+    model = os.getenv("FACTORIO_AI_LLM_MODEL", "").strip()
     if not base_url or not model:
         return None
     prompt = (
@@ -494,7 +494,7 @@ def try_llm_planner(payload: dict[str, Any]) -> dict[str, Any] | None:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    api_key = os.getenv("FACTORIO_AI_LLM_API_KEY")
+    api_key = os.getenv("FACTORIO_AI_LLM_API_KEY", "").strip()
     if api_key:
         req.add_header("Authorization", f"Bearer {api_key}")
     try:
@@ -602,8 +602,8 @@ def call_llm_json_with_diagnostics(
     prompt: str,
     schema: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-    base_url = os.getenv("FACTORIO_AI_LLM_BASE_URL", "").rstrip("/")
-    model = os.getenv("FACTORIO_AI_LLM_MODEL", "")
+    base_url = "".join(os.getenv("FACTORIO_AI_LLM_BASE_URL", "").split()).rstrip("/")
+    model = os.getenv("FACTORIO_AI_LLM_MODEL", "").strip()
     if not base_url or not model:
         return None, {"llm_error": "LLM base URL or model is not configured"}
     request_payload: dict[str, Any] = {
@@ -624,7 +624,7 @@ def call_llm_json_with_diagnostics(
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    api_key = os.getenv("FACTORIO_AI_LLM_API_KEY")
+    api_key = os.getenv("FACTORIO_AI_LLM_API_KEY", "").strip()
     if api_key:
         req.add_header("Authorization", f"Bearer {api_key}")
     try:

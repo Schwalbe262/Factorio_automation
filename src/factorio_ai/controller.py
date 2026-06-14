@@ -194,6 +194,7 @@ _PLANNING_SITE_RETRY_MARKERS = (
     "cannot find a powered or wireable site",
 )
 DEFAULT_PLANNING_SITE_CACHE_SECONDS = 180.0
+GEAR_HANDCRAFT_BLOCKING_ASSEMBLER_NAMES = {"assembling-machine-1", "assembling-machine-2", "assembling-machine-3"}
 
 
 def _planning_site_retry_needed(decision: PlannerDecision) -> bool:
@@ -224,17 +225,34 @@ def _automation_researched_in_observation(observation: dict[str, Any]) -> bool:
     return bool(isinstance(automation, dict) and automation.get("researched"))
 
 
+def _gear_handcraft_automation_context_in_observation(observation: dict[str, Any]) -> bool:
+    if _automation_researched_in_observation(observation):
+        return True
+    inventory = observation.get("inventory")
+    if isinstance(inventory, dict) and int(inventory.get("assembling-machine-1") or 0) > 0:
+        return True
+    for entity in observation.get("entities") or []:
+        if isinstance(entity, dict) and str(entity.get("name") or "") in GEAR_HANDCRAFT_BLOCKING_ASSEMBLER_NAMES:
+            return True
+    return False
+
+
+def _gear_handcraft_guard_reason(observation: dict[str, Any], action: dict[str, Any]) -> str:
+    if (
+        action.get("type") == "craft"
+        and action.get("recipe") == "iron-gear-wheel"
+        and _gear_handcraft_automation_context_in_observation(observation)
+    ):
+        return "blocked direct iron-gear-wheel handcraft after assembler automation exists; use gear mall or a logistic line instead"
+    return ""
+
+
 def _guard_post_automation_handcraft(observation: dict[str, Any], decision: PlannerDecision) -> PlannerDecision:
     action = decision.action
-    if (
-        isinstance(action, dict)
-        and action.get("type") == "craft"
-        and action.get("recipe") == "iron-gear-wheel"
-        and _automation_researched_in_observation(observation)
-    ):
+    if isinstance(action, dict) and _gear_handcraft_guard_reason(observation, action):
         return PlannerDecision(
             {"type": "wait", "ticks": 120},
-            "blocked direct iron-gear-wheel handcraft after Automation; use gear mall or a logistic line instead",
+            _gear_handcraft_guard_reason(observation, action),
         )
     return decision
 
@@ -2266,8 +2284,20 @@ class ModlessFactorioController(FactorioController):
 
     def act(self, action: dict[str, Any]) -> dict[str, Any]:
         validate_action(action)
-        if _real_player_execution_required():
+        observation: dict[str, Any] | None = None
+        if action.get("type") == "craft" and action.get("recipe") == "iron-gear-wheel":
             observation = self.observe()
+            guard_reason = _gear_handcraft_guard_reason(observation, action)
+            if guard_reason:
+                return {
+                    "ok": False,
+                    "reason": guard_reason,
+                    "mode": "modless-rcon-lua",
+                    "player": observation.get("player"),
+                    "execution": observation.get("execution"),
+                }
+        if _real_player_execution_required():
+            observation = observation or self.observe()
             observation, recovery_problem = self._maybe_restore_real_player_controller(observation)
             if recovery_problem:
                 return {

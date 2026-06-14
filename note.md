@@ -5510,3 +5510,29 @@
 - Next action: Add a planner/strategy guardrail for sustained `iron-plate` logistics into the gear/belt mall, then fix the Slurm/Qwen strategy source issue before restarting require-LLM autopilot.
 - Token usage: included in Loop 253 implementation token record / weekly quota unavailable.
 
+## 2026-06-15 07:51:15 +09:00 - Loop 261
+- Part: Part 96 - direct gear handcraft and Qwen worker recovery
+- Goal: Stop `iron-gear-wheel` direct crafting after assembler automation exists, block distant iron-plate hand-carry into the gear mall, and restore strict Qwen strategy as `source=llm`.
+- Hypothesis: The observed gear-crafting problem can reappear if the research flag is stale or if an action bypasses the planner; the Qwen fallback loop is caused by whitespace-polluted remote LLM env values.
+- Actions:
+  - Added planner automation-context detection so gear handcraft fallback is disabled when Automation is researched, an assembler exists, or an assembler is already in inventory.
+  - Added no-mod execution-layer guard so direct `craft iron-gear-wheel` actions are rejected before RCON execution after assembler automation exists.
+  - Added entity-output source references for furnaces/assemblers and filtered incomplete belt-only pseudo-sites so remote plate source detection no longer misses the real distant furnace.
+  - Normalized Slurm worker LLM env values: model names are trimmed and `FACTORIO_AI_LLM_BASE_URL` removes internal whitespace such as `8000 /v1`.
+  - Deployed the updated code/config to `/home1/r1jae262/factorio-ai-worker`.
+- Candidates:
+  - Leave the planner-only gear guard: rejected because `no-mod-action` and other direct action paths can bypass planner decisions.
+  - Block only after `automation.researched=true`: rejected because stale or incomplete observations can still show existing assemblers.
+  - Treat any existing assembler/inventory assembler as automation context and block direct gears: selected.
+- Metrics:
+  - Tests: `python -m unittest discover tests` -> 433 passed.
+  - Current-world gear mall decision: `action=null`, reason requires `iron-plate logistic line` from distant furnace unit `43` at 152 tiles and refuses repeated hand-carry.
+  - Controller gear craft guard decision: `action={"type":"wait","ticks":120}` for `craft iron-gear-wheel`.
+  - Slurm status after deploy: `llm_ready=true`, `FACTORIO_AI_LLM_BASE_URL=http://127.0.0.1:8000/v1`, model `Qwen/Qwen3.5-4B`, model visible.
+  - Strict strategy verification: `no-mod-strategy --require-llm` returned `source=llm`; deterministic reconciliation adjusted `plan_factory_site` to `automate_electronic_circuit_line`.
+  - Token usage sample: active goal counter `8,751,029`; recorder delta `8,564,388`; weekly quota unavailable.
+- Result: Direct gear craft paths are blocked after assembler automation exists, distant iron-plate hand-carry into the gear mall is refused, and strict Qwen strategy works again as an LLM result.
+- Failure reason: None for this guardrail/worker recovery loop. Remaining gameplay blocker is building a sustained iron-plate logistic line into the gear/belt mall instead of using player seed/hand-carry.
+- Next action: Commit/push Part 96, then restart the headless no-mod require-LLM autopilot with the AI player rather than the real GUI player.
+- Token usage: 8,751,029 active goal tokens observed / weekly quota unavailable.
+

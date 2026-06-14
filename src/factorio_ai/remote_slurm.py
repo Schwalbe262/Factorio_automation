@@ -121,13 +121,20 @@ def _worker_env_values(cfg: RemoteSlurmConfig) -> dict[str, str]:
     for name in LLM_ENV_VARS + VLLM_ENV_VARS:
         value = os.getenv(name)
         if value is not None:
-            values[name] = value
+            values[name] = _normalize_worker_env_value(name, value)
     if values.get("FACTORIO_AI_VLLM_MODEL") and not values.get("FACTORIO_AI_LLM_MODEL"):
         values["FACTORIO_AI_LLM_MODEL"] = values["FACTORIO_AI_VLLM_MODEL"]
     if values.get("FACTORIO_AI_VLLM_MODEL") and not values.get("FACTORIO_AI_LLM_BASE_URL"):
         port = values.get("FACTORIO_AI_VLLM_PORT") or "8000"
         values["FACTORIO_AI_LLM_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
     return values
+
+
+def _normalize_worker_env_value(name: str, value: str) -> str:
+    value = value.strip()
+    if name == "FACTORIO_AI_LLM_BASE_URL":
+        return "".join(value.split())
+    return value
 
 
 def deploy(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
@@ -436,7 +443,7 @@ safe_value_names = {json.dumps(["FACTORIO_AI_LLM_BASE_URL", "FACTORIO_AI_LLM_MOD
 factorio_ai_path = {json.dumps(remote_dir + "/factorio-ai")}
 
 env = {{name: bool(os.getenv(name)) for name in env_names}}
-env_values = {{name: os.getenv(name, "") for name in safe_value_names}}
+env_values = {{name: ("".join(os.getenv(name, "").split()) if name == "FACTORIO_AI_LLM_BASE_URL" else os.getenv(name, "").strip()) for name in safe_value_names}}
 gpu_env = {{name: os.getenv(name, "") for name in gpu_env_names}}
 nvidia_smi = shutil.which("nvidia-smi")
 gpu_output = ""
@@ -451,8 +458,8 @@ if nvidia_smi:
     except Exception as exc:
         gpu_error = f"{{type(exc).__name__}}: {{exc}}"
 
-llm_base_url = os.getenv("FACTORIO_AI_LLM_BASE_URL", "").rstrip("/")
-llm_model = os.getenv("FACTORIO_AI_LLM_MODEL", "")
+llm_base_url = "".join(os.getenv("FACTORIO_AI_LLM_BASE_URL", "").split()).rstrip("/")
+llm_model = os.getenv("FACTORIO_AI_LLM_MODEL", "").strip()
 llm_endpoint = {{
     "configured": bool(llm_base_url),
     "models_ok": False,
@@ -673,7 +680,7 @@ def _llm_status_remediation(
 def _status_needs_local_gpu(env_values: dict[str, Any]) -> bool:
     if env_values.get("FACTORIO_AI_VLLM_MODEL"):
         return True
-    base_url = str(env_values.get("FACTORIO_AI_LLM_BASE_URL") or "").lower()
+    base_url = "".join(str(env_values.get("FACTORIO_AI_LLM_BASE_URL") or "").split()).lower()
     if not base_url:
         return True
     return "127.0.0.1" in base_url or "localhost" in base_url
@@ -1212,6 +1219,8 @@ def _attached_env_setup(remote_dir: str | None = None) -> str:
         commands.append(
             f"if [[ -f {config_path} ]]; then "
             f"while IFS='=' read -r key value; do "
+            f"value=\"$(printf '%s' \"$value\" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')\"; "
+            f"if [[ \"$key\" == FACTORIO_AI_LLM_BASE_URL ]]; then value=\"$(printf '%s' \"$value\" | tr -d '[:space:]')\"; fi; "
             f"case \"$key\" in FACTORIO_AI_LLM_*|FACTORIO_AI_VLLM_*|FACTORIO_AI_CONDA_ENV) "
             f"export \"$key=$value\";; "
             f"esac; "
@@ -1221,12 +1230,12 @@ def _attached_env_setup(remote_dir: str | None = None) -> str:
     for name in LLM_ENV_VARS + VLLM_ENV_VARS:
         value = os.getenv(name)
         if value:
-            commands.append(f"export {name}={shlex.quote(value)}")
-    vllm_model = os.getenv("FACTORIO_AI_VLLM_MODEL")
+            commands.append(f"export {name}={shlex.quote(_normalize_worker_env_value(name, value))}")
+    vllm_model = (os.getenv("FACTORIO_AI_VLLM_MODEL") or "").strip()
     if vllm_model and not os.getenv("FACTORIO_AI_LLM_MODEL"):
         commands.append(f"export FACTORIO_AI_LLM_MODEL={shlex.quote(vllm_model)}")
     if vllm_model and not os.getenv("FACTORIO_AI_LLM_BASE_URL"):
-        port = os.getenv("FACTORIO_AI_VLLM_PORT") or "8000"
+        port = (os.getenv("FACTORIO_AI_VLLM_PORT") or "8000").strip()
         commands.append(f"export FACTORIO_AI_LLM_BASE_URL={shlex.quote(f'http://127.0.0.1:{port}/v1')}")
     return ("; ".join(commands) + "; ") if commands else ""
 

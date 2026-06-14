@@ -2682,6 +2682,42 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("logistic line", decision.reason)
         self.assertIn("refusing repeated hand-carry", decision.reason)
 
+    def test_build_item_mall_blocks_remote_iron_plate_prerequisite_hand_carry(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["entities"].append(mall_assembler(recipe="iron-gear-wheel"))
+        obs["entities"].extend(
+            [
+                {
+                    "name": "transport-belt",
+                    "unit_number": 930,
+                    "position": {"x": 3, "y": 5},
+                    "direction": 4,
+                    "inventories": {},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 931,
+                    "position": {"x": 4, "y": 5},
+                    "direction": 4,
+                    "inventories": {},
+                },
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 980,
+                    "position": {"x": 120, "y": 0},
+                    "recipe": "iron-plate",
+                    "inventories": {"3": {"iron-plate": 20}},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("iron-gear-wheel", 4).next_action(obs)
+
+        self.assertIsNone(decision.action)
+        self.assertIn("iron-plate logistic line", decision.reason)
+        self.assertIn("refusing repeated hand-carry", decision.reason)
+
     def test_build_item_mall_takes_output(self):
         obs = powered_automation_observation()
         obs["inventory"] = {}

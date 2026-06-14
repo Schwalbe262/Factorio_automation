@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 from math import ceil
 from typing import Any
 
@@ -59,6 +60,12 @@ AUTOMATED_SITE_INPUT_ITEMS = {
     "automation-science-pack",
     "logistic-science-pack",
 }
+
+
+@dataclass(frozen=True)
+class FactorySourceReference:
+    site_id: str
+    position: dict[str, float]
 
 
 class FactoryLayoutImprovementSkill:
@@ -5468,7 +5475,7 @@ class CircuitAutomationSkill:
             return None
 
         if item == "iron-gear-wheel":
-            if bool(_technology_state(observation, "automation").get("researched")):
+            if _gear_handcraft_automation_context_active(observation):
                 decision = BuildItemMallSkill("iron-gear-wheel", max(quantity, 4)).next_action(observation)
                 if not decision.done:
                     return decision
@@ -5485,12 +5492,30 @@ class CircuitAutomationSkill:
             return self._ensure_item_quantity(observation, player, "iron-plate", 2 * (quantity - inventory_count(observation, "iron-gear-wheel")))
 
         if item == "iron-plate":
+            if reference_position is not None:
+                logistics_blocker = _manual_site_input_logistics_blocker(
+                    observation,
+                    item,
+                    reference_position,
+                    consumer_label=f"{self.target_item} mall prerequisite",
+                )
+                if logistics_blocker is not None:
+                    return logistics_blocker
             decision = self.iron_skill.next_action(observation, target_count=quantity, inventory_only=True)
             if not decision.done:
                 return decision
             return None
 
         if item == "copper-plate":
+            if reference_position is not None:
+                logistics_blocker = _manual_site_input_logistics_blocker(
+                    observation,
+                    item,
+                    reference_position,
+                    consumer_label=f"{self.target_item} mall prerequisite",
+                )
+                if logistics_blocker is not None:
+                    return logistics_blocker
             decision = self.copper_skill.next_action(observation, target_count=quantity, inventory_only=True)
             if not decision.done:
                 return decision
@@ -6079,7 +6104,7 @@ class BuildItemMallSkill:
             return None
 
         if item == "iron-gear-wheel":
-            if bool(_technology_state(observation, "automation").get("researched")):
+            if _gear_handcraft_automation_context_active(observation):
                 if self.target_item != "iron-gear-wheel":
                     decision = BuildItemMallSkill("iron-gear-wheel", max(quantity, 4)).next_action(
                         observation,
@@ -6182,6 +6207,17 @@ def _automation_researched(observation: dict[str, Any]) -> bool:
     return bool(_technology_state(observation, "automation").get("researched"))
 
 
+def _gear_handcraft_automation_context_active(observation: dict[str, Any]) -> bool:
+    if _automation_researched(observation):
+        return True
+    if inventory_count(observation, "assembling-machine-1") > 0:
+        return True
+    for entity in observation.get("entities") or []:
+        if isinstance(entity, dict) and str(entity.get("name") or "") in ASSEMBLER_ENTITY_NAMES:
+            return True
+    return False
+
+
 def _ensure_iron_gears_without_post_automation_handcraft(
     observation: dict[str, Any],
     target_count: int,
@@ -6194,7 +6230,7 @@ def _ensure_iron_gears_without_post_automation_handcraft(
     if current_count >= target_count:
         return None
     missing = target_count - current_count
-    if not _automation_researched(observation):
+    if not _gear_handcraft_automation_context_active(observation):
         craftable = craftable_count(observation, "iron-gear-wheel")
         if craftable <= 0:
             return None
@@ -7171,7 +7207,7 @@ def _build_item_mall_batch_count(product_count: float, target_count: int) -> int
 
 
 def _block_player_mall_output_collection_after_automation(observation: dict[str, Any], target_item: str) -> bool:
-    return target_item == "iron-gear-wheel" and _automation_researched(observation)
+    return target_item == "iron-gear-wheel" and _gear_handcraft_automation_context_active(observation)
 
 
 def _manual_site_input_logistics_blocker(
@@ -7210,10 +7246,51 @@ def _nearest_factory_source_site(
         site
         for site in estimate_factory_sites(observation)
         if site.item == item and site.kind in source_kinds
+        and _factory_source_site_usable(site)
     ]
+    candidates.extend(_entity_output_source_references(observation, item))
     if not candidates:
         return None
     return min(candidates, key=lambda site: distance(site.position, consumer_position))
+
+
+def _factory_source_site_usable(site: Any) -> bool:
+    status = str(getattr(site, "status", "") or "")
+    if any(token in status for token in ("incomplete", "missing", "blocked")):
+        return False
+    machines = [str(item) for item in (getattr(site, "machines", []) or [])]
+    if machines and all(item.startswith("transport-belt") for item in machines):
+        return False
+    return True
+
+
+def _entity_output_source_references(observation: dict[str, Any], item: str) -> list[FactorySourceReference]:
+    references: list[FactorySourceReference] = []
+    furnace_names = {"stone-furnace", "steel-furnace", "electric-furnace"}
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict) or not isinstance(entity.get("position"), dict):
+            continue
+        name = str(entity.get("name") or "")
+        recipe = str(entity.get("recipe") or "")
+        if name in furnace_names and item in {"iron-plate", "copper-plate"}:
+            if entity_item_count(entity, item) > 0 or recipe == item:
+                references.append(
+                    FactorySourceReference(
+                        site_id=f"entity-source:{item}:{name}:{entity.get('unit_number') or _position_key(entity)}",
+                        position=_position(entity),
+                    )
+                )
+                continue
+        if name in ASSEMBLER_ENTITY_NAMES:
+            recipe_spec = RECIPES.get(recipe)
+            if recipe_spec is not None and item in recipe_spec.products and entity_item_count(entity, item) > 0:
+                references.append(
+                    FactorySourceReference(
+                        site_id=f"entity-source:{item}:{name}:{entity.get('unit_number') or _position_key(entity)}",
+                        position=_position(entity),
+                    )
+                )
+    return references
 
 
 def _near_recipe_assembler(
