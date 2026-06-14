@@ -109,6 +109,14 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("research_unit_ingredients", command)
         self.assertIn("trigger = true", command)
 
+    def test_build_action_is_idempotent_for_existing_entities(self):
+        command = build_modless_action_command({"type": "build", "name": "offshore-pump", "position": {"x": 1, "y": 2}})
+        action_build = command[command.index("local function action_build") :]
+
+        self.assertIn("existing_built_entity", command)
+        self.assertIn('status = "already_exists"', command)
+        self.assertLess(action_build.index("existing_built_entity(agent.surface"), action_build.index("inventory.get_item_count"))
+
 
 if __name__ == "__main__":
     unittest.main()

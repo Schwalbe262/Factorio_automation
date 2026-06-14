@@ -30,6 +30,7 @@ from .strategy import heuristic_strategy, make_layout_improvement_context
 from .targets import TARGET_ITEMS, load_targets, parse_target_form, save_targets
 from .token_usage import token_usage_summary
 from .trace_archive import trace_archive_summary
+from .world_memory import load_world_map_memory, summarize_world_map_memory
 
 
 FACTORIO_ROUTE = "/factorio"
@@ -319,6 +320,14 @@ TEXT["en"].update(
         "selected_improvement_site": "Selected",
         "selected_improvement_target": "Selected improvement target",
         "clear_improvement_site": "Cancel",
+        "world_map_memory": "World Map Memory",
+        "memory_encoding": "Encoding",
+        "memory_age": "Age",
+        "memory_feature_index": "Feature Index",
+        "known_water_sites": "Known water anchors",
+        "resource_patches": "Resource patches",
+        "factory_zones": "Factory zones",
+        "no_world_map_memory": "No spatial memory has been recorded yet.",
     }
 )
 TEXT["ko"].update(
@@ -366,6 +375,14 @@ TEXT["ko"].update(
         "selected_improvement_site": "\uc120\ud0dd\ub428",
         "selected_improvement_target": "\uc120\ud0dd\ub41c \uac1c\uc120 \ub300\uc0c1",
         "clear_improvement_site": "\ucde8\uc18c",
+        "world_map_memory": "World Map Memory",
+        "memory_encoding": "Encoding",
+        "memory_age": "Age",
+        "memory_feature_index": "Feature Index",
+        "known_water_sites": "Known water anchors",
+        "resource_patches": "Resource patches",
+        "factory_zones": "Factory zones",
+        "no_world_map_memory": "No spatial memory has been recorded yet.",
     }
 )
 TEXT["en"].update(
@@ -756,6 +773,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
     layout_validation_feedback = layout_validation_feedback_summary(cfg.log_dir)
     run_journal = run_journal_summary(cfg.log_dir)
     trace_archives = trace_archive_summary(cfg.runtime_dir / "trace_archives")
+    world_map_memory = summarize_world_map_memory(load_world_map_memory(cfg.runtime_dir))
     try:
         observation, adapter = observe_dashboard_state(cfg)
         monitor = summarize_factory(observation, objective, production_targets=targets.per_minute)
@@ -796,6 +814,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "strategy_worker_comparison": worker_comparison,
             "run_journal": run_journal,
             "trace_archives": trace_archives,
+            "world_map_memory": world_map_memory,
         }
     except Exception as exc:  # noqa: BLE001
         return {
@@ -812,6 +831,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "strategy_worker_comparison": worker_comparison,
             "run_journal": run_journal,
             "trace_archives": trace_archives,
+            "world_map_memory": world_map_memory,
         }
 
 
@@ -946,6 +966,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     layout_background = state.get("layout_background") if isinstance(state.get("layout_background"), dict) else {}
     run_journal = state.get("run_journal") if isinstance(state.get("run_journal"), dict) else {}
     trace_archives = state.get("trace_archives") if isinstance(state.get("trace_archives"), dict) else {}
+    world_map_memory = state.get("world_map_memory") if isinstance(state.get("world_map_memory"), dict) else {}
     selected_improvement_site = (
         state.get("selected_improvement_site") if isinstance(state.get("selected_improvement_site"), dict) else {}
     )
@@ -1032,6 +1053,11 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
       {_selected_improvement_site_panel(selected_improvement_site, lang, state.get("objective"))}
       {_factory_site_table(factory_sites, logistics_links, selected_improvement_site, lang, state.get("objective"))}
       {_unassigned_logistics_table(factory_sites, logistics_links, lang)}
+    </section>
+
+    <section class="panel">
+      <h2>{_t(lang, "world_map_memory")}</h2>
+      {_world_map_memory_panel(world_map_memory, lang)}
     </section>
 
     <section class="panel">
@@ -1811,6 +1837,78 @@ def _power_network_table(rows: list[Any], lang: str) -> str:
         f"<th>{_t(lang, 'generation_kw')}</th><th>{_t(lang, 'demand_kw')}</th>"
         f"<th>{_t(lang, 'satisfaction')}</th><th>{_t(lang, 'unconnected')}</th>"
         f"<th>{_t(lang, 'reason')}</th></tr></thead><tbody>{body}</tbody></table>"
+    )
+
+
+def _world_map_memory_panel(memory: dict[str, Any], lang: str) -> str:
+    if not memory or not memory.get("schema_version"):
+        return f"<p class=\"muted\">{_t(lang, 'no_world_map_memory')}</p>"
+    resources = memory.get("resources") if isinstance(memory.get("resources"), dict) else {}
+    factory = memory.get("factory") if isinstance(memory.get("factory"), dict) else {}
+    spatial_index = memory.get("spatial_index") if isinstance(memory.get("spatial_index"), dict) else {}
+    water_sites = memory.get("known_water_sites") if isinstance(memory.get("known_water_sites"), list) else []
+    patches = resources.get("patches") if isinstance(resources.get("patches"), list) else []
+    zones = factory.get("zones") if isinstance(factory.get("zones"), list) else []
+    candidate_counts = memory.get("candidate_counts") if isinstance(memory.get("candidate_counts"), dict) else {}
+    summary_rows = {
+        _t(lang, "memory_encoding"): memory.get("encoding") or "",
+        _t(lang, "updated"): _format_kst_timestamp(memory.get("updated_at")),
+        _t(lang, "memory_age"): f"{memory.get('updated_age_seconds', 0)}s",
+        _t(lang, "memory_feature_index"): (
+            f"{spatial_index.get('feature_count', 0)} features / "
+            f"{spatial_index.get('cell_count', 0)} cells @ {spatial_index.get('cell_size', '')} tiles"
+        ),
+        "Planning candidates": ", ".join(f"{key}={value}" for key, value in sorted(candidate_counts.items())),
+    }
+    water_body = "".join(
+        "<tr>"
+        f"<td>{_position_text(row.get('position'))}</td>"
+        f"<td>{escape(str(row.get('direction') or ''))}</td>"
+        f"<td>{escape(str(row.get('distance') or ''))}</td>"
+        "</tr>"
+        for row in water_sites[:8]
+        if isinstance(row, dict)
+    )
+    patch_body = "".join(
+        "<tr>"
+        f"<td>{_item_cell(str(row.get('name') or ''))}</td>"
+        f"<td>{_position_text(row.get('center'))}</td>"
+        f"<td>{escape(str(row.get('sample_count') or 0))}</td>"
+        f"<td>{escape(str(row.get('total_amount') or 0))}</td>"
+        "</tr>"
+        for row in patches[:8]
+        if isinstance(row, dict)
+    )
+    zone_body = "".join(
+        "<tr>"
+        f"<td>{escape(str(row.get('id') or ''))}</td>"
+        f"<td>{_position_text(row.get('center'))}</td>"
+        f"<td>{escape(str(row.get('entity_count') or 0))}</td>"
+        f"<td>{escape(', '.join(list((row.get('entity_counts') or {}).keys())[:5]))}</td>"
+        "</tr>"
+        for row in zones[:8]
+        if isinstance(row, dict)
+    )
+    water_table = (
+        f"<table><thead><tr><th>{_t(lang, 'position')}</th><th>Direction</th><th>{_t(lang, 'length')}</th></tr></thead><tbody>{water_body}</tbody></table>"
+        if water_body
+        else f"<p class=\"muted\">{_t(lang, 'no_sites')}</p>"
+    )
+    patch_table = (
+        f"<table><thead><tr><th>{_t(lang, 'item')}</th><th>{_t(lang, 'position')}</th><th>Samples</th><th>Amount</th></tr></thead><tbody>{patch_body}</tbody></table>"
+        if patch_body
+        else f"<p class=\"muted\">{_t(lang, 'no_inventory')}</p>"
+    )
+    zone_table = (
+        f"<table><thead><tr><th>ID</th><th>{_t(lang, 'position')}</th><th>{_t(lang, 'count')}</th><th>{_t(lang, 'machines')}</th></tr></thead><tbody>{zone_body}</tbody></table>"
+        if zone_body
+        else f"<p class=\"muted\">{_t(lang, 'no_sites')}</p>"
+    )
+    return (
+        _key_value_table(summary_rows, lang)
+        + f"<h3>{escape(_t(lang, 'known_water_sites'))}</h3>{water_table}"
+        + f"<h3>{escape(_t(lang, 'resource_patches'))}</h3>{patch_table}"
+        + f"<h3>{escape(_t(lang, 'factory_zones'))}</h3>{zone_table}"
     )
 
 

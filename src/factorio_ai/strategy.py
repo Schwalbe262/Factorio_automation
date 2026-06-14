@@ -524,8 +524,12 @@ def make_spatial_planning_context(observation: dict[str, Any]) -> dict[str, Any]
                 else None,
                 "factory_centroid": _entity_centroid(observation),
                 "resource_patches": _resource_summary(observation),
+                "world_map_memory": observation.get("world_map_memory")
+                if isinstance(observation.get("world_map_memory"), dict)
+                else {},
             },
             "constraints": [
+                "use remembered resource clusters, water anchors, factory zones, and sparse feature cells before requesting another full map/site scan",
                 "place smelting close to ore when early logistics are weak",
                 "reserve straight transport corridors before dense builds",
                 "keep high-throughput intermediates near their consumers",

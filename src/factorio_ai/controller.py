@@ -53,6 +53,13 @@ from .site_selection import load_selected_improvement_site
 from .skill_registry import annotate_strategy_with_skill_status
 from .strategy import heuristic_strategy, make_strategy_payload, reconcile_strategy_decision, skill_catalog_payload
 from .targets import load_targets
+from .world_memory import (
+    load_world_map_memory,
+    merge_world_map_memory_into_observation,
+    planning_sites_are_fresh,
+    planning_sites_from_memory,
+    update_world_map_memory,
+)
 
 
 @dataclass
@@ -184,6 +191,7 @@ _PLANNING_SITE_RETRY_MARKERS = (
     "cannot find a powered or wireable lab site",
     "cannot find a powered or wireable site",
 )
+DEFAULT_PLANNING_SITE_CACHE_SECONDS = 180.0
 
 
 def _planning_site_retry_needed(decision: PlannerDecision) -> bool:
@@ -191,6 +199,16 @@ def _planning_site_retry_needed(decision: PlannerDecision) -> bool:
         return False
     reason = decision.reason.lower()
     return any(marker in reason for marker in _PLANNING_SITE_RETRY_MARKERS)
+
+
+def _planning_site_cache_seconds() -> float:
+    try:
+        return max(
+            0.0,
+            float(os.getenv("FACTORIO_AI_PLANNING_SITE_CACHE_SECONDS", str(DEFAULT_PLANNING_SITE_CACHE_SECONDS))),
+        )
+    except (TypeError, ValueError):
+        return DEFAULT_PLANNING_SITE_CACHE_SECONDS
 
 
 class FactorioController:
@@ -1842,6 +1860,8 @@ class FactorioController:
     ) -> dict[str, Any]:
         if not self.cfg.slurm_enabled or decision.action is None:
             return decision.action or {"type": "wait", "ticks": 60}
+        if os.getenv("FACTORIO_AI_REMOTE_ACTION_HINT_ENABLED", "0").lower() not in {"1", "true", "yes", "on"}:
+            return decision.action
         try:
             from . import remote_slurm
 
@@ -1927,6 +1947,7 @@ class ModlessFactorioController(FactorioController):
         super().__init__(cfg)
         self._modless = ModlessLuaController(cfg)
         self._planning_sites_cache: dict[str, Any] = {}
+        self._planning_sites_cache_loaded = False
 
     def run_strategy_step(
         self,
@@ -2012,6 +2033,11 @@ class ModlessFactorioController(FactorioController):
     ) -> tuple[dict[str, Any], PlannerDecision]:
         if not _planning_site_retry_needed(decision):
             return observation, decision
+        self._load_planning_sites_cache(observation)
+        if self._planning_sites_cache_is_fresh():
+            cached_observation = self._merge_cached_planning_sites(observation)
+            cached_decision = skill.next_action(cached_observation)
+            return cached_observation, cached_decision
         full_observation = self._observe_modless(include_planning_sites=True)
         return full_observation, skill.next_action(full_observation)
 
@@ -2022,10 +2048,21 @@ class ModlessFactorioController(FactorioController):
         )
         if not response.get("ok"):
             raise RuntimeError(f"no-mod observe failed: {response}")
+        memory = self._remember_world_map(response, include_planning_sites=include_planning_sites)
         if include_planning_sites:
             self._update_planning_sites_cache(response)
-            return response
-        return self._merge_cached_planning_sites(response)
+            return merge_world_map_memory_into_observation(
+                response,
+                memory,
+                max_age_seconds=_planning_site_cache_seconds(),
+            )
+        self._load_planning_sites_cache(response)
+        merged = self._merge_cached_planning_sites(response)
+        return merge_world_map_memory_into_observation(
+            merged,
+            memory,
+            max_age_seconds=_planning_site_cache_seconds(),
+        )
 
     def _update_planning_sites_cache(self, observation: dict[str, Any]) -> None:
         for key in ("power_sites", "lab_sites", "automation_sites"):
@@ -2033,16 +2070,100 @@ class ModlessFactorioController(FactorioController):
             if isinstance(sites, list):
                 self._planning_sites_cache[key] = sites
         self._planning_sites_cache["tick"] = observation.get("tick")
+        self._planning_sites_cache["cached_at"] = time.time()
+        self._persist_planning_sites_cache()
 
     def _merge_cached_planning_sites(self, observation: dict[str, Any]) -> dict[str, Any]:
-        if not self._planning_sites_cache:
+        if not self._planning_sites_cache or not self._planning_sites_cache_is_fresh():
             return observation
         merged = dict(observation)
         for key in ("power_sites", "lab_sites", "automation_sites"):
             if key in self._planning_sites_cache:
                 merged[key] = self._planning_sites_cache[key]
         merged["planning_sites_cached_from_tick"] = self._planning_sites_cache.get("tick")
+        cached_at = self._planning_sites_cache.get("cached_at")
+        if isinstance(cached_at, (int, float)):
+            merged["planning_sites_cache_age_seconds"] = round(max(0.0, time.time() - cached_at), 3)
         return merged
+
+    def _planning_sites_cache_path(self) -> Path:
+        return self.cfg.runtime_dir / "planning-sites-cache.json"
+
+    def _load_planning_sites_cache(self, observation: dict[str, Any] | None = None) -> None:
+        if self._planning_sites_cache_loaded:
+            return
+        self._planning_sites_cache_loaded = True
+        path = self._planning_sites_cache_path()
+        if not path.exists():
+            self._load_planning_sites_cache_from_world_memory()
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            self._load_planning_sites_cache_from_world_memory()
+            return
+        if not isinstance(data, dict):
+            self._load_planning_sites_cache_from_world_memory()
+            return
+        cached_at = data.get("cached_at")
+        if not isinstance(cached_at, (int, float)) or time.time() - cached_at > _planning_site_cache_seconds():
+            self._load_planning_sites_cache_from_world_memory()
+            return
+        cached_tick = data.get("tick")
+        observed_tick = observation.get("tick") if isinstance(observation, dict) else None
+        if isinstance(cached_tick, (int, float)) and isinstance(observed_tick, (int, float)):
+            if cached_tick > observed_tick + 600:
+                self._load_planning_sites_cache_from_world_memory()
+                return
+        cache: dict[str, Any] = {"cached_at": cached_at, "tick": cached_tick}
+        for key in ("power_sites", "lab_sites", "automation_sites"):
+            sites = data.get(key)
+            if isinstance(sites, list):
+                cache[key] = sites
+        if any(key in cache for key in ("power_sites", "lab_sites", "automation_sites")):
+            self._planning_sites_cache = cache
+        else:
+            self._load_planning_sites_cache_from_world_memory()
+
+    def _load_planning_sites_cache_from_world_memory(self) -> None:
+        memory = load_world_map_memory(self.cfg.runtime_dir)
+        if not planning_sites_are_fresh(memory, max_age_seconds=_planning_site_cache_seconds()):
+            return
+        cache = planning_sites_from_memory(memory)
+        if any(key in cache for key in ("power_sites", "lab_sites", "automation_sites")):
+            self._planning_sites_cache = cache
+
+    def _planning_sites_cache_is_fresh(self) -> bool:
+        cached_at = self._planning_sites_cache.get("cached_at")
+        return isinstance(cached_at, (int, float)) and time.time() - cached_at <= _planning_site_cache_seconds()
+
+    def _persist_planning_sites_cache(self) -> None:
+        payload = {
+            "cached_at": self._planning_sites_cache.get("cached_at"),
+            "tick": self._planning_sites_cache.get("tick"),
+        }
+        for key in ("power_sites", "lab_sites", "automation_sites"):
+            if key in self._planning_sites_cache:
+                payload[key] = self._planning_sites_cache[key]
+        try:
+            self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+            self._planning_sites_cache_path().write_text(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+
+    def _remember_world_map(self, observation: dict[str, Any], *, include_planning_sites: bool) -> dict[str, Any]:
+        try:
+            return update_world_map_memory(
+                self.cfg.runtime_dir,
+                observation,
+                include_planning_sites=include_planning_sites,
+                source="no-mod-full-planning-observe" if include_planning_sites else "no-mod-lightweight-observe",
+            )
+        except OSError:
+            return load_world_map_memory(self.cfg.runtime_dir)
 
     def act(self, action: dict[str, Any]) -> dict[str, Any]:
         validate_action(action)

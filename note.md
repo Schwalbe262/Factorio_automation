@@ -2164,3 +2164,55 @@
 - Next action: Commit/push Part 80, then resume autonomous execution only with `FACTORIO_AI_AGENT_PLAYER=AI` and without GUI movement unless an explicit manual test requires observer control.
 - Token usage: exact cumulative Codex token sample unavailable; active goal counter observed at 2,656,413 tokens / weekly quota unavailable.
 
+## 2026-06-15 02:18:51 +09:00 - Loop 107
+- Part: skill
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: Running `research_automation` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_automation` for up to 40 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-171813.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Target item candidate: `automation-science-pack` target `10`.
+- Metrics:
+  - Steps: 20.
+  - Status: failed.
+  - Duration: 38.594s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-171813.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":40,"target":10}`.
+- Result: Loop stopped: action failed: cannot place entity
+- Failure reason: action failed: cannot place entity
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 02:34:17 +09:00 - Loop 108
+- Part: Part 81 - sparse world map memory and water-scan throttling
+- Goal: launch_rocket_program / reduce periodic lag and give the agent reusable spatial memory without storing per-tile map data.
+- Hypothesis: Repeated full water/site scans are unnecessary if the agent stores compact spatial features: resource patch clusters, water access anchors, factory zones, and sparse feature-index cells.
+- Actions:
+  - Checked active Factorio-related processes and confirmed only the no-mod server and Web UI were running; no autopilot or idle layout process was active.
+  - Measured recent `ai_observe` intervals from the server log: after the Web UI safety changes they were about 150 seconds, not 10-20 seconds.
+  - Disabled per-action remote LLM hints by default so deterministic skill steps no longer wait on Qwen for every single legal action unless `FACTORIO_AI_REMOTE_ACTION_HINT_ENABLED=1`.
+  - Added a process/runtime planning-site cache with `FACTORIO_AI_PLANNING_SITE_CACHE_SECONDS` so recent empty or populated water/lab/automation scan results prevent immediate repeated full scans.
+  - Added `runtime/world-map-memory.json` as a sparse feature graph, not a tile grid: resource samples become cluster bounds, offshore candidates become water anchors, factory entities become zones, and feature IDs are indexed by coarse cells.
+  - Attached world-map memory to no-mod controller observations, strategy spatial-planning context, and the Web UI.
+  - Made no-mod `build` idempotent for an already existing target entity so an offshore pump already placed at the requested position is treated as success instead of blocking later steps.
+  - Ran a live lightweight no-mod observe to verify memory creation without full planning-site scanning.
+- Candidates:
+  - Per-tile occupancy map: rejected as too large and stale-prone.
+  - Raw resource/entity snapshot persistence: rejected because it duplicates noisy observations and is poor fine-tuning material.
+  - Sparse feature graph: selected because it preserves useful spatial structure while staying small and easy for LLM/planner code to consume.
+- Metrics:
+  - Related tests: `114 passed`.
+  - Full tests: `375 passed`.
+  - Live lightweight observe: `ok=True`, `resources=2616`, `entities=208`, `planning_cached_from=None`.
+  - World memory file: `runtime/world-map-memory.json`, 10,412 bytes.
+  - Stored feature summary: resource patches `15`, factory zones `3`, sparse index cells `13`, sparse index features `18`.
+  - Planning candidate counts after lightweight observe: `power_sites=0`, `lab_sites=0`, `automation_sites=0`; no full water/site scan was run for this verification.
+  - Recent server `ai_observe` cadence before the manual check: approximately 150 seconds.
+- Result: Implemented compact spatial memory and additional throttling for water/site scans; current evidence does not support water scanning as the active 10-20 second lag source.
+- Failure reason: None for this implementation loop. The previous `research_automation` run still exposed a live execution blocker that must be retried after this build-idempotency fix.
+- Next action: Restart Web UI on the updated code, verify the World Map Memory panel, commit/push Part 81, then resume finite no-mod strategy execution as virtual `AI`.
+- Token usage: active goal counter observed at 3,240,728 tokens / weekly quota unavailable.

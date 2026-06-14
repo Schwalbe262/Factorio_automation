@@ -121,3 +121,11 @@
 - After: Web UI runs as `AI` with lightweight observe and slower refresh/cache settings; no-mod idle/autopilot/default observe use lightweight mode; full planning-site observe is retried only when the planner explicitly needs missing water/lab/automation site candidates, then cached.
 - Evidence: `{"after":{"active_processes":["start-no-mod-server pid=80472","web pid=58356"],"cli_default_planning_site_counts":{"automation_sites":0,"lab_sites":0,"power_sites":0},"lightweight_observe_seconds":2.146,"tests":"368 passed"},"before":{"failure":"connected observer controlled and Factorio GUI repeatedly foregrounded","idle_full_observe_period":"5-10s while stale","web_full_observe_cache_seconds":30},"source_loop":106}`
 - Remaining risk: Lightweight observe still scans resources/entities and currently took about 2.1s on this map, so if lag remains noticeable the next target is resource/entity scan throttling or cached monitor snapshots.
+
+## 2026-06-15 02:34:17 +09:00 - Insight 14
+- Source loop: Loop 108
+- Improvement: Agent spatial memory now stores a compact sparse feature graph instead of raw per-tile or per-sample map data, so LLM/planner code can reuse known resource clusters, factory zones, and water anchors without immediately repeating expensive site scans.
+- Before: The no-mod controller either used the current observation directly or reran full planning-site scans when water/lab/automation candidates were missing; there was no persistent spatial memory for known map features.
+- After: A live lightweight observe with 2,616 resource samples and 208 entities produced a 10,412-byte `runtime/world-map-memory.json` containing 15 resource patches, 3 factory zones, 13 sparse index cells, and 18 indexed features.
+- Evidence: `{"source_loop":108,"tests":"375 passed","live_observe":{"resources":2616,"entities":208,"planning_cached_from":null},"world_memory":{"encoding":"sparse_feature_graph","bytes":10412,"resource_patches":15,"factory_zones":3,"sparse_index_cells":13,"sparse_index_features":18},"full_water_scan_run":false}`
+- Remaining risk: Water anchors are only populated after a legitimate full planning-site scan; stale memory is guarded by TTL and final placement must still pass live `can_place_entity` validation.

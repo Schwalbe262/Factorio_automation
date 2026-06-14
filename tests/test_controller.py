@@ -1,5 +1,6 @@
 import json
 import tempfile
+import time
 import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -85,6 +86,7 @@ class ControllerTests(unittest.TestCase):
                 done=False,
             )
             with (
+                patch.dict("os.environ", {"FACTORIO_AI_REMOTE_ACTION_HINT_ENABLED": "1"}),
                 patch(
                     "factorio_ai.remote_slurm.llm_status",
                     return_value={"ok": True, "llm_ready": False, "missing": ["GPU allocation"], "remote": {}},
@@ -96,6 +98,26 @@ class ControllerTests(unittest.TestCase):
         status.assert_called_once()
         request_plan.assert_not_called()
         self.assertEqual(action, {"type": "wait", "ticks": 60})
+
+    def test_remote_action_hint_is_disabled_by_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            controller = FactorioController(cfg)
+            decision = PlannerDecision(
+                action={"type": "craft", "recipe": "iron-gear-wheel", "count": 1},
+                reason="test",
+                done=False,
+            )
+            with (
+                patch.dict("os.environ", {}, clear=True),
+                patch("factorio_ai.remote_slurm.llm_status") as status,
+                patch("factorio_ai.remote_slurm.request_plan") as request_plan,
+            ):
+                action = controller._maybe_apply_remote_hint({}, decision, "produce_iron_plate")
+
+        status.assert_not_called()
+        request_plan.assert_not_called()
+        self.assertEqual(action, {"type": "craft", "recipe": "iron-gear-wheel", "count": 1})
 
     def test_background_layout_work_submits_simulation_task_during_active_skill(self):
         observation = {
@@ -1159,6 +1181,101 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual([call["include_planning_sites"] for call in fake_modless.calls], [False, True, False])
         self.assertEqual(cached["planning_sites_cached_from_tick"], 2)
         self.assertEqual(cached["power_sites"], [{"layout": {}}])
+
+    def test_no_mod_uses_fresh_planning_site_cache_before_rescanning(self):
+        class FakeModless:
+            def __init__(self):
+                self.calls = []
+
+            def observe(self, **kwargs):
+                self.calls.append(kwargs)
+                if kwargs.get("include_planning_sites"):
+                    raise AssertionError("fresh planning-site cache should avoid a full scan")
+                return {"ok": True, "tick": 9, "power_sites": [], "lab_sites": [], "automation_sites": []}
+
+        class FakeSkill:
+            def next_action(self, observation):
+                if observation.get("power_sites"):
+                    return PlannerDecision({"type": "wait", "ticks": 1}, "cached site candidate available")
+                return PlannerDecision(None, "cannot find a buildable water site for steam power")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = make_test_config(Path(temp_dir))
+            cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+            (cfg.runtime_dir / "planning-sites-cache.json").write_text(
+                json.dumps(
+                    {
+                        "cached_at": time.time(),
+                        "tick": 7,
+                        "power_sites": [{"layout": {"offshore_pump": {"name": "offshore-pump"}}}],
+                        "lab_sites": [],
+                        "automation_sites": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            controller = ModlessFactorioController(cfg)
+            fake_modless = FakeModless()
+            controller._modless = fake_modless
+            initial = controller.observe()
+            initial_decision = FakeSkill().next_action(initial)
+
+            observation, decision = controller._maybe_retry_skill_with_planning_sites(
+                FakeSkill(),
+                initial,
+                initial_decision,
+            )
+
+        self.assertEqual(decision.action, {"type": "wait", "ticks": 1})
+        self.assertEqual(observation["planning_sites_cached_from_tick"], 7)
+        self.assertEqual([call["include_planning_sites"] for call in fake_modless.calls], [False])
+
+    def test_no_mod_recent_empty_planning_site_cache_throttles_water_scan_retry(self):
+        class FakeModless:
+            def __init__(self):
+                self.calls = []
+
+            def observe(self, **kwargs):
+                self.calls.append(kwargs)
+                if kwargs.get("include_planning_sites"):
+                    raise AssertionError("recent empty planning-site cache should throttle full water scan")
+                return {"ok": True, "tick": 10, "power_sites": [], "lab_sites": [], "automation_sites": []}
+
+        class FakeSkill:
+            def next_action(self, observation):
+                return PlannerDecision(None, "cannot find a buildable water site for steam power")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = make_test_config(Path(temp_dir))
+            cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+            (cfg.runtime_dir / "planning-sites-cache.json").write_text(
+                json.dumps(
+                    {
+                        "cached_at": time.time(),
+                        "tick": 9,
+                        "power_sites": [],
+                        "lab_sites": [],
+                        "automation_sites": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            controller = ModlessFactorioController(cfg)
+            fake_modless = FakeModless()
+            controller._modless = fake_modless
+            initial = controller.observe()
+            initial_decision = FakeSkill().next_action(initial)
+
+            observation, decision = controller._maybe_retry_skill_with_planning_sites(
+                FakeSkill(),
+                initial,
+                initial_decision,
+            )
+
+        self.assertIsNone(decision.action)
+        self.assertIn("cannot find a buildable water site", decision.reason)
+        self.assertEqual(observation["planning_sites_cached_from_tick"], 9)
+        self.assertEqual([call["include_planning_sites"] for call in fake_modless.calls], [False])
 
     def test_idle_layout_loop_skips_when_autopilot_heartbeat_is_fresh_busy(self):
         class BusyController(FactorioController):

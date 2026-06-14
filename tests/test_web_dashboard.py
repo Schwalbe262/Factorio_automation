@@ -787,6 +787,55 @@ class WebDashboardTests(unittest.TestCase):
 
         self.assertIn('http-equiv="refresh" content="20"', html)
 
+    def test_dashboard_renders_world_map_memory_panel(self):
+        html = render_dashboard(
+            {
+                "ok": True,
+                "objective": "launch_rocket_program",
+                "updated_at": "now",
+                "observation_tick": 1,
+                "adapter": "no-mod-rcon-lua",
+                "targets": {"per_minute": {}},
+                "monitor": {},
+                "strategy": {},
+                "world_map_memory": {
+                    "schema_version": 1,
+                    "encoding": "sparse_feature_graph",
+                    "updated_at": "2026-06-14T17:34:17+00:00",
+                    "updated_age_seconds": 1.0,
+                    "candidate_counts": {"power_sites": 1, "lab_sites": 0, "automation_sites": 0},
+                    "known_water_sites": [{"position": {"x": 55.5, "y": -814.5}, "direction": 0, "distance": 20}],
+                    "resources": {
+                        "patches": [
+                            {
+                                "name": "iron-ore",
+                                "center": {"x": 10, "y": 11},
+                                "sample_count": 2,
+                                "total_amount": 1200,
+                            }
+                        ]
+                    },
+                    "factory": {
+                        "zones": [
+                            {
+                                "id": "factory_zone:1",
+                                "center": {"x": 1, "y": 2},
+                                "entity_count": 2,
+                                "entity_counts": {"stone-furnace": 1},
+                            }
+                        ]
+                    },
+                    "spatial_index": {"feature_count": 3, "cell_count": 2, "cell_size": 64},
+                },
+            }
+        )
+
+        self.assertIn("World Map Memory", html)
+        self.assertIn("sparse_feature_graph", html)
+        self.assertIn("Known water anchors", html)
+        self.assertIn("Resource patches", html)
+        self.assertIn("Factory zones", html)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1039,6 +1039,12 @@ local function build_candidate_valid(surface, force, request, position, directio
   end
   return true
 end
+local function existing_built_entity(surface, force, name, position)
+  local found = surface.find_entities_filtered({ position = position, radius = 0.75, name = name, force = force, limit = 1 })
+  local entity = found[1]
+  if entity and entity.valid then return entity end
+  return nil
+end
 local function virtual_craft(recipe_name, count)
   local recipe = VIRTUAL_RECIPES[recipe_name]
   if not recipe then return 0 end
@@ -1150,10 +1156,14 @@ local function action_build()
   local position = normalize_position(action.position)
   if not position then return err("build requires position") end
   if distance(agent.position, position) > (action.reach or 32) then return err("build target out of reach") end
+  local direction = action.direction or defines.direction.north
+  local existing = existing_built_entity(agent.surface, agent.force, action.name, position)
+  if existing then
+    return ok({ action = "build", name = existing.name, unit_number = existing.unit_number, position = position_table(existing.position), status = "already_exists" })
+  end
   local inventory = main_inventory(agent)
   if not inventory or not inventory.valid then return err("agent inventory is not valid") end
   if inventory.get_item_count(action.name) < 1 then return err("missing item", { item = action.name }) end
-  local direction = action.direction or defines.direction.north
   local place_position = position
   if not build_candidate_valid(agent.surface, agent.force, action, place_position, direction) then
     if action.allow_nearby then
@@ -1170,6 +1180,10 @@ local function action_build()
       end
       if found then place_position = found else return err("cannot place entity", { name = action.name, position = position_table(position), required_resource = action.required_resource }) end
     else
+      existing = existing_built_entity(agent.surface, agent.force, action.name, position)
+      if existing then
+        return ok({ action = "build", name = existing.name, unit_number = existing.unit_number, position = position_table(existing.position), status = "already_exists" })
+      end
       return err("cannot place entity", { name = action.name, position = position_table(position), required_resource = action.required_resource })
     end
   end
