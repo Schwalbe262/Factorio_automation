@@ -2040,15 +2040,14 @@ class AutomationScienceSkill:
                 "craft automation science packs",
             )
 
-        if gear_total < science_needed and craftable_count(observation, "iron-gear-wheel") > 0:
-            return PlannerDecision(
-                {
-                    "type": "craft",
-                    "recipe": "iron-gear-wheel",
-                    "count": min(science_needed - gear_total, craftable_count(observation, "iron-gear-wheel")),
-                },
-                "craft iron gear wheels for automation science",
+        if gear_total < science_needed:
+            decision = _ensure_iron_gears_without_post_automation_handcraft(
+                observation,
+                science_needed,
+                pre_automation_reason="craft iron gear wheels for automation science",
             )
+            if decision is not None:
+                return decision
 
         if gear_total < science_needed:
             required_iron_for_gears = 2 * (science_needed - gear_total)
@@ -2232,15 +2231,14 @@ class StoneSupplySkill:
                 if stone is None:
                     return PlannerDecision(None, "cannot find bootstrap stone for burner drill")
                 return self.support_skill._mine_resource(player, stone, "stone", 8)
-            if inventory_count(observation, "iron-gear-wheel") < 3 and craftable_count(observation, "iron-gear-wheel") > 0:
-                return PlannerDecision(
-                    {
-                        "type": "craft",
-                        "recipe": "iron-gear-wheel",
-                        "count": min(3 - inventory_count(observation, "iron-gear-wheel"), craftable_count(observation, "iron-gear-wheel")),
-                    },
-                    "craft gears for stone supply drill",
+            if inventory_count(observation, "iron-gear-wheel") < 3:
+                decision = _ensure_iron_gears_without_post_automation_handcraft(
+                    observation,
+                    3,
+                    pre_automation_reason="craft gears for stone supply drill",
                 )
+                if decision is not None:
+                    return decision
             return self.support_skill.next_action(observation, target_count=20, inventory_only=True)
 
         if item in {"wooden-chest", "iron-chest"}:
@@ -2481,31 +2479,25 @@ class BeltSmeltingLineSkill:
                 decision = StoneSupplySkill(target_count=8).next_action(observation)
                 if not decision.done:
                     return decision
-            if inventory_count(observation, "iron-gear-wheel") < 3 and craftable_count(observation, "iron-gear-wheel") > 0:
-                if bool(_technology_state(observation, "automation").get("researched")):
-                    decision = BuildItemMallSkill("iron-gear-wheel", 3).next_action(observation)
-                    if not decision.done:
-                        return decision
-                return PlannerDecision(
-                    {
-                        "type": "craft",
-                        "recipe": "iron-gear-wheel",
-                        "count": min(3 - inventory_count(observation, "iron-gear-wheel"), craftable_count(observation, "iron-gear-wheel")),
-                    },
-                    "craft gears for line drill",
+            if inventory_count(observation, "iron-gear-wheel") < 3:
+                decision = _ensure_iron_gears_without_post_automation_handcraft(
+                    observation,
+                    3,
+                    pre_automation_reason="craft gears for line drill",
                 )
+                if decision is not None:
+                    return decision
             return self.support_skill.next_action(observation, target_count=20, inventory_only=True)
 
         if item in {"transport-belt", "burner-inserter"}:
-            if inventory_count(observation, "iron-gear-wheel") < 1 and craftable_count(observation, "iron-gear-wheel") > 0:
-                if bool(_technology_state(observation, "automation").get("researched")):
-                    decision = BuildItemMallSkill("iron-gear-wheel", 3).next_action(observation)
-                    if not decision.done:
-                        return decision
-                return PlannerDecision(
-                    {"type": "craft", "recipe": "iron-gear-wheel", "count": 1},
-                    f"craft gear for {item}",
+            if inventory_count(observation, "iron-gear-wheel") < 1:
+                decision = _ensure_iron_gears_without_post_automation_handcraft(
+                    observation,
+                    1,
+                    pre_automation_reason=f"craft gear for {item}",
                 )
+                if decision is not None:
+                    return decision
             if (
                 item == "transport-belt"
                 and bool(_technology_state(observation, "automation").get("researched"))
@@ -3009,15 +3001,14 @@ class StarterDefenseSkill:
     def _ensure_turret_item(self, observation: dict[str, Any]) -> PlannerDecision | None:
         if craftable_count(observation, "gun-turret") > 0:
             return PlannerDecision({"type": "craft", "recipe": "gun-turret", "count": 1}, "craft gun turret for starter defense")
-        if inventory_count(observation, "iron-gear-wheel") < 10 and craftable_count(observation, "iron-gear-wheel") > 0:
-            return PlannerDecision(
-                {
-                    "type": "craft",
-                    "recipe": "iron-gear-wheel",
-                    "count": min(10 - inventory_count(observation, "iron-gear-wheel"), craftable_count(observation, "iron-gear-wheel")),
-                },
-                "craft gears for starter defense turret",
+        if inventory_count(observation, "iron-gear-wheel") < 10:
+            decision = _ensure_iron_gears_without_post_automation_handcraft(
+                observation,
+                10,
+                pre_automation_reason="craft gears for starter defense turret",
             )
+            if decision is not None:
+                return decision
         if inventory_count(observation, "copper-plate") < 5:
             decision = self.copper_skill.next_action(observation, target_count=5, inventory_only=True)
             if not decision.done:
@@ -3677,15 +3668,14 @@ def _ensure_direct_smelting_item(
             decision = StoneSupplySkill(target_count=8).next_action(observation)
             if not decision.done:
                 return decision
-        if inventory_count(observation, "iron-gear-wheel") < 3 and craftable_count(observation, "iron-gear-wheel") > 0:
-            return PlannerDecision(
-                {
-                    "type": "craft",
-                    "recipe": "iron-gear-wheel",
-                    "count": min(3 - inventory_count(observation, "iron-gear-wheel"), craftable_count(observation, "iron-gear-wheel")),
-                },
-                "craft gears for direct smelting drill",
+        if inventory_count(observation, "iron-gear-wheel") < 3:
+            decision = _ensure_iron_gears_without_post_automation_handcraft(
+                observation,
+                3,
+                pre_automation_reason="craft gears for direct smelting drill",
             )
+            if decision is not None:
+                return decision
         if not allow_support_plate:
             return PlannerDecision(None, "missing burner mining drill and cannot bootstrap another iron drill from current inventory")
         return support_skill.next_action(observation, target_count=20, inventory_only=True)
@@ -4977,6 +4967,15 @@ class ResearchAutomationSkill:
     ) -> PlannerDecision | None:
         if inventory_count(observation, item) >= quantity:
             return None
+        if item == "iron-gear-wheel":
+            decision = _ensure_iron_gears_without_post_automation_handcraft(
+                observation,
+                quantity,
+                pre_automation_reason="craft iron-gear-wheel for automation research",
+            )
+            if decision is not None:
+                return decision
+            return self.power_skill._ensure_item_quantity(observation, player, item, quantity)
         if craftable_count(observation, item) > 0:
             return PlannerDecision(
                 {
@@ -5816,6 +5815,48 @@ def _technology_state(observation: dict[str, Any], technology: str) -> dict[str,
         return {}
     value = technologies.get(technology)
     return value if isinstance(value, dict) else {}
+
+
+def _automation_researched(observation: dict[str, Any]) -> bool:
+    return bool(_technology_state(observation, "automation").get("researched"))
+
+
+def _ensure_iron_gears_without_post_automation_handcraft(
+    observation: dict[str, Any],
+    target_count: int,
+    *,
+    pre_automation_reason: str,
+    allow_existing_remote: bool = False,
+    reference_position: dict[str, float] | None = None,
+) -> PlannerDecision | None:
+    current_count = inventory_count(observation, "iron-gear-wheel")
+    if current_count >= target_count:
+        return None
+    missing = target_count - current_count
+    if not _automation_researched(observation):
+        craftable = craftable_count(observation, "iron-gear-wheel")
+        if craftable <= 0:
+            return None
+        return PlannerDecision(
+            {
+                "type": "craft",
+                "recipe": "iron-gear-wheel",
+                "count": min(missing, craftable),
+            },
+            pre_automation_reason,
+        )
+
+    decision = BuildItemMallSkill("iron-gear-wheel", max(target_count, 4)).next_action(
+        observation,
+        allow_existing_remote=allow_existing_remote,
+        reference_position=reference_position,
+    )
+    if not decision.done:
+        return decision
+    return PlannerDecision(
+        {"type": "wait", "ticks": 120},
+        "wait for iron gear wheel mall output; refusing hand-crafted iron gears after Automation",
+    )
 
 
 def _current_research(observation: dict[str, Any]) -> str | None:

@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from factorio_ai import planner as planner_module
 from factorio_ai.blueprints import decode_blueprint_string
@@ -1026,6 +1027,31 @@ class PlannerTests(unittest.TestCase):
         )
         self.assertEqual(decision.action["type"], "set_recipe")
         self.assertEqual(decision.action["recipe"], "iron-gear-wheel")
+
+    def test_belt_smelting_skill_refuses_gear_handcraft_when_mall_reports_done_after_automation(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {
+            "coal": 12,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "burner-inserter": 1,
+            "iron-plate": 3,
+            "electronic-circuit": 7,
+        }
+        obs["craftable"] = {"iron-gear-wheel": 5, "transport-belt": 1}
+
+        class DoneGearMall:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def next_action(self, *args, **kwargs):
+                return planner_module.PlannerDecision(None, "gear mall target reached", done=True)
+
+        with patch("factorio_ai.planner.BuildItemMallSkill", DoneGearMall):
+            decision = BeltSmeltingLineSkill(target_count=10).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "wait")
+        self.assertIn("refusing hand-crafted iron gears after Automation", decision.reason)
 
     def test_belt_smelting_skill_places_belt_first_when_parts_exist(self):
         obs = base_observation()

@@ -638,6 +638,81 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("logistics_researched=true", result["evidence"])
         self.assertIn("heuristic_selected_skill=automate_electronic_circuit_line", result["evidence"])
 
+    def test_reconcile_promotes_post_logistics_plan_even_with_production_targets(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 78,
+                "reason": "Layout diagnostics look severe after Logistics.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 20, "electronic-circuit": 7},
+                "entities": [],
+                "research": {
+                    "technologies": {
+                        "automation": {"researched": True},
+                        "logistics": {"researched": True},
+                    }
+                },
+            },
+            production_targets={"electronic-circuit": 45.0},
+        )
+
+        self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertIn("heuristic_selected_skill=automate_electronic_circuit_line", result["evidence"])
+
+    def test_reconcile_promotes_post_logistics_layout_ratio_plan_to_circuit_executor(self):
+        observation = {
+            "inventory": {"iron-plate": 40, "copper-plate": 40, "electronic-circuit": 7},
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "recipe": "copper-cable",
+                    "position": {"x": 2, "y": 2},
+                    "electric_network_connected": True,
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "recipe": "electronic-circuit",
+                    "position": {"x": 6, "y": 2},
+                    "electric_network_connected": True,
+                },
+            ],
+            "research": {
+                "technologies": {
+                    "automation": {"researched": True},
+                    "logistics": {"researched": True},
+                }
+            },
+        }
+        heuristic = heuristic_strategy("launch_rocket_program", observation, production_targets={"electronic-circuit": 45.0})
+        self.assertEqual(heuristic["selected_skill"], "plan_factory_site")
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 78,
+                "reason": "Green circuit layout ratio should be improved.",
+                "evidence": ["layout_kind=rebalance_green_circuit_ratio"],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+            production_targets={"electronic-circuit": 45.0},
+        )
+
+        self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
+        self.assertIn("layout_executable_fallback=rebalance_green_circuit_ratio", result["evidence"])
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+
     def test_reconcile_recomputes_stale_remote_plan_guardrail(self):
         result = reconcile_strategy_decision(
             {

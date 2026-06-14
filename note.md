@@ -4696,3 +4696,250 @@
 - Failure reason: None in tests. Fresh live verification is still needed after restart.
 - Next action: Commit and push Part 91, then restart hidden autopilot and inspect the new circuit automation trace for `craft assembling-machine-1`.
 - Token usage: 6,927,582 tokens / weekly quota unavailable.
+## 2026-06-15 05:49:23 +09:00 - Loop 224
+- Part: skill
+- Goal: launch_rocket_program / plan_factory_site
+- Hypothesis: Running `plan_factory_site` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `plan_factory_site` for up to 1 step(s).
+  - Tracked `layout-plan` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260614-204919.jsonl`.
+- Candidates:
+  - Selected goal/skill: `plan_factory_site`.
+  - Target item candidate: `layout-plan` target `1`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 3.703s.
+  - layout-plan: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260614-204919.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1,"target":1}`.
+- Result: Completed: layout improvement plan: manual_power_fuel(76): route coal belt/inserter fuel feed to boiler before scaling electric machines; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; rebalance_green_circuit_ratio(78): rebuild or extend green circuits as a compact 3 cable to 2 circuit assembler pattern with short direct cable transfer; upgrade_lab_feed_pattern(66): use a short lab daisy chain or multi-feed science belt before expanding research throughput; best_candidate=green-circuit-3-cable-2-circuit-cell score=76.7 not_applied=true
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 05:49:23 +09:00 - Loop 225
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / plan_factory_site
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 1.
+  - Selected `plan_factory_site` with priority `78` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `plan_factory_site`.
+  - Strategy priority: `78`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 33.266s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-204847.jsonl`.
+  - Metadata: `{"cycle":1,"priority":78,"strategy_source":"llm"}`.
+- Result: Completed: layout improvement plan: manual_power_fuel(76): route coal belt/inserter fuel feed to boiler before scaling electric machines; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; rebalance_green_circuit_ratio(78): rebuild or extend green circuits as a compact 3 cable to 2 circuit assembler pattern with short direct cable transfer; upgrade_lab_feed_pattern(66): use a short lab daisy chain or multi-feed science belt before expanding research throughput; best_candidate=green-circuit-3-cable-2-circuit-cell score=76.7 not_applied=true
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 05:50:01 +09:00 - Loop 226
+- Part: skill
+- Goal: launch_rocket_program / plan_factory_site
+- Hypothesis: Running `plan_factory_site` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `plan_factory_site` for up to 1 step(s).
+  - Tracked `layout-plan` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260614-204957.jsonl`.
+- Candidates:
+  - Selected goal/skill: `plan_factory_site`.
+  - Target item candidate: `layout-plan` target `1`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 3.719s.
+  - layout-plan: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260614-204957.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1,"target":1}`.
+- Result: Completed: layout improvement plan: manual_power_fuel(76): route coal belt/inserter fuel feed to boiler before scaling electric machines; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; rebalance_green_circuit_ratio(78): rebuild or extend green circuits as a compact 3 cable to 2 circuit assembler pattern with short direct cable transfer; upgrade_lab_feed_pattern(66): use a short lab daisy chain or multi-feed science belt before expanding research throughput; best_candidate=green-circuit-3-cable-2-circuit-cell score=76.7 not_applied=true
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 05:50:01 +09:00 - Loop 227
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / plan_factory_site
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 2.
+  - Selected `plan_factory_site` with priority `78` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `plan_factory_site`.
+  - Strategy priority: `78`.
+- Metrics:
+  - Steps: 2.
+  - Status: ok.
+  - Duration: 33.125s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-204847.jsonl`.
+  - Metadata: `{"cycle":2,"priority":78,"strategy_source":"llm"}`.
+- Result: Completed: layout improvement plan: manual_power_fuel(76): route coal belt/inserter fuel feed to boiler before scaling electric machines; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; rebalance_green_circuit_ratio(78): rebuild or extend green circuits as a compact 3 cable to 2 circuit assembler pattern with short direct cable transfer; upgrade_lab_feed_pattern(66): use a short lab daisy chain or multi-feed science belt before expanding research throughput; best_candidate=green-circuit-3-cable-2-circuit-cell score=76.7 not_applied=true
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 05:50:39 +09:00 - Loop 228
+- Part: skill
+- Goal: launch_rocket_program / plan_factory_site
+- Hypothesis: Running `plan_factory_site` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `plan_factory_site` for up to 1 step(s).
+  - Tracked `layout-plan` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260614-205035.jsonl`.
+- Candidates:
+  - Selected goal/skill: `plan_factory_site`.
+  - Target item candidate: `layout-plan` target `1`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 3.797s.
+  - layout-plan: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260614-205035.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1,"target":1}`.
+- Result: Completed: layout improvement plan: manual_power_fuel(76): route coal belt/inserter fuel feed to boiler before scaling electric machines; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; rebalance_green_circuit_ratio(78): rebuild or extend green circuits as a compact 3 cable to 2 circuit assembler pattern with short direct cable transfer; upgrade_lab_feed_pattern(66): use a short lab daisy chain or multi-feed science belt before expanding research throughput; best_candidate=green-circuit-3-cable-2-circuit-cell score=76.7 not_applied=true
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 05:50:39 +09:00 - Loop 229
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / plan_factory_site
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 3.
+  - Selected `plan_factory_site` with priority `78` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `plan_factory_site`.
+  - Strategy priority: `78`.
+- Metrics:
+  - Steps: 3.
+  - Status: ok.
+  - Duration: 33.047s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-204847.jsonl`.
+  - Metadata: `{"cycle":3,"priority":78,"strategy_source":"llm"}`.
+- Result: Completed: layout improvement plan: manual_power_fuel(76): route coal belt/inserter fuel feed to boiler before scaling electric machines; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; rebalance_green_circuit_ratio(78): rebuild or extend green circuits as a compact 3 cable to 2 circuit assembler pattern with short direct cable transfer; upgrade_lab_feed_pattern(66): use a short lab daisy chain or multi-feed science belt before expanding research throughput; best_candidate=green-circuit-3-cable-2-circuit-cell score=76.7 not_applied=true
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 05:51:18 +09:00 - Loop 230
+- Part: skill
+- Goal: launch_rocket_program / plan_factory_site
+- Hypothesis: Running `plan_factory_site` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `plan_factory_site` for up to 1 step(s).
+  - Tracked `layout-plan` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260614-205114.jsonl`.
+- Candidates:
+  - Selected goal/skill: `plan_factory_site`.
+  - Target item candidate: `layout-plan` target `1`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 3.812s.
+  - layout-plan: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260614-205114.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1,"target":1}`.
+- Result: Completed: layout improvement plan: manual_power_fuel(76): route coal belt/inserter fuel feed to boiler before scaling electric machines; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; rebalance_green_circuit_ratio(78): rebuild or extend green circuits as a compact 3 cable to 2 circuit assembler pattern with short direct cable transfer; upgrade_lab_feed_pattern(66): use a short lab daisy chain or multi-feed science belt before expanding research throughput; best_candidate=green-circuit-3-cable-2-circuit-cell score=76.7 not_applied=true
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 05:51:18 +09:00 - Loop 231
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / plan_factory_site
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 4.
+  - Selected `plan_factory_site` with priority `78` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `plan_factory_site`.
+  - Strategy priority: `78`.
+- Metrics:
+  - Steps: 4.
+  - Status: ok.
+  - Duration: 33.266s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-204847.jsonl`.
+  - Metadata: `{"cycle":4,"priority":78,"strategy_source":"llm"}`.
+- Result: Completed: layout improvement plan: manual_power_fuel(76): route coal belt/inserter fuel feed to boiler before scaling electric machines; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; rebalance_green_circuit_ratio(78): rebuild or extend green circuits as a compact 3 cable to 2 circuit assembler pattern with short direct cable transfer; upgrade_lab_feed_pattern(66): use a short lab daisy chain or multi-feed science belt before expanding research throughput; best_candidate=green-circuit-3-cable-2-circuit-cell score=76.7 not_applied=true
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 05:59:27 +09:00 - Loop 232
+- Part: skill
+- Goal: launch_rocket_program / plan_factory_site
+- Hypothesis: Running `plan_factory_site` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `plan_factory_site` for up to 20 step(s).
+  - Tracked `layout-plan` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260614-205923.jsonl`.
+- Candidates:
+  - Selected goal/skill: `plan_factory_site`.
+  - Target item candidate: `layout-plan` target `1`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 3.719s.
+  - layout-plan: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260614-205923.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":20,"target":1}`.
+- Result: Completed: layout improvement plan: manual_power_fuel(76): route coal belt/inserter fuel feed to boiler before scaling electric machines; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; rebalance_green_circuit_ratio(78): rebuild or extend green circuits as a compact 3 cable to 2 circuit assembler pattern with short direct cable transfer; upgrade_lab_feed_pattern(66): use a short lab daisy chain or multi-feed science belt before expanding research throughput; best_candidate=green-circuit-3-cable-2-circuit-cell score=76.7 not_applied=true
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 06:02:29 +09:00 - Loop 233
+- Part: skill
+- Goal: launch_rocket_program / automate_electronic_circuit_line
+- Hypothesis: Running `automate_electronic_circuit_line` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `automate_electronic_circuit_line` for up to 20 step(s).
+  - Tracked `electronic-circuit` from 0 to 5.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-circuit-automation-20260614-210152.jsonl`.
+- Candidates:
+  - Selected goal/skill: `automate_electronic_circuit_line`.
+  - Target item candidate: `electronic-circuit` target `5`.
+- Metrics:
+  - Steps: 9.
+  - Status: ok.
+  - Duration: 37.343s.
+  - electronic-circuit: 0 -> 5 (delta 5).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-circuit-automation-20260614-210152.jsonl`.
+  - Metadata: `{"delta_item_count":5,"final_item_count":5,"initial_item_count":0,"max_steps":20,"target":5}`.
+- Result: Completed: circuit automation cell is running and target reached: 5/5
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 06:03:56 +09:00 - Loop 234
+- Part: post-Automation gear guardrail and plan-loop redirect
+- Goal: Stop direct `iron-gear-wheel` crafting after Automation and prevent the main no-mod autopilot from repeating diagnostic-only `plan_factory_site` loops after Logistics.
+- Hypothesis: If post-Automation gear prerequisites are routed through `BuildItemMallSkill("iron-gear-wheel")`, and high-severity green-circuit layout plans are mapped to an executable circuit automation skill, the LLM can keep advancing without hand-crafting gears or spending main cycles on non-applied layout plans.
+- Actions:
+  - Stopped only the hidden autopilot process that was repeating `plan_factory_site`; server, Web UI, and Slurm worker stayed running.
+  - Added a shared post-Automation gear prerequisite helper that refuses `craft iron-gear-wheel` and delegates to the gear mall.
+  - Wired the helper into automation science, stone supply, belt smelting, starter defense, direct smelting, and automation research prerequisite paths.
+  - Added a post-Logistics layout-plan fallback that maps `rebalance_green_circuit_ratio` / green-circuit layout plans to `automate_electronic_circuit_line` when heuristic strategy would otherwise return `plan_factory_site` again.
+  - Added regression tests for the gear-mall-done fallback and the post-Logistics layout-ratio redirect.
+  - Ran a live no-mod strategy step with Slurm/Qwen attached.
+- Candidates:
+  - Bad loop candidate: repeated `plan_factory_site` with `not_applied=true` in Loops 224-232.
+  - Fixed execution candidate: `automate_electronic_circuit_line`.
+  - Gear source candidate: assembler-based `iron-gear-wheel` mall, not player handcraft.
+- Metrics:
+  - Tests: `python -m unittest discover -s tests` -> 414 passed.
+  - Live LLM selected `plan_factory_site`; reconcile selected `automate_electronic_circuit_line`.
+  - Live trace: `logs/strategy-circuit-automation-20260614-210152.jsonl`.
+  - Live trace craft counts: total craft 0, `iron-gear-wheel` craft 0, `transport-belt` craft 0.
+  - Live item delta: electronic-circuit 0 -> 5 in 9 steps.
+- Result: Implemented and verified the no-direct-gear guardrail plus executable redirect for the observed post-Logistics diagnostic loop.
+- Failure reason: None for this patch. Remaining automation-quality issue: the current circuit executor still moves copper cable/circuit outputs by take/insert and does not yet rebuild a full 3-cable/2-circuit layout.
+- Next action: Restart hidden autopilot on the patched code, then implement the actual green-circuit 3:2 expansion/logistic transfer executor and remove remaining manual-style cable/plate shuttles.
+- Token usage: 7,186,227 tokens / weekly quota unavailable.

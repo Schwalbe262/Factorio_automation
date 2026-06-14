@@ -256,3 +256,27 @@
 - After: The regression path switches an existing powered gear assembler to `assembling-machine-1` with `set_recipe`, so assembler bootstrap can be machine-produced.
 - Evidence: `{"source_loop":223,"tests":"411 passed","bad_trace":"strategy-circuit-automation-20260614-204234.jsonl step 15 craft assembling-machine-1","regression_decision":"set_recipe assembling-machine-1 on existing powered mall assembler"}`
 - Remaining risk: The assembler-production path is test-verified; a fresh live autopilot run should confirm the circuit automation trace no longer reaches hand-crafted assembler bootstrap.
+
+## 2026-06-15 06:02:29 +09:00 - Insight 31
+- Source loop: Loop 233
+- Improvement: electronic-circuit increased by 5 during automate_electronic_circuit_line.
+- Before: electronic-circuit = 0
+- After: electronic-circuit = 5
+- Evidence: `{"delta":5,"final":5,"initial":0,"item":"electronic-circuit","source_loop":233,"target":5}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-15 06:02:29 +09:00 - Insight 32
+- Source loop: Loop 233
+- Improvement: automate_electronic_circuit_line completed after 9 step(s): circuit automation cell is running and target reached: 5/5
+- Before: not recorded
+- After: electronic-circuit = 5
+- Evidence: `{"item":"electronic-circuit","item_count":5,"source_loop":233,"steps":9,"target":5}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-15 06:03:56 +09:00 - Insight 33
+- Source loop: Loop 234
+- Improvement: Post-Automation gear prerequisites no longer fall back to direct `iron-gear-wheel` crafting in the observed expansion/research paths, and post-Logistics layout-ratio planning is redirected to an executable circuit automation skill.
+- Before: `strategy-logistics-research-20260614-200524.jsonl` and `strategy-circuit-automation-20260614-203509.jsonl` showed direct gear crafting after Automation; Loops 224-232 repeatedly ran `plan_factory_site` with `not_applied=true`.
+- After: Regression tests cover the gear-mall-done edge case and the post-Logistics layout-ratio redirect; live Slurm/Qwen strategy still proposed `plan_factory_site`, but final execution selected `automate_electronic_circuit_line` and `strategy-circuit-automation-20260614-210152.jsonl` had zero craft actions.
+- Evidence: `{"source_loop":234,"verification_loop":233,"tests":"414 passed","live_strategy":{"llm_selected":"plan_factory_site","final_selected":"automate_electronic_circuit_line","layout_executable_fallback":"rebalance_green_circuit_ratio"},"live_trace":"strategy-circuit-automation-20260614-210152.jsonl","craft_counts":{"total":0,"iron_gear_wheel":0,"transport_belt":0},"electronic_circuit_delta":5}`
+- Remaining risk: The circuit executor still uses take/insert to shuttle copper cable and circuit outputs and does not yet build the full 3-cable/2-circuit optimized layout.

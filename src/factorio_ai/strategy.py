@@ -884,10 +884,14 @@ def reconcile_strategy_decision(
         rocket_objective
         and selected == "plan_factory_site"
         and _technology_researched(observation, "logistics")
-        and not production_targets
     ):
         fallback_decision = heuristic_strategy(objective, observation, production_targets)
         fallback_skill = str(fallback_decision.get("selected_skill") or "")
+        if fallback_skill == "plan_factory_site":
+            layout_fallback = _executable_layout_plan_fallback(objective, observation, production_targets)
+            if layout_fallback is not None:
+                fallback_decision = layout_fallback
+                fallback_skill = str(fallback_decision.get("selected_skill") or "")
         if fallback_skill != "plan_factory_site":
             adjusted = dict(decision)
             adjusted["selected_skill"] = fallback_skill
@@ -1284,6 +1288,60 @@ def _top_layout_item(issues: list[Any], opportunities: list[Any]) -> dict[str, A
     if not candidates:
         return None
     return max(candidates, key=lambda item: int(item.get("severity") or 0))
+
+
+def _executable_layout_plan_fallback(
+    objective: str,
+    observation: dict[str, Any],
+    production_targets: dict[str, float] | None,
+) -> dict[str, Any] | None:
+    layout = make_layout_improvement_context(observation)
+    issues = layout.get("issues") if isinstance(layout.get("issues"), list) else []
+    opportunities = layout.get("opportunities") if isinstance(layout.get("opportunities"), list) else []
+    top_layout_item = _top_layout_item(issues, opportunities)
+    if top_layout_item is None or int(top_layout_item.get("severity") or 0) < 75:
+        return None
+
+    kind = str(top_layout_item.get("kind") or "")
+    skill = ""
+    expected_effect = ""
+    if kind in {"rebalance_green_circuit_ratio", "complete_green_circuit_block_pattern"}:
+        if not _technology_researched(observation, "automation"):
+            skill = "research_automation"
+            expected_effect = "Unlock assemblers before applying the green-circuit layout correction."
+        elif not _technology_researched(observation, "logistics"):
+            skill = "research_logistics"
+            expected_effect = "Unlock early logistics before rebuilding or extending the green-circuit cell."
+        else:
+            skill = "automate_electronic_circuit_line"
+            expected_effect = "Apply the green-circuit ratio correction through the implemented circuit automation executor."
+    elif kind == "manual_power_fuel":
+        if _transport_belt_automation_ready(observation):
+            skill = "connect_coal_fuel_feed"
+            expected_effect = "Replace repeated boiler or burner hand-fueling with an implemented coal fuel feed."
+        elif _technology_researched(observation, "automation"):
+            skill = "bootstrap_build_item_mall"
+            expected_effect = "Automate belt production before building site-to-site fuel feed paths."
+
+    if not skill:
+        return None
+    return StrategicDecision(
+        selected_skill=skill,
+        priority=max(84, min(92, int(top_layout_item.get("severity") or 75))),
+        reason=(
+            f"Layout planning selected {kind}, but main autopilot cycles need an executable correction; "
+            f"run {skill} instead of another diagnostic-only plan."
+        ),
+        evidence=[
+            f"layout_executable_fallback={kind}",
+            f"layout_kind={kind}",
+            f"severity={top_layout_item.get('severity')}",
+            f"site_id={top_layout_item.get('site_id')}",
+        ],
+        blockers=["diagnostic-only layout plan"],
+        expected_effect=expected_effect,
+        source="heuristic",
+    ).to_dict()
 
 
 def _first_automation_logistics_issue(issues: list[Any]) -> dict[str, Any] | None:
