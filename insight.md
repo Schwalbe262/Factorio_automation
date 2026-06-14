@@ -192,3 +192,10 @@
 - After: The summary exposes `latest_raw_tokens`, cumulative `latest_tokens`, `counter_reset_count`, and `latest_counter_reset`; the chart/table render cumulative tokens while retaining raw deltas.
 - Evidence: `{"source_loop":166,"tests":"398 passed","regressions":["test_counter_reset_continues_cumulative_display_tokens","test_token_usage_chart_uses_cumulative_tokens_after_counter_reset","test_token_usage_table_uses_cumulative_tokens_after_counter_reset"]}`
 - Remaining risk: Weekly percentage still cannot be computed unless `FACTORIO_AI_WEEKLY_TOKEN_QUOTA` is provided.
+## 2026-06-15 04:17:36 +09:00 - Insight 23
+- Source loop: Loop 167 / Loop 168
+- Improvement: The hidden no-mod autopilot completed Automation research under the 4B Slurm LLM strategy path.
+- Before: `research_automation` had previously stopped on missing gear prerequisites or an artificial one-step limit, so assembler-based item mall work was blocked.
+- After: `research_automation` ran 13 deterministic skill steps, inserted 10 automation science packs, waited through lab progress, and ended with `automation research completed`; the following LLM decision selected `bootstrap_build_item_mall`.
+- Evidence: `{"source_loops":[167,168],"strategy_source":"llm","selected_skill":"research_automation","steps":13,"result":"automation research completed","next_skill":"bootstrap_build_item_mall","log":"strategy-automation-research-20260614-191520.jsonl","model":"Qwen/Qwen3.5-4B"}`
+- Remaining risk: The next phase must minimize hand crafting by moving from tiny bootstrap crafting into assembler/belt-based site automation now that Automation is researched.

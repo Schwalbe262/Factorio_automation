@@ -3424,3 +3424,72 @@
 - Failure reason: None.
 - Next action: Commit/push Part 84, then restart hidden no-mod autopilot without simultaneous idle layout until Slurm attach contention is stable.
 - Token usage: 5,398,866 tokens / weekly quota unavailable.
+## 2026-06-15 04:17:36 +09:00 - Loop 167
+- Part: skill
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: Running `research_automation` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_automation` for up to 1500 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-191520.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Target item candidate: `automation-science-pack` target `10`.
+- Metrics:
+  - Steps: 13.
+  - Status: ok.
+  - Duration: 135.875s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260614-191520.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1500,"target":10}`.
+- Result: Completed: automation research completed
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 04:17:36 +09:00 - Loop 168
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 1.
+  - Selected `research_automation` with priority `90` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Strategy priority: `90`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 158.469s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-191455.jsonl`.
+  - Metadata: `{"cycle":1,"priority":90,"strategy_source":"llm"}`.
+- Result: Completed: automation research completed
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 04:18:45 +09:00 - Loop 169
+- Part: Part 85 operational verification - Qwen model policy, token UI refresh, hidden autopilot
+- Goal: Confirm which Qwen model is the active control model, fix the visible token usage reset symptom, and keep the no-GUI autopilot running.
+- Hypothesis: The token graph drop is caused by the long-running Web UI process serving old code after the counter-reset fix was already committed; the no-mod autopilot can run headlessly against the active 4B Slurm worker if command-line environment variables are set without trailing spaces.
+- Actions:
+  - Confirmed the active Slurm worker is `Qwen/Qwen3.5-4B`; 9B and 27B remain comparison/benchmark workers, not the continuous control default.
+  - Restarted only the Web UI process on port `18889`; Factorio server and GUI client were left untouched.
+  - Verified the refreshed Web UI renders cumulative token usage `44,230,378` while retaining latest raw counter `4,227,903`.
+  - Diagnosed temporary hidden-launch failures as a Windows `cmd` quoting issue from `set VAR=value && ...`, which inserted trailing spaces into Slurm partition values.
+  - Restarted hidden no-mod autopilot with quoted `set "VAR=value"` assignments and no idle layout loop.
+  - Verified Automation research completed under LLM-selected `research_automation`; the next LLM-selected skill became `bootstrap_build_item_mall`.
+- Candidates:
+  - Switch default control to 9B/27B: rejected for continuous play because the current A10-backed 4B worker is the stable low-latency default; larger models should remain benchmark/tuning candidates.
+  - Narrow Slurm partitions to a single queue: rejected after `sinfo` showed `gpu1`, `gpu2`, and `gpu4` are valid; the observed failure was trailing whitespace, not invalid partition names.
+  - Restart only Web UI for token display: selected because current code summary already computed cumulative tokens correctly.
+- Metrics:
+  - Web UI PID after restart: `84176`.
+  - Hidden autopilot PID: cmd `46092`, python `15032`.
+  - Slurm worker: job `678192`, `llm_ready=true`, model `Qwen/Qwen3.5-4B`.
+  - Gameplay progress: Automation research completed; `strategy-automation-research-20260614-191520.jsonl` ended with `automation research completed`.
+  - Next live skill: `bootstrap_build_item_mall`.
+- Result: Token usage display is fixed after Web UI restart, 4B model policy is confirmed, and hidden autopilot is running without GUI movement.
+- Failure reason: None for final state. Intermediate hidden-launch failures were caused by unquoted Windows `set` commands adding trailing spaces to env values.
+- Next action: Watch `bootstrap_build_item_mall` and ensure it transitions from tiny bootstrap crafting toward assembler/belt-based site automation now that Automation is researched.
+- Token usage: 5,552,689 tokens / weekly quota unavailable.
