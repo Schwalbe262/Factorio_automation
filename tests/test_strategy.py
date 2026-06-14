@@ -121,6 +121,18 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("iron-plate logistic line to gear mall", result["blockers"])
         self.assertIn("transport_belts_available_for_mall_logistics=true", result["evidence"])
 
+    def test_rocket_goal_repairs_power_before_unpowered_gear_mall_logistics(self):
+        observation = gear_mall_needs_plate_line_observation()
+        for entity in observation["entities"]:
+            if entity.get("name") == "assembling-machine-1":
+                entity["status"] = 54
+                entity["status_name"] = "no_power"
+
+        result = heuristic_strategy("launch_rocket_program", observation)
+
+        self.assertEqual(result["selected_skill"], "setup_power")
+        self.assertIn("gear/belt mall power", result["blockers"])
+
     def test_power_issue_is_prioritized_before_more_electric_expansion(self):
         result = heuristic_strategy(
             "launch_rocket_program",
@@ -437,7 +449,7 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["guardrail_adjusted"]["from"], "automate_electronic_circuit_line")
         self.assertIn("gear_handcraft_blocked=true", result["evidence"])
 
-    def test_reconcile_uses_belt_mall_output_even_when_mall_has_no_power(self):
+    def test_reconcile_repairs_power_even_when_belt_mall_has_output(self):
         observation = gear_mall_needs_plate_line_observation()
         for entity in observation["entities"]:
             if entity.get("name") == "assembling-machine-1":
@@ -457,8 +469,32 @@ class StrategyTests(unittest.TestCase):
             observation,
         )
 
-        self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
-        self.assertIn("transport_belts_available_for_mall_logistics=true", result["evidence"])
+        self.assertEqual(result["selected_skill"], "setup_power")
+        self.assertIn("gear/belt mall power", result["blockers"])
+
+    def test_reconcile_repairs_power_before_circuit_when_gear_mall_unpowered(self):
+        observation = gear_mall_needs_plate_line_observation()
+        for entity in observation["entities"]:
+            if entity.get("name") == "assembling-machine-1":
+                entity["status"] = 54
+                entity["status_name"] = "no_power"
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "automate_electronic_circuit_line",
+                "priority": 50,
+                "reason": "Need circuits next.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "setup_power")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "automate_electronic_circuit_line")
+        self.assertIn("gear/belt mall power", result["blockers"])
 
     def test_reconcile_promotes_fuel_dependent_expansion_to_coal_supply(self):
         result = reconcile_strategy_decision(

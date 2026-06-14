@@ -823,6 +823,39 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
+    gear_belt_mall_power_issue = _gear_belt_mall_power_issue(observation)
+    if gear_belt_mall_power_issue is not None and selected in {
+        "plan_factory_site",
+        "produce_electronic_circuit",
+        "automate_electronic_circuit_line",
+        "bootstrap_build_item_mall",
+        "build_iron_plate_logistic_line_to_gear_mall",
+    }:
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "setup_power"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 93)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            f"LLM selected {selected}, but the gear/belt mall is unpowered and cannot replenish belts "
+            "or feed the no-handcraft logistics route."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["gear/belt mall power"]))
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            f"gear_belt_mall_unit={gear_belt_mall_power_issue.get('unit')}",
+            f"gear_belt_mall_recipe={gear_belt_mall_power_issue.get('recipe')}",
+            f"gear_belt_mall_status={gear_belt_mall_power_issue.get('status')}",
+        ]
+        adjusted["expected_effect"] = (
+            "Restore electric power before extending the iron-plate logistics route or running circuit automation."
+        )
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": "setup_power",
+            "reason": guardrail_reason,
+        }
+        return adjusted
     gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
     if gear_mall_iron_plate_issue is not None and selected in {
         "plan_factory_site",
@@ -1079,6 +1112,7 @@ def heuristic_strategy(
     top_layout_item = _top_layout_item(layout_issues, layout_opportunities)
     automation_logistics_issue = _first_automation_logistics_issue(layout_issues)
     gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
+    gear_belt_mall_power_issue = _gear_belt_mall_power_issue(observation)
     if threats["danger_level"] in {"critical", "high"} and int(threats.get("armed_gun_turret_count") or 0) <= 0:
         nearest = threats.get("nearest_enemy") if isinstance(threats.get("nearest_enemy"), dict) else {}
         return StrategicDecision(
@@ -1149,6 +1183,23 @@ def heuristic_strategy(
             ],
             blockers=["electric power network"],
             expected_effect="Expand or connect the electric network before adding more electric machines.",
+        ).to_dict()
+
+    if gear_belt_mall_power_issue is not None:
+        return StrategicDecision(
+            selected_skill="setup_power",
+            priority=93,
+            reason=(
+                "The gear/belt mall is unpowered, so it cannot replenish transport belts for the iron-plate "
+                "logistics route or downstream automation."
+            ),
+            evidence=[
+                f"gear_belt_mall_unit={gear_belt_mall_power_issue.get('unit')}",
+                f"gear_belt_mall_recipe={gear_belt_mall_power_issue.get('recipe')}",
+                f"gear_belt_mall_status={gear_belt_mall_power_issue.get('status')}",
+            ],
+            blockers=["gear/belt mall power"],
+            expected_effect="Restore electric power before trying to extend the belt route or expand circuit automation.",
         ).to_dict()
 
     if gear_mall_iron_plate_issue is not None:
@@ -1714,6 +1765,29 @@ def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[s
                 "gear_assembler_status": gear.get("status_name") or gear.get("status"),
             }
     return best_issue
+
+
+def _gear_belt_mall_power_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
+    if not _technology_researched(observation, "automation"):
+        return None
+    assemblers = (
+        entities_named(observation, "assembling-machine-1")
+        + entities_named(observation, "assembling-machine-2")
+        + entities_named(observation, "assembling-machine-3")
+    )
+    for assembler in assemblers:
+        recipe = str(assembler.get("recipe") or assembler.get("recipe_name") or "")
+        if recipe not in {"iron-gear-wheel", "transport-belt"}:
+            continue
+        if assembler.get("electric_network_connected") is False:
+            continue
+        if _entity_status_is(assembler, "no_power", 3):
+            return {
+                "unit": assembler.get("unit_number"),
+                "recipe": recipe,
+                "status": assembler.get("status_name") or assembler.get("status"),
+            }
+    return None
 
 
 def _transport_belts_available_for_mall_logistics(observation: dict[str, Any]) -> bool:

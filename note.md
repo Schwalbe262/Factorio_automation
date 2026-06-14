@@ -6114,6 +6114,28 @@
 - Next action: Commit/push Part 100, then restart headless no-mod autopilot and monitor whether circuit automation or power repair is selected next.
 - Token usage: cumulative 57,112,738; current raw counter 9,429,338; delta 37,067 / weekly quota unavailable
 
+## 2026-06-15 08:58:05 +09:00 - Loop 289
+- Part: Part 101 - unpowered gear/belt mall strategy guard
+- Goal: Prevent Qwen from selecting circuit, item-mall, site-plan, or iron-line work when the gear/belt mall is actually blocked by `no_power`.
+- Hypothesis: If a gear or belt assembler is `no_power`, setup/power repair should preempt downstream automation because the belt mall cannot replenish construction belts.
+- Actions:
+  - Added `_gear_belt_mall_power_issue` in strategy.
+  - Added heuristic and LLM reconciliation guardrails redirecting relevant skills to `setup_power` when the gear/belt mall is unpowered.
+  - Added tests for heuristic power repair and LLM reconciliation from circuit/item-mall choices.
+  - Checked the current live map: gear/belt mall assemblers are not `no_power`; they are `item_ingredient_shortage`, so this guardrail does not apply to the current blocker.
+- Candidates:
+  - Guarded skills: `plan_factory_site`, `produce_electronic_circuit`, `automate_electronic_circuit_line`, `bootstrap_build_item_mall`, `build_iron_plate_logistic_line_to_gear_mall`.
+  - Current live selected skill remains `automate_electronic_circuit_line`, but it fails because the iron-gear mall still needs an iron-plate logistics route and belts are exhausted.
+- Metrics:
+  - Tests: `python -m unittest discover tests` -> 442 passed.
+  - Current live gear assembler status: `item_ingredient_shortage`.
+  - Current live belt assembler status: `item_ingredient_shortage`.
+  - Token usage sample: cumulative 57,147,158, current raw counter 9,463,758, delta 34,420 since prior sample, weekly quota unavailable.
+- Result: Strategy now handles the unpowered-mall case, but the current map's active blocker is long-distance iron-plate logistics with insufficient belts.
+- Failure reason: Current live blocker is not a power issue; no live improvement claim for this loop.
+- Next action: Commit/push Part 101. Next implementation should avoid the 150-tile belt deadlock by relocating/duplicating gear-belt production near the iron source or building a nearer iron-plate source for the mall.
+- Token usage: cumulative 57,147,158; current raw counter 9,463,758; delta 34,420 / weekly quota unavailable
+
 ## 2026-06-15 08:45:57 +09:00 - Loop 288
 - Part: skill
 - Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
@@ -6155,6 +6177,94 @@
   - Metadata: `{"cycle":1,"priority":92,"strategy_source":"llm"}`.
 - Result: Loop stopped: iron-plate logistics line needs transport belts from the belt mall; refusing gear handcraft or iron-plate hand-carry
 - Failure reason: iron-plate logistics line needs transport belts from the belt mall; refusing gear handcraft or iron-plate hand-carry
+- Next action: Plan or build the missing site-to-site logistic line before repeating the consumer loop.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 08:53:22 +09:00 - Loop 290
+- Part: skill
+- Goal: launch_rocket_program / automate_electronic_circuit_line
+- Hypothesis: Running `automate_electronic_circuit_line` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `automate_electronic_circuit_line` for up to 1800 step(s).
+  - Tracked `electronic-circuit` from 20 to 20.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-circuit-automation-20260614-235312.jsonl`.
+- Candidates:
+  - Selected goal/skill: `automate_electronic_circuit_line`.
+  - Target item candidate: `electronic-circuit` target `50`.
+- Metrics:
+  - Steps: 2.
+  - Status: failed.
+  - Duration: 9.828s.
+  - electronic-circuit: 20 -> 20 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-circuit-automation-20260614-235312.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":20,"initial_item_count":20,"max_steps":1800,"target":50}`.
+- Result: Loop stopped: iron-gear-wheel mall assembler needs a iron-plate logistic line from entity-source:iron-plate:stone-furnace:395 (152 tiles); refusing repeated hand-carry between distant sites
+- Failure reason: iron-gear-wheel mall assembler needs a iron-plate logistic line from entity-source:iron-plate:stone-furnace:395 (152 tiles); refusing repeated hand-carry between distant sites
+- Next action: Plan or build the missing site-to-site logistic line before repeating the consumer loop.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 08:53:22 +09:00 - Loop 291
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / automate_electronic_circuit_line
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 1.
+  - Selected `automate_electronic_circuit_line` with priority `84` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `automate_electronic_circuit_line`.
+  - Strategy priority: `84`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 50.984s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-235228.jsonl`.
+  - Metadata: `{"cycle":1,"priority":84,"strategy_source":"llm"}`.
+- Result: Loop stopped: iron-gear-wheel mall assembler needs a iron-plate logistic line from entity-source:iron-plate:stone-furnace:395 (152 tiles); refusing repeated hand-carry between distant sites
+- Failure reason: iron-gear-wheel mall assembler needs a iron-plate logistic line from entity-source:iron-plate:stone-furnace:395 (152 tiles); refusing repeated hand-carry between distant sites
+- Next action: Plan or build the missing site-to-site logistic line before repeating the consumer loop.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 08:54:14 +09:00 - Loop 292
+- Part: skill
+- Goal: launch_rocket_program / automate_electronic_circuit_line
+- Hypothesis: Running `automate_electronic_circuit_line` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `automate_electronic_circuit_line` for up to 1800 step(s).
+  - Tracked `electronic-circuit` from 20 to 20.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-circuit-automation-20260614-235412.jsonl`.
+- Candidates:
+  - Selected goal/skill: `automate_electronic_circuit_line`.
+  - Target item candidate: `electronic-circuit` target `50`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 2.594s.
+  - electronic-circuit: 20 -> 20 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-circuit-automation-20260614-235412.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":20,"initial_item_count":20,"max_steps":1800,"target":50}`.
+- Result: Loop stopped: iron-gear-wheel mall assembler needs a iron-plate logistic line from entity-source:iron-plate:stone-furnace:395 (152 tiles); refusing repeated hand-carry between distant sites
+- Failure reason: iron-gear-wheel mall assembler needs a iron-plate logistic line from entity-source:iron-plate:stone-furnace:395 (152 tiles); refusing repeated hand-carry between distant sites
+- Next action: Plan or build the missing site-to-site logistic line before repeating the consumer loop.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 08:54:14 +09:00 - Loop 293
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / automate_electronic_circuit_line
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 2.
+  - Selected `automate_electronic_circuit_line` with priority `84` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `automate_electronic_circuit_line`.
+  - Strategy priority: `84`.
+- Metrics:
+  - Steps: 2.
+  - Status: failed.
+  - Duration: 47.344s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260614-235228.jsonl`.
+  - Metadata: `{"cycle":2,"priority":84,"strategy_source":"llm"}`.
+- Result: Loop stopped: iron-gear-wheel mall assembler needs a iron-plate logistic line from entity-source:iron-plate:stone-furnace:395 (152 tiles); refusing repeated hand-carry between distant sites
+- Failure reason: iron-gear-wheel mall assembler needs a iron-plate logistic line from entity-source:iron-plate:stone-furnace:395 (152 tiles); refusing repeated hand-carry between distant sites
 - Next action: Plan or build the missing site-to-site logistic line before repeating the consumer loop.
 - Token usage: not recorded for this loop / weekly quota unavailable
 
