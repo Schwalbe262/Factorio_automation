@@ -128,6 +128,7 @@ class StrategyTests(unittest.TestCase):
                         "recipe": "transport-belt",
                         "position": {"x": 1, "y": 3},
                         "electric_network_connected": True,
+                        "inventories": {"1": {"transport-belt": 2}},
                     },
                 ],
                 "resources": [{"name": "coal", "position": {"x": 4, "y": 0}, "distance": 4}],
@@ -151,7 +152,7 @@ class StrategyTests(unittest.TestCase):
                 "research": {"technologies": {"automation": {"researched": True}}},
             },
         )
-        self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
         self.assertIn("transport-belt automation before site links", result["blockers"])
 
     def test_coal_supply_ready_uses_mining_target_when_resource_list_is_remote(self):
@@ -421,6 +422,7 @@ class StrategyTests(unittest.TestCase):
                         "recipe": "transport-belt",
                         "position": {"x": 1, "y": 3},
                         "electric_network_connected": True,
+                        "inventories": {"1": {"transport-belt": 2}},
                     },
                 ],
                 "resources": [{"name": "coal", "position": {"x": 4, "y": 0}, "distance": 4}],
@@ -455,7 +457,7 @@ class StrategyTests(unittest.TestCase):
                 "research": {"technologies": {"automation": {"researched": True}}},
             },
         )
-        self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
         self.assertEqual(result["source"], "llm")
         self.assertEqual(result["guardrail_adjusted"]["from"], "connect_coal_fuel_feed")
         self.assertIn("transport-belt automation before site links", result["blockers"])
@@ -503,6 +505,7 @@ class StrategyTests(unittest.TestCase):
                         "recipe": "transport-belt",
                         "position": {"x": 2, "y": 2},
                         "electric_network_connected": True,
+                        "inventories": {"1": {"transport-belt": 2}},
                     }
                 ],
                 "research": {"technologies": {"automation": {"researched": True}}},
@@ -740,6 +743,7 @@ class StrategyTests(unittest.TestCase):
                         "recipe": "transport-belt",
                         "position": {"x": 2, "y": 2},
                         "electric_network_connected": True,
+                        "inventories": {"1": {"transport-belt": 2}},
                     },
                 ],
                 "resources": [{"name": "iron-ore", "position": {"x": 4, "y": 0}, "distance_from_base": 4}],
@@ -792,6 +796,7 @@ class StrategyTests(unittest.TestCase):
                         "recipe": "transport-belt",
                         "position": {"x": 2, "y": 2},
                         "electric_network_connected": True,
+                        "inventories": {"1": {"transport-belt": 2}},
                     }
                 ],
                 "resources": [
@@ -855,6 +860,7 @@ class StrategyTests(unittest.TestCase):
                         "recipe": "transport-belt",
                         "position": {"x": 2, "y": 2},
                         "electric_network_connected": True,
+                        "inventories": {"1": {"transport-belt": 2}},
                     }
                 ],
                 "research": {"technologies": {"automation": {"researched": True}}},

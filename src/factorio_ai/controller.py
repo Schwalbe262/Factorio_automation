@@ -42,6 +42,7 @@ from .planner import (
     ExpandCopperSmeltingSkill,
     ExpandIronSmeltingSkill,
     FactoryLayoutImprovementSkill,
+    GearBeltMallLogisticsSkill,
     IronPlateSkill,
     ResearchAutomationSkill,
     ResearchTechnologySkill,
@@ -1210,6 +1211,16 @@ class FactorioController:
                 "goal": skill_name,
                 "max_steps": _max_steps(max_steps, 1200),
                 "log_prefix": "strategy-build-item-mall",
+            }
+        if skill_name == "build_gear_belt_mall_logistics":
+            target = target_count or 20
+            return {
+                "skill": GearBeltMallLogisticsSkill(target),
+                "target_item": "transport-belt",
+                "target": target,
+                "goal": skill_name,
+                "max_steps": _max_steps(max_steps, 900),
+                "log_prefix": "strategy-gear-belt-mall",
             }
         if skill_name == "build_starter_defense":
             return {

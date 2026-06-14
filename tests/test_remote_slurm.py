@@ -339,6 +339,7 @@ class RemoteSlurmTests(unittest.TestCase):
                         "name": "assembling-machine-1",
                         "recipe": "transport-belt",
                         "electric_network_connected": True,
+                        "inventories": {"1": {"transport-belt": 2}},
                     }
                 ],
                 "enemies": [],
@@ -354,6 +355,7 @@ class RemoteSlurmTests(unittest.TestCase):
                             "name": "assembling-machine-1",
                             "recipe": "transport-belt",
                             "electric_network_connected": True,
+                            "inventories": {"1": {"transport-belt": 2}},
                         }
                     ],
                     "enemies": [],

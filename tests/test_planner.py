@@ -15,6 +15,7 @@ from factorio_ai.planner import (
     ExpandCopperSmeltingSkill,
     ExpandIronSmeltingSkill,
     FactoryLayoutImprovementSkill,
+    GearBeltMallLogisticsSkill,
     IronPlateSkill,
     ResearchAutomationSkill,
     ResearchTechnologySkill,
@@ -2314,6 +2315,32 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "wait")
         self.assertIn("refusing player collection of iron gear wheels", decision.reason)
 
+    def test_circuit_automation_uses_inserter_mall_instead_of_handcrafting_inserter(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 8, "electronic-circuit": 2}
+        obs["craftable"] = {"iron-gear-wheel": 4, "inserter": 1}
+        for entity in circuit_cell_entities():
+            if entity["name"] != "inserter":
+                obs["entities"].append(entity)
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 819,
+                "position": {"x": 14, "y": 2},
+                "distance": 14,
+                "recipe": None,
+                "electric_network_connected": True,
+                "inventories": {"1": {}},
+            }
+        )
+
+        decision = CircuitAutomationSkill().next_action(obs)
+
+        self.assertNotEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["type"], "set_recipe")
+        self.assertEqual(decision.action["recipe"], "inserter")
+        self.assertEqual(decision.action["unit_number"], 819)
+
     def test_circuit_automation_places_cable_assembler_first(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"assembling-machine-1": 2, "inserter": 1}
@@ -2671,6 +2698,313 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.done)
         self.assertIsNone(decision.action)
 
+    def test_gear_belt_mall_sets_reusable_assembler_to_transport_belt(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 3, "burner-inserter": 1, "inserter": 1}
+        obs["entities"].extend(gear_belt_mall_entities())
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "set_recipe")
+        self.assertEqual(decision.action["recipe"], "transport-belt")
+        self.assertEqual(decision.action["unit_number"], 911)
+
+    def test_gear_belt_mall_builds_short_belt_lane_without_taking_gears(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 3, "burner-inserter": 1, "inserter": 1}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="transport-belt",
+                gear_inventory={"iron-gear-wheel": 4},
+            )
+        )
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertNotEqual(decision.action.get("type"), "take")
+
+    def test_gear_belt_mall_uses_bottom_lane_when_top_lane_hits_machine_footprint(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 3, "burner-inserter": 1, "inserter": 1}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="transport-belt",
+                gear_inventory={"iron-gear-wheel": 4},
+            )
+        )
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 912,
+                "position": {"x": 4, "y": -2},
+                "distance": 4,
+                "recipe": "copper-cable",
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertEqual(decision.action["position"], {"x": 3, "y": 5})
+
+    def test_gear_belt_mall_places_burner_output_inserter_after_lane(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"burner-inserter": 1, "inserter": 1}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="transport-belt",
+                gear_inventory={"iron-gear-wheel": 4},
+            )
+        )
+        for index, x in enumerate((3, 4), start=930):
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": index,
+                    "position": {"x": x, "y": -1},
+                    "direction": 4,
+                    "inventories": {},
+                }
+            )
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "burner-inserter")
+        self.assertEqual(decision.action["position"], {"x": 3, "y": 0})
+        self.assertEqual(decision.action["direction"], 8)
+
+    def test_gear_belt_mall_removes_misoriented_output_inserter(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 8}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="transport-belt",
+                gear_inventory={"iron-gear-wheel": 4},
+            )
+        )
+        for index, x in enumerate((3, 4), start=930):
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": index,
+                    "position": {"x": x, "y": -1},
+                    "direction": 4,
+                    "inventories": {},
+                }
+            )
+        obs["entities"].append(
+            {
+                "name": "burner-inserter",
+                "unit_number": 940,
+                "position": {"x": 3, "y": 0},
+                "direction": 0,
+                "inventories": {"1": {"coal": 1}},
+            }
+        )
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 940)
+        self.assertIn("misoriented", decision.reason)
+
+    def test_gear_belt_mall_seeds_iron_without_gear_handcraft_after_logistics(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 8}
+        obs["craftable"] = {"iron-gear-wheel": 4}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="transport-belt",
+                gear_inventory={"iron-gear-wheel": 4},
+            )
+        )
+        for index, x in enumerate((3, 4), start=930):
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": index,
+                    "position": {"x": x, "y": -1},
+                    "direction": 4,
+                    "inventories": {},
+                }
+            )
+        obs["entities"].extend(
+            [
+                {
+                    "name": "burner-inserter",
+                    "unit_number": 940,
+                    "position": {"x": 3, "y": 0},
+                    "direction": 8,
+                    "inventories": {"1": {"coal": 1}},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 941,
+                    "position": {"x": 4, "y": 0},
+                    "direction": 0,
+                    "inventories": {},
+                    "electric_network_connected": True,
+                },
+            ]
+        )
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertNotEqual(decision.action.get("recipe"), "iron-gear-wheel")
+
+    def test_gear_belt_mall_relocates_existing_inserter_instead_of_handcrafting_gear(self):
+        obs = powered_automation_observation()
+        obs["player"]["position"] = {"x": 8, "y": 2}
+        obs["inventory"] = {"iron-plate": 8}
+        obs["craftable"] = {"iron-gear-wheel": 4, "inserter": 1}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="transport-belt",
+                gear_inventory={"iron-gear-wheel": 4},
+            )
+        )
+        for index, x in enumerate((3, 4), start=930):
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": index,
+                    "position": {"x": x, "y": -1},
+                    "direction": 4,
+                    "inventories": {},
+                }
+            )
+        obs["entities"].extend(
+            [
+                {
+                    "name": "burner-inserter",
+                    "unit_number": 940,
+                    "position": {"x": 3, "y": 0},
+                    "direction": 8,
+                    "inventories": {"1": {"coal": 1}},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 942,
+                    "position": {"x": 8, "y": 0},
+                    "direction": 4,
+                    "inventories": {},
+                    "electric_network_connected": True,
+                },
+            ]
+        )
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 942)
+        self.assertNotEqual(decision.action.get("recipe"), "iron-gear-wheel")
+
+    def test_gear_belt_mall_powers_relocated_input_inserter(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"small-electric-pole": 1, "iron-plate": 8}
+        obs["craftable"] = {"iron-gear-wheel": 4}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="transport-belt",
+                gear_inventory={"iron-gear-wheel": 4},
+            )
+        )
+        for index, x in enumerate((3, 4), start=930):
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": index,
+                    "position": {"x": x, "y": -1},
+                    "direction": 4,
+                    "inventories": {},
+                }
+            )
+        obs["entities"].extend(
+            [
+                {
+                    "name": "small-electric-pole",
+                    "unit_number": 939,
+                    "position": {"x": 4, "y": 4},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "burner-inserter",
+                    "unit_number": 940,
+                    "position": {"x": 3, "y": 0},
+                    "direction": 8,
+                    "inventories": {"1": {"coal": 1}},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 941,
+                    "position": {"x": 4, "y": 0},
+                    "direction": 0,
+                    "inventories": {},
+                    "electric_network_connected": False,
+                },
+            ]
+        )
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "small-electric-pole")
+        self.assertEqual(decision.action["position"], {"x": 6.0, "y": 0.0})
+        self.assertNotEqual(decision.action.get("recipe"), "iron-gear-wheel")
+
+    def test_gear_belt_mall_done_when_belt_assembler_has_output(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="transport-belt",
+                belt_inventory={"transport-belt": 4},
+            )
+        )
+        for index, x in enumerate((3, 4), start=930):
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": index,
+                    "position": {"x": x, "y": -1},
+                    "direction": 4,
+                    "inventories": {},
+                }
+            )
+        obs["entities"].extend(
+            [
+                {
+                    "name": "burner-inserter",
+                    "unit_number": 940,
+                    "position": {"x": 3, "y": 0},
+                    "direction": 8,
+                    "inventories": {"1": {"coal": 1}},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 941,
+                    "position": {"x": 4, "y": 0},
+                    "direction": 0,
+                    "inventories": {},
+                    "electric_network_connected": True,
+                },
+            ]
+        )
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
+
     def test_expansion_prefers_high_coverage_patch_drill_position(self):
         obs = base_observation()
         obs["inventory"] = {
@@ -2858,6 +3192,29 @@ def mall_assembler(recipe="transport-belt", inventory=None, powered=True):
         "electric_network_connected": powered,
         "inventories": {"1": inventory or {}},
     }
+
+
+def gear_belt_mall_entities(belt_recipe="automation-science-pack", gear_inventory=None, belt_inventory=None):
+    return [
+        {
+            "name": "assembling-machine-1",
+            "unit_number": 910,
+            "position": {"x": 2, "y": 2},
+            "distance": 2,
+            "recipe": "iron-gear-wheel",
+            "electric_network_connected": True,
+            "inventories": {"1": gear_inventory or {}},
+        },
+        {
+            "name": "assembling-machine-1",
+            "unit_number": 911,
+            "position": {"x": 5, "y": 2},
+            "distance": 5,
+            "recipe": belt_recipe,
+            "electric_network_connected": True,
+            "inventories": {"1": belt_inventory or {}},
+        },
+    ]
 
 
 def complete_belt_smelting_entities(drill_x, drill_y, base_unit, resource="iron-ore", product="iron-plate", reserve_fuel=False):

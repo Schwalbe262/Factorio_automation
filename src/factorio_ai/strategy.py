@@ -235,6 +235,25 @@ SKILL_CATALOG: dict[str, SkillContract] = {
             "Executor handles exact assembler recipes, inserter/chest placement, belts, power, and resource validation."
         ),
     ),
+    "build_gear_belt_mall_logistics": SkillContract(
+        name="build_gear_belt_mall_logistics",
+        description="Connect an iron-gear assembler to a transport-belt assembler without player gear crafting or gear hand-carry.",
+        executor="GearBeltMallLogisticsSkill",
+        preconditions=[
+            "automation researched",
+            "electric power available",
+            "powered iron-gear assembler and reusable adjacent assembler are available",
+            "short bootstrap belts and inserters are available or craftable without hand-crafting gears",
+        ],
+        completion=[
+            "iron gears move toward the transport-belt assembler through inserters and belts",
+            "transport-belt production no longer depends on player gear collection",
+        ],
+        llm_scope=(
+            "Choose this when belt automation is blocked by gear mall output logistics. "
+            "Executor handles exact belt lane, inserter direction, burner fuel, and recipe changes."
+        ),
+    ),
     "build_starter_defense": SkillContract(
         name="build_starter_defense",
         description="Build early gun-turret and firearm-magazine defenses around the starter factory.",
@@ -702,7 +721,7 @@ def reconcile_strategy_decision(
     if selected == "connect_coal_fuel_feed" and not _transport_belt_automation_ready(observation):
         adjusted = dict(decision)
         automation_researched = _technology_researched(observation, "automation")
-        target_skill = "bootstrap_build_item_mall" if automation_researched else "research_automation"
+        target_skill = "build_gear_belt_mall_logistics" if automation_researched else "research_automation"
         adjusted["selected_skill"] = target_skill
         adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 87)
         original_reason = str(decision.get("reason") or "").strip()
@@ -718,7 +737,7 @@ def reconcile_strategy_decision(
             "transport_belt_automation_ready=false",
         ]
         adjusted["expected_effect"] = (
-            "Automate belt production before spending scarce bootstrap items on site-to-site fuel paths."
+            "Automate gear-fed belt production before spending scarce bootstrap items on site-to-site fuel paths."
         )
         adjusted["guardrail_adjusted"] = {
             "from": "connect_coal_fuel_feed",
@@ -730,7 +749,7 @@ def reconcile_strategy_decision(
         adjusted = dict(decision)
         automation_researched = _technology_researched(observation, "automation")
         if automation_researched:
-            target_skill = "bootstrap_build_item_mall"
+            target_skill = "build_gear_belt_mall_logistics"
         elif selected == "expand_copper_smelting":
             target_skill = "produce_copper_plate"
         else:
@@ -752,7 +771,7 @@ def reconcile_strategy_decision(
             f"automation_researched={str(automation_researched).lower()}",
         ]
         adjusted["expected_effect"] = (
-            "Avoid spending early hand-crafted belts on smelting; establish direct plate supply or automate belts first."
+            "Avoid spending early hand-crafted belts on smelting; establish direct plate supply or automate gear-fed belts first."
         )
         adjusted["guardrail_adjusted"] = {
             "from": selected,
@@ -1034,11 +1053,11 @@ def heuristic_strategy(
         if not _transport_belt_automation_ready(observation):
             if automation_researched:
                 return StrategicDecision(
-                    selected_skill="bootstrap_build_item_mall",
+                    selected_skill="build_gear_belt_mall_logistics",
                     priority=87,
                     reason=(
                         "A coal consumer link is route_needed, but transport-belt production is not automated; "
-                        "build the belt mall before adding site-to-site paths."
+                        "build gear-fed belt mall logistics before adding site-to-site paths."
                     ),
                     evidence=[
                         "coal_fuel_feed_route_needed=true",
@@ -1046,7 +1065,7 @@ def heuristic_strategy(
                         "automation_researched=true",
                     ],
                     blockers=["transport-belt automation before site links"],
-                    expected_effect="Automate transport belts so future site logistics can be built without hand-crafting each path.",
+                    expected_effect="Automate gear-fed transport belts so future site logistics can be built without hand-crafting each path.",
                 ).to_dict()
         else:
             return StrategicDecision(
@@ -1320,8 +1339,8 @@ def _executable_layout_plan_fallback(
             skill = "connect_coal_fuel_feed"
             expected_effect = "Replace repeated boiler or burner hand-fueling with an implemented coal fuel feed."
         elif _technology_researched(observation, "automation"):
-            skill = "bootstrap_build_item_mall"
-            expected_effect = "Automate belt production before building site-to-site fuel feed paths."
+            skill = "build_gear_belt_mall_logistics"
+            expected_effect = "Automate gear-fed belt production before building site-to-site fuel feed paths."
 
     if not skill:
         return None
@@ -1414,7 +1433,7 @@ def _plate_smelting_skill(kind: str, observation: dict[str, Any]) -> str:
     if _transport_belt_automation_ready(observation):
         return "expand_copper_smelting" if kind == "copper" else "expand_iron_smelting"
     if _technology_researched(observation, "automation"):
-        return "bootstrap_build_item_mall"
+        return "build_gear_belt_mall_logistics"
     return "produce_copper_plate" if kind == "copper" else "produce_iron_plate"
 
 
@@ -1539,7 +1558,10 @@ def _transport_belt_automation_ready(observation: dict[str, Any]) -> bool:
             continue
         if _entity_status_is(assembler, "no_power", 3):
             continue
-        return True
+        if entity_item_count(assembler, "transport-belt") > 0:
+            return True
+        if entity_item_count(assembler, "iron-gear-wheel") > 0 and entity_item_count(assembler, "iron-plate") > 0:
+            return True
     return False
 
 
@@ -1567,7 +1589,7 @@ def _first_actionable_target_deficit(
         skill = _skill_for_bottleneck_item(item, observation)
         if not skill:
             continue
-        if skill == "bootstrap_build_item_mall":
+        if skill in {"bootstrap_build_item_mall", "build_gear_belt_mall_logistics"}:
             if item in {"iron-plate", "iron-ore", "steel-plate"} and not _starter_resource_available(observation, "iron-ore"):
                 continue
             if item in {"copper-plate", "copper-ore", "copper-cable"} and not _starter_resource_available(observation, "copper-ore"):

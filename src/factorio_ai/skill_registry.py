@@ -23,6 +23,7 @@ IMPLEMENTED_SKILLS = {
     "automate_electronic_circuit_line": "CircuitAutomationSkill",
     "research_logistics": "ResearchTechnologySkill",
     "bootstrap_build_item_mall": "BuildItemMallSkill",
+    "build_gear_belt_mall_logistics": "GearBeltMallLogisticsSkill",
     "build_starter_defense": "StarterDefenseSkill",
     "plan_factory_site": "FactoryLayoutImprovementSkill",
 }
