@@ -2482,6 +2482,10 @@ class BeltSmeltingLineSkill:
                 if not decision.done:
                     return decision
             if inventory_count(observation, "iron-gear-wheel") < 3 and craftable_count(observation, "iron-gear-wheel") > 0:
+                if bool(_technology_state(observation, "automation").get("researched")):
+                    decision = BuildItemMallSkill("iron-gear-wheel", 3).next_action(observation)
+                    if not decision.done:
+                        return decision
                 return PlannerDecision(
                     {
                         "type": "craft",
@@ -2493,13 +2497,25 @@ class BeltSmeltingLineSkill:
             return self.support_skill.next_action(observation, target_count=20, inventory_only=True)
 
         if item in {"transport-belt", "burner-inserter"}:
-            if craftable_count(observation, item) > 0:
-                return PlannerDecision({"type": "craft", "recipe": item, "count": 1}, f"craft {item} for line")
             if inventory_count(observation, "iron-gear-wheel") < 1 and craftable_count(observation, "iron-gear-wheel") > 0:
+                if bool(_technology_state(observation, "automation").get("researched")):
+                    decision = BuildItemMallSkill("iron-gear-wheel", 3).next_action(observation)
+                    if not decision.done:
+                        return decision
                 return PlannerDecision(
                     {"type": "craft", "recipe": "iron-gear-wheel", "count": 1},
                     f"craft gear for {item}",
                 )
+            if (
+                item == "transport-belt"
+                and bool(_technology_state(observation, "automation").get("researched"))
+                and not _belt_smelting_ready(observation)
+            ):
+                decision = BuildItemMallSkill("transport-belt", 20).next_action(observation)
+                if not decision.done:
+                    return decision
+            if craftable_count(observation, item) > 0:
+                return PlannerDecision({"type": "craft", "recipe": item, "count": 1}, f"craft {item} for line")
             return self.support_skill.next_action(observation, target_count=20, inventory_only=True)
 
         return None
@@ -5485,6 +5501,7 @@ class BuildItemMallSkill:
             reference_position=reference_position,
         ) or _select_build_item_mall_site(
             observation,
+            self.target_item,
             allow_existing_remote=allow_existing_remote,
             reference_position=reference_position,
         )
@@ -5566,6 +5583,7 @@ class BuildItemMallSkill:
                 done=True,
             )
 
+        assembler_position = _position(assembler)
         batch_count = _build_item_mall_batch_count(recipe.products.get(self.target_item, 1.0), self.target_count)
         for ingredient, amount in sorted(recipe.ingredients.items()):
             needed_in_assembler = max(1, int(amount * batch_count))
@@ -5580,10 +5598,16 @@ class BuildItemMallSkill:
             if logistics_blocker is not None:
                 return logistics_blocker
             if inventory_count(observation, ingredient) <= 0:
-                decision = self._ensure_item_quantity(observation, player, ingredient, needed_in_assembler)
+                decision = self._ensure_item_quantity(
+                    observation,
+                    player,
+                    ingredient,
+                    needed_in_assembler,
+                    allow_existing_remote=allow_existing_remote,
+                    reference_position=assembler_position,
+                )
                 if decision is not None:
                     return decision
-            assembler_position = _position(assembler)
             if distance(player, assembler_position) > 20:
                 return PlannerDecision({"type": "move_to", "position": assembler_position}, f"move near mall assembler to insert {ingredient}")
             return PlannerDecision(
@@ -5626,18 +5650,12 @@ class BuildItemMallSkill:
         player: dict[str, float],
         item: str,
         quantity: int,
+        *,
+        allow_existing_remote: bool = False,
+        reference_position: dict[str, float] | None = None,
     ) -> PlannerDecision | None:
         if inventory_count(observation, item) >= quantity:
             return None
-        if craftable_count(observation, item) > 0:
-            return PlannerDecision(
-                {
-                    "type": "craft",
-                    "recipe": item,
-                    "count": min(quantity - inventory_count(observation, item), craftable_count(observation, item)),
-                },
-                f"craft {item} for build item mall",
-            )
 
         if item == "assembling-machine-1":
             for prerequisite, count in [
@@ -5645,12 +5663,45 @@ class BuildItemMallSkill:
                 ("iron-gear-wheel", 5 * quantity),
                 ("iron-plate", 9 * quantity),
             ]:
-                decision = self._ensure_item_quantity(observation, player, prerequisite, count)
+                decision = self._ensure_item_quantity(
+                    observation,
+                    player,
+                    prerequisite,
+                    count,
+                    allow_existing_remote=allow_existing_remote,
+                    reference_position=reference_position,
+                )
                 if decision is not None:
                     return decision
+            if craftable_count(observation, "assembling-machine-1") > 0:
+                return PlannerDecision(
+                    {
+                        "type": "craft",
+                        "recipe": "assembling-machine-1",
+                        "count": min(
+                            quantity - inventory_count(observation, "assembling-machine-1"),
+                            craftable_count(observation, "assembling-machine-1"),
+                        ),
+                    },
+                    "craft assembling-machine-1 for build item mall bootstrap",
+                )
             return None
 
         if item == "iron-gear-wheel":
+            if bool(_technology_state(observation, "automation").get("researched")):
+                if self.target_item != "iron-gear-wheel":
+                    decision = BuildItemMallSkill("iron-gear-wheel", max(quantity, 4)).next_action(
+                        observation,
+                        allow_existing_remote=allow_existing_remote,
+                        reference_position=reference_position,
+                    )
+                    if not decision.done:
+                        return decision
+                    return None
+                return PlannerDecision(
+                    None,
+                    "iron gear wheels must be produced by an assembler; refusing hand-crafted gear for build item mall bootstrap",
+                )
             if craftable_count(observation, "iron-gear-wheel") > 0:
                 return PlannerDecision(
                     {
@@ -5660,7 +5711,14 @@ class BuildItemMallSkill:
                     },
                     "craft gears for build item mall",
                 )
-            return self._ensure_item_quantity(observation, player, "iron-plate", 2 * (quantity - inventory_count(observation, "iron-gear-wheel")))
+            return self._ensure_item_quantity(
+                observation,
+                player,
+                "iron-plate",
+                2 * (quantity - inventory_count(observation, "iron-gear-wheel")),
+                allow_existing_remote=allow_existing_remote,
+                reference_position=reference_position,
+            )
 
         if item == "electronic-circuit":
             decision = self.circuit_skill.next_action(observation)
@@ -5690,10 +5748,27 @@ class BuildItemMallSkill:
                     },
                     "craft copper cable for build item mall",
                 )
-            return self._ensure_item_quantity(observation, player, "copper-plate", _ceil_div(quantity - inventory_count(observation, "copper-cable"), 2))
+            return self._ensure_item_quantity(
+                observation,
+                player,
+                "copper-plate",
+                _ceil_div(quantity - inventory_count(observation, "copper-cable"), 2),
+                allow_existing_remote=allow_existing_remote,
+                reference_position=reference_position,
+            )
 
         if item == "small-electric-pole":
             return self.power_skill._ensure_item_quantity(observation, player, item, quantity)
+
+        if craftable_count(observation, item) > 0:
+            return PlannerDecision(
+                {
+                    "type": "craft",
+                    "recipe": item,
+                    "count": min(quantity - inventory_count(observation, item), craftable_count(observation, item)),
+                },
+                f"craft {item} for build item mall",
+            )
 
         return PlannerDecision(None, f"missing {item} and no build item mall prerequisite path is implemented")
 
@@ -6075,6 +6150,19 @@ def _find_build_item_mall_cell(
                 reference_position=reference_position,
             )
         ]
+    if not candidates and target_item == "iron-gear-wheel" and inventory_count(observation, "assembling-machine-1") <= 0:
+        candidates = [
+            item
+            for item in assemblers
+            if item.get("electric_network_connected")
+            and item.get("recipe") not in {"copper-cable", "electronic-circuit"}
+            and _within_allowed_factory_area(
+                observation,
+                _position(item),
+                allow_existing_remote=allow_existing_remote,
+                reference_position=reference_position,
+            )
+        ]
     if not candidates:
         return None
     assembler = min(candidates, key=lambda item: float(item.get("distance") or 999999))
@@ -6118,6 +6206,7 @@ def _available_unassigned_mall_assembler(
 
 def _select_build_item_mall_site(
     observation: dict[str, Any],
+    target_item: str,
     *,
     allow_existing_remote: bool = False,
     reference_position: dict[str, float] | None = None,
@@ -6150,12 +6239,36 @@ def _select_build_item_mall_site(
             continue
         pole = _entity_near(observation, "small-electric-pole", pole_position, radius=1.0)
         assembler = _entity_near(observation, "assembling-machine-1", assembler_position, radius=1.5)
+        source_pole_unit_number = site.get("source_pole_unit_number")
+        pole_unit_number = site.get("pole_unit_number") or (pole.get("unit_number") if pole else None)
+        if assembler is not None and assembler.get("recipe") not in (None, "", target_item):
+            sidecar_position = _select_build_item_sidecar_position(
+                observation,
+                assembler_position,
+                power_positions=[pole_position],
+            )
+            if sidecar_position is None:
+                continue
+            assembler_position = sidecar_position
+            assembler = _entity_near(observation, "assembling-machine-1", assembler_position, radius=1.5)
+            if not _position_is_supplied_by_small_pole(observation, assembler_position, extra_power_positions=[pole_position]):
+                sidecar_pole_position = _select_build_item_sidecar_supply_pole_position(
+                    observation,
+                    assembler_position,
+                    source_position=pole_position,
+                )
+                if sidecar_pole_position is None:
+                    continue
+                source_pole_unit_number = site.get("pole_unit_number") or source_pole_unit_number
+                pole_position = sidecar_pole_position
+                pole = _entity_near(observation, "small-electric-pole", pole_position, radius=1.0)
+                pole_unit_number = pole.get("unit_number") if pole else None
         candidates.append(
             {
                 "pole_position": pole_position,
                 "assembler_position": assembler_position,
-                "pole_unit_number": site.get("pole_unit_number") or (pole.get("unit_number") if pole else None),
-                "source_pole_unit_number": site.get("source_pole_unit_number"),
+                "pole_unit_number": pole_unit_number,
+                "source_pole_unit_number": source_pole_unit_number,
                 "powered": bool(site.get("powered") or (assembler and assembler.get("electric_network_connected"))),
                 "distance": site.get("distance"),
                 "pole": pole,
@@ -6172,6 +6285,154 @@ def _select_build_item_mall_site(
         )
     )
     return candidates[0]
+
+
+def _select_build_item_sidecar_position(
+    observation: dict[str, Any],
+    anchor_position: dict[str, float],
+    *,
+    power_positions: list[dict[str, float]] | None = None,
+) -> dict[str, float] | None:
+    offsets = [
+        {"x": -3.0, "y": 0.0},
+        {"x": 3.0, "y": 0.0},
+        {"x": 0.0, "y": -3.0},
+        {"x": 0.0, "y": 3.0},
+        {"x": -3.0, "y": -3.0},
+        {"x": 3.0, "y": -3.0},
+        {"x": -3.0, "y": 3.0},
+        {"x": 3.0, "y": 3.0},
+    ]
+    candidates: list[dict[str, float]] = []
+    for offset in offsets:
+        candidate = {
+            "x": anchor_position["x"] + offset["x"],
+            "y": anchor_position["y"] + offset["y"],
+        }
+        if _build_item_sidecar_position_clear(observation, candidate):
+            candidates.append(candidate)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: _build_item_sidecar_power_score(observation, item, power_positions=power_positions))
+    return candidates[0]
+
+
+def _build_item_sidecar_position_clear(observation: dict[str, Any], position: dict[str, float]) -> bool:
+    if not _within_starter_logistics_area(observation, position):
+        return False
+    large_entities = ASSEMBLER_ENTITY_NAMES | {"lab", "stone-furnace", "burner-mining-drill", "boiler", "steam-engine"}
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    for entity in entities:
+        if not isinstance(entity, dict) or not isinstance(entity.get("position"), dict):
+            continue
+        name = str(entity.get("name") or "")
+        if name == "character" or name in {"tree", "fish"}:
+            continue
+        threshold = 3.0 if name in large_entities else 2.0
+        if distance(_position(entity), position) < threshold:
+            return False
+    resources = observation.get("resources") if isinstance(observation.get("resources"), list) else []
+    for resource in resources:
+        if not isinstance(resource, dict) or not isinstance(resource.get("position"), dict):
+            continue
+        if str(resource.get("name") or "") in PROTECTED_RESOURCE_NAMES and distance(_position(resource), position) < 2.5:
+            return False
+    return True
+
+
+def _select_build_item_sidecar_supply_pole_position(
+    observation: dict[str, Any],
+    assembler_position: dict[str, float],
+    *,
+    source_position: dict[str, float] | None = None,
+) -> dict[str, float] | None:
+    existing = _nearest_small_pole_supplying_position(observation, assembler_position)
+    if existing is not None:
+        return _position(existing)
+    offsets = [
+        {"x": 2.0, "y": -2.0},
+        {"x": -2.0, "y": -2.0},
+        {"x": 2.0, "y": 2.0},
+        {"x": -2.0, "y": 2.0},
+        {"x": 0.0, "y": -2.0},
+        {"x": 0.0, "y": 2.0},
+        {"x": 2.0, "y": 0.0},
+        {"x": -2.0, "y": 0.0},
+    ]
+    candidates: list[dict[str, float]] = []
+    for offset in offsets:
+        candidate = {
+            "x": assembler_position["x"] + offset["x"],
+            "y": assembler_position["y"] + offset["y"],
+        }
+        if _build_item_sidecar_pole_position_clear(observation, candidate):
+            candidates.append(candidate)
+    if not candidates:
+        return None
+    if source_position is not None:
+        candidates.sort(key=lambda item: distance(item, source_position))
+    return candidates[0]
+
+
+def _build_item_sidecar_pole_position_clear(observation: dict[str, Any], position: dict[str, float]) -> bool:
+    if not _within_starter_logistics_area(observation, position):
+        return False
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    for entity in entities:
+        if not isinstance(entity, dict) or not isinstance(entity.get("position"), dict):
+            continue
+        name = str(entity.get("name") or "")
+        if name == "character" or name in {"tree", "fish"}:
+            continue
+        if distance(_position(entity), position) < 1.5:
+            return False
+    resources = observation.get("resources") if isinstance(observation.get("resources"), list) else []
+    for resource in resources:
+        if not isinstance(resource, dict) or not isinstance(resource.get("position"), dict):
+            continue
+        if str(resource.get("name") or "") in PROTECTED_RESOURCE_NAMES and distance(_position(resource), position) < 1.0:
+            return False
+    return True
+
+
+def _build_item_sidecar_power_score(
+    observation: dict[str, Any],
+    position: dict[str, float],
+    *,
+    power_positions: list[dict[str, float]] | None = None,
+) -> tuple[int, float]:
+    poles = [_position(pole) for pole in _power_poles(observation)]
+    poles.extend(_xy_position(item) for item in (power_positions or []) if isinstance(item, dict))
+    if not poles:
+        return (1, 999999.0)
+    supplying = [pole_position for pole_position in poles if _small_pole_supplies_position(pole_position, position)]
+    if supplying:
+        return (0, min(distance(pole_position, position) for pole_position in supplying))
+    return (1, min(distance(pole_position, position) for pole_position in poles))
+
+
+def _position_is_supplied_by_small_pole(
+    observation: dict[str, Any],
+    position: dict[str, float],
+    *,
+    extra_power_positions: list[dict[str, float]] | None = None,
+) -> bool:
+    if _nearest_small_pole_supplying_position(observation, position) is not None:
+        return True
+    return any(_small_pole_supplies_position(_xy_position(item), position) for item in (extra_power_positions or []) if isinstance(item, dict))
+
+
+def _nearest_small_pole_supplying_position(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:
+    candidates = [
+        pole
+        for pole in _power_poles(observation)
+        if str(pole.get("name") or "") == "small-electric-pole" and _small_pole_supplies_position(_position(pole), position)
+    ]
+    return _nearest_to(candidates, position) if candidates else None
+
+
+def _small_pole_supplies_position(pole_position: dict[str, float], position: dict[str, float]) -> bool:
+    return abs(float(pole_position["x"]) - float(position["x"])) <= 2.5 and abs(float(pole_position["y"]) - float(position["y"])) <= 2.5
 
 
 def _missing_build_item_mall_item(observation: dict[str, Any], cell: dict[str, Any]) -> str | None:

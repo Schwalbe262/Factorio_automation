@@ -1005,6 +1005,28 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "craft")
         self.assertEqual(decision.action["recipe"], "transport-belt")
 
+    def test_belt_smelting_skill_uses_belt_mall_instead_of_handcrafting_gear_after_automation(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {
+            "coal": 12,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "burner-inserter": 1,
+            "iron-plate": 3,
+            "electronic-circuit": 7,
+        }
+        obs["craftable"] = {"iron-gear-wheel": 5, "transport-belt": 1}
+        obs["entities"].append(mall_assembler(recipe="automation-science-pack", inventory={"copper-plate": 4}))
+
+        decision = BeltSmeltingLineSkill(target_count=10).next_action(obs)
+
+        self.assertFalse(
+            decision.action["type"] == "craft"
+            and decision.action.get("recipe") in {"iron-gear-wheel", "transport-belt"}
+        )
+        self.assertEqual(decision.action["type"], "set_recipe")
+        self.assertEqual(decision.action["recipe"], "iron-gear-wheel")
+
     def test_belt_smelting_skill_places_belt_first_when_parts_exist(self):
         obs = base_observation()
         obs["inventory"] = {
@@ -2437,6 +2459,56 @@ class PlannerTests(unittest.TestCase):
         decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
         self.assertEqual(decision.action["type"], "insert")
         self.assertIn(decision.action["item"], {"iron-gear-wheel", "iron-plate"})
+
+    def test_build_item_mall_builds_gear_assembler_instead_of_handcrafting_science_input(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": -2.0, "y": 2.0}}
+        obs["resources"] = []
+        obs["inventory"] = {"assembling-machine-1": 1, "iron-plate": 10}
+        obs["craftable"] = {"iron-gear-wheel": 5}
+        obs["entities"].append(mall_assembler(recipe="automation-science-pack", inventory={"copper-plate": 4}))
+
+        decision = BuildItemMallSkill("automation-science-pack", 20).next_action(obs)
+
+        self.assertNotEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "assembling-machine-1")
+        self.assertEqual(decision.action["position"], {"x": 5.0, "y": -1.0})
+
+    def test_build_item_mall_uses_existing_gear_assembler_for_science_input(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 10}
+        obs["craftable"] = {"iron-gear-wheel": 5}
+        obs["entities"].append(mall_assembler(recipe="automation-science-pack", inventory={"copper-plate": 4}))
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 902,
+                "position": {"x": -2.0, "y": 2.0},
+                "distance": 2,
+                "recipe": "iron-gear-wheel",
+                "electric_network_connected": True,
+                "inventories": {"1": {"iron-gear-wheel": 4}},
+            }
+        )
+
+        decision = BuildItemMallSkill("automation-science-pack", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 902)
+
+    def test_build_item_mall_repurposes_existing_assembler_for_gears_before_handcrafting(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 10, "electronic-circuit": 7}
+        obs["craftable"] = {"iron-gear-wheel": 5}
+        obs["entities"].append(mall_assembler(recipe="automation-science-pack", inventory={"copper-plate": 4}))
+
+        decision = BuildItemMallSkill("automation-science-pack", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "set_recipe")
+        self.assertEqual(decision.action["recipe"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 901)
 
     def test_build_item_mall_blocks_repeated_hand_carry_from_distant_source_site(self):
         obs = powered_automation_observation()

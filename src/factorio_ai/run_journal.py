@@ -184,7 +184,7 @@ def record_skill_run_journal(
                 },
             )
         )
-    if ok:
+    if ok and not _skill_completion_is_diagnostic_only(goal, reason, item_name):
         insights.append(
             RunInsight(
                 timestamp=note.timestamp,
@@ -204,6 +204,12 @@ def record_skill_run_journal(
     for insight in insights:
         record_run_insight(log_dir, insight, repo_root=repo_root)
     return insights
+
+
+def _skill_completion_is_diagnostic_only(goal: str, reason: str, item_name: str) -> bool:
+    if goal == "plan_factory_site" or item_name == "layout-plan":
+        return True
+    return "not_applied=true" in reason
 
 
 def record_autopilot_cycle_journal(

@@ -208,3 +208,27 @@
 - After: The layout offset is `2 * direction`, direct furnace matching radius is `0.75`, exact furnace placement disables nearby fallback, and the live pair was rebuilt with furnace unit `316` at `{x:51,y:-30}`; both drill and furnace reported `working`.
 - Evidence: `{"source_loop":170,"tests":"400 passed","live_before":{"drill_unit":294,"furnace_unit":295,"drill_position":{"x":49,"y":-30},"furnace_position":{"x":52,"y":-30},"drill_status":"waiting_for_space_in_destination"},"live_after":{"drill_unit":294,"furnace_unit":316,"drill_position":{"x":49,"y":-30},"furnace_position":{"x":51,"y":-30},"drill_status":"working","furnace_status":"working","furnace_inventory":{"copper-ore":3,"copper-plate":3}}}`
 - Remaining risk: Existing historical traces with the offset-3 layout should be labeled as bad examples, not successful direct smelting examples, if used for fine-tuning.
+
+## 2026-06-15 05:20:27 +09:00 - Insight 25
+- Source loop: Loop 193
+- Improvement: automation-science-pack increased by 1 during research_logistics.
+- Before: automation-science-pack = 0
+- After: automation-science-pack = 1
+- Evidence: `{"delta":1,"final":1,"initial":0,"item":"automation-science-pack","source_loop":193,"target":20}`
+- Remaining risk: Target is not complete yet: 1/20.
+
+## 2026-06-15 05:20:27 +09:00 - Insight 26
+- Source loop: Loop 193
+- Improvement: research_logistics completed after 84 step(s): logistics research completed
+- Before: not recorded
+- After: automation-science-pack = 1
+- Evidence: `{"item":"automation-science-pack","item_count":1,"source_loop":193,"steps":84,"target":20}`
+- Remaining risk: Target is not complete yet: 1/20.
+
+## 2026-06-15 05:24:17 +09:00 - Insight 27
+- Source loop: Loop 211
+- Improvement: Automation-era Logistics work now avoids hand-crafting `iron-gear-wheel` and `transport-belt`, using assembler-based gear production instead.
+- Before: `strategy-logistics-research-20260614-200524.jsonl` showed `craft gear for transport-belt` at step 10 after Automation was already researched.
+- After: `strategy-logistics-research-20260614-201014.jsonl` has no `iron-gear-wheel` or `transport-belt` craft action; it sets assembler unit `318` to `iron-gear-wheel`, inserts iron plates, moves gears through the science assembler, and feeds the lab.
+- Evidence: `{"source_loop":211,"tests":"408 passed","bad_trace":"strategy-logistics-research-20260614-200524.jsonl step 10 craft gear for transport-belt","verified_trace":"strategy-logistics-research-20260614-201014.jsonl","craft_grep_after":{"iron_gear_wheel":0,"transport_belt":0,"other_craft":["stone-furnace"]}}`
+- Remaining risk: This fixes the observed gear/belt hand-craft paths, but early fuel/coal maintenance can still involve manual-style fallback actions and should be automated separately.

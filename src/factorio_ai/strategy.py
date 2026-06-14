@@ -849,6 +849,37 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
+    if (
+        rocket_objective
+        and selected == "plan_factory_site"
+        and _technology_researched(observation, "automation")
+        and not _technology_researched(observation, "logistics")
+        and not production_targets
+        and not _plan_site_should_preempt_logistics(observation)
+    ):
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "research_logistics"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 89)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            "LLM selected simulation-only layout planning before Logistics, but there is no confirmed "
+            "manual site-logistics issue that should preempt the next red-science research step."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["logistics research"]))
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            "guardrail_adjusted_from=plan_factory_site",
+            "automation_researched=true",
+            "logistics_researched=false",
+            "manual_site_logistics_preemption=false",
+        ]
+        adjusted["expected_effect"] = "Feed the powered lab with automation science before spending main cycles on diagnostic-only layout plans."
+        adjusted["guardrail_adjusted"] = {
+            "from": "plan_factory_site",
+            "to": "research_logistics",
+            "reason": guardrail_reason,
+        }
+        return adjusted
     if selected == "plan_factory_site":
         deficit = _first_actionable_target_deficit(objective, observation, production_targets)
         if deficit is not None:
@@ -1232,6 +1263,12 @@ def _first_automation_logistics_issue(issues: list[Any]) -> dict[str, Any] | Non
     if not candidates:
         return None
     return max(candidates, key=lambda item: int(item.get("severity") or 0))
+
+
+def _plan_site_should_preempt_logistics(observation: dict[str, Any]) -> bool:
+    layout = make_layout_improvement_context(observation)
+    issues = layout.get("issues") if isinstance(layout.get("issues"), list) else []
+    return _first_automation_logistics_issue(issues) is not None
 
 
 def _bounded_int(value: Any, fallback: int, minimum: int, maximum: int) -> int:

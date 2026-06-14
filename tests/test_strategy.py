@@ -273,6 +273,7 @@ class StrategyTests(unittest.TestCase):
                 "blockers": [],
                 "expected_effect": "",
                 "source": "llm",
+                "heuristic_selected_skill": "research_logistics",
             },
             "launch_rocket_program",
             {
@@ -297,6 +298,7 @@ class StrategyTests(unittest.TestCase):
                 "blockers": [],
                 "expected_effect": "",
                 "source": "llm",
+                "heuristic_selected_skill": "research_logistics",
             },
             "launch_rocket_program",
             {
@@ -514,6 +516,98 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("iron-plate", result["blockers"])
         self.assertIn("starter-usable estimated", result["reason"])
         self.assertTrue(any("iron-plate_starter_usable_per_minute" in item for item in result["evidence"]))
+
+    def test_reconcile_promotes_diagnostic_layout_planning_to_logistics_research(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 50,
+                "reason": "Layout diagnostics can run during idle time.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+                "heuristic_selected_skill": "research_logistics",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 50, "copper-plate": 50, "automation-science-pack": 10},
+                "entities": [
+                    {"name": "lab", "position": {"x": 0, "y": 0}, "electric_network_connected": True}
+                ],
+                "resources": [],
+                "research": {
+                    "technologies": {
+                        "automation": {"researched": True},
+                        "logistics": {"researched": False},
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(result["selected_skill"], "research_logistics")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertIn("manual_site_logistics_preemption=false", result["evidence"])
+
+    def test_reconcile_promotes_layout_planning_to_active_logistics_without_heuristic_hint(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 50,
+                "reason": "Layout diagnostics look severe.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 50, "copper-plate": 50, "automation-science-pack": 5},
+                "entities": [
+                    {"name": "lab", "position": {"x": 0, "y": 0}, "electric_network_connected": True}
+                ],
+                "resources": [],
+                "research": {
+                    "current": "logistics",
+                    "technologies": {
+                        "automation": {"researched": True},
+                        "logistics": {"researched": False},
+                    },
+                },
+            },
+        )
+
+        self.assertEqual(result["selected_skill"], "research_logistics")
+        self.assertEqual(result["guardrail_adjusted"]["to"], "research_logistics")
+
+    def test_reconcile_keeps_plan_site_for_confirmed_manual_site_logistics_issue(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 90,
+                "reason": "Manual site logistics must be fixed.",
+                "evidence": [],
+                "blockers": ["site-to-site logistic line"],
+                "expected_effect": "",
+                "source": "llm",
+                "heuristic_selected_skill": "research_logistics",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 50, "copper-plate": 50},
+                "entities": _distant_copper_source_and_science_consumer_entities(),
+                "resources": [{"name": "copper-ore", "position": {"x": 0, "y": 0}}],
+                "research": {
+                    "technologies": {
+                        "automation": {"researched": True},
+                        "logistics": {"researched": False},
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(result["selected_skill"], "plan_factory_site")
+        self.assertNotIn("guardrail_adjusted", result)
 
     def test_reconcile_recomputes_stale_remote_plan_guardrail(self):
         result = reconcile_strategy_decision(

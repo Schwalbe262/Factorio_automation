@@ -66,6 +66,32 @@ class RunJournalTests(unittest.TestCase):
             self.assertEqual(summary["insight_count"], 0)
             self.assertEqual(summary["notes"][0]["loop_type"], "autopilot_cycle")
 
+    def test_diagnostic_layout_plan_stays_out_of_insights(self):
+        with TemporaryDirectory() as root:
+            repo_root = Path(root)
+            log_dir = repo_root / "logs"
+            insights = record_skill_run_journal(
+                log_dir,
+                objective="launch_rocket_program",
+                goal="plan_factory_site",
+                ok=True,
+                reason="layout improvement plan: best_candidate=lab-short-daisy-chain-feed score=64.0 not_applied=true",
+                steps=1,
+                item_name="layout-plan",
+                initial_item_count=0,
+                final_item_count=0,
+                target=1,
+                max_steps=1,
+                log_path=log_dir / "layout.jsonl",
+                duration_seconds=0.25,
+                repo_root=repo_root,
+            )
+
+            summary = run_journal_summary(log_dir, repo_root=repo_root)
+            self.assertEqual(insights, [])
+            self.assertEqual(summary["note_count"], 1)
+            self.assertEqual(summary["insight_count"], 0)
+
     def test_note_number_follows_existing_markdown_loop_number(self):
         with TemporaryDirectory() as root:
             repo_root = Path(root)
