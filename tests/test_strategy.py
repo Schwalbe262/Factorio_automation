@@ -10,6 +10,43 @@ from factorio_ai.strategy import (
 )
 
 
+def gear_mall_needs_plate_line_observation() -> dict:
+    return {
+        "inventory": {"iron-plate": 20},
+        "entities": [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 100,
+                "recipe": "iron-gear-wheel",
+                "position": {"x": 0.5, "y": 0.5},
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 101,
+                "recipe": "transport-belt",
+                "position": {"x": 3.5, "y": 0.5},
+                "electric_network_connected": True,
+                "inventories": {"1": {"transport-belt": 8}},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 200,
+                "recipe": "iron-plate",
+                "position": {"x": 96.5, "y": 0.5},
+                "inventories": {"2": {"iron-plate": 24}},
+            },
+        ],
+        "research": {
+            "technologies": {
+                "automation": {"researched": True},
+                "logistics": {"researched": True},
+            }
+        },
+    }
+
+
 class StrategyTests(unittest.TestCase):
     def test_electronic_circuit_goal_detects_iron_bottleneck(self):
         result = heuristic_strategy(
@@ -76,6 +113,13 @@ class StrategyTests(unittest.TestCase):
             },
         )
         self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
+
+    def test_rocket_goal_prioritizes_gear_mall_plate_logistics(self):
+        result = heuristic_strategy("launch_rocket_program", gear_mall_needs_plate_line_observation())
+
+        self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertIn("iron-plate logistic line to gear mall", result["blockers"])
+        self.assertIn("transport_belts_available_for_mall_logistics=true", result["evidence"])
 
     def test_power_issue_is_prioritized_before_more_electric_expansion(self):
         result = heuristic_strategy(
@@ -372,6 +416,49 @@ class StrategyTests(unittest.TestCase):
         )
         self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
         self.assertIn("hand_crafting_not_rate_solution=true", result["evidence"])
+
+    def test_reconcile_promotes_circuit_choice_to_gear_mall_plate_logistics(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "automate_electronic_circuit_line",
+                "priority": 50,
+                "reason": "Need circuits next.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            gear_mall_needs_plate_line_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "automate_electronic_circuit_line")
+        self.assertIn("gear_handcraft_blocked=true", result["evidence"])
+
+    def test_reconcile_uses_belt_mall_output_even_when_mall_has_no_power(self):
+        observation = gear_mall_needs_plate_line_observation()
+        for entity in observation["entities"]:
+            if entity.get("name") == "assembling-machine-1":
+                entity["status"] = 54
+                entity["status_name"] = "no_power"
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 50,
+                "reason": "Layout planning next.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertIn("transport_belts_available_for_mall_logistics=true", result["evidence"])
 
     def test_reconcile_promotes_fuel_dependent_expansion_to_coal_supply(self):
         result = reconcile_strategy_decision(
@@ -894,6 +981,7 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(any(item["name"] == "research_automation" for item in catalog))
         self.assertTrue(any(item["name"] == "automate_electronic_circuit_line" for item in catalog))
         self.assertTrue(any(item["name"] == "bootstrap_build_item_mall" for item in catalog))
+        self.assertTrue(any(item["name"] == "build_iron_plate_logistic_line_to_gear_mall" for item in catalog))
         self.assertTrue(any(item["name"] == "research_logistics" for item in catalog))
         self.assertTrue(any(item["name"] == "build_starter_defense" for item in catalog))
         self.assertTrue(any(item["name"] == "build_rail_supply_line" for item in catalog))
@@ -913,6 +1001,10 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(
             next(item for item in catalog if item["name"] == "connect_coal_fuel_feed")["executor"],
             "CoalFuelFeedSkill",
+        )
+        self.assertEqual(
+            next(item for item in catalog if item["name"] == "build_iron_plate_logistic_line_to_gear_mall")["executor"],
+            "IronPlateLogisticLineToGearMallSkill",
         )
         self.assertTrue(all("llm_scope" in item for item in catalog))
 

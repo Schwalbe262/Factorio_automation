@@ -254,6 +254,25 @@ SKILL_CATALOG: dict[str, SkillContract] = {
             "Executor handles exact belt lane, inserter direction, burner fuel, and recipe changes."
         ),
     ),
+    "build_iron_plate_logistic_line_to_gear_mall": SkillContract(
+        name="build_iron_plate_logistic_line_to_gear_mall",
+        description="Build a transport-belt logistics route from iron-plate furnace output toward the gear/belt mall.",
+        executor="IronPlateLogisticLineToGearMallSkill",
+        preconditions=[
+            "automation researched",
+            "gear/belt mall exists",
+            "transport belts are available from the belt mall output or inventory",
+            "iron-plate source furnace is known",
+        ],
+        completion=[
+            "iron plates can move toward the iron-gear assembler by belt and inserter endpoints",
+            "the gear/belt mall no longer depends on player iron-plate shuttling",
+        ],
+        llm_scope=(
+            "Choose this when a gear or belt mall is blocked by missing iron-plate input logistics. "
+            "Executor extends the belt route and endpoint inserters without crafting gears or carrying iron plates."
+        ),
+    ),
     "build_starter_defense": SkillContract(
         name="build_starter_defense",
         description="Build early gun-turret and firearm-magazine defenses around the starter factory.",
@@ -804,6 +823,45 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
+    gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
+    if gear_mall_iron_plate_issue is not None and selected in {
+        "plan_factory_site",
+        "produce_electronic_circuit",
+        "automate_electronic_circuit_line",
+        "bootstrap_build_item_mall",
+        "research_logistics",
+    }:
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "build_iron_plate_logistic_line_to_gear_mall"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 92)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            f"LLM selected {selected}, but the gear/belt mall lacks a sustained iron-plate logistics route; "
+            "direct iron-gear handcraft must not be used to cover that input gap."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(
+            set(_string_list(decision.get("blockers")) + ["iron-plate logistic line to gear mall"])
+        )
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            f"gear_assembler_unit={gear_mall_iron_plate_issue.get('gear_unit')}",
+            f"iron_source_unit={gear_mall_iron_plate_issue.get('source_unit')}",
+            f"source_distance_tiles={gear_mall_iron_plate_issue.get('source_distance_tiles')}",
+            f"gear_assembler_status={gear_mall_iron_plate_issue.get('gear_assembler_status')}",
+            "transport_belts_available_for_mall_logistics=true",
+            "gear_handcraft_blocked=true",
+        ]
+        adjusted["expected_effect"] = (
+            "Build the iron-plate belt route into the gear assembler before continuing downstream circuit, "
+            "research, or diagnostic layout work."
+        )
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": "build_iron_plate_logistic_line_to_gear_mall",
+            "reason": guardrail_reason,
+        }
+        return adjusted
     if (
         rocket_objective
         and selected != "research_automation"
@@ -1020,6 +1078,7 @@ def heuristic_strategy(
     layout_opportunities = layout.get("opportunities") if isinstance(layout.get("opportunities"), list) else []
     top_layout_item = _top_layout_item(layout_issues, layout_opportunities)
     automation_logistics_issue = _first_automation_logistics_issue(layout_issues)
+    gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
     if threats["danger_level"] in {"critical", "high"} and int(threats.get("armed_gun_turret_count") or 0) <= 0:
         nearest = threats.get("nearest_enemy") if isinstance(threats.get("nearest_enemy"), dict) else {}
         return StrategicDecision(
@@ -1092,7 +1151,52 @@ def heuristic_strategy(
             expected_effect="Expand or connect the electric network before adding more electric machines.",
         ).to_dict()
 
+    if gear_mall_iron_plate_issue is not None:
+        return StrategicDecision(
+            selected_skill="build_iron_plate_logistic_line_to_gear_mall",
+            priority=92,
+            reason=(
+                "The powered gear/belt mall can make belts, but the iron-gear assembler has no sustained "
+                "iron-plate input from the distant furnace. Build the plate logistics route before any more "
+                "gear handcraft pressure appears."
+            ),
+            evidence=[
+                f"gear_assembler_unit={gear_mall_iron_plate_issue.get('gear_unit')}",
+                f"iron_source_unit={gear_mall_iron_plate_issue.get('source_unit')}",
+                f"source_distance_tiles={gear_mall_iron_plate_issue.get('source_distance_tiles')}",
+                f"gear_assembler_iron_plate={gear_mall_iron_plate_issue.get('gear_assembler_iron_plate')}",
+                f"gear_assembler_status={gear_mall_iron_plate_issue.get('gear_assembler_status')}",
+                "transport_belts_available_for_mall_logistics=true",
+            ],
+            blockers=["iron-plate logistic line to gear mall"],
+            expected_effect=(
+                "Extend transport belts and endpoint inserters so the gear assembler consumes furnace output "
+                "without player gear crafting or iron-plate shuttle runs."
+            ),
+        ).to_dict()
+
     if automation_researched and automation_logistics_issue is not None:
+        issue_text = " ".join(
+            str(automation_logistics_issue.get(key) or "")
+            for key in ("item", "site_id", "detail", "recommendation")
+        ).lower()
+        if "iron-plate" in issue_text and ("gear" in issue_text or "iron-gear-wheel" in issue_text):
+            return StrategicDecision(
+                selected_skill="build_iron_plate_logistic_line_to_gear_mall",
+                priority=91,
+                reason=(
+                    "The gear/belt mall needs iron-plate input logistics; build a belt route instead of "
+                    "letting the player shuttle plates from a distant furnace."
+                ),
+                evidence=[
+                    f"layout_kind={automation_logistics_issue.get('kind')}",
+                    f"item={automation_logistics_issue.get('item')}",
+                    f"site_id={automation_logistics_issue.get('site_id')}",
+                    "gear_mall_iron_plate_logistics=true",
+                ],
+                blockers=["iron-plate logistic line to gear mall"],
+                expected_effect="Extend transport belts and endpoint inserters so iron plates reach the gear mall without player carrying.",
+            ).to_dict()
         return StrategicDecision(
             selected_skill="plan_factory_site",
             priority=90,
@@ -1561,6 +1665,106 @@ def _transport_belt_automation_ready(observation: dict[str, Any]) -> bool:
         if entity_item_count(assembler, "transport-belt") > 0:
             return True
         if entity_item_count(assembler, "iron-gear-wheel") > 0 and entity_item_count(assembler, "iron-plate") > 0:
+            return True
+    return False
+
+
+def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
+    if not _technology_researched(observation, "automation"):
+        return None
+    if not _transport_belts_available_for_mall_logistics(observation):
+        return None
+    assemblers = (
+        entities_named(observation, "assembling-machine-1")
+        + entities_named(observation, "assembling-machine-2")
+        + entities_named(observation, "assembling-machine-3")
+    )
+    gear_assemblers = [
+        entity
+        for entity in assemblers
+        if str(entity.get("recipe") or entity.get("recipe_name") or "") == "iron-gear-wheel"
+        and entity.get("electric_network_connected") is not False
+    ]
+    source_furnaces = _iron_plate_source_furnaces(observation)
+    if not gear_assemblers or not source_furnaces:
+        return None
+    best_issue: dict[str, Any] | None = None
+    best_distance = 999999.0
+    for gear in gear_assemblers:
+        gear_position = _position(gear)
+        if gear_position is None:
+            continue
+        if entity_item_count(gear, "iron-plate") >= 2:
+            continue
+        if _gear_mall_has_local_plate_input(observation, gear_position):
+            continue
+        for source in source_furnaces:
+            source_position = _position(source)
+            source_distance = _distance(gear_position, source_position)
+            if source_distance is None or source_distance < 32.0:
+                continue
+            if source_distance >= best_distance:
+                continue
+            best_distance = source_distance
+            best_issue = {
+                "gear_unit": gear.get("unit_number"),
+                "source_unit": source.get("unit_number"),
+                "source_distance_tiles": round(source_distance, 1),
+                "gear_assembler_iron_plate": entity_item_count(gear, "iron-plate"),
+                "gear_assembler_status": gear.get("status_name") or gear.get("status"),
+            }
+    return best_issue
+
+
+def _transport_belts_available_for_mall_logistics(observation: dict[str, Any]) -> bool:
+    if inventory_count(observation, "transport-belt") > 0:
+        return True
+    assemblers = (
+        entities_named(observation, "assembling-machine-1")
+        + entities_named(observation, "assembling-machine-2")
+        + entities_named(observation, "assembling-machine-3")
+    )
+    for assembler in assemblers:
+        if str(assembler.get("recipe") or assembler.get("recipe_name") or "") != "transport-belt":
+            continue
+        if entity_item_count(assembler, "transport-belt") > 0:
+            return True
+        if assembler.get("electric_network_connected") is not False and not _entity_status_is(assembler, "no_power", 3):
+            if entity_item_count(assembler, "iron-gear-wheel") > 0 and entity_item_count(assembler, "iron-plate") > 0:
+                return True
+    return False
+
+
+def _iron_plate_source_furnaces(observation: dict[str, Any]) -> list[dict[str, Any]]:
+    entities = observation.get("entities")
+    if not isinstance(entities, list):
+        return []
+    furnaces: list[dict[str, Any]] = []
+    for entity in entities:
+        if not isinstance(entity, dict) or entity.get("name") not in {"stone-furnace", "steel-furnace", "electric-furnace"}:
+            continue
+        if str(entity.get("recipe") or entity.get("recipe_name") or "") != "iron-plate" and entity_item_count(entity, "iron-plate") <= 0:
+            continue
+        furnaces.append(entity)
+    return furnaces
+
+
+def _gear_mall_has_local_plate_input(observation: dict[str, Any], gear_position: dict[str, float]) -> bool:
+    target_belt = {"x": gear_position["x"] + 1.0, "y": gear_position["y"] - 3.0}
+    target_inserter = {"x": gear_position["x"] + 1.0, "y": gear_position["y"] - 2.0}
+    return _entity_near_name(observation, "transport-belt", target_belt, radius=0.8) and any(
+        _entity_near_name(observation, name, target_inserter, radius=0.8)
+        for name in ("inserter", "burner-inserter", "fast-inserter", "stack-inserter")
+    )
+
+
+def _entity_near_name(observation: dict[str, Any], name: str, position: dict[str, float], radius: float) -> bool:
+    for entity in entities_named(observation, name):
+        entity_position = _position(entity)
+        if entity_position is None:
+            continue
+        entity_distance = _distance(entity_position, position)
+        if entity_distance is not None and entity_distance <= radius:
             return True
     return False
 

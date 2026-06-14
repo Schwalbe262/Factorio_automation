@@ -16,6 +16,7 @@ from factorio_ai.planner import (
     ExpandIronSmeltingSkill,
     FactoryLayoutImprovementSkill,
     GearBeltMallLogisticsSkill,
+    IronPlateLogisticLineToGearMallSkill,
     IronPlateSkill,
     ResearchAutomationSkill,
     ResearchTechnologySkill,
@@ -3040,6 +3041,74 @@ class PlannerTests(unittest.TestCase):
 
         self.assertTrue(decision.done)
         self.assertIsNone(decision.action)
+
+    def test_iron_plate_logistic_line_takes_belts_from_belt_mall_output(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="transport-belt",
+                belt_inventory={"transport-belt": 8},
+            )
+        )
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 2},
+                "recipe": "iron-plate",
+                "inventories": {"3": {"iron-plate": 20}},
+            }
+        )
+
+        decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "transport-belt")
+        self.assertEqual(decision.action["unit_number"], 911)
+        self.assertNotEqual(decision.action.get("item"), "iron-plate")
+        self.assertNotEqual(decision.action.get("recipe"), "iron-gear-wheel")
+
+    def test_iron_plate_logistic_line_places_belt_without_plate_or_gear_handcarry(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 4}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 2},
+                "recipe": "iron-plate",
+                "inventories": {"3": {"iron-plate": 20}},
+            }
+        )
+
+        decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertNotIn(decision.action.get("item"), {"iron-plate", "iron-gear-wheel"})
+        self.assertNotEqual(decision.action.get("recipe"), "iron-gear-wheel")
+
+    def test_iron_plate_logistic_line_reports_missing_belts_without_gear_handcraft(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["craftable"] = {"iron-gear-wheel": 4, "transport-belt": 2}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 2},
+                "recipe": "iron-plate",
+                "inventories": {"3": {"iron-plate": 20}},
+            }
+        )
+
+        decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
+
+        self.assertIsNone(decision.action)
+        self.assertIn("refusing gear handcraft", decision.reason)
 
     def test_expansion_prefers_high_coverage_patch_drill_position(self):
         obs = base_observation()

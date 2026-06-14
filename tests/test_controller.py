@@ -1520,6 +1520,15 @@ class ControllerTests(unittest.TestCase):
             self.assertIsNotNone(logistics_config)
             self.assertEqual(logistics_config["goal"], "research_logistics")
             self.assertEqual(logistics_config["max_steps"], 666)
+            iron_line_config = controller._skill_run_config(
+                "build_iron_plate_logistic_line_to_gear_mall",
+                target_count=44,
+                max_steps=667,
+            )
+            self.assertIsNotNone(iron_line_config)
+            self.assertEqual(iron_line_config["goal"], "build_iron_plate_logistic_line_to_gear_mall")
+            self.assertEqual(iron_line_config["target"], 44)
+            self.assertEqual(iron_line_config["max_steps"], 667)
             expand_config = controller._skill_run_config("expand_iron_smelting", target_count=38, max_steps=777)
             self.assertIsNotNone(expand_config)
             self.assertEqual(expand_config["goal"], "expand_iron_smelting")
