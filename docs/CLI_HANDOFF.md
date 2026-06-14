@@ -1,6 +1,6 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-14 23:35 KST
+Last updated: 2026-06-15 00:12 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
@@ -35,6 +35,28 @@ Processes observed before this handoff:
 - Web dashboard: `python -m factorio_ai.cli web --host 0.0.0.0 --port 18889`
 - Local web URL: `http://127.0.0.1:18889/factorio?lang=ko&objective=launch_rocket_program`
 - External web URL through existing forwarding/proxy: `http://27.115.156.173:8787/factorio?lang=ko&objective=launch_rocket_program`
+
+## Latest Part 74 Status
+
+- The previous live no-mod map was backed up because factory sites had become too scattered for the automation-first logistics goal:
+  - Backup: `runtime/vanilla/saves/backups/no-mod-rcon-scattered-20260615-001123.zip`
+- A fresh no-mod world is now running:
+  - Save: `runtime/vanilla/saves/no-mod-rcon.zip`
+  - Initial observe after final reroll: tick 2679, spawn `{x:0,y:0}`, starter inventory `burner-mining-drill:1`, `stone-furnace:1`
+  - Observed cliffs: 0
+  - Initial strategy: `produce_iron_plate`, priority 96
+  - Nearest observed resources: copper about 52 tiles, stone about 5 tiles, iron about 100 tiles, coal about 107 tiles
+- Future no-mod world generation disables Nauvis cliffs:
+  - `cliff_settings.richness = 0`
+  - `cliff_elevation_interval = 0`
+- `note.md` and `insight.md` now use loop/insight templates:
+  - `note.md` records every exploration, validation, documentation, UI, strategy, and execution loop as `Loop N`.
+  - `insight.md` records only confirmed improvements as `Insight N`; failures and hypotheses stay in `note.md`.
+- Part 74 also keeps the useful code improvements found on the scattered map:
+  - `research_logistics` can repair/reuse an existing lab-adjacent remote steam block instead of failing on starter-local power selection.
+  - The red science mall can recover a lab-adjacent powered unassigned assembler.
+  - Automation-era repeated hand-carry between distant sites is blocked; strategy now raises missing site-to-site logistic lines to `plan_factory_site`.
+- Next priority on the fresh map: bootstrap compact starter-local iron/coal/copper/power, then build research and mall sites close enough for short belts or explicit logistic lines.
 
 If the CLI session starts fresh, verify processes first:
 
@@ -770,11 +792,13 @@ This file can later be transformed into Qwen fine-tuning examples.
 
 ## Next Implementation Priority
 
-Part 72 changes current strategy priority to `research_logistics`. The next CLI session should continue from the live red-science/research path before returning to green-circuit expansion:
+Part 74 restarted the live no-mod game on a fresh cliffs-off map after the previous factory became too scattered. The next CLI session should continue from the fresh-map bootstrap path:
 
-1. Run or inspect `research_logistics` in the live no-mod game. Current strategy evidence says `automation_science_pack_total=0`, `automation_researched=true`, and `logistics_researched=false`.
-2. If `research_logistics` stalls, inspect `ResearchTechnologySkill`/`AutomationScienceSkill` for red science production, lab placement, lab feeding, power, and coal fuel prerequisites.
-3. Keep green-circuit line work behind early red-science research unless Logistics is researched or the research path reports a concrete prerequisite blocker.
+1. Run compact starter-local `produce_iron_plate`/iron bootstrap on the fresh map.
+2. Add coal supply and coal fuel feed before scaling burner smelting or steam power.
+3. Add copper and steam power near the starter cluster; do not create remote starter sites before rail.
+4. Build research and mall sites close to their producer sites, with short belts/chests/inserters for repeated inputs.
+5. Keep green-circuit line work behind early red-science research unless Logistics is researched or the research path reports a concrete prerequisite blocker.
 4. Continue the selected-site operator loop after research is moving: add live observed-state detail for selected `site_placement_search.selected_anchor`, blockers, prerequisite tasks, and top candidate anchors.
 5. Convert `prerequisite_tasks` into strategy hints or deterministic prerequisite tasks: build-item mall, power pole corridor, iron/copper belt link, stock collection, or anchor reselection.
 6. Make layout candidate generation prefer the operator-selected site when multiple sites of the same kind/item exist, instead of only surfacing the selected site as LLM context.

@@ -92,8 +92,8 @@ def write_no_mod_map_gen_settings(cfg: AppConfig) -> Path:
         "cliff_settings": {
             "name": "cliff",
             "cliff_elevation_0": 10,
-            "cliff_elevation_interval": 40,
-            "richness": 1,
+            "cliff_elevation_interval": 0,
+            "richness": 0,
         },
         "property_expression_names": {
             "control:moisture:frequency": "1",

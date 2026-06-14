@@ -627,6 +627,38 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(items["transport-belt"]["needs_mall"])
         self.assertTrue(items["assembling-machine-1"]["needs_mall"])
 
+    def test_strategy_payload_exposes_automation_policy_context(self):
+        payload = make_strategy_payload(
+            "launch_rocket_program",
+            {
+                "inventory": {},
+                "entities": _distant_copper_source_and_science_consumer_entities(),
+                "resources": [{"name": "copper-ore", "position": {"x": 0, "y": 0}}],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
+        )
+        policy = payload["automation_policy"]
+        self.assertEqual(policy["recommended_skill"], "plan_factory_site")
+        self.assertTrue(any(link["item"] == "copper-plate" for link in policy["route_needed_links"]))
+
+    def test_heuristic_prioritizes_site_logistics_over_repeated_hand_carry_after_automation(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 50, "copper-plate": 50},
+                "entities": _distant_copper_source_and_science_consumer_entities(),
+                "resources": [{"name": "copper-ore", "position": {"x": 0, "y": 0}}],
+                "research": {
+                    "technologies": {
+                        "automation": {"researched": True},
+                        "logistics": {"researched": False},
+                    }
+                },
+            },
+        )
+        self.assertEqual(result["selected_skill"], "plan_factory_site")
+        self.assertIn("site-to-site logistic line", result["blockers"])
+
     def test_strategy_payload_exposes_research_daisy_chain_context(self):
         payload = make_strategy_payload(
             "launch_rocket_program",
@@ -740,6 +772,35 @@ class StrategyTests(unittest.TestCase):
             },
         )
         self.assertNotEqual(result["selected_skill"], "build_starter_defense")
+
+
+def _distant_copper_source_and_science_consumer_entities():
+    return [
+        {
+            "name": "burner-mining-drill",
+            "unit_number": 100,
+            "position": {"x": 0, "y": 0},
+            "mining_target": "copper-ore",
+            "inventories": {"1": {"coal": 3}},
+        },
+        {"name": "transport-belt", "unit_number": 101, "position": {"x": 2, "y": 0}, "inventories": {}},
+        {"name": "transport-belt", "unit_number": 102, "position": {"x": 3, "y": 0}, "inventories": {}},
+        {"name": "burner-inserter", "unit_number": 103, "position": {"x": 4, "y": 0}, "inventories": {"1": {"coal": 2}}},
+        {
+            "name": "stone-furnace",
+            "unit_number": 104,
+            "position": {"x": 5, "y": 0},
+            "inventories": {"1": {"coal": 3}, "2": {"copper-ore": 1}, "3": {"copper-plate": 1}},
+        },
+        {
+            "name": "assembling-machine-1",
+            "unit_number": 200,
+            "recipe": "automation-science-pack",
+            "position": {"x": 180, "y": 0},
+            "electric_network_connected": True,
+            "inventories": {},
+        },
+    ]
 
 
 if __name__ == "__main__":

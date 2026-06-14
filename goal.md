@@ -15,13 +15,22 @@
 - Record every strategy/autopilot/layout loop in `note.md` and append only meaningful improvements to `insight.md`.
 - Preserve no-custom-mod compatibility for the primary development path.
 
+## Current Status
+
+- 2026-06-15 00:12 KST: the previous live map was backed up because the factory sites were too scattered for the automation-first logistics goal.
+- A fresh no-mod world is now running with Nauvis cliffs disabled (`cliff_settings.richness = 0`), starter inventory only, and initial strategy `produce_iron_plate`.
+- Next live objective: bootstrap iron, coal, copper, and steam power as compact starter-local sites; after the first bootstrap phase, repeated inputs must move through site-to-site logistics lines rather than player inventory shuttle loops.
+
 ## Factory Quality Criteria
 
 - Compact footprint: prefer high output per tile and avoid scattered starter-era blocks.
 - Throughput: no unresolved input, output, belt, inserter, or later train loading bottlenecks.
+- Automation-first logistics: after the first bootstrap phase, repeated production must use belts, inserters, chests, pipes, trains, or later bots instead of player inventory shuttle loops.
+- Site adjacency: related producer/consumer sites should be close enough for short local belts until a main bus, trunk line, or rail network exists.
 - Power and pollution: prefer lower power draw and pollution for equivalent throughput, especially before defense is mature.
 - Expansion: leave clear lanes for belts, power, rails, modules, beacons, and replacement with higher-tier machines.
 - Site safety: avoid starter resource patches, enemy pressure, disconnected power grids, and unvalidated remote logistics before rail.
+- New world setup: for future Nauvis starts, disable cliffs because they make compact factory placement and corridor planning unnecessarily brittle.
 
 ## Learning Roadmap
 

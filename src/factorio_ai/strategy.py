@@ -323,6 +323,7 @@ def make_strategy_payload(
             observation,
             selected_improvement_site=selected_improvement_site,
         ),
+        "automation_policy": make_automation_policy_context(monitor),
         "build_item_supply": make_build_item_supply_context(observation, monitor),
         "research_planning": make_research_planning_context(observation, monitor),
         "threats": make_threat_context(observation),
@@ -332,6 +333,7 @@ def make_strategy_payload(
         "decision_rule": (
             "Select exactly one high-level skill. Diagnose bottlenecks first. "
             "Evaluate electric supply per connected power network, not as a single global pool. "
+            "After the first bootstrap phase, prefer site-to-site logistic lines over hand crafting or hand-carrying items. "
             "For spatial work, choose districts, corridors, or rail topology only. "
             "When urgent production, defense, research, and power work are satisfied, use idle LLM cycles "
             "to improve factory site layout against reusable blueprint-style patterns. "
@@ -379,8 +381,50 @@ def make_layout_improvement_context(
             "green circuit cells near iron/copper supply, roughly 3 cable assemblers per 2 circuit assemblers",
             "starter mall row near iron, gear, and circuit supply with shared inputs and chest outputs",
             "short lab daisy chain or science belt feed with room for later science colors",
+            "site-to-site logistic lines for repeated inputs instead of player inventory shuttle loops",
             "main bus or trunk corridors before dense consumer blocks",
             "remote outpost plus rail corridor when belts or walking logistics become too long",
+        ],
+    }
+
+
+def make_automation_policy_context(monitor: dict[str, Any]) -> dict[str, Any]:
+    links = monitor.get("logistics_links") if isinstance(monitor.get("logistics_links"), list) else []
+    sites = monitor.get("factory_sites") if isinstance(monitor.get("factory_sites"), list) else []
+    automated_items = {
+        "iron-plate",
+        "copper-plate",
+        "iron-gear-wheel",
+        "copper-cable",
+        "electronic-circuit",
+        "automation-science-pack",
+        "logistic-science-pack",
+    }
+    route_needed = [
+        link
+        for link in links
+        if isinstance(link, dict)
+        and link.get("status") == "route_needed"
+        and link.get("item") in automated_items
+    ]
+    manual_sites = [
+        site
+        for site in sites
+        if isinstance(site, dict)
+        and ("manual" in str(site.get("automation_level") or "") or "manual" in str(site.get("status") or ""))
+    ]
+    return {
+        "principle": (
+            "Factorio progress should become factory automation, not repeated player inventory transport. "
+            "Manual crafting, taking, and inserting are acceptable only for short bootstrap or one-time priming."
+        ),
+        "route_needed_links": route_needed[:8],
+        "manual_sites": manual_sites[:8],
+        "recommended_skill": "plan_factory_site" if route_needed or manual_sites else None,
+        "constraints": [
+            "prefer belt, inserter, chest, pipe, or train links between producer and consumer sites",
+            "place related starter sites close enough for short local belts until a bus or rail system exists",
+            "do not scale a consumer site while its repeated inputs are supplied by hand-carry",
         ],
     }
 
@@ -778,6 +822,7 @@ def heuristic_strategy(
     layout_issues = layout.get("issues") if isinstance(layout.get("issues"), list) else []
     layout_opportunities = layout.get("opportunities") if isinstance(layout.get("opportunities"), list) else []
     top_layout_item = _top_layout_item(layout_issues, layout_opportunities)
+    automation_logistics_issue = _first_automation_logistics_issue(layout_issues)
     if threats["danger_level"] in {"critical", "high"} and int(threats.get("armed_gun_turret_count") or 0) <= 0:
         nearest = threats.get("nearest_enemy") if isinstance(threats.get("nearest_enemy"), dict) else {}
         return StrategicDecision(
@@ -830,6 +875,23 @@ def heuristic_strategy(
             ],
             blockers=["electric power network"],
             expected_effect="Expand or connect the electric network before adding more electric machines.",
+        ).to_dict()
+
+    if automation_researched and automation_logistics_issue is not None:
+        return StrategicDecision(
+            selected_skill="plan_factory_site",
+            priority=90,
+            reason=(
+                "Automation is researched, but a repeated producer-to-consumer input flow still has no logistic route; "
+                "avoid continuing by hand-carrying items between sites."
+            ),
+            evidence=[
+                f"layout_kind={automation_logistics_issue.get('kind')}",
+                f"item={automation_logistics_issue.get('item')}",
+                f"site_id={automation_logistics_issue.get('site_id')}",
+            ],
+            blockers=["site-to-site logistic line"],
+            expected_effect="Plan the closest belt/chest/logistic-line correction before scaling or repeating that consumer loop.",
         ).to_dict()
 
     if rocket_objective and total_iron < 10:
@@ -1025,6 +1087,20 @@ def heuristic_strategy(
 
 def _top_layout_item(issues: list[Any], opportunities: list[Any]) -> dict[str, Any] | None:
     candidates = [item for item in issues + opportunities if isinstance(item, dict)]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: int(item.get("severity") or 0))
+
+
+def _first_automation_logistics_issue(issues: list[Any]) -> dict[str, Any] | None:
+    target_kinds = {"manual_site_logistics_gap", "distant_related_sites", "manual_feed_factory_block"}
+    candidates = [
+        item
+        for item in issues
+        if isinstance(item, dict)
+        and item.get("kind") in target_kinds
+        and int(item.get("severity") or 0) >= 84
+    ]
     if not candidates:
         return None
     return max(candidates, key=lambda item: int(item.get("severity") or 0))

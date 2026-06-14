@@ -48,6 +48,16 @@ SITE_GATE_INPUT_STOCK_FALLBACK = 20
 SITE_GATE_LOCAL_LOGISTICS_RADIUS = 96.0
 SITE_PLACEMENT_SEARCH_STEP = 8
 SITE_PLACEMENT_SEARCH_RADIUS = 48
+MANUAL_SITE_INPUT_RADIUS = 48.0
+AUTOMATED_SITE_INPUT_ITEMS = {
+    "iron-plate",
+    "copper-plate",
+    "iron-gear-wheel",
+    "copper-cable",
+    "electronic-circuit",
+    "automation-science-pack",
+    "logistic-science-pack",
+}
 
 
 class FactoryLayoutImprovementSkill:
@@ -180,6 +190,44 @@ def factory_layout_issues(observation: dict[str, Any]) -> list[dict[str, Any]]:
 
     for link in links:
         status = str(link.get("status") or "")
+        item = str(link.get("item") or "")
+        try:
+            length = float(link.get("length_tiles") or 0.0)
+        except (TypeError, ValueError):
+            length = 0.0
+        if (
+            bool(_technology_state(observation, "automation").get("researched"))
+            and status == "route_needed"
+            and item in AUTOMATED_SITE_INPUT_ITEMS
+            and length > MANUAL_SITE_INPUT_RADIUS
+        ):
+            issues.append(
+                {
+                    "kind": "manual_site_logistics_gap",
+                    "severity": 88,
+                    "site_id": link.get("link_id"),
+                    "item": link.get("item"),
+                    "detail": (
+                        f"{item} must move {length:.0f} tiles from {link.get('from_site')} "
+                        f"to {link.get('to_site')} but no site-to-site route is observed"
+                    ),
+                    "recommendation": (
+                        "build or validate a belt/chest/logistic line between the related sites before "
+                        "continuing repeated hand-carry production"
+                    ),
+                }
+            )
+        if item in AUTOMATED_SITE_INPUT_ITEMS and length > 96.0 and str(link.get("kind") or "") != "rail":
+            issues.append(
+                {
+                    "kind": "distant_related_sites",
+                    "severity": 84,
+                    "site_id": link.get("link_id"),
+                    "item": link.get("item"),
+                    "detail": f"related {item} producer/consumer sites are {length:.0f} tiles apart without rail",
+                    "recommendation": "co-locate related starter sites or reserve a trunk belt/rail corridor before scaling this flow",
+                }
+            )
         if any(token in status for token in ("incomplete", "missing", "blocked")):
             issues.append(
                 {
@@ -191,10 +239,6 @@ def factory_layout_issues(observation: dict[str, Any]) -> list[dict[str, Any]]:
                     "recommendation": "finish producer-to-consumer belt or rail link before adding more consumers",
                 }
             )
-        try:
-            length = float(link.get("length_tiles") or 0.0)
-        except (TypeError, ValueError):
-            length = 0.0
         if length > 180 and str(link.get("kind")) != "rail":
             issues.append(
                 {
@@ -3060,8 +3104,18 @@ class SetupPowerSkill:
         self.copper_skill = CopperPlateSkill(target_count=10)
         self.circuit_skill = ElectronicCircuitSkill(target_count=2)
 
-    def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
-        block = _find_steam_power_block(observation)
+    def next_action(
+        self,
+        observation: dict[str, Any],
+        *,
+        allow_existing_remote: bool = False,
+        reference_position: dict[str, float] | None = None,
+    ) -> PlannerDecision:
+        block = _find_steam_power_block(
+            observation,
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position,
+        )
         if _steam_power_ready(block):
             return PlannerDecision(None, "steam power block is producing usable steam power", done=True)
 
@@ -3352,6 +3406,24 @@ def _within_starter_logistics_area(
     radius: float = STARTER_SITE_RADIUS,
 ) -> bool:
     return any(distance(anchor, position) <= radius for anchor in _starter_logistics_anchors(observation))
+
+
+def _within_allowed_factory_area(
+    observation: dict[str, Any],
+    position: dict[str, float],
+    *,
+    allow_existing_remote: bool = False,
+    reference_position: dict[str, float] | None = None,
+    radius: float = STARTER_SITE_RADIUS,
+    reference_radius: float = 48.0,
+) -> bool:
+    if _within_starter_logistics_area(observation, position, radius=radius):
+        return True
+    return bool(
+        allow_existing_remote
+        and reference_position is not None
+        and distance(position, reference_position) <= reference_radius
+    )
 
 
 def _distance_to_starter_logistics_area(observation: dict[str, Any], position: dict[str, float]) -> float:
@@ -4302,12 +4374,20 @@ def _power_layout_from_specs(specs: dict[str, dict[str, Any]]) -> dict[str, Any]
     return layout
 
 
-def _find_steam_power_block(observation: dict[str, Any]) -> dict[str, Any] | None:
-    candidates: list[tuple[int, dict[str, Any]]] = []
+def _find_steam_power_block(
+    observation: dict[str, Any],
+    *,
+    allow_existing_remote: bool = False,
+    reference_position: dict[str, float] | None = None,
+) -> dict[str, Any] | None:
+    candidates: list[tuple[int, float, dict[str, Any]]] = []
     for pump in entities_named(observation, "offshore-pump"):
-        if not _within_starter_logistics_area(observation, _position(pump), radius=STARTER_POWER_SITE_RADIUS):
+        pump_position = _position(pump)
+        starter_local = _within_starter_logistics_area(observation, pump_position, radius=STARTER_POWER_SITE_RADIUS)
+        reference_distance = distance(pump_position, reference_position) if reference_position is not None else 999999.0
+        if not starter_local and not (allow_existing_remote and reference_distance <= 48.0):
             continue
-        layout = _power_layout_from_pump_position(_position(pump), int(pump.get("direction") or WEST))
+        layout = _power_layout_from_pump_position(pump_position, int(pump.get("direction") or WEST))
         layout["offshore_pump"] = pump
         layout["boiler"] = _entity_near(observation, "boiler", layout["boiler_spec"]["position"], radius=1.0)
         layout["steam_engine"] = _entity_near(observation, "steam-engine", layout["steam_engine_spec"]["position"], radius=1.0)
@@ -4318,11 +4398,12 @@ def _find_steam_power_block(observation: dict[str, Any]) -> dict[str, Any] | Non
             radius=1.0,
         )
         score = sum(1 for key in ("offshore_pump", "boiler", "steam_engine", "small_electric_pole") if layout.get(key) is not None)
-        candidates.append((score, layout))
+        locality_penalty = 0.0 if starter_local else 1.0
+        candidates.append((score, locality_penalty + reference_distance * 0.001, layout))
     if not candidates:
         return None
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    return candidates[0][1]
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    return candidates[0][2]
 
 
 def _missing_power_item(observation: dict[str, Any], layout: dict[str, Any]) -> str | None:
@@ -4605,13 +4686,6 @@ class ResearchTechnologySkill:
                 return PlannerDecision({"type": "wait", "ticks": 120}, "wait for research bootstrap observation to settle")
             return decision
 
-        power_block = _find_steam_power_block(observation)
-        if not _steam_power_ready(power_block):
-            decision = SetupPowerSkill().next_action(observation)
-            if decision.done:
-                return PlannerDecision({"type": "wait", "ticks": 120}, "wait for power observation to settle")
-            return decision
-
         current = _current_research(observation)
         if current == self.technology:
             self._research_requested = True
@@ -4625,6 +4699,22 @@ class ResearchTechnologySkill:
         lab = _find_research_lab(observation)
         if lab is None:
             return PlannerDecision(None, "cannot find a lab for research")
+
+        lab_position = _position(lab)
+        power_block = _find_steam_power_block(
+            observation,
+            allow_existing_remote=True,
+            reference_position=lab_position,
+        )
+        if not _steam_power_ready(power_block):
+            decision = SetupPowerSkill().next_action(
+                observation,
+                allow_existing_remote=True,
+                reference_position=lab_position,
+            )
+            if decision.done:
+                return PlannerDecision({"type": "wait", "ticks": 120}, "wait for power observation to settle")
+            return decision
 
         ingredients = technology.get("ingredients") if isinstance(technology.get("ingredients"), dict) else {}
         if not ingredients:
@@ -4660,7 +4750,11 @@ class ResearchTechnologySkill:
             if _any_lab_has_pack(observation, pack_name):
                 return PlannerDecision({"type": "wait", "ticks": 600}, f"wait for lab chain to consume {pack_name}")
 
-            science_decision = BuildItemMallSkill("automation-science-pack", packs_needed).next_action(observation)
+            science_decision = BuildItemMallSkill("automation-science-pack", packs_needed).next_action(
+                observation,
+                allow_existing_remote=True,
+                reference_position=lab_position,
+            )
             if not science_decision.done:
                 return science_decision
 
@@ -4982,7 +5076,13 @@ class BuildItemMallSkill:
         self.copper_skill = CopperPlateSkill(target_count=20)
         self.circuit_skill = ElectronicCircuitSkill(target_count=10)
 
-    def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
+    def next_action(
+        self,
+        observation: dict[str, Any],
+        *,
+        allow_existing_remote: bool = False,
+        reference_position: dict[str, float] | None = None,
+    ) -> PlannerDecision:
         recipe = RECIPES.get(self.target_item)
         if recipe is None:
             return PlannerDecision(None, f"build item mall recipe is not known: {self.target_item}")
@@ -4994,14 +5094,31 @@ class BuildItemMallSkill:
                 return PlannerDecision({"type": "wait", "ticks": 120}, "wait for automation unlock observation to settle")
             return decision
 
-        power_block = _find_steam_power_block(observation)
+        power_block = _find_steam_power_block(
+            observation,
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position,
+        )
         if not _steam_power_ready(power_block):
-            decision = self.power_skill.next_action(observation)
+            decision = self.power_skill.next_action(
+                observation,
+                allow_existing_remote=allow_existing_remote,
+                reference_position=reference_position,
+            )
             if decision.done:
                 return PlannerDecision({"type": "wait", "ticks": 120}, "wait for power observation to settle")
             return decision
 
-        cell = _find_build_item_mall_cell(observation, self.target_item) or _select_build_item_mall_site(observation)
+        cell = _find_build_item_mall_cell(
+            observation,
+            self.target_item,
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position,
+        ) or _select_build_item_mall_site(
+            observation,
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position,
+        )
         if cell is None:
             return PlannerDecision(None, "cannot find a powered or wireable site for the first build item mall assembler")
 
@@ -5085,6 +5202,14 @@ class BuildItemMallSkill:
             needed_in_assembler = max(1, int(amount * batch_count))
             if entity_item_count(assembler, ingredient) >= needed_in_assembler:
                 continue
+            logistics_blocker = _manual_site_input_logistics_blocker(
+                observation,
+                ingredient,
+                _position(assembler),
+                consumer_label=f"{self.target_item} mall assembler",
+            )
+            if logistics_blocker is not None:
+                return logistics_blocker
             if inventory_count(observation, ingredient) <= 0:
                 decision = self._ensure_item_quantity(observation, player, ingredient, needed_in_assembler)
                 if decision is not None:
@@ -5551,21 +5676,35 @@ def _circuit_cell_powered(line: dict[str, Any]) -> bool:
     return False
 
 
-def _find_build_item_mall_cell(observation: dict[str, Any], target_item: str) -> dict[str, Any] | None:
+def _find_build_item_mall_cell(
+    observation: dict[str, Any],
+    target_item: str,
+    *,
+    allow_existing_remote: bool = False,
+    reference_position: dict[str, float] | None = None,
+) -> dict[str, Any] | None:
     assemblers = entities_named(observation, "assembling-machine-1")
     candidates = [
         item
         for item in assemblers
         if item.get("recipe") == target_item
-        and _within_starter_logistics_area(observation, _position(item))
+        and _within_allowed_factory_area(
+            observation,
+            _position(item),
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position,
+        )
     ]
     if not candidates:
         candidates = [
             item
             for item in assemblers
-            if not item.get("recipe")
-            and not _near_recipe_assembler(observation, item, {"copper-cable", "electronic-circuit"}, radius=5.5)
-            and _within_starter_logistics_area(observation, _position(item))
+            if _available_unassigned_mall_assembler(
+                observation,
+                item,
+                allow_existing_remote=allow_existing_remote,
+                reference_position=reference_position,
+            )
         ]
     if not candidates:
         return None
@@ -5587,7 +5726,33 @@ def _find_build_item_mall_cell(observation: dict[str, Any], target_item: str) ->
     }
 
 
-def _select_build_item_mall_site(observation: dict[str, Any]) -> dict[str, Any] | None:
+def _available_unassigned_mall_assembler(
+    observation: dict[str, Any],
+    assembler: dict[str, Any],
+    *,
+    allow_existing_remote: bool = False,
+    reference_position: dict[str, float] | None = None,
+) -> bool:
+    if assembler.get("recipe"):
+        return False
+    if not _within_allowed_factory_area(
+        observation,
+        _position(assembler),
+        allow_existing_remote=allow_existing_remote,
+        reference_position=reference_position,
+    ):
+        return False
+    if not _near_recipe_assembler(observation, assembler, {"copper-cable", "electronic-circuit"}, radius=5.5):
+        return True
+    return bool(allow_existing_remote and reference_position is not None and assembler.get("electric_network_connected"))
+
+
+def _select_build_item_mall_site(
+    observation: dict[str, Any],
+    *,
+    allow_existing_remote: bool = False,
+    reference_position: dict[str, float] | None = None,
+) -> dict[str, Any] | None:
     sites = observation.get("automation_sites")
     if not isinstance(sites, list):
         return None
@@ -5600,8 +5765,18 @@ def _select_build_item_mall_site(observation: dict[str, Any]) -> dict[str, Any] 
         pole_position = _xy_position(site["pole_position"])
         assembler_position = _xy_position(site["cable_assembler_position"])
         if not (
-            _within_starter_logistics_area(observation, pole_position)
-            and _within_starter_logistics_area(observation, assembler_position)
+            _within_allowed_factory_area(
+                observation,
+                pole_position,
+                allow_existing_remote=allow_existing_remote,
+                reference_position=reference_position,
+            )
+            and _within_allowed_factory_area(
+                observation,
+                assembler_position,
+                allow_existing_remote=allow_existing_remote,
+                reference_position=reference_position,
+            )
         ):
             continue
         pole = _entity_near(observation, "small-electric-pole", pole_position, radius=1.0)
@@ -5664,6 +5839,48 @@ def _build_item_mall_batch_count(product_count: float, target_count: int) -> int
     except (TypeError, ValueError):
         per_batch = 1
     return max(1, min(4, _ceil_div(max(1, target_count), per_batch)))
+
+
+def _manual_site_input_logistics_blocker(
+    observation: dict[str, Any],
+    item: str,
+    consumer_position: dict[str, float],
+    *,
+    consumer_label: str,
+) -> PlannerDecision | None:
+    if item not in AUTOMATED_SITE_INPUT_ITEMS:
+        return None
+    if not bool(_technology_state(observation, "automation").get("researched")):
+        return None
+    source = _nearest_factory_source_site(observation, item, consumer_position)
+    if source is None:
+        return None
+    source_distance = distance(source.position, consumer_position)
+    if source_distance <= MANUAL_SITE_INPUT_RADIUS:
+        return None
+    return PlannerDecision(
+        None,
+        (
+            f"{consumer_label} needs a {item} logistic line from {source.site_id} "
+            f"({source_distance:.0f} tiles); refusing repeated hand-carry between distant sites"
+        ),
+    )
+
+
+def _nearest_factory_source_site(
+    observation: dict[str, Any],
+    item: str,
+    consumer_position: dict[str, float],
+) -> Any | None:
+    source_kinds = {"mining_patch", "plate_smelting_line", "build_item_mall", "assembler_cell", "circuit_automation"}
+    candidates = [
+        site
+        for site in estimate_factory_sites(observation)
+        if site.item == item and site.kind in source_kinds
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda site: distance(site.position, consumer_position))
 
 
 def _near_recipe_assembler(

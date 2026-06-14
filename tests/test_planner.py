@@ -298,6 +298,26 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(issue["item"], "copper-plate")
         self.assertIn("before rail logistics", issue["detail"])
 
+    def test_factory_layout_flags_distant_manual_site_input_after_automation(self):
+        obs = powered_automation_observation()
+        obs["entities"].extend(complete_belt_smelting_entities(0, 0, 920, resource="copper-ore", product="copper-plate"))
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 940,
+                "recipe": "automation-science-pack",
+                "position": {"x": 180, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
+        obs["resources"] = [{"name": "copper-ore", "position": {"x": 0, "y": 0}, "distance": 0}]
+
+        issues = factory_layout_issues(obs)
+        issue = next(item for item in issues if item["kind"] == "manual_site_logistics_gap")
+        self.assertEqual(issue["item"], "copper-plate")
+        self.assertIn("no site-to-site route", issue["detail"])
+
     def test_factory_layout_flags_production_on_resource_patch(self):
         obs = base_observation()
         obs["entities"] = [
@@ -1773,6 +1793,7 @@ class PlannerTests(unittest.TestCase):
 
     def test_research_logistics_inserts_red_science_into_lab(self):
         obs = powered_logistics_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
         obs["research"]["current"] = "logistics"
         obs["inventory"]["automation-science-pack"] = 20
         decision = ResearchTechnologySkill("logistics").next_action(obs)
@@ -1789,6 +1810,123 @@ class PlannerTests(unittest.TestCase):
             decision.action["type"] == "craft"
             and decision.action.get("recipe") == "automation-science-pack"
         )
+
+    def test_research_logistics_repairs_existing_lab_adjacent_remote_power_block(self):
+        obs = powered_logistics_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["research"]["current"] = "logistics"
+        obs["inventory"] = {"coal": 10}
+        obs["power_sites"] = []
+        for entity in obs["entities"]:
+            if entity.get("name") in {"offshore-pump", "boiler", "steam-engine", "small-electric-pole", "lab"}:
+                entity["position"] = {
+                    "x": float(entity["position"]["x"]),
+                    "y": float(entity["position"]["y"]) - 800.0,
+                }
+                entity["distance"] = 800
+        boiler = next(entity for entity in obs["entities"] if entity.get("name") == "boiler")
+        boiler["inventories"] = {}
+        boiler["fluids"] = {"1": {"name": "water", "amount": 200}}
+        engine = next(entity for entity in obs["entities"] if entity.get("name") == "steam-engine")
+        engine["status"] = 5
+        engine["status_name"] = "no_input_fluid"
+        engine["fluids"] = {}
+        obs["player"] = {"position": dict(boiler["position"])}
+
+        setup_decision = SetupPowerSkill().next_action(obs)
+        self.assertIn("cannot find a buildable water site", setup_decision.reason)
+
+        research_decision = ResearchTechnologySkill("logistics").next_action(obs)
+        self.assertEqual(research_decision.action["type"], "insert")
+        self.assertEqual(research_decision.action["name"], "boiler")
+        self.assertEqual(research_decision.action["item"], "coal")
+
+    def test_research_logistics_uses_lab_adjacent_remote_mall_site_after_power_is_ready(self):
+        obs = powered_logistics_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["research"]["current"] = "logistics"
+        obs["inventory"] = {"assembling-machine-1": 1}
+        obs["power_sites"] = []
+        for entity in obs["entities"]:
+            if entity.get("name") in {"offshore-pump", "boiler", "steam-engine", "small-electric-pole", "lab"}:
+                entity["position"] = {
+                    "x": float(entity["position"]["x"]),
+                    "y": float(entity["position"]["y"]) - 800.0,
+                }
+                entity["distance"] = 800
+        obs["automation_sites"] = [
+            {
+                "powered": True,
+                "pole_unit_number": 604,
+                "pole_position": {"x": 10.5, "y": -793.5},
+                "cable_assembler_position": {"x": 13.5, "y": -793.5},
+                "circuit_assembler_position": {"x": 17.5, "y": -793.5},
+                "transfer_inserter_position": {"x": 15.5, "y": -793.5},
+                "transfer_inserter_direction": 4,
+                "distance": 3,
+            }
+        ]
+        obs["player"] = {"position": {"x": 13.5, "y": -793.5}}
+
+        mall_decision = BuildItemMallSkill("automation-science-pack", 20).next_action(obs)
+        self.assertIn("cannot find a buildable water site", mall_decision.reason)
+
+        research_decision = ResearchTechnologySkill("logistics").next_action(obs)
+        self.assertEqual(research_decision.action["type"], "build")
+        self.assertEqual(research_decision.action["name"], "assembling-machine-1")
+        self.assertEqual(research_decision.action["position"], {"x": 13.5, "y": -793.5})
+
+    def test_research_logistics_recovers_lab_adjacent_unassigned_remote_mall_assembler(self):
+        obs = powered_logistics_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["research"]["current"] = "logistics"
+        obs["inventory"] = {}
+        obs["power_sites"] = []
+        obs["automation_sites"] = []
+        for entity in obs["entities"]:
+            if entity.get("name") in {"offshore-pump", "boiler", "steam-engine", "small-electric-pole", "lab"}:
+                entity["position"] = {
+                    "x": float(entity["position"]["x"]),
+                    "y": float(entity["position"]["y"]) - 800.0,
+                }
+                entity["distance"] = 800
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 801,
+                    "position": {"x": 18.5, "y": -799.5},
+                    "distance": 4,
+                    "recipe": "copper-cable",
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 802,
+                    "position": {"x": 22.5, "y": -799.5},
+                    "distance": 5,
+                    "recipe": "electronic-circuit",
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 803,
+                    "position": {"x": 18.5, "y": -803.5},
+                    "distance": 4,
+                    "recipe": None,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+            ]
+        )
+        obs["player"] = {"position": {"x": 18.5, "y": -803.5}}
+
+        decision = ResearchTechnologySkill("logistics").next_action(obs)
+        self.assertEqual(decision.action["type"], "set_recipe")
+        self.assertEqual(decision.action["recipe"], "automation-science-pack")
+        self.assertEqual(decision.action["unit_number"], 803)
 
     def test_circuit_automation_delegates_until_automation_is_researched(self):
         obs = powered_research_observation()
@@ -2048,6 +2186,28 @@ class PlannerTests(unittest.TestCase):
         decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
         self.assertEqual(decision.action["type"], "insert")
         self.assertIn(decision.action["item"], {"iron-gear-wheel", "iron-plate"})
+
+    def test_build_item_mall_blocks_repeated_hand_carry_from_distant_source_site(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"copper-plate": 20, "iron-gear-wheel": 20}
+        obs["entities"].extend(complete_belt_smelting_entities(0, 0, 960, resource="copper-ore", product="copper-plate"))
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 970,
+                "recipe": "automation-science-pack",
+                "position": {"x": 180, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
+        obs["resources"] = [{"name": "copper-ore", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["player"] = {"position": {"x": 180, "y": 0}}
+
+        decision = BuildItemMallSkill("automation-science-pack", 20).next_action(obs)
+        self.assertIsNone(decision.action)
+        self.assertIn("logistic line", decision.reason)
+        self.assertIn("refusing repeated hand-carry", decision.reason)
 
     def test_build_item_mall_takes_output(self):
         obs = powered_automation_observation()

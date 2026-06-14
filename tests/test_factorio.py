@@ -84,6 +84,8 @@ class FactorioProcessConfigTests(unittest.TestCase):
         self.assertFalse(payload["peaceful_mode"])
         self.assertEqual(payload["starting_points"], [{"x": 0, "y": 0}])
         self.assertGreater(payload["autoplace_controls"]["enemy-base"]["size"], 0)
+        self.assertEqual(payload["cliff_settings"]["richness"], 0)
+        self.assertEqual(payload["cliff_settings"]["cliff_elevation_interval"], 0)
 
 
 if __name__ == "__main__":
