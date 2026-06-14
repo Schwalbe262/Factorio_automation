@@ -273,6 +273,19 @@ local function entity_fluidbox_snapshot(entity)
   end
   return result
 end
+local function entity_mining_target_name(entity)
+  local ok, target = pcall(function() return entity.mining_target end)
+  if ok and target and target.valid then return target.name end
+  return nil
+end
+local function entity_status_name(entity)
+  local status = entity.status
+  if not status then return nil end
+  for name, value in pairs(defines.entity_status) do
+    if value == status then return name end
+  end
+  return nil
+end
 local function entity_snapshot(entity, origin)
   return {{
     unit_number = entity.unit_number,
@@ -283,9 +296,11 @@ local function entity_snapshot(entity, origin)
     position = position_table(entity.position),
     direction = entity.direction,
     status = entity.status,
+    status_name = entity_status_name(entity),
     recipe = entity_recipe_name(entity),
     electric_network_connected = entity_connected_to_electric_network(entity),
     electric_network_id = entity_electric_network_id(entity),
+    mining_target = entity_mining_target_name(entity),
     drop_position = optional_entity_position(entity, "drop_position"),
     pickup_position = optional_entity_position(entity, "pickup_position"),
     distance = round(distance(origin, entity.position)),

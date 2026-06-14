@@ -99,6 +99,54 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "connect_coal_fuel_feed")
         self.assertIn("coal fuel feed route", result["blockers"])
 
+    def test_coal_supply_ready_uses_mining_target_when_resource_list_is_remote(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "player": {"position": {"x": -500, "y": -500}},
+                "inventory": {"iron-plate": 20, "coal": 0},
+                "entities": [
+                    {
+                        "name": "burner-mining-drill",
+                        "unit_number": 20,
+                        "position": {"x": 260, "y": -370},
+                        "direction": 4,
+                        "mining_target": "coal",
+                        "status": 34,
+                        "status_name": "waiting_for_space_in_destination",
+                        "inventories": {},
+                    },
+                    {"name": "stone-furnace", "position": {"x": 4, "y": 0}, "inventories": {}},
+                ],
+                "resources": [{"name": "coal", "position": {"x": -10, "y": -30}, "distance": 700}],
+            },
+        )
+        self.assertNotEqual(result["selected_skill"], "setup_coal_supply")
+
+    def test_unfueled_coal_drill_still_requests_coal_supply(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "player": {"position": {"x": 0, "y": 0}},
+                "inventory": {"iron-plate": 20, "coal": 0},
+                "entities": [
+                    {
+                        "name": "burner-mining-drill",
+                        "unit_number": 20,
+                        "position": {"x": 8, "y": 0},
+                        "direction": 4,
+                        "mining_target": "coal",
+                        "status": 53,
+                        "status_name": "no_fuel",
+                        "inventories": {},
+                    },
+                    {"name": "stone-furnace", "position": {"x": 4, "y": 0}, "inventories": {}},
+                ],
+                "resources": [{"name": "coal", "position": {"x": 8, "y": 0}, "distance": 8}],
+            },
+        )
+        self.assertEqual(result["selected_skill"], "setup_coal_supply")
+
     def test_rocket_goal_researches_logistics_after_circuit_cell_ready(self):
         result = heuristic_strategy(
             "launch_rocket_program",

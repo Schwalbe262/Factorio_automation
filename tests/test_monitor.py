@@ -61,6 +61,97 @@ class MonitorTests(unittest.TestCase):
         self.assertIn("electronic-circuit", by_item)
         self.assertEqual(by_item["electronic-circuit"].per_minute, 60.0)
 
+    def test_belt_line_resource_uses_mining_target_when_resource_list_is_remote(self):
+        estimates = estimate_production(
+            {
+                "entities": [
+                    {
+                        "name": "burner-mining-drill",
+                        "unit_number": 1,
+                        "position": {"x": 0, "y": 0},
+                        "direction": 4,
+                        "mining_target": "copper-ore",
+                        "status": 34,
+                        "status_name": "waiting_for_space_in_destination",
+                        "inventories": {},
+                    },
+                    {"name": "transport-belt", "unit_number": 2, "position": {"x": 2, "y": 0}, "direction": 4},
+                    {"name": "transport-belt", "unit_number": 3, "position": {"x": 3, "y": 0}, "direction": 4},
+                    {
+                        "name": "burner-inserter",
+                        "unit_number": 4,
+                        "position": {"x": 4, "y": 0},
+                        "inventories": {"1": {"coal": 1}},
+                    },
+                    {
+                        "name": "stone-furnace",
+                        "unit_number": 5,
+                        "position": {"x": 5, "y": 0},
+                        "inventories": {"1": {"coal": 2}, "3": {"copper-plate": 1}},
+                    },
+                ],
+                "resources": [{"name": "iron-ore", "position": {"x": 100, "y": 100}, "distance": 140}],
+            }
+        )
+        by_item = {item.item: item for item in estimates}
+        self.assertIn("copper-ore", by_item)
+        self.assertIn("copper-plate", by_item)
+        self.assertNotIn("iron-plate", by_item)
+        links = estimate_logistics_links(
+            {
+                "entities": [
+                    {
+                        "name": "burner-mining-drill",
+                        "unit_number": 1,
+                        "position": {"x": 0, "y": 0},
+                        "direction": 4,
+                        "mining_target": "copper-ore",
+                        "status": 34,
+                        "status_name": "waiting_for_space_in_destination",
+                        "inventories": {},
+                    },
+                    {"name": "transport-belt", "unit_number": 2, "position": {"x": 2, "y": 0}, "direction": 4},
+                    {"name": "transport-belt", "unit_number": 3, "position": {"x": 3, "y": 0}, "direction": 4},
+                    {
+                        "name": "burner-inserter",
+                        "unit_number": 4,
+                        "position": {"x": 4, "y": 0},
+                        "inventories": {"1": {"coal": 1}},
+                    },
+                    {
+                        "name": "stone-furnace",
+                        "unit_number": 5,
+                        "position": {"x": 5, "y": 0},
+                        "inventories": {"1": {"coal": 2}, "3": {"copper-plate": 1}},
+                    },
+                ],
+                "resources": [{"name": "iron-ore", "position": {"x": 100, "y": 100}, "distance": 140}],
+            }
+        )
+        ore_links = [link for link in links if link.item == "copper-ore"]
+        self.assertTrue(ore_links)
+        self.assertNotIn("missing_source", ore_links[0].from_site)
+
+    def test_unfueled_miner_is_not_counted_as_producer(self):
+        estimates = estimate_production(
+            {
+                "entities": [
+                    {
+                        "name": "burner-mining-drill",
+                        "unit_number": 1,
+                        "position": {"x": 0, "y": 0},
+                        "direction": 4,
+                        "mining_target": "coal",
+                        "status": 53,
+                        "status_name": "no_fuel",
+                        "inventories": {},
+                    }
+                ],
+                "resources": [],
+            }
+        )
+        self.assertNotIn("coal", {item.item for item in estimates})
+
     def test_electronic_circuit_ratio_uses_recipe_speed(self):
         ratio = recipe_machine_ratio("copper-cable", "electronic-circuit", "copper-cable")
         self.assertEqual(ratio["producer"], 3.0)

@@ -708,14 +708,18 @@ def estimate_factory_sites(observation: dict[str, Any]) -> list[FactorySiteEstim
     ]:
         position = _position(drill)
         resource = _nearest_resource(observation, position)
+        resource_name = _entity_mining_target_name(drill) or (
+            str(resource.get("name")) if resource and resource.get("name") else None
+        )
         name = str(drill.get("name") or "")
         electric = name == "electric-mining-drill"
+        fueled = electric or entity_item_count(drill, "coal") > 0 or not _entity_status_is(drill, "no_fuel", 53)
         site = FactorySiteEstimate(
             site_id=_entity_site_id("mining_patch", drill),
             kind="mining_patch",
-            status="powered" if electric and drill.get("electric_network_connected") else ("fueled" if entity_item_count(drill, "coal") > 0 else "needs_fuel"),
+            status="powered" if electric and drill.get("electric_network_connected") else ("fueled" if fueled else "needs_fuel"),
             position=position,
-            item=str(resource.get("name")) if resource and resource.get("name") else None,
+            item=resource_name,
             machines=[name],
             automation_level="electric" if electric else "burner-bootstrap",
             notes=[
@@ -1298,16 +1302,30 @@ def _estimate_miner(
     position = entity.get("position") if isinstance(entity.get("position"), dict) else {}
     if not position:
         return None
-    resource = _nearest_resource(observation, {"x": float(position.get("x") or 0), "y": float(position.get("y") or 0)})
-    if resource is None:
+    if str(entity.get("name") or "") == "burner-mining-drill" and _entity_status_is(entity, "no_fuel", 53):
+        return None
+    resource_name = _entity_mining_target_name(entity)
+    if resource_name is None:
+        resource = _nearest_resource(observation, {"x": float(position.get("x") or 0), "y": float(position.get("y") or 0)})
+        resource_name = str(resource.get("name")) if resource is not None and resource.get("name") else None
+    if resource_name is None:
         return None
     return ProductionEstimate(
-        item=str(resource.get("name")),
+        item=resource_name,
         per_minute=round(per_minute, 3),
         producers=1,
         confidence=0.55,
         notes=[f"inferred from {entity.get('name')} near resource patch"],
     )
+
+
+def _entity_status_is(entity: dict[str, Any], status_name: str, status_code: int) -> bool:
+    if str(entity.get("status_name") or "") == status_name:
+        return True
+    try:
+        return int(entity.get("status")) == status_code
+    except (TypeError, ValueError):
+        return False
 
 
 def _estimate_assembler(entity: dict[str, Any], crafting_speed: float) -> ProductionEstimate | None:
@@ -1433,10 +1451,16 @@ def _belt_line_layouts_from_anchor(observation: dict[str, Any], belt: dict[str, 
         if not _entity_direction_matches(belt, belt_direction):
             continue
         drill_position = {"x": belt_position["x"] - 2 * dx, "y": belt_position["y"] - 2 * dy}
+        drill = _entity_near(observation, "burner-mining-drill", drill_position, 2.0)
         resource = _nearest_resource(observation, drill_position)
+        resource_name = (
+            _entity_mining_target_name(drill)
+            or (str(resource.get("name")) if resource is not None and resource.get("name") else None)
+            or "iron-ore"
+        )
         output.append(
             {
-                "resource_name": str(resource.get("name")) if resource is not None and resource.get("name") else "iron-ore",
+                "resource_name": resource_name,
                 "drill_position": drill_position,
                 "belt1_position": belt_position,
                 "belt2_position": {"x": belt_position["x"] + dx, "y": belt_position["y"] + dy},
@@ -1461,10 +1485,17 @@ def _belt_line_layouts_from_anchor(observation: dict[str, Any], belt: dict[str, 
                     {"x": belt_position["x"] + 3 * dx, "y": belt_position["y"] + 3 * dy},
                     1.75,
                 ),
-                "drill": _entity_near(observation, "burner-mining-drill", drill_position, 2.0),
+                "drill": drill,
             }
         )
     return output
+
+
+def _entity_mining_target_name(entity: dict[str, Any] | None) -> str | None:
+    if not isinstance(entity, dict):
+        return None
+    direct = str(entity.get("mining_target") or entity.get("resource_name") or "")
+    return direct or None
 
 
 def _smelting_orientation(orientation: str) -> tuple[int, int, int]:

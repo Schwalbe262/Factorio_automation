@@ -701,6 +701,14 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.done)
         self.assertIsNone(decision.action)
 
+    def test_expand_iron_smelting_does_not_count_copper_lines_as_iron_capacity(self):
+        obs = base_observation()
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, resource="copper-ore", product="copper-plate")
+        obs["resources"] = []
+        decision = ExpandIronSmeltingSkill(target_rate_per_minute=18).next_action(obs)
+        self.assertFalse(decision.done)
+        self.assertIn("iron-ore", decision.reason)
+
     def test_expand_iron_smelting_fuels_complete_line_before_counting_capacity(self):
         obs = base_observation()
         obs["inventory"] = {"coal": 12}
@@ -764,6 +772,25 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["item"], "coal")
         self.assertEqual(decision.action["name"], "stone-furnace")
         self.assertIn("surplus coal", decision.reason)
+
+    def test_expand_smelting_mines_walkable_coal_instead_of_tiny_surplus_trips(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 0, "y": 0}}
+        obs["inventory"] = {"coal": 0}
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 4, "y": 0}, "distance": 4},
+            {"name": "coal", "position": {"x": 80, "y": 0}, "distance": 80},
+        ]
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, resource="copper-ore", product="copper-plate")
+        for entity in obs["entities"]:
+            if entity["name"] == "burner-inserter":
+                entity["inventories"] = {}
+            if entity["name"] == "stone-furnace":
+                entity["inventories"] = {"1": {"coal": 4}, "2": {"copper-ore": 1}}
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=18).next_action(obs)
+        self.assertEqual(decision.action["type"], "move_to")
+        self.assertEqual(decision.action["position"], {"x": 80, "y": 0})
+        self.assertIn("move near coal", decision.reason)
 
     def test_expand_smelting_stops_when_fuel_logistics_are_too_far(self):
         obs = base_observation()
@@ -1701,6 +1728,7 @@ def complete_belt_smelting_entities(drill_x, drill_y, base_unit, resource="iron-
             "unit_number": base_unit,
             "position": {"x": drill_x, "y": drill_y},
             "distance": 4,
+            "mining_target": resource,
             "inventories": {"1": {"coal": 3}},
         },
         {

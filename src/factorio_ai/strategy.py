@@ -915,12 +915,23 @@ def _coal_supply_ready(observation: dict[str, Any]) -> bool:
         name = str(drill.get("name") or "")
         if name == "electric-mining-drill" and drill.get("electric_network_connected") is not False:
             return True
-        if entity_item_count(drill, "coal") > 0:
+        if entity_item_count(drill, "coal") > 0 or not _entity_status_is(drill, "no_fuel", 53):
             return True
     return False
 
 
+def _entity_status_is(entity: dict[str, Any], status_name: str, status_code: int) -> bool:
+    if str(entity.get("status_name") or "") == status_name:
+        return True
+    try:
+        return int(entity.get("status")) == status_code
+    except (TypeError, ValueError):
+        return False
+
+
 def _entity_on_resource(observation: dict[str, Any], entity: dict[str, Any], resource_name: str) -> bool:
+    if str(entity.get("mining_target") or entity.get("resource_name") or "") == resource_name:
+        return True
     position = entity.get("position") if isinstance(entity.get("position"), dict) else None
     if position is None:
         return False

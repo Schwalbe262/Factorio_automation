@@ -2211,7 +2211,8 @@ def _find_coal_supply_layout(observation: dict[str, Any]) -> dict[str, Any] | No
     candidates: list[tuple[bool, float, dict[str, Any]]] = []
     for drill in entities_named(observation, "burner-mining-drill"):
         drill_position = _position(drill)
-        if _resource_name_near_position(observation, drill_position, radius=4.5) != "coal":
+        target_resource = _entity_resource_name(observation, drill, radius=4.5)
+        if target_resource != "coal":
             continue
         direction = _direction_to_orientation(int(drill.get("direction") or EAST))
         layout = _coal_supply_layout_from_drill_position(drill_position, orientation=direction)
@@ -2228,6 +2229,13 @@ def _find_coal_supply_layout(observation: dict[str, Any]) -> dict[str, Any] | No
         return None
     candidates.sort(key=lambda item: (not item[0], item[1]))
     return candidates[0][2]
+
+
+def _entity_resource_name(observation: dict[str, Any], entity: dict[str, Any], radius: float = 3.0) -> str | None:
+    direct = str(entity.get("mining_target") or entity.get("resource_name") or "")
+    if direct:
+        return direct
+    return _resource_name_near_position(observation, _position(entity), radius=radius)
 
 
 def _select_coal_supply_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
@@ -2436,7 +2444,11 @@ def _belt_layouts_from_anchor(observation: dict[str, Any], belt: dict[str, Any])
         layout["inserter"] = _entity_near(observation, "burner-inserter", layout["inserter_position"], radius=1.0)
         layout["furnace"] = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=1.5)
         layout["drill"] = _entity_near(observation, "burner-mining-drill", layout["drill_position"], radius=2.0)
-        layout["resource_name"] = _resource_name_near_position(observation, layout["drill_position"])
+        layout["resource_name"] = (
+            _entity_resource_name(observation, layout["drill"])
+            if isinstance(layout.get("drill"), dict)
+            else _resource_name_near_position(observation, layout["drill_position"])
+        )
         output.append(layout)
     return output
 
@@ -2498,7 +2510,11 @@ def _fuel_burner_line_entity(
     position = _position(entity)
     inventory_coal = inventory_count(observation, "coal")
     if inventory_coal <= 0:
+        coal = _nearest_resource_to_position(observation, position, "coal")
         source = _nearest_surplus_fuel_source(observation, position, exclude_unit=entity.get("unit_number"))
+        source_surplus = _surplus_fuel_count(source) if source is not None else 0
+        if coal is not None and distance(position, _position(coal)) <= WALK_FUEL_LOGISTICS_LIMIT and source_surplus < 8:
+            return support_skill._mine_resource(player, coal, "coal", 16)
         if source is not None:
             source_position = _position(source)
             if distance(player, source_position) > 20:
@@ -2518,7 +2534,6 @@ def _fuel_burner_line_entity(
                 },
                 f"recover surplus coal from {source.get('name')} for {context}",
             )
-        coal = _nearest_resource_to_position(observation, position, "coal")
         if coal is None:
             return PlannerDecision(None, f"cannot find coal for {context}")
         if distance(position, _position(coal)) > WALK_FUEL_LOGISTICS_LIMIT:
