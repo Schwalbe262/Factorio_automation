@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from factorio_ai.slurm_worker import (
+    _layout_improvement_prompt,
     compact_layout_improvement_payload,
     normalize_layout_response,
     run_strategy_request,
@@ -214,6 +215,21 @@ class SlurmWorkerTests(unittest.TestCase):
             self.assertFalse(result["build_ready"])
             self.assertIn("site_prebuild_gate=fail", " ".join(result["risks"]))
             self.assertIn("site_placement_search=blocked", " ".join(result["risks"]))
+
+    def test_layout_prompt_repeats_json_only_instruction_after_payload(self):
+        prompt = _layout_improvement_prompt(
+            {
+                "objective": "launch_rocket_program",
+                "active_skill": "idle:test",
+                "layout_improvement": {"simulation_candidates": [{"id": "candidate-a"}]},
+            }
+        )
+
+        payload_index = prompt.index("Payload JSON for evaluation")
+        final_index = prompt.index("Now answer with exactly one JSON object")
+        self.assertGreater(final_index, payload_index)
+        self.assertIn("Do not repeat, quote, summarize, or continue the payload", prompt[final_index:])
+        self.assertIn("The first character of your response must be `{`", prompt[final_index:])
 
     def test_layout_payload_marks_codex_wait_context(self):
         compact = compact_layout_improvement_payload(

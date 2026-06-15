@@ -688,8 +688,10 @@ Common environment variables:
 - `FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=rtx3090`
 - `FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS=a6000ada,a6000`
 - `FACTORIO_AI_SLURM_LAYOUT_CPUS=3`
+- `FACTORIO_AI_SLURM_LAYOUT_PRIORITY=80`
 - `FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker`
 - `FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.5-4B`
+- `FACTORIO_AI_LLM_GUIDED_JSON=1`
 - `FACTORIO_AI_LLM_BASE_URL=http://127.0.0.1:8000/v1`
 - `FACTORIO_AI_LLM_MODEL=<model-name>`
 
@@ -718,9 +720,11 @@ $env:FACTORIO_AI_SLURM_SCHEDULER_GPUS="1"
 $env:FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL="rtx3090"
 $env:FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS="a6000ada,a6000"
 $env:FACTORIO_AI_SLURM_LAYOUT_CPUS="3"
+$env:FACTORIO_AI_SLURM_LAYOUT_PRIORITY="80"
 $env:FACTORIO_AI_VLLM_MODEL="Qwen/Qwen3.5-4B"
 $env:FACTORIO_AI_VLLM_ARGS="--max-model-len 32768 --gpu-memory-utilization 0.85 --enforce-eager"
 $env:FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER="0"
+$env:FACTORIO_AI_LLM_GUIDED_JSON="1"
 python -m factorio_ai.cli slurm-llm-status
 ```
 
@@ -742,9 +746,11 @@ The normal 4B local LLM path defaults to `rtx3090` because it can use warm sched
 improvement requests use `FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS`, defaulting to `a6000ada,a6000`; the client
 checks scheduler capacity and submits the task with the first ready candidate because `/tasks` accepts one
 `gpu_model` value. Layout requests default to `FACTORIO_AI_SLURM_LAYOUT_CPUS=3` so they can attach to the
-warm A6000 allocation that exposes three free CPUs. If a specific model or experiment needs another GPU or
-CPU shape, override `FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL`, `FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS`, or
-`FACTORIO_AI_SLURM_LAYOUT_CPUS` for that run.
+warm A6000 allocation that exposes three free CPUs, and `FACTORIO_AI_SLURM_LAYOUT_PRIORITY=80` so they are
+not starved behind lower-priority crawl work. If a specific model or experiment needs another GPU or
+CPU shape or queue weight, override `FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL`,
+`FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS`, `FACTORIO_AI_SLURM_LAYOUT_CPUS`, or
+`FACTORIO_AI_SLURM_LAYOUT_PRIORITY` for that run.
 
 If the scheduler GPU allocation is still pending or unavailable, `slurm-llm-status` reports
 `ready scheduler GPU allocation` in `missing` and lists pending allocations separately. Queued tasks do not

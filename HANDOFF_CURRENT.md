@@ -8,7 +8,7 @@
 \- Factory sites now fold dedicated intermediate assemblers into parent sites via `subitems`, such as `iron-gear-wheel` under `transport-belt`.
 \- Root current Markdown files now use the escaped `md/` marker format.
 \- Slurm scheduler mode defaults to `rtx3090`/`r1jae262`; layout improvement requests use `a6000ada,a6000` candidates and submit the ready single `gpu_model`.
-\- Scheduler layout tasks now fail visibly if requested vLLM does not become ready, and the idle loop will not submit a second layout task while one is active.
+\- Scheduler Qwen layout tasks now fail visibly, map vLLM env, disable flashinfer sampler, use guided JSON/detail polling, clean up vLLM children, and have the idle loop running again.
 \- Live map: belt mall output inserter now points assembler-to-chest and produced belts into chest; boiler coal route reached about `x=0.5` but still needs more belts to reach boiler at `x=-43.5`.
 
 \## Current objective
@@ -35,20 +35,19 @@
 
 \- `py_compile`, focused planner/monitor/web/slurm tests (`335`), full `pytest -q` (`612`) passed.
 \- Full `pytest -q` passed: `639 passed`.
-\- Live validation: layout scheduler selected `a6000`; task `148` confirmed remote `factorio-ai` env has `vllm` command/module, but recent layout tasks still fell back with `Connection refused`.
-\- Token sample recorded: `253,817,535` Factorio Codex thread tokens; delta `17,972,119`; weekly quota unknown.
+\- Live validation: scheduler deploy ok; layout smoke `runtime/logs/scheduler-layout-smoke-20260616-071003.json` returned `ok=true`, `source=llm`, `llm_error=null`.
+\- Token sample recorded: `268,178,970` Factorio Codex thread tokens; delta `14,361,435`; weekly quota unknown.
 
 \## Current blocker
 
-\- Idle layout loop is stopped; vLLM starts too slowly or exits before `/v1/models` is ready, so restarting now would submit failed layout tasks.
+\- Scheduler `/tasks` currently ignores submitted `priority=80` for layout work; task `4060` stored priority `0` even though the client posted priority.
 
 \## Next steps
 
-1\. Inspect scheduler vLLM logs for tasks `145`/`147` or run a short startup probe to find why `/v1/models` stays unavailable.
-2\. Increase/fix vLLM startup on scheduler A6000, then restart `run-no-mod-idle-layout-loop`.
-3\. Refresh/restart the dashboard process if it is still serving old code.
-4\. Fuel iron/coal burner drills as needed, refill belt mall, then continue `connect_coal_fuel_feed` until boiler receives belt-fed coal.
-5\. Continue red science/logistics research once fuel, belt output, and site input routes are stable.
+1\. Tell the scheduler maintainer that `/tasks` form `priority=80` is ignored and should be persisted/applied.
+2\. Refresh/restart the dashboard process if it is still serving old code.
+3\. Fuel iron/coal burner drills as needed, refill belt mall, then continue `connect_coal_fuel_feed` until boiler receives belt-fed coal.
+4\. Continue red science/logistics research once fuel, belt output, and site input routes are stable.
 
 \## Token/context policy
 

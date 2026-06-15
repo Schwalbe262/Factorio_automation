@@ -575,6 +575,7 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertEqual(posted[0]["remote_cwd"], "/remote/factorio-ai")
         self.assertEqual(posted[0]["account_name"], "r1jae262")
         self.assertEqual(posted[0]["gpu_model"], "rtx3090")
+        self.assertEqual(posted[0]["priority"], 80)
         self.assertLess(len(posted[0]["command"]), 5_000)
         self.assertNotIn(large_blob[:100], posted[0]["command"])
         self.assertIn(".factorio-ai-scheduler-tasks/t1.json", posted[0]["command"])
@@ -598,7 +599,59 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertIn("export VLLM_USE_FLASHINFER_SAMPLER", command)
         self.assertIn("export CUDA_VISIBLE_DEVICES", command)
         self.assertIn("export HF_HOME", command)
+        self.assertIn("trap cleanup_vllm EXIT", command)
+        self.assertIn('VLLM_PID="$!"', command)
         self.assertIn("exit 1", command)
+
+    def test_scheduler_task_polling_uses_detail_endpoint_after_submit(self):
+        from factorio_ai import remote_slurm
+
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="factorio-ai-worker",
+            conda_env="factorio-ai",
+            partition="gpu4",
+            cpus_per_task=8,
+            gpus_per_node=1,
+            gres="gpu:1",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        completed = {
+            "id": 77,
+            "name": "factorio-layout-improvement-request-test",
+            "status": "completed",
+            "account_name": "r1jae262",
+            "stdout_path": "stdout.log",
+        }
+        with (
+            patch.dict(os.environ, {"FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262"}),
+            patch(
+                "factorio_ai.remote_slurm._submit_scheduler_task",
+                return_value={"id": 77, "name": completed["name"], "status": "queued"},
+            ),
+            patch("factorio_ai.remote_slurm._scheduler_task_detail", return_value=completed) as detail,
+            patch("factorio_ai.remote_slurm._scheduler_task_rows", side_effect=AssertionError("used task list")),
+            patch("factorio_ai.remote_slurm._read_scheduler_task_stdout", return_value='{"ok": true, "source": "llm"}'),
+        ):
+            result = remote_slurm._request_task_via_scheduler(
+                {"id": "t1", "type": "layout_improvement_request", "payload": {}},
+                cfg,
+                timeout_seconds=5,
+            )
+
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["scheduler_task_id"], 77)
+        self.assertEqual(result["scheduler_task_name"], completed["name"])
+        detail.assert_called_once_with(77)
 
     def test_layout_scheduler_task_submission_selects_ready_a6000_candidate(self):
         from factorio_ai import remote_slurm
@@ -678,6 +731,7 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertEqual(row["id"], 43)
         self.assertEqual(posted[0]["gpu_model"], "a6000")
         self.assertEqual(posted[0]["cpus"], 3)
+        self.assertEqual(posted[0]["priority"], 80)
 
     def test_layout_scheduler_status_accepts_a6000_candidates(self):
         from factorio_ai import remote_slurm

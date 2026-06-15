@@ -331,6 +331,12 @@ def _scheduler_task_cpus(task_type: str | None = None) -> int:
     return _int_env("FACTORIO_AI_SLURM_SCHEDULER_CPUS", 4, 1)
 
 
+def _scheduler_task_priority(task_type: str | None = None) -> int:
+    if task_type == LAYOUT_IMPROVEMENT_TASK_TYPE:
+        return _int_env("FACTORIO_AI_SLURM_LAYOUT_PRIORITY", 80, 0)
+    return _int_env("FACTORIO_AI_SLURM_SCHEDULER_PRIORITY", 0, 0)
+
+
 def _scheduler_task_command(task: dict[str, Any]) -> str:
     task_id = str(task["id"])
     task_json = shlex.quote(f".factorio-ai-scheduler-tasks/{task_id}.json")
@@ -375,6 +381,14 @@ fi
 if [ -n "${{FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER:-}}" ]; then
   export VLLM_USE_FLASHINFER_SAMPLER="$FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER"
 fi
+VLLM_PID=""
+cleanup_vllm() {{
+  if [ -n "$VLLM_PID" ]; then
+    kill "$VLLM_PID" >/dev/null 2>&1 || true
+    wait "$VLLM_PID" >/dev/null 2>&1 || true
+  fi
+}}
+trap cleanup_vllm EXIT
 if [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ]; then
   VLLM_START_ERROR=""
   if ! python - <<'PY' >/dev/null 2>&1
@@ -385,12 +399,14 @@ PY
   then
     if command -v vllm >/dev/null 2>&1; then
       nohup vllm serve "$FACTORIO_AI_VLLM_MODEL" --host 127.0.0.1 --port "${{FACTORIO_AI_VLLM_PORT:-8000}}" ${{FACTORIO_AI_VLLM_ARGS:-}} > "$VLLM_LOG_BASE.out" 2> "$VLLM_LOG_BASE.err" &
+      VLLM_PID="$!"
     elif python - <<'PY' >/dev/null 2>&1
 import importlib.util
 raise SystemExit(0 if importlib.util.find_spec("vllm") else 1)
 PY
     then
       nohup python -m vllm.entrypoints.openai.api_server --model "$FACTORIO_AI_VLLM_MODEL" --host 127.0.0.1 --port "${{FACTORIO_AI_VLLM_PORT:-8000}}" ${{FACTORIO_AI_VLLM_ARGS:-}} > "$VLLM_LOG_BASE.out" 2> "$VLLM_LOG_BASE.err" &
+      VLLM_PID="$!"
     else
       VLLM_START_ERROR="vllm command/module not found after conda activation"
       printf '%s\\n' "$VLLM_START_ERROR" > "$VLLM_LOG_BASE.err"
@@ -510,6 +526,7 @@ def _submit_scheduler_task(task: dict[str, Any], cfg: RemoteSlurmConfig) -> dict
         "required_capability": _scheduler_required_capability(),
         "env_profile": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_ENV_PROFILE", "").strip(),
         "account_name": _scheduler_account(),
+        "priority": _scheduler_task_priority(task_type),
         **resources,
     }
     _scheduler_post_form("/tasks", data, timeout=30)
@@ -525,6 +542,16 @@ def _submit_scheduler_task(task: dict[str, Any], cfg: RemoteSlurmConfig) -> dict
 def _scheduler_task_rows() -> list[dict[str, Any]]:
     rows = _scheduler_api_json("/api/tasks", timeout=30)
     return rows if isinstance(rows, list) else []
+
+
+def _scheduler_task_detail(task_id: Any) -> dict[str, Any] | None:
+    if task_id is None:
+        return None
+    try:
+        row = _scheduler_api_json(f"/api/tasks/{task_id}", timeout=30)
+    except Exception:  # noqa: BLE001
+        return None
+    return row if isinstance(row, dict) else None
 
 
 def _scheduler_compact_task_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -624,8 +651,7 @@ def _request_task_via_scheduler(task: dict[str, Any], cfg: RemoteSlurmConfig, ti
     deadline = time.monotonic() + (timeout_seconds or max(cfg.task_timeout_seconds, 120))
     expected_account = _scheduler_account()
     while time.monotonic() < deadline:
-        rows = _scheduler_task_rows()
-        current = next((item for item in rows if item.get("id") == task_id), row)
+        current = _scheduler_task_detail(task_id) or row
         account = str(current.get("account_name") or "")
         if account and expected_account and account != expected_account:
             raise RemoteSlurmError(f"scheduler task attached to unexpected account {account}; expected {expected_account}")
@@ -637,6 +663,8 @@ def _request_task_via_scheduler(task: dict[str, Any], cfg: RemoteSlurmConfig, ti
                 raise RemoteSlurmError(f"scheduler task completed without JSON result: {stdout[:500]}")
             if not parsed.get("ok"):
                 raise RemoteSlurmError(f"scheduler task failed: {parsed}")
+            parsed.setdefault("scheduler_task_id", task_id)
+            parsed.setdefault("scheduler_task_name", row.get("name"))
             return parsed
         if status in {"failed", "cancelled"}:
             stdout = _read_scheduler_task_stdout(current, cfg)

@@ -247,16 +247,12 @@ def _augment_llm_strategy_with_heuristic_support(llm_result: dict[str, Any], heu
 
 def run_layout_improvement_request(payload: dict[str, Any]) -> dict[str, Any]:
     compact = compact_layout_improvement_payload(payload)
-    prompt = (
-        "You are a Factorio factory layout design reviewer running in the background while another "
-        "executor skill continues playing. Evaluate simulation-only site layout candidates. "
-        "Do not ask to build, mine, craft, demolish, or move anything. Pick one candidate or a next "
-        "simulation focus. If the evidence confirms a reusable factory-layout technique, return it in "
-        "learned_skills; otherwise return learned_skills=[]. Return strict JSON only matching the schema.\n\n"
-        f"Payload:\n{json.dumps(compact, ensure_ascii=False)}"
-    )
+    prompt = _layout_improvement_prompt(compact)
     parsed, diagnostics = call_llm_json_with_diagnostics(
-        system="Return strict JSON only. This is simulation-only design work; do not apply changes.",
+        system=(
+            "Return exactly one strict JSON object. This is simulation-only design work; do not apply changes. "
+            "Do not repeat or quote the user's payload."
+        ),
         prompt=prompt,
         schema=LAYOUT_RESPONSE_SCHEMA,
     )
@@ -275,6 +271,20 @@ def run_layout_improvement_request(payload: dict[str, Any]) -> dict[str, Any]:
     result["llm_prompt_chars"] = len(prompt)
     result.update(diagnostics)
     return result
+
+
+def _layout_improvement_prompt(compact: dict[str, Any]) -> str:
+    return (
+        "You are a Factorio factory layout design reviewer running in the background while another "
+        "executor skill continues playing. Evaluate simulation-only site layout candidates. "
+        "Do not ask to build, mine, craft, demolish, or move anything. Pick one candidate or a next "
+        "simulation focus. If the evidence confirms a reusable factory-layout technique, return it in "
+        "learned_skills; otherwise return learned_skills=[].\n\n"
+        f"Payload JSON for evaluation, not for copying:\n{json.dumps(compact, ensure_ascii=False)}\n\n"
+        "Now answer with exactly one JSON object and no markdown. Do not repeat, quote, summarize, or continue "
+        "the payload. The first character of your response must be `{`. Required keys: selected_candidate_id, "
+        "score, reasoning, expected_improvements, risks, next_simulation_focus, learned_skills, build_ready, no_apply."
+    )
 
 
 def compact_layout_improvement_payload(payload: dict[str, Any]) -> dict[str, Any]:
