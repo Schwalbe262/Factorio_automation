@@ -7378,3 +7378,30 @@
 - Next action: After emergency power is restored, immediately build/restore transport-belt automation and then use the boiler coal feed executor so future boiler fuel is belt/inserter fed.
 - Token usage: 15,659,459 cumulative Codex tokens / weekly quota unavailable; delta since Loop 337 record approximately 163,380 tokens.
 
+## 2026-06-15 15:05:25 +09:00 - Loop 339
+
+- Part: unlock-aware long-handed inserter layout verification
+- Goal: Confirm whether site layout optimization automatically considers newly usable long-handed inserters and other unlocked layout tools such as modules, higher-tier assemblers/furnaces, and beacons.
+- Hypothesis: The existing Part 108/331-336 layout path should already rerank candidates when `long-handed-inserter` becomes available, while separating recipe unlock from actual build readiness so the agent does not immediately rebuild with missing items.
+- Actions:
+  - Inspected planner, strategy, Slurm compact payload, Web UI rendering, and tests related to `layout_capabilities`, `layout_unlocks_considered`, `uses_unlocked_items`, `used_unlocked_item_state`, and `build_item_supply`.
+  - Verified that `factory_layout_simulation_candidates` generates long-handed green-circuit and starter-mall variants when the technology, recipe unlock, stock, or an existing assembler makes `long-handed-inserter` usable.
+  - Verified that modules, assembling-machine tiers, furnace tiers, and beacons are included in the layout capability context and generic unlock reassessment candidate, including throughput, footprint, power, pollution, and bottleneck recheck flags.
+  - Ran focused regression tests for long-handed inserter reranking, module awareness, higher-tier assembler use, strategy payload capability exposure, compact Slurm payload preservation, and Web UI unlocked-tool display.
+  - Ran live read-only no-mod observe for player `AI` and generated layout candidates without mutating the world.
+- Candidates:
+  - Live candidate: `green-circuit-long-handed-3-cable-2-circuit-cell`.
+  - Live candidate: `unlock-aware-site-rerank-long-handed-inserter`.
+  - Related build-item target path already covered by previous loop: `bootstrap_build_item_mall target_item=long-handed-inserter`.
+- Metrics:
+  - Focused tests: `15 passed, 297 deselected`.
+  - Full tests: `518 passed in 25.46s`.
+  - Live long-handed state: `available=true`, `recipe_unlocked=true`, `researched=false`, `stock=0`, `automated=false`.
+  - Live long-handed green-circuit candidate score: `82.7`.
+  - Live unlock-aware rerank candidate score: `79.1`.
+  - Live missing build items for the long-handed green-circuit candidate: `long-handed-inserter x7`, `transport-belt x39`, `assembling-machine-1 x5`, `inserter x5`, `iron-chest x2`.
+- Result: Site layout optimization already automatically considers long-handed inserters after recipe unlock and records both the benefit candidate and the missing supply state. It also exposes modules, better machines/furnaces, and beacons as layout rerank triggers.
+- Failure reason: No code failure found. This loop did not add a new improvement; it validated existing unlock-aware behavior. Long-handed variants remain simulation/planning candidates until build-item supply, sandbox validation, and site pre-build gates pass.
+- Next action: Continue from the live bootstrap blocker: restore power with the bounded emergency path, automate transport belts, then automate long-handed inserter supply before applying any long-handed rebuild candidate.
+- Token usage: 15,786,188 cumulative Codex tokens / weekly quota unavailable; delta since Loop 338 record approximately 126,729 tokens.
+
