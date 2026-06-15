@@ -4,7 +4,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from factorio_ai.slurm_worker import compact_layout_improvement_payload, run_strategy_request, run_task_file, run_worker
+from factorio_ai.slurm_worker import (
+    compact_layout_improvement_payload,
+    normalize_layout_response,
+    run_strategy_request,
+    run_task_file,
+    run_worker,
+)
 from factorio_ai.strategy import skill_catalog_payload
 
 
@@ -223,6 +229,11 @@ class SlurmWorkerTests(unittest.TestCase):
         self.assertEqual(compact["active_skill"], "codex_wait:future_build_item_skill")
         self.assertIn("Codex reports that the executor work is complete", compact["instruction"])
         self.assertIn("simulation only", compact["instruction"])
+        self.assertTrue(compact["layout_learning"]["return_learned_skills"])
+        self.assertTrue(compact["layout_learning"]["record_only_confirmed"])
+        self.assertIn("learned_skills", " ".join(compact["rules"]))
+        self.assertIn("corner tile", " ".join(compact["rules"]))
+        self.assertIn("drop into the consumer", " ".join(compact["rules"]))
 
     def test_compact_layout_improvement_payload_preserves_selected_site(self):
         compact = compact_layout_improvement_payload(
@@ -346,6 +357,35 @@ class SlurmWorkerTests(unittest.TestCase):
         self.assertIn("sandbox_validation is fail", " ".join(compact["rules"]))
         self.assertIn("site_prebuild_gate is fail", " ".join(compact["rules"]))
         self.assertIn("site_placement_search", " ".join(compact["rules"]))
+
+    def test_normalize_layout_response_preserves_confirmed_learned_skills(self):
+        result = normalize_layout_response(
+            {
+                "selected_candidate_id": "gear-belt-direct-transfer-cell",
+                "score": 92,
+                "reasoning": "direct transfer is shorter",
+                "expected_improvements": ["removes unnecessary belt hop"],
+                "risks": [],
+                "next_simulation_focus": "try the same producer-consumer pattern on science packs",
+                "learned_skills": [
+                    {
+                        "name": "direct assembler transfer",
+                        "trigger": "nearby producer and consumer assemblers",
+                        "lesson": "Use a direct inserter transfer when both assemblers are within inserter reach.",
+                        "evidence": "The candidate keeps gears off belts and still feeds the belt assembler.",
+                        "confirmed": True,
+                        "confidence": 0.88,
+                    },
+                    "ignore unstructured strings",
+                ],
+                "build_ready": False,
+                "no_apply": True,
+            }
+        )
+
+        self.assertEqual(result["learned_skills"][0]["name"], "direct assembler transfer")
+        self.assertTrue(result["learned_skills"][0]["confirmed"])
+        self.assertAlmostEqual(result["learned_skills"][0]["confidence"], 0.88)
 
 
 if __name__ == "__main__":

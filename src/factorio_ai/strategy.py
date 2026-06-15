@@ -326,16 +326,16 @@ SKILL_CATALOG: dict[str, SkillContract] = {
             "automation researched",
             "electric power available",
             "powered iron-gear assembler and reusable adjacent assembler are available",
-            "short bootstrap belts and inserters are available or recoverable without hand-crafting gears",
+            "direct assembler-to-assembler inserter transfer is preferred when the machines are within inserter reach; short belts are fallback only when direct transfer is blocked",
             "existing inventory iron plates may be used only as a one-time assembler seed; distant plate shuttle loops are not allowed",
         ],
         completion=[
-            "iron gears move toward the transport-belt assembler through inserters and belts",
+            "iron gears move into the transport-belt assembler by direct inserter transfer or, if blocked, a short inserter/belt fallback",
             "transport-belt production no longer depends on player gear collection",
         ],
         llm_scope=(
             "Choose this when belt automation is blocked by gear mall output logistics or when the belt mall needs a one-time iron seed before it can replenish construction belts. "
-            "Executor handles exact belt lane, inserter direction, burner fuel, and recipe changes."
+            "Executor handles exact direct-transfer inserter placement, belt-lane fallback, inserter direction, burner fuel, and recipe changes."
         ),
     ),
     "relocate_gear_belt_mall_to_iron_source": SkillContract(
@@ -1374,8 +1374,12 @@ def reconcile_strategy_decision(
         "produce_electronic_circuit",
         "automate_electronic_circuit_line",
         "bootstrap_build_item_mall",
+        "bootstrap_power_pole_mall",
+        "setup_coal_supply",
+        "connect_coal_fuel_feed",
         "build_iron_plate_logistic_line_to_gear_mall",
         "build_site_input_logistic_line",
+        "research_logistics",
     }:
         adjusted = dict(decision)
         adjusted["selected_skill"] = "setup_power"
@@ -3640,9 +3644,7 @@ def _gear_belt_mall_power_issue(observation: dict[str, Any]) -> dict[str, Any] |
         recipe = str(assembler.get("recipe") or assembler.get("recipe_name") or "")
         if recipe not in {"iron-gear-wheel", "transport-belt"}:
             continue
-        if assembler.get("electric_network_connected") is False:
-            continue
-        if _entity_status_is(assembler, "no_power", 3):
+        if assembler.get("electric_network_connected") is False or _entity_status_is(assembler, "no_power", 3):
             return {
                 "unit": assembler.get("unit_number"),
                 "recipe": recipe,

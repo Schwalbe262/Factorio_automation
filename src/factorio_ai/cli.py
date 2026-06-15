@@ -274,7 +274,7 @@ def main(argv: list[str] | None = None) -> None:
 
     idle_layout_parser = subparsers.add_parser(
         "run-idle-layout-loop",
-        help="Keep GPUs busy with simulation-only layout improvement whenever autopilot is idle or stale",
+        help="Keep GPUs busy with simulation-only layout improvement and confirmed skill learning whenever autopilot is idle or stale",
     )
     idle_layout_parser.add_argument("--objective", default="launch_rocket_program")
     idle_layout_parser.add_argument("--cycles", type=int, default=0, help="Number of pulses; 0 means run until interrupted")
@@ -284,7 +284,7 @@ def main(argv: list[str] | None = None) -> None:
 
     no_mod_idle_layout_parser = subparsers.add_parser(
         "run-no-mod-idle-layout-loop",
-        help="No-custom-mod idle GPU filler layout loop",
+        help="No-custom-mod idle GPU filler layout and confirmed skill-learning loop",
     )
     no_mod_idle_layout_parser.add_argument("--objective", default="launch_rocket_program")
     no_mod_idle_layout_parser.add_argument("--cycles", type=int, default=0, help="Number of pulses; 0 means run until interrupted")

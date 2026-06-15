@@ -775,3 +775,55 @@ Promote to insight.md only if:
 - Evidence: `{"item":"transport-belt","item_count":0,"source_loop":414,"steps":1,"target":20}`
 - Remaining risk: Target is not complete yet: 0/20.
 
+## 2026-06-15 22:56:04 +09:00 - Insight 91
+- Source loop: Loop 415
+- Improvement: relocate_gear_belt_mall_to_iron_source completed after 4 step(s): gear/belt mall assemblers are relocated near the iron-plate source; next build local gear-to-belt logistics
+- Before: not recorded
+- After: transport-belt = 0
+- Evidence: `{"item":"transport-belt","item_count":0,"source_loop":415,"steps":4,"target":20}`
+- Remaining risk: Target is not complete yet: 0/20.
+
+## 2026-06-16 00:00:30 +09:00 - Insight 92
+- Source loop: Loop 419
+- Improvement: transport-belt increased by 2 during build_gear_belt_mall_logistics.
+- Before: transport-belt = 1
+- After: transport-belt = 3
+- Evidence: `{"delta":2,"final":3,"initial":1,"item":"transport-belt","source_loop":419,"target":20}`
+- Remaining risk: Target is not complete yet: 3/20.
+
+## 2026-06-16 00:00:30 +09:00 - Insight 93
+- Source loop: Loop 419
+- Improvement: build_gear_belt_mall_logistics completed after 3 step(s): gear-fed belt mall logistics produced transport belts in assembler output: 2
+- Before: not recorded
+- After: transport-belt = 3
+- Evidence: `{"item":"transport-belt","item_count":3,"source_loop":419,"steps":3,"target":20}`
+- Remaining risk: Target is not complete yet: 3/20.
+
+## 2026-06-16 00:14:18 +09:00 - Insight 94
+- Source: user correction during Part 129.
+- Improvement: When two assembling machines are within inserter reach, prefer direct assembler-to-assembler inserter transfer for intermediate items; use belts only when direct transfer is blocked or expansion requires a lane.
+- Evidence: Gear-to-belt mall tests now prefer direct transfer even when belts are available and fall back to belts only on blocked direct inserter status.
+- Remaining risk: This rule is implemented for the gear-to-belt mall; broader mall layout generation still needs generalized producer/consumer pair detection.
+
+## 2026-06-16 00:36:11 +09:00 - Insight 95
+- Source loop: Loop 423
+- Improvement: transport-belt increased by 2 during build_gear_belt_mall_logistics.
+- Before: transport-belt = 0
+- After: transport-belt = 2
+- Evidence: `{"delta":2,"final":2,"initial":0,"item":"transport-belt","source_loop":423,"target":20}`
+- Remaining risk: Target is not complete yet: 2/20.
+
+## 2026-06-16 00:36:11 +09:00 - Insight 96
+- Source loop: Loop 423
+- Improvement: build_gear_belt_mall_logistics completed after 12 step(s): gear-fed belt mall logistics produced transport belts in assembler output: 2
+- Before: not recorded
+- After: transport-belt = 2
+- Evidence: `{"item":"transport-belt","item_count":2,"source_loop":423,"steps":12,"target":20}`
+- Remaining risk: Target is not complete yet: 2/20.
+
+## 2026-06-16 00:56:30 +09:00 - Insight 97
+- Source: user correction during Part 129.
+- Improvement: Routed belts must set the corner tile to the outgoing segment direction, and endpoint inserters must be oriented by flow role: output drops away from the producer, input drops into the consumer.
+- Evidence: Site-input logistics tests now verify corner belt direction, source/output and target/input inserter direction, and protection against reusing an already-built source endpoint inserter as target material.
+- Remaining risk: The rule is covered for site-input logistics; broader generated layouts still need the same role-aware endpoint checks.
+

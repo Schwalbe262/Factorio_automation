@@ -277,6 +277,42 @@ def _allow_first_assembler_bootstrap_gears(observation: dict[str, Any], action: 
     return int(inventory.get("electronic-circuit") or 0) >= 3 and int(inventory.get("iron-plate") or 0) >= 9 + (2 * count)
 
 
+def _allow_gear_belt_direct_transfer_bootstrap_gears(observation: dict[str, Any], action: dict[str, Any]) -> bool:
+    if action.get("allow_gear_belt_direct_transfer_bootstrap") is not True:
+        return False
+    try:
+        count = max(1, int(action.get("count") or 1))
+    except (TypeError, ValueError):
+        return False
+    if count > 1:
+        return False
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    gear_assemblers = [
+        entity
+        for entity in entities
+        if isinstance(entity, dict)
+        and str(entity.get("name") or "") == "assembling-machine-1"
+        and entity.get("recipe") == "iron-gear-wheel"
+        and entity.get("electric_network_connected") is not False
+        and isinstance(entity.get("position"), dict)
+    ]
+    belt_assemblers = [
+        entity
+        for entity in entities
+        if isinstance(entity, dict)
+        and str(entity.get("name") or "") == "assembling-machine-1"
+        and entity.get("recipe") == "transport-belt"
+        and entity.get("electric_network_connected") is not False
+        and isinstance(entity.get("position"), dict)
+    ]
+    return any(
+        abs(float(gear["position"].get("y") or 0.0) - float(belt["position"].get("y") or 0.0)) <= 0.25
+        and 3.75 <= abs(float(gear["position"].get("x") or 0.0) - float(belt["position"].get("x") or 0.0)) <= 4.25
+        for gear in gear_assemblers
+        for belt in belt_assemblers
+    )
+
+
 def _gear_handcraft_guard_reason(observation: dict[str, Any], action: dict[str, Any]) -> str:
     if (
         action.get("type") == "craft"
@@ -284,6 +320,8 @@ def _gear_handcraft_guard_reason(observation: dict[str, Any], action: dict[str, 
         and _gear_handcraft_automation_context_in_observation(observation)
     ):
         if _allow_first_assembler_bootstrap_gears(observation, action):
+            return ""
+        if _allow_gear_belt_direct_transfer_bootstrap_gears(observation, action):
             return ""
         return "blocked direct iron-gear-wheel handcraft after assembler automation exists; use gear mall or a logistic line instead"
     return ""
@@ -1877,6 +1915,7 @@ class FactorioController:
                         "factory_monitor": monitor,
                         "layout_validation_feedback": validation_feedback,
                         "selected_improvement_site": selected_improvement_site,
+                        "layout_learning": remote_slurm.layout_learning_request_context(),
                     },
                 }
                 self._background_layout_task_name = remote_slurm.submit_task(task)

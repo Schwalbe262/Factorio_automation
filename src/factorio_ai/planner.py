@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from math import ceil
+from math import ceil, floor
 from typing import Any
 
 from .blueprints import decode_blueprint_string, encode_blueprint_entities
@@ -70,6 +70,24 @@ AUTOMATED_SITE_INPUT_ITEMS = {
     "electronic-circuit",
     "automation-science-pack",
     "logistic-science-pack",
+}
+USER_OUTPUT_MALL_ITEMS = {
+    "transport-belt",
+    "underground-belt",
+    "splitter",
+    "inserter",
+    "burner-inserter",
+    "long-handed-inserter",
+    "fast-inserter",
+    "small-electric-pole",
+    "assembling-machine-1",
+    "burner-mining-drill",
+    "electric-mining-drill",
+    "lab",
+    "pipe",
+    "pipe-to-ground",
+    "stone-furnace",
+    "steel-furnace",
 }
 BLUEPRINT_INSERTER_NAMES = {
     "burner-inserter",
@@ -3461,6 +3479,7 @@ class CoalSupplySkill:
                 context="coal supply site",
                 support_skill=IronPlateSkill(target_count=20),
                 far_fuel_reason="coal supply site is too far from available hand fuel; build closer coal logistics first",
+                prefer_coal_supply=False,
             )
 
         chest = layout.get("output_chest")
@@ -5500,6 +5519,7 @@ def _fuel_burner_line_entity(
     far_fuel_reason: str,
     exclude_source_units: set[Any] | None = None,
     wait_for_existing_fuel: bool = False,
+    prefer_coal_supply: bool = True,
 ) -> PlannerDecision:
     position = _position(entity)
     current_fuel = _entity_burner_fuel_count(entity)
@@ -5518,6 +5538,10 @@ def _fuel_burner_line_entity(
         inventory_fuel_item, inventory_fuel_count = _select_inventory_burner_fuel(observation)
     desired_insert = min(insert_count, max(1, threshold - current_fuel))
     if inventory_fuel_count <= 0:
+        if prefer_coal_supply and _coal_supply_can_reduce_hand_mining(observation):
+            supply = CoalSupplySkill(target_count=max(16, desired_insert)).next_action(observation)
+            if supply.action is not None:
+                return supply
         coal = _nearest_resource_to_position(observation, position, "coal")
         excluded_units = set(exclude_source_units or set())
         excluded_units.add(entity.get("unit_number"))
@@ -5564,6 +5588,10 @@ def _fuel_burner_line_entity(
         },
         f"fuel {entity_name} in {context}",
     )
+
+
+def _coal_supply_can_reduce_hand_mining(observation: dict[str, Any]) -> bool:
+    return _find_coal_supply_layout(observation) is not None or _select_coal_supply_layout(observation) is not None
 
 
 def _surplus_fuel_source_is_logistic_output(entity: dict[str, Any]) -> bool:
@@ -6177,7 +6205,14 @@ def _find_site_input_logistic_line_layout(
             if _site_input_local_route_observed(observation, required_item, source, consumer):
                 continue
             endpoints = _site_input_line_endpoints(source, consumer)
-            segments = _iron_plate_line_segments(observation, endpoints["source_belt"], endpoints["target_belt"])
+            segments = _iron_plate_line_segments(
+                observation,
+                endpoints["source_belt"],
+                endpoints["target_belt"],
+                center_tiles=True,
+            )
+            source_inserter_position = _tile_center_position(endpoints["source_inserter"])
+            target_inserter_position = _tile_center_position(endpoints["target_inserter"])
             site_id = _consumer_site_id_for_entity(observation, consumer)
             score = (
                 _site_input_item_priority(required_item)
@@ -6194,14 +6229,14 @@ def _find_site_input_logistic_line_layout(
                     "distance": round(distance(source_position, consumer_position), 1),
                     "segments": segments,
                     "source_inserter": {
-                        "position": endpoints["source_inserter"],
+                        "position": source_inserter_position,
                         "direction": endpoints["source_direction"],
-                        "entity": _inserter_near(observation, endpoints["source_inserter"]),
+                        "entity": _inserter_near(observation, source_inserter_position),
                     },
                     "target_inserter": {
-                        "position": endpoints["target_inserter"],
+                        "position": target_inserter_position,
                         "direction": endpoints["target_direction"],
-                        "entity": _inserter_near(observation, endpoints["target_inserter"]),
+                        "entity": _inserter_near(observation, target_inserter_position),
                     },
                     "score": score,
                 }
@@ -6240,12 +6275,21 @@ def _nearest_site_input_source(
     for entity in observation.get("entities") or []:
         if not isinstance(entity, dict) or not isinstance(entity.get("position"), dict):
             continue
-        if entity_item_count(entity, item) <= 0 and not _entity_produces_site_input_item(entity, item):
+        if not _entity_can_supply_site_input_item(entity, item):
             continue
         if str(entity.get("name") or "") in ASSEMBLER_ENTITY_NAMES and entity.get("electric_network_connected") is False:
             continue
         candidates.append(entity)
     return _nearest_to(candidates, consumer_position)
+
+
+def _entity_can_supply_site_input_item(entity: dict[str, Any], item: str) -> bool:
+    if _entity_produces_site_input_item(entity, item):
+        return True
+    name = str(entity.get("name") or "")
+    if name in {"wooden-chest", "iron-chest", "steel-chest"} and entity_item_count(entity, item) > 0:
+        return True
+    return False
 
 
 def _entity_produces_site_input_item(entity: dict[str, Any], item: str) -> bool:
@@ -6266,9 +6310,11 @@ def _site_input_local_route_observed(
     consumer: dict[str, Any],
 ) -> bool:
     endpoints = _site_input_line_endpoints(source, consumer)
-    if not _entity_at_build_position(observation, "transport-belt", endpoints["target_belt"], radius=0.75):
+    target_belt = _tile_center_position(endpoints["target_belt"])
+    target_inserter = _tile_center_position(endpoints["target_inserter"])
+    if not _entity_at_build_position(observation, "transport-belt", target_belt, radius=0.75):
         return False
-    inserter = _inserter_near(observation, endpoints["target_inserter"])
+    inserter = _inserter_near(observation, target_inserter)
     if not isinstance(inserter, dict):
         return False
     return int(inserter.get("direction") or endpoints["target_direction"]) == int(endpoints["target_direction"])
@@ -6464,31 +6510,50 @@ def _find_partial_gear_belt_mall_relocation_layout(observation: dict[str, Any]) 
     source = _nearest_to(_iron_plate_source_furnaces(observation), player_position(observation))
     if not isinstance(source, dict):
         return None
-    recoverable = _recoverable_relocation_assembler(observation)
-    inventory_rebuild = not isinstance(recoverable, dict)
-    anchor_position = _position(recoverable) if isinstance(recoverable, dict) else player_position(observation)
     source_position = _position(source)
-    route_cost = _gear_mall_plate_layout_cost_estimate(observation, source_position, anchor_position)
-    if inventory_rebuild:
-        route_cost = {**route_cost, "route_cost_preference": "relocate_mall_to_iron_source"}
-    if (
-        not inventory_rebuild
-        and route_cost.get("route_cost_preference") != "relocate_mall_to_iron_source"
-        and distance(source_position, anchor_position) < PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT
-    ):
-        return None
     targets = _gear_belt_mall_relocation_target_positions(observation, source_position)
     if targets is None:
         return None
     target_gear_position, target_belt_position = targets
+    target_gear_assembler = _assembler_at_position(observation, target_gear_position)
+    target_belt_assembler = _assembler_at_position(observation, target_belt_position)
+    target_units = {
+        assembler.get("unit_number")
+        for assembler in (target_gear_assembler, target_belt_assembler)
+        if isinstance(assembler, dict) and assembler.get("unit_number") is not None
+    }
+    recoverable = _recoverable_relocation_assembler(observation, exclude_unit_numbers=target_units)
+    inventory_rebuild = not isinstance(recoverable, dict)
+    target_rebuild_in_progress = isinstance(target_gear_assembler, dict) or isinstance(target_belt_assembler, dict)
+    relocation_in_progress = (
+        inventory_count(observation, "assembling-machine-1") > 0
+        and (
+            target_rebuild_in_progress
+            or (
+                isinstance(recoverable, dict)
+                and recoverable.get("recipe") in {"transport-belt", "iron-gear-wheel"}
+            )
+        )
+    )
+    anchor_position = _position(recoverable) if isinstance(recoverable, dict) else player_position(observation)
+    route_cost = _gear_mall_plate_layout_cost_estimate(observation, source_position, anchor_position)
+    if inventory_rebuild or relocation_in_progress:
+        route_cost = {**route_cost, "route_cost_preference": "relocate_mall_to_iron_source"}
+    if (
+        not inventory_rebuild
+        and not relocation_in_progress
+        and route_cost.get("route_cost_preference") != "relocate_mall_to_iron_source"
+        and distance(source_position, anchor_position) < PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT
+    ):
+        return None
     return {
         "source": source,
         "gear_assembler": None,
         "belt_assembler": recoverable,
         "target_gear_position": target_gear_position,
         "target_belt_position": target_belt_position,
-        "target_gear_assembler": _assembler_at_position(observation, target_gear_position),
-        "target_belt_assembler": _assembler_at_position(observation, target_belt_position),
+        "target_gear_assembler": target_gear_assembler,
+        "target_belt_assembler": target_belt_assembler,
         "source_distance_tiles": round(distance(source_position, anchor_position), 1),
         **route_cost,
     }
@@ -6599,11 +6664,20 @@ def _compact_relocated_gear_belt_assemblers(
     return compact_gear, compact_belt
 
 
-def _recoverable_relocation_assembler(observation: dict[str, Any]) -> dict[str, Any] | None:
+def _recoverable_relocation_assembler(
+    observation: dict[str, Any],
+    *,
+    exclude_unit_numbers: set[Any] | None = None,
+) -> dict[str, Any] | None:
+    excluded = exclude_unit_numbers or set()
     candidates = [
         item
         for item in entities_named(observation, "assembling-machine-1")
-        if item.get("electric_network_connected") is not False
+        if item.get("unit_number") not in excluded
+        and (
+            item.get("electric_network_connected") is not False
+            or item.get("recipe") in {"transport-belt", "iron-gear-wheel"}
+        )
         and item.get("recipe") not in {"copper-cable", "electronic-circuit"}
         and _within_allowed_factory_area(observation, _position(item))
     ]
@@ -6631,6 +6705,8 @@ def _iron_plate_line_segments(
     observation: dict[str, Any],
     start: dict[str, float],
     end: dict[str, float],
+    *,
+    center_tiles: bool = False,
 ) -> list[dict[str, Any]]:
     start_x = float(start["x"])
     start_y = float(start["y"])
@@ -6658,7 +6734,7 @@ def _iron_plate_line_segments(
     segments: list[dict[str, Any]] = []
     seen: set[tuple[float, float]] = set()
     for position, direction in positions:
-        rounded = {"x": round(position["x"], 3), "y": round(position["y"], 3)}
+        rounded = _tile_center_position(position) if center_tiles else _rounded_position(position)
         key = _position_tuple(rounded)
         if key in seen:
             continue
@@ -6671,6 +6747,20 @@ def _iron_plate_line_segments(
             }
         )
     return segments
+
+
+def _rounded_position(position: dict[str, float]) -> dict[str, float]:
+    return {
+        "x": round(float(position["x"]), 3),
+        "y": round(float(position["y"]), 3),
+    }
+
+
+def _tile_center_position(position: dict[str, float]) -> dict[str, float]:
+    return {
+        "x": round(floor(float(position["x"])) + 0.5, 3),
+        "y": round(floor(float(position["y"])) + 0.5, 3),
+    }
 
 
 def _axis_route_positions(waypoints: list[dict[str, float]]) -> list[tuple[dict[str, float], int]]:
@@ -6777,7 +6867,12 @@ def _available_logistics_line_inserter_item(observation: dict[str, Any]) -> str 
 def _find_relocatable_inserter_for_iron_plate_line(
     observation: dict[str, Any],
     target_position: dict[str, float],
+    *,
+    exclude_unit_numbers: set[int] | None = None,
+    protected_positions: list[dict[str, float]] | None = None,
 ) -> dict[str, Any] | None:
+    excluded_units = set(exclude_unit_numbers or set())
+    protected = list(protected_positions or [])
     protected_centers = [
         _position(entity)
         for entity in observation.get("entities", [])
@@ -6788,8 +6883,15 @@ def _find_relocatable_inserter_for_iron_plate_line(
     candidates: list[dict[str, Any]] = []
     for name in ("inserter", "fast-inserter", "burner-inserter"):
         for entity in entities_named(observation, name):
+            try:
+                if int(entity.get("unit_number")) in excluded_units:
+                    continue
+            except (TypeError, ValueError):
+                pass
             position = _position(entity)
             if distance(position, target_position) <= 0.35:
+                continue
+            if any(distance(position, protected_position) <= 0.75 for protected_position in protected):
                 continue
             if any(distance(position, center) <= 3.5 for center in protected_centers):
                 continue
@@ -7790,53 +7892,87 @@ class GearBeltMallLogisticsSkill:
                 "set reusable mall assembler recipe to transport-belt",
             )
 
-        for belt in layout["gear_belts"]:
-            if belt.get("entity") is not None:
-                continue
-            decision = self._ensure_inventory_item(observation, "transport-belt", 1)
-            if decision is not None:
-                return decision
-            position = belt["position"]
-            if distance(player, position) > 20:
-                return PlannerDecision({"type": "move_to", "position": _stand_position(position)}, "move near gear mall belt lane")
-            return PlannerDecision(
-                {
-                    "type": "build",
-                    "name": "transport-belt",
-                    "position": position,
-                    "direction": belt["direction"],
-                    "allow_nearby": False,
-                },
-                "place gear-to-belt-mall transfer belt",
+        direct_transfer = layout.get("direct_gear_transfer_inserter")
+        direct_transfer_blocked = _direct_gear_transfer_blocked(layout)
+        belt_lane_empty = all(belt.get("entity") is None for belt in layout["gear_belts"])
+        use_direct_transfer = (
+            isinstance(direct_transfer, dict)
+            and not direct_transfer_blocked
+            and belt_lane_empty
+        )
+        if use_direct_transfer:
+            decision = self._ensure_inserter(
+                observation,
+                player,
+                direct_transfer,
+                prefer_burner=False,
+                label="direct gear-to-belt transfer inserter",
+                allow_bootstrap_craft=True,
             )
-
-        decision = self._ensure_inserter(
-            observation,
-            player,
-            layout["gear_output_inserter"],
-            prefer_burner=True,
-            label="gear mall output inserter",
-        )
-        if decision is not None:
-            return decision
-
-        decision = self._ensure_inserter(
-            observation,
-            player,
-            layout["belt_input_inserter"],
-            prefer_burner=False,
-            label="belt mall gear input inserter",
-        )
-        if decision is not None:
-            return decision
-
-        for spec, label in [
-            (layout["gear_output_inserter"], "gear mall output inserter"),
-            (layout["belt_input_inserter"], "belt mall gear input inserter"),
-        ]:
-            decision = self._ensure_powered_inserter(observation, player, spec, label=label)
             if decision is not None:
                 return decision
+            decision = self._ensure_powered_inserter(
+                observation,
+                player,
+                direct_transfer,
+                label="direct gear-to-belt transfer inserter",
+            )
+            if decision is not None:
+                return decision
+        else:
+            if inventory_count(observation, "transport-belt") <= 0 and belt_lane_empty:
+                decision = self._ensure_bootstrap_transfer_belts(observation, player, layout)
+                if decision is not None:
+                    return decision
+            for belt in layout["gear_belts"]:
+                if belt.get("entity") is not None:
+                    continue
+                decision = self._ensure_inventory_item(observation, "transport-belt", 1)
+                if decision is not None:
+                    return decision
+                position = belt["position"]
+                if distance(player, position) > 20:
+                    return PlannerDecision({"type": "move_to", "position": _stand_position(position)}, "move near gear mall belt lane")
+                return PlannerDecision(
+                    {
+                        "type": "build",
+                        "name": "transport-belt",
+                        "position": position,
+                        "direction": belt["direction"],
+                        "allow_nearby": False,
+                    },
+                    "place gear-to-belt-mall transfer belt",
+                )
+
+            decision = self._ensure_inserter(
+                observation,
+                player,
+                layout["gear_output_inserter"],
+                prefer_burner=True,
+                label="gear mall output inserter",
+                allow_bootstrap_craft=True,
+            )
+            if decision is not None:
+                return decision
+
+            decision = self._ensure_inserter(
+                observation,
+                player,
+                layout["belt_input_inserter"],
+                prefer_burner=False,
+                label="belt mall gear input inserter",
+                allow_bootstrap_craft=True,
+            )
+            if decision is not None:
+                return decision
+
+            for spec, label in [
+                (layout["gear_output_inserter"], "gear mall output inserter"),
+                (layout["belt_input_inserter"], "belt mall gear input inserter"),
+            ]:
+                decision = self._ensure_powered_inserter(observation, player, spec, label=label)
+                if decision is not None:
+                    return decision
 
         if entity_item_count(belt_assembler, "transport-belt") > 0:
             return PlannerDecision(
@@ -7957,6 +8093,36 @@ class GearBeltMallLogisticsSkill:
             )
         return PlannerDecision(None, f"missing {item} for gear/belt mall logistics")
 
+    def _ensure_bootstrap_transfer_belts(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        layout: dict[str, Any],
+    ) -> PlannerDecision | None:
+        if craftable_count(observation, "transport-belt") > 0:
+            return PlannerDecision(
+                {"type": "craft", "recipe": "transport-belt", "count": 1},
+                "craft one-time bootstrap transfer belts for gear/belt mall logistics",
+            )
+        if inventory_count(observation, "iron-gear-wheel") <= 0:
+            gear_assembler = layout["gear_assembler"]
+            if entity_item_count(gear_assembler, "iron-gear-wheel") > 0:
+                position = _position(gear_assembler)
+                if distance(player, position) > 20:
+                    return PlannerDecision({"type": "move_to", "position": position}, "move near gear assembler for bootstrap transfer belts")
+                return PlannerDecision(
+                    {
+                        "type": "take",
+                        "item": "iron-gear-wheel",
+                        "count": min(3, entity_item_count(gear_assembler, "iron-gear-wheel")),
+                        "unit_number": gear_assembler.get("unit_number"),
+                        "name": "assembling-machine-1",
+                        "position": position,
+                    },
+                    "recover one-time bootstrap gears for first gear/belt transfer belts; sustained transfer remains inserter-fed",
+                )
+        return None
+
     def _ensure_inserter(
         self,
         observation: dict[str, Any],
@@ -7965,9 +8131,27 @@ class GearBeltMallLogisticsSkill:
         *,
         prefer_burner: bool,
         label: str,
+        allow_bootstrap_craft: bool = False,
     ) -> PlannerDecision | None:
+        prefer_burner = prefer_burner and not _regular_inserter_can_be_used(observation)
         inserter = spec.get("entity")
         if isinstance(inserter, dict):
+            if inserter.get("name") == "burner-inserter" and _regular_inserter_can_be_used(observation):
+                position = _position(inserter)
+                if distance(player, position) > 4.5:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": _stand_position(position, offset=1.5)},
+                        f"move within mining reach of obsolete burner {label}",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "unit_number": inserter.get("unit_number"),
+                        "name": "burner-inserter",
+                        "position": position,
+                    },
+                    f"replace burner {label} now that regular inserters are usable",
+                )
             if int(inserter.get("direction") or 0) != int(spec["direction"]):
                 position = _position(inserter)
                 if distance(player, position) > 4.5:
@@ -8014,6 +8198,7 @@ class GearBeltMallLogisticsSkill:
                 observation,
                 spec["position"],
                 prefer_burner=prefer_burner,
+                exclude_units=set(spec.get("exclude_reusable_unit_numbers") or set()),
             )
             if reusable is not None:
                 position = _position(reusable)
@@ -8031,6 +8216,10 @@ class GearBeltMallLogisticsSkill:
                     },
                     f"relocate existing inserter for {label} instead of hand-crafting gears",
                 )
+            if allow_bootstrap_craft:
+                decision = self._craft_bootstrap_inserter(observation, prefer_burner=prefer_burner, label=label)
+                if decision is not None:
+                    return decision
             return PlannerDecision(None, f"missing inserter for {label}")
         position = spec["position"]
         if distance(player, position) > 20:
@@ -8045,6 +8234,52 @@ class GearBeltMallLogisticsSkill:
             },
             f"place {label}",
         )
+
+    def _craft_bootstrap_inserter(
+        self,
+        observation: dict[str, Any],
+        *,
+        prefer_burner: bool,
+        label: str,
+    ) -> PlannerDecision | None:
+        if _regular_inserter_can_be_used(observation):
+            for item in ("inserter", "fast-inserter"):
+                if craftable_count(observation, item) > 0:
+                    return PlannerDecision(
+                        {"type": "craft", "recipe": item, "count": 1},
+                        f"craft one-time bootstrap {item} for {label}",
+                    )
+            if inventory_count(observation, "iron-gear-wheel") <= 0 and craftable_count(observation, "iron-gear-wheel") > 0:
+                return PlannerDecision(
+                    {
+                        "type": "craft",
+                        "recipe": "iron-gear-wheel",
+                        "count": 1,
+                        "allow_gear_belt_direct_transfer_bootstrap": True,
+                    },
+                    f"craft one-time bootstrap gear for regular {label}",
+                )
+            return None
+
+        first = "burner-inserter" if prefer_burner else "inserter"
+        second = "inserter" if prefer_burner else "burner-inserter"
+        for item in (first, second):
+            if craftable_count(observation, item) > 0:
+                return PlannerDecision(
+                    {"type": "craft", "recipe": item, "count": 1},
+                    f"craft one-time bootstrap {item} for {label}",
+                )
+        if inventory_count(observation, "iron-gear-wheel") <= 0 and craftable_count(observation, "iron-gear-wheel") > 0:
+            return PlannerDecision(
+                {
+                    "type": "craft",
+                    "recipe": "iron-gear-wheel",
+                    "count": 1,
+                    "allow_gear_belt_direct_transfer_bootstrap": True,
+                },
+                f"craft one-time bootstrap gear for {label}",
+            )
+        return None
 
     def _ensure_powered_inserter(
         self,
@@ -8095,6 +8330,11 @@ class GearBeltMallLogisticsSkill:
         )
 
     def _available_inserter_item(self, observation: dict[str, Any], *, prefer_burner: bool) -> str | None:
+        if _regular_inserter_can_be_used(observation):
+            for item in ("inserter", "fast-inserter"):
+                if inventory_count(observation, item) > 0:
+                    return item
+            return None
         first = "burner-inserter" if prefer_burner else "inserter"
         second = "inserter" if prefer_burner else "burner-inserter"
         if inventory_count(observation, first) > 0:
@@ -8168,7 +8408,7 @@ class GearBeltMallRelocationSkill:
                     "type": "build",
                     "name": "small-electric-pole",
                     "position": build_position,
-                    "allow_nearby": True,
+                    "allow_nearby": False,
                 },
                 reason,
             )
@@ -8286,22 +8526,49 @@ def _gear_belt_mall_relocation_power_corridor_positions(
     anchor = _nearest_connected_power_anchor(observation, target)
     if anchor is None:
         return []
-    anchor_position = _position(anchor)
+    anchor_position = _power_corridor_wire_anchor_position(anchor)
+    seed_positions: list[dict[str, float]] = []
+    if str(anchor.get("name") or "") not in POWER_CONNECTOR_NAMES:
+        seed_positions.append(anchor_position)
     span = distance(anchor_position, target)
     if span <= _power_wire_reach("small-electric-pole"):
-        return [target]
+        return _dedupe_positions(seed_positions + [target])
     step_reach = _power_wire_reach("small-electric-pole")
     steps = max(1, int(ceil(span / step_reach)))
-    positions: list[dict[str, float]] = []
-    for index in range(1, steps + 1):
-        ratio = index / steps
-        positions.append(
-            {
-                "x": _round_half(anchor_position["x"] + (target["x"] - anchor_position["x"]) * ratio),
-                "y": _round_half(anchor_position["y"] + (target["y"] - anchor_position["y"]) * ratio),
-            }
-        )
-    return _dedupe_positions(positions)
+    while True:
+        positions: list[dict[str, float]] = list(seed_positions)
+        for index in range(1, steps + 1):
+            ratio = index / steps
+            positions.append(
+                {
+                    "x": _round_half(anchor_position["x"] + (target["x"] - anchor_position["x"]) * ratio),
+                    "y": _round_half(anchor_position["y"] + (target["y"] - anchor_position["y"]) * ratio),
+                }
+            )
+        positions = _dedupe_positions(positions)
+        if _power_corridor_gaps_within_reach(anchor_position, positions, step_reach):
+            return positions
+        steps += 1
+
+
+def _power_corridor_wire_anchor_position(anchor: dict[str, Any]) -> dict[str, float]:
+    position = _position(anchor)
+    if str(anchor.get("name") or "") in POWER_CONNECTOR_NAMES:
+        return position
+    return {"x": _round_half(position["x"] - 2.0), "y": _round_half(position["y"])}
+
+
+def _power_corridor_gaps_within_reach(
+    anchor_position: dict[str, float],
+    positions: list[dict[str, float]],
+    reach: float,
+) -> bool:
+    previous = anchor_position
+    for position in positions:
+        if distance(previous, position) > reach:
+            return False
+        previous = position
+    return True
 
 
 def _gear_belt_mall_relocation_power_target(layout: dict[str, Any]) -> dict[str, float]:
@@ -8332,6 +8599,8 @@ def _missing_power_corridor_positions(
     observation: dict[str, Any],
     positions: list[dict[str, float]],
 ) -> list[dict[str, float]]:
+    if positions and _existing_power_corridor_reaches_position(observation, positions[-1]):
+        return []
     missing: list[dict[str, float]] = []
     for position in positions:
         if any(
@@ -8347,11 +8616,54 @@ def _first_unconnected_power_corridor_pole(
     observation: dict[str, Any],
     positions: list[dict[str, float]],
 ) -> dict[str, Any] | None:
+    if positions and _existing_power_corridor_reaches_position(observation, positions[-1]):
+        return None
     for position in positions:
         pole = _entity_at_build_position(observation, "small-electric-pole", position, radius=1.6)
         if isinstance(pole, dict) and pole.get("electric_network_connected") is False:
             return pole
     return None
+
+
+def _existing_power_corridor_reaches_position(
+    observation: dict[str, Any],
+    target: dict[str, float],
+) -> bool:
+    poles = [pole for pole in _power_poles(observation) if isinstance(pole.get("position"), dict)]
+    if not poles:
+        return False
+    reach = _power_wire_reach("small-electric-pole")
+    connected_sources = [
+        entity
+        for entity in observation.get("entities") or []
+        if isinstance(entity, dict)
+        and str(entity.get("name") or "") in {"steam-engine", "steam-turbine", "solar-panel", "accumulator"}
+        and entity.get("electric_network_connected") is True
+        and isinstance(entity.get("position"), dict)
+    ]
+    visited_units: set[Any] = {
+        pole.get("unit_number")
+        for pole in poles
+        if pole.get("electric_network_connected") is True
+        or any(distance(_position(pole), _position(source)) <= 3.0 for source in connected_sources)
+    }
+    if not visited_units:
+        return False
+    changed = True
+    while changed:
+        changed = False
+        connected_poles = [pole for pole in poles if pole.get("unit_number") in visited_units]
+        for pole in poles:
+            unit = pole.get("unit_number")
+            if unit in visited_units:
+                continue
+            if any(distance(_position(pole), _position(connected)) <= reach for connected in connected_poles):
+                visited_units.add(unit)
+                changed = True
+    return any(
+        pole.get("unit_number") in visited_units and distance(_position(pole), target) <= 1.6
+        for pole in poles
+    )
 
 
 def _select_power_corridor_build_position(
@@ -8582,7 +8894,23 @@ class IronPlateLogisticLineToGearMallSkill:
                 continue
             item_name = _available_logistics_line_inserter_item(observation)
             if item_name is None:
-                reusable = _find_relocatable_inserter_for_iron_plate_line(observation, spec["position"])
+                protected_endpoint_units = {
+                    int(endpoint.get("entity", {}).get("unit_number"))
+                    for endpoint in (layout["source_inserter"], layout["target_inserter"])
+                    if isinstance(endpoint.get("entity"), dict)
+                    and endpoint.get("entity", {}).get("unit_number") is not None
+                }
+                protected_endpoint_positions = [
+                    endpoint["position"]
+                    for endpoint in (layout["source_inserter"], layout["target_inserter"])
+                    if isinstance(endpoint.get("entity"), dict)
+                ]
+                reusable = _find_relocatable_inserter_for_iron_plate_line(
+                    observation,
+                    spec["position"],
+                    exclude_unit_numbers=protected_endpoint_units,
+                    protected_positions=protected_endpoint_positions,
+                )
                 if reusable is not None:
                     position = _position(reusable)
                     if distance(player, position) > 4.5:
@@ -8651,29 +8979,6 @@ class SiteInputLogisticLineSkill:
             return PlannerDecision(None, "no executable repeated site input logistics route was found")
 
         belt_assembler = _transport_belt_output_assembler(observation)
-        if inventory_count(observation, "transport-belt") <= 0:
-            if isinstance(belt_assembler, dict) and entity_item_count(belt_assembler, "transport-belt") > 0:
-                position = _position(belt_assembler)
-                if distance(player, position) > 20:
-                    return PlannerDecision(
-                        {"type": "move_to", "position": position},
-                        "move near belt mall output to collect transport belts for site input logistics",
-                    )
-                return PlannerDecision(
-                    {
-                        "type": "take",
-                        "item": "transport-belt",
-                        "count": min(entity_item_count(belt_assembler, "transport-belt"), max(1, self.target_segments)),
-                        "unit_number": belt_assembler.get("unit_number"),
-                        "name": belt_assembler.get("name") or "assembling-machine-1",
-                        "position": position,
-                    },
-                    "take transport belts from the belt mall as construction material for site input logistics",
-                )
-            return PlannerDecision(
-                None,
-                "site input logistics needs transport belts from the belt mall; refusing hand-crafted belts or item shuttle",
-            )
 
         protected_units = {
             int(entity.get("unit_number"))
@@ -8721,6 +9026,29 @@ class SiteInputLogisticLineSkill:
                     },
                     f"clear blocking {blocker.get('name')} before extending site input logistics belt",
                 )
+            if inventory_count(observation, "transport-belt") <= 0:
+                if isinstance(belt_assembler, dict) and entity_item_count(belt_assembler, "transport-belt") > 0:
+                    position = _position(belt_assembler)
+                    if distance(player, position) > 20:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": position},
+                            "move near belt mall output to collect transport belts for site input logistics",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "take",
+                            "item": "transport-belt",
+                            "count": min(entity_item_count(belt_assembler, "transport-belt"), max(1, self.target_segments)),
+                            "unit_number": belt_assembler.get("unit_number"),
+                            "name": belt_assembler.get("name") or "assembling-machine-1",
+                            "position": position,
+                        },
+                        "take transport belts from the belt mall as construction material for site input logistics",
+                    )
+                return PlannerDecision(
+                    None,
+                    "site input logistics needs transport belts from the belt mall; refusing hand-crafted belts or item shuttle",
+                )
             position = segment["position"]
             if distance(player, position) > 20:
                 return PlannerDecision(
@@ -8763,7 +9091,23 @@ class SiteInputLogisticLineSkill:
                 continue
             item_name = _available_logistics_line_inserter_item(observation)
             if item_name is None:
-                reusable = _find_relocatable_inserter_for_iron_plate_line(observation, spec["position"])
+                protected_endpoint_units = {
+                    int(endpoint.get("entity", {}).get("unit_number"))
+                    for endpoint in (layout["source_inserter"], layout["target_inserter"])
+                    if isinstance(endpoint.get("entity"), dict)
+                    and endpoint.get("entity", {}).get("unit_number") is not None
+                }
+                protected_endpoint_positions = [
+                    endpoint["position"]
+                    for endpoint in (layout["source_inserter"], layout["target_inserter"])
+                    if isinstance(endpoint.get("entity"), dict)
+                ]
+                reusable = _find_relocatable_inserter_for_iron_plate_line(
+                    observation,
+                    spec["position"],
+                    exclude_unit_numbers=protected_endpoint_units,
+                    protected_positions=protected_endpoint_positions,
+                )
                 if reusable is not None:
                     position = _position(reusable)
                     if distance(player, position) > 4.5:
@@ -8941,6 +9285,16 @@ class BuildItemMallSkill:
 
         output_count = entity_item_count(assembler, self.target_item)
         if output_count > 0:
+            if _build_item_mall_should_use_output_chest(self.target_item):
+                if not _build_item_mall_output_buffer_ready(cell, observation):
+                    decision = self._ensure_output_buffer(observation, player, cell)
+                    if decision is not None:
+                        return decision
+                if _build_item_mall_output_buffer_ready(cell, observation):
+                    return PlannerDecision(
+                        {"type": "wait", "ticks": 300},
+                        f"wait for {self.target_item} mall output inserter to buffer items into chest",
+                    )
             if _block_player_mall_output_collection_after_automation(observation, self.target_item):
                 return PlannerDecision(
                     {"type": "wait", "ticks": 300},
@@ -9009,6 +9363,11 @@ class BuildItemMallSkill:
                 f"insert {ingredient} into {self.target_item} mall assembler",
             )
 
+        if _build_item_mall_should_use_output_chest(self.target_item):
+            decision = self._ensure_output_buffer(observation, player, cell)
+            if decision is not None:
+                return decision
+
         return PlannerDecision({"type": "wait", "ticks": 600}, f"wait for build item mall to produce {self.target_item}")
 
     def _set_recipe_decision(
@@ -9029,6 +9388,155 @@ class BuildItemMallSkill:
                 "position": position,
             },
             f"set build item mall assembler recipe to {recipe}",
+        )
+
+    def _ensure_output_buffer(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        cell: dict[str, Any],
+    ) -> PlannerDecision | None:
+        if _build_item_mall_output_buffer_ready(cell, observation):
+            return None
+
+        chest_position = cell.get("output_chest_position")
+        inserter_position = cell.get("output_inserter_position")
+        if not isinstance(chest_position, dict) or not isinstance(inserter_position, dict):
+            return PlannerDecision(None, f"cannot find clear output chest connection for {self.target_item} mall")
+
+        chest = cell.get("output_chest")
+        if not isinstance(chest, dict):
+            chest_name = _available_stone_output_chest_name(observation)
+            if chest_name is None:
+                needed = _build_item_mall_missing_output_chest_item(observation)
+                decision = self._ensure_item_quantity(observation, player, needed, 1)
+                if decision is not None:
+                    return decision
+                return None
+            if distance(player, chest_position) > 20:
+                return PlannerDecision({"type": "move_to", "position": _stand_position(chest_position)}, f"move near {self.target_item} mall output chest")
+            return PlannerDecision(
+                {
+                    "type": "build",
+                    "name": chest_name,
+                    "position": chest_position,
+                    "allow_nearby": False,
+                },
+                f"place output chest for {self.target_item} mall",
+            )
+
+        decision = self._ensure_output_inserter(observation, player, cell)
+        if decision is not None:
+            return decision
+        return None
+
+    def _ensure_output_inserter(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        cell: dict[str, Any],
+    ) -> PlannerDecision | None:
+        inserter = cell.get("output_inserter")
+        position = cell["output_inserter_position"]
+        direction = int(cell["output_inserter_direction"])
+        if isinstance(inserter, dict):
+            if inserter.get("name") == "burner-inserter" and _regular_inserter_can_be_used(observation):
+                inserter_position = _position(inserter)
+                if distance(player, inserter_position) > 4.5:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": _stand_position(inserter_position, offset=1.5)},
+                        f"move within mining reach of obsolete {self.target_item} mall output burner inserter",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "unit_number": inserter.get("unit_number"),
+                        "name": "burner-inserter",
+                        "position": inserter_position,
+                    },
+                    f"replace {self.target_item} mall output burner inserter now that regular inserters are usable",
+                )
+            if int(inserter.get("direction") or 0) != direction:
+                inserter_position = _position(inserter)
+                if distance(player, inserter_position) > 4.5:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": _stand_position(inserter_position, offset=1.5)},
+                        f"move within mining reach of misoriented {self.target_item} mall output inserter",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "unit_number": inserter.get("unit_number"),
+                        "name": inserter.get("name") or "inserter",
+                        "position": inserter_position,
+                    },
+                    f"remove misoriented {self.target_item} mall output inserter",
+                )
+            if inserter.get("name") == "burner-inserter" and _entity_burner_fuel_count(inserter) < 1:
+                fuel_item, fuel_count = _select_inventory_burner_fuel(observation)
+                if fuel_count <= 0:
+                    return PlannerDecision(None, f"{self.target_item} mall output burner inserter needs fuel")
+                inserter_position = _position(inserter)
+                if distance(player, inserter_position) > 20:
+                    return PlannerDecision({"type": "move_to", "position": inserter_position}, f"move near {self.target_item} mall output burner inserter")
+                return PlannerDecision(
+                    {
+                        "type": "insert",
+                        "item": fuel_item,
+                        "count": 1,
+                        "unit_number": inserter.get("unit_number"),
+                        "name": "burner-inserter",
+                        "position": inserter_position,
+                    },
+                    f"fuel {self.target_item} mall output burner inserter",
+                )
+            if inserter.get("name") != "burner-inserter" and inserter.get("electric_network_connected") is False:
+                existing = _nearest_small_pole_supplying_position(observation, _position(inserter))
+                if existing is not None:
+                    pole_position = _position(existing)
+                    if distance(player, pole_position) > 20:
+                        return PlannerDecision({"type": "move_to", "position": pole_position}, f"move near output inserter supply pole for {self.target_item} mall")
+                    return PlannerDecision(
+                        {
+                            "type": "connect_power",
+                            "unit_number": existing.get("unit_number"),
+                            "name": "small-electric-pole",
+                            "position": pole_position,
+                        },
+                        f"connect output inserter supply pole for {self.target_item} mall",
+                    )
+                pole_position = _select_mall_inserter_power_pole_position(observation, _position(inserter))
+                if pole_position is None:
+                    return PlannerDecision(None, f"cannot find clear output inserter power pole for {self.target_item} mall")
+                decision = self._ensure_item_quantity(observation, player, "small-electric-pole", 1)
+                if decision is not None:
+                    return decision
+                if distance(player, pole_position) > 20:
+                    return PlannerDecision({"type": "move_to", "position": _stand_position(pole_position)}, f"move near output inserter pole for {self.target_item} mall")
+                return PlannerDecision(
+                    {"type": "build", "name": "small-electric-pole", "position": pole_position, "allow_nearby": False},
+                    f"place output inserter power pole for {self.target_item} mall",
+                )
+            return None
+
+        item_name = _available_build_item_mall_output_inserter_name(observation)
+        if item_name is None:
+            needed = _build_item_mall_missing_output_inserter_item(observation)
+            decision = self._ensure_item_quantity(observation, player, needed, 1)
+            if decision is not None:
+                return decision
+            return None
+        if distance(player, position) > 20:
+            return PlannerDecision({"type": "move_to", "position": _stand_position(position)}, f"move near {self.target_item} mall output inserter")
+        return PlannerDecision(
+            {
+                "type": "build",
+                "name": item_name,
+                "position": position,
+                "direction": direction,
+                "allow_nearby": False,
+            },
+            f"place output inserter from {self.target_item} mall assembler to chest",
         )
 
     def _pre_power_recipe_retool_decision(
@@ -9215,6 +9723,67 @@ class BuildItemMallSkill:
 
         if item == "small-electric-pole":
             return self.power_skill._ensure_item_quantity(observation, player, item, quantity)
+
+        if item in {"wooden-chest", "iron-chest"}:
+            if craftable_count(observation, item) > 0:
+                return PlannerDecision({"type": "craft", "recipe": item, "count": 1}, f"craft {item} for build item mall output")
+            if item == "wooden-chest" and inventory_count(observation, "wood") < 2:
+                tree = _nearest_tree(observation)
+                if tree is None:
+                    if craftable_count(observation, "iron-chest") > 0:
+                        return PlannerDecision({"type": "craft", "recipe": "iron-chest", "count": 1}, "craft iron chest for build item mall output")
+                    return self._ensure_item_quantity(
+                        observation,
+                        player,
+                        "iron-plate",
+                        8,
+                        allow_existing_remote=allow_existing_remote,
+                        reference_position=reference_position,
+                    )
+                tree_pos = _position(tree)
+                if distance(player, tree_pos) > 8:
+                    return PlannerDecision({"type": "move_to", "position": tree_pos}, "move near tree for build item mall output chest")
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "name": tree.get("name"),
+                        "position": tree_pos,
+                        "count": 1,
+                    },
+                    "mine tree for build item mall output chest",
+                )
+            if item == "iron-chest":
+                return self._ensure_item_quantity(
+                    observation,
+                    player,
+                    "iron-plate",
+                    8,
+                    allow_existing_remote=allow_existing_remote,
+                    reference_position=reference_position,
+                )
+
+        if item in {"burner-inserter", "inserter"}:
+            recipe = RECIPES.get(item)
+            if recipe is not None:
+                for ingredient, amount in sorted(recipe.ingredients.items()):
+                    needed = max(1, int(amount * max(1, quantity)))
+                    if inventory_count(observation, ingredient) >= needed:
+                        continue
+                    decision = self._ensure_item_quantity(
+                        observation,
+                        player,
+                        ingredient,
+                        needed,
+                        allow_existing_remote=allow_existing_remote,
+                        reference_position=reference_position,
+                    )
+                    if decision is not None:
+                        return decision
+            if craftable_count(observation, item) > 0:
+                return PlannerDecision(
+                    {"type": "craft", "recipe": item, "count": min(quantity - inventory_count(observation, item), craftable_count(observation, item))},
+                    f"craft {item} for build item mall output",
+                )
 
         if item == "wood":
             tree = _nearest_tree(observation)
@@ -9561,6 +10130,23 @@ def _any_lab_has_pack(observation: dict[str, Any], pack_name: str) -> bool:
     return any(entity_item_count(lab, pack_name) > 0 for lab in _research_labs(observation, powered_only=True))
 
 
+def _science_pack_factory_positions(observation: dict[str, Any]) -> list[dict[str, float]]:
+    positions: list[dict[str, float]] = []
+    for entity_name in ASSEMBLER_ENTITY_NAMES:
+        for entity in entities_named(observation, entity_name):
+            recipe = str(entity.get("recipe") or "")
+            if recipe.endswith("science-pack"):
+                positions.append(_position(entity))
+    return positions
+
+
+def _nearest_power_generation_distance(observation: dict[str, Any], position: dict[str, float]) -> float:
+    candidates: list[dict[str, float]] = []
+    for entity_name in ("offshore-pump", "boiler", "steam-engine"):
+        candidates.extend(_position(entity) for entity in entities_named(observation, entity_name))
+    return min((distance(position, candidate) for candidate in candidates), default=999999.0)
+
+
 def _select_lab_site(observation: dict[str, Any]) -> dict[str, Any] | None:
     sites = observation.get("lab_sites")
     if not isinstance(sites, list):
@@ -9576,12 +10162,31 @@ def _select_lab_site(observation: dict[str, Any]) -> dict[str, Any] | None:
     ]
     if not candidates:
         return None
-    candidates.sort(
-        key=lambda item: (
+    science_positions = _science_pack_factory_positions(observation)
+
+    def sort_key(item: dict[str, Any]) -> tuple[float, ...]:
+        lab_position = _xy_position(item["lab_position"])
+        power_distance = _nearest_power_generation_distance(observation, lab_position)
+        power_clearance_penalty = 1 if power_distance < POWER_EXPANSION_CLEARANCE_RADIUS else 0
+        if science_positions:
+            science_distance = min(distance(lab_position, position) for position in science_positions)
+            return (
+                0 if item.get("powered") else 1,
+                0 if item.get("pole_unit_number") else 1,
+                science_distance,
+                power_clearance_penalty,
+                float(item.get("distance") or 999999),
+            )
+        return (
             0 if item.get("powered") else 1,
             0 if item.get("pole_unit_number") else 1,
+            power_clearance_penalty,
+            -min(power_distance, 999999.0),
             float(item.get("distance") or 999999),
         )
+
+    candidates.sort(
+        key=sort_key
     )
     return candidates[0]
 
@@ -9850,6 +10455,15 @@ def _gear_belt_mall_layout_for_pair(
     horizontal_distance = abs(belt_pos["x"] - gear_pos["x"])
     if horizontal_distance < GEAR_BELT_MALL_ASSEMBLER_SPACING:
         return None
+    direct_transfer = None
+    if abs(horizontal_distance - GEAR_BELT_MALL_ASSEMBLER_SPACING) <= 0.25 and abs(belt_pos["y"] - gear_pos["y"]) <= 0.1:
+        direct_position = {"x": gear_pos["x"] + direction_sign * 2.0, "y": gear_pos["y"]}
+        if _mall_logistics_positions_clear(observation, belt_positions=[], inserter_positions=[direct_position]):
+            direct_transfer = {
+                "position": direct_position,
+                "direction": belt_direction,
+                "entity": _inserter_near(observation, direct_position),
+            }
 
     for vertical_sign, output_direction, input_direction in [(-1, SOUTH, NORTH), (1, NORTH, SOUTH)]:
         lane_y = gear_pos["y"] + (3.0 * vertical_sign)
@@ -9868,6 +10482,13 @@ def _gear_belt_mall_layout_for_pair(
             inserter_positions=[output_position, input_position],
         ):
             continue
+        gear_output_entity = _inserter_near(observation, output_position)
+        belt_input_entity = _inserter_near(observation, input_position)
+        protected_output_units = {
+            gear_output_entity.get("unit_number")
+            for gear_output_entity in [gear_output_entity]
+            if isinstance(gear_output_entity, dict) and gear_output_entity.get("unit_number") is not None
+        }
         return {
             "gear_assembler": gear_assembler,
             "belt_assembler": belt_assembler,
@@ -9883,15 +10504,37 @@ def _gear_belt_mall_layout_for_pair(
             "gear_output_inserter": {
                 "position": output_position,
                 "direction": output_direction,
-                "entity": _inserter_near(observation, output_position),
+                "entity": gear_output_entity,
             },
             "belt_input_inserter": {
                 "position": input_position,
                 "direction": input_direction,
-                "entity": _inserter_near(observation, input_position),
+                "entity": belt_input_entity,
+                "exclude_reusable_unit_numbers": protected_output_units,
             },
+            "direct_gear_transfer_inserter": direct_transfer,
         }
     return None
+
+
+def _direct_gear_transfer_blocked(layout: dict[str, Any]) -> bool:
+    direct_transfer = layout.get("direct_gear_transfer_inserter")
+    if not isinstance(direct_transfer, dict):
+        return False
+    inserter = direct_transfer.get("entity")
+    if not isinstance(inserter, dict):
+        return False
+    status_name = str(inserter.get("status_name") or "")
+    if status_name == "waiting_for_space_in_destination":
+        return (
+            entity_item_count(layout["gear_assembler"], "iron-gear-wheel") > 0
+            and entity_item_count(layout["belt_assembler"], "iron-gear-wheel") <= 0
+        )
+    if status_name == "waiting_for_source_items":
+        return entity_item_count(layout["gear_assembler"], "iron-gear-wheel") > 0
+    if status_name:
+        return False
+    return False
 
 
 def _mall_logistics_positions_clear(
@@ -9977,11 +10620,15 @@ def _find_relocatable_inserter_for_mall(
     target_position: dict[str, float],
     *,
     prefer_burner: bool,
+    exclude_units: set[Any] | None = None,
 ) -> dict[str, Any] | None:
     names = ("burner-inserter",) if prefer_burner else ("inserter", "fast-inserter")
+    excluded = set(exclude_units or set())
     candidates: list[dict[str, Any]] = []
     for name in names:
         for entity in entities_named(observation, name):
+            if entity.get("unit_number") in excluded:
+                continue
             position = _position(entity)
             if distance(position, target_position) <= 0.35:
                 continue
@@ -10173,14 +10820,18 @@ def _find_build_item_mall_cell(
         "x": assembler_position["x"] + 2,
         "y": assembler_position["y"] - 2,
     }
-    return {
+    return _attach_build_item_mall_output_layout(
+        observation,
+        target_item,
+        {
         "pole_position": pole_position,
         "assembler_position": assembler_position,
         "pole": pole if pole_in_reach else None,
         "pole_unit_number": pole.get("unit_number") if pole_in_reach else None,
         "assembler": assembler,
         "powered": assembler.get("electric_network_connected"),
-    }
+        },
+    )
 
 
 def _available_unassigned_mall_assembler(
@@ -10259,6 +10910,161 @@ def _transport_belt_automation_factory_output_ready(observation: dict[str, Any])
     )
 
 
+def _build_item_mall_should_use_output_chest(target_item: str) -> bool:
+    return target_item in USER_OUTPUT_MALL_ITEMS
+
+
+def _attach_build_item_mall_output_layout(
+    observation: dict[str, Any],
+    target_item: str,
+    cell: dict[str, Any],
+) -> dict[str, Any]:
+    if not _build_item_mall_should_use_output_chest(target_item):
+        return cell
+    layout = _build_item_mall_output_layout(observation, cell["assembler_position"])
+    if layout is None:
+        return cell
+    cell.update(layout)
+    return cell
+
+
+def _build_item_mall_output_layout(
+    observation: dict[str, Any],
+    assembler_position: dict[str, float],
+) -> dict[str, Any] | None:
+    orientations = [
+        (EAST, {"x": 2.0, "y": 0.0}, {"x": 3.0, "y": 0.0}),
+        (WEST, {"x": -2.0, "y": 0.0}, {"x": -3.0, "y": 0.0}),
+        (SOUTH, {"x": 0.0, "y": 2.0}, {"x": 0.0, "y": 3.0}),
+        (NORTH, {"x": 0.0, "y": -2.0}, {"x": 0.0, "y": -3.0}),
+    ]
+    candidates: list[dict[str, Any]] = []
+    for direction, inserter_offset, chest_offset in orientations:
+        inserter_position = {
+            "x": assembler_position["x"] + inserter_offset["x"],
+            "y": assembler_position["y"] + inserter_offset["y"],
+        }
+        chest_position = {
+            "x": assembler_position["x"] + chest_offset["x"],
+            "y": assembler_position["y"] + chest_offset["y"],
+        }
+        if not _build_item_mall_output_position_clear(
+            observation,
+            inserter_position,
+            allowed_names={"inserter", "burner-inserter", "fast-inserter"},
+        ):
+            continue
+        if not _build_item_mall_output_position_clear(
+            observation,
+            chest_position,
+            allowed_names={"wooden-chest", "iron-chest", "steel-chest"},
+        ):
+            continue
+        chest = _stone_output_chest_near(observation, chest_position)
+        inserter = _inserter_near(observation, inserter_position)
+        candidates.append(
+            {
+                "output_chest_position": chest_position,
+                "output_inserter_position": inserter_position,
+                "output_inserter_direction": direction,
+                "output_chest": chest,
+                "output_inserter": inserter,
+            }
+        )
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda item: (
+            0 if isinstance(item.get("output_chest"), dict) and isinstance(item.get("output_inserter"), dict) else 1,
+            0 if isinstance(item.get("output_chest"), dict) else 1,
+            0 if isinstance(item.get("output_inserter"), dict) else 1,
+        )
+    )
+    return candidates[0]
+
+
+def _build_item_mall_output_position_clear(
+    observation: dict[str, Any],
+    position: dict[str, float],
+    *,
+    allowed_names: set[str],
+) -> bool:
+    if not _within_starter_logistics_area(observation, position):
+        return False
+    large_entities = ASSEMBLER_ENTITY_NAMES | {"lab", "stone-furnace", "burner-mining-drill", "boiler", "steam-engine"}
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    for entity in entities:
+        if not isinstance(entity, dict) or not isinstance(entity.get("position"), dict):
+            continue
+        name = str(entity.get("name") or "")
+        if name == "character" or name in {"tree", "fish"}:
+            continue
+        if name in large_entities and _point_inside_machine(position, entity):
+            return False
+        if name in allowed_names and distance(_position(entity), position) <= 0.9:
+            continue
+        if distance(_position(entity), position) <= 0.65:
+            return False
+    resources = observation.get("resources") if isinstance(observation.get("resources"), list) else []
+    for resource in resources:
+        if not isinstance(resource, dict) or not isinstance(resource.get("position"), dict):
+            continue
+        if str(resource.get("name") or "") in PROTECTED_RESOURCE_NAMES and distance(_position(resource), position) < 1.0:
+            return False
+    return True
+
+
+def _build_item_mall_output_buffer_ready(cell: dict[str, Any], observation: dict[str, Any] | None = None) -> bool:
+    inserter = cell.get("output_inserter")
+    if not (isinstance(cell.get("output_chest"), dict) and isinstance(inserter, dict)):
+        return False
+    if observation is not None and inserter.get("name") == "burner-inserter" and _regular_inserter_can_be_used(observation):
+        return False
+    return True
+
+
+def _regular_inserter_can_be_used(observation: dict[str, Any]) -> bool:
+    if inventory_count(observation, "inserter") > 0 or inventory_count(observation, "fast-inserter") > 0:
+        return True
+    if craftable_count(observation, "inserter") > 0 or craftable_count(observation, "fast-inserter") > 0:
+        return True
+    if inventory_count(observation, "electronic-circuit") <= 0 or inventory_count(observation, "iron-plate") <= 0:
+        return False
+    if inventory_count(observation, "iron-gear-wheel") > 0 or craftable_count(observation, "iron-gear-wheel") > 0:
+        return True
+    return any(
+        item.get("electric_network_connected") is not False
+        and str(item.get("recipe") or "") == "iron-gear-wheel"
+        and entity_item_count(item, "iron-gear-wheel") > 0
+        for name in ASSEMBLER_ENTITY_NAMES
+        for item in entities_named(observation, name)
+    )
+
+
+def _build_item_mall_missing_output_chest_item(observation: dict[str, Any]) -> str:
+    if (
+        craftable_count(observation, "wooden-chest") > 0
+        or inventory_count(observation, "wood") >= 2
+        or _nearest_tree(observation) is not None
+    ):
+        return "wooden-chest"
+    return "iron-chest"
+
+
+def _available_build_item_mall_output_inserter_name(observation: dict[str, Any]) -> str | None:
+    items = ("inserter", "fast-inserter") if _regular_inserter_can_be_used(observation) else ("inserter", "burner-inserter", "fast-inserter")
+    for item in items:
+        if inventory_count(observation, item) > 0:
+            return item
+    return None
+
+
+def _build_item_mall_missing_output_inserter_item(observation: dict[str, Any]) -> str:
+    if _regular_inserter_can_be_used(observation) or craftable_count(observation, "inserter") > 0 or inventory_count(observation, "electronic-circuit") > 0:
+        return "inserter"
+    return "burner-inserter"
+
+
 def _select_build_item_mall_site(
     observation: dict[str, Any],
     target_item: str,
@@ -10319,7 +11125,10 @@ def _select_build_item_mall_site(
                 pole = _entity_near(observation, "small-electric-pole", pole_position, radius=1.0)
                 pole_unit_number = pole.get("unit_number") if pole else None
         candidates.append(
-            {
+            _attach_build_item_mall_output_layout(
+                observation,
+                target_item,
+                {
                 "pole_position": pole_position,
                 "assembler_position": assembler_position,
                 "pole_unit_number": pole_unit_number,
@@ -10328,7 +11137,8 @@ def _select_build_item_mall_site(
                 "distance": site.get("distance"),
                 "pole": pole,
                 "assembler": assembler,
-            }
+                },
+            )
         )
     if not candidates:
         return None

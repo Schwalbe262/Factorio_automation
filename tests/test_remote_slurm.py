@@ -16,6 +16,7 @@ from factorio_ai.remote_slurm import (
     ensure_worker_job,
     llm_status,
     parse_strategy_worker_specs,
+    request_layout_improvement,
     request_strategy,
 )
 from factorio_ai.slurm_worker import (
@@ -186,6 +187,48 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertEqual(run_remote.call_count, 2)
         retry_script = run_remote.call_args_list[1].args[0]
         self.assertIn('elif [[ ! -f "$TASK_PATH" ]]', retry_script)
+
+    def test_request_layout_improvement_adds_learning_context(self):
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="factorio-ai-worker",
+            conda_env="factorio-ai",
+            partition="gpu",
+            cpus_per_task=8,
+            gpus_per_node=1,
+            gres="gpu:1",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        with (
+            patch("factorio_ai.remote_slurm.submit_task", return_value="layout-task.json") as submit_task,
+            patch("factorio_ai.remote_slurm.read_task_state", return_value=("result", {"ok": True}, "")),
+        ):
+            result = request_layout_improvement(
+                "launch_rocket_program",
+                "idle:autopilot_stale",
+                0,
+                {"inventory": {}, "entities": []},
+                cfg=cfg,
+                timeout_seconds=1,
+            )
+
+        self.assertTrue(result["ok"])
+        task = submit_task.call_args.args[0]
+        learning = task["payload"]["layout_learning"]
+        self.assertTrue(learning["return_learned_skills"])
+        self.assertTrue(learning["record_only_confirmed"])
+        self.assertIn("direct assembler-to-assembler inserter transfer", " ".join(learning["skill_targets"]))
+        self.assertIn("corner belt tile", " ".join(learning["skill_targets"]))
+        self.assertIn("input inserters", " ".join(learning["skill_targets"]))
 
     def test_llm_status_remediation_marks_pending_gpu_allocation(self):
         cfg = RemoteSlurmConfig(

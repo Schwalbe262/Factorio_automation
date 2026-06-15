@@ -2,15 +2,15 @@
 
 ## Current status
 
-- Branch `chore/part129-red-science-logistics` is active for red-science logistics, markdown memory format adoption, and current layout repair.
-- Markdown format, stale planning-site cache recovery, first-assembler gear bootstrap, and no-mod logistics/build-item commands are implemented.
-- Current live save still has the old compact gear/belt assemblers on iron ore and unpowered; new planner recognizes them as relocation sources.
-- Strategy currently selects `bootstrap_power_pole_mall` because relocation needs more small-electric-pole stock and coal supply is still missing.
+- Branch `chore/part129-red-science-logistics` is active for Part 129 red-science logistics and layout repair.
+- Planner now covers resource-safe gear/belt relocation, early coal drill+chest supply, user-output mall chests, science/lab spacing, regular inserter preference, direct assembler transfer, and site-input belts.
+- Slurm idle layout work now requests confirmed `learned_skills` and records only evidence-backed reusable layout skills.
+- Live strategy now selects `setup_power` when the gear/belt mall is unpowered; current live power run hit max steps while waiting on boiler fuel burn.
 
 ## Current objective
 
 - Finish Part 129 by recording current Codex token usage, committing, and pushing.
-- Next gameplay work: produce poles, relocate gear/belt mall to a resource-safe 4-tile layout, then build early coal supply/logistics.
+- Next gameplay work: continue `setup_power`, then resume belt mall output and site-input logistics once power is stable.
 
 ## Active branch / part
 
@@ -21,29 +21,31 @@
 
 - `goal.md`: mission, current sprint, and project quality criteria.
 - `src/factorio_ai/controller.py`: no-mod planning-site cache and retry behavior.
-- `src/factorio_ai/planner.py`: planning cache consumers, item malls, gear/belt relocation, power corridor, coal supply behavior.
-- `src/factorio_ai/strategy.py`: coal supply readiness and gear/belt relocation guardrails.
+- `src/factorio_ai/planner.py`: gear/belt logistics, site-input routes, mall outputs, coal supply, lab placement, power-sensitive execution.
+- `src/factorio_ai/strategy.py`: power-first guardrails before belt/site logistics.
+- `src/factorio_ai/remote_slurm.py`, `src/factorio_ai/slurm_worker.py`, `src/factorio_ai/run_journal.py`: idle layout skill-learning request and confirmed insight recording.
 - `note.md`: concise loop journal; archive/search-only for old evidence.
 - `insight.md`: confirmed reusable improvements only.
 
 ## Last validation
 
-- `pytest -q` passed: 569 tests.
-- Live no-mod strategy selects `bootstrap_power_pole_mall`; evidence includes `small_electric_pole_deficit=18` and `coal_supply_ready=false`.
-- Live planner relocation layout for old units 73/74 targets gear `{x:82.5,y:-58.0}` and belt `{x:86.5,y:-58.0}`, spacing 4.0, not on resources.
+- `pytest -q` passed: 600 tests.
+- Live site-input retry no longer fails on mixed integer/half-tile belt coordinates; latest blocker is powered belt automation.
+- Live strategy check selects `setup_power` with `gear_belt_mall_status=no_power`.
 
 ## Current blocker
 
-- Live world has not been repaired yet; it needs power-pole stock before gear/belt relocation can mine/rebuild the old compact mall.
-- One live `run-no-mod-strategy-step --max-steps 80` attempt timed out after 240s and was stopped; no observed world change.
+- Live gear/belt assemblers are placed off resources and 4 tiles apart, but currently report `no_power`.
+- `setup_power` run inserted boiler fuel then reached max steps waiting for fuel burn/steam recovery.
 
 ## Next steps
 
 1. Record current Codex thread token usage once.
 2. Commit and push Part 129 branch.
-3. Re-run `run-no-mod-strategy-step` with a longer timeout or direct pole-mall skill until poles are stocked.
-4. Run relocation, then verify old units 73/74 are gone and new gear/belt assemblers are powered, 4 tiles apart, and off resources.
-5. Run/setup coal supply early so a coal drill outputs to a chest/belt instead of repeated hand mining.
+3. Continue `run-no-mod-strategy-step --max-steps 60` or direct `setup_power` until steam/electric recovery is observed.
+4. Re-run `build_gear_belt_mall_logistics` to refill belt output.
+5. Re-run `build_site_input_logistic_line` for iron plates; verify corner belt direction and endpoint inserter roles.
+6. Then continue early coal supply/fuel logistics so hand-mined coal does not recur.
 
 ## Token/context policy
 
@@ -61,10 +63,10 @@
 
 ## Recent changes
 
-- Added current handoff and root AGENTS instructions in the new markdown memory format.
-- Fixed stale no-mod planning-site cache recovery; automation research live run succeeded after the fix.
-- Added no-mod logistics/build-item mall commands and first-assembler gear bootstrap safeguards.
-- Added resource-safe, 4-tile gear/belt relocation, stricter connected-power anchors, and coal-output readiness.
+- Added confirmed idle Slurm `learned_skills` flow with journal promotion only for confirmed reusable lessons.
+- Added route corner belt direction, endpoint inserter role checks, and source endpoint protection for site-input logistics.
+- Added strategy guardrail so unpowered gear/belt mall forces `setup_power` before iron/site logistics.
+- Full validation now passes `600 passed`.
 
 ## Risks and gotchas
 

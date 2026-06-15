@@ -88,6 +88,30 @@ DEFAULT_STRATEGY_WORKERS = (
 )
 
 
+def layout_learning_request_context() -> dict[str, Any]:
+    return {
+        "return_learned_skills": True,
+        "record_only_confirmed": True,
+        "instruction": (
+            "While idle, keep testing simulation-only layout variants and return reusable learned_skills "
+            "only when candidate, sandbox, or before/after evidence confirms the lesson."
+        ),
+        "skill_targets": [
+            "avoid placing factories on resource patches",
+            "keep power grids continuous",
+            "leave inserter clearance between coupled assemblers",
+            "prefer burner miner to chest for early coal buffering",
+            "buffer user-consumed mall outputs into chests",
+            "place labs near science-pack production with expansion room",
+            "replace burner inserters once regular inserters are available",
+            "use direct assembler-to-assembler inserter transfer when machines are within reach",
+            "turn belts by setting the corner belt tile to the outgoing segment direction",
+            "orient output inserters to drop away from producer machines and input inserters to drop into consumer machines",
+            "connect automated producer/consumer sites with belts after belt automation starts",
+        ],
+    }
+
+
 def config() -> RemoteSlurmConfig:
     home_key = str(Path.home() / ".ssh" / DEFAULT_KEY_NAME)
     return RemoteSlurmConfig(
@@ -1036,6 +1060,7 @@ def request_layout_improvement(
             "factory_monitor": factory_monitor or {},
             "layout_validation_feedback": layout_validation_feedback or {},
             "selected_improvement_site": selected_improvement_site or {},
+            "layout_learning": layout_learning_request_context(),
         },
     }
     if force_attached or _use_attached_srun(cfg):

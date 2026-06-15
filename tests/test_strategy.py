@@ -1136,6 +1136,31 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "setup_power")
         self.assertIn("gear/belt mall power", result["blockers"])
 
+    def test_reconcile_repairs_unpowered_gear_mall_before_coal_supply_or_iron_line(self):
+        observation = gear_mall_needs_plate_line_observation()
+        for entity in observation["entities"]:
+            if entity.get("name") == "assembling-machine-1":
+                entity["status_name"] = "no_power"
+                entity["electric_network_connected"] = False
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "setup_coal_supply",
+                "priority": 50,
+                "reason": "Need coal before more burner expansion.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "heuristic",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "setup_power")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "setup_coal_supply")
+        self.assertIn("gear/belt mall power", result["blockers"])
+
     def test_reconcile_repairs_power_before_circuit_when_gear_mall_unpowered(self):
         observation = gear_mall_needs_plate_line_observation()
         for entity in observation["entities"]:

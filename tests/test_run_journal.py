@@ -226,6 +226,98 @@ class RunJournalTests(unittest.TestCase):
             self.assertIn('"throughput_per_minute":30', insight_text)
             self.assertIn('"throughput_per_minute":45', insight_text)
 
+    def test_layout_result_records_confirmed_learned_skill(self):
+        with TemporaryDirectory() as root:
+            repo_root = Path(root)
+            log_dir = repo_root / "logs"
+            insight = record_layout_result_insight(
+                log_dir,
+                objective="launch_rocket_program",
+                active_skill="idle:autopilot_stale",
+                result={
+                    "source": "llm",
+                    "score": 88,
+                    "selected_candidate_id": "gear-belt-direct-transfer-cell",
+                    "learned_skills": [
+                        {
+                            "name": "direct assembler transfer",
+                            "trigger": "an intermediate item is consumed by a nearby assembler",
+                            "lesson": "Use an inserter directly between adjacent assemblers before adding an unnecessary belt lane.",
+                            "evidence": "The selected gear-to-belt candidate moves iron gear wheels by inserter without a belt hop.",
+                            "confirmed": True,
+                            "confidence": 0.91,
+                        }
+                    ],
+                },
+                repo_root=repo_root,
+            )
+
+            self.assertIsNotNone(insight)
+            summary = run_journal_summary(log_dir, repo_root=repo_root)
+            self.assertEqual(summary["insight_count"], 1)
+            self.assertEqual(summary["insights"][0]["kind"], "layout_skill_learned")
+            self.assertEqual(summary["insights"][0]["evidence"]["source"], "layout_idle_learning")
+            insight_text = (repo_root / "insight.md").read_text(encoding="utf-8")
+            self.assertIn("direct assembler transfer", insight_text)
+
+    def test_layout_result_skips_unconfirmed_or_duplicate_learned_skill(self):
+        with TemporaryDirectory() as root:
+            repo_root = Path(root)
+            log_dir = repo_root / "logs"
+            unconfirmed = record_layout_result_insight(
+                log_dir,
+                objective="launch_rocket_program",
+                active_skill="idle:autopilot_stale",
+                result={
+                    "source": "llm",
+                    "learned_skills": [
+                        {
+                            "name": "direct assembler transfer",
+                            "trigger": "nearby assemblers",
+                            "lesson": "Use a direct inserter transfer between adjacent assemblers.",
+                            "evidence": "candidate",
+                            "confirmed": False,
+                            "confidence": 0.5,
+                        }
+                    ],
+                },
+                repo_root=repo_root,
+            )
+
+            self.assertIsNone(unconfirmed)
+            confirmed_result = {
+                "source": "llm",
+                "selected_candidate_id": "gear-belt-direct-transfer-cell",
+                "learned_skills": [
+                    {
+                        "name": "direct assembler transfer",
+                        "trigger": "nearby assemblers",
+                        "lesson": "Use a direct inserter transfer between adjacent assemblers.",
+                        "evidence": "The candidate keeps both assemblers in inserter reach and removes one belt hop.",
+                        "confirmed": True,
+                        "confidence": 0.9,
+                    }
+                ],
+            }
+            record_layout_result_insight(
+                log_dir,
+                objective="launch_rocket_program",
+                active_skill="idle:autopilot_stale",
+                result=confirmed_result,
+                repo_root=repo_root,
+            )
+            duplicate = record_layout_result_insight(
+                log_dir,
+                objective="launch_rocket_program",
+                active_skill="idle:autopilot_stale",
+                result=confirmed_result,
+                repo_root=repo_root,
+            )
+
+            summary = run_journal_summary(log_dir, repo_root=repo_root)
+            self.assertIsNone(duplicate)
+            self.assertEqual(summary["insight_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

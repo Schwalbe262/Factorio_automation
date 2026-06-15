@@ -142,6 +142,63 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(guarded.action, {"type": "wait", "ticks": 120})
         self.assertIn("blocked direct iron-gear-wheel handcraft", guarded.reason)
 
+    def test_guard_allows_one_direct_transfer_bootstrap_gear_for_spaced_gear_belt_mall(self):
+        observation = {
+            "research": {"technologies": {"automation": {"researched": True}}},
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 2.0, "y": 2.0},
+                    "electric_network_connected": True,
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "recipe": "transport-belt",
+                    "position": {"x": 6.0, "y": 2.0},
+                    "electric_network_connected": True,
+                },
+            ],
+        }
+        decision = PlannerDecision(
+            action={
+                "type": "craft",
+                "recipe": "iron-gear-wheel",
+                "count": 1,
+                "allow_gear_belt_direct_transfer_bootstrap": True,
+            },
+            reason="test",
+        )
+
+        self.assertIs(_guard_post_automation_handcraft(observation, decision), decision)
+
+    def test_guard_blocks_direct_transfer_bootstrap_flag_without_spaced_mall_pair(self):
+        observation = {
+            "research": {"technologies": {"automation": {"researched": True}}},
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 2.0, "y": 2.0},
+                    "electric_network_connected": True,
+                },
+            ],
+        }
+        decision = PlannerDecision(
+            action={
+                "type": "craft",
+                "recipe": "iron-gear-wheel",
+                "count": 1,
+                "allow_gear_belt_direct_transfer_bootstrap": True,
+            },
+            reason="test",
+        )
+
+        guarded = _guard_post_automation_handcraft(observation, decision)
+
+        self.assertEqual(guarded.action, {"type": "wait", "ticks": 120})
+        self.assertIn("blocked direct iron-gear-wheel handcraft", guarded.reason)
+
     def test_no_mod_action_blocks_direct_gear_handcraft_after_automation(self):
         class FakeController(ModlessFactorioController):
             def observe(self):
@@ -457,6 +514,8 @@ class ControllerTests(unittest.TestCase):
         submitted = submit_task.call_args.args[0]
         self.assertEqual(submitted["type"], "layout_improvement_request")
         self.assertEqual(submitted["payload"]["active_skill"], "bootstrap_build_item_mall")
+        self.assertTrue(submitted["payload"]["layout_learning"]["return_learned_skills"])
+        self.assertTrue(submitted["payload"]["layout_learning"]["record_only_confirmed"])
         self.assertIn("layout_task_submitted", log_text)
 
     def test_blocked_strategy_submits_background_layout_work(self):
@@ -1320,6 +1379,7 @@ class ControllerTests(unittest.TestCase):
         submit_task.assert_called_once()
         submitted = submit_task.call_args.args[0]
         self.assertIn("idle:autopilot_heartbeat_missing", submitted["payload"]["active_skill"])
+        self.assertTrue(submitted["payload"]["layout_learning"]["return_learned_skills"])
         self.assertTrue(any(row["event"] == "layout_idle_scheduler_heartbeat" for row in rows))
         self.assertTrue(any(row["event"] == "layout_task_submitted" for row in rows))
 

@@ -58,6 +58,22 @@ LAYOUT_RESPONSE_SCHEMA = {
         "expected_improvements": {"type": "array", "items": {"type": "string"}},
         "risks": {"type": "array", "items": {"type": "string"}},
         "next_simulation_focus": {"type": "string"},
+        "learned_skills": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "name": {"type": "string"},
+                    "trigger": {"type": "string"},
+                    "lesson": {"type": "string"},
+                    "evidence": {"type": "string"},
+                    "confirmed": {"type": "boolean"},
+                    "confidence": {"type": "number"},
+                },
+                "required": ["name", "trigger", "lesson", "evidence", "confirmed", "confidence"],
+            },
+        },
         "build_ready": {"type": "boolean"},
         "no_apply": {"type": "boolean"},
     },
@@ -68,6 +84,7 @@ LAYOUT_RESPONSE_SCHEMA = {
         "expected_improvements",
         "risks",
         "next_simulation_focus",
+        "learned_skills",
         "build_ready",
         "no_apply",
     ],
@@ -234,7 +251,8 @@ def run_layout_improvement_request(payload: dict[str, Any]) -> dict[str, Any]:
         "You are a Factorio factory layout design reviewer running in the background while another "
         "executor skill continues playing. Evaluate simulation-only site layout candidates. "
         "Do not ask to build, mine, craft, demolish, or move anything. Pick one candidate or a next "
-        "simulation focus. Return strict JSON only matching the schema.\n\n"
+        "simulation focus. If the evidence confirms a reusable factory-layout technique, return it in "
+        "learned_skills; otherwise return learned_skills=[]. Return strict JSON only matching the schema.\n\n"
         f"Payload:\n{json.dumps(compact, ensure_ascii=False)}"
     )
     parsed, diagnostics = call_llm_json_with_diagnostics(
@@ -293,6 +311,7 @@ def compact_layout_improvement_payload(payload: dict[str, Any]) -> dict[str, Any
         "selected_improvement_site": selected_improvement_site,
         "layout_improvement": layout_improvement,
         "layout_validation_feedback": _compact_layout_validation_feedback(feedback),
+        "layout_learning": _layout_learning_context(payload.get("layout_learning")),
         "rules": [
             "Do not apply or build the design.",
             "Prefer candidates that reduce bottlenecks, footprint, transport distance, or ratio error.",
@@ -303,6 +322,9 @@ def compact_layout_improvement_payload(payload: dict[str, Any]) -> dict[str, Any
             "Sandbox pass is not site-ready; if site_prebuild_gate is fail or build_ready is false, keep the candidate simulation-only.",
             "Use site_placement_search to distinguish missing build items from a bad physical anchor.",
             "Flag belt-capacity risk when required item flow approaches or exceeds belt capacity.",
+            "For routed belts, the corner tile must point toward the outgoing segment so the belt visually and mechanically turns.",
+            "For inserters, output endpoints drop away from the producer and input endpoints drop into the consumer.",
+            "Return learned_skills only for reusable techniques that are confirmed by candidate, sandbox, or before/after evidence; speculative lessons must be omitted.",
             "The output can be used later by a deterministic executor after explicit approval.",
         ],
     }
@@ -321,9 +343,50 @@ def normalize_layout_response(raw: dict[str, Any]) -> dict[str, Any]:
         "expected_improvements": _string_list(expected_improvements),
         "risks": _string_list(risks),
         "next_simulation_focus": str(raw.get("next_simulation_focus") or raw.get("next_focus") or ""),
+        "learned_skills": _learned_skill_entries(raw.get("learned_skills") or raw.get("reusable_skills")),
         "build_ready": bool(raw.get("build_ready")),
         "no_apply": True,
     }
+
+
+def _layout_learning_context(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raw = {}
+    skill_targets = raw.get("skill_targets") if isinstance(raw.get("skill_targets"), list) else []
+    return {
+        "return_learned_skills": bool(raw.get("return_learned_skills", True)),
+        "record_only_confirmed": bool(raw.get("record_only_confirmed", True)),
+        "instruction": str(
+            raw.get("instruction")
+            or "Return reusable learned_skills only when explicit layout evidence confirms the lesson."
+        ),
+        "skill_targets": [str(item) for item in skill_targets[:12] if str(item)],
+    }
+
+
+def _learned_skill_entries(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    entries: list[dict[str, Any]] = []
+    for item in raw[:5]:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("skill") or "").strip()
+        lesson = str(item.get("lesson") or item.get("detail") or item.get("improvement") or "").strip()
+        evidence = str(item.get("evidence") or item.get("why_confirmed") or "").strip()
+        if not name or not lesson:
+            continue
+        entries.append(
+            {
+                "name": name[:120],
+                "trigger": str(item.get("trigger") or item.get("when") or "").strip()[:180],
+                "lesson": lesson[:320],
+                "evidence": evidence[:320],
+                "confirmed": bool(item.get("confirmed") or item.get("validated") or item.get("evidence_confirmed")),
+                "confidence": max(0.0, min(1.0, _float_value(item.get("confidence"), 0.0))),
+            }
+        )
+    return entries
 
 
 def heuristic_layout_improvement(compact: dict[str, Any]) -> dict[str, Any]:
@@ -382,6 +445,7 @@ def heuristic_layout_improvement(compact: dict[str, Any]) -> dict[str, Any]:
         "expected_improvements": [str(simulation.get("delta") or "layout simulation delta")],
         "risks": risks,
         "next_simulation_focus": "Generate another candidate or refine the current one against real site/link data.",
+        "learned_skills": [],
         "build_ready": False,
         "no_apply": True,
     }
@@ -1504,6 +1568,13 @@ def _round_float(value: Any, digits: int) -> float | None:
 def _int_value(value: Any, fallback: int) -> int:
     try:
         return int(float(value))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _float_value(value: Any, fallback: float) -> float:
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return fallback
 

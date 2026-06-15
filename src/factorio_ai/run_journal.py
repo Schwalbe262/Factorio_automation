@@ -283,6 +283,7 @@ def record_layout_result_insight(
 ) -> RunInsight | None:
     if not isinstance(result, dict):
         return None
+    recorded: RunInsight | None = None
     evidence = result.get("improvement_evidence") if isinstance(result.get("improvement_evidence"), dict) else {}
     confirmed = bool(
         result.get("confirmed_improvement")
@@ -291,26 +292,101 @@ def record_layout_result_insight(
     )
     before = result.get("before_metrics", result.get("before", evidence.get("before")))
     after = result.get("after_metrics", result.get("after", evidence.get("after")))
-    if not confirmed or before in (None, "") or after in (None, ""):
-        return None
     candidate_id = str(result.get("selected_candidate_id") or "")
-    detail = str(result.get("improvement") or result.get("detail") or candidate_id or "confirmed layout improvement")
-    insight = RunInsight(
-        timestamp=_now(),
-        objective=objective,
-        goal=active_skill,
-        kind="layout_improvement_confirmed",
-        detail=f"Layout work improved {active_skill}: {detail}",
-        evidence={
+    if confirmed and before not in (None, "") and after not in (None, ""):
+        detail = str(result.get("improvement") or result.get("detail") or candidate_id or "confirmed layout improvement")
+        insight = RunInsight(
+            timestamp=_now(),
+            objective=objective,
+            goal=active_skill,
+            kind="layout_improvement_confirmed",
+            detail=f"Layout work improved {active_skill}: {detail}",
+            evidence={
+                "selected_candidate_id": candidate_id,
+                "score": result.get("score"),
+                "source": result.get("source"),
+                "before": before,
+                "after": after,
+                **evidence,
+            },
+        )
+        recorded = record_run_insight(log_dir, insight, repo_root=repo_root)
+    for insight in _layout_skill_learning_insights(objective, active_skill, result):
+        if _recent_duplicate_insight(log_dir, insight):
+            continue
+        saved = record_run_insight(log_dir, insight, repo_root=repo_root)
+        if recorded is None:
+            recorded = saved
+    return recorded
+
+
+def _layout_skill_learning_insights(
+    objective: str,
+    active_skill: str,
+    result: dict[str, Any],
+) -> list[RunInsight]:
+    raw = result.get("learned_skills") or result.get("reusable_skills")
+    if not isinstance(raw, list):
+        return []
+    candidate_id = str(result.get("selected_candidate_id") or "")
+    rows: list[RunInsight] = []
+    for item in raw[:5]:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("skill") or "").strip()
+        lesson = str(item.get("lesson") or item.get("detail") or item.get("improvement") or "").strip()
+        evidence_text = str(item.get("evidence") or item.get("why_confirmed") or "").strip()
+        confirmed = bool(item.get("confirmed") or item.get("validated") or item.get("evidence_confirmed"))
+        if not confirmed or not name or len(lesson) < 12 or len(evidence_text) < 12:
+            continue
+        evidence: dict[str, Any] = {
+            "source": "layout_idle_learning",
+            "result_source": result.get("source"),
             "selected_candidate_id": candidate_id,
             "score": result.get("score"),
-            "source": result.get("source"),
-            "before": before,
-            "after": after,
-            **evidence,
-        },
-    )
-    return record_run_insight(log_dir, insight, repo_root=repo_root)
+            "trigger": str(item.get("trigger") or item.get("when") or ""),
+            "evidence": evidence_text,
+            "confirmed": True,
+            "confidence": _float_or_none(item.get("confidence")),
+        }
+        before = item.get("before", result.get("before_metrics", result.get("before")))
+        after = item.get("after", result.get("after_metrics", result.get("after")))
+        if before not in (None, ""):
+            evidence["before"] = before
+        if after not in (None, ""):
+            evidence["after"] = after
+        rows.append(
+            RunInsight(
+                timestamp=_now(),
+                objective=objective,
+                goal=active_skill,
+                kind="layout_skill_learned",
+                detail=f"Learned layout skill `{name}` during {active_skill}: {lesson}",
+                evidence=evidence,
+            )
+        )
+    return rows[:3]
+
+
+def _recent_duplicate_insight(log_dir: Path, insight: RunInsight) -> bool:
+    detail = insight.detail.strip().lower()
+    if not detail:
+        return False
+    for row in _load_jsonl(Path(log_dir) / RUN_INSIGHTS_LOG)[-50:]:
+        if str(row.get("kind") or "") != insight.kind:
+            continue
+        if str(row.get("goal") or "") != insight.goal:
+            continue
+        if str(row.get("detail") or "").strip().lower() == detail:
+            return True
+    return False
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def run_journal_summary(log_dir: Path, *, limit: int = 20, repo_root: Path = REPO_ROOT) -> dict[str, Any]:

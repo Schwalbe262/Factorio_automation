@@ -189,6 +189,19 @@ local function distance(a, b)
   local dy = (a.y or a[2]) - (b.y or b[2])
   return math.sqrt(dx * dx + dy * dy)
 end
+local function planner_direction(direction)
+  if direction == defines.direction.east then return 4 end
+  if direction == defines.direction.south then return 8 end
+  if direction == defines.direction.west then return 12 end
+  return 0
+end
+local function factorio_direction(direction)
+  local numeric = tonumber(direction)
+  if numeric == 4 then return defines.direction.east end
+  if numeric == 8 then return defines.direction.south end
+  if numeric == 12 then return defines.direction.west end
+  return defines.direction.north
+end
 local function normalize_position(value)
   if type(value) ~= "table" then return nil end
   local x = value.x or value[1]
@@ -269,9 +282,42 @@ local function allow_first_assembler_bootstrap_gears(agent, inventory, action)
   if current_gears + count > 5 then return false end
   return inventory.get_item_count("electronic-circuit") >= 3 and inventory.get_item_count("iron-plate") >= 9 + (2 * count)
 end
+local function guard_recipe_name(entity)
+  if not entity or not entity.valid then return nil end
+  local ok, recipe = pcall(function() return entity.get_recipe() end)
+  if ok and recipe and recipe.name then return recipe.name end
+  return nil
+end
+local function allow_gear_belt_direct_transfer_bootstrap_gears(agent, action)
+  if not action or action.allow_gear_belt_direct_transfer_bootstrap ~= true then return false end
+  if not agent or not agent.surface then return false end
+  local count = math.max(1, math.min(tonumber(action.count or 1) or 1, 100))
+  if count > 1 then return false end
+  local ok, assemblers = pcall(function()
+    return agent.surface.find_entities_filtered({{ name = "assembling-machine-1", force = agent.force }})
+  end)
+  if not ok or not assemblers then return false end
+  local gear_assemblers = {{}}
+  local belt_assemblers = {{}}
+  for _, entity in pairs(assemblers) do
+    local recipe_name = guard_recipe_name(entity)
+    if recipe_name == "iron-gear-wheel" then table.insert(gear_assemblers, entity) end
+    if recipe_name == "transport-belt" then table.insert(belt_assemblers, entity) end
+  end
+  for _, gear in pairs(gear_assemblers) do
+    for _, belt in pairs(belt_assemblers) do
+      if math.abs((gear.position.y or 0) - (belt.position.y or 0)) <= 0.25
+          and math.abs(math.abs((gear.position.x or 0) - (belt.position.x or 0)) - 4.0) <= 0.25 then
+        return true
+      end
+    end
+  end
+  return false
+end
 local function direct_gear_handcraft_guard(agent, inventory, recipe_name, action)
   if not agent or recipe_name ~= "iron-gear-wheel" then return nil end
   if allow_first_assembler_bootstrap_gears(agent, inventory, action) then return nil end
+  if allow_gear_belt_direct_transfer_bootstrap_gears(agent, action) then return nil end
   if force_has_automation_researched(agent.force) then
     return "blocked direct iron-gear-wheel handcraft after Automation research; use a gear assembler, gear mall, or logistic line instead"
   end
@@ -359,7 +405,7 @@ local function entity_snapshot(entity, origin)
     force = entity.force and entity.force.name or nil,
     health = entity.health,
     position = position_table(entity.position),
-    direction = entity.direction,
+    direction = planner_direction(entity.direction),
     status = entity.status,
     status_name = entity_status_name(entity),
     recipe = entity_recipe_name(entity),
@@ -1279,7 +1325,7 @@ local function action_build()
   local position = normalize_position(action.position)
   if not position then return err("build requires position") end
   if distance(agent.position, position) > (action.reach or 32) then return err("build target out of reach") end
-  local direction = action.direction or defines.direction.north
+  local direction = factorio_direction(action.direction)
   local existing = existing_built_entity(agent.surface, agent.force, action.name, position)
   if existing then
     return ok({ action = "build", name = existing.name, unit_number = existing.unit_number, position = position_table(existing.position), status = "already_exists" })
