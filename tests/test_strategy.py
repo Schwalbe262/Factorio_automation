@@ -47,6 +47,45 @@ def gear_mall_needs_plate_line_observation() -> dict:
     }
 
 
+def gear_belt_mall_needs_bootstrap_observation() -> dict:
+    return {
+        "inventory": {"iron-plate": 40},
+        "entities": [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 100,
+                "recipe": "iron-gear-wheel",
+                "position": {"x": 0.5, "y": 0.5},
+                "electric_network_connected": True,
+                "status_name": "item_ingredient_shortage",
+                "inventories": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 101,
+                "recipe": "transport-belt",
+                "position": {"x": 3.5, "y": 0.5},
+                "electric_network_connected": True,
+                "status_name": "item_ingredient_shortage",
+                "inventories": {"2": {"iron-gear-wheel": 1}},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 200,
+                "recipe": "iron-plate",
+                "position": {"x": 96.5, "y": 0.5},
+                "inventories": {"2": {"iron-plate": 24}},
+            },
+        ],
+        "research": {
+            "technologies": {
+                "automation": {"researched": True},
+                "logistics": {"researched": True},
+            }
+        },
+    }
+
+
 class StrategyTests(unittest.TestCase):
     def test_electronic_circuit_goal_detects_iron_bottleneck(self):
         result = heuristic_strategy(
@@ -120,6 +159,14 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
         self.assertIn("iron-plate logistic line to gear mall", result["blockers"])
         self.assertIn("transport_belts_available_for_mall_logistics=true", result["evidence"])
+
+    def test_rocket_goal_bootstraps_belt_mall_when_belts_are_exhausted(self):
+        result = heuristic_strategy("launch_rocket_program", gear_belt_mall_needs_bootstrap_observation())
+
+        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
+        self.assertIn("transport-belt mall bootstrap before iron-plate logistics", result["blockers"])
+        self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
+        self.assertIn("gear_handcraft_blocked=true", result["evidence"])
 
     def test_rocket_goal_repairs_power_before_unpowered_gear_mall_logistics(self):
         observation = gear_mall_needs_plate_line_observation()
@@ -447,6 +494,27 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
         self.assertEqual(result["source"], "llm")
         self.assertEqual(result["guardrail_adjusted"]["from"], "automate_electronic_circuit_line")
+        self.assertIn("gear_handcraft_blocked=true", result["evidence"])
+
+    def test_reconcile_bootstraps_belt_mall_before_iron_line_when_belts_exhausted(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "build_iron_plate_logistic_line_to_gear_mall",
+                "priority": 50,
+                "reason": "Need the long iron plate line.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            gear_belt_mall_needs_bootstrap_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
         self.assertIn("gear_handcraft_blocked=true", result["evidence"])
 
     def test_reconcile_repairs_power_even_when_belt_mall_has_output(self):

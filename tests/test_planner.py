@@ -2897,6 +2897,53 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["item"], "iron-plate")
         self.assertNotEqual(decision.action.get("recipe"), "iron-gear-wheel")
 
+    def test_gear_belt_mall_does_not_require_coal_for_waiting_burner_inserter(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 8}
+        obs["craftable"] = {"iron-gear-wheel": 4}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="transport-belt",
+                gear_inventory={"iron-gear-wheel": 4},
+            )
+        )
+        for index, x in enumerate((3, 4), start=930):
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": index,
+                    "position": {"x": x, "y": -1},
+                    "direction": 4,
+                    "inventories": {},
+                }
+            )
+        obs["entities"].extend(
+            [
+                {
+                    "name": "burner-inserter",
+                    "unit_number": 940,
+                    "position": {"x": 3, "y": 0},
+                    "direction": 8,
+                    "status_name": "waiting_for_source_items",
+                    "inventories": {},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 941,
+                    "position": {"x": 4, "y": 0},
+                    "direction": 0,
+                    "inventories": {},
+                    "electric_network_connected": True,
+                },
+            ]
+        )
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertNotIn("coal starter fuel", decision.reason)
+
     def test_gear_belt_mall_relocates_existing_inserter_instead_of_handcrafting_gear(self):
         obs = powered_automation_observation()
         obs["player"]["position"] = {"x": 8, "y": 2}
@@ -3089,6 +3136,36 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["name"], "transport-belt")
         self.assertNotIn(decision.action.get("item"), {"iron-plate", "iron-gear-wheel"})
         self.assertNotEqual(decision.action.get("recipe"), "iron-gear-wheel")
+
+    def test_iron_plate_logistic_line_clears_tree_without_rerouting(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 4}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 2},
+                "recipe": "iron-plate",
+                "inventories": {"3": {"iron-plate": 20}},
+            }
+        )
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+        next_position = layout["segments"][0]["position"]
+        obs["entities"].append(
+            {
+                "name": "tree-02",
+                "type": "tree",
+                "position": {"x": next_position["x"], "y": next_position["y"] + 1.0},
+                "inventories": {},
+            }
+        )
+
+        decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "tree-02")
+        self.assertIn("clear blocking tree-02", decision.reason)
 
     def test_iron_plate_logistic_line_does_not_mine_source_furnace_as_blocker(self):
         obs = powered_automation_observation()

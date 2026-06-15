@@ -6293,3 +6293,173 @@
 - Next action: Commit/push Part 102, then implement a deterministic recovery from the current long-distance iron-plate logistics deadlock without gear handcraft, gear output pickup, or distant iron-plate hand-carry.
 - Token usage: cumulative 57,789,968; current raw counter 10,106,568; delta 642,810 / weekly quota unavailable
 
+## 2026-06-15 09:20:01 +09:00 - Loop 295
+- Part: skill
+- Goal: launch_rocket_program / build_gear_belt_mall_logistics
+- Hypothesis: Running `build_gear_belt_mall_logistics` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_gear_belt_mall_logistics` for up to 40 step(s).
+  - Tracked `transport-belt` from 0 to 2.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-gear-belt-mall-20260615-001930.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_gear_belt_mall_logistics`.
+  - Target item candidate: `transport-belt` target `20`.
+- Metrics:
+  - Steps: 8.
+  - Status: ok.
+  - Duration: 30.813s.
+  - transport-belt: 0 -> 2 (delta 2).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-gear-belt-mall-20260615-001930.jsonl`.
+  - Metadata: `{"delta_item_count":2,"final_item_count":2,"initial_item_count":0,"max_steps":40,"target":20}`.
+- Result: Completed: gear-fed belt mall logistics produced transport belts in assembler output: 2
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 09:21:47 +09:00 - Loop 296
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 60 step(s).
+  - Tracked `transport-belt` from 8 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260615-002051.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 11.
+  - Status: failed.
+  - Duration: 55.797s.
+  - transport-belt: 8 -> 0 (delta -8).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260615-002051.jsonl`.
+  - Metadata: `{"delta_item_count":-8,"final_item_count":0,"initial_item_count":8,"max_steps":60,"target":40}`.
+- Result: Loop stopped: iron-plate logistics line needs transport belts from the belt mall; refusing gear handcraft or iron-plate hand-carry
+- Failure reason: iron-plate logistics line needs transport belts from the belt mall; refusing gear handcraft or iron-plate hand-carry
+- Next action: Plan or build the missing site-to-site logistic line before repeating the consumer loop.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 09:25:42 +09:00 - Loop 297
+- Part: skill
+- Goal: launch_rocket_program / build_gear_belt_mall_logistics
+- Hypothesis: Running `build_gear_belt_mall_logistics` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_gear_belt_mall_logistics` for up to 40 step(s).
+  - Tracked `transport-belt` from 0 to 2.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-gear-belt-mall-20260615-002517.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_gear_belt_mall_logistics`.
+  - Target item candidate: `transport-belt` target `20`.
+- Metrics:
+  - Steps: 5.
+  - Status: ok.
+  - Duration: 24.437s.
+  - transport-belt: 0 -> 2 (delta 2).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-gear-belt-mall-20260615-002517.jsonl`.
+  - Metadata: `{"delta_item_count":2,"final_item_count":2,"initial_item_count":0,"max_steps":40,"target":20}`.
+- Result: Completed: gear-fed belt mall logistics produced transport belts in assembler output: 2
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 09:27:09 +09:00 - Loop 298
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 40 step(s).
+  - Tracked `transport-belt` from 8 to 5.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260615-002632.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 6.
+  - Status: failed.
+  - Duration: 36.187s.
+  - transport-belt: 8 -> 5 (delta -3).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260615-002632.jsonl`.
+  - Metadata: `{"delta_item_count":-3,"final_item_count":5,"initial_item_count":8,"max_steps":40,"target":40}`.
+- Result: Loop stopped: action failed: cannot place entity
+- Failure reason: action failed: cannot place entity
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 09:34:45 +09:00 - Loop 299
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 40 step(s).
+  - Tracked `transport-belt` from 5 to 4.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260615-003430.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 3.
+  - Status: failed.
+  - Duration: 15.047s.
+  - transport-belt: 5 -> 4 (delta -1).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260615-003430.jsonl`.
+  - Metadata: `{"delta_item_count":-1,"final_item_count":4,"initial_item_count":5,"max_steps":40,"target":40}`.
+- Result: Loop stopped: action failed: cannot place entity
+- Failure reason: action failed: cannot place entity
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 09:37:25 +09:00 - Loop 300
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 40 step(s).
+  - Tracked `transport-belt` from 4 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260615-003636.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 9.
+  - Status: failed.
+  - Duration: 48.875s.
+  - transport-belt: 4 -> 0 (delta -4).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260615-003636.jsonl`.
+  - Metadata: `{"delta_item_count":-4,"final_item_count":0,"initial_item_count":4,"max_steps":40,"target":40}`.
+- Result: Loop stopped: iron-plate logistics line needs transport belts from the belt mall; refusing gear handcraft or iron-plate hand-carry
+- Failure reason: iron-plate logistics line needs transport belts from the belt mall; refusing gear handcraft or iron-plate hand-carry
+- Next action: Plan or build the missing site-to-site logistic line before repeating the consumer loop.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 09:39:27 +09:00 - Loop 301
+- Part: Part 103 - belt mall bootstrap strategy and tree-blocked iron route recovery
+- Goal: Let Qwen/deterministic strategy recover from the current long-distance iron-plate route deadlock without direct gear handcraft, gear output pickup, or distant plate shuttle loops.
+- Hypothesis: The agent was failing because two smaller missing capabilities compounded: strategy did not route exhausted-belt states back to the gear-fed belt mall, and the iron-plate route executor could not see nearby neutral trees that blocked belt placement.
+- Actions:
+  - Added `_gear_belt_mall_bootstrap_issue` so heuristic and LLM reconciliation select `build_gear_belt_mall_logistics` when construction belts are exhausted but the powered gear/belt mall can be restarted from existing materials.
+  - Updated the skill catalog to describe one-time inventory iron-plate seed as a recovery step, not a sustained plate shuttle.
+  - Narrowed the gear/belt mall burner inserter fuel blocker so `waiting_for_source_items` burner inserters do not require coal just because their fuel inventory is not exposed in observation.
+  - Added immediate/nearby tree collection to no-mod observe so build blockers near the AI route are visible before placement.
+  - Changed iron-plate route scoring so trees do not cause a new detour lane; they are treated as removable blockers.
+  - Widened tree/simple blocker radius to match actual Factorio belt placement collision around tile-centered entities.
+  - Ran Qwen `--require-llm` strategy: Qwen selected `plan_factory_site`, and the new guardrail adjusted it to `build_gear_belt_mall_logistics` with `source=llm`.
+  - Ran live gear/belt recovery twice and iron-plate route extension repeatedly. The route now clears trees and places belts instead of failing with `cannot place entity`.
+- Candidates:
+  - Rejected: repeat circuit automation while the belt mall cannot replenish construction belts.
+  - Rejected: direct `iron-gear-wheel` handcraft or player gear output pickup.
+  - Rejected: distant iron-plate hand-carry from furnace unit 395 into the gear mall.
+  - Selected: restart belt mall from existing materials, consume belt output as construction material, and extend the route while clearing tree blockers.
+- Metrics:
+  - Tests: `PYTHONPATH=src python -m unittest discover tests` -> 448 passed.
+  - Qwen strategy check: `source=llm`, `guardrail_adjusted.from=plan_factory_site`, `guardrail_adjusted.to=build_gear_belt_mall_logistics`.
+  - Live belt recovery traces: `strategy-gear-belt-mall-20260615-001930.jsonl`, `strategy-gear-belt-mall-20260615-002517.jsonl`.
+  - Live tree/route trace: `strategy-iron-plate-gear-mall-logistics-20260615-003636.jsonl`.
+  - Current line state near source: 23 observed transport belts from x=72.5 to x=92.5 on the partial route corridor.
+  - Current inventory after route work: `transport-belt=0`, `iron-plate=0`, `wood=19`.
+  - Slurm/Qwen status: job `678192` running, remote LLM ready, model `Qwen/Qwen3.5-4B`.
+  - Token usage sample: cumulative 58,116,310, current raw counter 10,432,910, delta 326,342 since prior sample, weekly quota unavailable.
+- Result: Implemented and live-verified strategy recovery for exhausted construction belts and tree-blocked belt placement. The current live map progressed from no belts and a stalled mall to a longer partial iron-plate route, but the route is not complete.
+- Failure reason: Remaining blocker is material supply: no transport belts or iron plates remain, so the next cycle must restart direct iron production without hand-mining ore.
+- Next action: Refuel/restart the existing direct iron drill/furnace using local wood or build a shorter sustained input path, then continue belt-mall refill and iron-plate route completion.
+- Token usage: cumulative 58,116,310; current raw counter 10,432,910; delta 326,342 / weekly quota unavailable
+

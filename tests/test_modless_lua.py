@@ -41,6 +41,16 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("player_actual_position", command)
         self.assertIn("controller_is_character", command)
         self.assertIn("auto_select_player_name", command)
+        self.assertIn('radius = 12, type = "tree", limit = 160', command)
+        self.assertIn('radius = 48, type = "tree", limit = 160', command)
+        self.assertLess(
+            command.index("local immediate_trees"),
+            command.index("local nearby_trees"),
+        )
+        self.assertLess(
+            command.index("local nearby_trees"),
+            command.index("local trees = surface.find_entities_filtered"),
+        )
         self.assertIn('observed_from = source_spec.source', command)
         self.assertIn("resources = collect_resources(base_anchor)", command)
         self.assertIn('execution = { mode = agent.kind == "server" and "virtual" or "player"', command)

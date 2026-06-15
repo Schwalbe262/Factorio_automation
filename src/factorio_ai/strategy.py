@@ -243,14 +243,15 @@ SKILL_CATALOG: dict[str, SkillContract] = {
             "automation researched",
             "electric power available",
             "powered iron-gear assembler and reusable adjacent assembler are available",
-            "short bootstrap belts and inserters are available or craftable without hand-crafting gears",
+            "short bootstrap belts and inserters are available or recoverable without hand-crafting gears",
+            "existing inventory iron plates may be used only as a one-time assembler seed; distant plate shuttle loops are not allowed",
         ],
         completion=[
             "iron gears move toward the transport-belt assembler through inserters and belts",
             "transport-belt production no longer depends on player gear collection",
         ],
         llm_scope=(
-            "Choose this when belt automation is blocked by gear mall output logistics. "
+            "Choose this when belt automation is blocked by gear mall output logistics or when the belt mall needs a one-time iron seed before it can replenish construction belts. "
             "Executor handles exact belt lane, inserter direction, burner fuel, and recipe changes."
         ),
     ),
@@ -824,6 +825,7 @@ def reconcile_strategy_decision(
         }
         return adjusted
     gear_belt_mall_power_issue = _gear_belt_mall_power_issue(observation)
+    gear_belt_mall_bootstrap_issue = _gear_belt_mall_bootstrap_issue(observation)
     if gear_belt_mall_power_issue is not None and selected in {
         "plan_factory_site",
         "produce_electronic_circuit",
@@ -853,6 +855,46 @@ def reconcile_strategy_decision(
         adjusted["guardrail_adjusted"] = {
             "from": selected,
             "to": "setup_power",
+            "reason": guardrail_reason,
+        }
+        return adjusted
+    if gear_belt_mall_bootstrap_issue is not None and selected in {
+        "plan_factory_site",
+        "produce_electronic_circuit",
+        "automate_electronic_circuit_line",
+        "bootstrap_build_item_mall",
+        "build_iron_plate_logistic_line_to_gear_mall",
+        "research_logistics",
+    }:
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "build_gear_belt_mall_logistics"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 92)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            f"LLM selected {selected}, but transport belts are exhausted while the gear/belt mall can be "
+            "restarted from existing assembler/inventory materials; replenish belts before extending long "
+            "iron-plate logistics or running downstream automation."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(
+            set(_string_list(decision.get("blockers")) + ["transport-belt mall bootstrap before iron-plate logistics"])
+        )
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            f"gear_assembler_unit={gear_belt_mall_bootstrap_issue.get('gear_unit')}",
+            f"belt_assembler_unit={gear_belt_mall_bootstrap_issue.get('belt_unit')}",
+            f"inventory_iron_plate={gear_belt_mall_bootstrap_issue.get('inventory_iron_plate')}",
+            f"belt_assembler_iron_gear={gear_belt_mall_bootstrap_issue.get('belt_assembler_iron_gear')}",
+            "transport_belts_available_for_mall_logistics=false",
+            "gear_handcraft_blocked=true",
+        ]
+        adjusted["expected_effect"] = (
+            "Seed or finish the gear-fed belt mall so it outputs construction belts without hand-crafting gears, "
+            "then resume the sustained iron-plate logistics route."
+        )
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": "build_gear_belt_mall_logistics",
             "reason": guardrail_reason,
         }
         return adjusted
@@ -1113,6 +1155,7 @@ def heuristic_strategy(
     automation_logistics_issue = _first_automation_logistics_issue(layout_issues)
     gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
     gear_belt_mall_power_issue = _gear_belt_mall_power_issue(observation)
+    gear_belt_mall_bootstrap_issue = _gear_belt_mall_bootstrap_issue(observation)
     if threats["danger_level"] in {"critical", "high"} and int(threats.get("armed_gun_turret_count") or 0) <= 0:
         nearest = threats.get("nearest_enemy") if isinstance(threats.get("nearest_enemy"), dict) else {}
         return StrategicDecision(
@@ -1200,6 +1243,32 @@ def heuristic_strategy(
             ],
             blockers=["gear/belt mall power"],
             expected_effect="Restore electric power before trying to extend the belt route or expand circuit automation.",
+        ).to_dict()
+
+    if gear_belt_mall_bootstrap_issue is not None:
+        return StrategicDecision(
+            selected_skill="build_gear_belt_mall_logistics",
+            priority=92,
+            reason=(
+                "Transport belts are exhausted, but the powered gear/belt mall can be restarted from existing "
+                "assembler or inventory materials. Replenish belt output before extending long iron-plate "
+                "logistics or downstream automation."
+            ),
+            evidence=[
+                f"gear_assembler_unit={gear_belt_mall_bootstrap_issue.get('gear_unit')}",
+                f"belt_assembler_unit={gear_belt_mall_bootstrap_issue.get('belt_unit')}",
+                f"inventory_iron_plate={gear_belt_mall_bootstrap_issue.get('inventory_iron_plate')}",
+                f"gear_assembler_iron_plate={gear_belt_mall_bootstrap_issue.get('gear_assembler_iron_plate')}",
+                f"gear_assembler_iron_gear={gear_belt_mall_bootstrap_issue.get('gear_assembler_iron_gear')}",
+                f"belt_assembler_iron_gear={gear_belt_mall_bootstrap_issue.get('belt_assembler_iron_gear')}",
+                "transport_belts_available_for_mall_logistics=false",
+                "gear_handcraft_blocked=true",
+            ],
+            blockers=["transport-belt mall bootstrap before iron-plate logistics"],
+            expected_effect=(
+                "Use the gear-fed belt mall executor to seed or finish belt production without hand-crafted gears, "
+                "then resume the sustained iron-plate input route."
+            ),
         ).to_dict()
 
     if gear_mall_iron_plate_issue is not None:
@@ -1807,6 +1876,70 @@ def _transport_belts_available_for_mall_logistics(observation: dict[str, Any]) -
             if entity_item_count(assembler, "iron-gear-wheel") > 0 and entity_item_count(assembler, "iron-plate") > 0:
                 return True
     return False
+
+
+def _gear_belt_mall_bootstrap_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
+    if not _technology_researched(observation, "automation"):
+        return None
+    if _transport_belts_available_for_mall_logistics(observation):
+        return None
+    assemblers = (
+        entities_named(observation, "assembling-machine-1")
+        + entities_named(observation, "assembling-machine-2")
+        + entities_named(observation, "assembling-machine-3")
+    )
+    gear_assemblers = [
+        entity
+        for entity in assemblers
+        if str(entity.get("recipe") or entity.get("recipe_name") or "") == "iron-gear-wheel"
+        and entity.get("electric_network_connected") is not False
+        and not _entity_status_is(entity, "no_power", 54)
+    ]
+    belt_assemblers = [
+        entity
+        for entity in assemblers
+        if str(entity.get("recipe") or entity.get("recipe_name") or "") == "transport-belt"
+        and entity.get("electric_network_connected") is not False
+        and not _entity_status_is(entity, "no_power", 54)
+    ]
+    if not gear_assemblers or not belt_assemblers:
+        return None
+
+    best_issue: dict[str, Any] | None = None
+    best_distance = 999999.0
+    for gear in gear_assemblers:
+        gear_position = _position(gear)
+        if gear_position is None:
+            continue
+        gear_iron_plate = entity_item_count(gear, "iron-plate")
+        gear_iron_gear = entity_item_count(gear, "iron-gear-wheel")
+        gear_can_be_seeded = inventory_count(observation, "iron-plate") > 0 or gear_iron_plate >= 2 or gear_iron_gear > 0
+        if not gear_can_be_seeded:
+            continue
+        for belt in belt_assemblers:
+            belt_position = _position(belt)
+            mall_distance = _distance(gear_position, belt_position)
+            if mall_distance is None or mall_distance > 16.0 or mall_distance >= best_distance:
+                continue
+            belt_output = entity_item_count(belt, "transport-belt")
+            if belt_output > 0:
+                continue
+            belt_iron_plate = entity_item_count(belt, "iron-plate")
+            belt_iron_gear = entity_item_count(belt, "iron-gear-wheel")
+            if belt_iron_plate <= 0 and belt_iron_gear <= 0 and inventory_count(observation, "iron-plate") <= 0:
+                continue
+            best_distance = mall_distance
+            best_issue = {
+                "gear_unit": gear.get("unit_number"),
+                "belt_unit": belt.get("unit_number"),
+                "mall_distance_tiles": round(mall_distance, 1),
+                "inventory_iron_plate": inventory_count(observation, "iron-plate"),
+                "gear_assembler_iron_plate": gear_iron_plate,
+                "gear_assembler_iron_gear": gear_iron_gear,
+                "belt_assembler_iron_plate": belt_iron_plate,
+                "belt_assembler_iron_gear": belt_iron_gear,
+            }
+    return best_issue
 
 
 def _iron_plate_source_furnaces(observation: dict[str, Any]) -> list[dict[str, Any]]:

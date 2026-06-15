@@ -4765,7 +4765,14 @@ def _select_iron_plate_line_detour_y(
             blocker = _belt_line_position_blocker(observation, position)
             if blocker is None:
                 continue
-            blocker_score += 10 if str(blocker.get("name") or "") in ASSEMBLER_ENTITY_NAMES else 4
+            blocker_type = str(blocker.get("type") or "")
+            blocker_name = str(blocker.get("name") or "")
+            if blocker_type == "tree":
+                blocker_score += 0
+            elif blocker_name in ASSEMBLER_ENTITY_NAMES:
+                blocker_score += 10
+            else:
+                blocker_score += 4
         candidates.append((blocker_score, abs(offset), detour_y))
     candidates.sort(key=lambda item: (item[0], item[1]))
     return candidates[0][2] if candidates else start_y + (3.0 * sign)
@@ -4801,7 +4808,7 @@ def _belt_line_position_blocker(
             blockers.append(entity)
             continue
         entity_type = str(entity.get("type") or "")
-        if (entity_type in {"simple-entity", "tree", "cliff"} or name.endswith("rock")) and distance(_position(entity), position) < 0.75:
+        if (entity_type in {"simple-entity", "tree", "cliff"} or name.endswith("rock")) and distance(_position(entity), position) < 1.25:
             blockers.append(entity)
     return _nearest_to(blockers, position) if blockers else None
 
@@ -5971,7 +5978,11 @@ class GearBeltMallLogisticsSkill:
                     },
                     f"remove misoriented {label} before rebuilding the gear/belt mall line",
                 )
-            if inserter.get("name") == "burner-inserter" and entity_item_count(inserter, "coal") < 1:
+            if (
+                inserter.get("name") == "burner-inserter"
+                and entity_item_count(inserter, "coal") < 1
+                and str(inserter.get("status_name") or "") == "no_fuel"
+            ):
                 if inventory_count(observation, "coal") <= 0:
                     return PlannerDecision(None, f"{label} needs coal starter fuel")
                 position = _position(inserter)

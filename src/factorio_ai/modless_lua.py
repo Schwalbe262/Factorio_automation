@@ -594,6 +594,10 @@ local function collect_entities()
       for _, entity in pairs(found) do add_unique_entity_snapshot(rows, seen, entity, origin) end
     end
   end
+  local immediate_trees = surface.find_entities_filtered({ position = origin, radius = 12, type = "tree", limit = 160 })
+  for _, entity in pairs(immediate_trees) do add_unique_entity_snapshot(rows, seen, entity, origin) end
+  local nearby_trees = surface.find_entities_filtered({ position = origin, radius = 48, type = "tree", limit = 160 })
+  for _, entity in pairs(nearby_trees) do add_unique_entity_snapshot(rows, seen, entity, origin) end
   local trees = surface.find_entities_filtered({ position = origin, radius = OBSERVE_RADIUS, type = "tree", limit = 80 })
   for _, entity in pairs(trees) do add_unique_entity_snapshot(rows, seen, entity, origin) end
   local nearby = surface.find_entities_filtered({ position = origin, radius = 32, limit = 120 })

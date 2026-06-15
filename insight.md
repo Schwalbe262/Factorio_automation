@@ -360,3 +360,43 @@
 - After: The same live action returns `ok=false` with reason `blocked direct iron-gear-wheel handcraft after Automation research`; validation pollution was restored to `iron-gear-wheel=0`, `iron-plate=40`.
 - Evidence: `{"source_loop":294,"tests":"444 passed","targeted_tests":"60 passed","live_guard":"ok=false; blocked direct iron-gear-wheel handcraft after Automation research","inventory_after_restore":{"iron-gear-wheel":0,"iron-plate":40,"transport-belt":0}}`
 - Remaining risk: This prevents the bad action but does not solve the current factory deadlock; the gear/belt mall still lacks sustained iron-plate input and transport belts are exhausted.
+
+## 2026-06-15 09:20:01 +09:00 - Insight 44
+- Source loop: Loop 295
+- Improvement: transport-belt increased by 2 during build_gear_belt_mall_logistics.
+- Before: transport-belt = 0
+- After: transport-belt = 2
+- Evidence: `{"delta":2,"final":2,"initial":0,"item":"transport-belt","source_loop":295,"target":20}`
+- Remaining risk: Target is not complete yet: 2/20.
+
+## 2026-06-15 09:20:01 +09:00 - Insight 45
+- Source loop: Loop 295
+- Improvement: build_gear_belt_mall_logistics completed after 8 step(s): gear-fed belt mall logistics produced transport belts in assembler output: 2
+- Before: not recorded
+- After: transport-belt = 2
+- Evidence: `{"item":"transport-belt","item_count":2,"source_loop":295,"steps":8,"target":20}`
+- Remaining risk: Target is not complete yet: 2/20.
+
+## 2026-06-15 09:25:42 +09:00 - Insight 46
+- Source loop: Loop 297
+- Improvement: transport-belt increased by 2 during build_gear_belt_mall_logistics.
+- Before: transport-belt = 0
+- After: transport-belt = 2
+- Evidence: `{"delta":2,"final":2,"initial":0,"item":"transport-belt","source_loop":297,"target":20}`
+- Remaining risk: Target is not complete yet: 2/20.
+
+## 2026-06-15 09:25:42 +09:00 - Insight 47
+- Source loop: Loop 297
+- Improvement: build_gear_belt_mall_logistics completed after 5 step(s): gear-fed belt mall logistics produced transport belts in assembler output: 2
+- Before: not recorded
+- After: transport-belt = 2
+- Evidence: `{"item":"transport-belt","item_count":2,"source_loop":297,"steps":5,"target":20}`
+- Remaining risk: Target is not complete yet: 2/20.
+
+## 2026-06-15 09:39:27 +09:00 - Insight 48
+- Source loop: Loops 295-300
+- Improvement: The strategy layer now recovers from exhausted construction belts by restarting the gear-fed belt mall first, and the iron-plate logistics executor can clear tree blockers instead of failing with `cannot place entity`.
+- Before: With `transport-belt=0`, Qwen/heuristic could keep choosing downstream circuit or iron-line work; `strategy-iron-plate-gear-mall-logistics-20260615-002632.jsonl` and `003430.jsonl` then hit `cannot place entity` on tree-blocked belt positions.
+- After: `no-mod-strategy --require-llm` returned `source=llm` with Qwen's `plan_factory_site` guardrailed to `build_gear_belt_mall_logistics`; live runs produced belt output twice, and `strategy-iron-plate-gear-mall-logistics-20260615-003636.jsonl` cleared trees, placed belts through x=72..76, and stopped only when belts were exhausted.
+- Evidence: `{"tests":"448 passed","llm_guardrail":{"source":"llm","from":"plan_factory_site","to":"build_gear_belt_mall_logistics"},"belt_mall_traces":["strategy-gear-belt-mall-20260615-001930.jsonl","strategy-gear-belt-mall-20260615-002517.jsonl"],"tree_clear_trace":"strategy-iron-plate-gear-mall-logistics-20260615-003636.jsonl","current_line_belts_near_source":23,"direct_gear_craft":0}`
+- Remaining risk: The long iron-plate route is still incomplete and the factory has no remaining iron plates for more belt-mall seed; next progress should refuel/restart the existing direct iron drill/furnace using local wood or build a shorter sustained input path.
