@@ -141,7 +141,8 @@ def record_skill_run_journal(
     duration_seconds: float,
     repo_root: Path = REPO_ROOT,
 ) -> list[RunInsight]:
-    source_loop = _next_jsonl_index(Path(log_dir) / RUN_NOTES_LOG)
+    note_log_path = Path(log_dir) / RUN_NOTES_LOG
+    source_loop = _next_markdown_record_index(repo_root / NOTE_MD, "Loop", fallback=_next_jsonl_index(note_log_path))
     note = RunNote(
         timestamp=_now(),
         loop_type="skill",
@@ -370,7 +371,12 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
 def _append_markdown(path: Path, header: str, entry: str) -> None:
     if not path.exists():
         path.write_text(header.rstrip() + "\n\n", encoding="utf-8")
+    existing = path.read_text(encoding="utf-8")
+    separator = ""
+    if existing and not existing.endswith("\n\n"):
+        separator = "\n" if existing.endswith("\n") else "\n\n"
     with path.open("a", encoding="utf-8") as file:
+        file.write(separator)
         file.write(entry.rstrip())
         file.write("\n\n")
 

@@ -885,6 +885,8 @@ def reconcile_strategy_decision(
             f"belt_assembler_unit={gear_belt_mall_bootstrap_issue.get('belt_unit')}",
             f"inventory_iron_plate={gear_belt_mall_bootstrap_issue.get('inventory_iron_plate')}",
             f"belt_assembler_iron_gear={gear_belt_mall_bootstrap_issue.get('belt_assembler_iron_gear')}",
+            f"local_iron_plate_seed_source_unit={gear_belt_mall_bootstrap_issue.get('local_iron_plate_seed_source_unit')}",
+            f"local_iron_plate_seed_distance={gear_belt_mall_bootstrap_issue.get('local_iron_plate_seed_distance')}",
             "transport_belts_available_for_mall_logistics=false",
             "gear_handcraft_blocked=true",
         ]
@@ -1261,6 +1263,8 @@ def heuristic_strategy(
                 f"gear_assembler_iron_plate={gear_belt_mall_bootstrap_issue.get('gear_assembler_iron_plate')}",
                 f"gear_assembler_iron_gear={gear_belt_mall_bootstrap_issue.get('gear_assembler_iron_gear')}",
                 f"belt_assembler_iron_gear={gear_belt_mall_bootstrap_issue.get('belt_assembler_iron_gear')}",
+                f"local_iron_plate_seed_source_unit={gear_belt_mall_bootstrap_issue.get('local_iron_plate_seed_source_unit')}",
+                f"local_iron_plate_seed_distance={gear_belt_mall_bootstrap_issue.get('local_iron_plate_seed_distance')}",
                 "transport_belts_available_for_mall_logistics=false",
                 "gear_handcraft_blocked=true",
             ],
@@ -1913,7 +1917,17 @@ def _gear_belt_mall_bootstrap_issue(observation: dict[str, Any]) -> dict[str, An
             continue
         gear_iron_plate = entity_item_count(gear, "iron-plate")
         gear_iron_gear = entity_item_count(gear, "iron-gear-wheel")
-        gear_can_be_seeded = inventory_count(observation, "iron-plate") > 0 or gear_iron_plate >= 2 or gear_iron_gear > 0
+        local_gear_plate_seed = _local_iron_plate_seed_source(
+            observation,
+            gear_position,
+            exclude_units={gear.get("unit_number")},
+        )
+        gear_can_be_seeded = (
+            inventory_count(observation, "iron-plate") > 0
+            or gear_iron_plate >= 2
+            or gear_iron_gear > 0
+            or local_gear_plate_seed is not None
+        )
         if not gear_can_be_seeded:
             continue
         for belt in belt_assemblers:
@@ -1926,8 +1940,20 @@ def _gear_belt_mall_bootstrap_issue(observation: dict[str, Any]) -> dict[str, An
                 continue
             belt_iron_plate = entity_item_count(belt, "iron-plate")
             belt_iron_gear = entity_item_count(belt, "iron-gear-wheel")
-            if belt_iron_plate <= 0 and belt_iron_gear <= 0 and inventory_count(observation, "iron-plate") <= 0:
+            local_belt_plate_seed = _local_iron_plate_seed_source(
+                observation,
+                belt_position,
+                exclude_units={gear.get("unit_number"), belt.get("unit_number")},
+            )
+            if (
+                belt_iron_plate <= 0
+                and belt_iron_gear <= 0
+                and inventory_count(observation, "iron-plate") <= 0
+                and local_gear_plate_seed is None
+                and local_belt_plate_seed is None
+            ):
                 continue
+            local_seed = local_gear_plate_seed or local_belt_plate_seed
             best_distance = mall_distance
             best_issue = {
                 "gear_unit": gear.get("unit_number"),
@@ -1938,8 +1964,48 @@ def _gear_belt_mall_bootstrap_issue(observation: dict[str, Any]) -> dict[str, An
                 "gear_assembler_iron_gear": gear_iron_gear,
                 "belt_assembler_iron_plate": belt_iron_plate,
                 "belt_assembler_iron_gear": belt_iron_gear,
+                "local_iron_plate_seed_source_unit": local_seed.get("unit_number") if isinstance(local_seed, dict) else None,
+                "local_iron_plate_seed_distance": (
+                    round(distance(_position(local_seed), gear_position), 1) if isinstance(local_seed, dict) else None
+                ),
             }
     return best_issue
+
+
+def _local_iron_plate_seed_source(
+    observation: dict[str, Any],
+    target_position: dict[str, float],
+    *,
+    exclude_units: set[Any] | None = None,
+    max_distance: float = 16.0,
+) -> dict[str, Any] | None:
+    excluded = set(exclude_units or set())
+    allowed_names = {
+        "assembling-machine-1",
+        "assembling-machine-2",
+        "assembling-machine-3",
+        "stone-furnace",
+        "steel-furnace",
+        "electric-furnace",
+        "wooden-chest",
+        "iron-chest",
+        "steel-chest",
+    }
+    candidates: list[dict[str, Any]] = []
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict) or entity.get("unit_number") in excluded:
+            continue
+        if str(entity.get("name") or "") not in allowed_names:
+            continue
+        if entity_item_count(entity, "iron-plate") <= 0:
+            continue
+        position = _position(entity)
+        if distance(position, target_position) > max_distance:
+            continue
+        candidates.append(entity)
+    if not candidates:
+        return None
+    return min(candidates, key=lambda entity: distance(_position(entity), target_position))
 
 
 def _iron_plate_source_furnaces(observation: dict[str, Any]) -> list[dict[str, Any]]:

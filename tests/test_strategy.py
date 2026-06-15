@@ -86,6 +86,25 @@ def gear_belt_mall_needs_bootstrap_observation() -> dict:
     }
 
 
+def gear_belt_mall_has_local_plate_seed_observation() -> dict:
+    observation = gear_belt_mall_needs_bootstrap_observation()
+    observation["inventory"] = {}
+    observation["entities"][0]["inventories"] = {}
+    observation["entities"][1]["inventories"] = {"2": {"iron-gear-wheel": 3}}
+    observation["entities"].append(
+        {
+            "name": "assembling-machine-1",
+            "unit_number": 102,
+            "recipe": "electronic-circuit",
+            "position": {"x": 8.5, "y": 2.5},
+            "electric_network_connected": True,
+            "status_name": "item_ingredient_shortage",
+            "inventories": {"2": {"iron-plate": 4}},
+        }
+    )
+    return observation
+
+
 class StrategyTests(unittest.TestCase):
     def test_electronic_circuit_goal_detects_iron_bottleneck(self):
         result = heuristic_strategy(
@@ -167,6 +186,13 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("transport-belt mall bootstrap before iron-plate logistics", result["blockers"])
         self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
         self.assertIn("gear_handcraft_blocked=true", result["evidence"])
+
+    def test_rocket_goal_bootstraps_belt_mall_from_local_plate_seed_before_circuit(self):
+        result = heuristic_strategy("launch_rocket_program", gear_belt_mall_has_local_plate_seed_observation())
+
+        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
+        self.assertIn("transport-belt mall bootstrap before iron-plate logistics", result["blockers"])
+        self.assertIn("local_iron_plate_seed_source_unit=102", result["evidence"])
 
     def test_rocket_goal_repairs_power_before_unpowered_gear_mall_logistics(self):
         observation = gear_mall_needs_plate_line_observation()

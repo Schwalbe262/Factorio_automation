@@ -6463,3 +6463,80 @@
 - Next action: Refuel/restart the existing direct iron drill/furnace using local wood or build a shorter sustained input path, then continue belt-mall refill and iron-plate route completion.
 - Token usage: cumulative 58,116,310; current raw counter 10,432,910; delta 326,342 / weekly quota unavailable
 
+## 2026-06-15 09:54:16 +09:00 - Loop 302
+- Part: skill
+- Goal: launch_rocket_program / setup_power
+- Hypothesis: Running `setup_power` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `setup_power` for up to 8 step(s).
+  - Tracked `steam` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-power-20260615-005358.jsonl`.
+- Candidates:
+  - Selected goal/skill: `setup_power`.
+  - Target item candidate: `steam` target `1`.
+- Metrics:
+  - Steps: 3.
+  - Status: ok.
+  - Duration: 18.234s.
+  - steam: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-power-20260615-005358.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":8,"target":1}`.
+- Result: Completed: steam power block is producing usable steam power
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 10:03:00 +09:00 - Loop 303
+- Part: skill
+- Goal: launch_rocket_program / build_gear_belt_mall_logistics
+- Hypothesis: Running `build_gear_belt_mall_logistics` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_gear_belt_mall_logistics` for up to 12 step(s).
+  - Tracked `transport-belt` from 0 to 2.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-gear-belt-mall-20260615-010249.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_gear_belt_mall_logistics`.
+  - Target item candidate: `transport-belt` target `20`.
+- Metrics:
+  - Steps: 3.
+  - Status: ok.
+  - Duration: 11.016s.
+  - transport-belt: 0 -> 2 (delta 2).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-gear-belt-mall-20260615-010249.jsonl`.
+  - Metadata: `{"delta_item_count":2,"final_item_count":2,"initial_item_count":0,"max_steps":12,"target":20}`.
+- Result: Completed: gear-fed belt mall logistics produced transport belts in assembler output: 2
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 10:06:45 +09:00 - Loop 304
+- Part: Part 104 - fuel-first power recovery and local plate belt-mall bootstrap
+- Goal: Restore the live factory from the post-power/post-belt deadlock without direct `iron-gear-wheel` handcraft, repeated coal hand-mining, or distant iron-plate hand-carry into the gear/belt mall.
+- Hypothesis: The next bad action came from two gaps: burner/boiler fuel logic treated only `coal` as valid fuel despite `wood` being available, and the strategy/executor did not recognize nearby local `iron-plate` already trapped in the circuit assembler as a valid one-time belt mall seed.
+- Actions:
+  - Changed burner fuel accounting to include `coal`, `wood`, `solid-fuel`, and `rocket-fuel` for boilers, burner drills, burner inserters, furnaces, direct smelting cells, coal supply/feed, and expanded smelting fuel checks.
+  - Replaced the `setup_power` boiler coal-only path with the shared burner fuel routine so existing `wood` is inserted before mining coal.
+  - Added local iron-plate seed detection for the gear/belt mall, limited to nearby assemblers/furnaces/chests and excluding the mall assemblers themselves.
+  - Changed gear/belt mall execution to seed the transport-belt assembler first when it already has `iron-gear-wheel`, so scarce local plates produce belts immediately instead of being consumed by the gear assembler.
+  - Added strategy evidence for `local_iron_plate_seed_source_unit` and `local_iron_plate_seed_distance`, and made the heuristic select `build_gear_belt_mall_logistics` before circuit/layout work in that starvation state.
+  - Fixed run journal source-loop numbering so automatic insights reference the Markdown `Loop N` number rather than the JSONL row count, and made Markdown appends insert a separator when the existing file lacks a trailing blank line.
+  - Corrected existing `insight.md` / `logs/run-insights.jsonl` source-loop references for Insights 44-47 and 49-51.
+  - Live-ran `setup_power` and `build_gear_belt_mall_logistics` on the current map.
+- Candidates:
+  - Rejected: mine coal by hand while `wood=19` was already available as burner fuel.
+  - Rejected: continue `automate_electronic_circuit_line` while the belt mall lacked plate input and construction belts.
+  - Rejected: carry iron plates from distant furnace unit `395` back to the gear mall as a repeated site-to-site shuttle.
+  - Selected: use available wood for boiler recovery, then recover only nearby local iron plates from circuit assembler unit `342` to seed the belt assembler.
+- Metrics:
+  - Focused tests: run_journal + strategy/planner local seed tests passed.
+  - Full tests: `PYTHONPATH=src python -m unittest discover tests` -> 453 passed.
+  - Live power trace: `strategy-power-20260615-005358.jsonl`, 3 steps, completed with usable steam power.
+  - Live belt mall trace: `strategy-gear-belt-mall-20260615-010249.jsonl`, 3 steps, transport-belt output reached 2 and then observed as 8 in the assembler output.
+  - Post-run strategy: `build_iron_plate_logistic_line_to_gear_mall` with `transport_belts_available_for_mall_logistics=true`.
+  - Post-run belt mall dry action: take 8 transport belts from assembler unit `320` for iron-plate logistics construction.
+  - Token usage sample: current raw counter 10,730,335, delta 297,425 since the prior sample, weekly quota unavailable.
+- Result: Implemented and live-verified fuel-first recovery plus local plate belt-mall bootstrap. The factory is no longer trying to hand-mine coal for the boiler or run circuit automation while the belt mall is starved; it is ready to resume the iron-plate logistics route using belt output.
+- Failure reason: The long iron-plate route is still incomplete; only belt-mall output has been replenished.
+- Next action: Let the local strategy continue with `build_iron_plate_logistic_line_to_gear_mall`, consuming belt output from unit `320` to extend the sustained iron-plate route.
+- Token usage: cumulative 10,730,335; delta 297,425 / weekly quota unavailable
+

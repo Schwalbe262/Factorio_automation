@@ -400,3 +400,35 @@
 - After: `no-mod-strategy --require-llm` returned `source=llm` with Qwen's `plan_factory_site` guardrailed to `build_gear_belt_mall_logistics`; live runs produced belt output twice, and `strategy-iron-plate-gear-mall-logistics-20260615-003636.jsonl` cleared trees, placed belts through x=72..76, and stopped only when belts were exhausted.
 - Evidence: `{"tests":"448 passed","llm_guardrail":{"source":"llm","from":"plan_factory_site","to":"build_gear_belt_mall_logistics"},"belt_mall_traces":["strategy-gear-belt-mall-20260615-001930.jsonl","strategy-gear-belt-mall-20260615-002517.jsonl"],"tree_clear_trace":"strategy-iron-plate-gear-mall-logistics-20260615-003636.jsonl","current_line_belts_near_source":23,"direct_gear_craft":0}`
 - Remaining risk: The long iron-plate route is still incomplete and the factory has no remaining iron plates for more belt-mall seed; next progress should refuel/restart the existing direct iron drill/furnace using local wood or build a shorter sustained input path.
+
+## 2026-06-15 09:54:16 +09:00 - Insight 49
+- Source loop: Loop 302
+- Improvement: setup_power completed after 3 step(s): steam power block is producing usable steam power
+- Before: not recorded
+- After: steam = 0
+- Evidence: `{"item":"steam","item_count":0,"source_loop":302,"steps":3,"target":1}`
+- Remaining risk: Target is not complete yet: 0/1.
+
+## 2026-06-15 10:03:00 +09:00 - Insight 50
+- Source loop: Loop 303
+- Improvement: transport-belt increased by 2 during build_gear_belt_mall_logistics.
+- Before: transport-belt = 0
+- After: transport-belt = 2
+- Evidence: `{"delta":2,"final":2,"initial":0,"item":"transport-belt","source_loop":303,"target":20}`
+- Remaining risk: Target is not complete yet: 2/20.
+
+## 2026-06-15 10:03:00 +09:00 - Insight 51
+- Source loop: Loop 303
+- Improvement: build_gear_belt_mall_logistics completed after 3 step(s): gear-fed belt mall logistics produced transport belts in assembler output: 2
+- Before: not recorded
+- After: transport-belt = 2
+- Evidence: `{"item":"transport-belt","item_count":2,"source_loop":303,"steps":3,"target":20}`
+- Remaining risk: Target is not complete yet: 2/20.
+
+## 2026-06-15 10:06:45 +09:00 - Insight 52
+- Source loop: Loop 304
+- Improvement: The live factory now recovers power and belt-mall output without coal hand-mining or direct gear handcraft by using available wood as burner fuel and nearby local iron plates as a one-time belt assembler seed.
+- Before: `SetupPowerSkill` wanted to mine coal despite `wood=19`, and strategy fell through to circuit automation while the transport-belt assembler had `iron-gear-wheel:3` but no `iron-plate`.
+- After: `setup_power` completed in 3 live steps, `build_gear_belt_mall_logistics` recovered local iron plates from unit `342`, produced transport belts in unit `320`, and the next strategy selected `build_iron_plate_logistic_line_to_gear_mall`.
+- Evidence: `{"tests":"453 passed","power_trace":"strategy-power-20260615-005358.jsonl","belt_mall_trace":"strategy-gear-belt-mall-20260615-010249.jsonl","local_plate_seed_source_unit":342,"belt_assembler_unit":320,"post_run_belt_output":8,"next_strategy":"build_iron_plate_logistic_line_to_gear_mall","direct_gear_craft":0}`
+- Remaining risk: The sustained iron-plate route is still incomplete and must consume the newly produced belts to remove the remaining distant plate dependency.

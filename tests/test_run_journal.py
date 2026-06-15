@@ -118,6 +118,66 @@ class RunJournalTests(unittest.TestCase):
             rows = [json.loads(line) for line in (log_dir / "run-notes.jsonl").read_text().splitlines()]
             self.assertEqual(rows[0]["loop_number"], 6)
 
+    def test_skill_insight_source_loop_follows_existing_markdown_loop_number(self):
+        with TemporaryDirectory() as root:
+            repo_root = Path(root)
+            log_dir = repo_root / "logs"
+            (repo_root / "note.md").write_text(
+                "# Factorio Loop Notes\n\n## 2026-06-15 00:00:00 +09:00 - Loop 41\n\n- Part: existing\n",
+                encoding="utf-8",
+            )
+
+            record_skill_run_journal(
+                log_dir,
+                objective="launch_rocket_program",
+                goal="build_gear_belt_mall_logistics",
+                ok=True,
+                reason="gear-fed belt mall logistics produced transport belts in assembler output: 2",
+                steps=3,
+                item_name="transport-belt",
+                initial_item_count=0,
+                final_item_count=2,
+                target=20,
+                max_steps=12,
+                log_path=log_dir / "skill.jsonl",
+                duration_seconds=1.25,
+                repo_root=repo_root,
+            )
+
+            insight_rows = [json.loads(line) for line in (log_dir / "run-insights.jsonl").read_text().splitlines()]
+            self.assertEqual(insight_rows[0]["evidence"]["source_loop"], 42)
+            insight_text = (repo_root / "insight.md").read_text(encoding="utf-8")
+            self.assertIn("- Source loop: Loop 42", insight_text)
+
+    def test_markdown_append_separates_existing_entry_without_blank_line(self):
+        with TemporaryDirectory() as root:
+            repo_root = Path(root)
+            log_dir = repo_root / "logs"
+            (repo_root / "insight.md").write_text(
+                "# Factorio Insights\n\n## 2026-06-15 00:00:00 +09:00 - Insight 7\n- Remaining risk: existing risk.",
+                encoding="utf-8",
+            )
+
+            record_skill_run_journal(
+                log_dir,
+                objective="launch_rocket_program",
+                goal="build_gear_belt_mall_logistics",
+                ok=False,
+                reason="still running",
+                steps=3,
+                item_name="transport-belt",
+                initial_item_count=0,
+                final_item_count=2,
+                target=20,
+                max_steps=12,
+                log_path=log_dir / "skill.jsonl",
+                duration_seconds=1.25,
+                repo_root=repo_root,
+            )
+
+            insight_text = (repo_root / "insight.md").read_text(encoding="utf-8")
+            self.assertIn("existing risk.\n\n##", insight_text)
+
     def test_layout_result_without_confirmed_before_after_stays_out_of_insights(self):
         with TemporaryDirectory() as root:
             repo_root = Path(root)
