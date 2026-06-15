@@ -472,3 +472,20 @@
 - After: Qwen-required strategy selects `plan_factory_site` with `belt_route_cost=153.0`, `relocation_power_poles_estimate=20`, `relocation_cost=58.0`, and `route_cost_preference=relocate_mall_to_iron_source`; short route test cases still select the belt-line skill.
 - Evidence: `{"tests":"466 passed","setup_power_trace":"strategy-power-20260615-015411.jsonl","layout_trace":"strategy-layout-improvement-20260615-015617.jsonl","selected_skill":"plan_factory_site","source":"llm","source_distance_tiles":152.5,"belt_route_cost":153.0,"relocation_power_poles_estimate":20,"relocation_cost":58.0,"route_cost_preference":"relocate_mall_to_iron_source","power_expansion_clearance_risk":true}`
 - Remaining risk: The system can now choose and record the better placement plan and power-clearance risk, but it still needs a deterministic relocation/corridor executor to rebuild the mall automatically.
+
+## 2026-06-15 11:29:21 +09:00 - Insight 58
+- Source loop: Loop 315
+- Improvement: setup_power completed after 5 step(s): steam power block is producing usable steam power
+- Before: not recorded
+- After: steam = 0
+- Evidence: `{"item":"steam","item_count":0,"source_loop":315,"steps":5,"target":1}`
+- Remaining risk: Target is not complete yet: 0/1.
+
+## 2026-06-15 12:10:34 +09:00 - Insight 59
+
+- Source loop: Loop 320
+- Improvement: Site layout optimization is now unlock-aware instead of fixed to pre-unlock patterns, and current blocker recovery has deterministic prerequisite skills for pole corridors and electric mining drill adoption.
+- Before: Layout candidates and compact Qwen payloads could describe long-handed inserters only weakly or not at all, green-circuit/starter-mall candidate ranking did not change after `long-inserters`, relocation could identify a cheaper site move but lacked safe prerequisite execution, and burner drills had no explicit early replacement research/mall path.
+- After: `factory_layout_simulation_candidates` generates `green-circuit-long-handed-3-cable-2-circuit-cell` and `starter-mall-row-long-handed-inputs` only when long-handed inserters are researched/stocked/automated; candidates include `layout_unlocks_considered`, `uses_unlocked_items`, and rerank evidence. Full and compact strategy payloads expose long-handed inserter and module availability. Relocation waits for small-electric-pole corridor materials, strategy can choose `bootstrap_power_pole_mall`, and burner-drill replacement can choose electric mining drill research/mall skills.
+- Evidence: `{"tests":"483 passed","new_candidates":["green-circuit-long-handed-3-cable-2-circuit-cell","starter-mall-row-long-handed-inputs"],"payloads":["layout_capabilities.inserters.long-handed-inserter","layout_capabilities.modules","compact.layout_capabilities.rerank_trigger"],"deterministic_skills":["bootstrap_power_pole_mall","relocate_gear_belt_mall_to_iron_source","research_electric_mining_drill","bootstrap_electric_mining_drill_mall"]}`
+- Remaining risk: Long-handed variants are still simulation candidates, not live build-ready executors; they must pass sandbox validation and site pre-build gates before mutation. Live factory still needs pole/science throughput to finish the relocation and electric-drill transition.

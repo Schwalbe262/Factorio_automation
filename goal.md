@@ -19,6 +19,7 @@
 - Preserve no-custom-mod compatibility for the primary development path.
 - When Codex adds missing functions, keep the new capability deterministic, logged, test-covered, and exposed to the local Qwen strategy layer instead of leaving it as an operator-only shortcut.
 - Keep the no-mod LLM autopilot running under local/remote Qwen whenever possible; Codex should diagnose and add missing functions, not manually drive each gameplay loop.
+- Re-rank site layout candidates whenever newly researched, stocked, or automated items change factory geometry or ratios, including long-handed inserters, modules, beacons, better machines, rail logistics, and quality tiers.
 
 ## Autonomy Roadmap
 
@@ -54,6 +55,7 @@
 - Site adjacency: related producer/consumer sites should be close enough for short local belts until a main bus, trunk line, or rail network exists.
 - Site graph and traffic: treat factory placement as a coupled producer/consumer graph, not isolated blocks. Co-locate high-coupling inputs and outputs unless a trunk belt, pipe corridor, rail station, or later bot network has enough capacity and expansion room; otherwise the factory will develop traffic congestion similar to badly separated city districts.
 - Placement cost model: compare the build and operating cost of belts, pipes, poles, rails, stations, inserters, buffers, and future throughput risk before deciding whether to extend a line, relocate a factory site, or reserve a corridor.
+- Unlock-aware layout optimization: candidate generation and LLM ranking must account for currently available buildings, inserters, modules, beacons, rails, quality tiers, and logistics tools. A design that was optimal before a new item unlock may become obsolete after that unlock.
 - Power and pollution: prefer lower power draw and pollution for equivalent throughput, especially before defense is mature.
 - Power expansion clearance: do not hard-ban factories near power blocks, but charge an explicit layout risk/cost when a factory consumes boiler, steam-engine, pole, water, fuel, or later power-upgrade expansion room.
 - Expansion: leave clear lanes for belts, power, rails, modules, beacons, and replacement with higher-tier machines.

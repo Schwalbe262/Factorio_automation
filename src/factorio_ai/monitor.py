@@ -686,7 +686,16 @@ def estimate_factory_sites(observation: dict[str, Any]) -> list[FactorySiteEstim
         position = _position(assembler)
         kind = "assembler_cell"
         automation_level = "powered" if assembler.get("electric_network_connected") else "unpowered"
-        if recipe in {"transport-belt", "inserter", "burner-inserter", "burner-mining-drill", "stone-furnace", "assembling-machine-1", "small-electric-pole"}:
+        if recipe in {
+            "transport-belt",
+            "inserter",
+            "burner-inserter",
+            "burner-mining-drill",
+            "electric-mining-drill",
+            "stone-furnace",
+            "assembling-machine-1",
+            "small-electric-pole",
+        }:
             kind = "build_item_mall"
         elif recipe in {"copper-cable", "electronic-circuit"}:
             kind = "circuit_automation"

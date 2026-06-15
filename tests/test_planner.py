@@ -16,6 +16,7 @@ from factorio_ai.planner import (
     ExpandIronSmeltingSkill,
     FactoryLayoutImprovementSkill,
     GearBeltMallLogisticsSkill,
+    GearBeltMallRelocationSkill,
     IronPlateLogisticLineToGearMallSkill,
     IronPlateSkill,
     ResearchAutomationSkill,
@@ -432,6 +433,89 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(issue["parameters"]["route_cost_preference"], "relocate_mall_to_iron_source")
         self.assertIn("route cost favors relocation", issue["detail"])
 
+    def test_gear_belt_mall_relocation_waits_for_power_poles_before_teardown(self):
+        obs = long_gear_mall_relocation_observation()
+        obs["inventory"] = {"small-electric-pole": 1}
+
+        decision = GearBeltMallRelocationSkill(20).next_action(obs)
+
+        self.assertIsNone(decision.action)
+        self.assertIn("needs 20 small-electric-pole", decision.reason)
+        self.assertIn("before mining the existing mall", decision.reason)
+
+    def test_gear_belt_mall_relocation_recovers_existing_assembler_when_ready(self):
+        obs = long_gear_mall_relocation_observation()
+        obs["inventory"] = {"small-electric-pole": 20}
+        obs["player"]["position"] = {"x": 0.5, "y": 0.5}
+
+        decision = GearBeltMallRelocationSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 100)
+        self.assertIn("costed relocation", decision.reason)
+
+    def test_power_pole_mall_reuses_existing_powered_assembler_before_crafting_new_assembler(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"wood": 4, "copper-cable": 8}
+        obs["craftable"] = {"assembling-machine-1": 0, "iron-gear-wheel": 4}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 100,
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 0.5, "y": 0.5},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 101,
+                    "recipe": "transport-belt",
+                    "position": {"x": 3.5, "y": 0.5},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 200,
+                    "recipe": "iron-plate",
+                    "position": {"x": 153.0, "y": 0.5},
+                    "inventories": {"2": {"iron-plate": 24}},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("small-electric-pole", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "set_recipe")
+        self.assertEqual(decision.action["recipe"], "small-electric-pole")
+        self.assertNotIn("iron-plate logistic line", decision.reason)
+
+    def test_gear_mall_does_not_steal_power_pole_assembler(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["craftable"] = {}
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 100,
+                "recipe": "small-electric-pole",
+                "position": {"x": 0.5, "y": 0.5},
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
+
+        decision = BuildItemMallSkill("iron-gear-wheel", 4).next_action(obs)
+
+        if decision.action is not None:
+            self.assertNotEqual(
+                (decision.action.get("type"), decision.action.get("unit_number"), decision.action.get("recipe")),
+                ("set_recipe", 100, "iron-gear-wheel"),
+            )
+        self.assertNotIn("set build item mall assembler recipe to iron-gear-wheel", decision.reason)
+
     def test_factory_layout_flags_production_on_resource_patch(self):
         obs = base_observation()
         obs["entities"] = [
@@ -524,6 +608,67 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(inserter_directions[(4.0, 1.0)], 12)
         self.assertEqual(inserter_directions[(8.0, 1.0)], 4)
         self.assertEqual(inserter_directions[(6.0, 3.0)], 0)
+
+    def test_factory_layout_reranks_green_circuit_when_long_handed_inserter_unlocked(self):
+        obs = base_observation()
+        obs["entities"] = [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 910,
+                "recipe": "electronic-circuit",
+                "position": {"x": 10, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        ]
+        standard = next(
+            item
+            for item in factory_layout_simulation_candidates(obs)
+            if item["candidate_id"] == "green-circuit-3-cable-2-circuit-cell"
+        )
+
+        obs["research"]["technologies"]["long-inserters"] = {"researched": True}
+        candidates = factory_layout_simulation_candidates(obs)
+        candidate = next(
+            item
+            for item in candidates
+            if item["candidate_id"] == "green-circuit-long-handed-3-cable-2-circuit-cell"
+        )
+
+        self.assertGreater(candidate["simulation"]["score"], standard["simulation"]["score"])
+        self.assertEqual(candidate["validation"]["status"], "pass")
+        self.assertIn("long-handed-inserter", candidate["uses_unlocked_items"])
+        self.assertTrue(candidate["simulation"]["delta"]["unlock_aware_rerank"])
+        decoded = decode_blueprint_string(candidate["blueprint"]["exchange_string"])
+        entities = decoded["blueprint"]["entities"]
+        self.assertTrue(any(entity["name"] == "long-handed-inserter" for entity in entities))
+
+    def test_factory_layout_uses_long_handed_starter_mall_variant_after_unlock(self):
+        obs = base_observation()
+        obs["research"]["technologies"]["long-inserters"] = {"researched": True}
+        obs["entities"] = [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 930 + index,
+                "recipe": recipe,
+                "position": {"x": index * 16, "y": index * 2},
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+            for index, recipe in enumerate(
+                ["transport-belt", "inserter", "burner-inserter", "stone-furnace", "small-electric-pole"]
+            )
+        ]
+
+        candidates = factory_layout_simulation_candidates(obs)
+        candidate = next(item for item in candidates if item["candidate_id"] == "starter-mall-row-long-handed-inputs")
+
+        self.assertIn("long-handed-inserter", candidate["uses_unlocked_items"])
+        self.assertTrue(candidate["simulation"]["delta"]["unlock_aware_rerank"])
+        self.assertEqual(candidate["simulation"]["after"]["shared_input_lanes"], 2)
+        decoded = decode_blueprint_string(candidate["blueprint"]["exchange_string"])
+        entities = decoded["blueprint"]["entities"]
+        self.assertTrue(any(entity["name"] == "long-handed-inserter" for entity in entities))
 
     def test_green_circuit_placement_search_finds_clear_powered_anchor(self):
         obs = base_observation()
@@ -2380,6 +2525,17 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "insert")
         self.assertEqual(decision.action["item"], "automation-science-pack")
 
+    def test_research_electric_mining_drill_uses_knowledge_fallback_when_observation_lacks_unit_metadata(self):
+        obs = powered_logistics_observation()
+        obs["research"]["current"] = "electric-mining-drill"
+        obs["research"]["technologies"]["electric-mining-drill"] = {"researched": False}
+        obs["inventory"]["automation-science-pack"] = 25
+
+        decision = ResearchTechnologySkill("electric-mining-drill").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "automation-science-pack")
+
     def test_research_logistics_produces_red_science_when_missing(self):
         obs = powered_logistics_observation()
         obs["research"]["current"] = "logistics"
@@ -3828,6 +3984,46 @@ def gear_belt_mall_entities(belt_recipe="automation-science-pack", gear_inventor
             "inventories": {"1": belt_inventory or {}},
         },
     ]
+
+
+def long_gear_mall_relocation_observation():
+    obs = base_observation()
+    obs["research"] = {"technologies": {"automation": {"researched": True}}}
+    obs["inventory"] = {}
+    obs["craftable"] = {}
+    obs["entities"] = [
+        {
+            "name": "small-electric-pole",
+            "unit_number": 90,
+            "position": {"x": 4.0, "y": 0.5},
+            "electric_network_connected": True,
+            "inventories": {},
+        },
+        {
+            "name": "assembling-machine-1",
+            "unit_number": 100,
+            "recipe": "iron-gear-wheel",
+            "position": {"x": 0.5, "y": 0.5},
+            "electric_network_connected": True,
+            "inventories": {},
+        },
+        {
+            "name": "assembling-machine-1",
+            "unit_number": 101,
+            "recipe": "transport-belt",
+            "position": {"x": 3.5, "y": 0.5},
+            "electric_network_connected": True,
+            "inventories": {"2": {"iron-gear-wheel": 3}},
+        },
+        {
+            "name": "stone-furnace",
+            "unit_number": 200,
+            "recipe": "iron-plate",
+            "position": {"x": 153.0, "y": 0.5},
+            "inventories": {"2": {"iron-plate": 24}},
+        },
+    ]
+    return obs
 
 
 def complete_belt_smelting_entities(drill_x, drill_y, base_unit, resource="iron-ore", product="iron-plate", reserve_fuel=False):

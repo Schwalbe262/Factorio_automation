@@ -157,6 +157,7 @@ local VIRTUAL_RECIPES = {{
   ["transport-belt"] = {{ ingredients = {{ ["iron-plate"] = 1, ["iron-gear-wheel"] = 1 }}, results = {{ ["transport-belt"] = 2 }} }},
   ["burner-inserter"] = {{ ingredients = {{ ["iron-plate"] = 1, ["iron-gear-wheel"] = 1 }}, results = {{ ["burner-inserter"] = 1 }} }},
   ["inserter"] = {{ ingredients = {{ ["electronic-circuit"] = 1, ["iron-gear-wheel"] = 1, ["iron-plate"] = 1 }}, results = {{ inserter = 1 }} }},
+  ["long-handed-inserter"] = {{ ingredients = {{ ["iron-plate"] = 1, ["iron-gear-wheel"] = 1, inserter = 1 }}, results = {{ ["long-handed-inserter"] = 1 }} }},
   ["pipe"] = {{ ingredients = {{ ["iron-plate"] = 1 }}, results = {{ pipe = 1 }} }},
   ["boiler"] = {{ ingredients = {{ pipe = 4, ["stone-furnace"] = 1 }}, results = {{ boiler = 1 }} }},
   ["steam-engine"] = {{ ingredients = {{ ["iron-gear-wheel"] = 8, pipe = 5, ["iron-plate"] = 10 }}, results = {{ ["steam-engine"] = 1 }} }},
@@ -164,6 +165,7 @@ local VIRTUAL_RECIPES = {{
   ["small-electric-pole"] = {{ ingredients = {{ wood = 1, ["copper-cable"] = 2 }}, results = {{ ["small-electric-pole"] = 2 }} }},
   ["electronic-circuit"] = {{ ingredients = {{ ["iron-plate"] = 1, ["copper-cable"] = 3 }}, results = {{ ["electronic-circuit"] = 1 }} }},
   ["burner-mining-drill"] = {{ ingredients = {{ ["iron-plate"] = 3, ["iron-gear-wheel"] = 3, stone = 5 }}, results = {{ ["burner-mining-drill"] = 1 }} }},
+  ["electric-mining-drill"] = {{ ingredients = {{ ["electronic-circuit"] = 3, ["iron-gear-wheel"] = 5, ["iron-plate"] = 10 }}, results = {{ ["electric-mining-drill"] = 1 }} }},
   ["automation-science-pack"] = {{ ingredients = {{ ["copper-plate"] = 1, ["iron-gear-wheel"] = 1 }}, results = {{ ["automation-science-pack"] = 1 }} }},
   ["lab"] = {{ ingredients = {{ ["electronic-circuit"] = 10, ["iron-gear-wheel"] = 10, ["transport-belt"] = 4 }}, results = {{ lab = 1 }} }},
   ["assembling-machine-1"] = {{ ingredients = {{ ["electronic-circuit"] = 3, ["iron-gear-wheel"] = 5, ["iron-plate"] = 9 }}, results = {{ ["assembling-machine-1"] = 1 }} }}

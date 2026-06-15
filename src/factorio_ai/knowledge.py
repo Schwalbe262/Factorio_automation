@@ -47,11 +47,25 @@ RECIPES: dict[str, Recipe] = {
         {"iron-plate": 3, "stone": 5, "iron-gear-wheel": 3},
         {"burner-mining-drill": 1},
     ),
+    "electric-mining-drill": Recipe(
+        "electric-mining-drill",
+        2.0,
+        {"electronic-circuit": 3, "iron-gear-wheel": 5, "iron-plate": 10},
+        {"electric-mining-drill": 1},
+        technology="electric-mining-drill",
+    ),
     "burner-inserter": Recipe(
         "burner-inserter",
         0.5,
         {"iron-plate": 1, "iron-gear-wheel": 1},
         {"burner-inserter": 1},
+    ),
+    "long-handed-inserter": Recipe(
+        "long-handed-inserter",
+        0.5,
+        {"iron-plate": 1, "iron-gear-wheel": 1, "inserter": 1},
+        {"long-handed-inserter": 1},
+        technology="long-inserters",
     ),
     "electronic-circuit": Recipe(
         "electronic-circuit",
@@ -142,6 +156,13 @@ RECIPES: dict[str, Recipe] = {
 
 TECHNOLOGIES: dict[str, Technology] = {
     "automation": Technology("automation", [], {"automation-science-pack": 10}, ["assembling-machine-1"]),
+    "electric-mining-drill": Technology(
+        "electric-mining-drill",
+        ["automation-science-pack"],
+        {"automation-science-pack": 25},
+        ["electric-mining-drill"],
+    ),
+    "long-inserters": Technology("long-inserters", [], {"automation-science-pack": 50}, ["long-handed-inserter"]),
     "logistics": Technology("logistics", [], {"automation-science-pack": 20}, ["splitter", "underground-belt"]),
     "steel-processing": Technology("steel-processing", [], {"automation-science-pack": 50}, ["steel-plate"]),
     "logistic-science-pack": Technology(

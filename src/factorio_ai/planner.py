@@ -6,7 +6,7 @@ from math import ceil
 from typing import Any
 
 from .blueprints import decode_blueprint_string, encode_blueprint_entities
-from .knowledge import RECIPES
+from .knowledge import RECIPES, TECHNOLOGIES
 from .monitor import estimate_factory_sites, estimate_logistics_links
 from .models import (
     PlannerDecision,
@@ -67,6 +67,13 @@ AUTOMATED_SITE_INPUT_ITEMS = {
     "electronic-circuit",
     "automation-science-pack",
     "logistic-science-pack",
+}
+BLUEPRINT_INSERTER_NAMES = {
+    "burner-inserter",
+    "inserter",
+    "long-handed-inserter",
+    "fast-inserter",
+    "stack-inserter",
 }
 
 
@@ -565,6 +572,7 @@ def factory_layout_simulation_candidates(observation: dict[str, Any]) -> list[di
         for entity in entities
         if isinstance(entity, dict) and str(entity.get("recipe") or "")
     )
+    layout_unlocks = _layout_unlock_context(observation)
     candidates: list[dict[str, Any]] = []
 
     opportunity_kinds = {str(item.get("kind") or "") for item in opportunities}
@@ -577,7 +585,13 @@ def factory_layout_simulation_candidates(observation: dict[str, Any]) -> list[di
         ]
         candidates.append(
             _with_blueprint_variants(
-                _green_circuit_layout_candidate(recipe_counts, observation, sites, current_circuit_sites),
+                _green_circuit_layout_candidate(
+                    recipe_counts,
+                    observation,
+                    sites,
+                    current_circuit_sites,
+                    layout_unlocks=layout_unlocks,
+                ),
                 _combined_site_blueprint(
                     "before-green-circuit-block",
                     current_circuit_sites,
@@ -638,7 +652,7 @@ def factory_layout_simulation_candidates(observation: dict[str, Any]) -> list[di
     if len(mall_sites) >= 4:
         candidates.append(
             _with_blueprint_variants(
-                _mall_compaction_candidate(mall_sites),
+                _mall_compaction_candidate(mall_sites, layout_unlocks=layout_unlocks),
                 _combined_site_blueprint(
                     "before-starter-mall-sites",
                     mall_sites,
@@ -653,6 +667,45 @@ def factory_layout_simulation_candidates(observation: dict[str, Any]) -> list[di
         reverse=True,
     )
     return candidates[:8]
+
+
+def _layout_unlock_context(observation: dict[str, Any]) -> dict[str, Any]:
+    long_handed = {
+        "available": _technology_researched_for_layout(observation, "long-inserters")
+        or total_item_count(observation, "long-handed-inserter") > 0
+        or _recipe_assembler_exists_for_layout(observation, "long-handed-inserter"),
+        "researched": _technology_researched_for_layout(observation, "long-inserters"),
+        "stock": total_item_count(observation, "long-handed-inserter"),
+        "automated": _recipe_assembler_exists_for_layout(observation, "long-handed-inserter"),
+    }
+    modules = {
+        name: {
+            "available": _technology_researched_for_layout(observation, name) or total_item_count(observation, name) > 0,
+            "researched": _technology_researched_for_layout(observation, name),
+            "stock": total_item_count(observation, name),
+        }
+        for name in ("speed-module", "productivity-module", "efficiency-module")
+    }
+    return {
+        "long_handed_inserter": long_handed,
+        "modules": modules,
+        "rerank_trigger": bool(long_handed["available"] or any(row["available"] for row in modules.values())),
+    }
+
+
+def _technology_researched_for_layout(observation: dict[str, Any], technology: str) -> bool:
+    return bool(_technology_state(observation, technology).get("researched"))
+
+
+def _recipe_assembler_exists_for_layout(observation: dict[str, Any], recipe: str) -> bool:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    return any(
+        isinstance(entity, dict)
+        and str(entity.get("name") or "") in ASSEMBLER_ENTITY_NAMES
+        and entity.get("recipe") == recipe
+        and entity.get("electric_network_connected") is not False
+        for entity in entities
+    )
 
 
 def _with_blueprint_variants(
@@ -1537,7 +1590,12 @@ def _green_circuit_layout_candidate(
     observation: dict[str, Any],
     all_sites: list[dict[str, Any]],
     current_circuit_sites: list[dict[str, Any]],
+    *,
+    layout_unlocks: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    unlocks = layout_unlocks if isinstance(layout_unlocks, dict) else {}
+    long_handed_state = unlocks.get("long_handed_inserter") if isinstance(unlocks.get("long_handed_inserter"), dict) else {}
+    use_long_handed = bool(long_handed_state.get("available"))
     current_cable = int(recipe_counts.get("copper-cable", 0))
     current_circuit = int(recipe_counts.get("electronic-circuit", 0))
     current_circuit = max(current_circuit, 1)
@@ -1549,7 +1607,9 @@ def _green_circuit_layout_candidate(
     score = 70.0 + min(20.0, max(0.0, after_rate - before_rate) / 12.0)
     if current_cable == 0:
         score += 5.0
-    after_entities = _green_circuit_blueprint_entities(groups)
+    if use_long_handed:
+        score += 6.0
+    after_entities = _green_circuit_blueprint_entities(groups, use_long_handed=use_long_handed)
     validation = _blueprint_operability_report(after_entities)
     placement_search = _site_placement_search(
         observation,
@@ -1569,13 +1629,22 @@ def _green_circuit_layout_candidate(
             all_sites=all_sites,
             preferred_sites=current_circuit_sites,
         )
-    candidate_id = "green-circuit-3-cable-2-circuit-cell"
+    candidate_id = (
+        "green-circuit-long-handed-3-cable-2-circuit-cell"
+        if use_long_handed
+        else "green-circuit-3-cable-2-circuit-cell"
+    )
+    inserter_tier = "long-handed-inserter" if use_long_handed else "inserter"
     return {
         "candidate_id": candidate_id,
         "simulation_only": True,
         "not_applied": True,
-        "source": "rate-calculator-style static recipe throughput",
-        "target_pattern": "3 copper-cable assemblers belt-feeding 2 electronic-circuit assemblers",
+        "source": "rate-calculator-style static recipe throughput plus unlocked layout capability ranking",
+        "target_pattern": (
+            "3 copper-cable assemblers feeding 2 electronic-circuit assemblers with long-handed inserter input lanes"
+            if use_long_handed
+            else "3 copper-cable assemblers belt-feeding 2 electronic-circuit assemblers"
+        ),
         "requires_build_command": True,
         "requires_site_prebuild_gate": True,
         "build_ready": False,
@@ -1585,11 +1654,18 @@ def _green_circuit_layout_candidate(
             placement_search=placement_search,
         ),
         "blueprint": _blueprint_export(
-            "green-circuit-3-cable-2-circuit-cell",
+            candidate_id,
             after_entities,
-            "Simulation-only 3:2 green circuit cell. Validate exact input belts, power, and collision before applying.",
+            (
+                "Simulation-only 3:2 green circuit cell using long-handed inserters for two-lane input reach. "
+                "Validate exact input belts, power, and collision before applying."
+                if use_long_handed
+                else "Simulation-only 3:2 green circuit cell. Validate exact input belts, power, and collision before applying."
+            ),
         ),
         "validation": validation,
+        "layout_unlocks_considered": unlocks,
+        "uses_unlocked_items": ["long-handed-inserter"] if use_long_handed else [],
         "site_prebuild_gate": site_gate,
         "site_placement_search": placement_search,
         "prerequisite_tasks": layout_candidate_prerequisite_tasks(
@@ -1608,10 +1684,14 @@ def _green_circuit_layout_candidate(
                 "copper_cable_assemblers": proposed_cable,
                 "electronic_circuit_assemblers": proposed_circuit,
                 "electronic_circuit_per_minute": round(after_rate, 1),
+                "inserter_tier": inserter_tier,
+                "input_lane_pattern": "long_reach_two_lane" if use_long_handed else "standard_adjacent_lanes",
             },
             "delta": {
                 "electronic_circuit_per_minute": round(after_rate - before_rate, 1),
                 "ratio_error_reduced": True,
+                "unlock_aware_rerank": use_long_handed,
+                "belt_doglegs_reduced": use_long_handed,
                 "static_operability": validation["status"],
             },
             "score": round(min(score, 95.0), 1),
@@ -1645,27 +1725,45 @@ def _green_circuit_rate_per_minute(cable_assemblers: int, circuit_assemblers: in
     return min(circuit_capacity, cable_limited_circuits)
 
 
-def _green_circuit_blueprint_entities(groups: int) -> list[dict[str, Any]]:
+def _green_circuit_blueprint_entities(groups: int, *, use_long_handed: bool = False) -> list[dict[str, Any]]:
     entities: list[dict[str, Any]] = []
     group_count = max(1, min(4, groups))
     for group in range(group_count):
         y = group * 14
-        for offset in range(-2, 11):
-            _add_entity(entities, "transport-belt", -3, y + offset, direction=SOUTH)
-            _add_entity(entities, "transport-belt", 3, y + offset, direction=SOUTH)
-            _add_entity(entities, "transport-belt", 9, y + offset, direction=SOUTH)
-        for offset in (0, 4, 8):
-            _add_entity(entities, "assembling-machine-1", 0, y + offset, recipe="copper-cable")
-            _add_entity(entities, "inserter", -2, y + offset, direction=WEST)
-            _add_entity(entities, "inserter", 2, y + offset, direction=WEST)
-        for offset in (1, 7):
-            _add_entity(entities, "assembling-machine-1", 6, y + offset, recipe="electronic-circuit")
-            _add_entity(entities, "inserter", 4, y + offset, direction=WEST)
-            _add_entity(entities, "inserter", 8, y + offset, direction=EAST)
-            _add_entity(entities, "inserter", 6, y + offset + 2, direction=NORTH)
-            _add_entity(entities, "iron-chest", 6, y + offset + 3)
-        _add_entity(entities, "small-electric-pole", 2, y + 4)
-        _add_entity(entities, "small-electric-pole", 7, y + 4)
+        if use_long_handed:
+            for offset in range(-2, 11):
+                _add_entity(entities, "transport-belt", -5, y + offset, direction=SOUTH)
+                _add_entity(entities, "transport-belt", 2, y + offset, direction=SOUTH)
+                _add_entity(entities, "transport-belt", 10, y + offset, direction=SOUTH)
+            for offset in (0, 4, 8):
+                _add_entity(entities, "assembling-machine-1", 0, y + offset, recipe="copper-cable")
+                _add_entity(entities, "long-handed-inserter", -3, y + offset, direction=WEST)
+                _add_entity(entities, "inserter", 1, y + offset, direction=WEST)
+            for offset in (1, 7):
+                _add_entity(entities, "assembling-machine-1", 6, y + offset, recipe="electronic-circuit")
+                _add_entity(entities, "long-handed-inserter", 4, y + offset, direction=WEST)
+                _add_entity(entities, "long-handed-inserter", 8, y + offset, direction=EAST)
+                _add_entity(entities, "inserter", 6, y + offset + 2, direction=NORTH)
+                _add_entity(entities, "iron-chest", 6, y + offset + 3)
+            _add_entity(entities, "small-electric-pole", 1, y + 4)
+            _add_entity(entities, "small-electric-pole", 7, y + 4)
+        else:
+            for offset in range(-2, 11):
+                _add_entity(entities, "transport-belt", -3, y + offset, direction=SOUTH)
+                _add_entity(entities, "transport-belt", 3, y + offset, direction=SOUTH)
+                _add_entity(entities, "transport-belt", 9, y + offset, direction=SOUTH)
+            for offset in (0, 4, 8):
+                _add_entity(entities, "assembling-machine-1", 0, y + offset, recipe="copper-cable")
+                _add_entity(entities, "inserter", -2, y + offset, direction=WEST)
+                _add_entity(entities, "inserter", 2, y + offset, direction=WEST)
+            for offset in (1, 7):
+                _add_entity(entities, "assembling-machine-1", 6, y + offset, recipe="electronic-circuit")
+                _add_entity(entities, "inserter", 4, y + offset, direction=WEST)
+                _add_entity(entities, "inserter", 8, y + offset, direction=EAST)
+                _add_entity(entities, "inserter", 6, y + offset + 2, direction=NORTH)
+                _add_entity(entities, "iron-chest", 6, y + offset + 3)
+            _add_entity(entities, "small-electric-pole", 2, y + 4)
+            _add_entity(entities, "small-electric-pole", 7, y + 4)
     return entities
 
 
@@ -1882,33 +1980,66 @@ def _lab_daisy_chain_blueprint_entities(lab_count: int) -> list[dict[str, Any]]:
     return entities
 
 
-def _mall_compaction_candidate(mall_sites: list[dict[str, Any]]) -> dict[str, Any]:
+def _mall_compaction_candidate(
+    mall_sites: list[dict[str, Any]],
+    *,
+    layout_unlocks: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    unlocks = layout_unlocks if isinstance(layout_unlocks, dict) else {}
+    long_handed_state = unlocks.get("long_handed_inserter") if isinstance(unlocks.get("long_handed_inserter"), dict) else {}
+    use_long_handed = bool(long_handed_state.get("available"))
     positions = [site.get("position") for site in mall_sites if isinstance(site.get("position"), dict)]
     footprint = _layout_footprint(positions)
     before_area = float(footprint.get("area") or 0.0)
-    after_area = max(24.0, before_area * 0.65)
+    after_factor = 0.58 if use_long_handed else 0.65
+    after_area = max(24.0, before_area * after_factor)
+    candidate_id = "starter-mall-row-long-handed-inputs" if use_long_handed else "starter-mall-row-compaction"
+    score = 60.0 + min(22.0, max(0.0, before_area - after_area) / 16.0)
+    if use_long_handed:
+        score += 7.0
     return {
-        "candidate_id": "starter-mall-row-compaction",
+        "candidate_id": candidate_id,
         "simulation_only": True,
         "not_applied": True,
-        "source": "blueprint-pattern heuristic",
-        "target_pattern": "starter mall row with shared iron/gear/circuit inputs and chest outputs",
+        "source": "blueprint-pattern heuristic plus unlocked layout capability ranking",
+        "target_pattern": (
+            "starter mall row with long-handed reach across a second shared input lane and chest outputs"
+            if use_long_handed
+            else "starter mall row with shared iron/gear/circuit inputs and chest outputs"
+        ),
         "requires_build_command": True,
         "blueprint": _blueprint_export(
-            "starter-mall-row-compaction",
-            _starter_mall_row_blueprint_entities(len(mall_sites)),
-            "Simulation-only starter mall row. Validate input belts, recipes, power, and chest positions before applying.",
+            candidate_id,
+            _starter_mall_row_blueprint_entities(len(mall_sites), use_long_handed=use_long_handed),
+            (
+                "Simulation-only starter mall row using long-handed inserters for a second input lane. "
+                "Validate input belts, recipes, power, and chest positions before applying."
+                if use_long_handed
+                else "Simulation-only starter mall row. Validate input belts, recipes, power, and chest positions before applying."
+            ),
         ),
+        "layout_unlocks_considered": unlocks,
+        "uses_unlocked_items": ["long-handed-inserter"] if use_long_handed else [],
         "simulation": {
             "before": {"cells": len(mall_sites), "footprint_area": round(before_area, 1)},
-            "after": {"cells": len(mall_sites), "estimated_footprint_area": round(after_area, 1)},
-            "delta": {"footprint_area": round(after_area - before_area, 1), "shared_input_lanes": True},
-            "score": round(60.0 + min(22.0, max(0.0, before_area - after_area) / 16.0), 1),
+            "after": {
+                "cells": len(mall_sites),
+                "estimated_footprint_area": round(after_area, 1),
+                "inserter_tier": "long-handed-inserter" if use_long_handed else "inserter",
+                "shared_input_lanes": 2 if use_long_handed else 1,
+            },
+            "delta": {
+                "footprint_area": round(after_area - before_area, 1),
+                "shared_input_lanes": True,
+                "unlock_aware_rerank": use_long_handed,
+                "belt_doglegs_reduced": use_long_handed,
+            },
+            "score": round(min(score, 95.0), 1),
         },
     }
 
 
-def _starter_mall_row_blueprint_entities(cell_count: int) -> list[dict[str, Any]]:
+def _starter_mall_row_blueprint_entities(cell_count: int, *, use_long_handed: bool = False) -> list[dict[str, Any]]:
     recipes = [
         "transport-belt",
         "inserter",
@@ -1918,13 +2049,19 @@ def _starter_mall_row_blueprint_entities(cell_count: int) -> list[dict[str, Any]
         "assembling-machine-1",
         "small-electric-pole",
     ]
+    if use_long_handed:
+        recipes.insert(2, "long-handed-inserter")
     entities: list[dict[str, Any]] = []
     count = max(1, min(len(recipes), cell_count or len(recipes)))
     for index, recipe in enumerate(recipes[:count]):
         x = index * 4
         _add_entity(entities, "assembling-machine-1", x, 0, recipe=recipe)
-        _add_entity(entities, "inserter", x, -2, direction=SOUTH)
-        _add_entity(entities, "transport-belt", x, -3, direction=EAST)
+        if use_long_handed and index % 2 == 1:
+            _add_entity(entities, "transport-belt", x, -4, direction=EAST)
+            _add_entity(entities, "long-handed-inserter", x, -2, direction=NORTH)
+        else:
+            _add_entity(entities, "transport-belt", x, -3, direction=EAST)
+            _add_entity(entities, "inserter", x, -2, direction=NORTH)
         _add_entity(entities, "inserter", x, 2, direction=NORTH)
         _add_entity(entities, "wooden-chest", x, 3)
         if index % 2 == 0:
@@ -2004,7 +2141,7 @@ def _blueprint_inserters(entities: list[dict[str, Any]]) -> list[dict[str, Any]]
     return [
         entity
         for entity in entities
-        if isinstance(entity, dict) and str(entity.get("name") or "") in {"inserter", "burner-inserter", "fast-inserter"}
+        if isinstance(entity, dict) and str(entity.get("name") or "") in BLUEPRINT_INSERTER_NAMES
     ]
 
 
@@ -2025,8 +2162,9 @@ def _inserter_endpoints(entity: dict[str, Any]) -> tuple[dict[str, float], dict[
     x = float(position.get("x") or 0.0)
     y = float(position.get("y") or 0.0)
     dx, dy = vector
-    pickup = {"x": x + dx, "y": y + dy}
-    drop = {"x": x - dx, "y": y - dy}
+    reach = 2.0 if str(entity.get("name") or "") == "long-handed-inserter" else 1.0
+    pickup = {"x": x + dx * reach, "y": y + dy * reach}
+    drop = {"x": x - dx * reach, "y": y - dy * reach}
     return pickup, drop
 
 
@@ -4836,6 +4974,38 @@ def _entity_at_build_position(
     return _nearest_to(candidates, position) if candidates else None
 
 
+def _assembler_at_position(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:
+    candidates: list[dict[str, Any]] = []
+    for name in ASSEMBLER_ENTITY_NAMES:
+        entity = _entity_at_build_position(observation, name, position, radius=0.75)
+        if entity is not None:
+            candidates.append(entity)
+    return _nearest_to(candidates, position) if candidates else None
+
+
+def _build_position_blocker(
+    observation: dict[str, Any],
+    position: dict[str, float],
+    *,
+    allowed_names: set[str] | frozenset[str] | None = None,
+) -> dict[str, Any] | None:
+    allowed = set(allowed_names or set())
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    for entity in entities:
+        if not isinstance(entity, dict) or not isinstance(entity.get("position"), dict):
+            continue
+        name = str(entity.get("name") or "")
+        if name in allowed and distance(_position(entity), position) <= 0.75:
+            continue
+        if name in ASSEMBLER_ENTITY_NAMES | {"lab", "stone-furnace", "burner-mining-drill", "boiler", "steam-engine"}:
+            if _point_inside_machine(position, entity):
+                return entity
+            continue
+        if distance(_position(entity), position) <= 0.55:
+            return entity
+    return None
+
+
 def _find_iron_plate_logistic_line_to_gear_mall_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
     gear_layout = _find_gear_belt_mall_logistics_layout(observation)
     if gear_layout is None:
@@ -4867,6 +5037,37 @@ def _find_iron_plate_logistic_line_to_gear_mall_layout(observation: dict[str, An
             "direction": SOUTH,
             "entity": _inserter_near(observation, target_inserter_position),
         },
+    }
+
+
+def _find_gear_belt_mall_relocation_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
+    existing_layout = _find_iron_plate_logistic_line_to_gear_mall_layout(observation)
+    if existing_layout is None:
+        return None
+    source = existing_layout.get("source")
+    gear_assembler = existing_layout.get("gear_assembler")
+    belt_assembler = existing_layout.get("belt_assembler")
+    if not isinstance(source, dict) or not isinstance(gear_assembler, dict) or not isinstance(belt_assembler, dict):
+        return None
+
+    source_position = _position(source)
+    gear_position = _position(gear_assembler)
+    route_cost = _gear_mall_plate_layout_cost_estimate(observation, source_position, gear_position)
+    if route_cost.get("route_cost_preference") != "relocate_mall_to_iron_source":
+        return None
+
+    target_gear_position = {"x": round(source_position["x"] + 5.5, 1), "y": round(source_position["y"] - 5.0, 1)}
+    target_belt_position = {"x": round(target_gear_position["x"] + 3.0, 1), "y": target_gear_position["y"]}
+    return {
+        "source": source,
+        "gear_assembler": gear_assembler,
+        "belt_assembler": belt_assembler,
+        "target_gear_position": target_gear_position,
+        "target_belt_position": target_belt_position,
+        "target_gear_assembler": _assembler_at_position(observation, target_gear_position),
+        "target_belt_assembler": _assembler_at_position(observation, target_belt_position),
+        "source_distance_tiles": round(distance(source_position, gear_position), 1),
+        **route_cost,
     }
 
 
@@ -5549,7 +5750,7 @@ class ResearchTechnologySkill:
                 return PlannerDecision({"type": "wait", "ticks": 120}, "wait for power observation to settle")
             return decision
 
-        ingredients = technology.get("ingredients") if isinstance(technology.get("ingredients"), dict) else {}
+        ingredients = _technology_research_ingredients(observation, self.technology)
         if not ingredients:
             return PlannerDecision({"type": "research", "technology": self.technology}, f"unlock trigger technology {self.technology}")
 
@@ -6356,6 +6557,125 @@ class GearBeltMallLogisticsSkill:
         return None
 
 
+class GearBeltMallRelocationSkill:
+    """Relocate a too-distant gear/belt mall toward its iron-plate source."""
+
+    def __init__(self, target_count: int = 20) -> None:
+        self.target_count = target_count
+        self.research_skill = ResearchAutomationSkill()
+
+    def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
+        player = player_position(observation)
+        if not _automation_researched(observation):
+            decision = self.research_skill.next_action(observation)
+            if decision.done:
+                return PlannerDecision({"type": "wait", "ticks": 120}, "wait for automation unlock observation to settle")
+            return decision
+
+        layout = _find_gear_belt_mall_relocation_layout(observation)
+        if layout is None:
+            return PlannerDecision(None, "no costed gear/belt mall relocation target was found")
+
+        required_poles = layout.get("relocation_power_poles_estimate")
+        available_poles = inventory_count(observation, "small-electric-pole")
+        if required_poles is None:
+            return PlannerDecision(None, "gear/belt mall relocation needs a known power anchor before moving existing assemblers")
+        if available_poles < int(required_poles):
+            return PlannerDecision(
+                None,
+                (
+                    f"gear/belt mall relocation needs {int(required_poles)} small-electric-pole for the power corridor "
+                    f"before mining the existing mall; available {available_poles}"
+                ),
+            )
+
+        target_specs = [
+            ("target_gear_assembler", "target_gear_position", "iron-gear-wheel", "gear assembler"),
+            ("target_belt_assembler", "target_belt_position", "transport-belt", "belt assembler"),
+        ]
+
+        for entity_key, _position_key, recipe, label in target_specs:
+            assembler = layout.get(entity_key)
+            if isinstance(assembler, dict) and assembler.get("recipe") != recipe:
+                position = _position(assembler)
+                if distance(player, position) > 20:
+                    return PlannerDecision({"type": "move_to", "position": position}, f"move near relocated {label} to set recipe")
+                return PlannerDecision(
+                    {
+                        "type": "set_recipe",
+                        "unit_number": assembler.get("unit_number"),
+                        "name": assembler.get("name") or "assembling-machine-1",
+                        "recipe": recipe,
+                        "position": position,
+                    },
+                    f"set relocated {label} recipe to {recipe}",
+                )
+
+        placed_targets = sum(1 for entity_key, *_ in target_specs if isinstance(layout.get(entity_key), dict))
+        if placed_targets < 2 and inventory_count(observation, "assembling-machine-1") + placed_targets < 2:
+            for source_key, label in (("gear_assembler", "existing gear assembler"), ("belt_assembler", "existing belt assembler")):
+                source = layout.get(source_key)
+                if not isinstance(source, dict):
+                    continue
+                source_position = _position(source)
+                if distance(player, source_position) > 4.5:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": _stand_position(source_position, offset=1.5)},
+                        f"move within reach of {label} for costed relocation",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "unit_number": source.get("unit_number"),
+                        "name": source.get("name") or "assembling-machine-1",
+                        "position": source_position,
+                    },
+                    f"recover {label} for costed relocation only after relocation power corridor materials are available",
+                )
+            return PlannerDecision(None, "gear/belt mall relocation needs two assembling machines before rebuilding near iron plates")
+
+        for entity_key, position_key, recipe, label in target_specs:
+            if isinstance(layout.get(entity_key), dict):
+                continue
+            position = layout[position_key]
+            blocker = _build_position_blocker(observation, position, allowed_names=ASSEMBLER_ENTITY_NAMES)
+            if blocker is not None:
+                blocker_position = _position(blocker)
+                if distance(player, blocker_position) > 8:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": blocker_position},
+                        f"move near blocking {blocker.get('name')} before relocating gear/belt mall",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "unit_number": blocker.get("unit_number"),
+                        "name": blocker.get("name"),
+                        "position": blocker_position,
+                    },
+                    f"clear blocking {blocker.get('name')} from compact gear/belt mall relocation site",
+                )
+            if inventory_count(observation, "assembling-machine-1") <= 0:
+                return PlannerDecision(None, "gear/belt mall relocation needs recovered assembling machines in inventory")
+            if distance(player, position) > 20:
+                return PlannerDecision({"type": "move_to", "position": _stand_position(position)}, f"move near relocated {label} site")
+            return PlannerDecision(
+                {
+                    "type": "build",
+                    "name": "assembling-machine-1",
+                    "position": position,
+                    "allow_nearby": False,
+                },
+                f"place relocated {label} near iron-plate source",
+            )
+
+        return PlannerDecision(
+            None,
+            "gear/belt mall assemblers are relocated near the iron-plate source; next build local gear-to-belt logistics",
+            done=True,
+        )
+
+
 class IronPlateLogisticLineToGearMallSkill:
     """Incrementally build a belt route from iron-plate output to the gear mall."""
 
@@ -6946,13 +7266,34 @@ def _research_progress(observation: dict[str, Any]) -> float:
         return 0.0
 
 
-def _research_pack_goal(observation: dict[str, Any], technology: str, pack_name: str) -> int:
+def _technology_research_ingredients(observation: dict[str, Any], technology: str) -> dict[str, int]:
+    state = _technology_state(observation, technology)
+    ingredients = state.get("ingredients") if isinstance(state.get("ingredients"), dict) else None
+    if ingredients:
+        return {str(item): int(count or 0) for item, count in ingredients.items()}
+    known = TECHNOLOGIES.get(technology)
+    if known is None:
+        return {}
+    return {str(pack_name): 1 for pack_name in known.science_packs}
+
+
+def _technology_research_unit_count(observation: dict[str, Any], technology: str) -> int:
     state = _technology_state(observation, technology)
     try:
-        unit_count = int(state.get("research_unit_count") or 10)
+        value = int(state.get("research_unit_count") or 0)
     except (TypeError, ValueError):
-        unit_count = 10
-    ingredients = state.get("ingredients") if isinstance(state.get("ingredients"), dict) else {}
+        value = 0
+    if value > 0:
+        return value
+    known = TECHNOLOGIES.get(technology)
+    if known is None:
+        return 10
+    return max(1, max(known.science_packs.values() or [1]))
+
+
+def _research_pack_goal(observation: dict[str, Any], technology: str, pack_name: str) -> int:
+    unit_count = _technology_research_unit_count(observation, technology)
+    ingredients = _technology_research_ingredients(observation, technology)
     try:
         pack_amount = int(ingredients.get(pack_name) or 1)
     except (TypeError, ValueError):
@@ -7587,7 +7928,7 @@ def _find_build_item_mall_cell(
             item
             for item in assemblers
             if item.get("electric_network_connected")
-            and item.get("recipe") not in {"copper-cable", "electronic-circuit"}
+            and item.get("recipe") not in {"copper-cable", "electronic-circuit", "small-electric-pole"}
             and _within_allowed_factory_area(
                 observation,
                 _position(item),
@@ -7596,6 +7937,19 @@ def _find_build_item_mall_cell(
             )
         ]
     if not candidates and target_item == "assembling-machine-1" and inventory_count(observation, "assembling-machine-1") <= 0:
+        candidates = [
+            item
+            for item in assemblers
+            if item.get("electric_network_connected")
+            and item.get("recipe") not in {"copper-cable", "electronic-circuit"}
+            and _within_allowed_factory_area(
+                observation,
+                _position(item),
+                allow_existing_remote=allow_existing_remote,
+                reference_position=reference_position,
+            )
+        ]
+    if not candidates and target_item == "small-electric-pole" and inventory_count(observation, "assembling-machine-1") <= 0:
         candidates = [
             item
             for item in assemblers

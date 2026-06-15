@@ -620,6 +620,10 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertIn("produce_iron_plate", compact["allowed_skill_names"])
         self.assertIn("automate_electronic_circuit_line", compact["allowed_skill_names"])
         self.assertIn("plan_factory_site", compact["allowed_skill_names"])
+        self.assertIn("bootstrap_power_pole_mall", compact["allowed_skill_names"])
+        self.assertIn("research_electric_mining_drill", compact["allowed_skill_names"])
+        self.assertIn("bootstrap_electric_mining_drill_mall", compact["allowed_skill_names"])
+        self.assertIn("relocate_gear_belt_mall_to_iron_source", compact["allowed_skill_names"])
         self.assertNotIn("launch_rocket_program", compact["allowed_skill_names"])
         circuit_skill = next(item for item in compact["available_skills"] if item["name"] == "produce_electronic_circuit")
         self.assertIn("bootstrap stock", circuit_skill["role"])
@@ -629,6 +633,20 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertIn("sustained green-circuit throughput", automation_skill["role"])
         layout_skill = next(item for item in compact["available_skills"] if item["name"] == "plan_factory_site")
         self.assertIn("inefficient site placement", layout_skill["role"])
+        pole_skill = next(item for item in compact["available_skills"] if item["name"] == "bootstrap_power_pole_mall")
+        self.assertIn("small electric poles", pole_skill["role"])
+        electric_research_skill = next(
+            item for item in compact["available_skills"] if item["name"] == "research_electric_mining_drill"
+        )
+        self.assertIn("electric mining drills", electric_research_skill["role"])
+        electric_mall_skill = next(
+            item for item in compact["available_skills"] if item["name"] == "bootstrap_electric_mining_drill_mall"
+        )
+        self.assertIn("electric mining drill production", electric_mall_skill["role"])
+        relocation_skill = next(
+            item for item in compact["available_skills"] if item["name"] == "relocate_gear_belt_mall_to_iron_source"
+        )
+        self.assertIn("route cost favors relocation", relocation_skill["role"])
 
     def test_compact_strategy_payload_includes_site_level_logistics(self):
         payload = {
@@ -684,8 +702,8 @@ class RemoteSlurmTests(unittest.TestCase):
         payload = {
             "objective": "launch_rocket_program",
             "observation": {
-                "inventory": {},
-                "research": {"technologies": {}},
+                "inventory": {"productivity-module": 1},
+                "research": {"technologies": {"long-inserters": {"researched": True}}},
                 "entities": [
                     {
                         "name": "assembling-machine-1",
@@ -705,6 +723,9 @@ class RemoteSlurmTests(unittest.TestCase):
         layout = compact["layout_improvement"]
         self.assertEqual(layout["recommended_skill"], "plan_factory_site")
         self.assertEqual(layout["site_structure"]["machine_counts"]["assembling-machine-1"], 1)
+        self.assertTrue(layout["layout_capabilities"]["long_handed_inserter"]["available"])
+        self.assertTrue(layout["layout_capabilities"]["modules"]["productivity-module"]["available"])
+        self.assertTrue(layout["layout_capabilities"]["rerank_trigger"])
         self.assertIn("rebalance_green_circuit_ratio", {item["kind"] for item in layout["opportunities"]})
 
 

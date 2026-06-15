@@ -718,9 +718,13 @@ def compact_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "Use expand_* or automate_* skills when target_status shows production/minute deficits.",
             "After automation is researched, prefer powered assembler automation over repeated hand crafting.",
             "If build items such as inserters, belts, poles, or assemblers block expansion, choose bootstrap_build_item_mall.",
-            "If layout_improvement has an issue/opportunity/candidate severity or score >= 75, choose plan_factory_site before adding more inefficient blocks.",
+            "If gear/belt mall relocation is blocked by small electric pole count, choose bootstrap_power_pole_mall before relocation.",
+            "After Automation and stable power, if burner mining drills remain, choose research_electric_mining_drill or bootstrap_electric_mining_drill_mall before nonblocking downstream expansion.",
+            "If layout_improvement shows distant_gear_mall_iron_source with relocation preferred, choose relocate_gear_belt_mall_to_iron_source before downstream automation.",
+            "For other layout_improvement issues/opportunities/candidates severity or score >= 75, choose plan_factory_site before adding more inefficient blocks.",
             "For site placement, compare construction distance costs with future input/output traffic risk; tightly coupled sites should be adjacent unless a trunk or rail corridor is justified.",
             "Account for power-block expansion clearance as a cost, not an absolute placement ban.",
+            "When long-handed inserters, modules, beacons, rails, quality, or better machines unlock, re-rank site layouts because optimal footprint and bottlenecks can change.",
             "When no urgent build/research/defense task exists, use idle LLM cycles for site layout simulation and improvement planning.",
         ],
         "decision_rule": payload.get("decision_rule"),
@@ -872,6 +876,10 @@ def _skill_role_hint(name: str) -> str:
         "research_automation": "unlock assembling-machine automation",
         "automate_electronic_circuit_line": "build powered circuit assemblers for sustained green-circuit throughput",
         "bootstrap_build_item_mall": "automate expansion items such as belts, inserters, poles, assemblers, furnaces",
+        "bootstrap_power_pole_mall": "automate small electric poles before relocation or power-corridor work",
+        "research_electric_mining_drill": "unlock electric mining drills to replace coal-fueled burner miners",
+        "bootstrap_electric_mining_drill_mall": "automate electric mining drill production before scaling more burner mining",
+        "relocate_gear_belt_mall_to_iron_source": "move an over-distant gear/belt mall next to iron plates when route cost favors relocation",
         "build_starter_defense": "build turret and ammo defense around factory sites; do not clear nests early",
         "plan_factory_site": "diagnose inefficient site placement, factory graph gaps, and layout parameters before building more",
         "research_logistics": "advance tech after science and lab feeding are available",
@@ -912,6 +920,7 @@ def _layout_improvement_context(
         "recommended_skill": "plan_factory_site" if max(top_severity, top_score) >= 75 else None,
         "selected_improvement_site": selected_site,
         "site_structure": _compact_layout_structure(factory_layout_structure(observation)),
+        "layout_capabilities": _compact_layout_capabilities(observation),
         "issues": compact_issues,
         "opportunities": compact_opportunities,
         "simulation_candidates": compact_candidates,
@@ -926,6 +935,75 @@ def _layout_improvement_context(
             "reserved belt, rail, and expansion corridors",
         ],
     }
+
+
+def _compact_layout_capabilities(observation: dict[str, Any]) -> dict[str, Any]:
+    modules = {
+        name: {
+            "available": _technology_researched_compact(observation, name) or _total_item_count_compact(observation, name) > 0,
+            "researched": _technology_researched_compact(observation, name),
+            "stock": _total_item_count_compact(observation, name),
+            "layout_impact": "changes assembler count, power demand, pollution, and beacon-ready spacing",
+        }
+        for name in ("speed-module", "productivity-module", "efficiency-module")
+    }
+    return {
+        "long_handed_inserter": {
+            "available": _technology_researched_compact(observation, "long-inserters")
+            or _total_item_count_compact(observation, "long-handed-inserter") > 0
+            or _recipe_assembler_exists_compact(observation, "long-handed-inserter"),
+            "researched": _technology_researched_compact(observation, "long-inserters"),
+            "stock": _total_item_count_compact(observation, "long-handed-inserter"),
+            "automated": _recipe_assembler_exists_compact(observation, "long-handed-inserter"),
+            "layout_impact": "consider 2-tile pickup/drop for denser input lanes and fewer belt doglegs",
+        },
+        "modules": modules,
+        "rerank_trigger": any(row["available"] for row in modules.values())
+        or _technology_researched_compact(observation, "long-inserters")
+        or _total_item_count_compact(observation, "long-handed-inserter") > 0
+        or _recipe_assembler_exists_compact(observation, "long-handed-inserter"),
+        "rule": "re-rank layouts when newly researched or stocked items change reach, footprint, power, pollution, or throughput.",
+    }
+
+
+def _technology_researched_compact(observation: dict[str, Any], technology: str) -> bool:
+    research = observation.get("research") if isinstance(observation.get("research"), dict) else {}
+    technologies = research.get("technologies") if isinstance(research.get("technologies"), dict) else {}
+    state = technologies.get(technology)
+    return bool(isinstance(state, dict) and state.get("researched"))
+
+
+def _total_item_count_compact(observation: dict[str, Any], item: str) -> int:
+    total = 0
+    inventory = observation.get("inventory") if isinstance(observation.get("inventory"), dict) else {}
+    try:
+        total += int(inventory.get(item) or 0)
+    except (TypeError, ValueError):
+        pass
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        inventories = entity.get("inventories") if isinstance(entity.get("inventories"), dict) else {}
+        for inventory_row in inventories.values():
+            if not isinstance(inventory_row, dict):
+                continue
+            try:
+                total += int(inventory_row.get(item) or 0)
+            except (TypeError, ValueError):
+                pass
+    return total
+
+
+def _recipe_assembler_exists_compact(observation: dict[str, Any], recipe: str) -> bool:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    return any(
+        isinstance(entity, dict)
+        and entity.get("name") == "assembling-machine-1"
+        and entity.get("recipe") == recipe
+        and entity.get("electric_network_connected") is not False
+        for entity in entities
+    )
 
 
 def _selected_improvement_site_from_payload(payload: dict[str, Any]) -> dict[str, Any]:

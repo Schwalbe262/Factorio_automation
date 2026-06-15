@@ -119,6 +119,51 @@ def gear_mall_needs_long_plate_line_without_belts_observation() -> dict:
     return observation
 
 
+def burner_drill_replacement_observation(*, electric_researched: bool = False) -> dict:
+    return {
+        "inventory": {"automation-science-pack": 25, "iron-plate": 40, "copper-plate": 20},
+        "entities": [
+            {
+                "name": "steam-engine",
+                "unit_number": 10,
+                "position": {"x": 0, "y": 0},
+                "electric_network_connected": True,
+                "fluids": {"1": {"name": "steam", "amount": 80}},
+                "inventories": {},
+            },
+            {
+                "name": "small-electric-pole",
+                "unit_number": 11,
+                "position": {"x": 2, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+            {
+                "name": "lab",
+                "unit_number": 12,
+                "position": {"x": 3, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 20,
+                "position": {"x": 6, "y": 0},
+                "mining_target": "iron-ore",
+                "inventories": {"1": {"coal": 2}},
+            },
+        ],
+        "resources": [{"name": "iron-ore", "position": {"x": 6, "y": 0}}],
+        "research": {
+            "technologies": {
+                "automation": {"researched": True},
+                "electric-mining-drill": {"researched": electric_researched},
+                "logistics": {"researched": False},
+            }
+        },
+    }
+
+
 class StrategyTests(unittest.TestCase):
     def test_electronic_circuit_goal_detects_iron_bottleneck(self):
         result = heuristic_strategy(
@@ -170,6 +215,24 @@ class StrategyTests(unittest.TestCase):
         )
         self.assertEqual(result["selected_skill"], "research_logistics")
 
+    def test_rocket_goal_researches_electric_drills_before_logistics_when_burner_drills_remain(self):
+        result = heuristic_strategy("launch_rocket_program", burner_drill_replacement_observation())
+
+        self.assertEqual(result["selected_skill"], "research_electric_mining_drill")
+        self.assertIn("electric mining drill research", result["blockers"])
+        self.assertIn("burner_mining_drill_count=1", result["evidence"])
+        self.assertIn("electric_mining_drill_researched=false", result["evidence"])
+
+    def test_rocket_goal_bootstraps_electric_drill_mall_after_research(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            burner_drill_replacement_observation(electric_researched=True),
+        )
+
+        self.assertEqual(result["selected_skill"], "bootstrap_electric_mining_drill_mall")
+        self.assertIn("electric mining drill mall", result["blockers"])
+        self.assertIn("electric_mining_drill_researched=true", result["evidence"])
+
     def test_rocket_goal_requests_circuit_line_after_early_red_science_research(self):
         result = heuristic_strategy(
             "launch_rocket_program",
@@ -200,14 +263,28 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("iron-plate logistic line to gear mall", result["blockers"])
         self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
 
-    def test_rocket_goal_plans_compaction_for_long_gear_mall_plate_route_without_belts(self):
+    def test_rocket_goal_bootstraps_power_poles_before_long_gear_mall_relocation(self):
         result = heuristic_strategy(
             "launch_rocket_program",
             gear_mall_needs_long_plate_line_without_belts_observation(),
         )
 
-        self.assertEqual(result["selected_skill"], "plan_factory_site")
-        self.assertIn("compact gear mall iron-plate site planning", result["blockers"])
+        self.assertEqual(result["selected_skill"], "bootstrap_power_pole_mall")
+        self.assertIn("small-electric-pole supply for mall relocation", result["blockers"])
+        self.assertIn("source_distance_tiles=152.5", result["evidence"])
+        self.assertIn("relocation_power_poles_estimate=20", result["evidence"])
+        self.assertIn("small_electric_poles_available=0", result["evidence"])
+        self.assertIn("small_electric_pole_deficit=20", result["evidence"])
+        self.assertIn("route_cost_preference=relocate_mall_to_iron_source", result["evidence"])
+
+    def test_rocket_goal_relocates_long_gear_mall_plate_route_when_power_poles_ready(self):
+        observation = gear_mall_needs_long_plate_line_without_belts_observation()
+        observation["inventory"] = {"small-electric-pole": 20}
+
+        result = heuristic_strategy("launch_rocket_program", observation)
+
+        self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertIn("costed gear/belt mall relocation", result["blockers"])
         self.assertIn("source_distance_tiles=152.5", result["evidence"])
         self.assertIn("belt_route_cost=153.0", result["evidence"])
         self.assertIn("relocation_cost=58.0", result["evidence"])
@@ -644,7 +721,7 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["guardrail_adjusted"]["from"], "automate_electronic_circuit_line")
         self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
 
-    def test_reconcile_keeps_plan_site_for_long_gear_mall_plate_route_without_belts(self):
+    def test_reconcile_routes_plan_site_to_power_pole_mall_for_long_gear_mall_plate_route_without_belts(self):
         result = reconcile_strategy_decision(
             {
                 "selected_skill": "plan_factory_site",
@@ -659,13 +736,14 @@ class StrategyTests(unittest.TestCase):
             gear_mall_needs_long_plate_line_without_belts_observation(),
         )
 
-        self.assertEqual(result["selected_skill"], "plan_factory_site")
-        self.assertNotIn("guardrail_adjusted", result)
-        self.assertIn("compact gear mall iron-plate site planning", result["blockers"])
+        self.assertEqual(result["selected_skill"], "bootstrap_power_pole_mall")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertIn("small-electric-pole supply for mall relocation", result["blockers"])
         self.assertIn("source_distance_tiles=152.5", result["evidence"])
+        self.assertIn("small_electric_pole_deficit=20", result["evidence"])
         self.assertIn("route_cost_preference=relocate_mall_to_iron_source", result["evidence"])
 
-    def test_reconcile_routes_downstream_to_plan_site_for_long_gear_mall_plate_route_without_belts(self):
+    def test_reconcile_routes_downstream_to_power_pole_mall_for_long_gear_mall_plate_route_without_belts(self):
         result = reconcile_strategy_decision(
             {
                 "selected_skill": "automate_electronic_circuit_line",
@@ -680,11 +758,35 @@ class StrategyTests(unittest.TestCase):
             gear_mall_needs_long_plate_line_without_belts_observation(),
         )
 
-        self.assertEqual(result["selected_skill"], "plan_factory_site")
+        self.assertEqual(result["selected_skill"], "bootstrap_power_pole_mall")
         self.assertEqual(result["guardrail_adjusted"]["from"], "automate_electronic_circuit_line")
-        self.assertIn("compact gear mall iron-plate site planning", result["blockers"])
+        self.assertIn("small-electric-pole supply for mall relocation", result["blockers"])
         self.assertIn("source_distance_tiles=152.5", result["evidence"])
+        self.assertIn("small_electric_pole_deficit=20", result["evidence"])
         self.assertIn("route_cost_preference=relocate_mall_to_iron_source", result["evidence"])
+
+    def test_reconcile_routes_to_relocation_when_power_poles_are_ready(self):
+        observation = gear_mall_needs_long_plate_line_without_belts_observation()
+        observation["inventory"] = {"small-electric-pole": 20}
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 84,
+                "reason": "Layout should be compacted before more construction.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertIn("costed gear/belt mall relocation", result["blockers"])
+        self.assertIn("source_distance_tiles=152.5", result["evidence"])
 
     def test_reconcile_promotes_fuel_dependent_expansion_to_coal_supply(self):
         result = reconcile_strategy_decision(
@@ -864,6 +966,44 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "research_logistics")
         self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
         self.assertIn("manual_site_logistics_preemption=false", result["evidence"])
+
+    def test_reconcile_promotes_layout_planning_to_electric_drill_research_when_burners_remain(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 50,
+                "reason": "Layout diagnostics can run during idle time.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            burner_drill_replacement_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "research_electric_mining_drill")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertIn("electric mining drill research", result["blockers"])
+
+    def test_reconcile_promotes_layout_planning_to_electric_drill_mall_after_research(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "research_logistics",
+                "priority": 50,
+                "reason": "Research logistics next.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            burner_drill_replacement_observation(electric_researched=True),
+        )
+
+        self.assertEqual(result["selected_skill"], "bootstrap_electric_mining_drill_mall")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "research_logistics")
+        self.assertIn("electric mining drill mall", result["blockers"])
 
     def test_reconcile_promotes_layout_planning_to_active_logistics_without_heuristic_hint(self):
         result = reconcile_strategy_decision(
@@ -1207,6 +1347,10 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(any(item["name"] == "research_automation" for item in catalog))
         self.assertTrue(any(item["name"] == "automate_electronic_circuit_line" for item in catalog))
         self.assertTrue(any(item["name"] == "bootstrap_build_item_mall" for item in catalog))
+        self.assertTrue(any(item["name"] == "bootstrap_power_pole_mall" for item in catalog))
+        self.assertTrue(any(item["name"] == "research_electric_mining_drill" for item in catalog))
+        self.assertTrue(any(item["name"] == "bootstrap_electric_mining_drill_mall" for item in catalog))
+        self.assertTrue(any(item["name"] == "relocate_gear_belt_mall_to_iron_source" for item in catalog))
         self.assertTrue(any(item["name"] == "build_iron_plate_logistic_line_to_gear_mall" for item in catalog))
         self.assertTrue(any(item["name"] == "research_logistics" for item in catalog))
         self.assertTrue(any(item["name"] == "build_starter_defense" for item in catalog))
@@ -1218,6 +1362,18 @@ class StrategyTests(unittest.TestCase):
         )
         self.assertEqual(
             next(item for item in catalog if item["name"] == "bootstrap_build_item_mall")["executor"],
+            "BuildItemMallSkill",
+        )
+        self.assertEqual(
+            next(item for item in catalog if item["name"] == "bootstrap_power_pole_mall")["executor"],
+            "BuildItemMallSkill",
+        )
+        self.assertEqual(
+            next(item for item in catalog if item["name"] == "research_electric_mining_drill")["executor"],
+            "ResearchTechnologySkill",
+        )
+        self.assertEqual(
+            next(item for item in catalog if item["name"] == "bootstrap_electric_mining_drill_mall")["executor"],
             "BuildItemMallSkill",
         )
         self.assertEqual(
@@ -1256,6 +1412,23 @@ class StrategyTests(unittest.TestCase):
             "iron-ore",
         )
 
+    def test_layout_context_marks_long_handed_inserter_as_layout_capability(self):
+        payload = make_strategy_payload(
+            "launch_rocket_program",
+            {
+                "inventory": {"speed-module": 1},
+                "entities": [],
+                "resources": [],
+                "research": {"technologies": {"long-inserters": {"researched": True}}},
+            },
+        )
+
+        capability = payload["layout_improvement"]["layout_capabilities"]["inserters"]["long-handed-inserter"]
+        self.assertTrue(capability["available"])
+        self.assertTrue(capability["researched"])
+        self.assertIn("denser", capability["layout_impact"])
+        self.assertTrue(payload["layout_improvement"]["layout_capabilities"]["modules"]["speed-module"]["available"])
+
     def test_strategy_payload_exposes_build_item_supply_context(self):
         payload = make_strategy_payload(
             "launch_rocket_program",
@@ -1270,6 +1443,7 @@ class StrategyTests(unittest.TestCase):
         items = {item["item"]: item for item in supply["items"]}
         self.assertTrue(items["transport-belt"]["needs_mall"])
         self.assertTrue(items["assembling-machine-1"]["needs_mall"])
+        self.assertTrue(items["electric-mining-drill"]["needs_mall"])
 
     def test_strategy_payload_exposes_automation_policy_context(self):
         payload = make_strategy_payload(

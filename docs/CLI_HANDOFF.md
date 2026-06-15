@@ -97,6 +97,16 @@ python -m factorio_ai.cli start-no-mod-server
 
 ## Recent Completed Work
 
+Latest continuation after Part 105:
+
+- Part 105 extended the long iron route without hand-carry and kept repeated gear/belt inputs behind site-to-site logistics.
+- Part 106 added the site placement cost model for the over-distant gear/belt mall, including belt-route cost, relocation cost, power-pole corridor estimate, and power expansion clearance risk.
+- Part 107 adds deterministic follow-through for that model:
+  - `relocate_gear_belt_mall_to_iron_source` refuses to tear down existing mall assemblers until the required small-electric-pole corridor materials are available.
+  - `bootstrap_power_pole_mall` lets Qwen/strategy choose pole automation before relocation when the corridor is short on poles.
+  - `research_electric_mining_drill` and `bootstrap_electric_mining_drill_mall` let the strategy replace burner drills after Automation/stable power instead of extending burner mining longer than necessary.
+  - Layout capability payloads now include long-handed inserter and module availability, and planner simulation candidates can rerank into long-handed green-circuit and starter-mall variants with `layout_unlocks_considered` and `uses_unlocked_items` evidence.
+
 Part 64 introduced:
 
 - Background idle layout loop so LLM/Slurm can keep doing simulation-only site layout work while deterministic skills are blocked or idle.
@@ -903,6 +913,7 @@ Open review GUI:
 - Stone bootstrap should place a burner mining drill outputting into a wooden/iron chest when possible.
 - Labs usually need daisy chain or belt-fed science distribution.
 - Burner drills are only bootstrap; later replace with electric drills.
+- After `long-inserters`, modules, beacons, better assemblers/furnaces, rails, or quality tiers unlock, rerank existing and proposed site layouts. The Qwen payload and deterministic planner should show which unlocked tools were considered, not rely on a fixed pre-unlock layout chain.
 - Boiler fuel should become coal belt plus inserter, not manual coal insertion.
 - Defense must build gun turrets plus firearm magazine supply around factory sites before trying to clear nests.
 - Threat logic should distinguish nearby nests, pollution-triggered attacks, recent damage, and actual factory danger.

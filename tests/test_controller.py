@@ -1536,6 +1536,12 @@ class ControllerTests(unittest.TestCase):
             self.assertIsNotNone(logistics_config)
             self.assertEqual(logistics_config["goal"], "research_logistics")
             self.assertEqual(logistics_config["max_steps"], 666)
+            electric_drill_research_config = controller._skill_run_config("research_electric_mining_drill", max_steps=667)
+            self.assertIsNotNone(electric_drill_research_config)
+            self.assertEqual(electric_drill_research_config["goal"], "research_electric_mining_drill")
+            self.assertEqual(electric_drill_research_config["target_item"], "automation-science-pack")
+            self.assertEqual(electric_drill_research_config["target"], 25)
+            self.assertEqual(electric_drill_research_config["max_steps"], 667)
             iron_line_config = controller._skill_run_config(
                 "build_iron_plate_logistic_line_to_gear_mall",
                 target_count=44,
@@ -1566,11 +1572,41 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(mall_config["target_item"], "transport-belt")
             self.assertEqual(mall_config["target"], 24)
             self.assertEqual(mall_config["max_steps"], 1111)
+            pole_mall_config = controller._skill_run_config(
+                "bootstrap_power_pole_mall",
+                target_count=18,
+                max_steps=1122,
+            )
+            self.assertIsNotNone(pole_mall_config)
+            self.assertEqual(pole_mall_config["goal"], "bootstrap_power_pole_mall")
+            self.assertEqual(pole_mall_config["target_item"], "small-electric-pole")
+            self.assertEqual(pole_mall_config["target"], 18)
+            self.assertEqual(pole_mall_config["max_steps"], 1122)
+            electric_drill_mall_config = controller._skill_run_config(
+                "bootstrap_electric_mining_drill_mall",
+                target_count=7,
+                max_steps=1133,
+            )
+            self.assertIsNotNone(electric_drill_mall_config)
+            self.assertEqual(electric_drill_mall_config["goal"], "bootstrap_electric_mining_drill_mall")
+            self.assertEqual(electric_drill_mall_config["target_item"], "electric-mining-drill")
+            self.assertEqual(electric_drill_mall_config["target"], 7)
+            self.assertEqual(electric_drill_mall_config["max_steps"], 1133)
             layout_config = controller._skill_run_config("plan_factory_site", max_steps=2)
             self.assertIsNotNone(layout_config)
             self.assertEqual(layout_config["goal"], "plan_factory_site")
             self.assertEqual(layout_config["target_item"], "layout-plan")
             self.assertEqual(layout_config["max_steps"], 2)
+            relocation_config = controller._skill_run_config(
+                "relocate_gear_belt_mall_to_iron_source",
+                target_count=30,
+                max_steps=444,
+            )
+            self.assertIsNotNone(relocation_config)
+            self.assertEqual(relocation_config["goal"], "relocate_gear_belt_mall_to_iron_source")
+            self.assertEqual(relocation_config["target_item"], "transport-belt")
+            self.assertEqual(relocation_config["target"], 30)
+            self.assertEqual(relocation_config["max_steps"], 444)
             dry_run_config = controller._skill_run_config("expand_iron_smelting", max_steps=0)
             self.assertIsNotNone(dry_run_config)
             self.assertEqual(dry_run_config["max_steps"], 0)

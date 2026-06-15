@@ -43,6 +43,7 @@ from .planner import (
     ExpandIronSmeltingSkill,
     FactoryLayoutImprovementSkill,
     GearBeltMallLogisticsSkill,
+    GearBeltMallRelocationSkill,
     IronPlateLogisticLineToGearMallSkill,
     IronPlateSkill,
     ResearchAutomationSkill,
@@ -1220,6 +1221,15 @@ class FactorioController:
                 "max_steps": _max_steps(max_steps, 2200),
                 "log_prefix": "strategy-logistics-research",
             }
+        if skill_name == "research_electric_mining_drill":
+            return {
+                "skill": ResearchTechnologySkill("electric-mining-drill"),
+                "target_item": "automation-science-pack",
+                "target": 25,
+                "goal": skill_name,
+                "max_steps": _max_steps(max_steps, 2200),
+                "log_prefix": "strategy-electric-mining-drill-research",
+            }
         if skill_name == "bootstrap_build_item_mall":
             target = target_count or 20
             target_item = "transport-belt"
@@ -1231,6 +1241,28 @@ class FactorioController:
                 "max_steps": _max_steps(max_steps, 1200),
                 "log_prefix": "strategy-build-item-mall",
             }
+        if skill_name == "bootstrap_power_pole_mall":
+            target = target_count or 20
+            target_item = "small-electric-pole"
+            return {
+                "skill": BuildItemMallSkill(target_item, target),
+                "target_item": target_item,
+                "target": target,
+                "goal": skill_name,
+                "max_steps": _max_steps(max_steps, 1200),
+                "log_prefix": "strategy-power-pole-mall",
+            }
+        if skill_name == "bootstrap_electric_mining_drill_mall":
+            target = target_count or 6
+            target_item = "electric-mining-drill"
+            return {
+                "skill": BuildItemMallSkill(target_item, target),
+                "target_item": target_item,
+                "target": target,
+                "goal": skill_name,
+                "max_steps": _max_steps(max_steps, 1600),
+                "log_prefix": "strategy-electric-mining-drill-mall",
+            }
         if skill_name == "build_gear_belt_mall_logistics":
             target = target_count or 20
             return {
@@ -1240,6 +1272,16 @@ class FactorioController:
                 "goal": skill_name,
                 "max_steps": _max_steps(max_steps, 900),
                 "log_prefix": "strategy-gear-belt-mall",
+            }
+        if skill_name == "relocate_gear_belt_mall_to_iron_source":
+            target = target_count or 20
+            return {
+                "skill": GearBeltMallRelocationSkill(target),
+                "target_item": "transport-belt",
+                "target": target,
+                "goal": skill_name,
+                "max_steps": _max_steps(max_steps, 900),
+                "log_prefix": "strategy-gear-belt-mall-relocation",
             }
         if skill_name == "build_iron_plate_logistic_line_to_gear_mall":
             target = target_count or 40

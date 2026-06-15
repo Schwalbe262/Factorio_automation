@@ -25,6 +25,7 @@ BUILD_ITEM_MALL_ITEMS = [
     "firearm-magazine",
     "gun-turret",
     "burner-mining-drill",
+    "electric-mining-drill",
     "stone-furnace",
     "small-electric-pole",
     "assembling-machine-1",
@@ -249,6 +250,59 @@ SKILL_CATALOG: dict[str, SkillContract] = {
             "Executor handles exact assembler recipes, inserter/chest placement, belts, power, and resource validation."
         ),
     ),
+    "bootstrap_power_pole_mall": SkillContract(
+        name="bootstrap_power_pole_mall",
+        description="Automate small electric pole production when site relocation or power corridors are blocked by pole count.",
+        executor="BuildItemMallSkill",
+        preconditions=[
+            "automation researched",
+            "electric power available",
+            "wood and copper cable are available or producible",
+            "a powered mall cell can be placed near existing factory logistics",
+        ],
+        completion=[
+            "small electric poles are produced by a powered assembler",
+            "power corridor construction no longer depends on hand-crafting every pole",
+        ],
+        llm_scope=(
+            "Choose this when relocation, power expansion, or new factory sites are blocked by insufficient small electric poles. "
+            "Executor uses the generic build-item mall with target item small-electric-pole."
+        ),
+    ),
+    "research_electric_mining_drill": SkillContract(
+        name="research_electric_mining_drill",
+        description="Research electric mining drills so burner miners can be replaced soon after power is stable.",
+        executor="ResearchTechnologySkill",
+        preconditions=[
+            "powered lab exists or can be fed",
+            "automation science packs are available or producible",
+            "burner mining drills are still active in factory sites",
+        ],
+        completion=["electric-mining-drill recipe is unlocked"],
+        llm_scope=(
+            "Choose this after Automation and stable power when burner mining drills are still supplying production. "
+            "Do not postpone indefinitely behind nonblocking layout diagnostics."
+        ),
+    ),
+    "bootstrap_electric_mining_drill_mall": SkillContract(
+        name="bootstrap_electric_mining_drill_mall",
+        description="Automate electric mining drill production to replace burner mining drills and reduce coal-fuel maintenance.",
+        executor="BuildItemMallSkill",
+        preconditions=[
+            "electric-mining-drill technology researched",
+            "electric power available",
+            "iron plates, iron gears, and electronic circuits available through nearby logistics or producer cells",
+            "burner mining drills remain in active factory sites",
+        ],
+        completion=[
+            "electric mining drills are produced by a powered assembler",
+            "burner mining drill replacement can proceed without hand-crafting each drill",
+        ],
+        llm_scope=(
+            "Choose this once the recipe is researched and burner miners remain. "
+            "Executor reuses the generic build-item mall with target item electric-mining-drill."
+        ),
+    ),
     "build_gear_belt_mall_logistics": SkillContract(
         name="build_gear_belt_mall_logistics",
         description="Connect an iron-gear assembler to a transport-belt assembler without player gear crafting or gear hand-carry.",
@@ -267,6 +321,26 @@ SKILL_CATALOG: dict[str, SkillContract] = {
         llm_scope=(
             "Choose this when belt automation is blocked by gear mall output logistics or when the belt mall needs a one-time iron seed before it can replenish construction belts. "
             "Executor handles exact belt lane, inserter direction, burner fuel, and recipe changes."
+        ),
+    ),
+    "relocate_gear_belt_mall_to_iron_source": SkillContract(
+        name="relocate_gear_belt_mall_to_iron_source",
+        description="Move a pre-rail gear/belt mall close to its iron-plate source when the route cost model rejects a long belt recovery.",
+        executor="GearBeltMallRelocationSkill",
+        preconditions=[
+            "automation researched",
+            "existing gear and belt assemblers are known",
+            "nearby iron-plate source furnace is known",
+            "site cost model prefers relocation over extending the exhausted pre-rail belt route",
+            "power corridor materials are available before existing assemblers are mined",
+        ],
+        completion=[
+            "gear and belt assemblers are rebuilt near the iron-plate source",
+            "follow-up local gear-to-belt logistics can be built without long player shuttles",
+        ],
+        llm_scope=(
+            "Choose this when related starter sites are too far apart and construction belts are exhausted. "
+            "Executor validates cost evidence, protects against premature teardown, and moves the exact assemblers."
         ),
     ),
     "build_iron_plate_logistic_line_to_gear_mall": SkillContract(
@@ -408,6 +482,7 @@ def make_strategy_payload(
             "Treat factory placement as site-graph optimization: compare belt, pipe, pole, and later rail distance costs "
             "against future input/output traffic, and co-locate tightly coupled producer/consumer sites unless a trunk or rail corridor is justified. "
             "Do not hard-ban factories near power blocks, but account for lost boiler, engine, pole, fuel, water, and future power expansion clearance. "
+            "When new buildings, inserters, modules, beacons, rails, quality tiers, or logistics tools unlock, re-evaluate site layout candidates because optimal footprint and bottlenecks can change. "
             "For spatial work, choose districts, corridors, or rail topology only. "
             "When urgent production, defense, research, and power work are satisfied, use idle LLM cycles "
             "to improve factory site layout against reusable blueprint-style patterns. "
@@ -447,6 +522,7 @@ def make_layout_improvement_context(
         "recommended_skill": "plan_factory_site" if top_severity >= 75 else None,
         "selected_improvement_site": selected_site,
         "site_structure": factory_layout_structure(observation),
+        "layout_capabilities": make_layout_capability_context(observation),
         "issues": issues,
         "opportunities": opportunities,
         "simulation_candidates": candidates,
@@ -460,6 +536,62 @@ def make_layout_improvement_context(
             "remote outpost plus rail corridor when belts or walking logistics become too long",
         ],
     }
+
+
+def make_layout_capability_context(observation: dict[str, Any]) -> dict[str, Any]:
+    inserters = {
+        "burner-inserter": {
+            "available": total_item_count(observation, "burner-inserter") > 0,
+            "stock": total_item_count(observation, "burner-inserter"),
+            "layout_impact": "fuel-dependent inserter; use only for bootstrap or burner fuel loops",
+        },
+        "inserter": {
+            "available": total_item_count(observation, "inserter") > 0 or _technology_researched(observation, "automation"),
+            "stock": total_item_count(observation, "inserter"),
+            "layout_impact": "standard one-tile pickup/drop for most early assembler and belt layouts",
+        },
+        "long-handed-inserter": {
+            "available": _technology_researched(observation, "long-inserters")
+            or total_item_count(observation, "long-handed-inserter") > 0
+            or _recipe_assembler_exists(observation, "long-handed-inserter"),
+            "stock": total_item_count(observation, "long-handed-inserter"),
+            "researched": _technology_researched(observation, "long-inserters"),
+            "automated": _recipe_assembler_exists(observation, "long-handed-inserter"),
+            "layout_impact": (
+                "can reach across one intervening tile or belt lane, enabling denser 2-belt input layouts, "
+                "cleaner assembler rows, and fewer awkward belt doglegs"
+            ),
+        },
+    }
+    modules = {
+        name: {
+            "available": _technology_researched(observation, name) or total_item_count(observation, name) > 0,
+            "researched": _technology_researched(observation, name),
+            "stock": total_item_count(observation, name),
+            "layout_impact": "module availability can change assembler count, power demand, pollution, and beacon-ready spacing",
+        }
+        for name in ("speed-module", "productivity-module", "efficiency-module")
+    }
+    return {
+        "llm_responsibility": (
+            "When proposing or ranking site layouts, account for currently researched, stocked, or automated buildings, "
+            "inserters, modules, quality, and logistics options. A layout optimal before a new item may become obsolete after unlock."
+        ),
+        "inserters": inserters,
+        "modules": modules,
+        "constraints": [
+            "prefer long-handed inserters when they reduce belt crossings, input bottlenecks, or site footprint without harming expansion access",
+            "re-evaluate existing sites after new machines, inserters, modules, beacons, rails, or quality tiers unlock",
+            "record before/after layout metrics when a newly unlocked item improves footprint, throughput, power, pollution, or bottlenecks",
+        ],
+    }
+
+
+def _recipe_assembler_exists(observation: dict[str, Any], recipe: str) -> bool:
+    return any(
+        assembler.get("recipe") == recipe and assembler.get("electric_network_connected") is not False
+        for assembler in entities_named(observation, "assembling-machine-1")
+    )
 
 
 def make_automation_policy_context(monitor: dict[str, Any]) -> dict[str, Any]:
@@ -918,16 +1050,70 @@ def reconcile_strategy_decision(
         }
         return adjusted
     gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
-    if _gear_mall_plate_route_needs_compaction(gear_mall_iron_plate_issue) and selected in {
+    relocation_power_pole_deficit = _gear_mall_relocation_power_pole_deficit(gear_mall_iron_plate_issue, observation)
+    if relocation_power_pole_deficit > 0 and selected in {
         "plan_factory_site",
+        "relocate_gear_belt_mall_to_iron_source",
         "produce_electronic_circuit",
         "automate_electronic_circuit_line",
         "bootstrap_build_item_mall",
+        "bootstrap_power_pole_mall",
         "research_logistics",
         "build_iron_plate_logistic_line_to_gear_mall",
     }:
         adjusted = dict(decision)
-        adjusted["selected_skill"] = "plan_factory_site"
+        adjusted["selected_skill"] = "bootstrap_power_pole_mall"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 94)
+        original_reason = str(decision.get("reason") or "").strip()
+        required_poles = gear_mall_iron_plate_issue.get("relocation_power_poles_estimate") if isinstance(gear_mall_iron_plate_issue, dict) else None
+        available_poles = total_item_count(observation, "small-electric-pole")
+        guardrail_reason = (
+            "The gear/belt mall relocation is cost-preferred, but the power corridor lacks enough small electric poles; "
+            "automate pole supply before mining the existing mall."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["small-electric-pole supply for mall relocation"]))
+        evidence = _string_list(decision.get("evidence"))
+        if selected != "bootstrap_power_pole_mall":
+            evidence.append(f"guardrail_adjusted_from={selected}")
+        for item in [
+            f"gear_assembler_unit={gear_mall_iron_plate_issue.get('gear_unit')}",
+            f"iron_source_unit={gear_mall_iron_plate_issue.get('source_unit')}",
+            f"source_distance_tiles={gear_mall_iron_plate_issue.get('source_distance_tiles')}",
+            f"relocation_power_poles_estimate={required_poles}",
+            f"small_electric_poles_available={available_poles}",
+            f"small_electric_pole_deficit={relocation_power_pole_deficit}",
+            f"route_cost_preference={gear_mall_iron_plate_issue.get('route_cost_preference')}",
+            "gear_handcraft_blocked=true",
+        ]:
+            if item not in evidence:
+                evidence.append(item)
+        adjusted["evidence"] = evidence
+        adjusted["expected_effect"] = (
+            "Automate small electric poles so the later gear/belt mall relocation can build a power corridor "
+            "without hand-crafting poles or prematurely tearing down the old mall."
+        )
+        if selected != "bootstrap_power_pole_mall":
+            adjusted["guardrail_adjusted"] = {
+                "from": selected,
+                "to": "bootstrap_power_pole_mall",
+                "reason": guardrail_reason,
+            }
+        else:
+            adjusted.pop("guardrail_adjusted", None)
+        return adjusted
+    if _gear_mall_plate_route_needs_compaction(gear_mall_iron_plate_issue) and selected in {
+        "plan_factory_site",
+        "relocate_gear_belt_mall_to_iron_source",
+        "produce_electronic_circuit",
+        "automate_electronic_circuit_line",
+        "bootstrap_build_item_mall",
+        "bootstrap_power_pole_mall",
+        "research_logistics",
+        "build_iron_plate_logistic_line_to_gear_mall",
+    }:
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "relocate_gear_belt_mall_to_iron_source"
         adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 93)
         original_reason = str(decision.get("reason") or "").strip()
         guardrail_reason = (
@@ -935,11 +1121,14 @@ def reconcile_strategy_decision(
             "over this pre-rail belt recovery while construction belts are exhausted."
         )
         current_blockers = _string_list(decision.get("blockers"))
-        already_explains_issue = selected == "plan_factory_site" and "compact gear mall iron-plate site planning" in current_blockers
+        already_explains_issue = (
+            selected == "relocate_gear_belt_mall_to_iron_source"
+            and "costed gear/belt mall relocation" in current_blockers
+        )
         adjusted["reason"] = original_reason if already_explains_issue else f"{guardrail_reason} {original_reason}".strip()
-        adjusted["blockers"] = sorted(set(current_blockers + ["compact gear mall iron-plate site planning"]))
+        adjusted["blockers"] = sorted(set(current_blockers + ["costed gear/belt mall relocation"]))
         evidence = _string_list(decision.get("evidence"))
-        if selected != "plan_factory_site":
+        if selected != "relocate_gear_belt_mall_to_iron_source":
             evidence.append(f"guardrail_adjusted_from={selected}")
         for item in [
             f"gear_assembler_unit={gear_mall_iron_plate_issue.get('gear_unit')}",
@@ -956,13 +1145,13 @@ def reconcile_strategy_decision(
                 evidence.append(item)
         adjusted["evidence"] = evidence
         adjusted["expected_effect"] = (
-            "Ask the layout planner/Qwen layer to co-locate the gear/belt mall with iron-plate production "
-            "or reserve a validated trunk corridor before more live construction."
+            "Execute the costed relocation precheck so the gear/belt mall can be rebuilt near iron-plate production "
+            "without extending another exhausted pre-rail belt route."
         )
-        if selected != "plan_factory_site":
+        if selected != "relocate_gear_belt_mall_to_iron_source":
             adjusted["guardrail_adjusted"] = {
                 "from": selected,
-                "to": "plan_factory_site",
+                "to": "relocate_gear_belt_mall_to_iron_source",
                 "reason": guardrail_reason,
             }
         else:
@@ -1006,6 +1195,50 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
+    burner_drill_replacement_issue = _burner_drill_replacement_issue(observation)
+    if burner_drill_replacement_issue is not None and selected in {
+        "plan_factory_site",
+        "research_logistics",
+        "produce_electronic_circuit",
+        "automate_electronic_circuit_line",
+        "bootstrap_build_item_mall",
+        "build_belt_smelting_line",
+        "expand_iron_smelting",
+        "expand_copper_smelting",
+    }:
+        target_skill = (
+            "research_electric_mining_drill"
+            if not bool(burner_drill_replacement_issue.get("electric_mining_drill_researched"))
+            else "bootstrap_electric_mining_drill_mall"
+        )
+        if selected != target_skill:
+            adjusted = dict(decision)
+            adjusted["selected_skill"] = target_skill
+            adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 90)
+            original_reason = str(decision.get("reason") or "").strip()
+            guardrail_reason = (
+                "Burner mining drills remain after Automation and stable power; introduce electric mining drills "
+                "before letting layout diagnostics or downstream automation consume the next strategy cycle."
+            )
+            adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+            blockers = ["electric mining drill research"] if target_skill == "research_electric_mining_drill" else ["electric mining drill mall"]
+            adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + blockers))
+            adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+                f"guardrail_adjusted_from={selected}",
+                f"burner_mining_drill_count={burner_drill_replacement_issue.get('burner_drill_count')}",
+                f"electric_mining_drill_count={burner_drill_replacement_issue.get('electric_drill_count')}",
+                f"electric_mining_drill_researched={str(bool(burner_drill_replacement_issue.get('electric_mining_drill_researched'))).lower()}",
+                f"electric_mining_drill_automated={str(bool(burner_drill_replacement_issue.get('electric_mining_drill_automated'))).lower()}",
+            ]
+            adjusted["expected_effect"] = (
+                "Move the factory from coal-fueled burner mining toward powered electric mining before scaling more raw throughput."
+            )
+            adjusted["guardrail_adjusted"] = {
+                "from": selected,
+                "to": target_skill,
+                "reason": guardrail_reason,
+            }
+            return adjusted
     if (
         rocket_objective
         and selected != "research_automation"
@@ -1225,6 +1458,7 @@ def heuristic_strategy(
     gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
     gear_belt_mall_power_issue = _gear_belt_mall_power_issue(observation)
     gear_belt_mall_bootstrap_issue = _gear_belt_mall_bootstrap_issue(observation)
+    burner_drill_replacement_issue = _burner_drill_replacement_issue(observation)
     if threats["danger_level"] in {"critical", "high"} and int(threats.get("armed_gun_turret_count") or 0) <= 0:
         nearest = threats.get("nearest_enemy") if isinstance(threats.get("nearest_enemy"), dict) else {}
         return StrategicDecision(
@@ -1342,9 +1576,37 @@ def heuristic_strategy(
             ),
         ).to_dict()
 
+    relocation_power_pole_deficit = _gear_mall_relocation_power_pole_deficit(gear_mall_iron_plate_issue, observation)
+    if relocation_power_pole_deficit > 0:
+        required_poles = gear_mall_iron_plate_issue.get("relocation_power_poles_estimate") if isinstance(gear_mall_iron_plate_issue, dict) else None
+        available_poles = total_item_count(observation, "small-electric-pole")
+        return StrategicDecision(
+            selected_skill="bootstrap_power_pole_mall",
+            priority=94,
+            reason=(
+                "The powered gear/belt mall should be relocated near iron plates, but the relocation power corridor "
+                "does not have enough small electric poles. Automate pole supply before mining the existing mall."
+            ),
+            evidence=[
+                f"gear_assembler_unit={gear_mall_iron_plate_issue.get('gear_unit')}",
+                f"iron_source_unit={gear_mall_iron_plate_issue.get('source_unit')}",
+                f"source_distance_tiles={gear_mall_iron_plate_issue.get('source_distance_tiles')}",
+                f"relocation_power_poles_estimate={required_poles}",
+                f"small_electric_poles_available={available_poles}",
+                f"small_electric_pole_deficit={relocation_power_pole_deficit}",
+                f"route_cost_preference={gear_mall_iron_plate_issue.get('route_cost_preference')}",
+                "gear_handcraft_blocked=true",
+            ],
+            blockers=["small-electric-pole supply for mall relocation"],
+            expected_effect=(
+                "Automate small electric poles so the mall relocation can reserve and connect a power corridor "
+                "without hand-crafting poles."
+            ),
+        ).to_dict()
+
     if _gear_mall_plate_route_needs_compaction(gear_mall_iron_plate_issue):
         return StrategicDecision(
-            selected_skill="plan_factory_site",
+            selected_skill="relocate_gear_belt_mall_to_iron_source",
             priority=93,
             reason=(
                 "The powered gear/belt mall has no sustained iron-plate input, and the site placement cost "
@@ -1362,10 +1624,10 @@ def heuristic_strategy(
                 "transport_belts_available_for_mall_logistics=false",
                 "gear_handcraft_blocked=true",
             ],
-            blockers=["compact gear mall iron-plate site planning"],
+            blockers=["costed gear/belt mall relocation"],
             expected_effect=(
-                "Generate a site-level relocation or corridor plan so related starter sites become close enough "
-                "for short belts before downstream automation resumes."
+                "Run the relocation precheck and move the gear/belt mall toward iron-plate production only when "
+                "the power corridor and assembler materials make the rebuild safe."
             ),
         ).to_dict()
 
@@ -1391,6 +1653,48 @@ def heuristic_strategy(
                 "Extend transport belts and endpoint inserters so the gear assembler consumes furnace output "
                 "without player gear crafting or iron-plate shuttle runs."
             ),
+        ).to_dict()
+
+    if burner_drill_replacement_issue is not None and not bool(
+        burner_drill_replacement_issue.get("electric_mining_drill_researched")
+    ):
+        return StrategicDecision(
+            selected_skill="research_electric_mining_drill",
+            priority=90,
+            reason=(
+                "Burner mining drills are still active after Automation and stable power; research electric mining drills "
+                "so coal-fueled mining can be phased out early."
+            ),
+            evidence=[
+                f"burner_mining_drill_count={burner_drill_replacement_issue.get('burner_drill_count')}",
+                f"electric_mining_drill_count={burner_drill_replacement_issue.get('electric_drill_count')}",
+                f"burner_drill_resources={burner_drill_replacement_issue.get('resource_counts')}",
+                "electric_mining_drill_researched=false",
+            ],
+            blockers=["electric mining drill research"],
+            expected_effect="Unlock electric mining drills before adding more burner-drill mining capacity.",
+        ).to_dict()
+
+    if (
+        burner_drill_replacement_issue is not None
+        and bool(burner_drill_replacement_issue.get("electric_mining_drill_researched"))
+        and not bool(burner_drill_replacement_issue.get("electric_mining_drill_automated"))
+    ):
+        return StrategicDecision(
+            selected_skill="bootstrap_electric_mining_drill_mall",
+            priority=89,
+            reason=(
+                "Electric mining drill technology is available while burner mining drills remain; automate electric drill "
+                "production before scaling more coal-fueled mining."
+            ),
+            evidence=[
+                f"burner_mining_drill_count={burner_drill_replacement_issue.get('burner_drill_count')}",
+                f"electric_mining_drill_stock={burner_drill_replacement_issue.get('electric_mining_drill_stock')}",
+                "electric_mining_drill_researched=true",
+                "electric_mining_drill_automated=false",
+            ],
+            blockers=["electric mining drill mall"],
+            expected_effect="Produce electric mining drills by assembler so burner miners can be replaced without hand-crafting.",
         ).to_dict()
 
     if automation_researched and automation_logistics_issue is not None:
@@ -1828,6 +2132,76 @@ def _fuel_dependent_factory_exists(observation: dict[str, Any]) -> bool:
     return False
 
 
+def _burner_drill_replacement_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
+    if not _technology_researched(observation, "automation"):
+        return None
+    if not _electric_network_available(observation):
+        return None
+    burners = [
+        drill
+        for drill in entities_named(observation, "burner-mining-drill")
+        if isinstance(drill, dict)
+    ]
+    if not burners:
+        return None
+    electric_drills = [
+        drill
+        for drill in entities_named(observation, "electric-mining-drill")
+        if isinstance(drill, dict) and drill.get("electric_network_connected") is not False
+    ]
+    resource_counts: dict[str, int] = {}
+    for drill in burners:
+        resource = str(drill.get("mining_target") or drill.get("resource_name") or "")
+        if not resource:
+            nearest = _nearest_resource_name(observation, drill)
+            resource = nearest or "unknown"
+        resource_counts[resource] = resource_counts.get(resource, 0) + 1
+    automated = any(
+        assembler.get("recipe") == "electric-mining-drill" and assembler.get("electric_network_connected") is not False
+        for assembler in entities_named(observation, "assembling-machine-1")
+    )
+    return {
+        "burner_drill_count": len(burners),
+        "electric_drill_count": len(electric_drills),
+        "resource_counts": resource_counts,
+        "electric_mining_drill_researched": _technology_researched(observation, "electric-mining-drill"),
+        "electric_mining_drill_stock": total_item_count(observation, "electric-mining-drill"),
+        "electric_mining_drill_automated": automated,
+    }
+
+
+def _electric_network_available(observation: dict[str, Any]) -> bool:
+    for engine in entities_named(observation, "steam-engine"):
+        if _entity_status_is(engine, "no_power", 3):
+            continue
+        if engine.get("electric_network_connected") is not False:
+            return True
+    for name in POWER_ANCHOR_ENTITY_NAMES - {"steam-engine"}:
+        for pole in entities_named(observation, name):
+            if pole.get("electric_network_connected") is not False:
+                return True
+    return False
+
+
+def _nearest_resource_name(observation: dict[str, Any], entity: dict[str, Any]) -> str | None:
+    position = entity.get("position") if isinstance(entity.get("position"), dict) else None
+    if position is None:
+        return None
+    resources = observation.get("resources") if isinstance(observation.get("resources"), list) else []
+    candidates = [
+        resource
+        for resource in resources
+        if isinstance(resource, dict)
+        and isinstance(resource.get("position"), dict)
+        and isinstance(resource.get("name"), str)
+        and distance(position, resource["position"]) <= 4.5
+    ]
+    if not candidates:
+        return None
+    nearest = min(candidates, key=lambda resource: distance(position, resource["position"]))
+    return str(nearest.get("name") or "")
+
+
 def _coal_patch_is_near_player(observation: dict[str, Any]) -> bool:
     player = observation.get("player") if isinstance(observation.get("player"), dict) else {}
     position = player.get("position") if isinstance(player.get("position"), dict) else {"x": 0, "y": 0}
@@ -1949,6 +2323,16 @@ def _gear_mall_plate_route_needs_compaction(issue: dict[str, Any] | None) -> boo
         source_distance > PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT
         and not bool(issue.get("transport_belts_available"))
     )
+
+
+def _gear_mall_relocation_power_pole_deficit(issue: dict[str, Any] | None, observation: dict[str, Any]) -> int:
+    if not _gear_mall_plate_route_needs_compaction(issue):
+        return 0
+    required = issue.get("relocation_power_poles_estimate") if isinstance(issue, dict) else None
+    if not isinstance(required, (int, float)):
+        return 0
+    available = total_item_count(observation, "small-electric-pole")
+    return max(0, int(ceil(float(required))) - int(available))
 
 
 def _gear_mall_plate_route_cost_estimate(
@@ -2472,6 +2856,7 @@ def _build_item_stock_floor(item: str) -> int:
         "inserter": 20,
         "burner-inserter": 10,
         "burner-mining-drill": 5,
+        "electric-mining-drill": 6,
         "stone-furnace": 10,
         "small-electric-pole": 20,
         "assembling-machine-1": 10,

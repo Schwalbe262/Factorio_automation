@@ -94,6 +94,28 @@ class SkillRegistryTests(unittest.TestCase):
         self.assertEqual(status.executor, "BuildItemMallSkill")
         self.assertFalse(status.codex_required)
 
+    def test_power_pole_mall_skill_is_implemented(self):
+        status = skill_status("bootstrap_power_pole_mall")
+        self.assertTrue(status.implemented)
+        self.assertEqual(status.executor, "BuildItemMallSkill")
+        self.assertFalse(status.codex_required)
+
+    def test_electric_mining_drill_skills_are_implemented(self):
+        research = skill_status("research_electric_mining_drill")
+        self.assertTrue(research.implemented)
+        self.assertEqual(research.executor, "ResearchTechnologySkill")
+        self.assertFalse(research.codex_required)
+        mall = skill_status("bootstrap_electric_mining_drill_mall")
+        self.assertTrue(mall.implemented)
+        self.assertEqual(mall.executor, "BuildItemMallSkill")
+        self.assertFalse(mall.codex_required)
+
+    def test_gear_belt_mall_relocation_skill_is_implemented(self):
+        status = skill_status("relocate_gear_belt_mall_to_iron_source")
+        self.assertTrue(status.implemented)
+        self.assertEqual(status.executor, "GearBeltMallRelocationSkill")
+        self.assertFalse(status.codex_required)
+
     def test_factory_layout_skill_is_implemented(self):
         status = skill_status("plan_factory_site")
         self.assertTrue(status.implemented)
