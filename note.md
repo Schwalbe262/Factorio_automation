@@ -7189,3 +7189,27 @@
 - Next action: Ensure the strategy/autopilot loop uses the remote Slurm Qwen path when LLM is required, then convert the current incomplete copper/gear/cable site links into executable logistics steps without hand-carry.
 - Token usage: 13,761,064 cumulative Codex tokens / weekly quota unavailable
 
+## 2026-06-15 13:32:27 +09:00 - Loop 332
+
+- Part: required-Qwen remote strategy path
+- Goal: Make direct `--require-llm` strategy calls use the ready Slurm Qwen worker when local LLM env variables are not set.
+- Hypothesis: The previous direct CLI failure happened because `FACTORIO_AI_SLURM_ENABLED=1` was present in the launcher batch but not in ad-hoc shell commands; if `require_llm=True` and local `FACTORIO_AI_LLM_BASE_URL`/`FACTORIO_AI_LLM_MODEL` are empty, the controller should try the ready remote Slurm LLM before local fallback.
+- Actions:
+  - Inspected `controller.strategy_decision`, `config.load_config`, Slurm status, Slurm LLM status, and launcher batch env.
+  - Added `_should_try_remote_strategy(require_llm)` so required-LLM calls auto-use remote Slurm when local LLM env is missing.
+  - Added `_local_llm_env_configured()` and kept local-only escape hatch `FACTORIO_AI_REQUIRE_LLM_AUTO_SLURM=0`.
+  - Added controller tests for auto remote use, opt-out behavior, and existing pending-GPU behavior.
+  - Ran live `no-mod-strategy --require-llm` after clearing local LLM and Slurm env variables.
+- Candidates:
+  - Remote Qwen selected `bootstrap_build_item_mall`.
+  - Deterministic heuristic support reported `plan_factory_site` due incomplete logistics links, so the next execution still needs no-hand-carry logistics judgment.
+- Metrics:
+  - Targeted tests: 3 controller tests passed.
+  - Full test suite: `501 passed in 26.07s`.
+  - Live smoke: `source=llm`, remote strategy id `strategy-0d5deda1486e444d963b51bdd9c91e94`, prompt chars `26184`, max tokens `512`.
+  - Slurm worker before change: job `678192` running, remote model `Qwen/Qwen3.5-4B`, `llm_ready=true`.
+- Result: Direct required-Qwen strategy calls now use remote Slurm automatically instead of failing through local heuristic fallback when local LLM env is absent.
+- Failure reason: None for the implemented fix. Remaining strategy disagreement is not a transport failure: Qwen chose build-item mall while heuristic sees incomplete site logistics.
+- Next action: Evaluate whether Qwen's `bootstrap_build_item_mall` step is executable without hand-carry; if not, add a guardrail/executor that turns current missing copper/gear/cable links into site-to-site logistics steps.
+- Token usage: 13,992,836 cumulative Codex tokens / weekly quota unavailable
+

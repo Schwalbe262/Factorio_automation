@@ -1,6 +1,6 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-15 13:25 KST
+Last updated: 2026-06-15 13:32 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
@@ -122,6 +122,12 @@ Latest continuation after Part 105:
   - `SetupPowerSkill` requires boiler fuel reserve before reporting done, so transient steam does not hide an empty boiler.
   - Live Slurm worker is ready on `Qwen/Qwen3.5-4B`, but local `no-mod-strategy --require-llm` still fails if local LLM env vars are unset; use/check the remote worker path for required-Qwen strategy loops.
   - Full verification: `pytest -q` -> `499 passed`.
+- Part 110 fixes the required-Qwen strategy path for direct CLI use:
+  - `strategy_decision(..., require_llm=True)` now automatically tries the ready remote Slurm worker when local `FACTORIO_AI_LLM_BASE_URL`/`FACTORIO_AI_LLM_MODEL` are unset, even if `FACTORIO_AI_SLURM_ENABLED` was not exported in the current shell.
+  - This preserves local-only behavior when local LLM env is configured, and can be disabled with `FACTORIO_AI_REQUIRE_LLM_AUTO_SLURM=0`.
+  - Live smoke without local LLM env now succeeds: `python -m factorio_ai.cli no-mod-strategy --require-llm` returned `source=llm` from remote task `strategy-0d5deda1486e444d963b51bdd9c91e94`.
+  - The active remote model remains `Qwen/Qwen3.5-4B`; Qwen selected `bootstrap_build_item_mall` while heuristic support still reported the current layout blocker as incomplete site logistics.
+  - Full verification: `pytest -q` -> `501 passed`.
 
 Part 64 introduced:
 

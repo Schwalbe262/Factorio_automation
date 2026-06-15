@@ -259,6 +259,10 @@ def _guard_post_automation_handcraft(observation: dict[str, Any], decision: Plan
     return decision
 
 
+def _local_llm_env_configured() -> bool:
+    return bool(os.getenv("FACTORIO_AI_LLM_BASE_URL", "").strip() and os.getenv("FACTORIO_AI_LLM_MODEL", "").strip())
+
+
 class FactorioController:
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
@@ -500,8 +504,10 @@ class FactorioController:
         selected_improvement_site = load_selected_improvement_site(self.cfg.runtime_dir, objective)
         request_summary = strategy_request_summary(observation, production_targets)
         result: dict[str, Any] | None = None
-        if self.cfg.slurm_enabled:
-            self._maybe_ensure_slurm_worker(reason="strategy_decision")
+        use_remote_strategy = self._should_try_remote_strategy(require_llm)
+        if use_remote_strategy:
+            if self.cfg.slurm_enabled:
+                self._maybe_ensure_slurm_worker(reason="strategy_decision")
             started = time.monotonic()
             try:
                 status = self._remote_llm_status(refresh=True)
@@ -621,6 +627,16 @@ class FactorioController:
         if require_llm and result.get("source") != "llm":
             raise RuntimeError(f"LLM strategy was required but source was {result.get('source')}")
         return annotate_strategy_with_skill_status(result, runtime_dir=self.cfg.runtime_dir)
+
+    def _should_try_remote_strategy(self, require_llm: bool) -> bool:
+        if self.cfg.slurm_enabled:
+            return True
+        if not require_llm:
+            return False
+        if _local_llm_env_configured():
+            return False
+        auto_slurm = os.getenv("FACTORIO_AI_REQUIRE_LLM_AUTO_SLURM", "1").strip().lower()
+        return auto_slurm not in {"0", "false", "no", "off"}
 
     def run_strategy_step(
         self,

@@ -556,3 +556,12 @@
 - Evidence: `{"tests":"499 passed","live_capability":{"item":"long-handed-inserter","available":true,"recipe_unlocked":true,"researched":false,"automated":false},"live_opportunity":"unlock_layout_reassessment","affected_site_kinds":["assembler_cell","build_item_mall","circuit_automation"],"live_candidates":[{"candidate_id":"green-circuit-long-handed-3-cable-2-circuit-cell","uses":["long-handed-inserter"],"score":82.7},{"candidate_id":"unlock-aware-site-rerank-long-handed-inserter","uses":["long-handed-inserter"],"score":79.1}]}`
 - Remaining risk: The generic unlock-aware candidate is still simulation-only; applying a rebuild still needs sandbox validation, site pre-build gates, and deterministic executors for safe mutation.
 
+## 2026-06-15 13:32:27 +09:00 - Insight 68
+
+- Source loop: Loop 332
+- Improvement: Direct required-LLM strategy calls now use the ready remote Slurm Qwen worker when local LLM env is absent.
+- Before: `python -m factorio_ai.cli no-mod-strategy --require-llm` failed through local fallback with `LLM strategy was required but source was heuristic` because the direct shell did not export `FACTORIO_AI_SLURM_ENABLED=1` and local `FACTORIO_AI_LLM_BASE_URL`/`FACTORIO_AI_LLM_MODEL` were unset.
+- After: With local LLM and Slurm env variables cleared, the same command returned `source=llm` from remote Slurm task `strategy-0d5deda1486e444d963b51bdd9c91e94` using `Qwen/Qwen3.5-4B`.
+- Evidence: `{"tests":"501 passed","live_command":"python -m factorio_ai.cli no-mod-strategy --require-llm","local_llm_env":false,"remote_model":"Qwen/Qwen3.5-4B","remote_strategy_id":"strategy-0d5deda1486e444d963b51bdd9c91e94","source":"llm","selected_skill":"bootstrap_build_item_mall"}`
+- Remaining risk: This fixes the LLM transport path, not Qwen's strategic choice quality; current live Qwen selected `bootstrap_build_item_mall` while heuristic support still flags incomplete site logistics.
+

@@ -163,6 +163,73 @@ class ControllerTests(unittest.TestCase):
         self.assertIn("Slurm worker job pending GPU allocation", rows[0]["error"])
         self.assertIn("677406", rows[0]["error"])
 
+    def test_required_llm_auto_uses_ready_remote_slurm_when_local_env_missing(self):
+        class FakeController(FactorioController):
+            def observe(self):
+                return {"ok": True, "tick": 1, "inventory": {}, "entities": [], "enemies": [], "research": {}}
+
+        remote_result = {
+            "selected_skill": "research_automation",
+            "priority": 90,
+            "reason": "remote qwen selected automation",
+            "evidence": ["remote_slurm_auto=true"],
+            "blockers": [],
+            "expected_effect": "bootstrap automation research",
+            "source": "llm",
+            "ok": True,
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = make_test_config(Path(temp_dir))
+            controller = FakeController(cfg)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_LLM_BASE_URL": "",
+                        "FACTORIO_AI_LLM_MODEL": "",
+                        "FACTORIO_AI_REQUIRE_LLM_AUTO_SLURM": "1",
+                    },
+                ),
+                patch("factorio_ai.remote_slurm.llm_status", return_value={"ok": True, "llm_ready": True}),
+                patch("factorio_ai.remote_slurm.request_strategy", return_value=remote_result) as request_strategy,
+            ):
+                result = controller.strategy_decision("launch_rocket_program", require_llm=True)
+
+            log_path = llm_decision_log_path(cfg.log_dir)
+            rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        request_strategy.assert_called_once()
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["selected_skill"], "research_automation")
+        self.assertEqual(rows[0]["provider"], "remote_slurm")
+        self.assertEqual(rows[0]["source"], "llm")
+        self.assertTrue(rows[0]["ok"])
+
+    def test_required_llm_auto_slurm_can_be_disabled_for_local_only(self):
+        class FakeController(FactorioController):
+            def observe(self):
+                return {"ok": True, "tick": 1, "inventory": {}, "entities": [], "enemies": [], "research": {}}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_LLM_BASE_URL": "",
+                        "FACTORIO_AI_LLM_MODEL": "",
+                        "FACTORIO_AI_REQUIRE_LLM_AUTO_SLURM": "0",
+                    },
+                ),
+                patch("factorio_ai.remote_slurm.llm_status") as status,
+                patch("factorio_ai.remote_slurm.request_strategy") as request_strategy,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "LLM strategy was required"):
+                    controller.strategy_decision("launch_rocket_program", require_llm=True)
+
+        status.assert_not_called()
+        request_strategy.assert_not_called()
+
     def test_remote_action_hint_skips_queue_when_llm_pending(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
