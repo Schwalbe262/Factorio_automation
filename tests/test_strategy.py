@@ -1396,6 +1396,61 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["guardrail_adjusted"]["from"], "connect_coal_fuel_feed")
         self.assertIn("transport-belt automation before site links", result["blockers"])
 
+    def test_reconcile_bootstraps_iron_before_item_mall_and_automation_research(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "bootstrap_build_item_mall",
+                "priority": 50,
+                "reason": "Build missing expansion items.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {"burner-mining-drill": 1, "stone-furnace": 1},
+                "entities": [],
+                "research": {"technologies": {"automation": {"researched": False}}},
+            },
+        )
+
+        self.assertEqual(result["selected_skill"], "produce_iron_plate")
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "bootstrap_build_item_mall")
+        self.assertIn("basic iron supply", result["blockers"])
+        self.assertIn("iron_plate_total=0", result["evidence"])
+
+    def test_reconcile_recomputes_remote_item_mall_guardrail_for_fresh_starter(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "research_automation",
+                "priority": 90,
+                "reason": "Remote worker already adjusted before local code was updated.",
+                "evidence": ["guardrail_adjusted_from=bootstrap_build_item_mall"],
+                "blockers": ["automation research"],
+                "expected_effect": "Research Automation.",
+                "source": "llm",
+                "guardrail_adjusted": {
+                    "from": "bootstrap_build_item_mall",
+                    "to": "research_automation",
+                    "reason": "older remote worker guardrail",
+                },
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {"burner-mining-drill": 1, "stone-furnace": 1},
+                "entities": [],
+                "research": {"technologies": {"automation": {"researched": False}}},
+            },
+        )
+
+        self.assertEqual(result["selected_skill"], "produce_iron_plate")
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "bootstrap_build_item_mall")
+        self.assertIn("basic iron supply", result["blockers"])
+        self.assertIn("iron_plate_total=0", result["evidence"])
+
     def test_reconcile_blocks_item_mall_before_automation_research(self):
         result = reconcile_strategy_decision(
             {

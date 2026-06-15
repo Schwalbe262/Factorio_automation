@@ -968,6 +968,17 @@ def reconcile_strategy_decision(
         decision["expected_effect"] = ""
         decision.pop("guardrail_adjusted", None)
         selected = "plan_factory_site"
+    if remote_guardrail.get("from") == "bootstrap_build_item_mall" and selected == remote_guardrail.get("to"):
+        # Remote Slurm workers may have already applied older pre-automation mall guardrails.
+        # Recompute locally so fresh starter worlds bootstrap plates before research/mall planning.
+        decision = dict(decision)
+        decision["selected_skill"] = "bootstrap_build_item_mall"
+        decision["reason"] = ""
+        decision["blockers"] = []
+        decision["evidence"] = []
+        decision["expected_effect"] = ""
+        decision.pop("guardrail_adjusted", None)
+        selected = "bootstrap_build_item_mall"
     if selected in _COAL_DEPENDENT_SKILLS and _coal_supply_needed(observation):
         adjusted = dict(decision)
         adjusted["selected_skill"] = "setup_coal_supply"
@@ -990,6 +1001,32 @@ def reconcile_strategy_decision(
         }
         return adjusted
     if selected == "bootstrap_build_item_mall" and not _technology_researched(observation, "automation"):
+        iron_total = total_item_count(observation, "iron-plate")
+        if rocket_objective and iron_total < 10:
+            adjusted = dict(decision)
+            adjusted["selected_skill"] = "produce_iron_plate"
+            adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 95)
+            original_reason = str(decision.get("reason") or "").strip()
+            guardrail_reason = (
+                "LLM selected the build-item mall before Automation, but the starter base has not "
+                "bootstrapped basic iron plates yet."
+            )
+            adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+            adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["basic iron supply"]))
+            adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+                "guardrail_adjusted_from=bootstrap_build_item_mall",
+                "automation_researched=false",
+                f"iron_plate_total={iron_total}",
+            ]
+            adjusted["expected_effect"] = (
+                "Bootstrap direct burner drill to stone furnace iron smelting before research or mall planning."
+            )
+            adjusted["guardrail_adjusted"] = {
+                "from": "bootstrap_build_item_mall",
+                "to": "produce_iron_plate",
+                "reason": guardrail_reason,
+            }
+            return adjusted
         adjusted = dict(decision)
         adjusted["selected_skill"] = "research_automation"
         adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 90)

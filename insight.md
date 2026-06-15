@@ -654,3 +654,12 @@
 - After: Corridor poles use protected-artifact detours and nearby placement, strategy tracks `power_recovery_waits_on_belt_mall` and `relocation_in_progress`, and planner/strategy keep partial target rebuilds active until recipes are set. Live state has unit 664 `iron-gear-wheel` and unit 665 `transport-belt` near unit 395.
 - Evidence: `{"tests":"540 passed","live_done":true,"old_units_mined":[537,318],"new_units":{"gear":664,"belt":665},"recipes":{"664":"iron-gear-wheel","665":"transport-belt"},"protected_crash_site":"detoured, not mined","strategy_ids":["strategy-b7b9d422aef440cd87942a537c4e0740"]}`
 - Remaining risk: Units 664 and 665 are unpowered/unconnected and no local plate/gear/belt logistics exists yet; transport-belt count is still 0.
+
+## 2026-06-15 18:36:02 +09:00 - Insight 79
+
+- Source loop: Loop 367
+- Improvement: Fresh starter worlds now keep Qwen's strategic mall pressure but guardrail it into direct iron bootstrap before research or mall planning.
+- Before: In a fresh no-mod world with only `burner-mining-drill x1` and `stone-furnace x1`, Qwen selected `bootstrap_build_item_mall` and the older guardrail redirected to `research_automation`, even though there were no basic iron plates or powered research prerequisites.
+- After: Local reconciliation recomputes older remote `bootstrap_build_item_mall -> research_automation` guardrails and redirects to `produce_iron_plate` while `iron_plate_total < 10`. Live execution built burner mining drill unit 14 directly into stone furnace unit 15, with the furnace output holding 26 iron plates.
+- Evidence: `{"tests":"542 passed","live_strategy_id":"strategy-7194bb8f715d43c78f0f22084bff018e","guardrailed_skill":"produce_iron_plate","live_units":{"burner_drill":14,"stone_furnace":15},"furnace_output_iron_plate":26,"execution":"virtual server agent; r1jae not moved","logs":["logs/strategy-iron-20260615-093214.jsonl","logs/strategy-automation-research-20260615-093345.jsonl"]}`
+- Remaining risk: The fresh map is only in early bootstrap. Research automation has started gathering stone/chest prerequisites, and the next loop still needs to finish compact stone supply, steam power, lab placement, and red science without drifting into manual shuttle loops.

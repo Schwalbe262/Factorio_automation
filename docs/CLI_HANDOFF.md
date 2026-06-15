@@ -202,6 +202,16 @@ Latest continuation after Part 105:
   - Current live blocker: units 664 and 665 are `no_power`/not connected, transport-belt count is still 0, and local plate/gear/belt logistics has not been built yet.
   - Reboot resume action: start the no-mod server/dashboard if needed, ensure the Slurm worker successor is queued, then continue from local gear-to-belt logistics and power connection near units 664/665. Do not hand-carry iron plates and do not mine the preserved crash-site spaceship.
   - Full verification: `PYTHONPATH=src pytest -q` -> `540 passed`.
+- Part 122 fixes fresh-starter Qwen guardrails after the map restart:
+  - The current live map is a fresh no-mod starter state again, not the Part 121 relocated-mall state.
+  - Qwen 4B still tends to select `bootstrap_build_item_mall` immediately, but before Automation and before basic iron plates this now guardrails to `produce_iron_plate` instead of `research_automation`.
+  - Local reconciliation also unwraps older remote Slurm responses that already changed `bootstrap_build_item_mall -> research_automation`, so current local guardrails can recompute the correct starter action even when the worker source lags.
+  - Live required-Qwen smoke: strategy `strategy-7194bb8f715d43c78f0f22084bff018e` selected `produce_iron_plate` with `iron_plate_total=0`.
+  - Live capped execution built a direct iron bootstrap cell through the virtual server agent: burner mining drill unit 14 at `{75,-69}` outputs directly into stone furnace unit 15 at `{77,-69}`.
+  - Verified furnace unit 15 held `iron-plate x26` after the run; `r1jae` was not moved.
+  - Current live state after the final capped loop: research automation has started gathering stone/chest prerequisites; inventory has `wooden-chest x1`, `coal x8`; drill unit 14 needs refuel soon and furnace unit 15 still has `coal x2`.
+  - Next action: continue `research_automation` from compact stone supply, starter-local steam power, lab placement, and automation science. Keep manual coal/tree mining bounded to unavoidable starter bootstrap and avoid repeated shuttle loops.
+  - Full verification: `PYTHONPATH=src pytest -q` -> `542 passed`.
 
 Part 64 introduced:
 

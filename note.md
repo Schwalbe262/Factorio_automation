@@ -8004,3 +8004,110 @@
 - Next action: After reboot, start the no-mod server/dashboard if needed, ensure Slurm worker renewal, then continue from local gear-to-belt logistics and power connection near units 664/665. Do not revert to hand-carrying iron plates or mining the preserved crash-site spaceship.
 - Token usage: 17,415,343 raw Codex tokens / weekly quota unavailable; delta since Part 120 sample 335,868 tokens.
 
+## 2026-06-15 18:31:02 +09:00 - Loop 364
+- Part: skill
+- Goal: launch_rocket_program / produce_iron_plate
+- Hypothesis: Running `produce_iron_plate` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `produce_iron_plate` for up to 3 step(s).
+  - Tracked `iron-plate` from 7 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-20260615-093038.jsonl`.
+- Candidates:
+  - Selected goal/skill: `produce_iron_plate`.
+  - Target item candidate: `iron-plate` target `10`.
+- Metrics:
+  - Steps: 3.
+  - Status: failed.
+  - Duration: 24.453s.
+  - iron-plate: 7 -> 0 (delta -7).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-20260615-093038.jsonl`.
+  - Metadata: `{"delta_item_count":-7,"final_item_count":0,"initial_item_count":7,"max_steps":3,"target":10}`.
+- Result: Loop stopped: max steps reached: 3
+- Failure reason: max steps reached: 3
+- Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:32:51 +09:00 - Loop 365
+- Part: skill
+- Goal: launch_rocket_program / produce_iron_plate
+- Hypothesis: Running `produce_iron_plate` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `produce_iron_plate` for up to 8 step(s).
+  - Tracked `iron-plate` from 0 to 5.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-20260615-093214.jsonl`.
+- Candidates:
+  - Selected goal/skill: `produce_iron_plate`.
+  - Target item candidate: `iron-plate` target `10`.
+- Metrics:
+  - Steps: 8.
+  - Status: failed.
+  - Duration: 37.344s.
+  - iron-plate: 0 -> 5 (delta 5).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-20260615-093214.jsonl`.
+  - Metadata: `{"delta_item_count":5,"final_item_count":5,"initial_item_count":0,"max_steps":8,"target":10}`.
+- Result: Partial progress despite loop stop: max steps reached: 8
+- Failure reason: max steps reached: 8
+- Next action: Continue only if the next decision still respects automation and site-logistics guardrails.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:34:16 +09:00 - Loop 366
+- Part: skill
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: Running `research_automation` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_automation` for up to 4 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260615-093345.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Target item candidate: `automation-science-pack` target `10`.
+- Metrics:
+  - Steps: 4.
+  - Status: failed.
+  - Duration: 30.578s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260615-093345.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":4,"target":10}`.
+- Result: Loop stopped: max steps reached: 4
+- Failure reason: max steps reached: 4
+- Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:36:02 +09:00 - Loop 367
+
+- Part: Part 122 fresh starter iron guardrail
+- Goal: Keep the fresh no-mod world aligned with `goal.md` by making Qwen's early mall/research pressure pass through direct iron bootstrap first.
+- Hypothesis: If local strategy reconciliation recomputes older remote `bootstrap_build_item_mall -> research_automation` guardrails, the current Qwen 4B worker can keep choosing strategic build-item pressure while the local deterministic layer still enforces starter direct burner drill -> furnace iron production.
+- Actions:
+  - Confirmed the rebooted no-mod server/RCON is running on the fresh early map with the virtual `server`/`AI` agent and no real-player movement.
+  - Added a local guardrail in `reconcile_strategy_decision`: before Automation, if Qwen selects `bootstrap_build_item_mall` and `iron_plate_total < 10`, redirect to `produce_iron_plate`.
+  - Added a second guardrail path that unwraps older remote Slurm decisions already adjusted from `bootstrap_build_item_mall` to `research_automation`, so local current code can recompute the safer fresh-starter choice.
+  - Added regression tests for both direct Qwen mall selection and older remote adjusted responses.
+  - Ran live required-Qwen strategy smoke; Qwen still selected mall, but local guardrail redirected to `produce_iron_plate`.
+  - Ran capped live no-mod strategy steps through the virtual server agent.
+  - Built a direct iron bootstrap cell: burner mining drill unit 14 at `{75, -69}` outputs directly into stone furnace unit 15 at `{77, -69}`.
+  - Confirmed the furnace is an `iron-plate` cell and held 26 iron plates after the live run.
+  - Confirmed subsequent strategy moved to `research_automation` only after the direct iron bootstrap existed.
+- Candidates:
+  - Live strategy IDs:
+    - `strategy-7194bb8f715d43c78f0f22084bff018e`: Qwen mall choice guardrailed to `produce_iron_plate` at `iron_plate_total=0`.
+    - `strategy-b7548102b2cf4c96b5be69c7c266883f`: Qwen mall choice guardrailed to `produce_iron_plate` and executed direct iron bootstrap.
+    - `strategy-4816e7459e5d44ac831706711b2edc4a`: after iron bootstrap, strategy advanced to `research_automation`.
+  - Live entities:
+    - Burner mining drill unit 14 at `{75, -69}`, direction 4, currently `no_fuel` after bootstrap fuel was consumed.
+    - Stone furnace unit 15 at `{77, -69}`, output inventory `iron-plate x26`, fuel inventory `coal x2`.
+  - Important logs:
+    - `logs/strategy-iron-20260615-093038.jsonl`: initial coal bootstrap and movement to iron patch.
+    - `logs/strategy-iron-20260615-093214.jsonl`: direct burner drill/furnace iron cell placement and fuel insertion.
+    - `logs/strategy-automation-research-20260615-093345.jsonl`: research path started gathering stone/chest prerequisites after iron bootstrap.
+- Metrics:
+  - Focused strategy tests: `3 passed, 93 deselected`.
+  - Full test suite: `542 passed in 28.94s`.
+  - Live direct iron cell output after verification: `iron-plate x26` in furnace unit 15.
+  - Current live inventory after verification: `wooden-chest x1`, `coal x8`.
+  - Current execution mode: virtual server agent; `r1jae` was not moved.
+- Result: Fresh starter Qwen strategy now starts with direct iron bootstrap before research/mall planning, and the live map contains a working direct iron drill -> furnace cell.
+- Failure reason: The broader rocket goal is not complete. The latest capped research loop stopped on max steps while preparing stone/chest prerequisites.
+- Next action: Continue `research_automation` from compact stone supply, then starter-local steam power, lab placement, and automation science. Avoid manual shuttle loops; direct bootstrap mining/crafting remains only a bounded starter exception.
+- Token usage: 17,669,291 raw Codex tokens / weekly quota unavailable; delta since Part 121 sample 253,948 tokens.
+
