@@ -168,6 +168,7 @@ local VIRTUAL_RECIPES = {{
   ["lab"] = {{ ingredients = {{ ["electronic-circuit"] = 10, ["iron-gear-wheel"] = 10, ["transport-belt"] = 4 }}, results = {{ lab = 1 }} }},
   ["assembling-machine-1"] = {{ ingredients = {{ ["electronic-circuit"] = 3, ["iron-gear-wheel"] = 5, ["iron-plate"] = 9 }}, results = {{ ["assembling-machine-1"] = 1 }} }}
 }}
+local GEAR_HANDCRAFT_BLOCKING_ASSEMBLERS = {{ "assembling-machine-1", "assembling-machine-2", "assembling-machine-3" }}
 local function json_reply(payload)
   local encode = helpers and helpers.table_to_json or nil
   if not encode and game and game.table_to_json then encode = game.table_to_json end
@@ -235,6 +236,38 @@ end
 local function main_inventory(agent)
   if not agent then return nil end
   return agent.inventory
+end
+local function force_has_automation_researched(force)
+  if not force or not force.technologies then return false end
+  local technology = force.technologies["automation"]
+  return technology ~= nil and technology.researched == true
+end
+local function inventory_has_gear_blocking_assembler(inventory)
+  if not inventory or not inventory.valid then return false end
+  for _, name in pairs(GEAR_HANDCRAFT_BLOCKING_ASSEMBLERS) do
+    if inventory.get_item_count(name) > 0 then return true end
+  end
+  return false
+end
+local function surface_has_gear_blocking_assembler(surface, force)
+  if not surface then return false end
+  local ok, found = pcall(function()
+    return surface.find_entities_filtered({{ name = GEAR_HANDCRAFT_BLOCKING_ASSEMBLERS, force = force, limit = 1 }})
+  end)
+  return ok and found and #found > 0
+end
+local function direct_gear_handcraft_guard(agent, inventory, recipe_name)
+  if not agent or recipe_name ~= "iron-gear-wheel" then return nil end
+  if force_has_automation_researched(agent.force) then
+    return "blocked direct iron-gear-wheel handcraft after Automation research; use a gear assembler, gear mall, or logistic line instead"
+  end
+  if inventory_has_gear_blocking_assembler(inventory) then
+    return "blocked direct iron-gear-wheel handcraft because an assembler is already available; produce gears with the assembler instead"
+  end
+  if surface_has_gear_blocking_assembler(agent.surface, agent.force) then
+    return "blocked direct iron-gear-wheel handcraft because assembler automation exists on the surface; use the gear mall instead"
+  end
+  return nil
 end
 local function entity_recipe_name(entity)
   if not entity or not entity.valid then return nil end
@@ -1178,6 +1211,9 @@ end
 local function action_craft()
   if type(action.recipe) ~= "string" then return err("craft requires recipe") end
   local count = math.max(1, math.min(action.count or 1, 100))
+  local inventory = main_inventory(agent)
+  local gear_guard_reason = direct_gear_handcraft_guard(agent, inventory, action.recipe)
+  if gear_guard_reason then return err(gear_guard_reason, { recipe = action.recipe }) end
   if agent.kind == "server" then
     local crafted = virtual_craft(action.recipe, count)
     if crafted <= 0 then return err("recipe is not craftable", { recipe = action.recipe }) end

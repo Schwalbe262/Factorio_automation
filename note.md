@@ -6268,3 +6268,28 @@
 - Next action: Plan or build the missing site-to-site logistic line before repeating the consumer loop.
 - Token usage: not recorded for this loop / weekly quota unavailable
 
+## 2026-06-15 09:09:50 +09:00 - Loop 294
+- Part: Part 102 - no-mod direct gear handcraft executor guard
+- Goal: Stop `iron-gear-wheel` direct crafting even when a no-mod CLI/RCON path bypasses the Python `FactorioController` guard.
+- Hypothesis: The existing post-Automation guard blocks planner/controller actions, but `ModlessLuaController.act()` can still execute a direct `craft iron-gear-wheel` action unless the Lua executor itself checks Automation/assembler context.
+- Actions:
+  - Searched controller, planner, CLI, and no-mod Lua action paths for `iron-gear-wheel` craft routes.
+  - Added a Lua-side `direct_gear_handcraft_guard` that rejects `craft iron-gear-wheel` when Automation is researched, an assembler is in inventory, or an assembler exists on the surface.
+  - Added regression coverage for no-mod Lua command generation and for the Python guard when an assembler is available in inventory.
+  - Ran an initial live guard check; it exposed a Lua lexical-scope bug and accidentally virtual-crafted one `iron-gear-wheel`.
+  - Fixed the guard to pass `recipe_name` explicitly into the Lua function, re-ran the live check, and verified it now returns `ok=false` before crafting.
+  - Restored the temporary live validation pollution by removing the accidentally crafted `iron-gear-wheel` and reinserting the two consumed `iron-plate`.
+- Candidates:
+  - Rejected: relying only on `FactorioController.act`, because `no-mod-action` calls `ModlessLuaController` directly.
+  - Selected: enforce the same no-hand-gear rule at the no-mod Lua executor boundary.
+- Metrics:
+  - Targeted tests: `PYTHONPATH=src python -m unittest tests.test_modless_lua tests.test_controller` -> 60 passed.
+  - Full tests: `PYTHONPATH=src python -m unittest discover tests` -> 444 passed.
+  - Live blocked action: `ModlessLuaController.act({"type":"craft","recipe":"iron-gear-wheel","count":1})` -> `ok=false`, reason `blocked direct iron-gear-wheel handcraft after Automation research`.
+  - Inventory restored after validation: `iron-gear-wheel=0`, `iron-plate=40`, `transport-belt=0`.
+  - Token usage sample: cumulative 57,789,968, current raw counter 10,106,568, delta 642,810 since prior sample, weekly quota unavailable.
+- Result: Direct gear handcraft is now blocked at both planner/controller policy and no-mod Lua execution boundaries after Automation/assembler context exists.
+- Failure reason: None for the final patch; the first live validation revealed and then fixed a scope bug.
+- Next action: Commit/push Part 102, then implement a deterministic recovery from the current long-distance iron-plate logistics deadlock without gear handcraft, gear output pickup, or distant iron-plate hand-carry.
+- Token usage: cumulative 57,789,968; current raw counter 10,106,568; delta 642,810 / weekly quota unavailable
+

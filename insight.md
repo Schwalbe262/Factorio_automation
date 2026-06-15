@@ -352,3 +352,11 @@
 - After: `_select_iron_plate_line_detour_y` evaluates several offsets and the regression layout avoids the blocker on the default detour lane.
 - Evidence: `{"source_loop":288,"tests":"440 passed","bad_trace":"strategy-iron-plate-gear-mall-logistics-20260614-234516.jsonl mined burner-mining-drill unit 40","regression":"test_iron_plate_logistic_line_does_not_mine_source_furnace_as_blocker blocks default detour and verifies alternate segments"}`
 - Remaining risk: Existing live belts already follow the earlier y=-62 partial route; future longer route completion still needs more belts and may need a proper pathfinder if the corridor gets dense.
+
+## 2026-06-15 09:09:50 +09:00 - Insight 43
+- Source loop: Loop 294
+- Improvement: `ModlessLuaController` now blocks direct `craft iron-gear-wheel` at the Lua executor boundary when Automation or assembler context exists, closing the CLI/RCON bypass around the Python controller guard.
+- Before: A direct no-mod live action through `ModlessLuaController.act({"type":"craft","recipe":"iron-gear-wheel","count":1})` could virtual-craft one gear despite Automation being researched and four assemblers existing on the surface.
+- After: The same live action returns `ok=false` with reason `blocked direct iron-gear-wheel handcraft after Automation research`; validation pollution was restored to `iron-gear-wheel=0`, `iron-plate=40`.
+- Evidence: `{"source_loop":294,"tests":"444 passed","targeted_tests":"60 passed","live_guard":"ok=false; blocked direct iron-gear-wheel handcraft after Automation research","inventory_after_restore":{"iron-gear-wheel":0,"iron-plate":40,"transport-belt":0}}`
+- Remaining risk: This prevents the bad action but does not solve the current factory deadlock; the gear/belt mall still lacks sustained iron-plate input and transport belts are exhausted.

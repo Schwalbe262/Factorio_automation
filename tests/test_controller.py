@@ -87,6 +87,22 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(guarded.action, {"type": "wait", "ticks": 120})
         self.assertIn("blocked direct iron-gear-wheel handcraft", guarded.reason)
 
+    def test_guard_blocks_gear_handcraft_when_assembler_is_available_in_inventory(self):
+        observation = {
+            "research": {"technologies": {"automation": {"researched": False}}},
+            "inventory": {"assembling-machine-1": 1},
+            "entities": [],
+        }
+        decision = PlannerDecision(
+            action={"type": "craft", "recipe": "iron-gear-wheel", "count": 1},
+            reason="test",
+        )
+
+        guarded = _guard_post_automation_handcraft(observation, decision)
+
+        self.assertEqual(guarded.action, {"type": "wait", "ticks": 120})
+        self.assertIn("blocked direct iron-gear-wheel handcraft", guarded.reason)
+
     def test_no_mod_action_blocks_direct_gear_handcraft_after_automation(self):
         class FakeController(ModlessFactorioController):
             def observe(self):

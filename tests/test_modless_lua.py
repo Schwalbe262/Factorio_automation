@@ -121,6 +121,15 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn('recipe_name == "lab"', command)
         self.assertIn('agent.force.technologies["automation-science-pack"]', command)
 
+    def test_action_blocks_direct_gear_handcraft_when_automation_context_exists(self):
+        command = build_modless_action_command({"type": "craft", "recipe": "iron-gear-wheel", "count": 1})
+
+        self.assertIn("direct_gear_handcraft_guard", command)
+        self.assertIn("force_has_automation_researched", command)
+        self.assertIn("inventory_has_gear_blocking_assembler", command)
+        self.assertIn("surface_has_gear_blocking_assembler", command)
+        self.assertIn("blocked direct iron-gear-wheel handcraft", command)
+
     def test_action_research_completes_trigger_technology(self):
         command = build_modless_action_command({"type": "research", "technology": "automation-science-pack"})
         self.assertIn("research_unit_ingredients", command)
