@@ -1,7 +1,7 @@
 # Current Handoff
 
 ## Current status
-- Part 127 startup/handoff cleanup is patched and validated on `chore/codex-context-budget`.
+- Part 128 selected-row token SQLite query is patched and validated on `chore/codex-context-budget`.
 - No previous root `HANDOFF_CURRENT.md` existed; old handoffs remain archive/search-only history.
 - `AGENTS.md` contains the active Codex context policy and should be tracked with this part.
 
@@ -11,8 +11,8 @@
 
 ## Active branch/part
 - Branch: `chore/codex-context-budget`
-- Part 127: current handoff and startup instruction cleanup, pending commit/push.
-- Part 128 next: selected-row Codex token SQLite query tightening.
+- Part 127: current handoff and startup instruction cleanup, pushed as `2c1b78e`.
+- Part 128: selected-row Codex token SQLite query tightening, pending commit/push.
 
 ## Important files
 - Startup context: `HANDOFF_CURRENT.md`, `AGENTS.md`, `pyproject.toml`.
@@ -20,18 +20,18 @@
 - Token accounting: `src/factorio_ai/token_usage.py`, `src/factorio_ai/cli.py`, `tests/test_token_usage.py`.
 
 ## Last validation
-- Part 127: targeted `rg` checks found no stale default startup prompt; token sample recorded `1,165,030` tokens, weekly percent unknown.
+- Part 128: `tests/test_token_usage.py` 9 passed; targeted suite 34 passed; full `pytest -q` 555 passed; token delta `1,365,554`, weekly percent unknown.
 
 ## Current blocker
 - `FACTORIO_AI_WEEKLY_TOKEN_QUOTA` is unset in the current shell, so weekly token percent reports `unknown`.
 
 ## Next 3-7 concrete steps
-- Review exact Part 127 diff hunks.
-- Commit and push Part 127.
-- Update token SQLite selection to query only the selected/current thread row.
-- Add regression tests for cwd variant matching and selected-row behavior.
-- Run targeted token/dashboard/CLI tests, then full `pytest -q`.
-- Record one current Codex thread token sample, update this handoff by 10 lines or fewer, then commit and push Part 128.
+- Review exact Part 128 diff hunks.
+- Commit and push Part 128.
+- Open or update the PR for `chore/codex-context-budget`.
+- Keep later feature work on a separate branch/part.
+- Keep future `HANDOFF_CURRENT.md` closeouts to 10 changed lines or fewer.
+- Continue recording one current Codex thread token sample per completed part.
 
 ## Token/context policy
 - New Codex sessions start with `HANDOFF_CURRENT.md`, `AGENTS.md`, and minimal project metadata only.

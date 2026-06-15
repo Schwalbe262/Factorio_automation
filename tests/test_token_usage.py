@@ -122,6 +122,55 @@ class TokenUsageTests(unittest.TestCase):
             self.assertEqual(thread.tokens_used, 2200)
             self.assertEqual(thread.updated_at_ms, 2000)
 
+    def test_current_codex_thread_usage_matches_slash_and_case_cwd_variant(self):
+        with TemporaryDirectory() as root:
+            db_path = Path(root) / "state_5.sqlite"
+            _create_threads_fixture(db_path)
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute(
+                    "INSERT INTO threads (id, cwd, tokens_used, updated_at_ms, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    ("factorio-slash-case", r"C:/USERS/NEC/Documents/Factorio", 4400, 4000, 4),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            thread = current_codex_thread_usage(
+                state_db_path=db_path,
+                cwd=r"\\?\C:\Users\NEC\Documents\Factorio",
+            )
+
+            self.assertEqual(thread.thread_id, "factorio-slash-case")
+            self.assertEqual(thread.tokens_used, 4400)
+
+    def test_current_codex_thread_usage_queries_selected_cwd_row(self):
+        with TemporaryDirectory() as root:
+            db_path = Path(root) / "state_5.sqlite"
+            db_path.write_bytes(b"")
+            conn = _RecordingThreadConnection(
+                {
+                    "id": "factorio-latest",
+                    "cwd": r"\\?\C:\Users\NEC\Documents\Factorio",
+                    "tokens_used": 2200,
+                    "updated_at_ms": 2000,
+                    "updated_at": 2,
+                }
+            )
+
+            with patch("factorio_ai.token_usage.sqlite3.connect", return_value=conn):
+                thread = current_codex_thread_usage(
+                    state_db_path=db_path,
+                    cwd=r"C:\Users\NEC\Documents\Factorio",
+                )
+
+            self.assertEqual(thread.thread_id, "factorio-latest")
+            self.assertEqual(thread.tokens_used, 2200)
+            self.assertTrue(conn.closed)
+            self.assertEqual(len(conn.statements), 1)
+            self.assertIn("WHERE", conn.statements[0].upper())
+            self.assertIn("LIMIT 1", conn.statements[0].upper())
+
     def test_current_codex_thread_usage_prefers_thread_id(self):
         with TemporaryDirectory() as root:
             db_path = Path(root) / "state_5.sqlite"
@@ -173,6 +222,35 @@ def _create_threads_fixture(db_path: Path) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+class _RecordingThreadConnection:
+    def __init__(self, row: dict[str, object]):
+        self.row = row
+        self.row_factory = None
+        self.statements: list[str] = []
+        self.closed = False
+
+    def execute(self, statement: str, params: tuple[object, ...] = ()) -> "_RecordingThreadCursor":
+        compact_statement = " ".join(statement.split())
+        if "SELECT id, cwd, tokens_used, updated_at_ms, updated_at FROM threads" not in compact_statement:
+            raise AssertionError(statement)
+        self.statements.append(statement)
+        return _RecordingThreadCursor(self.row)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _RecordingThreadCursor:
+    def __init__(self, row: dict[str, object]):
+        self.row = row
+
+    def fetchone(self) -> dict[str, object]:
+        return self.row
+
+    def fetchall(self) -> list[dict[str, object]]:
+        raise AssertionError("current Codex thread selection must not fetch all thread rows")
 
 
 if __name__ == "__main__":

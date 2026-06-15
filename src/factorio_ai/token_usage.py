@@ -12,6 +12,7 @@ from typing import Any
 
 TOKEN_USAGE_LOG = "token_usage.jsonl"
 DEFAULT_CODEX_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
+CODEX_EXTENDED_PATH_PREFIX = "\\\\?\\"
 
 
 @dataclass(frozen=True)
@@ -118,19 +119,31 @@ def current_codex_thread_usage(
             return _codex_thread_usage_from_row(row)
 
         target_cwd = _normalized_codex_cwd(cwd if cwd is not None else Path.cwd())
-        rows = conn.execute("SELECT id, cwd, tokens_used, updated_at_ms, updated_at FROM threads").fetchall()
-        candidates = [
-            _codex_thread_usage_from_row(row)
-            for row in rows
-            if _normalized_codex_cwd(str(row["cwd"] or "")) == target_cwd
-        ]
+        row = conn.execute(
+            """
+            SELECT id, cwd, tokens_used, updated_at_ms, updated_at
+            FROM threads
+            WHERE LOWER(
+                REPLACE(
+                    CASE
+                        WHEN SUBSTR(cwd, 1, 4) = ? THEN SUBSTR(cwd, 5)
+                        ELSE cwd
+                    END,
+                    '/',
+                    '\\'
+                )
+            ) = ?
+            ORDER BY COALESCE(updated_at_ms, updated_at * 1000, 0) DESC, id DESC
+            LIMIT 1
+            """,
+            (CODEX_EXTENDED_PATH_PREFIX, target_cwd),
+        ).fetchone()
     finally:
         conn.close()
 
-    if not candidates:
+    if row is None:
         raise ValueError(f"Codex thread not found for cwd: {cwd if cwd is not None else Path.cwd()}")
-    candidates.sort(key=lambda item: ((item.updated_at_ms or 0), item.thread_id), reverse=True)
-    return candidates[0]
+    return _codex_thread_usage_from_row(row)
 
 
 def _codex_thread_usage_from_row(row: sqlite3.Row) -> CodexThreadUsage:

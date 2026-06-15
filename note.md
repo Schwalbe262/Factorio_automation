@@ -8867,3 +8867,12 @@
 - Result: Future Codex sessions should start from short current context instead of long historical handoffs.
 - Token usage: 1,165,030 / weekly quota unavailable.
 
+## 2026-06-15 20:16:14 +09:00 - Loop 406
+
+- Part: Part 128 - Codex selected-row token accounting
+- Goal: Make current Codex thread token sampling follow the read-only selected-row SQLite policy.
+- Actions: Replaced the all-thread fetch with a cwd-normalized `LIMIT 1` query and added regression coverage for cwd variants and the selected-row path.
+- Validation: `tests/test_token_usage.py` 9 passed; targeted token/dashboard/CLI suite 34 passed; full `pytest -q` 555 passed.
+- Result: `record-current-codex-thread-usage` keeps the same CLI behavior while avoiding a full `threads` table fetch.
+- Token usage: 1,365,554 / weekly quota unavailable.
+
