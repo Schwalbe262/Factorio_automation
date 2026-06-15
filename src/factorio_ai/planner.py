@@ -61,6 +61,7 @@ GEAR_MALL_RELOCATION_FIXED_COST = 18.0
 GEAR_MALL_RELOCATION_POWER_POLE_COST = 2.0
 GEAR_MALL_PLATE_BELT_TILE_COST = 1.0
 GEAR_MALL_RELOCATION_ADVANTAGE_RATIO = 0.75
+GEAR_BELT_MALL_ASSEMBLER_SPACING = 4.0
 AUTOMATED_SITE_INPUT_ITEMS = {
     "iron-plate",
     "copper-plate",
@@ -345,6 +346,8 @@ def _gear_mall_plate_compaction_issue(observation: dict[str, Any]) -> dict[str, 
     if total_item_count(observation, "transport-belt") > 0:
         return None
     layout = _find_iron_plate_logistic_line_to_gear_mall_layout(observation)
+    if layout is None:
+        layout = _find_compact_gear_belt_mall_relocation_layout(observation)
     if layout is None:
         return None
     source = layout.get("source")
@@ -2664,10 +2667,26 @@ def _point_inside_machine(point: dict[str, float], entity: dict[str, Any]) -> bo
     center = entity.get("position") if isinstance(entity.get("position"), dict) else None
     if center is None:
         return False
+    return _point_inside_machine_footprint(point, center)
+
+
+def _point_inside_machine_footprint(point: dict[str, float], center: dict[str, float]) -> bool:
     return (
         abs(float(point.get("x") or 0.0) - float(center.get("x") or 0.0)) <= 1.5
         and abs(float(point.get("y") or 0.0) - float(center.get("y") or 0.0)) <= 1.5
     )
+
+
+def _planned_machine_over_protected_resource(observation: dict[str, Any], position: dict[str, float]) -> bool:
+    resources = observation.get("resources") if isinstance(observation.get("resources"), list) else []
+    for resource in resources:
+        if not isinstance(resource, dict) or not isinstance(resource.get("position"), dict):
+            continue
+        if str(resource.get("name") or "") not in PROTECTED_RESOURCE_NAMES:
+            continue
+        if _point_inside_machine_footprint(_position(resource), position):
+            return True
+    return False
 
 
 def _point_inside_tile_entity(point: dict[str, float], entity: dict[str, Any]) -> bool:
@@ -6357,6 +6376,9 @@ def _transport_belt_output_assembler(observation: dict[str, Any]) -> dict[str, A
 def _find_gear_belt_mall_relocation_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
     existing_layout = _find_iron_plate_logistic_line_to_gear_mall_layout(observation)
     if existing_layout is None:
+        compact_layout = _find_compact_gear_belt_mall_relocation_layout(observation)
+        if compact_layout is not None:
+            return compact_layout
         return _find_partial_gear_belt_mall_relocation_layout(observation)
     source = existing_layout.get("source")
     gear_assembler = existing_layout.get("gear_assembler")
@@ -6366,8 +6388,10 @@ def _find_gear_belt_mall_relocation_layout(observation: dict[str, Any]) -> dict[
 
     source_position = _position(source)
     gear_position = _position(gear_assembler)
-    target_gear_position = {"x": round(source_position["x"] + 5.5, 1), "y": round(source_position["y"] - 5.0, 1)}
-    target_belt_position = {"x": round(target_gear_position["x"] + 3.0, 1), "y": target_gear_position["y"]}
+    targets = _gear_belt_mall_relocation_target_positions(observation, source_position)
+    if targets is None:
+        return None
+    target_gear_position, target_belt_position = targets
     target_gear_assembler = _assembler_at_position(observation, target_gear_position)
     target_belt_assembler = _assembler_at_position(observation, target_belt_position)
     target_rebuild_in_progress = isinstance(target_gear_assembler, dict) or isinstance(target_belt_assembler, dict)
@@ -6390,6 +6414,50 @@ def _find_gear_belt_mall_relocation_layout(observation: dict[str, Any]) -> dict[
     }
 
 
+def _find_compact_gear_belt_mall_relocation_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
+    sources = _iron_plate_source_furnaces(observation)
+    if not sources:
+        return None
+    candidates: list[dict[str, Any]] = []
+    assemblers = entities_named(observation, "assembling-machine-1")
+    gear_assemblers = [item for item in assemblers if item.get("recipe") == "iron-gear-wheel"]
+    for gear_assembler in gear_assemblers:
+        gear_position = _position(gear_assembler)
+        for belt_assembler in assemblers:
+            if belt_assembler is gear_assembler or belt_assembler.get("recipe") != "transport-belt":
+                continue
+            belt_position = _position(belt_assembler)
+            if abs(belt_position["y"] - gear_position["y"]) > 0.1:
+                continue
+            if abs(abs(belt_position["x"] - gear_position["x"]) - 3.0) > 0.1:
+                continue
+            source = min(sources, key=lambda item: distance(_position(item), gear_position))
+            source_position = _position(source)
+            targets = _gear_belt_mall_relocation_target_positions(observation, source_position)
+            if targets is None:
+                continue
+            target_gear_position, target_belt_position = targets
+            route_cost = _gear_mall_plate_layout_cost_estimate(observation, source_position, gear_position)
+            route_cost = {**route_cost, "route_cost_preference": "relocate_mall_to_iron_source"}
+            candidates.append(
+                {
+                    "source": source,
+                    "gear_assembler": gear_assembler,
+                    "belt_assembler": belt_assembler,
+                    "target_gear_position": target_gear_position,
+                    "target_belt_position": target_belt_position,
+                    "target_gear_assembler": _assembler_at_position(observation, target_gear_position),
+                    "target_belt_assembler": _assembler_at_position(observation, target_belt_position),
+                    "source_distance_tiles": round(distance(source_position, gear_position), 1),
+                    **route_cost,
+                }
+            )
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: float(item.get("source_distance_tiles") or 999999.0), reverse=True)
+    return candidates[0]
+
+
 def _find_partial_gear_belt_mall_relocation_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
     if inventory_count(observation, "assembling-machine-1") <= 0:
         return _find_relocated_gear_belt_mall_target_layout(observation)
@@ -6409,8 +6477,10 @@ def _find_partial_gear_belt_mall_relocation_layout(observation: dict[str, Any]) 
         and distance(source_position, anchor_position) < PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT
     ):
         return None
-    target_gear_position = {"x": round(source_position["x"] + 5.5, 1), "y": round(source_position["y"] - 5.0, 1)}
-    target_belt_position = {"x": round(target_gear_position["x"] + 3.0, 1), "y": target_gear_position["y"]}
+    targets = _gear_belt_mall_relocation_target_positions(observation, source_position)
+    if targets is None:
+        return None
+    target_gear_position, target_belt_position = targets
     return {
         "source": source,
         "gear_assembler": None,
@@ -6430,18 +6500,33 @@ def _find_relocated_gear_belt_mall_target_layout(observation: dict[str, Any]) ->
         return None
     for source in sources:
         source_position = _position(source)
-        target_gear_position = {"x": round(source_position["x"] + 5.5, 1), "y": round(source_position["y"] - 5.0, 1)}
-        target_belt_position = {"x": round(target_gear_position["x"] + 3.0, 1), "y": target_gear_position["y"]}
+        targets = _gear_belt_mall_relocation_target_positions(observation, source_position)
+        if targets is None:
+            continue
+        target_gear_position, target_belt_position = targets
         target_gear_assembler = _assembler_at_position(observation, target_gear_position)
         target_belt_assembler = _assembler_at_position(observation, target_belt_position)
-        if not isinstance(target_gear_assembler, dict) and not isinstance(target_belt_assembler, dict):
+        compact_gear_assembler, compact_belt_assembler = _compact_relocated_gear_belt_assemblers(
+            observation,
+            source_position,
+        )
+        if compact_gear_assembler is target_gear_assembler:
+            compact_gear_assembler = None
+        if compact_belt_assembler is target_belt_assembler:
+            compact_belt_assembler = None
+        if (
+            not isinstance(target_gear_assembler, dict)
+            and not isinstance(target_belt_assembler, dict)
+            and not isinstance(compact_gear_assembler, dict)
+            and not isinstance(compact_belt_assembler, dict)
+        ):
             continue
         route_cost = _gear_mall_plate_layout_cost_estimate(observation, source_position, player_position(observation))
         route_cost = {**route_cost, "route_cost_preference": "relocate_mall_to_iron_source"}
         return {
             "source": source,
-            "gear_assembler": None,
-            "belt_assembler": None,
+            "gear_assembler": compact_gear_assembler,
+            "belt_assembler": compact_belt_assembler,
             "target_gear_position": target_gear_position,
             "target_belt_position": target_belt_position,
             "target_gear_assembler": target_gear_assembler,
@@ -6450,6 +6535,68 @@ def _find_relocated_gear_belt_mall_target_layout(observation: dict[str, Any]) ->
             **route_cost,
         }
     return None
+
+
+def _gear_belt_mall_relocation_target_positions(
+    observation: dict[str, Any],
+    source_position: dict[str, float],
+) -> tuple[dict[str, float], dict[str, float]] | None:
+    for gear_position in _gear_belt_mall_relocation_gear_position_candidates(source_position):
+        belt_position = {
+            "x": round(gear_position["x"] + GEAR_BELT_MALL_ASSEMBLER_SPACING, 1),
+            "y": gear_position["y"],
+        }
+        if _gear_belt_mall_relocation_positions_avoid_resources(observation, gear_position, belt_position):
+            return gear_position, belt_position
+    return None
+
+
+def _gear_belt_mall_relocation_gear_position_candidates(source_position: dict[str, float]) -> list[dict[str, float]]:
+    offsets = [
+        (5.5, -5.0),
+        (5.5, 5.0),
+        (8.5, -6.0),
+        (8.5, 6.0),
+        (5.5, -8.0),
+        (5.5, 8.0),
+        (5.5, -11.0),
+        (5.5, 11.0),
+        (8.5, -11.0),
+        (8.5, 11.0),
+        (11.5, -5.0),
+        (11.5, 5.0),
+        (11.5, -8.0),
+        (11.5, 8.0),
+    ]
+    return [
+        {
+            "x": round(source_position["x"] + dx, 1),
+            "y": round(source_position["y"] + dy, 1),
+        }
+        for dx, dy in offsets
+    ]
+
+
+def _gear_belt_mall_relocation_positions_avoid_resources(
+    observation: dict[str, Any],
+    *positions: dict[str, float],
+) -> bool:
+    return all(not _planned_machine_over_protected_resource(observation, position) for position in positions)
+
+
+def _compact_relocated_gear_belt_assemblers(
+    observation: dict[str, Any],
+    source_position: dict[str, float],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    compact_gear_position = {"x": round(source_position["x"] + 5.5, 1), "y": round(source_position["y"] - 5.0, 1)}
+    compact_belt_position = {"x": round(compact_gear_position["x"] + 3.0, 1), "y": compact_gear_position["y"]}
+    compact_gear = _assembler_at_position(observation, compact_gear_position)
+    compact_belt = _assembler_at_position(observation, compact_belt_position)
+    if isinstance(compact_gear, dict) and compact_gear.get("recipe") != "iron-gear-wheel":
+        compact_gear = None
+    if isinstance(compact_belt, dict) and compact_belt.get("recipe") != "transport-belt":
+        compact_belt = None
+    return compact_gear, compact_belt
 
 
 def _recoverable_relocation_assembler(observation: dict[str, Any]) -> dict[str, Any] | None:
@@ -7607,7 +7754,7 @@ class GearBeltMallLogisticsSkill:
         if layout is None:
             return PlannerDecision(
                 None,
-                "cannot find adjacent powered gear and reusable belt assemblers for gear/belt mall logistics",
+                "cannot find spaced powered gear and reusable belt assemblers for gear/belt mall logistics",
             )
 
         belt_assembler = layout["belt_assembler"]
@@ -8026,6 +8173,24 @@ class GearBeltMallRelocationSkill:
                 reason,
             )
 
+        unconnected_pole = _first_unconnected_power_corridor_pole(observation, corridor_positions)
+        if unconnected_pole is not None:
+            pole_position = _position(unconnected_pole)
+            if distance(player, pole_position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": pole_position},
+                    "move near gear/belt mall relocation power corridor pole",
+                )
+            return PlannerDecision(
+                {
+                    "type": "connect_power",
+                    "unit_number": unconnected_pole.get("unit_number"),
+                    "name": unconnected_pole.get("name") or "small-electric-pole",
+                    "position": pole_position,
+                },
+                "connect gear/belt mall relocation power corridor before moving assemblers",
+            )
+
         target_specs = [
             ("target_gear_assembler", "target_gear_position", "iron-gear-wheel", "gear assembler"),
             ("target_belt_assembler", "target_belt_position", "transport-belt", "belt assembler"),
@@ -8158,7 +8323,7 @@ def _nearest_connected_power_anchor(observation: dict[str, Any], target: dict[st
         if isinstance(entity, dict)
         and str(entity.get("name") or "") in names
         and isinstance(entity.get("position"), dict)
-        and (str(entity.get("name") or "") in POWER_CONNECTOR_NAMES or entity.get("electric_network_connected") is True)
+        and entity.get("electric_network_connected") is True
     ]
     return _nearest_to(candidates, target) if candidates else None
 
@@ -8176,6 +8341,17 @@ def _missing_power_corridor_positions(
             continue
         missing.append(position)
     return missing
+
+
+def _first_unconnected_power_corridor_pole(
+    observation: dict[str, Any],
+    positions: list[dict[str, float]],
+) -> dict[str, Any] | None:
+    for position in positions:
+        pole = _entity_at_build_position(observation, "small-electric-pole", position, radius=1.6)
+        if isinstance(pole, dict) and pole.get("electric_network_connected") is False:
+            return pole
+    return None
 
 
 def _select_power_corridor_build_position(
@@ -8905,11 +9081,21 @@ class BuildItemMallSkill:
         *,
         allow_existing_remote: bool = False,
         reference_position: dict[str, float] | None = None,
+        allow_first_assembler_gear_bootstrap: bool = False,
     ) -> PlannerDecision | None:
         if inventory_count(observation, item) >= quantity:
             return None
 
         if item == "assembling-machine-1":
+            decision = self._ensure_assembler_bootstrap_gears(
+                observation,
+                player,
+                quantity,
+                allow_existing_remote=allow_existing_remote,
+                reference_position=reference_position,
+            )
+            if decision is not None:
+                return decision
             for prerequisite, count in [
                 ("electronic-circuit", 3 * quantity),
                 ("iron-gear-wheel", 5 * quantity),
@@ -8922,6 +9108,9 @@ class BuildItemMallSkill:
                     count,
                     allow_existing_remote=allow_existing_remote,
                     reference_position=reference_position,
+                    allow_first_assembler_gear_bootstrap=(
+                        prerequisite == "iron-gear-wheel" and _first_assembler_bootstrap_needed(observation, quantity)
+                    ),
                 )
                 if decision is not None:
                     return decision
@@ -8941,6 +9130,21 @@ class BuildItemMallSkill:
 
         if item == "iron-gear-wheel":
             if _gear_handcraft_automation_context_active(observation):
+                if allow_first_assembler_gear_bootstrap and _can_handcraft_first_assembler_gears(observation, quantity):
+                    current_count = inventory_count(observation, "iron-gear-wheel")
+                    return PlannerDecision(
+                        {
+                            "type": "craft",
+                            "recipe": "iron-gear-wheel",
+                            "count": min(
+                                quantity - current_count,
+                                craftable_count(observation, "iron-gear-wheel"),
+                                max(0, 5 - current_count),
+                            ),
+                            "allow_first_assembler_bootstrap": True,
+                        },
+                        "craft one-time iron gears for first assembling-machine-1 bootstrap",
+                    )
                 if self.target_item != "iron-gear-wheel":
                     decision = BuildItemMallSkill("iron-gear-wheel", max(quantity, 4)).next_action(
                         observation,
@@ -9041,6 +9245,101 @@ class BuildItemMallSkill:
 
         return PlannerDecision(None, f"missing {item} and no build item mall prerequisite path is implemented")
 
+    def _ensure_assembler_bootstrap_gears(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        quantity: int,
+        *,
+        allow_existing_remote: bool = False,
+        reference_position: dict[str, float] | None = None,
+    ) -> PlannerDecision | None:
+        target_gears = 5 * quantity
+        if inventory_count(observation, "iron-gear-wheel") >= target_gears:
+            return None
+        if not _assembler_automation_available(observation):
+            return None
+        cell = _find_build_item_mall_cell(
+            observation,
+            "iron-gear-wheel",
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position,
+        )
+        assembler = cell.get("assembler") if isinstance(cell, dict) else None
+        if not isinstance(assembler, dict):
+            return None
+        assembler_position = _position(assembler)
+        if not assembler.get("electric_network_connected"):
+            pole_position = cell.get("pole_position") if isinstance(cell, dict) else None
+            if isinstance(pole_position, dict):
+                if distance(player, pole_position) > 20:
+                    return PlannerDecision({"type": "move_to", "position": pole_position}, "move near gear assembler pole")
+                return PlannerDecision(
+                    {
+                        "type": "connect_power",
+                        "unit_number": cell.get("pole_unit_number") if isinstance(cell, dict) else None,
+                        "name": "small-electric-pole",
+                        "position": pole_position,
+                    },
+                    "connect gear assembler before next assembling-machine-1 bootstrap",
+                )
+        if str(assembler.get("recipe") or "") != "iron-gear-wheel":
+            incompatible = _first_incompatible_assembler_item(assembler, "iron-gear-wheel")
+            if incompatible is not None:
+                if distance(player, assembler_position) > 20:
+                    return PlannerDecision({"type": "move_to", "position": assembler_position}, f"move near gear assembler to clear {incompatible}")
+                return PlannerDecision(
+                    {
+                        "type": "take",
+                        "item": incompatible,
+                        "count": entity_item_count(assembler, incompatible),
+                        "unit_number": assembler.get("unit_number"),
+                        "name": assembler.get("name") or "assembling-machine-1",
+                        "position": assembler_position,
+                    },
+                    f"clear {incompatible} before retooling assembler for bootstrap gears",
+                )
+            return self._set_recipe_decision(player, assembler, "iron-gear-wheel")
+        output_count = entity_item_count(assembler, "iron-gear-wheel")
+        if output_count > 0:
+            if distance(player, assembler_position) > 20:
+                return PlannerDecision({"type": "move_to", "position": assembler_position}, "move near gear assembler for next assembler bootstrap")
+            return PlannerDecision(
+                {
+                    "type": "take",
+                    "item": "iron-gear-wheel",
+                    "count": min(output_count, target_gears - inventory_count(observation, "iron-gear-wheel")),
+                    "unit_number": assembler.get("unit_number"),
+                    "name": assembler.get("name") or "assembling-machine-1",
+                    "position": assembler_position,
+                },
+                "take assembler-produced gears for next assembling-machine-1 bootstrap",
+            )
+        if entity_item_count(assembler, "iron-plate") < 2:
+            if inventory_count(observation, "iron-plate") <= 0:
+                return self._ensure_item_quantity(
+                    observation,
+                    player,
+                    "iron-plate",
+                    2,
+                    allow_existing_remote=allow_existing_remote,
+                    reference_position=reference_position,
+                )
+            if distance(player, assembler_position) > 20:
+                return PlannerDecision({"type": "move_to", "position": assembler_position}, "move near gear assembler to seed iron")
+            return PlannerDecision(
+                {
+                    "type": "insert",
+                    "item": "iron-plate",
+                    "count": min(10, inventory_count(observation, "iron-plate")),
+                    "unit_number": assembler.get("unit_number"),
+                    "name": assembler.get("name") or "assembling-machine-1",
+                    "position": assembler_position,
+                },
+                "insert iron plates for assembler-produced bootstrap gears",
+            )
+        return PlannerDecision({"type": "wait", "ticks": 300}, "wait for assembler-produced bootstrap gears")
+
 
 def _research_root(observation: dict[str, Any]) -> dict[str, Any]:
     value = observation.get("research")
@@ -9069,6 +9368,34 @@ def _gear_handcraft_automation_context_active(observation: dict[str, Any]) -> bo
         if isinstance(entity, dict) and str(entity.get("name") or "") in ASSEMBLER_ENTITY_NAMES:
             return True
     return False
+
+
+def _assembler_automation_available(observation: dict[str, Any]) -> bool:
+    if inventory_count(observation, "assembling-machine-1") > 0:
+        return True
+    for entity in observation.get("entities") or []:
+        if isinstance(entity, dict) and str(entity.get("name") or "") in ASSEMBLER_ENTITY_NAMES:
+            return True
+    return False
+
+
+def _first_assembler_bootstrap_needed(observation: dict[str, Any], quantity: int) -> bool:
+    return quantity <= 1 and not _assembler_automation_available(observation)
+
+
+def _can_handcraft_first_assembler_gears(observation: dict[str, Any], target_gear_count: int) -> bool:
+    if _assembler_automation_available(observation):
+        return False
+    current_gears = inventory_count(observation, "iron-gear-wheel")
+    missing_gears = max(0, target_gear_count - current_gears)
+    if target_gear_count > 5 or missing_gears <= 0:
+        return False
+    craft_count = min(missing_gears, craftable_count(observation, "iron-gear-wheel"), max(0, 5 - current_gears))
+    if craft_count <= 0:
+        return False
+    return inventory_count(observation, "electronic-circuit") >= 3 and inventory_count(observation, "iron-plate") >= 9 + (
+        2 * craft_count
+    )
 
 
 def _ensure_iron_gears_without_post_automation_handcraft(
@@ -9485,7 +9812,7 @@ def _find_gear_belt_mall_logistics_layout(observation: dict[str, Any]) -> dict[s
             and item.get("recipe") not in {"copper-cable", "electronic-circuit"}
             and _within_allowed_factory_area(observation, _position(item))
             and abs(_position(item)["y"] - gear_pos["y"]) <= 0.1
-            and 3.0 <= abs(_position(item)["x"] - gear_pos["x"]) <= 8.0
+            and GEAR_BELT_MALL_ASSEMBLER_SPACING <= abs(_position(item)["x"] - gear_pos["x"]) <= 8.0
         ]
         if not belt_candidates:
             continue
@@ -9521,7 +9848,7 @@ def _gear_belt_mall_layout_for_pair(
     direction_sign = 1 if belt_pos["x"] >= gear_pos["x"] else -1
     belt_direction = EAST if direction_sign > 0 else WEST
     horizontal_distance = abs(belt_pos["x"] - gear_pos["x"])
-    if horizontal_distance < 3.0:
+    if horizontal_distance < GEAR_BELT_MALL_ASSEMBLER_SPACING:
         return None
 
     for vertical_sign, output_direction, input_direction in [(-1, SOUTH, NORTH), (1, NORTH, SOUTH)]:

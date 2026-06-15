@@ -258,8 +258,20 @@ local function surface_has_gear_blocking_assembler(surface, force)
   end)
   return ok and found and #found > 0
 end
-local function direct_gear_handcraft_guard(agent, inventory, recipe_name)
+local function allow_first_assembler_bootstrap_gears(agent, inventory, action)
+  if not action or action.allow_first_assembler_bootstrap ~= true then return false end
+  if not agent or not inventory or not inventory.valid then return false end
+  if inventory_has_gear_blocking_assembler(inventory) then return false end
+  if surface_has_gear_blocking_assembler(agent.surface, agent.force) then return false end
+  local count = math.max(1, math.min(action.count or 1, 100))
+  if count > 5 then return false end
+  local current_gears = inventory.get_item_count("iron-gear-wheel")
+  if current_gears + count > 5 then return false end
+  return inventory.get_item_count("electronic-circuit") >= 3 and inventory.get_item_count("iron-plate") >= 9 + (2 * count)
+end
+local function direct_gear_handcraft_guard(agent, inventory, recipe_name, action)
   if not agent or recipe_name ~= "iron-gear-wheel" then return nil end
+  if allow_first_assembler_bootstrap_gears(agent, inventory, action) then return nil end
   if force_has_automation_researched(agent.force) then
     return "blocked direct iron-gear-wheel handcraft after Automation research; use a gear assembler, gear mall, or logistic line instead"
   end
@@ -1247,7 +1259,7 @@ local function action_craft()
   if type(action.recipe) ~= "string" then return err("craft requires recipe") end
   local count = math.max(1, math.min(action.count or 1, 100))
   local inventory = main_inventory(agent)
-  local gear_guard_reason = direct_gear_handcraft_guard(agent, inventory, action.recipe)
+  local gear_guard_reason = direct_gear_handcraft_guard(agent, inventory, action.recipe, action)
   if gear_guard_reason then return err(gear_guard_reason, { recipe = action.recipe }) end
   if agent.kind == "server" then
     local crafted = virtual_craft(action.recipe, count)

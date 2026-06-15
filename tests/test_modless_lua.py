@@ -150,6 +150,8 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("inventory_has_gear_blocking_assembler", command)
         self.assertIn("surface_has_gear_blocking_assembler", command)
         self.assertIn("blocked direct iron-gear-wheel handcraft", command)
+        self.assertIn("allow_first_assembler_bootstrap_gears", command)
+        self.assertIn("allow_first_assembler_bootstrap", command)
 
     def test_action_research_completes_trigger_technology(self):
         command = build_modless_action_command({"type": "research", "technology": "automation-science-pack"})

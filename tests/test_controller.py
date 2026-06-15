@@ -103,6 +103,45 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(guarded.action, {"type": "wait", "ticks": 120})
         self.assertIn("blocked direct iron-gear-wheel handcraft", guarded.reason)
 
+    def test_guard_allows_one_time_first_assembler_bootstrap_gears_after_automation(self):
+        observation = {
+            "research": {"technologies": {"automation": {"researched": True}}},
+            "inventory": {"electronic-circuit": 3, "iron-plate": 19},
+            "entities": [],
+        }
+        decision = PlannerDecision(
+            action={
+                "type": "craft",
+                "recipe": "iron-gear-wheel",
+                "count": 5,
+                "allow_first_assembler_bootstrap": True,
+            },
+            reason="test",
+        )
+
+        self.assertIs(_guard_post_automation_handcraft(observation, decision), decision)
+
+    def test_guard_blocks_first_assembler_bootstrap_flag_when_assembler_exists(self):
+        observation = {
+            "research": {"technologies": {"automation": {"researched": True}}},
+            "inventory": {"electronic-circuit": 3, "iron-plate": 19},
+            "entities": [{"name": "assembling-machine-1", "position": {"x": 0, "y": 0}}],
+        }
+        decision = PlannerDecision(
+            action={
+                "type": "craft",
+                "recipe": "iron-gear-wheel",
+                "count": 5,
+                "allow_first_assembler_bootstrap": True,
+            },
+            reason="test",
+        )
+
+        guarded = _guard_post_automation_handcraft(observation, decision)
+
+        self.assertEqual(guarded.action, {"type": "wait", "ticks": 120})
+        self.assertIn("blocked direct iron-gear-wheel handcraft", guarded.reason)
+
     def test_no_mod_action_blocks_direct_gear_handcraft_after_automation(self):
         class FakeController(ModlessFactorioController):
             def observe(self):
@@ -1533,6 +1572,60 @@ class ControllerTests(unittest.TestCase):
         self.assertIn("cannot find a buildable water site", decision.reason)
         self.assertEqual(observation["planning_sites_cached_from_tick"], 9)
         self.assertEqual([call["include_planning_sites"] for call in fake_modless.calls], [False])
+
+    def test_no_mod_stale_planning_site_cache_rescans_for_lab_retry(self):
+        class FakeModless:
+            def __init__(self):
+                self.calls = []
+
+            def observe(self, **kwargs):
+                self.calls.append(kwargs)
+                if kwargs.get("include_planning_sites"):
+                    return {
+                        "ok": True,
+                        "tick": 2001,
+                        "power_sites": [],
+                        "lab_sites": [{"lab_position": {"x": 1, "y": 1}}],
+                        "automation_sites": [],
+                    }
+                return {"ok": True, "tick": 2000, "power_sites": [], "lab_sites": [], "automation_sites": []}
+
+        class FakeSkill:
+            def next_action(self, observation):
+                if observation.get("lab_sites"):
+                    return PlannerDecision({"type": "wait", "ticks": 1}, "lab site candidate available")
+                return PlannerDecision(None, "cannot find a powered or wireable lab site near the starter power block")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = make_test_config(Path(temp_dir))
+            cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+            (cfg.runtime_dir / "planning-sites-cache.json").write_text(
+                json.dumps(
+                    {
+                        "cached_at": time.time(),
+                        "tick": 10,
+                        "power_sites": [],
+                        "lab_sites": [],
+                        "automation_sites": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            controller = ModlessFactorioController(cfg)
+            fake_modless = FakeModless()
+            controller._modless = fake_modless
+            initial = controller.observe()
+            initial_decision = FakeSkill().next_action(initial)
+
+            observation, decision = controller._maybe_retry_skill_with_planning_sites(
+                FakeSkill(),
+                initial,
+                initial_decision,
+            )
+
+        self.assertEqual(decision.action, {"type": "wait", "ticks": 1})
+        self.assertEqual(observation["tick"], 2001)
+        self.assertEqual([call["include_planning_sites"] for call in fake_modless.calls], [False, True])
 
     def test_idle_layout_loop_skips_when_autopilot_heartbeat_is_fresh_busy(self):
         class BusyController(FactorioController):

@@ -1407,6 +1407,7 @@ def reconcile_strategy_decision(
         "produce_electronic_circuit",
         "automate_electronic_circuit_line",
         "bootstrap_build_item_mall",
+        "setup_coal_supply",
         "build_iron_plate_logistic_line_to_gear_mall",
         "build_site_input_logistic_line",
         "research_logistics",
@@ -1452,6 +1453,7 @@ def reconcile_strategy_decision(
         "automate_electronic_circuit_line",
         "bootstrap_build_item_mall",
         "bootstrap_power_pole_mall",
+        "setup_coal_supply",
         "research_electric_mining_drill",
         "bootstrap_electric_mining_drill_mall",
         "research_logistics",
@@ -1498,6 +1500,53 @@ def reconcile_strategy_decision(
             }
         else:
             adjusted.pop("guardrail_adjusted", None)
+        return adjusted
+    if (
+        gear_mall_iron_plate_issue is not None
+        and not bool(gear_mall_iron_plate_issue.get("transport_belts_available"))
+        and gear_belt_mall_bootstrap_issue is None
+        and selected
+        in {
+            "plan_factory_site",
+            "produce_electronic_circuit",
+            "automate_electronic_circuit_line",
+            "bootstrap_build_item_mall",
+            "setup_coal_supply",
+            "research_electric_mining_drill",
+            "bootstrap_electric_mining_drill_mall",
+            "research_logistics",
+            "build_iron_plate_logistic_line_to_gear_mall",
+            "build_site_input_logistic_line",
+        }
+    ):
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "relocate_gear_belt_mall_to_iron_source"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 93)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            "The gear/belt mall cannot seed construction belts locally and has no transport-belt stock for "
+            "the long iron-plate route; relocate the mall toward iron instead of selecting an unbuildable belt line."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["gear/belt mall relocation before iron-plate route"]))
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            f"gear_assembler_unit={gear_mall_iron_plate_issue.get('gear_unit')}",
+            f"iron_source_unit={gear_mall_iron_plate_issue.get('source_unit')}",
+            f"source_distance_tiles={gear_mall_iron_plate_issue.get('source_distance_tiles')}",
+            "transport_belts_available_for_mall_logistics=false",
+            "gear_belt_mall_local_seed=false",
+            "gear_handcraft_blocked=true",
+        ]
+        adjusted["expected_effect"] = (
+            "Move or rebuild the gear and belt assemblers near iron-plate production so belts can be produced "
+            "without hand-crafted gears or a missing construction-belt route."
+        )
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": "relocate_gear_belt_mall_to_iron_source",
+            "reason": guardrail_reason,
+        }
         return adjusted
     if _gear_mall_plate_route_needs_compaction(gear_mall_iron_plate_issue) and selected in {
         "plan_factory_site",
@@ -1562,6 +1611,7 @@ def reconcile_strategy_decision(
         "produce_electronic_circuit",
         "automate_electronic_circuit_line",
         "bootstrap_build_item_mall",
+        "setup_coal_supply",
         "build_site_input_logistic_line",
         "research_logistics",
     }:
@@ -3021,8 +3071,6 @@ def _coal_supply_needed(observation: dict[str, Any]) -> bool:
         return False
     if _coal_supply_ready(observation):
         return False
-    if inventory_count(observation, "coal") >= 24:
-        return False
     return _fuel_dependent_factory_exists(observation) or _coal_patch_is_near_player(observation)
 
 
@@ -3036,9 +3084,41 @@ def _coal_supply_ready(observation: dict[str, Any]) -> bool:
         name = str(drill.get("name") or "")
         if name == "electric-mining-drill" and drill.get("electric_network_connected") is not False:
             return True
-        if entity_item_count(drill, "coal") > 0 or not _entity_status_is(drill, "no_fuel", 53):
+        if not (entity_item_count(drill, "coal") > 0 or not _entity_status_is(drill, "no_fuel", 53)):
+            continue
+        if _coal_drill_has_output_entity(observation, drill):
             return True
     return False
+
+
+def _coal_drill_has_output_entity(observation: dict[str, Any], drill: dict[str, Any]) -> bool:
+    position = drill.get("position") if isinstance(drill.get("position"), dict) else None
+    if position is None:
+        return False
+    direction = int(drill.get("direction") or 4)
+    dx, dy = _direction_vector(direction)
+    output_position = {
+        "x": float(position.get("x") or 0.0) + 2.0 * dx,
+        "y": float(position.get("y") or 0.0) + 2.0 * dy,
+    }
+    output_names = {"transport-belt", "fast-transport-belt", "express-transport-belt", "wooden-chest", "iron-chest", "steel-chest"}
+    return any(
+        isinstance(entity, dict)
+        and str(entity.get("name") or "") in output_names
+        and isinstance(entity.get("position"), dict)
+        and distance(output_position, entity["position"]) <= 0.75
+        for entity in observation.get("entities") or []
+    )
+
+
+def _direction_vector(direction: int) -> tuple[float, float]:
+    if direction == 12:
+        return -1.0, 0.0
+    if direction == 8:
+        return 0.0, 1.0
+    if direction == 0:
+        return 0.0, -1.0
+    return 1.0, 0.0
 
 
 def _entity_status_is(entity: dict[str, Any], status_name: str, status_code: int) -> bool:
@@ -3319,6 +3399,45 @@ def _relocated_gear_belt_mall_target_issue(
 ) -> dict[str, Any] | None:
     if not source_furnaces:
         return None
+    relocation_layout = _find_gear_belt_mall_relocation_layout(observation)
+    if relocation_layout is not None:
+        source = relocation_layout.get("source")
+        target_gear = relocation_layout.get("target_gear_assembler")
+        target_belt = relocation_layout.get("target_belt_assembler")
+        compact_gear = relocation_layout.get("gear_assembler")
+        compact_belt = relocation_layout.get("belt_assembler")
+        gear = target_gear if isinstance(target_gear, dict) else compact_gear
+        belt = target_belt if isinstance(target_belt, dict) else compact_belt
+        if isinstance(source, dict) and (isinstance(gear, dict) or isinstance(belt, dict)):
+            route_cost = {
+                "belt_route_tiles_estimate": relocation_layout.get("belt_route_tiles_estimate"),
+                "belt_route_cost": relocation_layout.get("belt_route_cost"),
+                "power_anchor_distance_tiles": relocation_layout.get("power_anchor_distance_tiles"),
+                "relocation_power_poles_estimate": relocation_layout.get("relocation_power_poles_estimate"),
+                "relocation_cost": relocation_layout.get("relocation_cost"),
+                "route_cost_preference": "relocate_mall_to_iron_source",
+            }
+            corridor_positions = _gear_belt_mall_relocation_power_corridor_positions(observation, relocation_layout)
+            if corridor_positions:
+                route_cost["relocation_power_poles_estimate"] = len(corridor_positions)
+                route_cost["relocation_cost"] = round(
+                    GEAR_MALL_RELOCATION_FIXED_COST + len(corridor_positions) * GEAR_MALL_RELOCATION_POWER_POLE_COST,
+                    1,
+                )
+            return {
+                "gear_unit": gear.get("unit_number") if isinstance(gear, dict) else "inventory",
+                "source_unit": source.get("unit_number"),
+                "source_distance_tiles": relocation_layout.get("source_distance_tiles"),
+                "gear_assembler_iron_plate": entity_item_count(gear, "iron-plate") if isinstance(gear, dict) else 0,
+                "gear_assembler_status": (
+                    gear.get("status_name") or gear.get("status") if isinstance(gear, dict) else "relocation_in_progress"
+                ),
+                "transport_belts_available": belts_available,
+                "relocation_in_progress": True,
+                "target_gear_assembler_unit": target_gear.get("unit_number") if isinstance(target_gear, dict) else None,
+                "target_belt_assembler_unit": target_belt.get("unit_number") if isinstance(target_belt, dict) else None,
+                **route_cost,
+            }
     for source in source_furnaces:
         source_position = _position(source)
         target_gear_position = {"x": round(source_position["x"] + 5.5, 1), "y": round(source_position["y"] - 5.0, 1)}

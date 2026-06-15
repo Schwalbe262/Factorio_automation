@@ -2,7 +2,20 @@
 
 실제 개선이 확인된 경우만 이 파일에 시간순으로 추가한다. 단순 실행 기록, 실패 기록, 가설 단계의 내용은 `note.md`에만 남긴다.
 
-## 기록 템플릿
+Do not add:
+
+- ordinary successful loops;
+- ordinary failures;
+- speculative hypotheses;
+- diagnostic-only runs;
+- plans that were not implemented;
+- improvements without evidence.
+
+This file is archive/search-only for new Codex sessions.
+Do not read this file in full.
+Search it only for specific prior lessons.
+
+## Entry template
 
 ```text
 ## YYYY-MM-DD HH:mm:ss +09:00 - Insight N
@@ -14,6 +27,14 @@
 - Evidence:
 - Remaining risk:
 ```
+
+Promote to insight.md only if:
+
+- behavior improved in a reusable way;
+- before/after is clear;
+- evidence exists;
+- tests, live validation, metrics, or operator comparison support it;
+- the lesson can prevent a future regression or guide future design.
 
 ## 2026-06-14 23:56:39 +09:00 - Insight 1
 
@@ -713,4 +734,44 @@
 - After: The summary uses only the latest contiguous `codex_thread` segment for display, makes the first thread-counter sample a zero-delta baseline, and formats large token values as M/B in the token metrics, chart, table, quota, and hourly rate fields.
 - Evidence: `{"tests":"32 passed","sample_basis_source":"codex_thread","ignored_older_basis_samples":96,"latest_tokens":549320647,"latest_delta_tokens":1082352,"total_delta_tokens":1921985,"ui_examples":["549.3M","1.1M"]}`
 - Remaining risk: Raw historical JSONL rows still contain older Goal-counter samples and the raw first migration delta; this is intentional for auditability, but consumers outside `token_usage_summary` must avoid mixing counter bases directly.
+
+## 2026-06-15 20:32:17 +09:00 - Insight 86
+- Source loop: Loop 406
+- Improvement: research_automation completed after 33 step(s): automation research completed
+- Before: not recorded
+- After: automation-science-pack = 0
+- Evidence: `{"item":"automation-science-pack","item_count":0,"source_loop":406,"steps":33,"target":10}`
+- Remaining risk: Target is not complete yet: 0/10.
+
+## 2026-06-15 21:18:05 +09:00 - Insight 87
+- Source loop: Loop 411
+- Improvement: small-electric-pole increased by 20 during bootstrap_power_pole_mall.
+- Before: small-electric-pole = 1
+- After: small-electric-pole = 21
+- Evidence: `{"delta":20,"final":21,"initial":1,"item":"small-electric-pole","source_loop":411,"target":20}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-15 21:18:05 +09:00 - Insight 88
+- Source loop: Loop 411
+- Improvement: bootstrap_power_pole_mall completed after 27 step(s): build item mall is producing small-electric-pole and target reached: 21/20
+- Before: not recorded
+- After: small-electric-pole = 21
+- Evidence: `{"item":"small-electric-pole","item_count":21,"source_loop":411,"steps":27,"target":20}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-15 21:24:16 +09:00 - Insight 89
+- Source loop: Loop 413
+- Improvement: relocate_gear_belt_mall_to_iron_source completed after 35 step(s): gear/belt mall assemblers are relocated near the iron-plate source; next build local gear-to-belt logistics
+- Before: not recorded
+- After: transport-belt = 0
+- Evidence: `{"item":"transport-belt","item_count":0,"source_loop":413,"steps":35,"target":20}`
+- Remaining risk: Target is not complete yet: 0/20.
+
+## 2026-06-15 21:24:29 +09:00 - Insight 90
+- Source loop: Loop 414
+- Improvement: relocate_gear_belt_mall_to_iron_source completed after 1 step(s): gear/belt mall assemblers are relocated near the iron-plate source; next build local gear-to-belt logistics
+- Before: not recorded
+- After: transport-belt = 0
+- Evidence: `{"item":"transport-belt","item_count":0,"source_loop":414,"steps":1,"target":20}`
+- Remaining risk: Target is not complete yet: 0/20.
 

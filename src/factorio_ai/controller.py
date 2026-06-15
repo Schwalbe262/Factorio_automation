@@ -197,6 +197,7 @@ _PLANNING_SITE_RETRY_MARKERS = (
     "cannot find a powered or wireable site",
 )
 DEFAULT_PLANNING_SITE_CACHE_SECONDS = 180.0
+DEFAULT_PLANNING_SITE_CACHE_TICK_DRIFT = 600
 GEAR_HANDCRAFT_BLOCKING_ASSEMBLER_NAMES = {"assembling-machine-1", "assembling-machine-2", "assembling-machine-3"}
 
 
@@ -215,6 +216,12 @@ def _planning_site_cache_seconds() -> float:
         )
     except (TypeError, ValueError):
         return DEFAULT_PLANNING_SITE_CACHE_SECONDS
+
+
+def _planning_site_cache_tick_stale(cached_tick: Any, observed_tick: Any) -> bool:
+    if not isinstance(cached_tick, (int, float)) or not isinstance(observed_tick, (int, float)):
+        return False
+    return abs(float(observed_tick) - float(cached_tick)) > DEFAULT_PLANNING_SITE_CACHE_TICK_DRIFT
 
 
 def _automation_researched_in_observation(observation: dict[str, Any]) -> bool:
@@ -240,12 +247,44 @@ def _gear_handcraft_automation_context_in_observation(observation: dict[str, Any
     return False
 
 
+def _gear_handcraft_blocking_assembler_available(observation: dict[str, Any]) -> bool:
+    inventory = observation.get("inventory")
+    if isinstance(inventory, dict) and int(inventory.get("assembling-machine-1") or 0) > 0:
+        return True
+    for entity in observation.get("entities") or []:
+        if isinstance(entity, dict) and str(entity.get("name") or "") in GEAR_HANDCRAFT_BLOCKING_ASSEMBLER_NAMES:
+            return True
+    return False
+
+
+def _allow_first_assembler_bootstrap_gears(observation: dict[str, Any], action: dict[str, Any]) -> bool:
+    if action.get("allow_first_assembler_bootstrap") is not True:
+        return False
+    if _gear_handcraft_blocking_assembler_available(observation):
+        return False
+    try:
+        count = max(1, int(action.get("count") or 1))
+    except (TypeError, ValueError):
+        return False
+    if count > 5:
+        return False
+    inventory = observation.get("inventory")
+    if not isinstance(inventory, dict):
+        return False
+    current_gears = int(inventory.get("iron-gear-wheel") or 0)
+    if current_gears + count > 5:
+        return False
+    return int(inventory.get("electronic-circuit") or 0) >= 3 and int(inventory.get("iron-plate") or 0) >= 9 + (2 * count)
+
+
 def _gear_handcraft_guard_reason(observation: dict[str, Any], action: dict[str, Any]) -> str:
     if (
         action.get("type") == "craft"
         and action.get("recipe") == "iron-gear-wheel"
         and _gear_handcraft_automation_context_in_observation(observation)
     ):
+        if _allow_first_assembler_bootstrap_gears(observation, action):
+            return ""
         return "blocked direct iron-gear-wheel handcraft after assembler automation exists; use gear mall or a logistic line instead"
     return ""
 
@@ -2307,26 +2346,24 @@ class ModlessFactorioController(FactorioController):
         self._planning_sites_cache_loaded = True
         path = self._planning_sites_cache_path()
         if not path.exists():
-            self._load_planning_sites_cache_from_world_memory()
+            self._load_planning_sites_cache_from_world_memory(observation)
             return
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            self._load_planning_sites_cache_from_world_memory()
+            self._load_planning_sites_cache_from_world_memory(observation)
             return
         if not isinstance(data, dict):
-            self._load_planning_sites_cache_from_world_memory()
+            self._load_planning_sites_cache_from_world_memory(observation)
             return
         cached_at = data.get("cached_at")
         if not isinstance(cached_at, (int, float)) or time.time() - cached_at > _planning_site_cache_seconds():
-            self._load_planning_sites_cache_from_world_memory()
+            self._load_planning_sites_cache_from_world_memory(observation)
             return
         cached_tick = data.get("tick")
-        observed_tick = observation.get("tick") if isinstance(observation, dict) else None
-        if isinstance(cached_tick, (int, float)) and isinstance(observed_tick, (int, float)):
-            if cached_tick > observed_tick + 600:
-                self._load_planning_sites_cache_from_world_memory()
-                return
+        if _planning_site_cache_tick_stale(cached_tick, observation.get("tick") if isinstance(observation, dict) else None):
+            self._load_planning_sites_cache_from_world_memory(observation)
+            return
         cache: dict[str, Any] = {"cached_at": cached_at, "tick": cached_tick}
         for key in ("power_sites", "lab_sites", "automation_sites"):
             sites = data.get(key)
@@ -2335,13 +2372,18 @@ class ModlessFactorioController(FactorioController):
         if any(key in cache for key in ("power_sites", "lab_sites", "automation_sites")):
             self._planning_sites_cache = cache
         else:
-            self._load_planning_sites_cache_from_world_memory()
+            self._load_planning_sites_cache_from_world_memory(observation)
 
-    def _load_planning_sites_cache_from_world_memory(self) -> None:
+    def _load_planning_sites_cache_from_world_memory(self, observation: dict[str, Any] | None = None) -> None:
         memory = load_world_map_memory(self.cfg.runtime_dir)
         if not planning_sites_are_fresh(memory, max_age_seconds=_planning_site_cache_seconds()):
             return
         cache = planning_sites_from_memory(memory)
+        if _planning_site_cache_tick_stale(
+            cache.get("tick"),
+            observation.get("tick") if isinstance(observation, dict) else None,
+        ):
+            return
         if any(key in cache for key in ("power_sites", "lab_sites", "automation_sites")):
             self._planning_sites_cache = cache
 

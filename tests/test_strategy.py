@@ -785,7 +785,7 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
         self.assertIn("boiler coal fuel feed", result["blockers"])
 
-    def test_coal_supply_ready_uses_mining_target_when_resource_list_is_remote(self):
+    def test_coal_supply_still_needed_when_coal_drill_has_no_output(self):
         result = heuristic_strategy(
             "launch_rocket_program",
             {
@@ -802,6 +802,31 @@ class StrategyTests(unittest.TestCase):
                         "status_name": "waiting_for_space_in_destination",
                         "inventories": {},
                     },
+                    {"name": "stone-furnace", "position": {"x": 4, "y": 0}, "inventories": {}},
+                ],
+                "resources": [{"name": "coal", "position": {"x": -10, "y": -30}, "distance": 700}],
+            },
+        )
+        self.assertEqual(result["selected_skill"], "setup_coal_supply")
+
+    def test_coal_supply_ready_uses_mining_target_with_output_chest(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "player": {"position": {"x": -500, "y": -500}},
+                "inventory": {"iron-plate": 20, "coal": 0},
+                "entities": [
+                    {
+                        "name": "burner-mining-drill",
+                        "unit_number": 20,
+                        "position": {"x": 260, "y": -370},
+                        "direction": 4,
+                        "mining_target": "coal",
+                        "status": 34,
+                        "status_name": "waiting_for_space_in_destination",
+                        "inventories": {},
+                    },
+                    {"name": "wooden-chest", "unit_number": 21, "position": {"x": 262, "y": -370}, "inventories": {"1": {"coal": 4}}},
                     {"name": "stone-furnace", "position": {"x": 4, "y": 0}, "inventories": {}},
                 ],
                 "resources": [{"name": "coal", "position": {"x": -10, "y": -30}, "distance": 700}],
@@ -1044,6 +1069,50 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
         self.assertIn("gear_handcraft_blocked=true", result["evidence"])
 
+    def test_reconcile_promotes_coal_supply_to_gear_belt_bootstrap_when_belts_are_exhausted(self):
+        observation = gear_belt_mall_needs_bootstrap_observation()
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "setup_coal_supply",
+                "priority": 50,
+                "reason": "Need coal before more burner expansion.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "heuristic",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "setup_coal_supply")
+        self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
+
+    def test_reconcile_promotes_unseedable_iron_line_to_gear_belt_relocation(self):
+        observation = gear_belt_mall_needs_bootstrap_observation()
+        observation["inventory"] = {"small-electric-pole": 20}
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "build_iron_plate_logistic_line_to_gear_mall",
+                "priority": 50,
+                "reason": "Need the long iron plate line.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "heuristic",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
+        self.assertIn("route_cost_preference=relocate_mall_to_iron_source", result["evidence"])
+
     def test_reconcile_repairs_power_even_when_belt_mall_has_output(self):
         observation = gear_mall_needs_plate_line_observation()
         for entity in observation["entities"]:
@@ -1106,7 +1175,7 @@ class StrategyTests(unittest.TestCase):
             gear_mall_needs_plate_line_without_belts_observation(),
         )
 
-        self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
         self.assertEqual(result["guardrail_adjusted"]["from"], "automate_electronic_circuit_line")
         self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
 

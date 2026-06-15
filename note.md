@@ -2,7 +2,11 @@
 
 모든 탐색, 검증, 문서화, UI 개선, 전략 실행, 공장 실행 루프는 이 파일에 시간순으로 기록한다.
 
-## 기록 템플릿
+This file is archive/search-only for new Codex sessions.
+Do not read this file in full.
+Use `HANDOFF_CURRENT.md` for current state and use targeted search for old evidence.
+
+## Entry template
 
 ```text
 ## YYYY-MM-DD HH:mm:ss +09:00 - Loop N
@@ -18,6 +22,16 @@
 - Next action:
 - Token usage:
 ```
+
+note.md rules:
+
+- Record every meaningful loop.
+- Keep entries concise.
+- Reference raw logs by path; do not paste raw logs.
+- Record failures and partial progress here.
+- Record diagnostic-only work here.
+- Do not require future sessions to read the whole file.
+- At closeout, append one concise entry only.
 
 ## 2026-06-14 23:32:14 +09:00 - Loop 1
 
@@ -8857,4 +8871,238 @@
 - Failure reason: None.
 - Next action: Refresh the Web UI; the latest token metric should render around `549.3M`, and displayed deltas should be based only on the latest `codex_thread` segment.
 - Token usage: current Factorio Codex thread counter observed in summary `549,320,647` tokens / weekly quota unavailable.
+
+## 2026-06-15 20:23:04 +09:00 - Loop 405
+- Part: skill
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: Running `research_automation` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_automation` for up to 1500 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\automation-research-mvp-20260615-112134.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Target item candidate: `automation-science-pack` target `10`.
+- Metrics:
+  - Steps: 52.
+  - Status: failed.
+  - Duration: 89.609s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\automation-research-mvp-20260615-112134.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1500,"target":10}`.
+- Result: Loop stopped: cannot find a powered or wireable lab site near the starter power block
+- Failure reason: cannot find a powered or wireable lab site near the starter power block
+- Next action: Inspect the raw log and patch planner/site selection before retrying the same loop.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 20:32:17 +09:00 - Loop 406
+- Part: skill
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: Running `research_automation` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_automation` for up to 1500 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\automation-research-mvp-20260615-112927.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Target item candidate: `automation-science-pack` target `10`.
+- Metrics:
+  - Steps: 33.
+  - Status: ok.
+  - Duration: 170.765s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\automation-research-mvp-20260615-112927.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1500,"target":10}`.
+- Result: Completed: automation research completed
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 20:34:49 +09:00 - Loop 407
+- Part: skill
+- Goal: launch_rocket_program / research_logistics
+- Hypothesis: Running `research_logistics` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_logistics` for up to 2200 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\logistics-research-mvp-20260615-113341.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_logistics`.
+  - Target item candidate: `automation-science-pack` target `20`.
+- Metrics:
+  - Steps: 39.
+  - Status: failed.
+  - Duration: 68.875s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\logistics-research-mvp-20260615-113341.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":2200,"target":20}`.
+- Result: Loop stopped: iron gear wheels must be produced by an assembler; refusing hand-crafted gear for build item mall bootstrap
+- Failure reason: iron gear wheels must be produced by an assembler; refusing hand-crafted gear for build item mall bootstrap
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 20:43:57 +09:00 - Loop 408
+- Part: skill
+- Goal: launch_rocket_program / research_logistics
+- Hypothesis: Running `research_logistics` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_logistics` for up to 2200 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\logistics-research-mvp-20260615-114323.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_logistics`.
+  - Target item candidate: `automation-science-pack` target `20`.
+- Metrics:
+  - Steps: 7.
+  - Status: failed.
+  - Duration: 33.859s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\logistics-research-mvp-20260615-114323.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":2200,"target":20}`.
+- Result: Loop stopped: automation-science-pack mall assembler needs a copper-plate logistic line from entity-source:copper-plate:stone-furnace:19 (110 tiles); refusing repeated hand-carry between distant sites
+- Failure reason: automation-science-pack mall assembler needs a copper-plate logistic line from entity-source:copper-plate:stone-furnace:19 (110 tiles); refusing repeated hand-carry between distant sites
+- Next action: Plan or build the missing site-to-site logistic line before repeating the consumer loop.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 21:11:27 +09:00 - Loop 409
+- Part: skill
+- Goal: launch_rocket_program / bootstrap_build_item_mall
+- Hypothesis: Running `bootstrap_build_item_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `bootstrap_build_item_mall` for up to 80 step(s).
+  - Tracked `transport-belt` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\build-item-mall-transport-belt-20260615-120953.jsonl`.
+- Candidates:
+  - Selected goal/skill: `bootstrap_build_item_mall`.
+  - Target item candidate: `transport-belt` target `20`.
+- Metrics:
+  - Steps: 48.
+  - Status: failed.
+  - Duration: 94.235s.
+  - transport-belt: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\build-item-mall-transport-belt-20260615-120953.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":80,"target":20}`.
+- Result: Loop stopped: iron-gear-wheel mall assembler needs a iron-plate logistic line from entity-source:iron-plate:stone-furnace:15 (145 tiles); refusing repeated hand-carry between distant sites
+- Failure reason: iron-gear-wheel mall assembler needs a iron-plate logistic line from entity-source:iron-plate:stone-furnace:15 (145 tiles); refusing repeated hand-carry between distant sites
+- Next action: Plan or build the missing site-to-site logistic line before repeating the consumer loop.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 21:12:15 +09:00 - Loop 410
+- Part: skill
+- Goal: launch_rocket_program / setup_coal_supply
+- Hypothesis: Running `setup_coal_supply` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `setup_coal_supply` for up to 120 step(s).
+  - Tracked `coal` from 4 to 4.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-coal-supply-20260615-121210.jsonl`.
+- Candidates:
+  - Selected goal/skill: `setup_coal_supply`.
+  - Target item candidate: `coal` target `16`.
+- Metrics:
+  - Steps: 4.
+  - Status: failed.
+  - Duration: 5.484s.
+  - coal: 4 -> 4 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-coal-supply-20260615-121210.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":4,"initial_item_count":4,"max_steps":120,"target":16}`.
+- Result: Loop stopped: iron-gear-wheel mall assembler needs a iron-plate logistic line from entity-source:iron-plate:stone-furnace:15 (145 tiles); refusing repeated hand-carry between distant sites
+- Failure reason: iron-gear-wheel mall assembler needs a iron-plate logistic line from entity-source:iron-plate:stone-furnace:15 (145 tiles); refusing repeated hand-carry between distant sites
+- Next action: Plan or build the missing site-to-site logistic line before repeating the consumer loop.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 21:18:05 +09:00 - Loop 411
+- Part: skill
+- Goal: launch_rocket_program / bootstrap_power_pole_mall
+- Hypothesis: Running `bootstrap_power_pole_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `bootstrap_power_pole_mall` for up to 220 step(s).
+  - Tracked `small-electric-pole` from 1 to 21.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-power-pole-mall-20260615-121548.jsonl`.
+- Candidates:
+  - Selected goal/skill: `bootstrap_power_pole_mall`.
+  - Target item candidate: `small-electric-pole` target `20`.
+- Metrics:
+  - Steps: 27.
+  - Status: ok.
+  - Duration: 136.890s.
+  - small-electric-pole: 1 -> 21 (delta 20).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-power-pole-mall-20260615-121548.jsonl`.
+  - Metadata: `{"delta_item_count":20,"final_item_count":21,"initial_item_count":1,"max_steps":220,"target":20}`.
+- Result: Completed: build item mall is producing small-electric-pole and target reached: 21/20
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 21:18:24 +09:00 - Loop 412
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 260 step(s).
+  - Tracked `transport-belt` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260615-121821.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 2.781s.
+  - transport-belt: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260615-121821.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":260,"target":40}`.
+- Result: Loop stopped: iron-plate logistics line needs transport belts from the belt mall; refusing gear handcraft or iron-plate hand-carry
+- Failure reason: iron-plate logistics line needs transport belts from the belt mall; refusing gear handcraft or iron-plate hand-carry
+- Next action: Plan or build the missing site-to-site logistic line before repeating the consumer loop.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 21:24:16 +09:00 - Loop 413
+- Part: skill
+- Goal: launch_rocket_program / relocate_gear_belt_mall_to_iron_source
+- Hypothesis: Running `relocate_gear_belt_mall_to_iron_source` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `relocate_gear_belt_mall_to_iron_source` for up to 320 step(s).
+  - Tracked `transport-belt` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-gear-belt-mall-relocation-20260615-122059.jsonl`.
+- Candidates:
+  - Selected goal/skill: `relocate_gear_belt_mall_to_iron_source`.
+  - Target item candidate: `transport-belt` target `20`.
+- Metrics:
+  - Steps: 35.
+  - Status: ok.
+  - Duration: 197.875s.
+  - transport-belt: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-gear-belt-mall-relocation-20260615-122059.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":320,"target":20}`.
+- Result: Completed: gear/belt mall assemblers are relocated near the iron-plate source; next build local gear-to-belt logistics
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 21:24:29 +09:00 - Loop 414
+- Part: skill
+- Goal: launch_rocket_program / relocate_gear_belt_mall_to_iron_source
+- Hypothesis: Running `relocate_gear_belt_mall_to_iron_source` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `relocate_gear_belt_mall_to_iron_source` for up to 360 step(s).
+  - Tracked `transport-belt` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-gear-belt-mall-relocation-20260615-122427.jsonl`.
+- Candidates:
+  - Selected goal/skill: `relocate_gear_belt_mall_to_iron_source`.
+  - Target item candidate: `transport-belt` target `20`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 2.015s.
+  - transport-belt: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-gear-belt-mall-relocation-20260615-122427.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":360,"target":20}`.
+- Result: Completed: gear/belt mall assemblers are relocated near the iron-plate source; next build local gear-to-belt logistics
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 22:03:49 +09:00 - Context/Layout Repair
+- Event: Fixed compact gear/belt relocation to use resource-safe 4-tile spacing, connected-only power anchors, and coal supply readiness requiring an output chest/belt.
+- Validation: `pytest -q` passed 569 tests; live observe still needs pole stock before relocation can repair old units 73/74.
 

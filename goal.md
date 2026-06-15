@@ -21,6 +21,39 @@
 - Keep the no-mod LLM autopilot running under local/remote Qwen whenever possible; Codex should diagnose and add missing functions, not manually drive each gameplay loop.
 - Re-rank site layout candidates whenever newly researched, stocked, or automated items change factory geometry or ratios, including long-handed inserters, modules, beacons, better machines, rail logistics, and quality tiers.
 
+## System Roles
+
+### Strategic layer
+
+- Chooses objectives, priorities, bottleneck diagnoses, and safe layout candidate directions.
+- Uses local/remote Qwen, planner/rule fallbacks, and operator review where appropriate.
+- Must not directly mutate the Factorio world outside deterministic execution.
+
+### Deterministic execution layer
+
+- Performs concrete movement, mining, crafting, building, recipe, power, belt, inserter, validation, and rollback actions.
+- Owns safety checks, test coverage, raw action logs, and live mutation.
+- Must expose new Codex-added capabilities as normal selectable skills for the strategy layer.
+
+### Monitoring/UI layer
+
+- Shows current factory status, blockers, production targets, site/layout evidence, recent loops, confirmed insights, and token usage.
+- Supports safe manual inspection and operator intervention without replacing deterministic validation.
+
+### Codex role
+
+- Adds missing deterministic functions, tests, CLI hooks, docs, and UI support while the local agent is still incomplete.
+- Diagnoses live blockers and turns fixes into ordinary deterministic capabilities.
+- Does not become the long-term strategic player once Qwen can perform the loop.
+
+## Success Criteria
+
+- Correctness: first rocket is launched through the no-custom-mod automation path without relying on unsafe direct world mutation.
+- Sprint success: automation science production and lab feeding are stable, and `logistics` research completes from red science.
+- Safety: deterministic skills validate placement, avoid protected wreckage, avoid unvalidated remote logistics before rail, and keep rollback evidence where needed.
+- Observability: each meaningful loop has a concise note entry, raw logs are referenced by path, and confirmed reusable improvements are promoted to `insight.md`.
+- Maintainability: new capabilities are small, tested, logged, and exposed to the Qwen strategy layer rather than remaining operator-only shortcuts.
+
 ## Autonomy Roadmap
 
 - Bootstrap phase: Codex may add missing deterministic skills, planner checks, validation gates, trace exporters, and web UI controls because the local agent does not yet have enough tools to complete the rocket path alone.
@@ -62,7 +95,7 @@
 - Site safety: avoid starter resource patches, enemy pressure, disconnected power grids, preserved starting wreckage, and unvalidated remote logistics before rail.
 - New world setup: for future Nauvis starts, disable cliffs because they make compact factory placement and corridor planning unnecessarily brittle.
 
-## Learning Roadmap
+## Learning / Improvement Roadmap
 
 - Collect structured traces from LLM decisions, strategy outcomes, layout candidates, sandbox validation, notes, insights, and operator interventions.
 - Compare human/operator factory edits against the agent's previous site layout; accept them as reusable insights only when objective metrics improve.
