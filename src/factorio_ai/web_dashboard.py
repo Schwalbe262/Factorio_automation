@@ -2823,21 +2823,24 @@ def _agent_activity_svg(position: Any, target: Any) -> str:
 def _token_usage_panel(value: Any, lang: str) -> str:
     usage = value if isinstance(value, dict) else {}
     samples = usage.get("samples") if isinstance(usage.get("samples"), list) else []
+    basis = _token_usage_basis_description(lang)
     if not samples:
         return (
             "<section class=\"panel\">"
             f"<h2>{_t(lang, 'token_usage')}</h2>"
+            f"{basis}"
             f"<p class=\"muted\">{_t(lang, 'no_token_usage')}</p>"
             "</section>"
         )
     return (
         "<section class=\"panel\">"
         f"<h2>{_t(lang, 'token_usage')}</h2>"
+        f"{basis}"
         "<div class=\"metrics\">"
-        f"{_metric(_t(lang, 'latest_tokens'), _format_int(usage.get('latest_tokens')))}"
-        f"{_metric(_t(lang, 'total_delta_tokens'), _format_int(usage.get('total_delta_tokens')))}"
-        f"{_metric(_t(lang, 'latest_delta_tokens'), _format_int(usage.get('latest_delta_tokens')))}"
-        f"{_metric(_t(lang, 'weekly_quota'), _format_int_or_unknown(usage.get('weekly_quota_tokens')))}"
+        f"{_metric(_t(lang, 'latest_tokens'), _format_token_count(usage.get('latest_tokens')))}"
+        f"{_metric(_t(lang, 'total_delta_tokens'), _format_token_count(usage.get('total_delta_tokens')))}"
+        f"{_metric(_t(lang, 'latest_delta_tokens'), _format_token_count(usage.get('latest_delta_tokens')))}"
+        f"{_metric(_t(lang, 'weekly_quota'), _format_token_count_or_unknown(usage.get('weekly_quota_tokens')))}"
         f"{_metric(_t(lang, 'weekly_percent'), _format_percent_or_unknown(usage.get('latest_weekly_percent')))}"
         f"{_metric(_t(lang, 'sample_count'), _format_int(usage.get('sample_count')))}"
         f"{_metric(_t(lang, 'counter_resets'), _format_int(usage.get('counter_reset_count')))}"
@@ -2847,6 +2850,14 @@ def _token_usage_panel(value: Any, lang: str) -> str:
         f"{_token_usage_table(samples, lang)}"
         "</section>"
     )
+
+
+def _token_usage_basis_description(lang: str) -> str:
+    if lang == "ko":
+        text = "현재 Factorio Codex thread의 threads.tokens_used 기준"
+    else:
+        text = "Based on threads.tokens_used for the current Factorio Codex thread"
+    return f"<p class=\"muted\">{escape(text)}</p>"
 
 
 def _llm_decision_panel(value: Any, lang: str) -> str:
@@ -2988,8 +2999,8 @@ def _token_usage_svg(samples: list[Any]) -> str:
         f"<svg class=\"token-chart\" viewBox=\"0 0 {width} {height}\" role=\"img\" "
         "aria-label=\"Codex token usage line chart\">"
         f"{gridlines}"
-        f"<text x=\"{left}\" y=\"{top + plot_height - 4:.1f}\" fill=\"#9aa4af\" font-size=\"11\">{escape(_format_int(min_value))}</text>"
-        f"<text x=\"{left}\" y=\"14\" fill=\"#9aa4af\" font-size=\"11\">{escape(_format_int(max_value))}</text>"
+        f"<text x=\"{left}\" y=\"{top + plot_height - 4:.1f}\" fill=\"#9aa4af\" font-size=\"11\">{escape(_format_token_count(min_value))}</text>"
+        f"<text x=\"{left}\" y=\"14\" fill=\"#9aa4af\" font-size=\"11\">{escape(_format_token_count(max_value))}</text>"
         f"{axis_labels}"
         f"<polyline class=\"usage-line\" points=\"{' '.join(points)}\" />"
         f"{''.join(circles)}"
@@ -3006,10 +3017,10 @@ def _token_usage_table(samples: list[Any], lang: str) -> str:
             "<tr>"
             f"<td>{escape(_format_kst_timestamp(row.get('timestamp')))}</td>"
             f"<td>{escape(str(row.get('label') or ''))}</td>"
-            f"<td>{escape(_format_int(row.get('delta_tokens')))}</td>"
+            f"<td>{escape(_format_token_count(row.get('delta_tokens')))}</td>"
             f"<td>{escape(_format_percent_or_unknown(row.get('weekly_percent')))}</td>"
             f"<td>{escape(_format_token_rate_per_hour(row, previous))}</td>"
-            f"<td>{escape(_format_int(_token_usage_display_value(row)))}</td>"
+            f"<td>{escape(_format_token_count(_token_usage_display_value(row)))}</td>"
             "</tr>"
         )
     return (
@@ -3034,7 +3045,7 @@ def _format_token_rate_per_hour(row: dict[str, Any], previous: dict[str, Any] | 
     delta = _token_delta(row, previous)
     if delta is None:
         return ""
-    return _format_int(round(delta * 3600.0 / elapsed_seconds))
+    return _format_token_count(round(delta * 3600.0 / elapsed_seconds))
 
 
 def _token_usage_display_value(row: dict[str, Any]) -> int:
@@ -3223,6 +3234,26 @@ def _format_int_or_unknown(value: Any) -> str:
     if value is None or value == "":
         return "unknown"
     return _format_int(value)
+
+
+def _format_token_count(value: Any) -> str:
+    try:
+        number = int(value or 0)
+    except (TypeError, ValueError):
+        return "0"
+    sign = "-" if number < 0 else ""
+    absolute = abs(number)
+    if absolute >= 1_000_000_000:
+        return f"{sign}{absolute / 1_000_000_000:.1f}B"
+    if absolute >= 1_000_000:
+        return f"{sign}{absolute / 1_000_000:.1f}M"
+    return f"{number:,}"
+
+
+def _format_token_count_or_unknown(value: Any) -> str:
+    if value is None or value == "":
+        return "unknown"
+    return _format_token_count(value)
 
 
 def _format_percent_or_unknown(value: Any) -> str:

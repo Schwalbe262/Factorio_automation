@@ -12,6 +12,7 @@ from factorio_ai.web_dashboard import (
     _candidate_blueprint_response,
     _handle_dashboard_post_values,
     _site_blueprint_response,
+    _token_usage_panel,
     _token_usage_table,
     _token_usage_svg,
     build_dashboard_state,
@@ -729,6 +730,28 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn(">500<", html)
         self.assertIn("Weekly %", html)
         self.assertIn("2.5000%", html)
+
+    def test_token_usage_panel_describes_codex_thread_counter_basis(self):
+        html = _token_usage_panel(
+            {
+                "samples": [
+                    {
+                        "timestamp": "2026-06-13T00:00:00+00:00",
+                        "tokens_used": 1000,
+                        "delta_tokens": 0,
+                        "label": "sample",
+                    }
+                ],
+                "latest_tokens": 1000,
+                "total_delta_tokens": 0,
+                "latest_delta_tokens": 0,
+                "sample_count": 1,
+            },
+            "ko",
+        )
+
+        self.assertIn("현재 Factorio Codex thread", html)
+        self.assertIn("threads.tokens_used", html)
 
     def test_token_usage_table_uses_cumulative_tokens_after_counter_reset(self):
         html = _token_usage_table(

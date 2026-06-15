@@ -34,7 +34,7 @@ from .vanilla_gui import (
 )
 from .vanilla_perception import classify_bmp_file
 from .web_dashboard import FACTORIO_ROUTE, public_dashboard_urls, serve_dashboard
-from .token_usage import record_token_usage, token_usage_summary
+from .token_usage import record_current_codex_thread_usage, record_token_usage, token_usage_summary
 from .trace_archive import archive_training_traces, trace_archive_summary
 from .run_journal import run_journal_summary
 
@@ -333,6 +333,23 @@ def main(argv: list[str] | None = None) -> None:
     token_parser.add_argument("--label", default="")
     token_parser.add_argument("--source", default="codex")
     token_parser.add_argument("--timestamp")
+
+    current_token_parser = subparsers.add_parser(
+        "record-current-codex-thread-usage",
+        help="Append the current Factorio Codex thread tokens_used sample from the local Codex state DB",
+    )
+    current_token_parser.add_argument("--label", default="")
+    current_token_parser.add_argument("--source", default="codex_thread")
+    current_token_parser.add_argument("--timestamp")
+    current_token_parser.add_argument("--thread-id", help="Codex thread id to record; overrides cwd selection")
+    current_token_parser.add_argument(
+        "--state-db",
+        help=r"Codex state sqlite path; defaults to C:\Users\NEC\.codex\state_5.sqlite",
+    )
+    current_token_parser.add_argument(
+        "--cwd",
+        help=r"Thread cwd to match when --thread-id is omitted; defaults to the current working directory",
+    )
 
     subparsers.add_parser("token-usage-summary", help="Print the recorded Codex token usage summary")
     subparsers.add_parser("run-journal-summary", help="Print goal, loop note, and insight journal summary")
@@ -1004,6 +1021,19 @@ def main(argv: list[str] | None = None) -> None:
             timestamp=args.timestamp,
         )
         print_json({"ok": True, "sample": sample.to_dict()})
+        return
+
+    if args.command == "record-current-codex-thread-usage":
+        sample, thread = record_current_codex_thread_usage(
+            cfg.log_dir,
+            state_db_path=Path(args.state_db) if args.state_db else None,
+            cwd=args.cwd if args.cwd else Path.cwd(),
+            thread_id=args.thread_id,
+            label=args.label,
+            source=args.source,
+            timestamp=args.timestamp,
+        )
+        print_json({"ok": True, "sample": sample.to_dict(), "thread": thread.to_dict()})
         return
 
     if args.command == "token-usage-summary":
