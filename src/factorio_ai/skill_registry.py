@@ -29,6 +29,7 @@ IMPLEMENTED_SKILLS = {
     "build_gear_belt_mall_logistics": "GearBeltMallLogisticsSkill",
     "relocate_gear_belt_mall_to_iron_source": "GearBeltMallRelocationSkill",
     "build_iron_plate_logistic_line_to_gear_mall": "IronPlateLogisticLineToGearMallSkill",
+    "build_site_input_logistic_line": "SiteInputLogisticLineSkill",
     "build_starter_defense": "StarterDefenseSkill",
     "plan_factory_site": "FactoryLayoutImprovementSkill",
 }

@@ -1639,6 +1639,17 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(mall_config["target_item"], "transport-belt")
             self.assertEqual(mall_config["target"], 24)
             self.assertEqual(mall_config["max_steps"], 1111)
+            long_inserter_mall_config = controller._skill_run_config(
+                "bootstrap_build_item_mall",
+                target_count=12,
+                max_steps=1112,
+                target_item="long-handed-inserter",
+            )
+            self.assertIsNotNone(long_inserter_mall_config)
+            self.assertEqual(long_inserter_mall_config["goal"], "bootstrap_build_item_mall")
+            self.assertEqual(long_inserter_mall_config["target_item"], "long-handed-inserter")
+            self.assertEqual(long_inserter_mall_config["target"], 12)
+            self.assertEqual(long_inserter_mall_config["max_steps"], 1112)
             pole_mall_config = controller._skill_run_config(
                 "bootstrap_power_pole_mall",
                 target_count=18,

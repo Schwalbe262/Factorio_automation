@@ -49,6 +49,7 @@ from .planner import (
     ResearchAutomationSkill,
     ResearchTechnologySkill,
     SetupPowerSkill,
+    SiteInputLogisticLineSkill,
     StoneSupplySkill,
     StarterDefenseSkill,
 )
@@ -668,7 +669,16 @@ class FactorioController:
                 strategy=strategy,
             )
 
-        config = self._skill_run_config(selected, target_count=target_count, max_steps=max_steps)
+        strategy_target_item = _strategy_target_item(strategy) if selected == "bootstrap_build_item_mall" else None
+        strategy_target_count = target_count
+        if strategy_target_count is None and selected == "bootstrap_build_item_mall":
+            strategy_target_count = _int_or_none(strategy.get("target_count"))
+        config = self._skill_run_config(
+            selected,
+            target_count=strategy_target_count,
+            max_steps=max_steps,
+            target_item=strategy_target_item,
+        )
         if config is None:
             self._record_codex_wait_state(
                 objective,
@@ -1100,6 +1110,7 @@ class FactorioController:
         skill_name: str,
         target_count: int | None = None,
         max_steps: int | None = None,
+        target_item: str | None = None,
     ) -> dict[str, Any] | None:
         if skill_name == "produce_iron_plate":
             target = target_count or 10
@@ -1248,7 +1259,7 @@ class FactorioController:
             }
         if skill_name == "bootstrap_build_item_mall":
             target = target_count or 20
-            target_item = "transport-belt"
+            target_item = _strategy_target_item({"target_item": target_item}) or "transport-belt"
             return {
                 "skill": BuildItemMallSkill(target_item, target),
                 "target_item": target_item,
@@ -1308,6 +1319,16 @@ class FactorioController:
                 "goal": skill_name,
                 "max_steps": _max_steps(max_steps, 1200),
                 "log_prefix": "strategy-iron-plate-gear-mall-logistics",
+            }
+        if skill_name == "build_site_input_logistic_line":
+            target = target_count or 40
+            return {
+                "skill": SiteInputLogisticLineSkill(target),
+                "target_item": "transport-belt",
+                "target": target,
+                "goal": skill_name,
+                "max_steps": _max_steps(max_steps, 1200),
+                "log_prefix": "strategy-site-input-logistics",
             }
         if skill_name == "build_starter_defense":
             return {
@@ -2695,6 +2716,25 @@ def _int_or_none(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _strategy_target_item(strategy: dict[str, Any]) -> str | None:
+    item = str(strategy.get("target_item") or strategy.get("item") or "").strip()
+    if item in {
+        "transport-belt",
+        "inserter",
+        "long-handed-inserter",
+        "burner-inserter",
+        "firearm-magazine",
+        "gun-turret",
+        "burner-mining-drill",
+        "electric-mining-drill",
+        "stone-furnace",
+        "small-electric-pole",
+        "assembling-machine-1",
+    }:
+        return item
+    return None
 
 
 def _max_steps(value: int | None, default: int) -> int:

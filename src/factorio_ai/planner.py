@@ -5476,6 +5476,19 @@ def _build_position_blocker(
     return None
 
 
+def _entity_status_is(entity: dict[str, Any], status_name: str, status_code: int) -> bool:
+    if str(entity.get("status_name") or "") == status_name:
+        return True
+    try:
+        return int(entity.get("status")) == status_code
+    except (TypeError, ValueError):
+        return False
+
+
+def _entity_status_name_in(entity: dict[str, Any], names: set[str]) -> bool:
+    return str(entity.get("status_name") or "") in names
+
+
 def _find_iron_plate_logistic_line_to_gear_mall_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
     gear_layout = _find_gear_belt_mall_logistics_layout(observation)
     if gear_layout is None:
@@ -5508,6 +5521,256 @@ def _find_iron_plate_logistic_line_to_gear_mall_layout(observation: dict[str, An
             "entity": _inserter_near(observation, target_inserter_position),
         },
     }
+
+
+def _find_site_input_logistic_line_layout(
+    observation: dict[str, Any],
+    *,
+    item: str | None = None,
+) -> dict[str, Any] | None:
+    target_items = {
+        "iron-plate",
+        "copper-plate",
+        "iron-gear-wheel",
+        "copper-cable",
+        "electronic-circuit",
+        "automation-science-pack",
+        "logistic-science-pack",
+    }
+    if item:
+        target_items &= {item}
+    if not target_items:
+        return None
+
+    links = [link.to_dict() for link in estimate_logistics_links(observation)]
+    link_priority: dict[tuple[str, str], int] = {}
+    for link in links:
+        if not isinstance(link, dict) or link.get("status") not in {"route_needed", "missing_source"}:
+            continue
+        link_item = str(link.get("item") or "")
+        if link_item not in target_items:
+            continue
+        link_priority[(link_item, str(link.get("to_site") or ""))] = max(
+            link_priority.get((link_item, str(link.get("to_site") or "")), 0),
+            12 if link.get("status") == "route_needed" else 8,
+        )
+
+    candidates: list[dict[str, Any]] = []
+    for consumer in _site_input_consumer_entities(observation, target_items):
+        consumer_position = _position(consumer)
+        recipe = str(consumer.get("recipe") or consumer.get("recipe_name") or "")
+        recipe_obj = RECIPES.get(recipe)
+        if recipe_obj is None:
+            continue
+        for required_item in sorted(target_items & set(recipe_obj.ingredients)):
+            if entity_item_count(consumer, required_item) > 0 and not _entity_status_name_in(
+                consumer,
+                {"item_ingredient_shortage", "missing_required_fluid"},
+            ):
+                continue
+            source = _nearest_site_input_source(observation, required_item, consumer_position)
+            if source is None:
+                continue
+            source_position = _position(source)
+            if distance(source_position, consumer_position) < 6.0:
+                continue
+            if _site_input_local_route_observed(observation, required_item, source, consumer):
+                continue
+            endpoints = _site_input_line_endpoints(source, consumer)
+            segments = _iron_plate_line_segments(observation, endpoints["source_belt"], endpoints["target_belt"])
+            site_id = _consumer_site_id_for_entity(observation, consumer)
+            score = (
+                _site_input_item_priority(required_item)
+                + link_priority.get((required_item, site_id), 0)
+                + min(20.0, distance(source_position, consumer_position) / 8.0)
+            )
+            candidates.append(
+                {
+                    "item": required_item,
+                    "source": source,
+                    "consumer": consumer,
+                    "consumer_recipe": recipe,
+                    "consumer_site_id": site_id,
+                    "distance": round(distance(source_position, consumer_position), 1),
+                    "segments": segments,
+                    "source_inserter": {
+                        "position": endpoints["source_inserter"],
+                        "direction": endpoints["source_direction"],
+                        "entity": _inserter_near(observation, endpoints["source_inserter"]),
+                    },
+                    "target_inserter": {
+                        "position": endpoints["target_inserter"],
+                        "direction": endpoints["target_direction"],
+                        "entity": _inserter_near(observation, endpoints["target_inserter"]),
+                    },
+                    "score": score,
+                }
+            )
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: (float(row.get("score") or 0.0), -float(row.get("distance") or 0.0)), reverse=True)
+    return candidates[0]
+
+
+def _site_input_consumer_entities(observation: dict[str, Any], target_items: set[str]) -> list[dict[str, Any]]:
+    consumers: list[dict[str, Any]] = []
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict):
+            continue
+        if str(entity.get("name") or "") not in ASSEMBLER_ENTITY_NAMES:
+            continue
+        if entity.get("electric_network_connected") is False:
+            continue
+        recipe_name = str(entity.get("recipe") or entity.get("recipe_name") or "")
+        recipe = RECIPES.get(recipe_name)
+        if recipe is None or not (set(recipe.ingredients) & target_items):
+            continue
+        if recipe_name == "transport-belt":
+            continue
+        consumers.append(entity)
+    return consumers
+
+
+def _nearest_site_input_source(
+    observation: dict[str, Any],
+    item: str,
+    consumer_position: dict[str, float],
+) -> dict[str, Any] | None:
+    candidates: list[dict[str, Any]] = []
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict) or not isinstance(entity.get("position"), dict):
+            continue
+        if entity_item_count(entity, item) <= 0 and not _entity_produces_site_input_item(entity, item):
+            continue
+        if str(entity.get("name") or "") in ASSEMBLER_ENTITY_NAMES and entity.get("electric_network_connected") is False:
+            continue
+        candidates.append(entity)
+    return _nearest_to(candidates, consumer_position)
+
+
+def _entity_produces_site_input_item(entity: dict[str, Any], item: str) -> bool:
+    name = str(entity.get("name") or "")
+    recipe_name = str(entity.get("recipe") or entity.get("recipe_name") or "")
+    if recipe_name == item:
+        return True
+    if item in {"iron-plate", "copper-plate"} and name in {"stone-furnace", "steel-furnace", "electric-furnace"}:
+        return recipe_name == item
+    recipe = RECIPES.get(recipe_name)
+    return bool(recipe and item in recipe.products)
+
+
+def _site_input_local_route_observed(
+    observation: dict[str, Any],
+    item: str,
+    source: dict[str, Any],
+    consumer: dict[str, Any],
+) -> bool:
+    endpoints = _site_input_line_endpoints(source, consumer)
+    if not _entity_at_build_position(observation, "transport-belt", endpoints["target_belt"], radius=0.75):
+        return False
+    inserter = _inserter_near(observation, endpoints["target_inserter"])
+    if not isinstance(inserter, dict):
+        return False
+    return int(inserter.get("direction") or endpoints["target_direction"]) == int(endpoints["target_direction"])
+
+
+def _site_input_line_endpoints(source: dict[str, Any], consumer: dict[str, Any]) -> dict[str, Any]:
+    source_position = _position(source)
+    consumer_position = _position(consumer)
+    vector = _dominant_axis_vector(source_position, consumer_position)
+    source_radius = _site_input_endpoint_radius(source)
+    target_radius = _site_input_endpoint_radius(consumer)
+    target_side = {"x": -vector["x"], "y": -vector["y"]}
+    return {
+        "source_inserter": _offset_along_axis(source_position, vector, source_radius),
+        "source_belt": _offset_along_axis(source_position, vector, source_radius + 1.0),
+        "source_direction": _direction_from_axis_vector(vector),
+        "target_inserter": _offset_along_axis(consumer_position, target_side, target_radius),
+        "target_belt": _offset_along_axis(consumer_position, target_side, target_radius + 1.0),
+        "target_direction": _direction_from_axis_vector(vector),
+    }
+
+
+def _dominant_axis_vector(source: dict[str, float], target: dict[str, float]) -> dict[str, float]:
+    dx = float(target["x"]) - float(source["x"])
+    dy = float(target["y"]) - float(source["y"])
+    if abs(dx) >= abs(dy):
+        return {"x": 1.0 if dx >= 0 else -1.0, "y": 0.0}
+    return {"x": 0.0, "y": 1.0 if dy >= 0 else -1.0}
+
+
+def _offset_along_axis(origin: dict[str, float], vector: dict[str, float], amount: float) -> dict[str, float]:
+    return {
+        "x": round(float(origin["x"]) + float(vector["x"]) * amount, 3),
+        "y": round(float(origin["y"]) + float(vector["y"]) * amount, 3),
+    }
+
+
+def _site_input_endpoint_radius(entity: dict[str, Any]) -> float:
+    name = str(entity.get("name") or "")
+    if name in ASSEMBLER_ENTITY_NAMES:
+        return 2.0
+    if name in {"stone-furnace", "steel-furnace", "electric-furnace"}:
+        return 1.0
+    return 1.0
+
+
+def _direction_from_axis_vector(vector: dict[str, float]) -> int:
+    if abs(float(vector.get("x") or 0.0)) >= abs(float(vector.get("y") or 0.0)):
+        return EAST if float(vector.get("x") or 0.0) >= 0 else WEST
+    return SOUTH if float(vector.get("y") or 0.0) >= 0 else NORTH
+
+
+def _site_input_item_priority(item: str) -> int:
+    return {
+        "copper-plate": 98,
+        "iron-plate": 95,
+        "iron-gear-wheel": 92,
+        "copper-cable": 90,
+        "electronic-circuit": 86,
+        "automation-science-pack": 82,
+        "logistic-science-pack": 78,
+    }.get(item, 60)
+
+
+def _consumer_site_id_for_entity(observation: dict[str, Any], consumer: dict[str, Any]) -> str:
+    consumer_position = _position(consumer)
+    sites = [site.to_dict() for site in estimate_factory_sites(observation)]
+    candidates = [
+        site
+        for site in sites
+        if isinstance(site.get("position"), dict) and distance(site["position"], consumer_position) <= 3.5
+    ]
+    if not candidates:
+        return f"consumer:{consumer.get('unit_number')}"
+    candidates.sort(key=lambda site: distance(site["position"], consumer_position))
+    return str(candidates[0].get("site_id") or f"consumer:{consumer.get('unit_number')}")
+
+
+def _transport_belt_assembler_exists(observation: dict[str, Any]) -> bool:
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict) or str(entity.get("name") or "") not in ASSEMBLER_ENTITY_NAMES:
+            continue
+        if str(entity.get("recipe") or entity.get("recipe_name") or "") != "transport-belt":
+            continue
+        if entity.get("electric_network_connected") is False:
+            continue
+        if _entity_status_is(entity, "no_power", 3):
+            continue
+        return True
+    return False
+
+
+def _transport_belt_output_assembler(observation: dict[str, Any]) -> dict[str, Any] | None:
+    candidates = [
+        entity
+        for entity in observation.get("entities") or []
+        if isinstance(entity, dict)
+        and str(entity.get("name") or "") in ASSEMBLER_ENTITY_NAMES
+        and str(entity.get("recipe") or entity.get("recipe_name") or "") == "transport-belt"
+        and entity_item_count(entity, "transport-belt") > 0
+    ]
+    return _nearest_to(candidates, player_position(observation))
 
 
 def _find_gear_belt_mall_relocation_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
@@ -7363,6 +7626,187 @@ class IronPlateLogisticLineToGearMallSkill:
         return PlannerDecision(
             None,
             "iron-plate logistics line to the gear mall is built with belts and endpoint inserters",
+            done=True,
+        )
+
+
+class SiteInputLogisticLineSkill:
+    """Build a belt route for a repeated producer-to-consumer factory input."""
+
+    def __init__(self, target_segments: int = 40, item: str | None = None) -> None:
+        self.target_segments = target_segments
+        self.item = item
+        self.research_skill = ResearchAutomationSkill()
+
+    def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
+        player = player_position(observation)
+        if not _automation_researched(observation):
+            decision = self.research_skill.next_action(observation)
+            if decision.done:
+                return PlannerDecision({"type": "wait", "ticks": 120}, "wait for automation unlock observation to settle")
+            return decision
+
+        if not _transport_belt_assembler_exists(observation):
+            return PlannerDecision(
+                None,
+                "site input logistics need automated transport-belt production before building repeated site-to-site routes",
+            )
+
+        layout = _find_site_input_logistic_line_layout(observation, item=self.item)
+        if layout is None:
+            return PlannerDecision(None, "no executable repeated site input logistics route was found")
+
+        belt_assembler = _transport_belt_output_assembler(observation)
+        if inventory_count(observation, "transport-belt") <= 0:
+            if isinstance(belt_assembler, dict) and entity_item_count(belt_assembler, "transport-belt") > 0:
+                position = _position(belt_assembler)
+                if distance(player, position) > 20:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": position},
+                        "move near belt mall output to collect transport belts for site input logistics",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "take",
+                        "item": "transport-belt",
+                        "count": min(entity_item_count(belt_assembler, "transport-belt"), max(1, self.target_segments)),
+                        "unit_number": belt_assembler.get("unit_number"),
+                        "name": belt_assembler.get("name") or "assembling-machine-1",
+                        "position": position,
+                    },
+                    "take transport belts from the belt mall as construction material for site input logistics",
+                )
+            return PlannerDecision(
+                None,
+                "site input logistics needs transport belts from the belt mall; refusing hand-crafted belts or item shuttle",
+            )
+
+        protected_units = {
+            int(entity.get("unit_number"))
+            for entity in (layout.get("source"), layout.get("consumer"))
+            if isinstance(entity, dict) and entity.get("unit_number") is not None
+        }
+        for segment in layout["segments"]:
+            existing = segment.get("entity")
+            if isinstance(existing, dict):
+                if int(existing.get("direction") or segment["direction"]) != int(segment["direction"]):
+                    position = _position(existing)
+                    if distance(player, position) > 4.5:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": _stand_position(position, offset=1.5)},
+                            "move within reach of misoriented site input logistics belt",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "mine",
+                            "unit_number": existing.get("unit_number"),
+                            "name": "transport-belt",
+                            "position": position,
+                        },
+                        "remove misoriented transport belt from the site input logistics line",
+                    )
+                continue
+            blocker = _belt_line_position_blocker(
+                observation,
+                segment["position"],
+                protected_unit_numbers=protected_units,
+            )
+            if blocker is not None:
+                blocker_position = _position(blocker)
+                if distance(player, blocker_position) > 8:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": blocker_position},
+                        f"move near blocking {blocker.get('name')} before extending site input logistics belt",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "unit_number": blocker.get("unit_number"),
+                        "name": blocker.get("name"),
+                        "position": blocker_position,
+                    },
+                    f"clear blocking {blocker.get('name')} before extending site input logistics belt",
+                )
+            position = segment["position"]
+            if distance(player, position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position, offset=3.0)},
+                    "move near next site input logistics belt segment",
+                )
+            return PlannerDecision(
+                {
+                    "type": "build",
+                    "name": "transport-belt",
+                    "position": position,
+                    "direction": segment["direction"],
+                    "allow_nearby": False,
+                },
+                f"extend {layout['item']} site input belt without player item shuttle",
+            )
+
+        for spec, label in [
+            (layout["source_inserter"], "site source output inserter"),
+            (layout["target_inserter"], "site consumer input inserter"),
+        ]:
+            inserter = spec.get("entity")
+            if isinstance(inserter, dict):
+                if int(inserter.get("direction") or 0) != int(spec["direction"]):
+                    position = _position(inserter)
+                    if distance(player, position) > 4.5:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": _stand_position(position, offset=1.5)},
+                            f"move within reach of misoriented {label}",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "mine",
+                            "unit_number": inserter.get("unit_number"),
+                            "name": inserter.get("name") or "inserter",
+                            "position": position,
+                        },
+                        f"remove misoriented {label} before rebuilding the site input endpoint",
+                    )
+                continue
+            item_name = _available_logistics_line_inserter_item(observation)
+            if item_name is None:
+                reusable = _find_relocatable_inserter_for_iron_plate_line(observation, spec["position"])
+                if reusable is not None:
+                    position = _position(reusable)
+                    if distance(player, position) > 4.5:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": _stand_position(position, offset=1.5)},
+                            f"move within reach of reusable inserter for {label}",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "mine",
+                            "unit_number": reusable.get("unit_number"),
+                            "name": reusable.get("name") or "inserter",
+                            "position": position,
+                        },
+                        f"relocate existing inserter for {label} instead of hand-crafting gears",
+                    )
+                return PlannerDecision(None, f"missing inserter for {label}; refusing hand-crafted gear workaround")
+            position = spec["position"]
+            if distance(player, position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position, offset=3.0)},
+                    f"move near {label} position",
+                )
+            return PlannerDecision(
+                {
+                    "type": "build",
+                    "name": item_name,
+                    "position": position,
+                    "direction": spec["direction"],
+                    "allow_nearby": False,
+                },
+                f"place {label} for automated {layout['item']} delivery",
+            )
+
+        return PlannerDecision(
+            None,
+            f"{layout['item']} site input logistics line is built with belts and endpoint inserters",
             done=True,
         )
 

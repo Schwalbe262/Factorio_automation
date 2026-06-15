@@ -1,6 +1,6 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-15 13:51 KST
+Last updated: 2026-06-15 14:19 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
@@ -139,6 +139,12 @@ Latest continuation after Part 105:
   - The web dashboard candidate cards now render a `Build items` row next to `Unlock-aware`.
   - Live read-only smoke: current no-mod state reports `long-handed-inserter` as `available=true`, `recipe_unlocked=true`, `stock=0`, `automated=false`; compact Qwen payload preserves that state and the long-handed green-circuit candidate's missing build items.
   - Related verification: `pytest -q tests/test_planner.py tests/test_slurm_worker.py tests/test_web_dashboard.py` -> `220 passed`; full verification `pytest -q` -> `503 passed`.
+- Part 113 turns unlock-aware layout supply and repeated site input gaps into executable strategy paths:
+  - `long-handed-inserter` is now part of build-item supply planning only when actually available by research, recipe unlock, stock, or an existing assembler.
+  - Qwen/heuristic `bootstrap_build_item_mall` decisions can preserve `target_item=long-handed-inserter`, and the controller passes that target into `BuildItemMallSkill` instead of always defaulting to transport belts.
+  - `SiteInputLogisticLineSkill` builds general producer-to-consumer belt routes for repeated inputs such as copper plates after transport-belt production exists; before belt automation, strategy routes the issue to `build_gear_belt_mall_logistics`.
+  - The gear/belt mall's iron-plate route remains on the specialized `build_iron_plate_logistic_line_to_gear_mall` path, and generic site input logic excludes build-item mall iron/gear missing-source noise so target smelting deficits can still preempt layout diagnostics.
+  - Full verification: `PYTHONPATH=src pytest -q` -> `509 passed`.
 
 Part 64 introduced:
 

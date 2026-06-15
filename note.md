@@ -7266,3 +7266,31 @@
 - Next action: Commit/push Part 112, then continue toward deterministic site-to-site logistics correction.
 - Token usage: 14,325,479 cumulative Codex tokens / weekly quota unavailable
 
+## 2026-06-15 14:19:12 +09:00 - Loop 335
+
+- Part: unlock-aware layout execution targets and general site input logistics
+- Goal: Make newly usable long-handed inserters affect not only layout candidate ranking but also build-item automation targets, and replace diagnostic-only repeated site input gaps with executable no-hand-carry logistics routes.
+- Hypothesis: If `long-handed-inserter` is treated as a build-item supply target only after it is actually available, Qwen can choose the improved layout without confusing recipe unlock with build readiness. If general producer-to-consumer input links have a deterministic executor, strategy can move beyond `plan_factory_site` while still refusing to build repeated site-to-site paths before transport belts are automated.
+- Actions:
+  - Added `SiteInputLogisticLineSkill` for repeated factory inputs such as copper plates, copper cable, gears, circuits, and science packs.
+  - Made the site input executor require Automation plus an existing transport-belt assembler, take belts from belt mall output when inventory is empty, and refuse hand-crafted belts or item shuttle workarounds.
+  - Added `build_site_input_logistic_line` to the skill catalog, skill registry, and controller strategy runner.
+  - Updated strategy guardrails so missing repeated site inputs route to `build_gear_belt_mall_logistics` before belt automation and to `build_site_input_logistic_line` after belt automation.
+  - Preserved the existing specialized `build_iron_plate_logistic_line_to_gear_mall` path for gear/belt mall iron inputs and excluded build-item mall iron/gear missing-source noise from the generic site input guard.
+  - Added `long-handed-inserter` to build-item supply planning when research, recipe unlock, stock, or assembler evidence makes it actually available.
+  - Preserved `target_item=long-handed-inserter` through normalized Qwen decisions and controller `_skill_run_config`, so `bootstrap_build_item_mall` can build a long-handed inserter mall instead of defaulting to transport belts.
+  - Updated handoff documentation.
+- Candidates:
+  - New executable strategy skill: `build_site_input_logistic_line`.
+  - New build-item target path: `bootstrap_build_item_mall` with `target_item=long-handed-inserter`.
+  - Belt prerequisite path before site-to-site routes: `build_gear_belt_mall_logistics`.
+- Metrics:
+  - Targeted tests: 10 passed for site input executor, strategy routing, long-handed target preservation, and controller config.
+  - Related suite: `350 passed in 25.12s` for planner, strategy, controller, Slurm payload, and web dashboard tests.
+  - Full test suite: `509 passed in 25.70s`.
+  - Files updated: planner, strategy, controller, skill registry, planner/strategy/controller tests, handoff docs.
+- Result: Long-handed inserters are automatically considered by layout optimization and now feed into an executable supply target when missing; repeated site input gaps no longer stop at diagnostic planning once belt automation exists.
+- Failure reason: No failing tests remain. Live mutation was not run in this loop; verification is code-level and unit/integration-test based.
+- Next action: Commit/push Part 113, then use the next live strategy/autopilot cycle to validate whether current copper/gear/cable input gaps select the new executor without moving items by hand.
+- Token usage: 14,842,895 cumulative Codex tokens / weekly quota unavailable; delta since Loop 334 record approximately 517,416 tokens.
+

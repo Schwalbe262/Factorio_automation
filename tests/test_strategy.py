@@ -1043,10 +1043,52 @@ class StrategyTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(result["selected_skill"], "plan_factory_site")
+        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
         self.assertEqual(result["guardrail_adjusted"]["from"], "bootstrap_build_item_mall")
-        self.assertIn("site-to-site logistic line", result["blockers"])
+        self.assertIn("transport-belt automation before site input line", result["blockers"])
         self.assertIn("hand_carry_seed_risk=true", result["evidence"])
+
+    def test_reconcile_builds_site_input_line_when_belt_automation_ready(self):
+        entities = _distant_copper_source_and_science_consumer_entities()
+        entities.append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 300,
+                "recipe": "transport-belt",
+                "position": {"x": 20, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {"1": {"transport-belt": 8}},
+            }
+        )
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 50,
+                "reason": "Layout can be improved.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {},
+                "entities": entities,
+                "resources": [{"name": "copper-ore", "position": {"x": 0, "y": 0}}],
+                "research": {
+                    "technologies": {
+                        "automation": {"researched": True},
+                        "logistics": {"researched": True},
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(result["selected_skill"], "build_site_input_logistic_line")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertIn("site input logistic line", result["blockers"])
+        self.assertIn("transport_belt_automation_ready=true", result["evidence"])
 
     def test_reconcile_promotes_layout_planning_to_actionable_target_deficit(self):
         result = reconcile_strategy_decision(
@@ -1184,7 +1226,7 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "research_logistics")
         self.assertEqual(result["guardrail_adjusted"]["to"], "research_logistics")
 
-    def test_reconcile_keeps_plan_site_for_confirmed_manual_site_logistics_issue(self):
+    def test_reconcile_routes_confirmed_manual_site_logistics_to_belt_prerequisite(self):
         result = reconcile_strategy_decision(
             {
                 "selected_skill": "plan_factory_site",
@@ -1210,8 +1252,9 @@ class StrategyTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(result["selected_skill"], "plan_factory_site")
-        self.assertNotIn("guardrail_adjusted", result)
+        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertIn("transport-belt automation before site input line", result["blockers"])
 
     def test_reconcile_promotes_post_logistics_diagnostic_plan_to_executable_heuristic_step(self):
         result = reconcile_strategy_decision(
@@ -1500,6 +1543,7 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(any(item["name"] == "bootstrap_electric_mining_drill_mall" for item in catalog))
         self.assertTrue(any(item["name"] == "relocate_gear_belt_mall_to_iron_source" for item in catalog))
         self.assertTrue(any(item["name"] == "build_iron_plate_logistic_line_to_gear_mall" for item in catalog))
+        self.assertTrue(any(item["name"] == "build_site_input_logistic_line" for item in catalog))
         self.assertTrue(any(item["name"] == "research_logistics" for item in catalog))
         self.assertTrue(any(item["name"] == "build_starter_defense" for item in catalog))
         self.assertTrue(any(item["name"] == "build_rail_supply_line" for item in catalog))
@@ -1535,6 +1579,10 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(
             next(item for item in catalog if item["name"] == "build_iron_plate_logistic_line_to_gear_mall")["executor"],
             "IronPlateLogisticLineToGearMallSkill",
+        )
+        self.assertEqual(
+            next(item for item in catalog if item["name"] == "build_site_input_logistic_line")["executor"],
+            "SiteInputLogisticLineSkill",
         )
         self.assertTrue(all("llm_scope" in item for item in catalog))
 
@@ -1635,14 +1683,30 @@ class StrategyTests(unittest.TestCase):
                 "inventory": {"iron-plate": 100, "copper-plate": 100},
                 "entities": [],
                 "resources": [],
+                "recipe_unlocks": {"long-handed-inserter": {"enabled": True}},
             },
         )
         supply = payload["build_item_supply"]
         self.assertEqual(supply["recommended_skill"], "bootstrap_build_item_mall")
         items = {item["item"]: item for item in supply["items"]}
         self.assertTrue(items["transport-belt"]["needs_mall"])
+        self.assertTrue(items["long-handed-inserter"]["needs_mall"])
         self.assertTrue(items["assembling-machine-1"]["needs_mall"])
         self.assertTrue(items["electric-mining-drill"]["needs_mall"])
+
+    def test_normalize_preserves_build_item_target(self):
+        result = normalize_strategy_response(
+            {
+                "selected_skill": "bootstrap_build_item_mall",
+                "target_item": "long-handed-inserter",
+                "target_count": 12,
+                "priority": 80,
+            }
+        )
+
+        self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(result["target_item"], "long-handed-inserter")
+        self.assertEqual(result["target_count"], 12)
 
     def test_strategy_payload_exposes_automation_policy_context(self):
         payload = make_strategy_payload(
@@ -1673,8 +1737,40 @@ class StrategyTests(unittest.TestCase):
                 },
             },
         )
-        self.assertEqual(result["selected_skill"], "plan_factory_site")
-        self.assertIn("site-to-site logistic line", result["blockers"])
+        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
+        self.assertIn("transport-belt automation before site input line", result["blockers"])
+
+    def test_heuristic_builds_site_input_line_after_belt_automation_ready(self):
+        entities = _distant_copper_source_and_science_consumer_entities()
+        entities.append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 300,
+                "recipe": "transport-belt",
+                "position": {"x": 20, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {"1": {"transport-belt": 8}},
+            }
+        )
+
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            {
+                "inventory": {"iron-plate": 50, "copper-plate": 50},
+                "entities": entities,
+                "resources": [{"name": "copper-ore", "position": {"x": 0, "y": 0}}],
+                "research": {
+                    "technologies": {
+                        "automation": {"researched": True},
+                        "logistics": {"researched": True},
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(result["selected_skill"], "build_site_input_logistic_line")
+        self.assertIn("site input logistic line", result["blockers"])
+        self.assertIn("transport_belt_automation_ready=true", result["evidence"])
 
     def test_strategy_payload_exposes_research_daisy_chain_context(self):
         payload = make_strategy_payload(

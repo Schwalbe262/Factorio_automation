@@ -582,3 +582,12 @@
 - After: Planner candidates, Slurm/Qwen compact payloads, and the web dashboard preserve `used_unlocked_item_state` plus `build_item_supply`; the live long-handed green-circuit candidate reports `long-handed-inserter x7` missing while still showing the tool as `recipe_unlocked=true`, `stock=0`, `automated=false`.
 - Evidence: `{"targeted_tests":"220 passed","full_tests":"503 passed","live_candidates":["green-circuit-long-handed-3-cable-2-circuit-cell","unlock-aware-site-rerank-long-handed-inserter"],"live_state":{"long-handed-inserter":{"available":true,"researched":false,"recipe_unlocked":true,"stock":0,"automated":false}},"live_missing":{"long-handed-inserter":7,"transport-belt":39,"assembling-machine-1":5,"inserter":5,"iron-chest":2},"ui":"Build items row renders unlocked_tool_shortage"}`
 - Remaining risk: This is planning and monitoring visibility; a deterministic executor still needs to supply long-handed inserters and safely rebuild selected sites after validation.
+
+## 2026-06-15 14:19:12 +09:00 - Insight 71
+
+- Source loop: Loop 335
+- Improvement: Unlock-aware layout optimization can now create the correct build-item automation target for long-handed inserters, and repeated site input gaps can route to an executable logistics skill after belt automation.
+- Before: Long-handed inserters appeared in layout candidates and missing build-item metadata, but `bootstrap_build_item_mall` execution defaulted to transport belts unless target context was manually supplied. General copper/cable/circuit input gaps still risked stopping at `plan_factory_site`.
+- After: Normalized Qwen decisions and heuristic fallbacks preserve `target_item=long-handed-inserter`; controller `_skill_run_config` runs `BuildItemMallSkill("long-handed-inserter", ...)`; `build_site_input_logistic_line` builds repeated input belt routes only after a transport-belt assembler exists, while pre-belt cases route to `build_gear_belt_mall_logistics`.
+- Evidence: `{"targeted_tests":"10 passed","related_suite":"350 passed","full_tests":"509 passed","strategy_paths":["bootstrap_build_item_mall target_item=long-handed-inserter","build_gear_belt_mall_logistics before belt automation","build_site_input_logistic_line after belt automation"],"executor":"SiteInputLogisticLineSkill"}`
+- Remaining risk: Live mutation was not run in this loop; the next live strategy/autopilot cycle should verify that current map input gaps select the new executor and that path placement is buildable in the observed terrain.

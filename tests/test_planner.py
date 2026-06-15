@@ -22,6 +22,7 @@ from factorio_ai.planner import (
     ResearchAutomationSkill,
     ResearchTechnologySkill,
     SetupPowerSkill,
+    SiteInputLogisticLineSkill,
     StoneSupplySkill,
     StarterDefenseSkill,
     factory_layout_issues,
@@ -4022,6 +4023,98 @@ class PlannerTests(unittest.TestCase):
 
         self.assertIsNone(decision.action)
         self.assertIn("refusing gear handcraft", decision.reason)
+
+    def test_site_input_logistic_line_takes_belts_from_belt_mall_output(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt", inventory={"transport-belt": 8}),
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": -8, "y": 8},
+                    "recipe": "copper-plate",
+                    "inventories": {"3": {"copper-plate": 20}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 951,
+                    "position": {"x": 8, "y": 8},
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = SiteInputLogisticLineSkill(20, item="copper-plate").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "transport-belt")
+        self.assertEqual(decision.action["unit_number"], 901)
+        self.assertNotEqual(decision.action.get("item"), "copper-plate")
+
+    def test_site_input_logistic_line_places_belt_without_item_handcarry(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 4}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt"),
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": -8, "y": 8},
+                    "recipe": "copper-plate",
+                    "inventories": {"3": {"copper-plate": 20}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 951,
+                    "position": {"x": 8, "y": 8},
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = SiteInputLogisticLineSkill(20, item="copper-plate").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertNotEqual(decision.action.get("item"), "copper-plate")
+
+    def test_site_input_logistic_line_refuses_without_belt_automation(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 4}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": -8, "y": 8},
+                    "recipe": "copper-plate",
+                    "inventories": {"3": {"copper-plate": 20}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 951,
+                    "position": {"x": 8, "y": 8},
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = SiteInputLogisticLineSkill(20, item="copper-plate").next_action(obs)
+
+        self.assertIsNone(decision.action)
+        self.assertIn("automated transport-belt production", decision.reason)
 
     def test_expansion_prefers_high_coverage_patch_drill_position(self):
         obs = base_observation()
