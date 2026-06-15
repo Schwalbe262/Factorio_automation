@@ -8,6 +8,7 @@
 \- Factory sites now fold dedicated intermediate assemblers into parent sites via `subitems`, such as `iron-gear-wheel` under `transport-belt`.
 \- Root current Markdown files now use the escaped `md/` marker format.
 \- Slurm scheduler mode defaults to `rtx3090`/`r1jae262`; layout improvement requests use `a6000ada,a6000` candidates and submit the ready single `gpu_model`.
+\- Scheduler layout tasks now fail visibly if requested vLLM does not become ready, and the idle loop will not submit a second layout task while one is active.
 \- Live map: belt mall output inserter now points assembler-to-chest and produced belts into chest; boiler coal route reached about `x=0.5` but still needs more belts to reach boiler at `x=-43.5`.
 
 \## Current objective
@@ -33,19 +34,19 @@
 \## Last validation
 
 \- `py_compile`, focused planner/monitor/web/slurm tests (`335`), full `pytest -q` (`612`) passed.
-\- Full `pytest -q` passed: `636 passed`.
-\- Live validation: scheduler layout status ready with candidates `a6000ada,a6000`, selected `a6000`, free ready GPUs `2`; output inserter `708` has pickup at assembler and drop at chest.
-\- Token sample recorded: `235,845,416` Factorio Codex thread tokens; delta `10,317,368`; weekly quota unknown.
+\- Full `pytest -q` passed: `639 passed`.
+\- Live validation: layout scheduler selected `a6000`; task `148` confirmed remote `factorio-ai` env has `vllm` command/module, but recent layout tasks still fell back with `Connection refused`.
+\- Token sample recorded: `253,817,535` Factorio Codex thread tokens; delta `17,972,119`; weekly quota unknown.
 
 \## Current blocker
 
-\- Idle layout loop is not restarted in this closeout; scheduler route now targets A6000 candidates, but live gameplay work should resume deliberately.
+\- Idle layout loop is stopped; vLLM starts too slowly or exits before `/v1/models` is ready, so restarting now would submit failed layout tasks.
 
 \## Next steps
 
-1\. Push Part 129 branch if the current session has not already pushed it.
-2\. Refresh/restart the dashboard process if it is still serving old code.
-3\. Ask scheduler side to use absolute task.sh paths inside `srun`/wrapper, then restart `run-no-mod-idle-layout-loop`.
+1\. Inspect scheduler vLLM logs for tasks `145`/`147` or run a short startup probe to find why `/v1/models` stays unavailable.
+2\. Increase/fix vLLM startup on scheduler A6000, then restart `run-no-mod-idle-layout-loop`.
+3\. Refresh/restart the dashboard process if it is still serving old code.
 4\. Fuel iron/coal burner drills as needed, refill belt mall, then continue `connect_coal_fuel_feed` until boiler receives belt-fed coal.
 5\. Continue red science/logistics research once fuel, belt output, and site input routes are stable.
 
@@ -72,7 +73,7 @@
 \- Added route corner belt direction, endpoint inserter role checks, and source endpoint protection for site-input logistics.
 \- Fixed site-input/iron-line inserter pickup/drop semantics, corrected integer-center coal drill output tiles, and stopped boiler feed from treating the next route belt as the coal source.
 \- Added role-aware dogleg site-input routes and fixed `NORTH=0` direction comparisons so north-facing belts/inserters are not treated as missing direction.
-\- Fixed scheduler task payload size, A6000 layout routing, belt mall output inserter direction, belt-chest consumption for boiler feed, and local gear-output bootstrap for belt/inserter infrastructure.
+\- Fixed scheduler task payload size, A6000 layout routing, vLLM startup failure reporting, active layout task throttling, belt mall output direction, belt-chest consumption, and local gear-output bootstrap.
 
 \## Risks and gotchas
 
