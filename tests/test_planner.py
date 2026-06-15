@@ -3391,6 +3391,29 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "set_recipe")
         self.assertEqual(decision.action["recipe"], "transport-belt")
 
+    def test_build_item_mall_clears_retooled_small_pole_assembler_before_belts(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"small-electric-pole": 12, "iron-plate": 10, "iron-gear-wheel": 10}
+        obs["entities"].append(mall_assembler(recipe="small-electric-pole", inventory={"copper-cable": 4}))
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "copper-cable")
+        self.assertEqual(decision.action["unit_number"], 901)
+        self.assertIn("before setting transport-belt", decision.reason)
+
+    def test_build_item_mall_retools_stocked_small_pole_assembler_for_belts(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"small-electric-pole": 12, "iron-plate": 10, "iron-gear-wheel": 10}
+        obs["entities"].append(mall_assembler(recipe="small-electric-pole", inventory={}))
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "set_recipe")
+        self.assertEqual(decision.action["recipe"], "transport-belt")
+        self.assertEqual(decision.action["unit_number"], 901)
+
     def test_build_item_mall_recovers_unassigned_assembler_outside_planned_site(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"iron-plate": 10, "iron-gear-wheel": 10}

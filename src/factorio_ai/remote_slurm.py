@@ -1133,8 +1133,7 @@ def _request_task_via_attached_srun(
         f"cd {shlex.quote(remote_dir + '/factorio-ai')} && "
         f"python -m factorio_ai.slurm_worker --task {shlex.quote(task_path)} --result {shlex.quote(result_path)}"
     )
-    output = _run_remote(
-        f"""set -euo pipefail
+    script = f"""set -euo pipefail
 REMOTE_DIR={json.dumps(remote_dir)}
 JOB_NAME={json.dumps(cfg.job_name)}
 TASK_NAME={json.dumps(task_name)}
@@ -1148,12 +1147,23 @@ if [[ -z "$JOB_ID" ]]; then
 fi
 TASK_PATH="$REMOTE_DIR/$TASK_NAME"
 RESULT_PATH="$REMOTE_DIR/$RESULT_NAME"
-mv "$REMOTE_TEMP" "$TASK_PATH"
-rm -f "$RESULT_PATH"
+if [[ -f "$RESULT_PATH" ]]; then
+  cat "$RESULT_PATH"
+  rm -f "$TASK_PATH" "$RESULT_PATH" "$REMOTE_TEMP"
+  exit 0
+fi
+if [[ -f "$REMOTE_TEMP" ]]; then
+  mv "$REMOTE_TEMP" "$TASK_PATH"
+elif [[ ! -f "$TASK_PATH" ]]; then
+  echo "__ERROR__:attached task file missing for retry: $TASK_NAME"
+  exit 3
+fi
 srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/null
 cat "$RESULT_PATH"
 rm -f "$TASK_PATH" "$RESULT_PATH"
-""",
+"""
+    output = _run_remote_attached_task_with_retry(
+        script,
         cfg,
         timeout=timeout_seconds or cfg.task_timeout_seconds,
     )
@@ -1171,6 +1181,43 @@ rm -f "$TASK_PATH" "$RESULT_PATH"
     if not result.get("ok"):
         raise RemoteSlurmError(f"attached AUTO task failed: {result}")
     return result
+
+
+def _run_remote_attached_task_with_retry(script: str, cfg: RemoteSlurmConfig, *, timeout: int) -> str:
+    attempts = _int_env("FACTORIO_AI_SLURM_ATTACHED_TASK_ATTEMPTS", 2, 1)
+    retry_delay = _int_env("FACTORIO_AI_SLURM_ATTACHED_TASK_RETRY_DELAY_SECONDS", 2, 0)
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return _run_remote(script, cfg, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if attempt >= attempts or not _attached_task_error_retryable(exc):
+                raise
+            if retry_delay:
+                time.sleep(retry_delay)
+    assert last_error is not None
+    raise last_error
+
+
+def _attached_task_error_retryable(exc: Exception) -> bool:
+    if isinstance(exc, (subprocess.TimeoutExpired, TimeoutError)):
+        return True
+    message = str(exc).lower()
+    retryable_markers = (
+        "temporarily",
+        "timed out",
+        "timeout",
+        "connection reset",
+        "connection closed",
+        "connection timed out",
+        "kex_exchange_identification",
+        "resource temporarily unavailable",
+        "step creation temporarily disabled",
+        "unable to create step",
+        "job step",
+    )
+    return isinstance(exc, RemoteSlurmError) and any(marker in message for marker in retryable_markers)
 
 
 def resolve_remote_dir(cfg: RemoteSlurmConfig | None = None) -> str:

@@ -618,3 +618,12 @@
 - After: `SetupPowerSkill` can take up to 5 surplus fuel from an existing fuel source or insert up to 5 carried fuel into the boiler, labels the action with `emergency_bootstrap`, refuses direct resource mining, and only runs when a critical powered factory exists and the normal boiler coal feed route is blocked by missing route materials. Live read-only now returns `move near surplus fuel source for one-time emergency power bootstrap`.
 - Evidence: `{"targeted_tests":"6 passed","related_suite":"328 passed","full_tests":"518 passed","live_action":{"type":"move_to","position":{"x":113.0,"y":18.0}},"live_reason":"move near surplus fuel source for one-time emergency power bootstrap","fuel_cap":5,"direct_resource_mining":false}`
 - Remaining risk: This is a bounded bootstrap exception, not a steady-state logistics solution. After power is restored, the agent must build transport-belt automation and the boiler coal feed route.
+
+## 2026-06-15 15:20:09 +09:00 - Insight 75
+
+- Source loop: Loop 341
+- Improvement: Qwen attached strategy calls now retry transient task SSH/srun failures, and the live transport-belt mall blocker has an executable retooling step using the existing stocked small-electric-pole mall assembler.
+- Before: A required-LLM no-mod strategy step failed before mutation with `subprocess.TimeoutExpired` during attached Slurm SSH. After a one-step emergency coal insert, `BuildItemMallSkill("transport-belt")` still returned `cannot find a powered or wireable site for the first build item mall assembler` despite powered unit 318 already existing.
+- After: Attached strategy task execution retries retryable timeouts/errors and can reuse an already moved remote task file. `BuildItemMallSkill("transport-belt")` can retask a powered small-electric-pole mall assembler when pole stock is sufficient, clearing incompatible contents before `set_recipe`.
+- Evidence: `{"tests":"521 passed","slurm_retry_test":"request_strategy TimeoutExpired then success","live_before":"transport-belt mall action=null; cannot find powered or wireable site","live_after":{"action":"take copper-cable","unit_number":318,"count":4,"next":"set recipe to transport-belt"},"live_llm_strategy":"Qwen plan_factory_site guardrailed to setup_power; AI/server inserted coal x2 without moving r1jae"}`
+- Remaining risk: The live retooling action has not yet been executed after the patch. Boiler fuel is still not steady-state; the next loop must retool unit 318, get belt output, and then build the boiler coal feed route.

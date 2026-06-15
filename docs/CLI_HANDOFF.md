@@ -163,6 +163,18 @@ Latest continuation after Part 105:
   - Live read-only verification: current action is `move_to {x:113,y:18}` with reason `move near surplus fuel source for one-time emergency power bootstrap`; the source is the existing coal drill with 9 coal and the target remains boiler 272.
   - Full verification: `PYTHONPATH=src pytest -q` -> `518 passed`.
   - Immediate follow-up after emergency power returns: build/restore transport-belt automation, then build the boiler coal feed route so steady-state fuel is belt/inserter fed.
+- Part 117 verified unlock-aware layout reranking:
+  - No code change; this loop confirmed that live layout candidates already consider `long-handed-inserter` from recipe unlock state.
+  - Live state: `available=true`, `recipe_unlocked=true`, `researched=false`, `stock=0`, `automated=false`.
+  - Live candidates include `green-circuit-long-handed-3-cable-2-circuit-cell` and `unlock-aware-site-rerank-long-handed-inserter`, but they correctly remain not build-ready because long-handed inserters and other build items are missing.
+  - Full verification: `PYTHONPATH=src pytest -q` -> `518 passed`.
+- Part 118 hardens Qwen attach and creates the next executable belt-automation step:
+  - Attached Slurm task execution now retries transient `TimeoutExpired`, SSH, and srun job-step failures, and the remote script can retry when the task file was already moved or a result file already exists.
+  - `BuildItemMallSkill("transport-belt")` can now reuse a powered `small-electric-pole` mall assembler when no new assembler is available, small pole stock is sufficient, and the candidate is not part of the circuit assembler cluster.
+  - Before setting the reused assembler to `transport-belt`, incompatible contents such as `copper-cable` are cleared.
+  - Live read-only verification changed the transport-belt mall decision from `action=null; cannot find a powered or wireable site` to `take copper-cable x4 from assembler unit 318 before setting transport-belt`.
+  - Full verification: `PYTHONPATH=src pytest -q` -> `521 passed`.
+  - Next live step: run the Qwen/no-mod loop with a small cap so unit 318 is cleared and retooled, then use belt output for the boiler coal feed route.
 
 Part 64 introduced:
 

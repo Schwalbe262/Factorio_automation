@@ -1,4 +1,5 @@
 import json
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -126,6 +127,65 @@ class RemoteSlurmTests(unittest.TestCase):
 
         self.assertTrue(status["llm_ready"])
         sleep.assert_called_once_with(2)
+
+    def test_attached_strategy_task_retries_timeout(self):
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="factorio-ai-worker",
+            conda_env="factorio-ai",
+            partition="gpu",
+            cpus_per_task=8,
+            gpus_per_node=1,
+            gres="gpu:1",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        remote_result = {
+            "ok": True,
+            "source": "llm",
+            "selected_skill": "setup_power",
+            "priority": 90,
+            "reason": "restore power before belt automation",
+        }
+        with (
+            patch("factorio_ai.remote_slurm.resolve_remote_dir", return_value="/remote/factorio-ai-worker"),
+            patch("factorio_ai.remote_slurm._run_scp"),
+            patch(
+                "factorio_ai.remote_slurm._run_remote",
+                side_effect=[
+                    subprocess.TimeoutExpired(["ssh"], timeout=30),
+                    json.dumps(remote_result),
+                ],
+            ) as run_remote,
+            patch.dict(
+                "os.environ",
+                {
+                    "FACTORIO_AI_SLURM_MODE": "attach",
+                    "FACTORIO_AI_SLURM_ATTACHED_TASK_ATTEMPTS": "2",
+                    "FACTORIO_AI_SLURM_ATTACHED_TASK_RETRY_DELAY_SECONDS": "0",
+                },
+                clear=False,
+            ),
+        ):
+            result = request_strategy(
+                "launch_rocket_program",
+                {"inventory": {}, "entities": []},
+                cfg=cfg,
+                timeout_seconds=30,
+            )
+
+        self.assertEqual(result["selected_skill"], "setup_power")
+        self.assertEqual(run_remote.call_count, 2)
+        retry_script = run_remote.call_args_list[1].args[0]
+        self.assertIn('elif [[ ! -f "$TASK_PATH" ]]', retry_script)
 
     def test_llm_status_remediation_marks_pending_gpu_allocation(self):
         cfg = RemoteSlurmConfig(

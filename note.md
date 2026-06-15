@@ -7405,3 +7405,55 @@
 - Next action: Continue from the live bootstrap blocker: restore power with the bounded emergency path, automate transport belts, then automate long-handed inserter supply before applying any long-handed rebuild candidate.
 - Token usage: 15,786,188 cumulative Codex tokens / weekly quota unavailable; delta since Loop 338 record approximately 126,729 tokens.
 
+## 2026-06-15 15:14:18 +09:00 - Loop 340
+- Part: live LLM-required one-step power bootstrap
+- Goal: Let Qwen select the next high-level skill, but execute only one deterministic no-mod step through the `AI` virtual/server agent so `r1jae` is not moved.
+- Hypothesis: If the remote Qwen strategy attach succeeds, deterministic guardrails should redirect layout work to `setup_power` while a critical powered factory is starved, and the bounded emergency bootstrap should insert only carried fuel into boiler 272.
+- Actions:
+  - First `run-no-mod-strategy-step --require-llm --max-steps 1` attempt failed before mutation because remote attached Slurm SSH timed out after 30 seconds.
+  - Retried after inspecting the `AI`/`r1jae` execution modes; `AI` observed as virtual/server and `r1jae` was not controlled.
+  - Qwen selected `plan_factory_site`, deterministic guardrail adjusted it to `setup_power`, and one skill step inserted carried coal into boiler 272.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-power-20260615-061408.jsonl`.
+- Candidates:
+  - Raw Qwen skill: `plan_factory_site`.
+  - Guardrailed skill: `setup_power`.
+  - Executed action: `insert coal x2` into boiler unit 272 with `emergency_bootstrap=true`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed only because `--max-steps 1` stopped before the skill could report done.
+  - `steam`: 0 -> 0 in the item-count journal.
+  - Action response: `ok=true`, `mode=modless-rcon-lua`, `execution.mode=virtual`, `agent.name=server`.
+  - After observe: assemblers are electrically connected, but boiler 272 is again fuel-starved and transport-belt assembler count remains 0.
+- Result: The one permitted live step mutated the world only through the virtual `AI/server` path and inserted the two carried coal into the boiler. It did not restore steady-state power or belt automation.
+- Failure reason: One-step cap intentionally stopped the skill; the underlying blocker is still lack of automated boiler fuel and no transport-belt assembler.
+- Next action: Harden attached Slurm strategy retries, then make `BuildItemMallSkill("transport-belt")` able to reuse the stocked small-electric-pole mall assembler instead of stopping at `cannot find a powered or wireable site`.
+- Token usage: not recorded for this auto journal loop / weekly quota unavailable
+
+## 2026-06-15 15:20:09 +09:00 - Loop 341
+
+- Part: Slurm attach retry and transport-belt mall retooling
+- Goal: Remove the two blockers observed in Loop 340: transient Qwen attached-task SSH timeout and `BuildItemMallSkill("transport-belt")` failing to find a usable first mall assembler even though a stocked powered small-electric-pole mall assembler exists.
+- Hypothesis: Attached Slurm strategy tasks need the same transient retry protection as status probes. Separately, after a bounded power bootstrap, transport-belt automation should be allowed to retask an existing powered build-item mall assembler when the old output is already well stocked and the assembler can be safely cleared before changing recipe.
+- Actions:
+  - Added retry handling for attached Slurm task execution around `_run_remote`, including `subprocess.TimeoutExpired`, `TimeoutError`, and common transient SSH/srun job-step errors.
+  - Made the attached task shell script retry-safe by accepting an already moved task file and by returning an existing result file if the first attempt completed remotely.
+  - Added env controls `FACTORIO_AI_SLURM_ATTACHED_TASK_ATTEMPTS` and `FACTORIO_AI_SLURM_ATTACHED_TASK_RETRY_DELAY_SECONDS`.
+  - Added a regression test where `request_strategy` receives one `subprocess.TimeoutExpired` and then succeeds on retry.
+  - Added a narrow transport-belt mall retool candidate: an electrically connected `small-electric-pole` assembler may be reused for `transport-belt` only when no assembler stock exists, at least 8 small electric poles are already available, the candidate is in the allowed factory area, and it is not too close to the circuit assemblers.
+  - Added a pre-`set_recipe` cleanup step for transport-belt retooling so incompatible contents such as `copper-cable` are removed before changing the assembler recipe.
+  - Ran live read-only verification after the planner change.
+- Candidates:
+  - Slurm retry path: `_run_remote_attached_task_with_retry`.
+  - Live reusable assembler: unit 318, recipe `small-electric-pole`, position `{x:-40.5,y:15.5}`.
+  - Live next deterministic transport-belt mall action: take `copper-cable x4` from unit 318 before setting recipe to `transport-belt`.
+- Metrics:
+  - Targeted remote tests: `2 passed, 23 deselected`.
+  - Build-item mall tests: `17 passed, 183 deselected`.
+  - Full tests: `521 passed in 27.00s`.
+  - Live before: `BuildItemMallSkill("transport-belt")` returned `action=null`, reason `cannot find a powered or wireable site for the first build item mall assembler`.
+  - Live after: `action={"type":"take","item":"copper-cable","count":4,"unit_number":318,...}`, reason `clear copper-cable from reusable build item mall assembler before setting transport-belt`.
+- Result: Qwen attached strategy calls can recover from a transient attach timeout, and the current live map now has an executable first step toward transport-belt automation without crafting a new assembler or hand-crafting gears.
+- Failure reason: No code/test failure remains. Live transport-belt mall mutation was not run in this loop; the current world still needs the planner/autopilot to clear unit 318, set it to `transport-belt`, supply iron/gears through automation-first paths, and then build the boiler coal feed route.
+- Next action: Run the Qwen/no-mod loop with a small step cap after this commit, verify unit 318 retools to `transport-belt`, then connect boiler coal feed so emergency fuel is no longer needed.
+- Token usage: 16,012,090 cumulative Codex tokens / weekly quota unavailable; delta since Loop 339 record approximately 225,902 tokens.
+

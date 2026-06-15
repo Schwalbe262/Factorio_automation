@@ -8338,7 +8338,23 @@ class BuildItemMallSkill:
                 "connect build item mall pole to nearby electric network",
             )
 
+        assembler_position = _position(assembler)
         if assembler.get("recipe") != self.target_item:
+            incompatible = _first_incompatible_assembler_item(assembler, self.target_item)
+            if self.target_item == "transport-belt" and incompatible is not None:
+                if distance(player, assembler_position) > 20:
+                    return PlannerDecision({"type": "move_to", "position": assembler_position}, f"move near mall assembler to clear {incompatible}")
+                return PlannerDecision(
+                    {
+                        "type": "take",
+                        "item": incompatible,
+                        "count": entity_item_count(assembler, incompatible),
+                        "unit_number": assembler.get("unit_number"),
+                        "name": "assembling-machine-1",
+                        "position": assembler_position,
+                    },
+                    f"clear {incompatible} from reusable build item mall assembler before setting {self.target_item}",
+                )
             return self._set_recipe_decision(player, assembler, self.target_item)
 
         output_count = entity_item_count(assembler, self.target_item)
@@ -8373,7 +8389,6 @@ class BuildItemMallSkill:
                 done=True,
             )
 
-        assembler_position = _position(assembler)
         batch_count = _build_item_mall_batch_count(recipe.products.get(self.target_item, 1.0), self.target_count)
         for ingredient, amount in sorted(recipe.ingredients.items()):
             needed_in_assembler = max(1, int(amount * batch_count))
@@ -9359,6 +9374,17 @@ def _find_build_item_mall_cell(
                 reference_position=reference_position,
             )
         ]
+    if not candidates and target_item == "transport-belt" and inventory_count(observation, "assembling-machine-1") <= 0:
+        candidates = [
+            item
+            for item in assemblers
+            if _transport_belt_mall_retool_candidate(
+                observation,
+                item,
+                allow_existing_remote=allow_existing_remote,
+                reference_position=reference_position,
+            )
+        ]
     if not candidates:
         return None
     assembler = min(candidates, key=lambda item: float(item.get("distance") or 999999))
@@ -9398,6 +9424,30 @@ def _available_unassigned_mall_assembler(
     if not _near_recipe_assembler(observation, assembler, {"copper-cable", "electronic-circuit"}, radius=5.5):
         return True
     return bool(allow_existing_remote and reference_position is not None and assembler.get("electric_network_connected"))
+
+
+def _transport_belt_mall_retool_candidate(
+    observation: dict[str, Any],
+    assembler: dict[str, Any],
+    *,
+    allow_existing_remote: bool = False,
+    reference_position: dict[str, float] | None = None,
+) -> bool:
+    if not assembler.get("electric_network_connected"):
+        return False
+    if not _within_allowed_factory_area(
+        observation,
+        _position(assembler),
+        allow_existing_remote=allow_existing_remote,
+        reference_position=reference_position,
+    ):
+        return False
+    recipe = str(assembler.get("recipe") or "")
+    if recipe != "small-electric-pole":
+        return False
+    if total_item_count(observation, "small-electric-pole") < 8:
+        return False
+    return not _near_recipe_assembler(observation, assembler, {"copper-cable", "electronic-circuit"}, radius=3.0)
 
 
 def _select_build_item_mall_site(
