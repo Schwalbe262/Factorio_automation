@@ -1313,6 +1313,37 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
+    bootstrap_site_logistics_issue = _bootstrap_mall_site_logistics_risk(observation)
+    if bootstrap_site_logistics_issue is not None and selected == "bootstrap_build_item_mall":
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "plan_factory_site"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 90)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            "LLM selected build-item mall expansion while existing factory sites still have missing input links "
+            "and transport-belt production is not automated; avoid starting another mall cycle that would be "
+            "seeded by player inventory shuttles."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["site-to-site logistic line"]))
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            "guardrail_adjusted_from=bootstrap_build_item_mall",
+            f"layout_kind={bootstrap_site_logistics_issue.get('kind')}",
+            f"item={bootstrap_site_logistics_issue.get('item')}",
+            f"site_id={bootstrap_site_logistics_issue.get('site_id')}",
+            "transport_belt_automation_ready=false",
+            f"assembling_machine_1_inventory={inventory_count(observation, 'assembling-machine-1')}",
+            "hand_carry_seed_risk=true",
+        ]
+        adjusted["expected_effect"] = (
+            "Plan the missing producer-to-consumer logistics correction before expanding another build-item mall."
+        )
+        adjusted["guardrail_adjusted"] = {
+            "from": "bootstrap_build_item_mall",
+            "to": "plan_factory_site",
+            "reason": guardrail_reason,
+        }
+        return adjusted
     burner_drill_replacement_issue = _burner_drill_replacement_issue(observation)
     if burner_drill_replacement_issue is not None and selected in {
         "plan_factory_site",
@@ -2135,6 +2166,53 @@ def _first_automation_logistics_issue(issues: list[Any]) -> dict[str, Any] | Non
         and item.get("kind") in target_kinds
         and int(item.get("severity") or 0) >= 84
     ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: int(item.get("severity") or 0))
+
+
+def _bootstrap_mall_site_logistics_risk(observation: dict[str, Any]) -> dict[str, Any] | None:
+    if _transport_belt_automation_ready(observation):
+        return None
+    issue = _first_unserved_factory_input_issue(observation)
+    if issue is None:
+        return None
+    if inventory_count(observation, "assembling-machine-1") <= 0:
+        return issue
+    item = str(issue.get("item") or "")
+    if item and inventory_count(observation, item) <= 0:
+        return issue
+    return None
+
+
+def _first_unserved_factory_input_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
+    layout = make_layout_improvement_context(observation)
+    issues = layout.get("issues") if isinstance(layout.get("issues"), list) else []
+    candidate_items = {
+        "iron-plate",
+        "copper-plate",
+        "iron-gear-wheel",
+        "copper-cable",
+        "electronic-circuit",
+        "automation-science-pack",
+        "logistic-science-pack",
+    }
+    candidates: list[dict[str, Any]] = []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        kind = str(issue.get("kind") or "")
+        if kind not in {"incomplete_logistics_link", "manual_site_logistics_gap", "distant_related_sites", "manual_feed_factory_block"}:
+            continue
+        if int(issue.get("severity") or 0) < 75:
+            continue
+        item = str(issue.get("item") or "")
+        if item and item not in candidate_items:
+            continue
+        text = " ".join(str(issue.get(key) or "") for key in ("site_id", "detail", "recommendation")).lower()
+        if not any(token in text for token in ("missing_source", "incomplete", "missing", "route_needed", "manual")):
+            continue
+        candidates.append(issue)
     if not candidates:
         return None
     return max(candidates, key=lambda item: int(item.get("severity") or 0))

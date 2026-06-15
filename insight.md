@@ -565,3 +565,12 @@
 - Evidence: `{"tests":"501 passed","live_command":"python -m factorio_ai.cli no-mod-strategy --require-llm","local_llm_env":false,"remote_model":"Qwen/Qwen3.5-4B","remote_strategy_id":"strategy-0d5deda1486e444d963b51bdd9c91e94","source":"llm","selected_skill":"bootstrap_build_item_mall"}`
 - Remaining risk: This fixes the LLM transport path, not Qwen's strategic choice quality; current live Qwen selected `bootstrap_build_item_mall` while heuristic support still flags incomplete site logistics.
 
+## 2026-06-15 13:40:44 +09:00 - Insight 69
+
+- Source loop: Loop 333
+- Improvement: Qwen build-item mall choices are now blocked when they would likely seed a new mall from player inventory while existing site input links are missing.
+- Before: Live Qwen selected `bootstrap_build_item_mall` even though current assemblers had incomplete copper/gear/cable inputs, no transport-belt automation, and no `assembling-machine-1` inventory; executing that path risked repeated hand-carry from distant plate sources.
+- After: The same live strategy call is guardrailed to `plan_factory_site` with `hand_carry_seed_risk=true`, `transport_belt_automation_ready=false`, and `assembling_machine_1_inventory=0`.
+- Evidence: `{"tests":"502 passed","live_strategy_id":"strategy-e7840d7f4e2a4796b9f92a431f25a7a2","raw_llm_skill":"bootstrap_build_item_mall","guardrailed_skill":"plan_factory_site","layout_kind":"incomplete_logistics_link","item":"copper-plate","site_id":"site-link:copper-plate:missing_source:copper-plate->assembler_cell:537","hand_carry_seed_risk":true}`
+- Remaining risk: This prevents the unsafe strategy choice but still leaves the factory waiting on an executable general site-to-site logistics correction.
+

@@ -7213,3 +7213,29 @@
 - Next action: Evaluate whether Qwen's `bootstrap_build_item_mall` step is executable without hand-carry; if not, add a guardrail/executor that turns current missing copper/gear/cable links into site-to-site logistics steps.
 - Token usage: 13,992,836 cumulative Codex tokens / weekly quota unavailable
 
+## 2026-06-15 13:40:44 +09:00 - Loop 333
+
+- Part: no-hand-carry guard for Qwen build-item mall selection
+- Goal: Prevent the remote Qwen strategy from starting a new build-item mall cycle when existing factory sites still have missing input links that would be seeded by player inventory shuttles.
+- Hypothesis: In the current live map, `bootstrap_build_item_mall` is not the next safe executor step because there is no `assembling-machine-1` in inventory, transport-belt production is not automated, and the active science/pole/circuit assemblers have missing copper/gear/cable inputs sourced from distant sites.
+- Actions:
+  - Summarized live no-mod observation without executing a skill; direct observe currently sees the server/virtual agent, so live mutation was avoided.
+  - Confirmed inventory has no iron/copper plates or assembler stock, while remote furnaces hold plates and current assemblers are `small-electric-pole`, `automation-science-pack`, `copper-cable`, and `electronic-circuit` with ingredient shortages.
+  - Added `_bootstrap_mall_site_logistics_risk` and `_first_unserved_factory_input_issue` to strategy guardrails.
+  - When Qwen selects `bootstrap_build_item_mall` under this risk, strategy now selects `plan_factory_site` with explicit `hand_carry_seed_risk=true` evidence.
+  - Added a regression test for the distant copper-source/science-consumer case.
+  - Ran live `no-mod-strategy --require-llm` and the full test suite.
+- Candidates:
+  - Raw Qwen candidate: `bootstrap_build_item_mall`.
+  - Guardrailed candidate: `plan_factory_site`.
+  - Live blocker: `incomplete_logistics_link` for `copper-plate` into `assembler_cell:537`.
+- Metrics:
+  - Targeted tests: 2 strategy tests passed.
+  - Full test suite: `502 passed in 26.82s`.
+  - Live strategy smoke: `source=llm`, selected `plan_factory_site`, guardrail from `bootstrap_build_item_mall`, evidence `hand_carry_seed_risk=true`.
+  - Live material context: `assembling_machine_1_inventory=0`, `transport_belt_automation_ready=false`.
+- Result: Qwen can still reason about build-item scarcity, but deterministic guardrails now stop it from converting missing site inputs into another player-inventory bootstrap loop.
+- Failure reason: None for this guardrail. The actual missing capability remains a deterministic general site-to-site logistics executor for current copper/gear/cable input links.
+- Next action: Implement or route an executable logistics correction for the current missing copper-plate, iron-gear-wheel, and copper-cable links so the loop can advance beyond diagnostic `plan_factory_site`.
+- Token usage: 14,139,245 cumulative Codex tokens / weekly quota unavailable
+

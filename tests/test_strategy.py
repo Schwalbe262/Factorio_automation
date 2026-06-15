@@ -1018,6 +1018,36 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["guardrail_adjusted"]["from"], "bootstrap_build_item_mall")
         self.assertIn("automation research", result["blockers"])
 
+    def test_reconcile_blocks_item_mall_when_existing_site_inputs_are_missing(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "bootstrap_build_item_mall",
+                "priority": 50,
+                "reason": "Build missing expansion items.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {"electronic-circuit": 20},
+                "entities": _distant_copper_source_and_science_consumer_entities(),
+                "resources": [{"name": "copper-ore", "position": {"x": 0, "y": 0}}],
+                "research": {
+                    "technologies": {
+                        "automation": {"researched": True},
+                        "logistics": {"researched": True},
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(result["selected_skill"], "plan_factory_site")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "bootstrap_build_item_mall")
+        self.assertIn("site-to-site logistic line", result["blockers"])
+        self.assertIn("hand_carry_seed_risk=true", result["evidence"])
+
     def test_reconcile_promotes_layout_planning_to_actionable_target_deficit(self):
         result = reconcile_strategy_decision(
             {

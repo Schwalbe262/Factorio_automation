@@ -1,6 +1,6 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-15 13:32 KST
+Last updated: 2026-06-15 13:40 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
@@ -128,6 +128,11 @@ Latest continuation after Part 105:
   - Live smoke without local LLM env now succeeds: `python -m factorio_ai.cli no-mod-strategy --require-llm` returned `source=llm` from remote task `strategy-0d5deda1486e444d963b51bdd9c91e94`.
   - The active remote model remains `Qwen/Qwen3.5-4B`; Qwen selected `bootstrap_build_item_mall` while heuristic support still reported the current layout blocker as incomplete site logistics.
   - Full verification: `pytest -q` -> `501 passed`.
+- Part 111 prevents Qwen from starting a new build-item mall cycle when existing site inputs are still broken:
+  - If Qwen selects `bootstrap_build_item_mall` while existing factory sites have missing/incomplete producer-to-consumer input links, transport-belt production is not automated, and no assembler stock is available for a safe local bootstrap, strategy is guardrailed back to `plan_factory_site`.
+  - Live smoke changed Qwen's raw mall choice into `plan_factory_site` with `hand_carry_seed_risk=true`, `transport_belt_automation_ready=false`, and `assembling_machine_1_inventory=0`.
+  - This is intentionally a no-hand-carry safety guard, not a full logistics executor; the next missing feature is an executable general site-to-site logistics correction for copper/gear/cable inputs.
+  - Full verification: `pytest -q` -> `502 passed`.
 
 Part 64 introduced:
 
