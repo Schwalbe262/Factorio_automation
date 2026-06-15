@@ -531,3 +531,28 @@
 - Evidence: `{"tests":"492 passed","live_recipe_unlock":"long-handed-inserter.enabled=true","live_technology":"long-inserters=None","layout_capability":{"available":true,"recipe_unlocked":true,"researched":false,"rerank_trigger":true},"live_candidate":"green-circuit-long-handed-3-cable-2-circuit-cell","candidate_uses":["long-handed-inserter"],"additional_capabilities":["modules","assembling-machine-2/3","steel/electric-furnace","beacon"]}`
 - Remaining risk: Long-handed and higher-tier variants are still simulation candidates until sandbox validation and site pre-build gates pass; module-specific/beacon-specific physical layouts need further candidate generators beyond capability exposure.
 
+## 2026-06-15 13:06:18 +09:00 - Insight 65
+- Source loop: Loop 328
+- Improvement: setup_power completed after 2 step(s): steam power block is producing usable steam power
+- Before: not recorded
+- After: steam = 0
+- Evidence: `{"item":"steam","item_count":0,"source_loop":328,"steps":2,"target":1}`
+- Remaining risk: Target is not complete yet: 0/1.
+
+## 2026-06-15 13:10:17 +09:00 - Insight 66
+- Source loop: Loop 329
+- Improvement: setup_power completed after 8 step(s): steam power block is producing usable steam power
+- Before: not recorded
+- After: steam = 0
+- Evidence: `{"item":"steam","item_count":0,"source_loop":329,"steps":8,"target":1}`
+- Remaining risk: Target is not complete yet: 0/1.
+
+## 2026-06-15 13:24:57 +09:00 - Insight 67
+
+- Source loop: Loop 331
+- Improvement: Layout optimization now creates a concrete unlock-driven reassessment opportunity and simulation candidate when a newly usable layout item changes existing site assumptions.
+- Before: Part 108 made specialized candidates unlock-aware, but generic site optimization could still treat newly usable tools mostly as passive capability metadata unless the site matched a green-circuit, smelting, or starter-mall pattern.
+- After: Live layout context includes `unlock_layout_reassessment` for long-handed inserters across `assembler_cell`, `build_item_mall`, and `circuit_automation`; simulation candidates include `unlock-aware-site-rerank-long-handed-inserter` in addition to `green-circuit-long-handed-3-cable-2-circuit-cell`.
+- Evidence: `{"tests":"499 passed","live_capability":{"item":"long-handed-inserter","available":true,"recipe_unlocked":true,"researched":false,"automated":false},"live_opportunity":"unlock_layout_reassessment","affected_site_kinds":["assembler_cell","build_item_mall","circuit_automation"],"live_candidates":[{"candidate_id":"green-circuit-long-handed-3-cable-2-circuit-cell","uses":["long-handed-inserter"],"score":82.7},{"candidate_id":"unlock-aware-site-rerank-long-handed-inserter","uses":["long-handed-inserter"],"score":79.1}]}`
+- Remaining risk: The generic unlock-aware candidate is still simulation-only; applying a rebuild still needs sandbox validation, site pre-build gates, and deterministic executors for safe mutation.
+

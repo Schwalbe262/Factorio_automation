@@ -441,6 +441,10 @@ def factory_layout_opportunities(observation: dict[str, Any]) -> list[dict[str, 
     entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
     opportunities: list[dict[str, Any]] = []
 
+    unlock_opportunity = _unlock_retool_opportunity(observation, sites, entities)
+    if unlock_opportunity is not None:
+        opportunities.append(unlock_opportunity)
+
     smelting_by_item: dict[str, list[dict[str, Any]]] = {}
     for site in sites:
         if site.get("kind") == "plate_smelting_line" and site.get("item"):
@@ -560,6 +564,117 @@ def factory_layout_opportunities(observation: dict[str, Any]) -> list[dict[str, 
     return opportunities[:12]
 
 
+def _unlock_retool_opportunity(
+    observation: dict[str, Any],
+    sites: list[dict[str, Any]],
+    entities: list[Any],
+) -> dict[str, Any] | None:
+    unlocks = _layout_unlock_context(observation)
+    considered = _layout_considered_unlocked_items(unlocks)
+    if not considered or not sites:
+        return None
+
+    retool_tools: list[str] = []
+    affected_site_ids: list[str] = []
+    affected_kinds: set[str] = set()
+    obsolete_patterns: list[str] = []
+
+    assembler_sites = [
+        site
+        for site in sites
+        if str(site.get("kind") or "") in {"assembler_cell", "circuit_automation", "build_item_mall"}
+    ]
+    smelting_sites = [site for site in sites if str(site.get("kind") or "") == "plate_smelting_line"]
+    assembler_entities = [
+        entity
+        for entity in entities
+        if isinstance(entity, dict) and str(entity.get("name") or "") in ASSEMBLER_ENTITY_NAMES
+    ]
+
+    long_handed_state = unlocks.get("long_handed_inserter") if isinstance(unlocks.get("long_handed_inserter"), dict) else {}
+    if bool(long_handed_state.get("available")) and assembler_sites:
+        long_handed_count = _entity_count_for_layout(observation, "long-handed-inserter")
+        if long_handed_count <= 0:
+            retool_tools.append("long-handed-inserter")
+            affected_site_ids.extend(str(site.get("site_id") or "") for site in assembler_sites[:6])
+            affected_kinds.update(str(site.get("kind") or "") for site in assembler_sites)
+            obsolete_patterns.append("one-tile-only inserter rows where a second shared input lane would reduce belt doglegs")
+
+    preferred_assembler, preferred_speed = _preferred_assembler_for_layout(unlocks)
+    if preferred_assembler != "assembling-machine-1" and any(
+        isinstance(entity, dict) and str(entity.get("name") or "") == "assembling-machine-1"
+        for entity in entities
+    ):
+        retool_tools.append(preferred_assembler)
+        affected_site_ids.extend(str(site.get("site_id") or "") for site in assembler_sites[:6])
+        affected_kinds.update(str(site.get("kind") or "") for site in assembler_sites)
+        obsolete_patterns.append(f"assembling-machine-1 cells that can be rerated with {preferred_assembler} speed {preferred_speed}")
+
+    preferred_furnace, furnace_rate, _ = _preferred_furnace_for_layout(unlocks)
+    if preferred_furnace != "stone-furnace" and any(
+        isinstance(entity, dict) and str(entity.get("name") or "") == "stone-furnace"
+        for entity in entities
+    ):
+        retool_tools.append(preferred_furnace)
+        affected_site_ids.extend(str(site.get("site_id") or "") for site in smelting_sites[:6])
+        affected_kinds.update(str(site.get("kind") or "") for site in smelting_sites)
+        obsolete_patterns.append(f"stone-furnace columns that can be rerated around {preferred_furnace} {furnace_rate}/min throughput")
+
+    module_group = unlocks.get("modules") if isinstance(unlocks.get("modules"), dict) else {}
+    module_tools = [
+        str(name)
+        for name, state in module_group.items()
+        if isinstance(state, dict) and bool(state.get("available")) and assembler_entities
+    ]
+    if module_tools:
+        retool_tools.extend(module_tools)
+        affected_site_ids.extend(str(site.get("site_id") or "") for site in assembler_sites[:6])
+        affected_kinds.update(str(site.get("kind") or "") for site in assembler_sites)
+        obsolete_patterns.append("unmoduled assembler counts whose optimal footprint, power draw, and pollution may change")
+
+    beacon_state = unlocks.get("beacons") if isinstance(unlocks.get("beacons"), dict) else {}
+    beacon_available = bool(
+        isinstance(beacon_state.get("beacon"), dict)
+        and beacon_state["beacon"].get("available")
+        and assembler_entities
+    )
+    if beacon_available:
+        retool_tools.append("beacon")
+        affected_site_ids.extend(str(site.get("site_id") or "") for site in assembler_sites[:6])
+        affected_kinds.update(str(site.get("kind") or "") for site in assembler_sites)
+        obsolete_patterns.append("dense pre-beacon rows that may need reserved beacon spacing")
+
+    retool_tools = sorted(dict.fromkeys(item for item in retool_tools if item))
+    affected_site_ids = sorted(dict.fromkeys(item for item in affected_site_ids if item))
+    if not retool_tools or not affected_site_ids:
+        return None
+
+    severity = min(89, 74 + len(retool_tools) * 3)
+    if "long-handed-inserter" in retool_tools:
+        severity += 2
+    return {
+        "kind": "unlock_layout_reassessment",
+        "severity": min(92, severity),
+        "site_id": "layout-capability:unlocked-tools",
+        "item": "factory_layout",
+        "detail": (
+            "new layout-capable items are available but existing sites still match earlier layout assumptions: "
+            + ", ".join(retool_tools)
+        ),
+        "recommendation": (
+            "rerank affected site layouts with the newly available inserters, machines, modules, furnaces, or beacons "
+            "before copying old patterns into more factory blocks"
+        ),
+        "parameters": {
+            "considered_unlocked_items": considered,
+            "retool_tools": retool_tools,
+            "affected_site_ids": affected_site_ids[:8],
+            "affected_site_kinds": sorted(affected_kinds),
+            "obsolete_patterns": obsolete_patterns[:6],
+        },
+    }
+
+
 def factory_layout_simulation_candidates(observation: dict[str, Any]) -> list[dict[str, Any]]:
     """Return simulation-only layout candidates; nothing here is applied to the game."""
 
@@ -597,6 +712,23 @@ def factory_layout_simulation_candidates(observation: dict[str, Any]) -> list[di
                     current_circuit_sites,
                     "Observed current green-circuit/cable machine footprint before ratio rebalance.",
                 ),
+            )
+        )
+
+    unlock_opportunity = next(
+        (
+            item
+            for item in opportunities
+            if isinstance(item, dict) and str(item.get("kind") or "") == "unlock_layout_reassessment"
+        ),
+        None,
+    )
+    if isinstance(unlock_opportunity, dict):
+        candidates.append(
+            _unlock_retooling_candidate(
+                unlock_opportunity,
+                sites,
+                layout_unlocks=layout_unlocks,
             )
         )
 
@@ -1893,6 +2025,106 @@ def _green_circuit_blueprint_entities(
             _add_entity(entities, "small-electric-pole", 2, y + 4)
             _add_entity(entities, "small-electric-pole", 7, y + 4)
     return entities
+
+
+def _unlock_retooling_candidate(
+    opportunity: dict[str, Any],
+    sites: list[dict[str, Any]],
+    *,
+    layout_unlocks: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    unlocks = layout_unlocks if isinstance(layout_unlocks, dict) else {}
+    params = opportunity.get("parameters") if isinstance(opportunity.get("parameters"), dict) else {}
+    retool_tools = [
+        str(item)
+        for item in params.get("retool_tools", [])
+        if isinstance(item, str) and item
+    ]
+    affected_site_ids = {
+        str(item)
+        for item in params.get("affected_site_ids", [])
+        if isinstance(item, str) and item
+    }
+    affected_sites = [
+        site
+        for site in sites
+        if not affected_site_ids or str(site.get("site_id") or "") in affected_site_ids
+    ]
+    positions = [site.get("position") for site in affected_sites if isinstance(site.get("position"), dict)]
+    footprint = _layout_footprint(positions)
+    before_area = float(footprint.get("area") or max(24.0, len(affected_sites) * 12.0))
+    area_factor = 1.0
+    throughput_factor = 1.0
+    power_factor = 1.0
+    if "long-handed-inserter" in retool_tools:
+        area_factor *= 0.88
+    if "assembling-machine-2" in retool_tools:
+        throughput_factor *= 1.5
+        power_factor *= 3.0
+    if "assembling-machine-3" in retool_tools:
+        throughput_factor *= 2.5
+        power_factor *= 6.25
+    if "steel-furnace" in retool_tools:
+        throughput_factor *= 2.0
+    if "electric-furnace" in retool_tools:
+        throughput_factor *= 2.0
+        power_factor *= 3.0
+    if "speed-module" in retool_tools:
+        throughput_factor *= 1.2
+        power_factor *= 1.5
+    if "productivity-module" in retool_tools:
+        throughput_factor *= 1.04
+        power_factor *= 1.4
+    if "efficiency-module" in retool_tools:
+        power_factor *= 0.7
+    if "beacon" in retool_tools:
+        area_factor *= 1.25
+        throughput_factor *= 1.5
+        power_factor *= 2.0
+    after_area = max(16.0, before_area * area_factor)
+    considered_unlocked_items = _layout_considered_unlocked_items(unlocks)
+    candidate_suffix = "-".join(item.replace("_", "-") for item in retool_tools[:4]) or "unlocked-tools"
+    score = float(opportunity.get("severity") or 75)
+    if throughput_factor > 1.0:
+        score += min(8.0, (throughput_factor - 1.0) * 4.0)
+    if after_area < before_area:
+        score += min(6.0, (before_area - after_area) / 20.0)
+    return {
+        "candidate_id": f"unlock-aware-site-rerank-{candidate_suffix}",
+        "simulation_only": True,
+        "not_applied": True,
+        "source": "unlock-aware site graph re-evaluation; benchmark before rebuild",
+        "target_pattern": (
+            "rerank affected sites with the currently unlocked item set before extending the old footprint"
+        ),
+        "requires_build_command": True,
+        "layout_unlocks_considered": unlocks,
+        "considered_unlocked_items": considered_unlocked_items,
+        "uses_unlocked_items": retool_tools,
+        "unused_unlocked_items": _layout_unused_unlocked_items(considered_unlocked_items, retool_tools),
+        "simulation": {
+            "before": {
+                "affected_sites": len(affected_sites),
+                "affected_site_kinds": params.get("affected_site_kinds", []),
+                "footprint_area": round(before_area, 1),
+                "obsolete_patterns": params.get("obsolete_patterns", []),
+            },
+            "after": {
+                "retool_tools": retool_tools,
+                "estimated_footprint_area": round(after_area, 1),
+                "throughput_factor_estimate": round(throughput_factor, 2),
+                "power_factor_estimate": round(power_factor, 2),
+            },
+            "delta": {
+                "footprint_area": round(after_area - before_area, 1),
+                "unlock_aware_rerank": True,
+                "unlock_aware_considered": bool(considered_unlocked_items),
+                "requires_power_pollution_recheck": power_factor != 1.0,
+                "requires_bottleneck_recheck": throughput_factor != 1.0 or "long-handed-inserter" in retool_tools,
+            },
+            "score": round(min(score, 96.0), 1),
+        },
+    }
 
 
 def _smelting_standardization_candidate(
@@ -3508,9 +3740,6 @@ class SetupPowerSkill:
             allow_existing_remote=allow_existing_remote,
             reference_position=reference_position,
         )
-        if _steam_power_ready(block):
-            return PlannerDecision(None, "steam power block is producing usable steam power", done=True)
-
         player = player_position(observation)
         layout = block or _select_power_layout(observation)
         if layout is None:
@@ -3563,6 +3792,9 @@ class SetupPowerSkill:
                 far_fuel_reason="steam power boiler needs local fuel before it can run",
                 wait_for_existing_fuel=True,
             )
+
+        if _steam_power_ready(layout):
+            return PlannerDecision(None, "steam power block is producing usable steam power", done=True)
 
         return PlannerDecision(
             {"type": "wait", "ticks": 300},

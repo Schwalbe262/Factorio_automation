@@ -1,6 +1,6 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-15 12:55 KST
+Last updated: 2026-06-15 13:25 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
@@ -113,6 +113,15 @@ Latest continuation after Part 105:
   - Smelting candidates can switch blueprint/rate estimates to `steel-furnace` or `electric-furnace` when available.
   - The dashboard candidate cards show an `Unlock-aware` row so the operator can see which unlocked tools were considered and which were actually used.
   - Full verification: `pytest -q` -> `492 passed`.
+- Part 109 tightens unlock-aware layout optimization and sustained power guardrails:
+  - `unlock_layout_reassessment` now appears when newly available layout tools can make existing sites obsolete, including long-handed inserters, higher-tier assemblers/furnaces, modules, and beacons.
+  - `factory_layout_simulation_candidates` adds a generic `unlock-aware-site-rerank-*` candidate so idle Slurm/Qwen layout loops see retooling work even when a site does not yet match a specialized green-circuit, smelting, or mall pattern.
+  - Live no-mod payload now reports `long-handed-inserter` as `available=true`, `recipe_unlocked=true`; top candidates include `green-circuit-long-handed-3-cable-2-circuit-cell` and `unlock-aware-site-rerank-long-handed-inserter`.
+  - Strategy capability detection now treats `assembling-machine-2/3` recipe automation as automation evidence, not only `assembling-machine-1`.
+  - Critical powered factories now force `setup_power` before electric research/science/layout work, and gear/belt mall power blockers keep the specific `gear/belt mall power` label as well as `factory power`.
+  - `SetupPowerSkill` requires boiler fuel reserve before reporting done, so transient steam does not hide an empty boiler.
+  - Live Slurm worker is ready on `Qwen/Qwen3.5-4B`, but local `no-mod-strategy --require-llm` still fails if local LLM env vars are unset; use/check the remote worker path for required-Qwen strategy loops.
+  - Full verification: `pytest -q` -> `499 passed`.
 
 Part 64 introduced:
 

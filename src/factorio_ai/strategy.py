@@ -43,6 +43,16 @@ POWER_ANCHOR_ENTITY_NAMES = {
     "substation",
     "steam-engine",
 }
+ASSEMBLER_ENTITY_NAMES = {"assembling-machine-1", "assembling-machine-2", "assembling-machine-3"}
+CRITICAL_FACTORY_POWER_RECIPES = set(BUILD_ITEM_MALL_ITEMS) | {
+    "automation-science-pack",
+    "logistic-science-pack",
+    "chemical-science-pack",
+    "copper-cable",
+    "electronic-circuit",
+    "iron-gear-wheel",
+    "long-handed-inserter",
+}
 
 
 @dataclass(frozen=True)
@@ -646,9 +656,15 @@ def make_layout_capability_context(observation: dict[str, Any]) -> dict[str, Any
 
 
 def _recipe_assembler_exists(observation: dict[str, Any], recipe: str) -> bool:
+    entities = observation.get("entities")
+    if not isinstance(entities, list):
+        return False
     return any(
-        assembler.get("recipe") == recipe and assembler.get("electric_network_connected") is not False
-        for assembler in entities_named(observation, "assembling-machine-1")
+        isinstance(assembler, dict)
+        and str(assembler.get("name") or "") in ASSEMBLER_ENTITY_NAMES
+        and assembler.get("recipe") == recipe
+        and assembler.get("electric_network_connected") is not False
+        for assembler in entities
     )
 
 
@@ -1031,8 +1047,48 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
+    critical_factory_power_issue = _critical_factory_power_issue(observation)
     gear_belt_mall_power_issue = _gear_belt_mall_power_issue(observation)
     gear_belt_mall_bootstrap_issue = _gear_belt_mall_bootstrap_issue(observation)
+    if critical_factory_power_issue is not None and selected in {
+        "plan_factory_site",
+        "produce_electronic_circuit",
+        "automate_electronic_circuit_line",
+        "bootstrap_build_item_mall",
+        "bootstrap_power_pole_mall",
+        "build_iron_plate_logistic_line_to_gear_mall",
+        "relocate_gear_belt_mall_to_iron_source",
+        "research_logistics",
+        "research_electric_mining_drill",
+        "bootstrap_electric_mining_drill_mall",
+        "produce_automation_science_pack",
+    }:
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "setup_power"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 94)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            f"LLM selected {selected}, but a critical powered factory block is starved of electricity; "
+            "restore steam/electric power before research, mall, or layout expansion."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(
+            set(_string_list(decision.get("blockers")) + _critical_factory_power_blockers(critical_factory_power_issue))
+        )
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            f"factory_power_unit={critical_factory_power_issue.get('unit')}",
+            f"factory_power_entity={critical_factory_power_issue.get('entity')}",
+            f"factory_power_recipe={critical_factory_power_issue.get('recipe')}",
+            f"factory_power_status={critical_factory_power_issue.get('status')}",
+        ]
+        adjusted["expected_effect"] = "Restore factory electricity before attempting electric research, science, mall, or layout work."
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": "setup_power",
+            "reason": guardrail_reason,
+        }
+        return adjusted
     if gear_belt_mall_power_issue is not None and selected in {
         "plan_factory_site",
         "produce_electronic_circuit",
@@ -1518,6 +1574,7 @@ def heuristic_strategy(
     top_layout_item = _top_layout_item(layout_issues, layout_opportunities)
     automation_logistics_issue = _first_automation_logistics_issue(layout_issues)
     gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
+    critical_factory_power_issue = _critical_factory_power_issue(observation)
     gear_belt_mall_power_issue = _gear_belt_mall_power_issue(observation)
     gear_belt_mall_bootstrap_issue = _gear_belt_mall_bootstrap_issue(observation)
     burner_drill_replacement_issue = _burner_drill_replacement_issue(observation)
@@ -1591,6 +1648,24 @@ def heuristic_strategy(
             ],
             blockers=["electric power network"],
             expected_effect="Expand or connect the electric network before adding more electric machines.",
+        ).to_dict()
+
+    if critical_factory_power_issue is not None:
+        return StrategicDecision(
+            selected_skill="setup_power",
+            priority=94,
+            reason=(
+                "A critical powered factory block has no electricity, so research, science, mall, and layout "
+                "expansion would stall until steam/electric power is restored."
+            ),
+            evidence=[
+                f"factory_power_unit={critical_factory_power_issue.get('unit')}",
+                f"factory_power_entity={critical_factory_power_issue.get('entity')}",
+                f"factory_power_recipe={critical_factory_power_issue.get('recipe')}",
+                f"factory_power_status={critical_factory_power_issue.get('status')}",
+            ],
+            blockers=_critical_factory_power_blockers(critical_factory_power_issue),
+            expected_effect="Restore electricity before attempting electric research, science, mall, or layout work.",
         ).to_dict()
 
     if gear_belt_mall_power_issue is not None:
@@ -2099,6 +2174,75 @@ def _first_power_issue(monitor: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _critical_factory_power_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("name") or "")
+        recipe = str(entity.get("recipe") or entity.get("recipe_name") or "")
+        if name in ASSEMBLER_ENTITY_NAMES and recipe in CRITICAL_FACTORY_POWER_RECIPES and _entity_no_power(entity):
+            return {
+                "unit": entity.get("unit_number"),
+                "entity": name,
+                "recipe": recipe,
+                "status": str(entity.get("status_name") or entity.get("status") or "no_power"),
+            }
+        if name == "lab" and _entity_no_power(entity):
+            return {
+                "unit": entity.get("unit_number"),
+                "entity": "lab",
+                "recipe": "research",
+                "status": str(entity.get("status_name") or entity.get("status") or "no_power"),
+            }
+    steam_issue = _starter_steam_power_issue(observation)
+    if steam_issue is not None and _critical_electric_factory_present(observation):
+        return steam_issue
+    return None
+
+
+def _critical_factory_power_blockers(issue: dict[str, Any]) -> list[str]:
+    blockers = ["factory power"]
+    recipe = str(issue.get("recipe") or "")
+    if recipe in {"iron-gear-wheel", "transport-belt"}:
+        blockers.append("gear/belt mall power")
+    return blockers
+
+
+def _critical_electric_factory_present(observation: dict[str, Any]) -> bool:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("name") or "")
+        recipe = str(entity.get("recipe") or entity.get("recipe_name") or "")
+        if name == "lab":
+            return True
+        if name in ASSEMBLER_ENTITY_NAMES and recipe in CRITICAL_FACTORY_POWER_RECIPES:
+            return True
+    return False
+
+
+def _starter_steam_power_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
+    for boiler in entities_named(observation, "boiler"):
+        if _entity_status_name_in(boiler, {"no_fuel", "no_input_fluid"}):
+            return {
+                "unit": boiler.get("unit_number"),
+                "entity": "boiler",
+                "recipe": "steam-power",
+                "status": str(boiler.get("status_name") or boiler.get("status") or "starved"),
+            }
+    for engine in entities_named(observation, "steam-engine"):
+        if _entity_status_name_in(engine, {"no_input_fluid", "no_fuel", "no_power"}):
+            return {
+                "unit": engine.get("unit_number"),
+                "entity": "steam-engine",
+                "recipe": "steam-power",
+                "status": str(engine.get("status_name") or engine.get("status") or "starved"),
+            }
+    return None
+
+
 def _skill_for_bottleneck_item(item: str, observation: dict[str, Any]) -> str | None:
     if item == "coal":
         return "setup_coal_supply"
@@ -2168,6 +2312,27 @@ def _entity_status_is(entity: dict[str, Any], status_name: str, status_code: int
         return False
 
 
+def _entity_status_name_in(entity: dict[str, Any], names: set[str]) -> bool:
+    return str(entity.get("status_name") or "") in names
+
+
+def _entity_no_power(entity: dict[str, Any]) -> bool:
+    return _entity_status_is(entity, "no_power", 3) or _entity_status_is(entity, "no_power", 54)
+
+
+def _entity_fluid_amount(entity: dict[str, Any], fluid_name: str) -> float:
+    fluids = entity.get("fluids") if isinstance(entity.get("fluids"), dict) else {}
+    total = 0.0
+    for row in fluids.values():
+        if not isinstance(row, dict) or row.get("name") != fluid_name:
+            continue
+        try:
+            total += float(row.get("amount") or 0.0)
+        except (TypeError, ValueError):
+            pass
+    return total
+
+
 def _entity_on_resource(observation: dict[str, Any], entity: dict[str, Any], resource_name: str) -> bool:
     if str(entity.get("mining_target") or entity.get("resource_name") or "") == resource_name:
         return True
@@ -2199,6 +2364,9 @@ def _burner_drill_replacement_issue(observation: dict[str, Any]) -> dict[str, An
         return None
     if not _electric_network_available(observation):
         return None
+    electric_researched = _technology_researched(observation, "electric-mining-drill")
+    if not electric_researched and not _electric_drill_research_supply_ready(observation):
+        return None
     burners = [
         drill
         for drill in entities_named(observation, "burner-mining-drill")
@@ -2226,21 +2394,38 @@ def _burner_drill_replacement_issue(observation: dict[str, Any]) -> dict[str, An
         "burner_drill_count": len(burners),
         "electric_drill_count": len(electric_drills),
         "resource_counts": resource_counts,
-        "electric_mining_drill_researched": _technology_researched(observation, "electric-mining-drill"),
+        "electric_mining_drill_researched": electric_researched,
         "electric_mining_drill_stock": total_item_count(observation, "electric-mining-drill"),
         "electric_mining_drill_automated": automated,
     }
 
 
+def _electric_drill_research_supply_ready(observation: dict[str, Any]) -> bool:
+    if total_item_count(observation, "automation-science-pack") >= 25:
+        return True
+    for assembler in entities_named(observation, "assembling-machine-1"):
+        if str(assembler.get("recipe") or assembler.get("recipe_name") or "") != "automation-science-pack":
+            continue
+        if assembler.get("electric_network_connected") is False or _entity_no_power(assembler):
+            continue
+        if _entity_status_name_in(assembler, {"working", "waiting_for_space_in_destination"}):
+            return True
+        if entity_item_count(assembler, "automation-science-pack") > 0:
+            return True
+    return False
+
+
 def _electric_network_available(observation: dict[str, Any]) -> bool:
     for engine in entities_named(observation, "steam-engine"):
-        if _entity_status_is(engine, "no_power", 3):
+        if engine.get("electric_network_connected") is False:
             continue
-        if engine.get("electric_network_connected") is not False:
+        if _entity_no_power(engine) or _entity_status_name_in(engine, {"no_input_fluid", "no_fuel"}):
+            continue
+        if _entity_fluid_amount(engine, "steam") > 0 or str(engine.get("status_name") or "") == "working":
             return True
-    for name in POWER_ANCHOR_ENTITY_NAMES - {"steam-engine"}:
-        for pole in entities_named(observation, name):
-            if pole.get("electric_network_connected") is not False:
+    for name in ("solar-panel", "accumulator", "steam-turbine"):
+        for producer in entities_named(observation, name):
+            if producer.get("electric_network_connected") is not False and not _entity_no_power(producer):
                 return True
     return False
 

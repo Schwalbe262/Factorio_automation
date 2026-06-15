@@ -7094,3 +7094,98 @@
 - Next action: Continue with the live power/logistics blocker: restore factory power before repeating electric mining drill research or science production loops.
 - Token usage: not recorded for this loop / weekly quota unavailable
 
+## 2026-06-15 13:06:18 +09:00 - Loop 328
+- Part: skill
+- Goal: launch_rocket_program / setup_power
+- Hypothesis: Running `setup_power` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `setup_power` for up to 12 step(s).
+  - Tracked `steam` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-power-20260615-040611.jsonl`.
+- Candidates:
+  - Selected goal/skill: `setup_power`.
+  - Target item candidate: `steam` target `1`.
+- Metrics:
+  - Steps: 2.
+  - Status: ok.
+  - Duration: 7.375s.
+  - steam: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-power-20260615-040611.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":12,"target":1}`.
+- Result: Completed: steam power block is producing usable steam power
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 13:10:17 +09:00 - Loop 329
+- Part: skill
+- Goal: launch_rocket_program / setup_power
+- Hypothesis: Running `setup_power` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `setup_power` for up to 10 step(s).
+  - Tracked `steam` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-power-20260615-040929.jsonl`.
+- Candidates:
+  - Selected goal/skill: `setup_power`.
+  - Target item candidate: `steam` target `1`.
+- Metrics:
+  - Steps: 8.
+  - Status: ok.
+  - Duration: 48.078s.
+  - steam: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-power-20260615-040929.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":10,"target":1}`.
+- Result: Completed: steam power block is producing usable steam power
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 13:14:44 +09:00 - Loop 330
+- Part: skill
+- Goal: launch_rocket_program / plan_factory_site
+- Hypothesis: Running `plan_factory_site` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `plan_factory_site` for up to 1 step(s).
+  - Tracked `layout-plan` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260615-041438.jsonl`.
+- Candidates:
+  - Selected goal/skill: `plan_factory_site`.
+  - Target item candidate: `layout-plan` target `1`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 6.546s.
+  - layout-plan: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260615-041438.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1,"target":1}`.
+- Result: Completed: layout improvement plan: incomplete_logistics_link(82): finish producer-to-consumer belt or rail link before adding more consumers; incomplete_logistics_link(82): finish producer-to-consumer belt or rail link before adding more consumers; incomplete_logistics_link(82): finish producer-to-consumer belt or rail link before adding more consumers; incomplete_logistics_link(82): finish producer-to-consumer belt or rail link before adding more consumers; manual_power_fuel(76): route coal belt/inserter fuel feed to boiler before scaling electric machines; rebalance_green_circuit_ratio(78): rebuild or extend green circuits as a compact 3 cable to 2 circuit assembler pattern with short direct cable transfer; upgrade_lab_feed_pattern(66): use a short lab daisy chain or multi-feed science belt before expanding research throughput; best_candidate=green-circuit-long-handed-3-cable-2-circuit-cell score=82.7 not_applied=true
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 13:24:57 +09:00 - Loop 331
+
+- Part: unlock-aware layout reassessment and sustained factory power guardrails
+- Goal: Ensure newly usable long-handed inserters and later machines/modules/furnaces/beacons are automatically considered when site layouts are optimized, not just displayed as passive capability data.
+- Hypothesis: A usable layout tool should create both capability evidence and a concrete layout reassessment candidate when existing sites still use older assumptions; critical unpowered factory blocks should preempt research/layout loops until power is truly sustained.
+- Actions:
+  - Reviewed current planner/strategy/tests and live no-mod payload after `long-handed-inserter` became recipe-enabled.
+  - Added `unlock_layout_reassessment` opportunities for existing assembler, circuit, mall, and smelting sites when newly available layout tools can change footprint, throughput, power draw, pollution, or bottlenecks.
+  - Added generic `unlock-aware-site-rerank-*` simulation candidates so idle Slurm/Qwen layout work can benchmark retooling even outside specialized green-circuit, smelting, or starter-mall candidates.
+  - Fixed strategy capability detection so recipe automation in `assembling-machine-2/3` counts, not only `assembling-machine-1`.
+  - Preserved specific `gear/belt mall power` blockers when the generalized factory-power guardrail catches an unpowered gear/belt mall first.
+  - Verified live Slurm/Qwen readiness and noted that local `--require-llm` strategy still fails without local LLM env vars, despite the remote worker being ready.
+- Candidates:
+  - Live top layout candidate: `green-circuit-long-handed-3-cable-2-circuit-cell`, `uses_unlocked_items=["long-handed-inserter"]`, score `82.7`.
+  - New generic live candidate: `unlock-aware-site-rerank-long-handed-inserter`, `uses_unlocked_items=["long-handed-inserter"]`, score `79.1`.
+  - Live opportunity: `unlock_layout_reassessment`, affected site kinds `assembler_cell`, `build_item_mall`, `circuit_automation`.
+- Metrics:
+  - Full test suite: `499 passed in 25.79s`.
+  - Live capability: `long-handed-inserter.available=true`, `recipe_unlocked=true`, `researched=false`, `automated=false`.
+  - Slurm worker: job `678192` running, remote model `Qwen/Qwen3.5-4B`, `llm_ready=true`.
+  - Local required LLM smoke: failed with `LLM base URL or model is not configured`; remote worker path remains ready.
+- Result: Unlock-aware layout optimization now produces a concrete re-evaluation opportunity and candidate from live recipe unlock state, and power guardrails retain both general and gear/belt-specific blocker evidence.
+- Failure reason: Local direct LLM env is unset for `no-mod-strategy --require-llm`; this is an orchestration/config path issue, not a layout candidate failure.
+- Next action: Ensure the strategy/autopilot loop uses the remote Slurm Qwen path when LLM is required, then convert the current incomplete copper/gear/cable site links into executable logistics steps without hand-carry.
+- Token usage: 13,761,064 cumulative Codex tokens / weekly quota unavailable
+

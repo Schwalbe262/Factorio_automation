@@ -173,6 +173,38 @@ def burner_drill_replacement_observation(*, electric_researched: bool = False) -
     }
 
 
+def factory_power_down_before_electric_research_observation() -> dict:
+    observation = burner_drill_replacement_observation()
+    observation["inventory"] = {"iron-plate": 40, "copper-plate": 20, "coal": 8}
+    observation["entities"].extend(
+        [
+            {
+                "name": "boiler",
+                "unit_number": 30,
+                "position": {"x": -2, "y": 0},
+                "status_name": "no_fuel",
+                "fluids": {"1": {"name": "water", "amount": 200}},
+                "inventories": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 31,
+                "recipe": "automation-science-pack",
+                "position": {"x": 4, "y": 0},
+                "status": 54,
+                "status_name": "no_power",
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+        ]
+    )
+    for entity in observation["entities"]:
+        if entity.get("name") == "steam-engine":
+            entity["status_name"] = "no_input_fluid"
+            entity["fluids"] = {}
+    return observation
+
+
 class StrategyTests(unittest.TestCase):
     def test_electronic_circuit_goal_detects_iron_bottleneck(self):
         result = heuristic_strategy(
@@ -231,6 +263,22 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("electric mining drill research", result["blockers"])
         self.assertIn("burner_mining_drill_count=1", result["evidence"])
         self.assertIn("electric_mining_drill_researched=false", result["evidence"])
+
+    def test_rocket_goal_repairs_factory_power_before_electric_drill_research(self):
+        result = heuristic_strategy("launch_rocket_program", factory_power_down_before_electric_research_observation())
+
+        self.assertEqual(result["selected_skill"], "setup_power")
+        self.assertIn("factory power", result["blockers"])
+        self.assertIn("factory_power_unit=31", result["evidence"])
+        self.assertIn("factory_power_recipe=automation-science-pack", result["evidence"])
+
+    def test_rocket_goal_does_not_force_electric_drill_research_without_red_science_supply(self):
+        observation = burner_drill_replacement_observation()
+        observation["inventory"] = {"iron-plate": 40, "copper-plate": 20}
+
+        result = heuristic_strategy("launch_rocket_program", observation)
+
+        self.assertNotEqual(result["selected_skill"], "research_electric_mining_drill")
 
     def test_rocket_goal_bootstraps_electric_drill_mall_after_research(self):
         result = heuristic_strategy(
@@ -816,6 +864,47 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["guardrail_adjusted"]["from"], "research_electric_mining_drill")
         self.assertIn("gear_assembler_unit=inventory", result["evidence"])
         self.assertIn("costed gear/belt mall relocation", result["blockers"])
+
+    def test_reconcile_repairs_factory_power_before_electric_drill_research(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "research_electric_mining_drill",
+                "priority": 90,
+                "reason": "Burner drills remain.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            factory_power_down_before_electric_research_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "setup_power")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "research_electric_mining_drill")
+        self.assertIn("factory power", result["blockers"])
+        self.assertIn("factory_power_recipe=automation-science-pack", result["evidence"])
+
+    def test_reconcile_does_not_force_electric_drill_research_without_red_science_supply(self):
+        observation = burner_drill_replacement_observation()
+        observation["inventory"] = {"iron-plate": 40, "copper-plate": 20}
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 90,
+                "reason": "Fix science logistics first.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "research_logistics")
+        self.assertNotIn("electric mining drill research", result["blockers"])
 
     def test_reconcile_promotes_fuel_dependent_expansion_to_coal_supply(self):
         result = reconcile_strategy_decision(
@@ -1484,6 +1573,30 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(capabilities["machines"]["assembling-machine-2"]["available"])
         self.assertTrue(capabilities["beacons"]["beacon"]["available"])
         self.assertTrue(capabilities["rerank_trigger"])
+
+    def test_layout_context_counts_higher_tier_assembler_recipe_automation(self):
+        payload = make_strategy_payload(
+            "launch_rocket_program",
+            {
+                "inventory": {},
+                "entities": [
+                    {
+                        "name": "assembling-machine-2",
+                        "recipe": "long-handed-inserter",
+                        "position": {"x": 0, "y": 0},
+                        "electric_network_connected": True,
+                        "inventories": {},
+                    }
+                ],
+                "resources": [],
+                "research": {"technologies": {}},
+            },
+        )
+
+        capability = payload["layout_improvement"]["layout_capabilities"]["inserters"]["long-handed-inserter"]
+        self.assertTrue(capability["available"])
+        self.assertTrue(capability["automated"])
+        self.assertTrue(payload["layout_improvement"]["layout_capabilities"]["rerank_trigger"])
 
     def test_strategy_payload_exposes_build_item_supply_context(self):
         payload = make_strategy_payload(

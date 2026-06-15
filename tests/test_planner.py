@@ -25,6 +25,7 @@ from factorio_ai.planner import (
     StoneSupplySkill,
     StarterDefenseSkill,
     factory_layout_issues,
+    factory_layout_opportunities,
     factory_layout_simulation_candidates,
 )
 
@@ -705,6 +706,68 @@ class PlannerTests(unittest.TestCase):
 
         self.assertTrue(candidate["layout_unlocks_considered"]["long_handed_inserter"]["recipe_unlocked"])
         self.assertIn("long-handed-inserter", candidate["uses_unlocked_items"])
+
+    def test_factory_layout_adds_unlock_reassessment_when_long_handed_changes_site_options(self):
+        obs = base_observation()
+        obs["recipe_unlocks"] = {"long-handed-inserter": {"enabled": True}}
+        obs["entities"] = [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 927,
+                "recipe": "inserter",
+                "position": {"x": 10, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+            {
+                "name": "transport-belt",
+                "unit_number": 928,
+                "position": {"x": 10, "y": -3},
+                "direction": 4,
+                "inventories": {},
+            },
+            {
+                "name": "inserter",
+                "unit_number": 929,
+                "position": {"x": 10, "y": -2},
+                "direction": 0,
+                "inventories": {},
+            },
+        ]
+
+        opportunities = factory_layout_opportunities(obs)
+        opportunity = next(item for item in opportunities if item["kind"] == "unlock_layout_reassessment")
+
+        self.assertIn("long-handed-inserter", opportunity["parameters"]["retool_tools"])
+        self.assertIn("build_item_mall", opportunity["parameters"]["affected_site_kinds"])
+
+    def test_factory_layout_unlock_reassessment_candidate_records_retool_tools(self):
+        obs = base_observation()
+        obs["recipe_unlocks"] = {
+            "long-handed-inserter": {"enabled": True},
+            "assembling-machine-2": {"enabled": True},
+        }
+        obs["entities"] = [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 930,
+                "recipe": "electronic-circuit",
+                "position": {"x": 10, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        ]
+
+        candidate = next(
+            item
+            for item in factory_layout_simulation_candidates(obs)
+            if item["candidate_id"].startswith("unlock-aware-site-rerank")
+        )
+
+        self.assertIn("long-handed-inserter", candidate["uses_unlocked_items"])
+        self.assertIn("assembling-machine-2", candidate["uses_unlocked_items"])
+        self.assertTrue(candidate["simulation"]["delta"]["unlock_aware_rerank"])
+        self.assertTrue(candidate["simulation"]["delta"]["requires_bottleneck_recheck"])
 
     def test_factory_layout_uses_higher_tier_assembler_when_recipe_is_enabled(self):
         obs = base_observation()
@@ -2319,7 +2382,7 @@ class PlannerTests(unittest.TestCase):
                 "position": {"x": 12.5, "y": 10},
                 "direction": 0,
                 "distance": 12,
-                "inventories": {"1": {"coal": 5}},
+                "inventories": {"1": {"coal": 10}},
                 "fluids": {
                     "1": {"name": "water", "amount": 200},
                     "2": {"name": "steam", "amount": 20},
@@ -2367,7 +2430,7 @@ class PlannerTests(unittest.TestCase):
                 "position": {"x": 8.5, "y": 11.5},
                 "direction": 8,
                 "distance": 12,
-                "inventories": {"1": {"coal": 5}},
+                "inventories": {"1": {"coal": 10}},
                 "fluids": {
                     "1": {"name": "water", "amount": 200},
                     "2": {"name": "steam", "amount": 20},
