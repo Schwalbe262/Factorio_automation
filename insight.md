@@ -627,3 +627,12 @@
 - After: Attached strategy task execution retries retryable timeouts/errors and can reuse an already moved remote task file. `BuildItemMallSkill("transport-belt")` can retask a powered small-electric-pole mall assembler when pole stock is sufficient, clearing incompatible contents before `set_recipe`.
 - Evidence: `{"tests":"521 passed","slurm_retry_test":"request_strategy TimeoutExpired then success","live_before":"transport-belt mall action=null; cannot find powered or wireable site","live_after":{"action":"take copper-cable","unit_number":318,"count":4,"next":"set recipe to transport-belt"},"live_llm_strategy":"Qwen plan_factory_site guardrailed to setup_power; AI/server inserted coal x2 without moving r1jae"}`
 - Remaining risk: The live retooling action has not yet been executed after the patch. Boiler fuel is still not steady-state; the next loop must retool unit 318, get belt output, and then build the boiler coal feed route.
+
+## 2026-06-15 15:54:31 +09:00 - Insight 76
+
+- Source loop: Loop 347
+- Improvement: The belt mall now preserves the only `transport-belt` assembler while bootstrapping iron-gear automation, so Qwen does not fall back into repeated emergency power loops before the mall is staged.
+- Before: After unit 318 was retooled to `transport-belt`, the next `BuildItemMallSkill("transport-belt")` prerequisite path selected unit 318 again for `iron-gear-wheel`, which would undo belt automation. Qwen-required strategy also kept returning to `setup_power` because the one-coal emergency boiler window expired during the remote strategy round trip.
+- After: Planner selection prefers a different powered assembler for iron gears and preserves the only belt assembler. Strategy guardrails now redirect `plan_factory_site`/`setup_power` to `bootstrap_build_item_mall target_item=transport-belt` when a nearby non-belt assembler can be retooled to gears. Live execution set unit 537 to `iron-gear-wheel` while unit 318 stayed `transport-belt`.
+- Evidence: `{"tests":"526 passed","live_strategy_id":"strategy-5a4a02f2b76c4b76b793df90d39c93d5","guardrailed_skill":"bootstrap_build_item_mall","target_item":"transport-belt","preserved_belt_unit":318,"gear_retool_unit":537,"live_log":"logs/strategy-build-item-mall-20260615-065213.jsonl","after":{"unit318_recipe":"transport-belt","unit537_recipe":"iron-gear-wheel"}}`
+- Remaining risk: Transport belts are not produced yet. The next blocker is iron-plate input to unit 537 from a source about 149 tiles away; hand-carry remains correctly refused and needs a placement/logistics solution.

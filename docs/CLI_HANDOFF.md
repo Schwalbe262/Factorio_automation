@@ -175,6 +175,15 @@ Latest continuation after Part 105:
   - Live read-only verification changed the transport-belt mall decision from `action=null; cannot find a powered or wireable site` to `take copper-cable x4 from assembler unit 318 before setting transport-belt`.
   - Full verification: `PYTHONPATH=src pytest -q` -> `521 passed`.
   - Next live step: run the Qwen/no-mod loop with a small cap so unit 318 is cleared and retooled, then use belt output for the boiler coal feed route.
+- Part 119 preserves the live belt assembler while bootstrapping gear input:
+  - Unlock-aware layout optimization already considers `long-handed-inserter` automatically from technology, recipe unlock, stock, or an existing assembler, and candidate metadata separates `uses_unlocked_items` from missing build-item supply.
+  - The current live belt mall then exposed a separate executor issue: after unit 318 was retooled to `transport-belt`, the nested iron-gear bootstrap tried to retask that same belt assembler back to `iron-gear-wheel`.
+  - `BuildItemMallSkill("iron-gear-wheel")` now prefers non-belt powered assemblers before considering any transport-belt assembler, and preserves the only belt assembler when transport-belt output is not ready.
+  - `BuildItemMallSkill("transport-belt")` can set the nearby gear assembler recipe before another short emergency power window, so remote Qwen latency does not force repeated boiler fueling before the mall is staged.
+  - Strategy guardrails now route `plan_factory_site` or `setup_power` to `bootstrap_build_item_mall target_item=transport-belt` when a belt assembler exists and a nearby non-belt assembler can be retooled to gears.
+  - Live Qwen read-only changed from repeated `setup_power` to `bootstrap_build_item_mall target_item=transport-belt`, preserving unit 318 and selecting unit 537 for gear retooling. A capped live step then set unit 537 to `iron-gear-wheel` through the `AI/server` virtual agent.
+  - Full verification: `PYTHONPATH=src pytest -q` -> `526 passed`.
+  - Current live blocker after this part: unit 537 now needs iron plates, but the nearest source is about 149 tiles away, so hand-carry is correctly refused. Next work should solve this with placement/logistics cost handling rather than manual transfer.
 
 Part 64 introduced:
 

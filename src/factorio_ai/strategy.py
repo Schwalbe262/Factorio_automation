@@ -1131,6 +1131,92 @@ def reconcile_strategy_decision(
     critical_factory_power_issue = _critical_factory_power_issue(observation)
     gear_belt_mall_power_issue = _gear_belt_mall_power_issue(observation)
     gear_belt_mall_bootstrap_issue = _gear_belt_mall_bootstrap_issue(observation)
+    transport_belt_mall_gear_retool_issue = _transport_belt_mall_gear_retool_issue(observation)
+    transport_belt_mall_retool_issue = _transport_belt_mall_retool_issue(observation)
+    if transport_belt_mall_gear_retool_issue is not None and selected in {
+        "setup_power",
+        "plan_factory_site",
+        "bootstrap_build_item_mall",
+        "bootstrap_power_pole_mall",
+        "build_iron_plate_logistic_line_to_gear_mall",
+        "build_site_input_logistic_line",
+        "research_electric_mining_drill",
+        "produce_automation_science_pack",
+    }:
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "bootstrap_build_item_mall"
+        adjusted["target_item"] = "transport-belt"
+        adjusted["target_count"] = max(_positive_int_or_none(decision.get("target_count")) or 0, 20)
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 94)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            f"LLM selected {selected}, but the transport-belt assembler should be preserved and a nearby "
+            "non-belt assembler can be retooled to iron-gear-wheel before repeating emergency boiler fueling."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(
+            set(_string_list(decision.get("blockers")) + ["iron-gear assembler retooling before repeated power bootstrap"])
+        )
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            f"belt_assembler_unit={transport_belt_mall_gear_retool_issue.get('belt_unit')}",
+            f"gear_retool_assembler_unit={transport_belt_mall_gear_retool_issue.get('gear_unit')}",
+            f"gear_retool_assembler_recipe={transport_belt_mall_gear_retool_issue.get('gear_recipe')}",
+            f"mall_distance_tiles={transport_belt_mall_gear_retool_issue.get('mall_distance_tiles')}",
+            "transport_belt_automation_ready=false",
+            "preserve_transport_belt_assembler=true",
+        ]
+        adjusted["expected_effect"] = (
+            "Set a nearby reusable assembler to iron gears while preserving the transport-belt assembler, "
+            "then use the next power window to produce belts."
+        )
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": "bootstrap_build_item_mall",
+            "reason": guardrail_reason,
+        }
+        return adjusted
+    if transport_belt_mall_retool_issue is not None and selected in {
+        "setup_power",
+        "plan_factory_site",
+        "bootstrap_build_item_mall",
+        "bootstrap_power_pole_mall",
+        "build_iron_plate_logistic_line_to_gear_mall",
+        "build_site_input_logistic_line",
+        "research_electric_mining_drill",
+        "produce_automation_science_pack",
+    }:
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "bootstrap_build_item_mall"
+        adjusted["target_item"] = "transport-belt"
+        adjusted["target_count"] = max(_positive_int_or_none(decision.get("target_count")) or 0, 20)
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 93)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            f"LLM selected {selected}, but the boiler fuel route is blocked on transport-belt automation and "
+            "an existing stocked small-electric-pole mall assembler can be safely retooled to transport-belt."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(
+            set(_string_list(decision.get("blockers")) + ["transport-belt mall retooling before boiler fuel route"])
+        )
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            f"retool_assembler_unit={transport_belt_mall_retool_issue.get('unit')}",
+            f"retool_assembler_recipe={transport_belt_mall_retool_issue.get('recipe')}",
+            f"small_electric_pole_stock={transport_belt_mall_retool_issue.get('small_electric_pole_stock')}",
+            f"clear_item={transport_belt_mall_retool_issue.get('clear_item')}",
+            "transport_belt_automation_ready=false",
+        ]
+        adjusted["expected_effect"] = (
+            "Retool the stocked starter mall assembler to transport belts so belts can feed the boiler and later site links."
+        )
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": "bootstrap_build_item_mall",
+            "reason": guardrail_reason,
+        }
+        return adjusted
     if critical_factory_power_issue is not None and selected in {
         "plan_factory_site",
         "produce_electronic_circuit",
@@ -3310,6 +3396,139 @@ def _gear_belt_mall_bootstrap_issue(observation: dict[str, Any]) -> dict[str, An
                 ),
             }
     return best_issue
+
+
+def _transport_belt_mall_retool_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
+    if not _technology_researched(observation, "automation"):
+        return None
+    if _transport_belt_automation_ready(observation):
+        return None
+    if inventory_count(observation, "assembling-machine-1") > 0:
+        return None
+    pole_stock = total_item_count(observation, "small-electric-pole")
+    if pole_stock < 8:
+        return None
+    candidates: list[tuple[float, dict[str, Any]]] = []
+    assemblers = (
+        entities_named(observation, "assembling-machine-1")
+        + entities_named(observation, "assembling-machine-2")
+        + entities_named(observation, "assembling-machine-3")
+    )
+    for assembler in assemblers:
+        if str(assembler.get("recipe") or assembler.get("recipe_name") or "") != "small-electric-pole":
+            continue
+        if assembler.get("electric_network_connected") is False:
+            continue
+        position = _position(assembler)
+        if position is None:
+            continue
+        if _near_recipe_assembler_for_strategy(observation, position, {"copper-cable", "electronic-circuit"}, radius=3.0):
+            continue
+        candidates.append((float(assembler.get("distance") or 999999.0), assembler))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    assembler = candidates[0][1]
+    return {
+        "unit": assembler.get("unit_number"),
+        "recipe": assembler.get("recipe") or assembler.get("recipe_name"),
+        "position": assembler.get("position"),
+        "small_electric_pole_stock": pole_stock,
+        "clear_item": _first_incompatible_retool_item_for_strategy(assembler, "transport-belt"),
+    }
+
+
+def _transport_belt_mall_gear_retool_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
+    if not _technology_researched(observation, "automation"):
+        return None
+    if _transport_belt_automation_ready(observation):
+        return None
+    if inventory_count(observation, "assembling-machine-1") > 0:
+        return None
+    assemblers = (
+        entities_named(observation, "assembling-machine-1")
+        + entities_named(observation, "assembling-machine-2")
+        + entities_named(observation, "assembling-machine-3")
+    )
+    belt_assemblers = [
+        assembler
+        for assembler in assemblers
+        if str(assembler.get("recipe") or assembler.get("recipe_name") or "") == "transport-belt"
+        and assembler.get("electric_network_connected") is not False
+    ]
+    if not belt_assemblers:
+        return None
+    if any(
+        str(assembler.get("recipe") or assembler.get("recipe_name") or "") == "iron-gear-wheel"
+        and assembler.get("electric_network_connected") is not False
+        for assembler in assemblers
+    ):
+        return None
+    best_issue: dict[str, Any] | None = None
+    best_distance = 999999.0
+    for belt in belt_assemblers:
+        belt_position = _position(belt)
+        if belt_position is None:
+            continue
+        for assembler in assemblers:
+            recipe = str(assembler.get("recipe") or assembler.get("recipe_name") or "")
+            if recipe in {"transport-belt", "iron-gear-wheel", "copper-cable", "electronic-circuit", "small-electric-pole"}:
+                continue
+            if assembler.get("electric_network_connected") is False:
+                continue
+            position = _position(assembler)
+            if position is None:
+                continue
+            mall_distance = _distance(position, belt_position)
+            if mall_distance is None or mall_distance > 16.0 or mall_distance >= best_distance:
+                continue
+            best_distance = mall_distance
+            best_issue = {
+                "belt_unit": belt.get("unit_number"),
+                "gear_unit": assembler.get("unit_number"),
+                "gear_recipe": recipe,
+                "mall_distance_tiles": round(mall_distance, 1),
+            }
+    return best_issue
+
+
+def _near_recipe_assembler_for_strategy(
+    observation: dict[str, Any],
+    position: dict[str, float],
+    recipes: set[str],
+    *,
+    radius: float,
+) -> bool:
+    for assembler in (
+        entities_named(observation, "assembling-machine-1")
+        + entities_named(observation, "assembling-machine-2")
+        + entities_named(observation, "assembling-machine-3")
+    ):
+        if str(assembler.get("recipe") or assembler.get("recipe_name") or "") not in recipes:
+            continue
+        other_position = _position(assembler)
+        if other_position is not None and distance(position, other_position) <= radius:
+            return True
+    return False
+
+
+def _first_incompatible_retool_item_for_strategy(assembler: dict[str, Any], target_recipe: str) -> str | None:
+    allowed_by_recipe = {
+        "transport-belt": {"iron-plate", "iron-gear-wheel", "transport-belt"},
+    }
+    allowed = allowed_by_recipe.get(target_recipe, set())
+    inventories = assembler.get("inventories") if isinstance(assembler.get("inventories"), dict) else {}
+    for inventory in inventories.values():
+        if not isinstance(inventory, dict):
+            continue
+        for item, raw_count in inventory.items():
+            try:
+                count = int(raw_count or 0)
+            except (TypeError, ValueError):
+                count = 0
+            if count > 0 and item not in allowed:
+                return str(item)
+    return None
 
 
 def _local_iron_plate_seed_source(

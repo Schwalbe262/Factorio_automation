@@ -3414,6 +3414,60 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["recipe"], "transport-belt")
         self.assertEqual(decision.action["unit_number"], 901)
 
+    def test_build_item_mall_preserves_belt_assembler_when_bootstrapping_gears(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 10}
+        obs["craftable"] = {"iron-gear-wheel": 5}
+        obs["entities"].append(mall_assembler(recipe="transport-belt", inventory={}))
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 902,
+                "position": {"x": 8.0, "y": 2.0},
+                "distance": 8,
+                "recipe": "automation-science-pack",
+                "electric_network_connected": True,
+                "inventories": {"1": {}},
+            }
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "set_recipe")
+        self.assertEqual(decision.action["recipe"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 902)
+
+    def test_build_item_mall_can_retool_gear_assembler_before_power_window(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 10}
+        obs["craftable"] = {"iron-gear-wheel": 5}
+        for entity in obs["entities"]:
+            if entity.get("name") == "boiler":
+                entity["status_name"] = "no_fuel"
+                entity["inventories"] = {}
+                entity["fluids"] = {"1": {"name": "water", "amount": 200}}
+            if entity.get("name") == "steam-engine":
+                entity["status"] = 5
+                entity["fluids"] = {}
+        obs["entities"].append(mall_assembler(recipe="transport-belt", inventory={}))
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 902,
+                "position": {"x": 8.0, "y": 2.0},
+                "distance": 8,
+                "recipe": "automation-science-pack",
+                "electric_network_connected": True,
+                "inventories": {"1": {}},
+            }
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "set_recipe")
+        self.assertEqual(decision.action["recipe"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 902)
+
     def test_build_item_mall_recovers_unassigned_assembler_outside_planned_site(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"iron-plate": 10, "iron-gear-wheel": 10}

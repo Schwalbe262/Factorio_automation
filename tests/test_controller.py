@@ -205,6 +205,41 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(rows[0]["source"], "llm")
         self.assertTrue(rows[0]["ok"])
 
+    def test_remote_strategy_timeout_is_configurable(self):
+        class FakeController(FactorioController):
+            def observe(self):
+                return {"ok": True, "tick": 1, "inventory": {}, "entities": [], "enemies": [], "research": {}}
+
+        remote_result = {
+            "selected_skill": "plan_factory_site",
+            "priority": 80,
+            "reason": "remote qwen selected layout",
+            "evidence": [],
+            "blockers": [],
+            "expected_effect": "diagnose layout",
+            "source": "llm",
+            "ok": True,
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = make_test_config(Path(temp_dir))
+            controller = FakeController(cfg)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_LLM_BASE_URL": "",
+                        "FACTORIO_AI_LLM_MODEL": "",
+                        "FACTORIO_AI_REQUIRE_LLM_AUTO_SLURM": "1",
+                        "FACTORIO_AI_REMOTE_STRATEGY_TIMEOUT_SECONDS": "123",
+                    },
+                ),
+                patch("factorio_ai.remote_slurm.llm_status", return_value={"ok": True, "llm_ready": True}),
+                patch("factorio_ai.remote_slurm.request_strategy", return_value=remote_result) as request_strategy,
+            ):
+                controller.strategy_decision("launch_rocket_program", require_llm=True)
+
+        self.assertEqual(request_strategy.call_args.kwargs["timeout_seconds"], 123)
+
     def test_required_llm_auto_slurm_can_be_disabled_for_local_only(self):
         class FakeController(FactorioController):
             def observe(self):

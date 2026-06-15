@@ -272,6 +272,116 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("factory_power_unit=31", result["evidence"])
         self.assertIn("factory_power_recipe=automation-science-pack", result["evidence"])
 
+    def test_reconcile_retools_belt_mall_before_repeating_emergency_power(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 80,
+                "reason": "layout diagnostics",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {"small-electric-pole": 23},
+                "entities": [
+                    {
+                        "name": "boiler",
+                        "unit_number": 272,
+                        "position": {"x": -43.5, "y": 19},
+                        "status_name": "no_fuel",
+                        "inventories": {},
+                    },
+                    {
+                        "name": "assembling-machine-1",
+                        "unit_number": 318,
+                        "recipe": "small-electric-pole",
+                        "position": {"x": -40.5, "y": 15.5},
+                        "electric_network_connected": True,
+                        "inventories": {"2": {"copper-cable": 4}},
+                    },
+                    {
+                        "name": "assembling-machine-1",
+                        "unit_number": 341,
+                        "recipe": "copper-cable",
+                        "position": {"x": -37.5, "y": 11.5},
+                        "electric_network_connected": True,
+                        "inventories": {},
+                    },
+                    {
+                        "name": "assembling-machine-1",
+                        "unit_number": 342,
+                        "recipe": "electronic-circuit",
+                        "position": {"x": -33.5, "y": 11.5},
+                        "electric_network_connected": True,
+                        "inventories": {},
+                    },
+                ],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
+        )
+
+        self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(result["target_item"], "transport-belt")
+        self.assertEqual(result["target_count"], 20)
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertIn("transport-belt mall retooling before boiler fuel route", result["blockers"])
+        self.assertIn("retool_assembler_unit=318", result["evidence"])
+        self.assertIn("clear_item=copper-cable", result["evidence"])
+
+    def test_reconcile_retools_gear_assembler_without_overwriting_belt_assembler(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "setup_power",
+                "priority": 94,
+                "reason": "boiler no fuel",
+                "evidence": [],
+                "blockers": ["factory power"],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {"small-electric-pole": 23},
+                "entities": [
+                    {
+                        "name": "boiler",
+                        "unit_number": 272,
+                        "position": {"x": -43.5, "y": 19},
+                        "status_name": "no_fuel",
+                        "inventories": {},
+                    },
+                    {
+                        "name": "assembling-machine-1",
+                        "unit_number": 318,
+                        "recipe": "transport-belt",
+                        "position": {"x": -40.5, "y": 15.5},
+                        "electric_network_connected": True,
+                        "inventories": {},
+                    },
+                    {
+                        "name": "assembling-machine-1",
+                        "unit_number": 537,
+                        "recipe": "automation-science-pack",
+                        "position": {"x": -36.5, "y": 15.5},
+                        "electric_network_connected": True,
+                        "inventories": {},
+                    },
+                ],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
+        )
+
+        self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(result["target_item"], "transport-belt")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "setup_power")
+        self.assertIn("iron-gear assembler retooling before repeated power bootstrap", result["blockers"])
+        self.assertIn("belt_assembler_unit=318", result["evidence"])
+        self.assertIn("gear_retool_assembler_unit=537", result["evidence"])
+        self.assertIn("preserve_transport_belt_assembler=true", result["evidence"])
+
     def test_rocket_goal_does_not_force_electric_drill_research_without_red_science_supply(self):
         observation = burner_drill_replacement_observation()
         observation["inventory"] = {"iron-plate": 40, "copper-plate": 20}

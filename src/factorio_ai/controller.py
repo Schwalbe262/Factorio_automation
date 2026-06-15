@@ -534,7 +534,7 @@ class FactorioController:
                         production_targets=production_targets,
                         selected_improvement_site=selected_improvement_site,
                         available_skills=skill_catalog_payload(),
-                        timeout_seconds=30,
+                        timeout_seconds=_remote_strategy_timeout_seconds(),
                     )
                     record_llm_decision(
                         self.cfg.log_dir,
@@ -2681,6 +2681,10 @@ def _float_env(name: str, default: float) -> float:
         return float(os.getenv(name, ""))
     except (TypeError, ValueError):
         return default
+
+
+def _remote_strategy_timeout_seconds() -> int:
+    return max(5, int(_float_env("FACTORIO_AI_REMOTE_STRATEGY_TIMEOUT_SECONDS", 90.0)))
 
 
 def _parse_datetime(value: Any) -> datetime | None:

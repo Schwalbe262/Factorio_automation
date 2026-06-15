@@ -7457,3 +7457,150 @@
 - Next action: Run the Qwen/no-mod loop with a small step cap after this commit, verify unit 318 retools to `transport-belt`, then connect boiler coal feed so emergency fuel is no longer needed.
 - Token usage: 16,012,090 cumulative Codex tokens / weekly quota unavailable; delta since Loop 339 record approximately 225,902 tokens.
 
+## 2026-06-15 15:33:30 +09:00 - Loop 342
+- Part: skill
+- Goal: launch_rocket_program / bootstrap_build_item_mall
+- Hypothesis: Running `bootstrap_build_item_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `bootstrap_build_item_mall` for up to 2 step(s).
+  - Tracked `transport-belt` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-build-item-mall-20260615-063308.jsonl`.
+- Candidates:
+  - Selected goal/skill: `bootstrap_build_item_mall`.
+  - Target item candidate: `transport-belt` target `20`.
+- Metrics:
+  - Steps: 2.
+  - Status: failed.
+  - Duration: 22.187s.
+  - transport-belt: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-build-item-mall-20260615-063308.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":2,"target":20}`.
+- Result: Loop stopped: max steps reached: 2
+- Failure reason: max steps reached: 2
+- Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 15:35:48 +09:00 - Loop 343
+- Part: skill
+- Goal: launch_rocket_program / bootstrap_build_item_mall
+- Hypothesis: Running `bootstrap_build_item_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `bootstrap_build_item_mall` for up to 4 step(s).
+  - Tracked `transport-belt` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-build-item-mall-20260615-063517.jsonl`.
+- Candidates:
+  - Selected goal/skill: `bootstrap_build_item_mall`.
+  - Target item candidate: `transport-belt` target `20`.
+- Metrics:
+  - Steps: 4.
+  - Status: failed.
+  - Duration: 31.266s.
+  - transport-belt: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-build-item-mall-20260615-063517.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":4,"target":20}`.
+- Result: Loop stopped: max steps reached: 4
+- Failure reason: max steps reached: 4
+- Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 15:42:45 +09:00 - Loop 344
+- Part: skill
+- Goal: launch_rocket_program / setup_power
+- Hypothesis: Running `setup_power` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `setup_power` for up to 1 step(s).
+  - Tracked `steam` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-power-20260615-064228.jsonl`.
+- Candidates:
+  - Selected goal/skill: `setup_power`.
+  - Target item candidate: `steam` target `1`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 16.437s.
+  - steam: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-power-20260615-064228.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1,"target":1}`.
+- Result: Loop stopped: max steps reached: 1
+- Failure reason: max steps reached: 1
+- Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 15:44:52 +09:00 - Loop 345
+- Part: skill
+- Goal: launch_rocket_program / setup_power
+- Hypothesis: Running `setup_power` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `setup_power` for up to 3 step(s).
+  - Tracked `steam` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-power-20260615-064425.jsonl`.
+- Candidates:
+  - Selected goal/skill: `setup_power`.
+  - Target item candidate: `steam` target `1`.
+- Metrics:
+  - Steps: 3.
+  - Status: failed.
+  - Duration: 26.562s.
+  - steam: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-power-20260615-064425.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":3,"target":1}`.
+- Result: Loop stopped: max steps reached: 3
+- Failure reason: max steps reached: 3
+- Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 15:52:21 +09:00 - Loop 346
+- Part: skill
+- Goal: launch_rocket_program / bootstrap_build_item_mall
+- Hypothesis: Running `bootstrap_build_item_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `bootstrap_build_item_mall` for up to 1 step(s).
+  - Tracked `transport-belt` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-build-item-mall-20260615-065213.jsonl`.
+- Candidates:
+  - Selected goal/skill: `bootstrap_build_item_mall`.
+  - Target item candidate: `transport-belt` target `20`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 7.234s.
+  - transport-belt: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-build-item-mall-20260615-065213.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1,"target":20}`.
+- Result: Loop stopped: max steps reached: 1
+- Failure reason: max steps reached: 1
+- Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 15:54:31 +09:00 - Loop 347
+
+- Part: Part 119 belt mall gear retool and unlock-aware layout check
+- Goal: Answer whether newly available long-handed inserters are automatically considered by site layout optimization, then remove the current live blocker that made the belt mall undo its own `transport-belt` assembler while trying to bootstrap iron gears.
+- Hypothesis: Unlock-aware layout reranking already handles long-handed inserters from technology, recipe unlocks, stock, or existing automation, but the current belt mall executor still needs a deterministic guard so prerequisite gear automation preserves the only transport-belt assembler.
+- Actions:
+  - Re-read `goal.md`, `docs/CLI_HANDOFF.md`, planner, strategy, Slurm compact payload, and dashboard paths related to `layout_unlocks_considered`, `uses_unlocked_items`, `used_unlocked_item_state`, and `build_item_supply`.
+  - Confirmed that long-handed inserters, modules, better assemblers/furnaces, and beacons are already part of automatic layout candidate reranking and are exposed to the Web UI and Qwen payload with missing build-item supply separated from recipe availability.
+  - Added configurable remote Qwen strategy timeout through `FACTORIO_AI_REMOTE_STRATEGY_TIMEOUT_SECONDS` so attached strategy calls do not fail at the old fixed 30 second cap.
+  - Added strategy guardrails for two belt-mall states: retooling the stocked small-electric-pole assembler into `transport-belt`, and then preserving that belt assembler while retooling a different nearby assembler into `iron-gear-wheel`.
+  - Changed `BuildItemMallSkill("iron-gear-wheel")` to prefer non-belt powered assemblers and preserve the only `transport-belt` assembler when belt output is not ready.
+  - Added a narrow pre-power recipe retool path so `BuildItemMallSkill("transport-belt")` can set the gear assembler recipe before another short emergency boiler fuel window.
+  - Ran Qwen-required live read-only strategy calls and one capped live mutation through the `AI/server` virtual agent, not `r1jae`.
+  - Recorded Codex token usage sample `part119 belt mall gear retool`.
+- Candidates:
+  - Layout candidate already automatic: `green-circuit-long-handed-3-cable-2-circuit-cell`.
+  - Layout candidate already automatic: `unlock-aware-site-rerank-long-handed-inserter`.
+  - Live preserved assembler: unit 318, recipe `transport-belt`.
+  - Live retooled gear assembler: unit 537, recipe changed from `automation-science-pack` to `iron-gear-wheel`.
+- Metrics:
+  - Focused planner tests: `4 passed, 198 deselected`.
+  - Focused strategy tests: `4 passed, 81 deselected`.
+  - Full tests: `526 passed in 26.37s`.
+  - Live before fix: Qwen selected `plan_factory_site`, guardrail repeatedly changed to `setup_power` because boiler 272 ran out of the one-coal emergency fuel before the next Qwen round trip completed.
+  - Live read-only after fix: Qwen selected `plan_factory_site`, guardrail changed to `bootstrap_build_item_mall target_item=transport-belt`, with evidence `belt_assembler_unit=318`, `gear_retool_assembler_unit=537`, `preserve_transport_belt_assembler=true`.
+  - Live mutation log: `C:\Users\NEC\Documents\Factorio\logs\strategy-build-item-mall-20260615-065213.jsonl`.
+  - Live after mutation: unit 318 remains `transport-belt`; unit 537 is now `iron-gear-wheel`; next blocker is iron-plate input from a source about 149 tiles away, and hand-carry is correctly refused.
+- Result: Long-handed inserter availability is already automatically considered for layout optimization. The new Part 119 code fixes the separate live belt-mall executor problem by preserving the belt assembler and retooling a different assembler for gears, even when the power window is too short for another remote Qwen round trip.
+- Failure reason: Transport belts are still not produced. The next blocker is not recipe selection; it is the costed placement/logistics problem of feeding iron plates to the gear assembler without player hand-carry.
+- Next action: Solve the unit 537 iron-plate input by relocating the gear/belt mall closer to iron or building an automation-first logistics route once belt supply is available; do not hand-carry iron plates across the 149-tile gap.
+- Token usage: 16,414,262 raw Codex tokens / weekly quota unavailable; delta since Part 118 final sample 402,172 tokens.
+

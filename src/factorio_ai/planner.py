@@ -8267,6 +8267,14 @@ class BuildItemMallSkill:
             reference_position=reference_position,
         )
         if not _steam_power_ready(power_block):
+            decision = self._pre_power_recipe_retool_decision(
+                observation,
+                player,
+                allow_existing_remote=allow_existing_remote,
+                reference_position=reference_position,
+            )
+            if decision is not None:
+                return decision
             decision = self.power_skill.next_action(
                 observation,
                 allow_existing_remote=allow_existing_remote,
@@ -8448,6 +8456,47 @@ class BuildItemMallSkill:
             },
             f"set build item mall assembler recipe to {recipe}",
         )
+
+    def _pre_power_recipe_retool_decision(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        *,
+        allow_existing_remote: bool = False,
+        reference_position: dict[str, float] | None = None,
+    ) -> PlannerDecision | None:
+        if self.target_item != "transport-belt":
+            return None
+        belt_cell = _find_build_item_mall_cell(
+            observation,
+            "transport-belt",
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position,
+        )
+        belt_assembler = belt_cell.get("assembler") if isinstance(belt_cell, dict) else None
+        if not isinstance(belt_assembler, dict) or str(belt_assembler.get("recipe") or "") != "transport-belt":
+            return None
+        recipe = RECIPES.get("transport-belt")
+        if recipe is None:
+            return None
+        batch_count = _build_item_mall_batch_count(recipe.products.get("transport-belt", 1.0), self.target_count)
+        needed_gears = max(1, int(recipe.ingredients.get("iron-gear-wheel", 1) * batch_count))
+        if entity_item_count(belt_assembler, "iron-gear-wheel") >= needed_gears:
+            return None
+        if inventory_count(observation, "iron-gear-wheel") > 0:
+            return None
+        gear_cell = _find_build_item_mall_cell(
+            observation,
+            "iron-gear-wheel",
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position or _position(belt_assembler),
+        )
+        gear_assembler = gear_cell.get("assembler") if isinstance(gear_cell, dict) else None
+        if not isinstance(gear_assembler, dict):
+            return None
+        if str(gear_assembler.get("recipe") or "") in {"iron-gear-wheel", "transport-belt"}:
+            return None
+        return self._set_recipe_decision(player, gear_assembler, "iron-gear-wheel")
 
     def _ensure_item_quantity(
         self,
@@ -9336,7 +9385,7 @@ def _find_build_item_mall_cell(
             )
         ]
     if not candidates and target_item == "iron-gear-wheel" and inventory_count(observation, "assembling-machine-1") <= 0:
-        candidates = [
+        retool_candidates = [
             item
             for item in assemblers
             if item.get("electric_network_connected")
@@ -9347,6 +9396,10 @@ def _find_build_item_mall_cell(
                 allow_existing_remote=allow_existing_remote,
                 reference_position=reference_position,
             )
+        ]
+        non_belt_candidates = [item for item in retool_candidates if item.get("recipe") != "transport-belt"]
+        candidates = non_belt_candidates or [
+            item for item in retool_candidates if not _preserve_transport_belt_mall_assembler(observation, item)
         ]
     if not candidates and target_item == "assembling-machine-1" and inventory_count(observation, "assembling-machine-1") <= 0:
         candidates = [
@@ -9448,6 +9501,32 @@ def _transport_belt_mall_retool_candidate(
     if total_item_count(observation, "small-electric-pole") < 8:
         return False
     return not _near_recipe_assembler(observation, assembler, {"copper-cable", "electronic-circuit"}, radius=3.0)
+
+
+def _preserve_transport_belt_mall_assembler(observation: dict[str, Any], assembler: dict[str, Any]) -> bool:
+    if str(assembler.get("recipe") or "") != "transport-belt":
+        return False
+    if assembler.get("electric_network_connected") is False:
+        return False
+    if entity_item_count(assembler, "transport-belt") > 0:
+        return True
+    belt_assembler_count = sum(
+        1
+        for item in entities_named(observation, "assembling-machine-1")
+        if item.get("electric_network_connected") is not False and str(item.get("recipe") or "") == "transport-belt"
+    )
+    return belt_assembler_count <= 1 and not _transport_belt_automation_output_ready(observation)
+
+
+def _transport_belt_automation_output_ready(observation: dict[str, Any]) -> bool:
+    if inventory_count(observation, "transport-belt") > 0:
+        return True
+    return any(
+        item.get("electric_network_connected") is not False
+        and str(item.get("recipe") or "") == "transport-belt"
+        and entity_item_count(item, "transport-belt") > 0
+        for item in entities_named(observation, "assembling-machine-1")
+    )
 
 
 def _select_build_item_mall_site(
