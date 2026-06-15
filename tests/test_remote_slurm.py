@@ -595,6 +595,9 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertIn("vllm endpoint not ready before FACTORIO_AI_VLLM_STARTUP_SECONDS", command)
         self.assertIn("VLLM_LOG_BASE=logs/vllm-scheduler-layout-test", command)
         self.assertIn("$VLLM_LOG_BASE.err", command)
+        self.assertIn("export VLLM_USE_FLASHINFER_SAMPLER", command)
+        self.assertIn("export CUDA_VISIBLE_DEVICES", command)
+        self.assertIn("export HF_HOME", command)
         self.assertIn("exit 1", command)
 
     def test_layout_scheduler_task_submission_selects_ready_a6000_candidate(self):

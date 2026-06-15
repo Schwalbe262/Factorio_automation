@@ -366,6 +366,15 @@ fi
 if [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ] && [ -z "${{FACTORIO_AI_LLM_BASE_URL:-}}" ]; then
   export FACTORIO_AI_LLM_BASE_URL="http://127.0.0.1:${{FACTORIO_AI_VLLM_PORT:-8000}}/v1"
 fi
+if [ -n "${{FACTORIO_AI_HF_HOME:-}}" ]; then
+  export HF_HOME="$FACTORIO_AI_HF_HOME"
+fi
+if [ -n "${{FACTORIO_AI_VLLM_CUDA_VISIBLE_DEVICES:-}}" ]; then
+  export CUDA_VISIBLE_DEVICES="$FACTORIO_AI_VLLM_CUDA_VISIBLE_DEVICES"
+fi
+if [ -n "${{FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER:-}}" ]; then
+  export VLLM_USE_FLASHINFER_SAMPLER="$FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER"
+fi
 if [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ]; then
   VLLM_START_ERROR=""
   if ! python - <<'PY' >/dev/null 2>&1
