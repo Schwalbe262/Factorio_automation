@@ -7,8 +7,8 @@
 \- `setup_coal_supply` now places a coal burner mining drill before output chest/belt work when a drill is available.
 \- Factory sites now fold dedicated intermediate assemblers into parent sites via `subitems`, such as `iron-gear-wheel` under `transport-belt`.
 \- Root current Markdown files now use the escaped `md/` marker format.
-\- Slurm idle layout work now requests confirmed `learned_skills` and records only evidence-backed reusable layout skills.
-\- Live observe found `coal_miners=1` at `{x:106,y:24}`.
+\- Slurm scheduler mode defaults to `rtx3090`/`r1jae262`; client task payloads are uploaded to remote files so `/tasks` commands stay small.
+\- Live map: belt mall output inserter now points assembler-to-chest and produced belts into chest; boiler coal route reached about `x=0.5` but still needs more belts to reach boiler at `x=-43.5`.
 
 \## Current objective
 
@@ -33,20 +33,21 @@
 \## Last validation
 
 \- `py_compile`, focused planner/monitor/web/slurm tests (`335`), full `pytest -q` (`612`) passed.
-\- Full `pytest -q` passed: `617 passed`.
-\- Live coal supply output corrected to `{x:107.5,y:24.5}` for burner drill `{x:106,y:24}`; coal feed belt route is extending but still short of boiler.
-\- Token sample recorded: `162,147,720` Factorio Codex thread tokens; delta `8,652,602`; weekly quota unknown.
+\- Full `pytest -q` passed: `634 passed`.
+\- Live validation: task command length now about `2KB`; output inserter `708` has pickup at assembler and drop at chest.
+\- Token sample recorded: `225,528,048` Factorio Codex thread tokens; delta `63,380,328`; weekly quota unknown.
 
 \## Current blocker
 
-\- No code/test blocker. Live gameplay still needs more belt batches to finish `connect_coal_fuel_feed` to the boiler.
+\- Idle layout loop stopped because scheduler task 50 failed before user command: `srun` invoked `~/slurm_scheduler/.../task.sh` as argv and the shell did not expand `~`.
 
 \## Next steps
 
 1\. Push Part 129 branch if the current session has not already pushed it.
 2\. Refresh/restart the dashboard process if it is still serving old code.
-3\. Refill belt mall as needed, then continue `connect_coal_fuel_feed` until boiler receives belt-fed coal.
-4\. Continue red science/logistics research once fuel, belt output, and site input routes are stable.
+3\. Ask scheduler side to use absolute task.sh paths inside `srun`/wrapper, then restart `run-no-mod-idle-layout-loop`.
+4\. Fuel iron/coal burner drills as needed, refill belt mall, then continue `connect_coal_fuel_feed` until boiler receives belt-fed coal.
+5\. Continue red science/logistics research once fuel, belt output, and site input routes are stable.
 
 \## Token/context policy
 
@@ -71,7 +72,7 @@
 \- Added route corner belt direction, endpoint inserter role checks, and source endpoint protection for site-input logistics.
 \- Fixed site-input/iron-line inserter pickup/drop semantics, corrected integer-center coal drill output tiles, and stopped boiler feed from treating the next route belt as the coal source.
 \- Added role-aware dogleg site-input routes and fixed `NORTH=0` direction comparisons so north-facing belts/inserters are not treated as missing direction.
-\- Full validation now passes `612 passed`.
+\- Fixed scheduler task payload size, belt mall output inserter direction, belt-chest consumption for boiler feed, and local gear-output bootstrap for belt/inserter infrastructure.
 
 \## Risks and gotchas
 

@@ -665,18 +665,14 @@ The remote worker follows the same shape as the reference projects:
 - `failed/`
 - `logs/`
 
-Default remote directory: `~/factorio-ai-worker`
+Default scheduler URL: `http://100.112.168.31:8000`
 
-Default job name: `factorio-ai-worker`
+Default scheduler account: `r1jae262`
 
-The Factorio worker owns its Slurm queue and job name by default. This keeps it separate from the
-Kakao/Telegram bot `AUTO` worker and from crypto-lab jobs such as `optimization`, so a cancel action
-in another project does not accidentally cancel the Factorio LLM worker.
-
-Legacy attach mode still exists for experiments: if `FACTORIO_AI_SLURM_JOB_NAME=AUTO`,
-`FACTORIO_AI_SLURM_REMOTE_DIR=~/kakao-bot-worker`, and `FACTORIO_AI_SLURM_MODE=attach` are set,
-planner requests use `srun --jobid=<AUTO_JOB_ID> --overlap` inside the existing Kakao allocation.
-That mode is no longer the default because shared `AUTO` ownership is easy to confuse.
+Local LLM work should go through the `slurm_scheduler` `/tasks` API. Do not submit or renew a separate
+Factorio-named Slurm job for normal no-mod autopilot, real-player autopilot, or idle layout learning.
+In scheduler mode, `slurm-ensure-worker` reports scheduler readiness and does not call `sbatch` for
+`factorio-ai-worker`.
 
 Common environment variables:
 
@@ -684,20 +680,21 @@ Common environment variables:
 - `SUPERCOMPUTER_WORKER_SSH_USER`
 - `SUPERCOMPUTER_WORKER_SSH_KEY`
 - `SUPERCOMPUTER_WORKER_SSH_PORT`
-- `FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker`
-- `FACTORIO_AI_SLURM_JOB_NAME=factorio-ai-worker`
 - `FACTORIO_AI_SLURM_ENABLED=1`
-- `FACTORIO_AI_SLURM_GPUS_PER_NODE=1`
-- `FACTORIO_AI_SLURM_GRES=gpu:1`
-- `FACTORIO_AI_SLURM_PARTITION=gpu4,gpu2,gpu1`
+- `FACTORIO_AI_SLURM_MODE=scheduler`
+- `FACTORIO_AI_SLURM_SCHEDULER_URL=http://100.112.168.31:8000`
+- `FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT=r1jae262`
+- `FACTORIO_AI_SLURM_SCHEDULER_GPUS=1`
+- `FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=rtx3090`
+- `FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker`
 - `FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.5-4B`
 - `FACTORIO_AI_LLM_BASE_URL=http://127.0.0.1:8000/v1`
 - `FACTORIO_AI_LLM_MODEL=<model-name>`
 
-Start or reuse the current active 4B worker:
+Check scheduler-managed local LLM readiness:
 
 ```cmd
-run_factorio_slurm_llm_4b_worker.bat
+run_factorio_no_mod_idle_layout_loop.bat
 ```
 
 After code changes, do not cancel and resubmit the worker just to verify Python-side logic. Keep the
@@ -711,73 +708,42 @@ Equivalent PowerShell:
 
 ```powershell
 $env:FACTORIO_AI_SLURM_ENABLED="1"
+$env:FACTORIO_AI_SLURM_MODE="scheduler"
+$env:FACTORIO_AI_SLURM_SCHEDULER_URL="http://100.112.168.31:8000"
+$env:FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT="r1jae262"
 $env:FACTORIO_AI_SLURM_REMOTE_DIR="~/factorio-ai-worker"
-$env:FACTORIO_AI_SLURM_JOB_NAME="factorio-ai-worker"
-$env:FACTORIO_AI_SLURM_GPUS_PER_NODE="1"
-$env:FACTORIO_AI_SLURM_GRES="gpu:1"
-$env:FACTORIO_AI_SLURM_PARTITION="gpu4,gpu2,gpu1"
+$env:FACTORIO_AI_SLURM_SCHEDULER_GPUS="1"
+$env:FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL="rtx3090"
 $env:FACTORIO_AI_VLLM_MODEL="Qwen/Qwen3.5-4B"
 $env:FACTORIO_AI_VLLM_ARGS="--max-model-len 32768 --gpu-memory-utilization 0.85 --enforce-eager"
 $env:FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER="0"
-factorio-ai slurm-start-worker
+python -m factorio_ai.cli slurm-llm-status
 ```
 
-Keep a 1-day Slurm allocation from expiring without a successor:
+Check the scheduler path without submitting a Factorio Slurm job:
 
 ```powershell
 $env:PYTHONPATH="src"
 python -m factorio_ai.cli slurm-ensure-worker --renew-before-minutes 360
 ```
 
-If a worker is running and has less than the threshold remaining, this queues a dependent successor
-with `--dependency=afterany:<running-job-id>`. If a successor is already pending, it does not submit
-another one.
+In scheduler mode this command reports `scheduler_managed_no_direct_worker`; allocation ownership and
+queueing remain inside `slurm_scheduler`.
 
-The no-mod autopilot, real-player autopilot, idle layout loop, and 4B worker launchers set a 6-hour
-renewal threshold and the controller rechecks periodically during strategy/layout heartbeats. This is
-important on clusters where queued jobs may wait after submission; the successor must enter the
-queue before the current 1-day allocation ends.
+The no-mod autopilot, real-player autopilot, idle layout loop, and 4B launcher use scheduler mode.
+Older 9B/27B direct-worker launchers are legacy queue experiments and should not be used for normal
+local LLM operation unless this project explicitly needs an isolated comparison run.
 
-The larger 9B and 27B workers are kept as separate worker jobs so they can wait or run without
-blocking the active 4B worker:
+The normal 4B local LLM path defaults to `rtx3090` because it can use warm scheduler capacity and does not
+need to wait for `a6000ada`. If a specific model or experiment needs another GPU, override
+`FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL` for that run.
 
-```cmd
-run_factorio_slurm_llm_9b_worker.bat
-```
-
-For code-change verification on the already running 9B allocation:
-
-```cmd
-run_factorio_slurm_llm_9b_attached_benchmark.bat
-```
-
-The 9B worker uses:
-
-- `FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker-9b`
-- `FACTORIO_AI_SLURM_JOB_NAME=factorio-ai-worker-9b`
-- `FACTORIO_AI_SLURM_GPUS_PER_NODE=1`
-- `FACTORIO_AI_SLURM_GRES=gpu:a6000:1`
-- `FACTORIO_AI_SLURM_PARTITION=gpu4`
-- `FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.5-9B`
-- `FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER=0`
-
-```cmd
-run_factorio_slurm_llm_27b_gpu3_queue.bat
-```
-
-It uses:
-
-- `FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker-27b`
-- `FACTORIO_AI_SLURM_JOB_NAME=factorio-ai-worker-27b`
-- `FACTORIO_AI_SLURM_GPUS_PER_NODE=3`
-- `FACTORIO_AI_SLURM_GRES=gpu:a6000ada:3`
-- `FACTORIO_AI_SLURM_PARTITION=gpu3`
-- `FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.6-27B-FP8`
-- `FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER=0`
-
-If the worker is pending, `slurm-llm-status` reports `Slurm worker job pending GPU allocation`.
-If it is running without visible CUDA devices, the same command reports `GPU allocation` in
-`missing`.
+If the scheduler GPU allocation is still pending or unavailable, `slurm-llm-status` reports
+`ready scheduler GPU allocation` in `missing` and lists pending allocations separately. Queued tasks do not
+have remote stdout/stderr paths until the scheduler attaches them to a ready allocation. If ready GPUs are
+already matched by pending GPU tasks, it reports `scheduler GPU queue capacity` and waits instead of adding
+more background layout tasks. If VLLM or an OpenAI-compatible endpoint is not configured, it reports
+`FACTORIO_AI_VLLM_MODEL or FACTORIO_AI_LLM_BASE_URL`.
 
 Submit a test task:
 

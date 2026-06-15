@@ -12,6 +12,10 @@ import subprocess
 import tarfile
 import tempfile
 import time
+from urllib.parse import urlencode
+from urllib.parse import urljoin
+from urllib.request import Request
+from urllib.request import urlopen
 import uuid
 from typing import Any
 
@@ -25,6 +29,8 @@ DEFAULT_KEY_NAME = "r1jae262.pem"
 DEFAULT_REMOTE_DIR = "~/factorio-ai-worker"
 DEFAULT_JOB_NAME = "factorio-ai-worker"
 DEFAULT_CONDA_ENV = "factorio-ai"
+DEFAULT_SCHEDULER_URL = "http://100.112.168.31:8000"
+DEFAULT_SCHEDULER_ACCOUNT = "r1jae262"
 LLM_ENV_VARS = (
     "FACTORIO_AI_LLM_BASE_URL",
     "FACTORIO_AI_LLM_MODEL",
@@ -139,6 +145,64 @@ def config() -> RemoteSlurmConfig:
     )
 
 
+def _use_scheduler_tasks() -> bool:
+    mode = os.getenv("FACTORIO_AI_SLURM_MODE", "auto").strip().lower()
+    if mode in {"scheduler", "slurm_scheduler", "scheduler_tasks"}:
+        return True
+    if mode in {"queue", "worker_queue", "attach", "attached", "srun", "auto_srun"}:
+        return False
+    return _bool_env("FACTORIO_AI_SLURM_SCHEDULER_ENABLED", False)
+
+
+def _legacy_direct_slurm_allowed() -> bool:
+    return _bool_env("FACTORIO_AI_ALLOW_LEGACY_DIRECT_SLURM", False)
+
+
+def _legacy_direct_slurm_disabled_result(action: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "action": "legacy_direct_slurm_disabled",
+        "requestedAction": action,
+        "schedulerUrl": _scheduler_url(),
+        "account": _scheduler_account(),
+        "remediation": (
+            "Set FACTORIO_AI_SLURM_MODE=scheduler for slurm_scheduler /tasks, "
+            "or set FACTORIO_AI_ALLOW_LEGACY_DIRECT_SLURM=1 for an explicit legacy sbatch run."
+        ),
+    }
+
+
+def _scheduler_url() -> str:
+    return (os.getenv("FACTORIO_AI_SLURM_SCHEDULER_URL") or DEFAULT_SCHEDULER_URL).strip().rstrip("/")
+
+
+def _scheduler_account() -> str:
+    return (os.getenv("FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT") or DEFAULT_SCHEDULER_ACCOUNT).strip()
+
+
+def _scheduler_required_capability() -> str:
+    return os.getenv("FACTORIO_AI_SLURM_SCHEDULER_REQUIRED_CAPABILITY", "").strip()
+
+
+def _scheduler_remote_cwd(cfg: RemoteSlurmConfig) -> str:
+    return os.getenv("FACTORIO_AI_SLURM_SCHEDULER_REMOTE_CWD", "").strip() or f"{cfg.remote_dir}/factorio-ai"
+
+
+def _scheduler_api_json(path: str, *, timeout: int = 30) -> Any:
+    url = urljoin(_scheduler_url() + "/", path.lstrip("/"))
+    with urlopen(url, timeout=timeout) as response:  # noqa: S310 - configured trusted scheduler endpoint
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _scheduler_post_form(path: str, data: dict[str, Any], *, timeout: int = 30) -> str:
+    url = urljoin(_scheduler_url() + "/", path.lstrip("/"))
+    encoded = urlencode({key: str(value) for key, value in data.items()}).encode("utf-8")
+    request = Request(url, data=encoded, method="POST")
+    request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    with urlopen(request, timeout=timeout) as response:  # noqa: S310 - configured trusted scheduler endpoint
+        return response.read().decode("utf-8", errors="replace")
+
+
 def _worker_env_values(cfg: RemoteSlurmConfig) -> dict[str, str]:
     values = {
         "FACTORIO_AI_SLURM_CONDA_ENV": cfg.conda_env,
@@ -153,6 +217,297 @@ def _worker_env_values(cfg: RemoteSlurmConfig) -> dict[str, str]:
         port = values.get("FACTORIO_AI_VLLM_PORT") or "8000"
         values["FACTORIO_AI_LLM_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
     return values
+
+
+def _scheduler_env_setup() -> str:
+    lines = []
+    for name in LLM_ENV_VARS + VLLM_ENV_VARS:
+        value = os.getenv(name)
+        if value:
+            lines.append(f"export {name}={shlex.quote(_normalize_worker_env_value(name, value))}")
+    conda_env = os.getenv("FACTORIO_AI_SLURM_CONDA_ENV")
+    if conda_env:
+        lines.append(f"export FACTORIO_AI_SLURM_CONDA_ENV={shlex.quote(conda_env.strip())}")
+    return "\n".join(lines)
+
+
+def _scheduler_task_resources() -> dict[str, Any]:
+    return {
+        "cpus": _int_env("FACTORIO_AI_SLURM_SCHEDULER_CPUS", 4, 1),
+        "memory_mb": _int_env("FACTORIO_AI_SLURM_SCHEDULER_MEMORY_MB", 32768, 1024),
+        "gpus": _int_env("FACTORIO_AI_SLURM_SCHEDULER_GPUS", 1, 0),
+        "gpu_model": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL", "rtx3090").strip(),
+        "partition": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_PARTITION", "auto").strip() or "auto",
+        "node_name": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_NODE", "").strip(),
+        "exclusive_node": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_EXCLUSIVE_NODE", "0").strip().lower()
+        in {"1", "true", "yes", "on"},
+    }
+
+
+def _scheduler_task_command(task: dict[str, Any]) -> str:
+    task_id = str(task["id"])
+    task_json = shlex.quote(f".factorio-ai-scheduler-tasks/{task_id}.json")
+    result_json = shlex.quote(f".factorio-ai-scheduler-tasks/{task_id}.result.json")
+    startup_seconds = _int_env("FACTORIO_AI_VLLM_STARTUP_SECONDS", 240, 1)
+    return f"""set -euo pipefail
+mkdir -p .factorio-ai-scheduler-tasks logs
+TASK_JSON={task_json}
+RESULT_JSON={result_json}
+if [[ ! -s "$TASK_JSON" ]]; then
+  python3 - "$TASK_JSON" <<'PY'
+import json
+import sys
+print(json.dumps({{"ok": False, "error": "scheduler task payload file missing", "task_path": sys.argv[1]}}))
+PY
+  exit 1
+fi
+rm -f "$RESULT_JSON"
+if command -v conda >/dev/null 2>&1; then
+  eval "$(conda shell.bash hook)" || true
+  conda activate "${{FACTORIO_AI_SLURM_CONDA_ENV:-factorio-ai}}" || true
+elif [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+  . "$HOME/miniconda3/etc/profile.d/conda.sh"
+  conda activate "${{FACTORIO_AI_SLURM_CONDA_ENV:-factorio-ai}}" || true
+fi
+export PYTHONPATH="${{PWD}}/src:${{PYTHONPATH:-}}"
+if [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ] && [ -z "${{FACTORIO_AI_LLM_MODEL:-}}" ]; then
+  export FACTORIO_AI_LLM_MODEL="$FACTORIO_AI_VLLM_MODEL"
+fi
+if [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ] && [ -z "${{FACTORIO_AI_LLM_BASE_URL:-}}" ]; then
+  export FACTORIO_AI_LLM_BASE_URL="http://127.0.0.1:${{FACTORIO_AI_VLLM_PORT:-8000}}/v1"
+fi
+if [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ] && command -v vllm >/dev/null 2>&1; then
+  if ! python - <<'PY' >/dev/null 2>&1
+import os, urllib.request
+url = os.environ.get("FACTORIO_AI_LLM_BASE_URL", "").rstrip("/") + "/models"
+urllib.request.urlopen(url, timeout=5).read()
+PY
+  then
+    nohup vllm serve "$FACTORIO_AI_VLLM_MODEL" \
+      --host 127.0.0.1 \
+      --port "${{FACTORIO_AI_VLLM_PORT:-8000}}" \
+      ${{FACTORIO_AI_VLLM_ARGS:-}} > "logs/vllm-scheduler-${{SLURM_JOB_ID:-task}}.out" 2> "logs/vllm-scheduler-${{SLURM_JOB_ID:-task}}.err" &
+  fi
+  python - <<'PY'
+import os, time, urllib.request
+deadline = time.time() + {startup_seconds}
+url = os.environ.get("FACTORIO_AI_LLM_BASE_URL", "").rstrip("/") + "/models"
+while time.time() < deadline:
+    try:
+        urllib.request.urlopen(url, timeout=5).read()
+        raise SystemExit(0)
+    except Exception:
+        time.sleep(2)
+raise SystemExit(0)
+PY
+fi
+python -m factorio_ai.slurm_worker --task "$TASK_JSON" --result "$RESULT_JSON"
+cat "$RESULT_JSON"
+"""
+
+
+def _resolve_scheduler_remote_cwd(cfg: RemoteSlurmConfig) -> str:
+    raw_cwd = _scheduler_remote_cwd(cfg)
+    output = _run_remote(
+        f"""set -euo pipefail
+SCHEDULER_CWD_RAW={json.dumps(raw_cwd)}
+if [[ "$SCHEDULER_CWD_RAW" == "~" ]]; then
+  SCHEDULER_CWD="$HOME"
+elif [[ "$SCHEDULER_CWD_RAW" == "~/"* ]]; then
+  SCHEDULER_CWD="$HOME/${{SCHEDULER_CWD_RAW:2}}"
+elif [[ "$SCHEDULER_CWD_RAW" == /* ]]; then
+  SCHEDULER_CWD="$SCHEDULER_CWD_RAW"
+else
+  SCHEDULER_CWD="$PWD/$SCHEDULER_CWD_RAW"
+fi
+mkdir -p "$SCHEDULER_CWD/.factorio-ai-scheduler-tasks" "$SCHEDULER_CWD/logs"
+printf '%s\\n' "$SCHEDULER_CWD"
+""",
+        cfg,
+        timeout=60,
+    )
+    return output.splitlines()[-1]
+
+
+def _upload_scheduler_task_payload(task: dict[str, Any], cfg: RemoteSlurmConfig, remote_cwd: str) -> None:
+    task_id = str(task["id"])
+    payload_bytes = json.dumps(task, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
+    remote_task_dir = f"{remote_cwd}/.factorio-ai-scheduler-tasks"
+    remote_target = f"{remote_task_dir}/{task_id}.json"
+    remote_temp = f"{remote_task_dir}/.{task_id}.{uuid.uuid4().hex}.tmp"
+    local_temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix="factorio-ai-scheduler-task-", suffix=".json", delete=False) as file:
+            file.write(payload_bytes)
+            local_temp_path = Path(file.name)
+        _run_scp(local_temp_path, f"{cfg.user}@{cfg.host}:{remote_temp}", cfg, timeout=cfg.setup_timeout_seconds)
+        _run_remote(
+            f"""set -euo pipefail
+REMOTE_TEMP={json.dumps(remote_temp)}
+REMOTE_TARGET={json.dumps(remote_target)}
+if [[ ! -s "$REMOTE_TEMP" ]]; then
+  echo "scheduler task payload upload is empty: $REMOTE_TEMP" >&2
+  exit 1
+fi
+mv "$REMOTE_TEMP" "$REMOTE_TARGET"
+""",
+            cfg,
+            timeout=60,
+        )
+    finally:
+        if local_temp_path is not None:
+            try:
+                local_temp_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _submit_scheduler_task(task: dict[str, Any], cfg: RemoteSlurmConfig) -> dict[str, Any]:
+    resources = _scheduler_task_resources()
+    name = f"factorio-{str(task.get('type') or 'task').replace('_', '-')}-{uuid.uuid4().hex[:8]}"
+    remote_cwd = _resolve_scheduler_remote_cwd(cfg)
+    _upload_scheduler_task_payload(task, cfg, remote_cwd)
+    data = {
+        "name": name,
+        "remote_cwd": remote_cwd,
+        "command": _scheduler_task_command(task),
+        "env_setup": _scheduler_env_setup(),
+        "required_capability": _scheduler_required_capability(),
+        "env_profile": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_ENV_PROFILE", "").strip(),
+        "account_name": _scheduler_account(),
+        **resources,
+    }
+    _scheduler_post_form("/tasks", data, timeout=30)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        for row in _scheduler_task_rows():
+            if str(row.get("name") or "") == name:
+                return row
+        time.sleep(1)
+    raise RemoteSlurmError(f"scheduler accepted task but it did not appear in /api/tasks: {name}")
+
+
+def _scheduler_task_rows() -> list[dict[str, Any]]:
+    rows = _scheduler_api_json("/api/tasks", timeout=30)
+    return rows if isinstance(rows, list) else []
+
+
+def _scheduler_compact_task_row(row: dict[str, Any]) -> dict[str, Any]:
+    keys = [
+        "id",
+        "name",
+        "status",
+        "account_name",
+        "allocation_id",
+        "created_at",
+        "attached_at",
+        "started_at",
+        "finished_at",
+        "stdout_path",
+        "stderr_path",
+        "failure_message",
+        "gpus",
+        "gpu_model",
+        "partition",
+        "node_name",
+        "required_capability",
+    ]
+    compact = {key: row.get(key) for key in keys if key in row}
+    failure = compact.get("failure_message")
+    if isinstance(failure, str) and len(failure) > 500:
+        compact["failure_message"] = failure[:500] + "...<truncated>"
+    return compact
+
+
+def _scheduler_compact_allocation_row(row: dict[str, Any]) -> dict[str, Any]:
+    keys = [
+        "id",
+        "account_name",
+        "partition",
+        "node_name",
+        "slurm_job_id",
+        "state",
+        "total_cpus",
+        "free_cpus",
+        "total_memory_mb",
+        "free_memory_mb",
+        "total_gpus",
+        "free_gpus",
+        "gpu_model",
+        "resource_pool",
+        "pending_reason",
+        "created_at",
+        "submitted_at",
+        "started_at",
+        "closed_at",
+        "stdout_path",
+        "stderr_path",
+        "failure_message",
+    ]
+    compact = {key: row.get(key) for key in keys if key in row}
+    failure = compact.get("failure_message")
+    if isinstance(failure, str) and len(failure) > 500:
+        compact["failure_message"] = failure[:500] + "...<truncated>"
+    return compact
+
+
+def _read_scheduler_task_stdout(row: dict[str, Any], cfg: RemoteSlurmConfig) -> str:
+    path = str(row.get("stdout_path") or "")
+    if not path:
+        return ""
+    return _run_remote(
+        f"""set -euo pipefail
+PATH_VALUE={json.dumps(path)}
+if [[ "$PATH_VALUE" == /* ]]; then
+  cat "$PATH_VALUE"
+else
+  cat "$HOME/$PATH_VALUE"
+fi
+""",
+        cfg,
+        timeout=30,
+    )
+
+
+def _parse_last_json_object(text: str) -> dict[str, Any] | None:
+    for line in reversed(text.splitlines()):
+        candidate = line.strip()
+        if not candidate.startswith("{") or not candidate.endswith("}"):
+            continue
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _request_task_via_scheduler(task: dict[str, Any], cfg: RemoteSlurmConfig, timeout_seconds: int | None = None) -> dict[str, Any]:
+    row = _submit_scheduler_task(task, cfg)
+    task_id = row.get("id")
+    deadline = time.monotonic() + (timeout_seconds or max(cfg.task_timeout_seconds, 120))
+    expected_account = _scheduler_account()
+    while time.monotonic() < deadline:
+        rows = _scheduler_task_rows()
+        current = next((item for item in rows if item.get("id") == task_id), row)
+        account = str(current.get("account_name") or "")
+        if account and expected_account and account != expected_account:
+            raise RemoteSlurmError(f"scheduler task attached to unexpected account {account}; expected {expected_account}")
+        status = str(current.get("status") or "")
+        if status == "completed":
+            stdout = _read_scheduler_task_stdout(current, cfg)
+            parsed = _parse_last_json_object(stdout)
+            if parsed is None:
+                raise RemoteSlurmError(f"scheduler task completed without JSON result: {stdout[:500]}")
+            if not parsed.get("ok"):
+                raise RemoteSlurmError(f"scheduler task failed: {parsed}")
+            return parsed
+        if status in {"failed", "cancelled"}:
+            stdout = _read_scheduler_task_stdout(current, cfg)
+            raise RemoteSlurmError(f"scheduler task {status}: {current.get('failure_message') or stdout[:500]}")
+        time.sleep(2)
+    raise TimeoutError(f"scheduler task timed out: {task_id}")
 
 
 def _normalize_worker_env_value(name: str, value: str) -> str:
@@ -254,6 +609,16 @@ echo "submitted_job_id=$job_id"
 
 def submit_worker_job(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
     cfg = cfg or config()
+    if _use_scheduler_tasks():
+        return {
+            "ok": True,
+            "schedulerUrl": _scheduler_url(),
+            "account": _scheduler_account(),
+            "action": "scheduler_managed_no_direct_worker",
+            "output": "scheduler mode uses /tasks and does not submit a factorio-ai-worker Slurm job",
+        }
+    if not _legacy_direct_slurm_allowed():
+        return _legacy_direct_slurm_disabled_result("slurm-start-worker")
     remote_dir = resolve_remote_dir(cfg)
     deploy(cfg)
     submit_command = _worker_submit_command(cfg, remote_dir)
@@ -287,6 +652,17 @@ def ensure_worker_job(
     renew_before_minutes: int | None = None,
 ) -> dict[str, Any]:
     cfg = cfg or config()
+    if _use_scheduler_tasks():
+        return {
+            "ok": True,
+            "schedulerUrl": _scheduler_url(),
+            "account": _scheduler_account(),
+            "action": "scheduler_managed_no_direct_worker",
+            "renewBeforeSeconds": max(60, int(renew_before_minutes or _int_env("FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES", 180, 1)) * 60),
+            "status": _scheduler_status_payload(),
+        }
+    if not _legacy_direct_slurm_allowed():
+        return _legacy_direct_slurm_disabled_result("slurm-ensure-worker")
     remote_dir = resolve_remote_dir(cfg)
     threshold_minutes = (
         renew_before_minutes
@@ -452,6 +828,8 @@ fi
 
 def llm_status(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
     cfg = cfg or config()
+    if _use_scheduler_tasks():
+        return _scheduler_status_payload()
     remote_dir = resolve_remote_dir(cfg)
     local_env = _llm_env_presence(os.environ)
     probe_code = f"""
@@ -639,6 +1017,132 @@ srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/nu
         "llm_ready": not missing,
         "missing": missing,
         "remediation": _llm_status_remediation(missing, cfg, bool(remote_payload.get("vllm_command")), gpu),
+    }
+
+
+def _scheduler_status_payload() -> dict[str, Any]:
+    local_env = _llm_env_presence(os.environ)
+    resources = _scheduler_task_resources()
+    scheduler_url = _scheduler_url()
+    account = _scheduler_account()
+    try:
+        health = _scheduler_api_json("/api/health", timeout=10)
+        allocations = _scheduler_api_json("/api/allocations", timeout=10)
+        gpu_capacity = _scheduler_api_json("/api/gpu-capacity", timeout=10)
+        tasks = _scheduler_api_json("/api/tasks", timeout=10)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": True,
+            "provider": "slurm_scheduler",
+            "schedulerUrl": scheduler_url,
+            "account": account,
+            "local_env": local_env,
+            "llm_ready": False,
+            "missing": ["Slurm scheduler API"],
+            "remote": {"error": f"{type(exc).__name__}: {exc}"},
+            "remediation": {
+                "why": "Factorio cannot submit local LLM work until the configured slurm_scheduler API responds.",
+                "scheduler_url": scheduler_url,
+            },
+        }
+    allocation_rows = allocations if isinstance(allocations, list) else []
+    capacity_rows = gpu_capacity if isinstance(gpu_capacity, list) else []
+    task_rows = tasks if isinstance(tasks, list) else []
+    wanted_gpu_model = str(resources.get("gpu_model") or "")
+    active_gpu_allocations = [
+        row
+        for row in allocation_rows
+        if str(row.get("account_name") or "") == account
+        and int(row.get("total_gpus") or 0) > 0
+        and str(row.get("state") or "") not in {"closed", "failed", "cancelled"}
+        and (not wanted_gpu_model or str(row.get("gpu_model") or "") == wanted_gpu_model)
+    ]
+    ready_gpu_allocations = [
+        row
+        for row in active_gpu_allocations
+        if str(row.get("state") or "") in {"warm", "running", "active"}
+    ]
+    pending_gpu_allocations = [
+        row for row in active_gpu_allocations if str(row.get("state") or "") == "pending"
+    ]
+    scheduler_ready_free_gpus = sum(int(row.get("free_gpus") or 0) for row in ready_gpu_allocations)
+    scheduler_free_gpus = 0
+    scheduler_owned_gpus = 0
+    pending_gpu_tasks = 0
+    for row in capacity_rows:
+        if wanted_gpu_model and str(row.get("gpu_model") or "") != wanted_gpu_model:
+            continue
+        scheduler_free_gpus += int(row.get("scheduler_free_gpus") or 0)
+        scheduler_owned_gpus += int(row.get("scheduler_owned_gpus") or 0)
+        pending_gpu_tasks += int(row.get("pending_gpu_tasks") or 0)
+    has_llm_runtime = bool(
+        os.getenv("FACTORIO_AI_LLM_BASE_URL", "").strip()
+        or os.getenv("FACTORIO_AI_VLLM_MODEL", "").strip()
+    )
+    needs_gpu = int(resources.get("gpus") or 0) > 0 and not os.getenv("FACTORIO_AI_LLM_BASE_URL", "").strip()
+    has_gpu_queue_capacity = scheduler_ready_free_gpus > pending_gpu_tasks
+    has_gpu_path = not needs_gpu or has_gpu_queue_capacity
+    missing = []
+    if not has_llm_runtime:
+        missing.append("FACTORIO_AI_VLLM_MODEL or FACTORIO_AI_LLM_BASE_URL")
+    if not has_gpu_path:
+        if scheduler_ready_free_gpus <= 0:
+            missing.append("ready scheduler GPU allocation")
+        else:
+            missing.append("scheduler GPU queue capacity")
+    return {
+        "ok": True,
+        "provider": "slurm_scheduler",
+        "schedulerUrl": scheduler_url,
+        "account": account,
+        "local_env": local_env,
+        "llm_ready": not missing,
+        "missing": missing,
+        "remote": {
+            "health": health,
+            "resources": resources,
+            "active_gpu_allocations": [
+                _scheduler_compact_allocation_row(row) for row in active_gpu_allocations
+            ],
+            "ready_gpu_allocations": [
+                _scheduler_compact_allocation_row(row) for row in ready_gpu_allocations
+            ],
+            "pending_gpu_allocations": [
+                _scheduler_compact_allocation_row(row) for row in pending_gpu_allocations
+            ],
+            "scheduler_owned_gpus": scheduler_owned_gpus,
+            "scheduler_free_gpus": scheduler_free_gpus,
+            "scheduler_ready_free_gpus": scheduler_ready_free_gpus,
+            "scheduler_gpu_queue_capacity": has_gpu_queue_capacity,
+            "pending_gpu_tasks": pending_gpu_tasks,
+            "recent_tasks": [_scheduler_compact_task_row(row) for row in task_rows[:5]],
+        },
+        "remediation": None
+        if not missing
+        else {
+            "why": "Scheduler mode submits local LLM work through slurm_scheduler /tasks; no factorio-ai-worker job is submitted.",
+            "required_local_env": ["FACTORIO_AI_SLURM_MODE=scheduler", "FACTORIO_AI_VLLM_MODEL or FACTORIO_AI_LLM_BASE_URL"],
+            "scheduler_url": scheduler_url,
+            "account": account,
+            "gpu_model": wanted_gpu_model,
+        },
+    }
+
+
+def _scheduler_not_ready_result(status_payload: dict[str, Any]) -> dict[str, Any]:
+    missing = [str(item) for item in status_payload.get("missing") or ["LLM not ready"]]
+    remote = status_payload.get("remote") if isinstance(status_payload.get("remote"), dict) else {}
+    return {
+        "ok": False,
+        "source": "slurm_scheduler",
+        "llm_ready": False,
+        "missing": missing,
+        "error": "scheduler LLM not ready: " + "; ".join(missing),
+        "remote": {
+            "scheduler_ready_free_gpus": remote.get("scheduler_ready_free_gpus"),
+            "pending_gpu_tasks": remote.get("pending_gpu_tasks"),
+            "pending_gpu_allocations": remote.get("pending_gpu_allocations") or [],
+        },
     }
 
 
@@ -876,6 +1380,8 @@ def request_plan(
     }
     if _use_attached_srun(cfg):
         return _request_plan_via_attached_srun(task, cfg, timeout_seconds)
+    if _use_scheduler_tasks():
+        return _request_task_via_scheduler(task, cfg, timeout_seconds)
 
     task_name = submit_task(task, cfg)
     deadline = time.monotonic() + (timeout_seconds or cfg.task_timeout_seconds)
@@ -922,6 +1428,8 @@ def request_strategy(
     }
     if _use_attached_srun(cfg):
         return _request_task_via_attached_srun(task, cfg, timeout_seconds)
+    if _use_scheduler_tasks():
+        return _request_task_via_scheduler(task, cfg, timeout_seconds)
 
     task_name = submit_task(task, cfg)
     deadline = time.monotonic() + (timeout_seconds or cfg.task_timeout_seconds)
@@ -1048,6 +1556,10 @@ def request_layout_improvement(
     force_attached: bool = False,
 ) -> dict[str, Any]:
     cfg = cfg or config()
+    if _use_scheduler_tasks():
+        status_payload = _scheduler_status_payload()
+        if not status_payload.get("llm_ready"):
+            return _scheduler_not_ready_result(status_payload)
     task = {
         "id": f"layout-improvement-{uuid.uuid4().hex}",
         "type": "layout_improvement_request",
@@ -1064,6 +1576,8 @@ def request_layout_improvement(
             "layout_learning": layout_learning_request_context(),
         },
     }
+    if _use_scheduler_tasks():
+        return _request_task_via_scheduler(task, cfg, timeout_seconds or max(cfg.task_timeout_seconds, 120))
     if force_attached or _use_attached_srun(cfg):
         return _request_task_via_attached_srun(task, cfg, timeout_seconds or max(cfg.task_timeout_seconds, 120))
 
@@ -1097,6 +1611,8 @@ def request_strategy_model_benchmark(
     }
     if _use_attached_srun(cfg):
         return _request_task_via_attached_srun(task, cfg, timeout_seconds or max(cfg.task_timeout_seconds, 120))
+    if _use_scheduler_tasks():
+        return _request_task_via_scheduler(task, cfg, timeout_seconds or max(cfg.task_timeout_seconds, 120))
 
     task_name = submit_task(task, cfg)
     deadline = time.monotonic() + (timeout_seconds or max(cfg.task_timeout_seconds, 120))

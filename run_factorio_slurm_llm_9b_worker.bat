@@ -2,6 +2,11 @@
 setlocal
 cd /d "%~dp0"
 
+if not "%FACTORIO_AI_ALLOW_LEGACY_DIRECT_SLURM%"=="1" (
+  echo [factorio-ai] Legacy direct Slurm worker launch is disabled. Use scheduler mode at http://100.112.168.31:8000.
+  exit /b 1
+)
+
 set PYTHONPATH=src
 set FACTORIO_AI_SLURM_ENABLED=1
 set FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker-9b

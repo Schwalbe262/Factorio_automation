@@ -518,6 +518,61 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(submitted["payload"]["layout_learning"]["record_only_confirmed"])
         self.assertIn("layout_task_submitted", log_text)
 
+    def test_scheduler_background_layout_waits_when_gpu_not_ready(self):
+        observation = {
+            "tick": 1,
+            "inventory": {},
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 10,
+                    "recipe": "electronic-circuit",
+                    "position": {"x": 0, "y": 0},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                }
+            ],
+            "resources": [],
+            "research": {"technologies": {}},
+        }
+        status = {
+            "llm_ready": False,
+            "missing": ["ready scheduler GPU allocation"],
+            "remote": {
+                "scheduler_ready_free_gpus": 0,
+                "pending_gpu_tasks": 2,
+                "pending_gpu_allocations": [{"id": 9, "state": "pending"}],
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            controller = FactorioController(cfg)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS": "0",
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "scheduler",
+                    },
+                ),
+                patch.object(controller, "_maybe_ensure_slurm_worker"),
+                patch("factorio_ai.remote_slurm.llm_status", return_value=status),
+                patch("factorio_ai.remote_slurm.request_layout_improvement") as request_layout,
+            ):
+                controller._maybe_progress_background_layout_work(
+                    observation,
+                    "launch_rocket_program",
+                    "bootstrap_build_item_mall",
+                    4,
+                )
+            log_path = cfg.log_dir / "layout-improvement-background.jsonl"
+            log_text = log_path.read_text(encoding="utf-8")
+
+        request_layout.assert_not_called()
+        self.assertIsNone(controller._background_layout_thread)
+        self.assertIn("layout_scheduler_waiting_for_ready_gpu", log_text)
+        self.assertIn("ready scheduler GPU allocation", log_text)
+
     def test_blocked_strategy_submits_background_layout_work(self):
         observation = {
             "tick": 1,

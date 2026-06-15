@@ -204,6 +204,18 @@ class PlannerTests(unittest.TestCase):
 
         self.assertEqual(output_position, {"x": 107.5, "y": 24.5})
 
+    def test_coal_supply_prefers_live_drill_drop_position_for_output_tile(self):
+        drill = {
+            "name": "burner-mining-drill",
+            "position": {"x": 106, "y": 24},
+            "direction": planner_module.EAST,
+            "drop_position": {"x": 107.3, "y": 23.5},
+        }
+
+        output_position = planner_module._burner_drill_output_position(drill)
+
+        self.assertEqual(output_position, {"x": 107.5, "y": 23.5})
+
     def test_boiler_feed_source_uses_corrected_integer_center_drill_output(self):
         obs = base_observation()
         obs["resources"] = [{"name": "coal", "position": {"x": 4, "y": 0}, "distance": 4}]
@@ -658,7 +670,7 @@ class PlannerTests(unittest.TestCase):
         obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
         obs["entities"] = [
             {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
-            {"name": "transport-belt", "unit_number": 21, "position": {"x": 2, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
             {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
         ]
 
@@ -666,9 +678,38 @@ class PlannerTests(unittest.TestCase):
 
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "transport-belt")
-        self.assertEqual(decision.action["position"], {"x": 3.0, "y": 0.0})
+        self.assertEqual(decision.action["position"], {"x": 2.5, "y": 0.5})
         self.assertEqual(decision.action["direction"], 4)
         self.assertIn("boiler", decision.reason)
+
+    def test_coal_fuel_feed_takes_belts_from_belt_mall_output_chest_for_boiler_feed(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 5, "y": 2}
+        obs["inventory"] = {"burner-inserter": 1, "coal": 1}
+        obs["research"]["technologies"]["automation"]["researched"] = True
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+            mall_assembler(recipe="transport-belt", inventory={}),
+            {"name": "wooden-chest", "unit_number": 980, "position": {"x": 5.0, "y": 2.0}, "inventories": {"1": {"transport-belt": 8}}},
+            {
+                "name": "inserter",
+                "unit_number": 981,
+                "position": {"x": 4.0, "y": 2.0},
+                "direction": 12,
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["name"], "wooden-chest")
+        self.assertEqual(decision.action["item"], "transport-belt")
+        self.assertIn("output chest", decision.reason)
 
     def test_coal_fuel_feed_clears_chest_blocking_boiler_belt_route(self):
         obs = base_observation()
@@ -677,8 +718,8 @@ class PlannerTests(unittest.TestCase):
         obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
         obs["entities"] = [
             {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
-            {"name": "transport-belt", "unit_number": 21, "position": {"x": 2, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 1}}},
-            {"name": "wooden-chest", "unit_number": 22, "position": {"x": 3, "y": 0}, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "wooden-chest", "unit_number": 22, "position": {"x": 2.5, "y": 0.5}, "inventories": {}},
             {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
         ]
 
@@ -694,10 +735,11 @@ class PlannerTests(unittest.TestCase):
         obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
         obs["entities"] = [
             {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
-            {"name": "transport-belt", "unit_number": 21, "position": {"x": 2, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 1}}},
-            {"name": "transport-belt", "unit_number": 22, "position": {"x": 3, "y": 0}, "direction": 4, "inventories": {}},
-            {"name": "transport-belt", "unit_number": 23, "position": {"x": 4, "y": 0}, "direction": 4, "inventories": {}},
-            {"name": "transport-belt", "unit_number": 24, "position": {"x": 5, "y": 0}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 2.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 23, "position": {"x": 3.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 24, "position": {"x": 4.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 26, "position": {"x": 5.5, "y": 0.5}, "direction": 4, "inventories": {}},
             {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
         ]
 
@@ -708,16 +750,69 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["position"], {"x": 6.0, "y": 0.0})
         self.assertEqual(decision.action["direction"], 12)
 
+    def test_coal_fuel_feed_takes_assembler_gears_for_boiler_feed_inserter(self):
+        obs = base_observation()
+        obs["inventory"] = {"transport-belt": 1, "iron-plate": 1, "coal": 1}
+        obs["research"]["technologies"]["automation"]["researched"] = True
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 2.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 23, "position": {"x": 3.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 24, "position": {"x": 4.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 26, "position": {"x": 5.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 981,
+                "position": {"x": 0.5, "y": 6.5},
+                "distance": 6,
+                "recipe": "iron-gear-wheel",
+                "electric_network_connected": True,
+                "inventories": {"1": {"iron-gear-wheel": 3}},
+            },
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertIn("burner-inserter infrastructure", decision.reason)
+
+    def test_coal_fuel_feed_relocates_existing_inserter_for_boiler_feed(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": -8, "y": -8}
+        obs["inventory"] = {}
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 2.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 23, "position": {"x": 3.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 24, "position": {"x": 4.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 26, "position": {"x": 5.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "burner-inserter", "unit_number": 27, "position": {"x": -8, "y": -8}, "direction": 4, "inventories": {}},
+            {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 27)
+        self.assertIn("relocate existing inserter", decision.reason)
+
     def test_coal_fuel_feed_primes_boiler_feed_inserter_not_boiler(self):
         obs = base_observation()
         obs["inventory"] = {"coal": 1}
         obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
         obs["entities"] = [
             {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
-            {"name": "transport-belt", "unit_number": 21, "position": {"x": 2, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 1}}},
-            {"name": "transport-belt", "unit_number": 22, "position": {"x": 3, "y": 0}, "direction": 4, "inventories": {}},
-            {"name": "transport-belt", "unit_number": 23, "position": {"x": 4, "y": 0}, "direction": 4, "inventories": {}},
-            {"name": "transport-belt", "unit_number": 24, "position": {"x": 5, "y": 0}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 2.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 23, "position": {"x": 3.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 24, "position": {"x": 4.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 26, "position": {"x": 5.5, "y": 0.5}, "direction": 4, "inventories": {}},
             {"name": "burner-inserter", "unit_number": 25, "position": {"x": 6, "y": 0}, "direction": 12, "inventories": {}},
             {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
         ]
@@ -729,16 +824,38 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 25)
         self.assertEqual(decision.action["name"], "burner-inserter")
 
+    def test_coal_fuel_feed_detects_tile_centered_boiler_inserter_after_build(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 1}
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 2.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 23, "position": {"x": 3.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 24, "position": {"x": 4.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 26, "position": {"x": 5.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "burner-inserter", "unit_number": 25, "position": {"x": 6.0, "y": 0.5}, "direction": 12, "inventories": {}},
+            {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["unit_number"], 25)
+        self.assertNotEqual(decision.action["type"], "mine")
+
     def test_coal_fuel_feed_done_when_boiler_receives_belt_fed_coal(self):
         obs = base_observation()
         obs["inventory"] = {}
         obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
         obs["entities"] = [
             {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
-            {"name": "transport-belt", "unit_number": 21, "position": {"x": 2, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 1}}},
-            {"name": "transport-belt", "unit_number": 22, "position": {"x": 3, "y": 0}, "direction": 4, "inventories": {}},
-            {"name": "transport-belt", "unit_number": 23, "position": {"x": 4, "y": 0}, "direction": 4, "inventories": {}},
-            {"name": "transport-belt", "unit_number": 24, "position": {"x": 5, "y": 0}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 2.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 23, "position": {"x": 3.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 24, "position": {"x": 4.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 26, "position": {"x": 5.5, "y": 0.5}, "direction": 4, "inventories": {}},
             {"name": "burner-inserter", "unit_number": 25, "position": {"x": 6, "y": 0}, "direction": 12, "inventories": {"1": {"coal": 1}}},
             {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "working", "inventories": {"1": {"coal": 1}}},
         ]
@@ -4452,7 +4569,31 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "inserter")
         self.assertEqual(decision.action["position"], {"x": 4.0, "y": 2.0})
-        self.assertEqual(decision.action["direction"], 4)
+        self.assertEqual(decision.action["direction"], 12)
+
+    def test_build_item_mall_removes_output_inserter_pointing_from_chest_to_assembler(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"inserter": 1}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt", inventory={"transport-belt": 8}),
+                {"name": "wooden-chest", "unit_number": 980, "position": {"x": 5.0, "y": 2.0}, "inventories": {}},
+                {
+                    "name": "inserter",
+                    "unit_number": 981,
+                    "position": {"x": 4.0, "y": 2.0},
+                    "direction": 4,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 981)
+        self.assertIn("misoriented", decision.reason)
 
     def test_build_item_mall_crafts_regular_output_inserter_instead_of_using_burner_when_available(self):
         obs = powered_automation_observation()
@@ -4470,6 +4611,65 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "craft")
         self.assertEqual(decision.action["recipe"], "inserter")
 
+    def test_build_item_mall_takes_assembler_gears_for_output_inserter_infrastructure(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 1, "electronic-circuit": 1}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt", inventory={"transport-belt": 8}),
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 981,
+                    "position": {"x": 0.5, "y": 6.5},
+                    "distance": 2,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"iron-gear-wheel": 1}},
+                },
+                {"name": "wooden-chest", "unit_number": 980, "position": {"x": 5.0, "y": 2.0}, "inventories": {}},
+            ]
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertEqual(decision.action["count"], 1)
+        self.assertIn("infrastructure", decision.reason)
+
+    def test_build_item_mall_takes_assembler_gears_for_local_input_bootstrap(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 4}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt", inventory={"iron-gear-wheel": 3}),
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 981,
+                    "position": {"x": 0.5, "y": 6.5},
+                    "distance": 2,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"iron-gear-wheel": 4}},
+                },
+                {"name": "wooden-chest", "unit_number": 980, "position": {"x": 5.0, "y": 2.0}, "inventories": {}},
+                {
+                    "name": "inserter",
+                    "unit_number": 982,
+                    "position": {"x": 4.0, "y": 2.0},
+                    "direction": 12,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertIn("transport-belt mall input bootstrap", decision.reason)
+
     def test_build_item_mall_replaces_output_burner_inserter_when_regular_is_usable(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"inserter": 1}
@@ -4481,7 +4681,7 @@ class PlannerTests(unittest.TestCase):
                     "name": "burner-inserter",
                     "unit_number": 981,
                     "position": {"x": 4.0, "y": 2.0},
-                    "direction": 4,
+                    "direction": 12,
                     "inventories": {"1": {"coal": 1}},
                 },
             ]
@@ -4504,7 +4704,7 @@ class PlannerTests(unittest.TestCase):
                     "name": "inserter",
                     "unit_number": 981,
                     "position": {"x": 4.0, "y": 2.0},
-                    "direction": 4,
+                    "direction": 12,
                     "electric_network_connected": True,
                     "inventories": {},
                 },
@@ -4535,7 +4735,7 @@ class PlannerTests(unittest.TestCase):
                     "name": "inserter",
                     "unit_number": 981,
                     "position": {"x": 4.0, "y": 2.0},
-                    "direction": 4,
+                    "direction": 12,
                     "electric_network_connected": True,
                     "inventories": {},
                 },

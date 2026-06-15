@@ -1019,6 +1019,12 @@ class FactorioController:
         busy_cycles = 0
         interrupted = False
         reason = "idle layout loop running"
+        heartbeat_log_interval = max(
+            1.0,
+            _float_env("FACTORIO_AI_IDLE_LAYOUT_HEARTBEAT_LOG_INTERVAL_SECONDS", 60.0),
+        )
+        last_idle_heartbeat_log = 0.0
+        last_busy_heartbeat_log = 0.0
 
         try:
             while cycles <= 0 or completed < cycles:
@@ -1054,27 +1060,18 @@ class FactorioController:
                         )
                     else:
                         active_skill = f"idle:{_slugify_reason(idle_reason)}"
-                        self._write_background_layout_log(
-                            {
-                                "event": "layout_idle_scheduler_heartbeat",
-                                "active_skill": active_skill,
-                                "active_step": 0,
-                                "idle_reason": idle_reason,
-                                "heartbeat": heartbeat,
-                            }
-                        )
-                        record_layout_loop_journal(
-                            self.cfg.log_dir,
-                            loop_type="idle_layout_cycle",
-                            objective=objective,
-                            cycle=completed,
-                            active_skill=active_skill,
-                            ok=True,
-                            reason=idle_reason,
-                            log_path=log_path,
-                            metadata={"idle": True},
-                            repo_root=self._journal_repo_root(),
-                        )
+                        now_monotonic = time.monotonic()
+                        if now_monotonic - last_idle_heartbeat_log >= heartbeat_log_interval:
+                            last_idle_heartbeat_log = now_monotonic
+                            self._write_background_layout_log(
+                                {
+                                    "event": "layout_idle_scheduler_heartbeat",
+                                    "active_skill": active_skill,
+                                    "active_step": 0,
+                                    "idle_reason": idle_reason,
+                                    "heartbeat": heartbeat,
+                                }
+                            )
                         self._maybe_progress_background_layout_work(
                             observation,
                             objective,
@@ -1084,27 +1081,18 @@ class FactorioController:
                         )
                 else:
                     busy_cycles += 1
-                    self._write_background_layout_log(
-                        {
-                            "event": "layout_idle_scheduler_busy",
-                            "active_skill": "autopilot",
-                            "active_step": 0,
-                            "idle_reason": idle_reason,
-                            "heartbeat": heartbeat,
-                        }
-                    )
-                    record_layout_loop_journal(
-                        self.cfg.log_dir,
-                        loop_type="idle_layout_cycle",
-                        objective=objective,
-                        cycle=completed,
-                        active_skill="autopilot",
-                        ok=True,
-                        reason=idle_reason,
-                        log_path=log_path,
-                        metadata={"idle": False},
-                        repo_root=self._journal_repo_root(),
-                    )
+                    now_monotonic = time.monotonic()
+                    if now_monotonic - last_busy_heartbeat_log >= heartbeat_log_interval:
+                        last_busy_heartbeat_log = now_monotonic
+                        self._write_background_layout_log(
+                            {
+                                "event": "layout_idle_scheduler_busy",
+                                "active_skill": "autopilot",
+                                "active_step": 0,
+                                "idle_reason": idle_reason,
+                                "heartbeat": heartbeat,
+                            }
+                        )
                 reason = "cycle limit reached" if cycles > 0 and completed >= cycles else "idle layout loop running"
                 if cycles > 0 and completed >= cycles:
                     break
@@ -1863,22 +1851,45 @@ class FactorioController:
                 return
             if force_poll:
                 return
+            mode = os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_MODE", "attach").strip().lower()
             interval = (
                 float(minimum_interval_seconds)
                 if minimum_interval_seconds is not None
                 else float(os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS", "20"))
             )
+            if mode in {"scheduler", "slurm_scheduler"}:
+                interval = max(
+                    interval,
+                    float(os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_SCHEDULER_NOT_READY_INTERVAL_SECONDS", "60")),
+                )
             now = time.monotonic()
             if now - self._background_layout_last_submit < interval:
                 return
+            if mode in {"scheduler", "slurm_scheduler"}:
+                status = remote_slurm.llm_status()
+                if not status.get("llm_ready"):
+                    self._background_layout_last_submit = now
+                    remote = status.get("remote") if isinstance(status.get("remote"), dict) else {}
+                    self._write_background_layout_log(
+                        {
+                            "event": "layout_scheduler_waiting_for_ready_gpu",
+                            "mode": mode,
+                            "active_skill": active_skill,
+                            "active_step": active_step,
+                            "missing": status.get("missing") or [],
+                            "scheduler_ready_free_gpus": remote.get("scheduler_ready_free_gpus"),
+                            "pending_gpu_tasks": remote.get("pending_gpu_tasks"),
+                            "pending_gpu_allocations": remote.get("pending_gpu_allocations") or [],
+                        }
+                    )
+                    return
 
             targets = load_targets(self.cfg.runtime_dir, objective)
             monitor = summarize_factory(observation, objective, production_targets=targets.per_minute)
             validation_feedback = layout_validation_feedback_summary(self.cfg.log_dir)
             selected_improvement_site = load_selected_improvement_site(self.cfg.runtime_dir, objective)
             self._background_layout_last_submit = now
-            mode = os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_MODE", "attach").strip().lower()
-            if mode in {"attach", "attached", "srun"}:
+            if mode in {"attach", "attached", "srun", "scheduler", "slurm_scheduler"}:
                 self._background_layout_thread_result = None
                 self._background_layout_thread = threading.Thread(
                     target=self._background_layout_attached_worker,
@@ -1898,6 +1909,7 @@ class FactorioController:
                 self._write_background_layout_log(
                     {
                         "event": "layout_attached_started",
+                        "mode": mode,
                         "active_skill": active_skill,
                         "active_step": active_step,
                     }

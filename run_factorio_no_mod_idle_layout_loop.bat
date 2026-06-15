@@ -4,25 +4,25 @@ cd /d "%~dp0"
 
 set PYTHONPATH=src
 set FACTORIO_AI_SLURM_ENABLED=1
-set FACTORIO_AI_SLURM_MODE=attach
+set FACTORIO_AI_SLURM_MODE=scheduler
+set FACTORIO_AI_SLURM_SCHEDULER_URL=http://100.112.168.31:8000
+set FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT=r1jae262
 set FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker
-set FACTORIO_AI_SLURM_JOB_NAME=factorio-ai-worker
-set FACTORIO_AI_SLURM_GPUS_PER_NODE=1
-set FACTORIO_AI_SLURM_GRES=gpu:1
-set FACTORIO_AI_SLURM_PARTITION=gpu4,gpu2,gpu1
+set FACTORIO_AI_SLURM_SCHEDULER_GPUS=1
+set FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=rtx3090
 set FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.5-4B
 set FACTORIO_AI_VLLM_ARGS=--max-model-len 32768 --gpu-memory-utilization 0.85 --enforce-eager
 set FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER=0
 set FACTORIO_AI_VLLM_PORT=8000
 set FACTORIO_AI_VLLM_STARTUP_SECONDS=240
 set FACTORIO_AI_BACKGROUND_LAYOUT_ENABLED=1
-set FACTORIO_AI_BACKGROUND_LAYOUT_MODE=attach
+set FACTORIO_AI_BACKGROUND_LAYOUT_MODE=scheduler
 set FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS=0
 set FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES=360
 set FACTORIO_AI_SLURM_RENEW_CHECK_INTERVAL_SECONDS=1800
 
 echo [factorio-ai] Running opportunistic no-mod layout loop.
 echo [factorio-ai] It submits simulation-only site layout work whenever autopilot is idle, stopped, or stale.
-echo [factorio-ai] Ensuring Qwen Slurm worker renewal before idle layout work.
+echo [factorio-ai] Checking scheduler-managed Qwen local LLM path before idle layout work.
 python -m factorio_ai.cli slurm-ensure-worker --renew-before-minutes %FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES% || exit /b 1
 python -m factorio_ai.cli run-no-mod-idle-layout-loop --objective launch_rocket_program --cycles 0 --sleep-seconds 5 --stale-seconds 180 --min-submit-interval-seconds 0
