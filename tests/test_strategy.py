@@ -649,6 +649,33 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "setup_coal_supply")
         self.assertIn("automated coal fuel supply", result["blockers"])
 
+    def test_reconcile_routes_research_automation_to_coal_supply_when_supply_missing(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "research_automation",
+                "priority": 70,
+                "reason": "Research Automation next.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "player": {"position": {"x": 0, "y": 0}},
+                "inventory": {"iron-plate": 20, "coal": 1},
+                "entities": [
+                    {"name": "stone-furnace", "position": {"x": 4, "y": 0}, "inventories": {}},
+                ],
+                "resources": [{"name": "coal", "position": {"x": 8, "y": 0}, "distance": 8}],
+                "research": {"technologies": {"automation": {"researched": False}}},
+            },
+        )
+
+        self.assertEqual(result["selected_skill"], "setup_coal_supply")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "research_automation")
+        self.assertIn("automated coal fuel supply", result["blockers"])
+
     def test_coal_fuel_feed_is_prioritized_after_coal_supply_exists(self):
         result = heuristic_strategy(
             "launch_rocket_program",

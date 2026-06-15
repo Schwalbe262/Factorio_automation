@@ -737,14 +737,15 @@ class WebDashboardTests(unittest.TestCase):
                 "samples": [
                     {
                         "timestamp": "2026-06-13T00:00:00+00:00",
-                        "tokens_used": 1000,
-                        "delta_tokens": 0,
+                        "tokens_used": 548_238_295,
+                        "delta_tokens": 1_234_567,
                         "label": "sample",
                     }
                 ],
-                "latest_tokens": 1000,
-                "total_delta_tokens": 0,
-                "latest_delta_tokens": 0,
+                "latest_tokens": 548_238_295,
+                "total_delta_tokens": 839_633,
+                "latest_delta_tokens": 1_234_567,
+                "weekly_quota_tokens": 2_000_000_000,
                 "sample_count": 1,
             },
             "ko",
@@ -752,6 +753,10 @@ class WebDashboardTests(unittest.TestCase):
 
         self.assertIn("현재 Factorio Codex thread", html)
         self.assertIn("threads.tokens_used", html)
+        self.assertIn("548.2M", html)
+        self.assertIn("1.2M", html)
+        self.assertIn("2.0B", html)
+        self.assertIn("839,633", html)
 
     def test_token_usage_table_uses_cumulative_tokens_after_counter_reset(self):
         html = _token_usage_table(

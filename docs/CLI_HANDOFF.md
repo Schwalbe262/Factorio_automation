@@ -1026,6 +1026,7 @@ Open review GUI:
 - Research automation must use assemblers and labs; hand-crafting science packs is not acceptable for sustained progress.
 - Iron/copper bootstrap must place/fuel direct burner mining drill -> stone furnace cells; repeated pickaxe mining of ore is not acceptable for normal plate supply.
 - Stone bootstrap should place a burner mining drill outputting into a wooden/iron chest when possible.
+- Coal bootstrap should place a temporary burner mining drill outputting into a wooden/iron chest before transport-belt production is automated; repeated hand coal mining is only an emergency fallback.
 - Labs usually need daisy chain or belt-fed science distribution.
 - Burner drills are only bootstrap; later replace with electric drills.
 - After `long-inserters`, modules, beacons, better assemblers/furnaces, rails, or quality tiers unlock, rerank existing and proposed site layouts. The Qwen payload and deterministic planner should show which unlocked tools were considered, not rely on a fixed pre-unlock layout chain.
@@ -1038,6 +1039,7 @@ Open review GUI:
 - Part 82 recovered the bad remote steam entities and verified that `SetupPowerSkill` now returns a remote-water blocker even when a full planning-site scan finds remote `power_sites`.
 - Part 83 fixed the nearest-water scan order, built working starter-local steam power, protected starting wreckage, and queued a dependent Slurm successor before the current 1-day job expired.
 - Part 84 moved Slurm renewal into launcher/controller heartbeats, added direct iron/copper smelting bootstrap, added stone drill->chest supply, and gates belt smelting expansion until transport-belt production is automated.
+- Part 125 added starter coal drill->chest supply before belt automation, made logistic-output chests preferred fuel sources over hand mining, and routes `research_automation` to `setup_coal_supply` while coal supply is missing.
 
 ## LLM Model Direction
 
@@ -1096,10 +1098,12 @@ Before finishing any CLI continuation:
 ```powershell
 git status --short
 $env:PYTHONPATH='src'; pytest -q
-python -m factorio_ai.cli record-token-usage --tokens-used <goal_tokens_used> --label "partXX short label"
+python -m factorio_ai.cli record-current-codex-thread-usage --label "partXX short label"
 git add ...
 git commit -m "Part XX: concise description"
 git push origin master
 ```
+
+Token usage samples in `logs/token_usage.jsonl` should use the current Factorio Codex thread counter from `C:\Users\NEC\.codex\state_5.sqlite` (`threads.tokens_used`). Do not pass the active goal counter to `record-token-usage`; that command remains only for backward compatibility with historical/manual samples.
 
 Never revert user changes unless explicitly requested.

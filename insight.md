@@ -663,3 +663,45 @@
 - After: Local reconciliation recomputes older remote `bootstrap_build_item_mall -> research_automation` guardrails and redirects to `produce_iron_plate` while `iron_plate_total < 10`. Live execution built burner mining drill unit 14 directly into stone furnace unit 15, with the furnace output holding 26 iron plates.
 - Evidence: `{"tests":"542 passed","live_strategy_id":"strategy-7194bb8f715d43c78f0f22084bff018e","guardrailed_skill":"produce_iron_plate","live_units":{"burner_drill":14,"stone_furnace":15},"furnace_output_iron_plate":26,"execution":"virtual server agent; r1jae not moved","logs":["logs/strategy-iron-20260615-093214.jsonl","logs/strategy-automation-research-20260615-093345.jsonl"]}`
 - Remaining risk: The fresh map is only in early bootstrap. Research automation has started gathering stone/chest prerequisites, and the next loop still needs to finish compact stone supply, steam power, lab placement, and red science without drifting into manual shuttle loops.
+
+## 2026-06-15 18:49:36 +09:00 - Insight 80
+- Source loop: Loop 398
+- Improvement: iron-plate increased by 3 during produce_iron_plate.
+- Before: iron-plate = 8
+- After: iron-plate = 11
+- Evidence: `{"delta":3,"final":11,"initial":8,"item":"iron-plate","source_loop":398,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-15 18:49:36 +09:00 - Insight 81
+- Source loop: Loop 398
+- Improvement: produce_iron_plate completed after 5 step(s): iron plate target reached: 11/10
+- Before: not recorded
+- After: iron-plate = 11
+- Evidence: `{"item":"iron-plate","item_count":11,"source_loop":398,"steps":5,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-15 19:09:10 +09:00 - Insight 82
+- Source loop: Loop 401
+- Improvement: Codex token usage sampling now records the current Factorio Codex thread counter instead of the active goal counter.
+- Before: The dashboard could show a sharp apparent reset, such as about 40M tokens dropping to about 4.2M, after recording the resumed goal counter.
+- After: `record-current-codex-thread-usage` reads the latest matching repo thread from `C:\Users\NEC\.codex\state_5.sqlite` and records `threads.tokens_used`; the dashboard states that basis.
+- Evidence: `{"targeted_tests":"11 passed","full_tests":"552 passed","source":"current Codex sqlite thread tokens_used","recorded_sample":549320647,"recorded_delta":1082352,"ui_basis_text":true}`
+- Remaining risk: The local Codex sqlite schema or cwd format could change; tests cover current `threads` columns and `\\?\\` Windows path normalization.
+
+## 2026-06-15 19:09:10 +09:00 - Insight 83
+- Source loop: Loop 402
+- Improvement: Early coal supply now prefers a temporary burner drill -> chest site and strategy routes research automation to coal supply when no automated coal source exists.
+- Before: `logs/strategy-automation-research-20260615-095155.jsonl` showed `research_automation` manually mining coal, and new coal supply always tried to place a transport belt before the drill.
+- After: Before transport-belt automation has assembler output, `CoalSupplySkill` plans an output chest first, fuel helpers take from coal output chests before hand mining, and `research_automation` is guardrailed to `setup_coal_supply` while coal supply is missing.
+- Evidence: `{"coal_planner_tests":"10 passed","strategy_guardrail_tests":"6 passed","full_tests":"552 passed","live_read_only":{"action":"mine tree","reason":"mine tree for coal output chest","player":"AI/server"}}`
+- Remaining risk: The live coal chest/drill site has not yet been executed after this patch; next loop should run `setup_coal_supply` and verify adjacent drill/chest placement.
+
+## 2026-06-15 19:05:29 +09:00 - Insight 82
+
+- Source loop: Loop 401
+- Improvement: The existing Web UI token panel now records newly sampled `tokens_used` from the current Factorio Codex thread's `threads.tokens_used` counter instead of the unrelated active Goal counter.
+- Before: Closeout workflow used `record-token-usage --tokens-used <current_goal_tokens>`, so the panel could show a much smaller or reset-like counter that did not represent total Codex thread/session usage.
+- After: `record-current-codex-thread-usage` opens `C:\Users\NEC\.codex\state_5.sqlite` read-only, chooses `--thread-id` when provided or the latest normalized Factorio cwd thread otherwise, and appends that `threads.tokens_used` value to the same `logs/token_usage.jsonl` panel data.
+- Evidence: `{"tests":"31 passed","thread_id":"019ec67d-31ec-72f2-a5c9-cc17c552702a","db_threads_tokens_used":548238295,"latest_log_tokens_used":548238295,"source":"codex_thread","web_description":"threads.tokens_used"}`
+- Remaining risk: The first new sample after older Goal-counter samples has a large migration delta because the absolute counter basis changed; future samples from the same thread counter will have meaningful increments.
+

@@ -8686,3 +8686,147 @@
 - Next action: After commit, restart only the virtual autopilot if continuous play is desired. Restart idle layout with the updated launcher or add heartbeat updates around long remote strategy calls if Qwen calls regularly exceed 180 seconds.
 - Token usage: 17,735,896 raw Codex tokens / weekly quota unavailable; delta since Part 122 sample 66,605 tokens.
 
+## 2026-06-15 18:49:36 +09:00 - Loop 398
+- Part: skill
+- Goal: launch_rocket_program / produce_iron_plate
+- Hypothesis: Running `produce_iron_plate` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `produce_iron_plate` for up to 200 step(s).
+  - Tracked `iron-plate` from 8 to 11.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-20260615-094909.jsonl`.
+- Candidates:
+  - Selected goal/skill: `produce_iron_plate`.
+  - Target item candidate: `iron-plate` target `10`.
+- Metrics:
+  - Steps: 5.
+  - Status: ok.
+  - Duration: 27.344s.
+  - iron-plate: 8 -> 11 (delta 3).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-20260615-094909.jsonl`.
+  - Metadata: `{"delta_item_count":3,"final_item_count":11,"initial_item_count":8,"max_steps":200,"target":10}`.
+- Result: Completed: iron plate target reached: 11/10
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:49:36 +09:00 - Loop 399
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / produce_iron_plate
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 1.
+  - Selected `produce_iron_plate` with priority `95` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `produce_iron_plate`.
+  - Strategy priority: `95`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 49.891s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260615-094843.jsonl`.
+  - Metadata: `{"cycle":1,"priority":95,"strategy_source":"llm"}`.
+- Result: Completed: iron plate target reached: 11/10
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:52:54 +09:00 - Loop 400
+- Part: skill
+- Goal: launch_rocket_program / research_automation
+- Hypothesis: Running `research_automation` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_automation` for up to 12 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260615-095155.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_automation`.
+  - Target item candidate: `automation-science-pack` target `10`.
+- Metrics:
+  - Steps: 12.
+  - Status: failed.
+  - Duration: 59.063s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-automation-research-20260615-095155.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":12,"target":10}`.
+- Result: Loop stopped: max steps reached: 12
+- Failure reason: max steps reached: 12
+- Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 19:09:10 +09:00 - Loop 401
+- Part: Part 124 Codex token usage counter source
+- Goal: Fix the dashboard/CLI token usage recorder so samples continue from the current Factorio Codex thread counter instead of using the active goal counter after a context/session reset.
+- Hypothesis: The apparent drop from about 40M tokens to about 4.2M tokens came from recording the wrong counter source, so reading `threads.tokens_used` from the latest local Codex thread for this repo should restore monotonic sampling.
+- Actions:
+  - Added `current_codex_thread_usage` and `record_current_codex_thread_usage` to read `C:\Users\NEC\.codex\state_5.sqlite`.
+  - Added CLI command `record-current-codex-thread-usage`.
+  - Updated the dashboard token panel to state that samples are based on the current Factorio Codex thread's `threads.tokens_used`.
+  - Updated `docs/CLI_HANDOFF.md` so future token samples use the current thread command, not the active goal counter.
+  - Added tests for latest-thread selection, explicit thread-id override, recording the current thread sample, and dashboard basis text.
+  - Recorded the current thread sample with label `part125 starter coal chest supply`.
+- Candidates:
+  - Selected fix: local Codex sqlite `threads.tokens_used` keyed by repo cwd.
+  - Rejected source for future samples: active goal counter, because it can reset or represent only the resumed goal state.
+- Metrics:
+  - Targeted token/dashboard tests: `11 passed`.
+  - Full test suite after combined changes: `552 passed in 28.82s`.
+  - Recorded current thread sample: `549,320,647` tokens, delta `1,082,352`, source `codex_thread`.
+- Result: Token usage recording now has an explicit current-thread source and UI basis text.
+- Failure reason: None.
+- Next action: Use `python -m factorio_ai.cli record-current-codex-thread-usage --label "partXX short label"` for future part samples.
+- Token usage: 549,320,647 raw current-thread Codex tokens / weekly quota unavailable; active goal tool counter at documentation time was 18,110,245.
+
+## 2026-06-15 19:09:10 +09:00 - Loop 402
+- Part: Part 125 starter coal chest supply
+- Goal: Avoid repeated hand coal mining in early bootstrap by making coal use the same temporary drill -> chest pattern as starter stone until transport-belt production is actually automated.
+- Hypothesis: Before the belt mall exists, a burner mining drill outputting into a chest is cheaper and more reliable than spending scarce hand-crafted belts or repeatedly mining coal by hand.
+- Actions:
+  - Updated `CoalSupplySkill` so new pre-belt coal sites place a wooden/iron/steel output chest before the burner mining drill.
+  - Kept existing belt-output coal sites working, but only creates new belt-output coal supply when a powered transport-belt assembler has produced belt output.
+  - Made starter coal output chests count as preferred surplus fuel sources before direct coal resource mining.
+  - Changed coal stock recovery to use inventory coal count, not coal sitting inside drills/chests, when deciding whether to take coal from the output.
+  - Added coal-specific chest preparation reason strings so logs say `coal output chest`, not `stone output chest`.
+  - Added strategy guardrail so Qwen-selected `research_automation` redirects to `setup_coal_supply` while coal supply is missing.
+  - Updated `docs/CLI_HANDOFF.md` with the coal drill -> chest bootstrap rule.
+  - Read the live no-mod world without mutation; `CoalSupplySkill(target_count=16)` now returns `mine tree for coal output chest` instead of choosing another manual coal-mining loop.
+- Candidates:
+  - Selected early coal pattern: burner mining drill -> wooden/iron chest.
+  - Deferred pattern: coal output belt and coal fuel feed route, only after transport-belt automation has real assembler output.
+- Metrics:
+  - Coal/fuel planner tests: `10 passed`.
+  - Strategy coal/research guardrail tests: `6 passed`.
+  - Full test suite: `552 passed in 28.82s`.
+  - Live read-only action: `{"type":"mine","name":"tree-02","position":{"x":75.88,"y":-64.5},"count":1}` with reason `mine tree for coal output chest`.
+- Result: Early coal supply planning no longer requires hand coal mining before building a temporary coal output site.
+- Failure reason: No live mutation was executed in this loop; this was a code, test, and read-only verification pass.
+- Next action: Let the virtual AI run `setup_coal_supply`, then verify the coal burner drill and output chest are adjacent and feeding without moving `r1jae`.
+- Token usage: 549,320,647 raw current-thread Codex tokens / weekly quota unavailable; active goal tool counter at documentation time was 18,110,245.
+
+## 2026-06-15 19:05:29 +09:00 - Loop 401
+
+- Part: Codex thread token usage correction
+- Goal: Make the existing Web UI `Codex 토큰 사용량` panel record and display the current Factorio Codex thread counter instead of the active goal counter.
+- Hypothesis: The active goal counter is not the full Codex session/thread token counter, so `logs/token_usage.jsonl` should be sampled from `C:\Users\NEC\.codex\state_5.sqlite` `threads.tokens_used` for the current Factorio working directory.
+- Actions:
+  - Added read-only sqlite lookup for Codex thread usage in `src/factorio_ai/token_usage.py`.
+  - Added `record-current-codex-thread-usage` CLI command with `--thread-id`, `--state-db`, `--cwd`, `--label`, `--source`, and `--timestamp` options.
+  - Kept `record-token-usage --tokens-used ...` for compatibility, but updated `docs/CLI_HANDOFF.md` so future workflow uses the new thread-counter command.
+  - Updated the existing Web UI token panel description to state that it is based on the current Factorio Codex thread's `threads.tokens_used`.
+  - Added tests for latest Factorio thread selection, `--thread-id` precedence, current-thread sample recording, and Web UI description rendering.
+  - Executed the new CLI once against the real local Codex DB and verified the latest `logs/token_usage.jsonl` sample matches the selected thread row.
+- Candidates:
+  - Keep manually passing the Goal counter: rejected because it does not represent total Codex thread/session usage.
+  - Add a separate thread-token panel: rejected because the requirement was to keep the existing panel.
+  - Reuse `logs/token_usage.jsonl` with `tokens_used=threads.tokens_used`: selected to preserve existing graph, reset, and delta logic.
+- Metrics:
+  - Targeted token/Web tests: `11 passed, 17 deselected`.
+  - Related CLI/Web/token tests: `31 passed`.
+  - Real selected thread: `019ec67d-31ec-72f2-a5c9-cc17c552702a`, cwd `\\?\C:\Users\NEC\Documents\Factorio`.
+  - Real DB `threads.tokens_used`: `548,238,295`.
+  - Latest `logs/token_usage.jsonl` sample `tokens_used`: `548,238,295`.
+  - Latest sample source: `codex_thread`.
+- Result: Existing token usage panel now uses the current Factorio Codex thread counter for newly recorded samples.
+- Failure reason: None.
+- Next action: Use `python -m factorio_ai.cli record-current-codex-thread-usage --label "partXX short label"` for future part closeouts. Treat the first thread-counter delta as a baseline transition from older Goal-counter samples, not as a normal incremental work delta.
+- Token usage: current Factorio Codex thread counter `548,238,295` tokens / weekly quota unavailable.
+

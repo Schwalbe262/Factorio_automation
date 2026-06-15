@@ -3010,6 +3010,7 @@ _COAL_DEPENDENT_SKILLS = {
     "build_belt_smelting_line",
     "expand_iron_smelting",
     "expand_copper_smelting",
+    "research_automation",
     "setup_power",
 }
 
