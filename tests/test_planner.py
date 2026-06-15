@@ -663,6 +663,7 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "insert")
         self.assertEqual(decision.action["item"], "coal")
         self.assertEqual(decision.action["unit_number"], 20)
+        self.assertEqual(decision.action["count"], 8)
 
     def test_coal_fuel_feed_extends_coal_belt_to_boiler_before_furnace_receiver(self):
         obs = base_observation()
