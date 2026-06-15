@@ -109,6 +109,13 @@ def gear_mall_needs_plate_line_without_belts_observation() -> dict:
     observation = gear_mall_needs_plate_line_observation()
     observation["inventory"] = {}
     observation["entities"][1]["inventories"] = {}
+    observation["entities"][2]["position"] = {"x": 33.0, "y": 0.5}
+    return observation
+
+
+def gear_mall_needs_long_plate_line_without_belts_observation() -> dict:
+    observation = gear_mall_needs_plate_line_without_belts_observation()
+    observation["entities"][2]["position"] = {"x": 153.0, "y": 0.5}
     return observation
 
 
@@ -191,6 +198,20 @@ class StrategyTests(unittest.TestCase):
 
         self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
         self.assertIn("iron-plate logistic line to gear mall", result["blockers"])
+        self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
+
+    def test_rocket_goal_plans_compaction_for_long_gear_mall_plate_route_without_belts(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            gear_mall_needs_long_plate_line_without_belts_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "plan_factory_site")
+        self.assertIn("compact gear mall iron-plate site planning", result["blockers"])
+        self.assertIn("source_distance_tiles=152.5", result["evidence"])
+        self.assertIn("belt_route_cost=153.0", result["evidence"])
+        self.assertIn("relocation_cost=58.0", result["evidence"])
+        self.assertIn("route_cost_preference=relocate_mall_to_iron_source", result["evidence"])
         self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
 
     def test_rocket_goal_bootstraps_belt_mall_when_belts_are_exhausted(self):
@@ -622,6 +643,48 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
         self.assertEqual(result["guardrail_adjusted"]["from"], "automate_electronic_circuit_line")
         self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
+
+    def test_reconcile_keeps_plan_site_for_long_gear_mall_plate_route_without_belts(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 84,
+                "reason": "Layout should be compacted before more construction.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            gear_mall_needs_long_plate_line_without_belts_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "plan_factory_site")
+        self.assertNotIn("guardrail_adjusted", result)
+        self.assertIn("compact gear mall iron-plate site planning", result["blockers"])
+        self.assertIn("source_distance_tiles=152.5", result["evidence"])
+        self.assertIn("route_cost_preference=relocate_mall_to_iron_source", result["evidence"])
+
+    def test_reconcile_routes_downstream_to_plan_site_for_long_gear_mall_plate_route_without_belts(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "automate_electronic_circuit_line",
+                "priority": 84,
+                "reason": "Need more circuits.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            gear_mall_needs_long_plate_line_without_belts_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "plan_factory_site")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "automate_electronic_circuit_line")
+        self.assertIn("compact gear mall iron-plate site planning", result["blockers"])
+        self.assertIn("source_distance_tiles=152.5", result["evidence"])
+        self.assertIn("route_cost_preference=relocate_mall_to_iron_source", result["evidence"])
 
     def test_reconcile_promotes_fuel_dependent_expansion_to_coal_supply(self):
         result = reconcile_strategy_decision(

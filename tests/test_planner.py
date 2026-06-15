@@ -335,6 +335,30 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.done)
         self.assertIn("layout improvement plan", decision.reason)
 
+    def test_factory_layout_flags_power_expansion_clearance_risk(self):
+        obs = base_observation()
+        obs["entities"] = [
+            {"name": "offshore-pump", "unit_number": 901, "position": {"x": 0, "y": 0}, "inventories": {}},
+            {"name": "boiler", "unit_number": 902, "position": {"x": 2, "y": 0}, "inventories": {"1": {"coal": 2}}},
+            {"name": "steam-engine", "unit_number": 903, "position": {"x": 4, "y": 0}, "inventories": {}, "electric_network_connected": True},
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 904,
+                "recipe": "transport-belt",
+                "position": {"x": 8, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+        ]
+
+        issues = factory_layout_issues(obs)
+        issue = next(item for item in issues if item["kind"] == "power_expansion_clearance_risk")
+
+        self.assertEqual(issue["item"], "electric-power")
+        self.assertEqual(issue["parameters"]["neighbor_kind"], "build_item_mall")
+        self.assertLessEqual(issue["parameters"]["distance_tiles"], 12.0)
+        self.assertIn("placement cost", issue["recommendation"])
+
     def test_factory_layout_flags_remote_starter_smelting_site(self):
         obs = base_observation()
         obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
@@ -364,6 +388,49 @@ class PlannerTests(unittest.TestCase):
         issue = next(item for item in issues if item["kind"] == "manual_site_logistics_gap")
         self.assertEqual(issue["item"], "copper-plate")
         self.assertIn("no site-to-site route", issue["detail"])
+
+    def test_factory_layout_flags_long_gear_mall_iron_source_when_belts_are_exhausted(self):
+        obs = base_observation()
+        obs["research"] = {"technologies": {"automation": {"researched": True}}}
+        obs["inventory"] = {}
+        obs["entities"] = [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 100,
+                "recipe": "iron-gear-wheel",
+                "position": {"x": 0.5, "y": 0.5},
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 101,
+                "recipe": "transport-belt",
+                "position": {"x": 3.5, "y": 0.5},
+                "electric_network_connected": True,
+                "inventories": {"2": {"iron-gear-wheel": 3}},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 200,
+                "recipe": "iron-plate",
+                "position": {"x": 153.0, "y": 0.5},
+                "inventories": {"2": {"iron-plate": 24}},
+            },
+        ]
+
+        issues = factory_layout_issues(obs)
+        issue = next(item for item in issues if item["kind"] == "distant_gear_mall_iron_source")
+
+        self.assertEqual(issue["item"], "iron-plate")
+        self.assertEqual(issue["parameters"]["gear_assembler_unit"], 100)
+        self.assertEqual(issue["parameters"]["iron_source_unit"], 200)
+        self.assertEqual(issue["parameters"]["source_distance_tiles"], 152.5)
+        self.assertEqual(issue["parameters"]["belt_route_cost"], 153.0)
+        self.assertEqual(issue["parameters"]["relocation_power_poles_estimate"], 20)
+        self.assertEqual(issue["parameters"]["relocation_cost"], 58.0)
+        self.assertEqual(issue["parameters"]["route_cost_preference"], "relocate_mall_to_iron_source")
+        self.assertIn("route cost favors relocation", issue["detail"])
 
     def test_factory_layout_flags_production_on_resource_patch(self):
         obs = base_observation()

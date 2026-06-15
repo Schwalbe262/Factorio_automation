@@ -296,6 +296,8 @@ def compact_layout_improvement_payload(payload: dict[str, Any]) -> dict[str, Any
         "rules": [
             "Do not apply or build the design.",
             "Prefer candidates that reduce bottlenecks, footprint, transport distance, or ratio error.",
+            "Treat factory placement as a site graph: separate high-coupling producer/consumer districts only when the input/output traffic has a trunk, rail, or other validated corridor.",
+            "Do not hard-ban factories near power blocks; price the lost boiler, engine, pole, water, fuel, and future power expansion clearance as a layout risk.",
             "Treat candidate validation failures as training feedback: explain the exact inserter, belt, power, or collision reason and do not mark it build-ready.",
             "If sandbox_validation is fail, use its lesson and reasons in the next candidate design.",
             "Sandbox pass is not site-ready; if site_prebuild_gate is fail or build_ready is false, keep the candidate simulation-only.",
@@ -717,6 +719,8 @@ def compact_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "After automation is researched, prefer powered assembler automation over repeated hand crafting.",
             "If build items such as inserters, belts, poles, or assemblers block expansion, choose bootstrap_build_item_mall.",
             "If layout_improvement has an issue/opportunity/candidate severity or score >= 75, choose plan_factory_site before adding more inefficient blocks.",
+            "For site placement, compare construction distance costs with future input/output traffic risk; tightly coupled sites should be adjacent unless a trunk or rail corridor is justified.",
+            "Account for power-block expansion clearance as a cost, not an absolute placement ban.",
             "When no urgent build/research/defense task exists, use idle LLM cycles for site layout simulation and improvement planning.",
         ],
         "decision_rule": payload.get("decision_rule"),

@@ -6663,3 +6663,100 @@
 - Next action: Use the surfaced blocker to add a proper non-hand-carry recovery path: either automate more belts without distant plate shuttle, shorten/re-site related factories, or plan a power/logistics relocation that makes the iron source and gear/belt mall adjacent enough for compact automation.
 - Token usage: cumulative 11,013,231; delta 282,896 / weekly quota unavailable
 
+## 2026-06-15 10:45:42 +09:00 - Loop 310
+- Part: skill
+- Goal: launch_rocket_program / plan_factory_site
+- Hypothesis: Running `plan_factory_site` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `plan_factory_site` for up to 1 step(s).
+  - Tracked `layout-plan` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260615-014534.jsonl`.
+- Candidates:
+  - Selected goal/skill: `plan_factory_site`.
+  - Target item candidate: `layout-plan` target `1`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 7.938s.
+  - layout-plan: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260615-014534.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1,"target":1}`.
+- Result: Completed: layout improvement plan: distant_gear_mall_iron_source(91): plan compact relocation of the gear/belt mall near iron-plate production or reserve a validated trunk corridor before extending the pre-rail belt route; manual_power_fuel(76): route coal belt/inserter fuel feed to boiler before scaling electric machines; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; rebalance_green_circuit_ratio(78): rebuild or extend green circuits as a compact 3 cable to 2 circuit assembler pattern with short direct cable transfer; upgrade_lab_feed_pattern(66): use a short lab daisy chain or multi-feed science belt before expanding research throughput; best_candidate=iron-plate-parallel-smelting-columns score=78.0 not_applied=true
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 10:57:09 +09:00 - Loop 313
+- Part: Part 106 - site placement cost model
+- Goal: Stop treating every distant iron-plate dependency as a belt-extension problem and make Qwen/strategy compare route costs against compact factory relocation or corridor planning.
+- Hypothesis: When the gear/belt mall is 152.5 tiles from the iron-plate source and construction belts are exhausted, relocating or rebuilding the mall near iron and connecting power with poles is cheaper and cleaner than extending another long pre-rail belt route.
+- Actions:
+  - Added a deterministic cost estimate to the gear mall iron-plate logistics issue: belt route tiles/cost, nearest power-anchor distance, estimated small-pole count, relocation fixed cost, and route preference.
+  - Changed strategy guardrails so a long, belt-starved gear mall iron-plate route selects `plan_factory_site` instead of forcing `build_iron_plate_logistic_line_to_gear_mall`.
+  - Kept short route cases on `build_iron_plate_logistic_line_to_gear_mall`, so the model is cost-based instead of a blind distance ban.
+  - Added `distant_gear_mall_iron_source` layout issue parameters for GEPA/Qwen training data.
+  - Added strategy and Slurm compact-payload guidance that factory placement is a site-graph/traffic problem: tightly coupled producer/consumer sites should be adjacent unless a trunk, rail, or validated corridor is justified.
+  - Added `power_expansion_clearance_risk` so factories near steam power are not forbidden, but lost boiler/engine/pole/fuel/water expansion room is charged as a layout cost.
+  - Restored live steam power after the gear/belt mall fell to `no_power`, then reran Qwen-required strategy and layout-plan loops.
+- Candidates:
+  - Rejected: continue the 152.5-tile pre-rail belt extension while belts are exhausted.
+  - Rejected: use a fixed distance threshold alone; it misses cases where power/corridor costs change the right answer.
+  - Selected: compare `belt_route_cost=153.0` against `relocation_cost=58.0` with `relocation_power_poles_estimate=20`, then route to `plan_factory_site`.
+- Metrics:
+  - Live Qwen strategy after power recovery: `selected_skill=plan_factory_site`, `source=llm`.
+  - Live evidence: `source_distance_tiles=152.5`, `belt_route_cost=153.0`, `relocation_power_poles_estimate=20`, `relocation_cost=58.0`, `route_cost_preference=relocate_mall_to_iron_source`.
+  - Live setup power trace: `strategy-power-20260615-015411.jsonl`, 3 steps, ok.
+  - Live layout plan trace: `strategy-layout-improvement-20260615-015617.jsonl`, 1 step, ok.
+  - Tests: `PYTHONPATH=src python -m unittest discover tests` -> 466 passed.
+  - Token usage sample: current raw counter 11,535,238, delta 522,007 since prior sample, weekly quota unavailable.
+- Result: Qwen and heuristic strategy now prefer layout planning for the current distant gear/belt mall iron dependency based on explicit route-cost evidence, short route cases remain eligible for belt construction, and power-block adjacency is represented as an expansion-clearance cost instead of a hard ban.
+- Failure reason: No live factory relocation executor exists yet; `plan_factory_site` currently records the costed plan but does not rebuild the mall automatically.
+- Next action: Add a deterministic executor for compact mall relocation or validated corridor construction, then expose it as a selectable skill instead of leaving the result as a plan-only loop.
+- Token usage: cumulative 11,535,238; delta 522,007 / weekly quota unavailable
+
+## 2026-06-15 10:54:28 +09:00 - Loop 311
+- Part: skill
+- Goal: launch_rocket_program / setup_power
+- Hypothesis: Running `setup_power` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `setup_power` for up to 6 step(s).
+  - Tracked `steam` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-power-20260615-015411.jsonl`.
+- Candidates:
+  - Selected goal/skill: `setup_power`.
+  - Target item candidate: `steam` target `1`.
+- Metrics:
+  - Steps: 3.
+  - Status: ok.
+  - Duration: 16.953s.
+  - steam: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-power-20260615-015411.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":6,"target":1}`.
+- Result: Completed: steam power block is producing usable steam power
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 10:56:25 +09:00 - Loop 312
+- Part: skill
+- Goal: launch_rocket_program / plan_factory_site
+- Hypothesis: Running `plan_factory_site` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `plan_factory_site` for up to 1 step(s).
+  - Tracked `layout-plan` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260615-015617.jsonl`.
+- Candidates:
+  - Selected goal/skill: `plan_factory_site`.
+  - Target item candidate: `layout-plan` target `1`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 7.547s.
+  - layout-plan: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-layout-improvement-20260615-015617.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1,"target":1}`.
+- Result: Completed: layout improvement plan: distant_gear_mall_iron_source(91): plan compact relocation of the gear/belt mall near iron-plate production or reserve a validated trunk corridor before extending the pre-rail belt route; manual_power_fuel(76): route coal belt/inserter fuel feed to boiler before scaling electric machines; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; resource_tile_blocked(74): avoid expanding production blocks over starter resources; reserve the patch for miner coverage unless no alternative remains; rebalance_green_circuit_ratio(78): rebuild or extend green circuits as a compact 3 cable to 2 circuit assembler pattern with short direct cable transfer; upgrade_lab_feed_pattern(66): use a short lab daisy chain or multi-feed science belt before expanding research throughput; best_candidate=iron-plate-parallel-smelting-columns score=78.0 not_applied=true
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+

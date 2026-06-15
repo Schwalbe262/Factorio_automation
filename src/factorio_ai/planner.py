@@ -53,6 +53,12 @@ SITE_GATE_LOCAL_LOGISTICS_RADIUS = 96.0
 SITE_PLACEMENT_SEARCH_STEP = 8
 SITE_PLACEMENT_SEARCH_RADIUS = 48
 MANUAL_SITE_INPUT_RADIUS = 48.0
+POWER_EXPANSION_CLEARANCE_RADIUS = 12.0
+PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT = 128.0
+GEAR_MALL_RELOCATION_FIXED_COST = 18.0
+GEAR_MALL_RELOCATION_POWER_POLE_COST = 2.0
+GEAR_MALL_PLATE_BELT_TILE_COST = 1.0
+GEAR_MALL_RELOCATION_ADVANTAGE_RATIO = 0.75
 AUTOMATED_SITE_INPUT_ITEMS = {
     "iron-plate",
     "copper-plate",
@@ -261,8 +267,165 @@ def factory_layout_issues(observation: dict[str, Any]) -> list[dict[str, Any]]:
                 }
             )
 
+    for issue in _power_expansion_clearance_issues(sites):
+        issues.append(issue)
+
+    gear_mall_compaction_issue = _gear_mall_plate_compaction_issue(observation)
+    if gear_mall_compaction_issue is not None:
+        issues.append(gear_mall_compaction_issue)
+
     issues.sort(key=lambda item: int(item.get("severity") or 0), reverse=True)
     return issues[:12]
+
+
+def _power_expansion_clearance_issues(sites: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    power_sites = [
+        site for site in sites if isinstance(site, dict) and str(site.get("kind") or "") == "steam_power"
+    ]
+    production_sites = [
+        site
+        for site in sites
+        if isinstance(site, dict)
+        and str(site.get("kind") or "") in {"plate_smelting_line", "build_item_mall", "assembler_cell", "circuit_automation", "research_lab_block"}
+    ]
+    issues: list[dict[str, Any]] = []
+    for power_site in power_sites:
+        power_position = power_site.get("position") if isinstance(power_site.get("position"), dict) else None
+        if power_position is None:
+            continue
+        nearest: dict[str, Any] | None = None
+        nearest_distance = 999999.0
+        for site in production_sites:
+            site_position = site.get("position") if isinstance(site.get("position"), dict) else None
+            if site_position is None:
+                continue
+            gap = distance(power_position, site_position)
+            if gap < nearest_distance:
+                nearest = site
+                nearest_distance = gap
+        if nearest is None or nearest_distance > POWER_EXPANSION_CLEARANCE_RADIUS:
+            continue
+        issues.append(
+            {
+                "kind": "power_expansion_clearance_risk",
+                "severity": 68,
+                "site_id": power_site.get("site_id"),
+                "item": "electric-power",
+                "detail": (
+                    f"{nearest.get('kind')} is {nearest_distance:.1f} tiles from steam power, reducing room for boiler/engine expansion"
+                ),
+                "recommendation": (
+                    "treat power-block adjacency as a placement cost: reserve expansion lanes for extra boilers, engines, poles, "
+                    "coal/water input, and later power rebuilds unless the nearby factory has a stronger locality benefit"
+                ),
+                "parameters": {
+                    "power_site_id": power_site.get("site_id"),
+                    "neighbor_site_id": nearest.get("site_id"),
+                    "neighbor_kind": nearest.get("kind"),
+                    "distance_tiles": round(nearest_distance, 1),
+                    "clearance_radius": POWER_EXPANSION_CLEARANCE_RADIUS,
+                },
+            }
+        )
+    return issues
+
+
+def _gear_mall_plate_compaction_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
+    if not bool(_technology_state(observation, "automation").get("researched")):
+        return None
+    if total_item_count(observation, "transport-belt") > 0:
+        return None
+    layout = _find_iron_plate_logistic_line_to_gear_mall_layout(observation)
+    if layout is None:
+        return None
+    source = layout.get("source")
+    gear_assembler = layout.get("gear_assembler")
+    if not isinstance(source, dict) or not isinstance(gear_assembler, dict):
+        return None
+    source_position = _position(source)
+    gear_position = _position(gear_assembler)
+    source_distance = distance(source_position, gear_position)
+    route_cost = _gear_mall_plate_layout_cost_estimate(observation, source_position, gear_position)
+    if route_cost.get("route_cost_preference") != "relocate_mall_to_iron_source":
+        return None
+    return {
+        "kind": "distant_gear_mall_iron_source",
+        "severity": 91,
+        "site_id": f"gear:{gear_assembler.get('unit_number')}:iron-source:{source.get('unit_number')}",
+        "item": "iron-plate",
+        "detail": (
+            f"gear/belt mall iron route cost favors relocation or a trunk corridor over a {source_distance:.0f}-tile pre-rail belt recovery"
+        ),
+        "recommendation": (
+            "plan compact relocation of the gear/belt mall near iron-plate production or reserve a validated "
+            "trunk corridor before extending the pre-rail belt route"
+        ),
+        "parameters": {
+            "gear_assembler_unit": gear_assembler.get("unit_number"),
+            "iron_source_unit": source.get("unit_number"),
+            "source_distance_tiles": round(source_distance, 1),
+            "transport_belts_available": False,
+            **route_cost,
+        },
+    }
+
+
+def _gear_mall_plate_layout_cost_estimate(
+    observation: dict[str, Any],
+    source_position: dict[str, float],
+    gear_position: dict[str, float],
+) -> dict[str, Any]:
+    source_distance = distance(source_position, gear_position)
+    belt_tiles = int(ceil(max(0.0, source_distance)))
+    belt_cost = round(belt_tiles * GEAR_MALL_PLATE_BELT_TILE_COST, 1)
+    power_distance = _nearest_power_anchor_distance(observation, source_position)
+    if power_distance is None:
+        return {
+            "belt_route_tiles_estimate": belt_tiles,
+            "belt_route_cost": belt_cost,
+            "power_anchor_distance_tiles": None,
+            "relocation_power_poles_estimate": None,
+            "relocation_cost": None,
+            "route_cost_preference": (
+                "relocate_mall_to_iron_source"
+                if source_distance > PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT
+                else "build_belt_route"
+            ),
+        }
+
+    power_poles = int(ceil(max(0.0, power_distance) / _power_wire_reach("small-electric-pole")))
+    relocation_cost = round(
+        GEAR_MALL_RELOCATION_FIXED_COST + power_poles * GEAR_MALL_RELOCATION_POWER_POLE_COST,
+        1,
+    )
+    preference = (
+        "relocate_mall_to_iron_source"
+        if relocation_cost < belt_cost * GEAR_MALL_RELOCATION_ADVANTAGE_RATIO
+        else "build_belt_route"
+    )
+    return {
+        "belt_route_tiles_estimate": belt_tiles,
+        "belt_route_cost": belt_cost,
+        "power_anchor_distance_tiles": round(power_distance, 1),
+        "relocation_power_poles_estimate": power_poles,
+        "relocation_cost": relocation_cost,
+        "route_cost_preference": preference,
+    }
+
+
+def _nearest_power_anchor_distance(observation: dict[str, Any], target_position: dict[str, float]) -> float | None:
+    distances: list[float] = []
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("name") or "")
+        if name not in POWER_CONNECTOR_NAMES and entity.get("electric_network_connected") is not True:
+            continue
+        position = entity.get("position")
+        if not isinstance(position, dict):
+            continue
+        distances.append(distance(position, target_position))
+    return min(distances) if distances else None
 
 
 def factory_layout_opportunities(observation: dict[str, Any]) -> list[dict[str, Any]]:

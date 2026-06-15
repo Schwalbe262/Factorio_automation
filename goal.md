@@ -52,7 +52,10 @@
 - Automation-first logistics: after the first bootstrap phase, repeated production must use belts, inserters, chests, pipes, trains, or later bots instead of player inventory shuttle loops.
 - Ore extraction: copper and iron production should move to mining drills as soon as the relevant drill can be crafted or placed; do not continue pickaxe mining ore for normal plate production.
 - Site adjacency: related producer/consumer sites should be close enough for short local belts until a main bus, trunk line, or rail network exists.
+- Site graph and traffic: treat factory placement as a coupled producer/consumer graph, not isolated blocks. Co-locate high-coupling inputs and outputs unless a trunk belt, pipe corridor, rail station, or later bot network has enough capacity and expansion room; otherwise the factory will develop traffic congestion similar to badly separated city districts.
+- Placement cost model: compare the build and operating cost of belts, pipes, poles, rails, stations, inserters, buffers, and future throughput risk before deciding whether to extend a line, relocate a factory site, or reserve a corridor.
 - Power and pollution: prefer lower power draw and pollution for equivalent throughput, especially before defense is mature.
+- Power expansion clearance: do not hard-ban factories near power blocks, but charge an explicit layout risk/cost when a factory consumes boiler, steam-engine, pole, water, fuel, or later power-upgrade expansion room.
 - Expansion: leave clear lanes for belts, power, rails, modules, beacons, and replacement with higher-tier machines.
 - Site safety: avoid starter resource patches, enemy pressure, disconnected power grids, preserved starting wreckage, and unvalidated remote logistics before rail.
 - New world setup: for future Nauvis starts, disable cliffs because they make compact factory placement and corridor planning unnecessarily brittle.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from math import ceil
 from typing import Any
 
 from .knowledge import dependency_tree_for_objective
@@ -28,6 +29,19 @@ BUILD_ITEM_MALL_ITEMS = [
     "small-electric-pole",
     "assembling-machine-1",
 ]
+PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT = 128.0
+SMALL_POWER_POLE_REACH = 7.5
+GEAR_MALL_RELOCATION_FIXED_COST = 18.0
+GEAR_MALL_RELOCATION_POWER_POLE_COST = 2.0
+GEAR_MALL_PLATE_BELT_TILE_COST = 1.0
+GEAR_MALL_RELOCATION_ADVANTAGE_RATIO = 0.75
+POWER_ANCHOR_ENTITY_NAMES = {
+    "small-electric-pole",
+    "medium-electric-pole",
+    "big-electric-pole",
+    "substation",
+    "steam-engine",
+}
 
 
 @dataclass(frozen=True)
@@ -391,6 +405,9 @@ def make_strategy_payload(
             "Select exactly one high-level skill. Diagnose bottlenecks first. "
             "Evaluate electric supply per connected power network, not as a single global pool. "
             "After the first bootstrap phase, prefer site-to-site logistic lines over hand crafting or hand-carrying items. "
+            "Treat factory placement as site-graph optimization: compare belt, pipe, pole, and later rail distance costs "
+            "against future input/output traffic, and co-locate tightly coupled producer/consumer sites unless a trunk or rail corridor is justified. "
+            "Do not hard-ban factories near power blocks, but account for lost boiler, engine, pole, fuel, water, and future power expansion clearance. "
             "For spatial work, choose districts, corridors, or rail topology only. "
             "When urgent production, defense, research, and power work are satisfied, use idle LLM cycles "
             "to improve factory site layout against reusable blueprint-style patterns. "
@@ -901,6 +918,56 @@ def reconcile_strategy_decision(
         }
         return adjusted
     gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
+    if _gear_mall_plate_route_needs_compaction(gear_mall_iron_plate_issue) and selected in {
+        "plan_factory_site",
+        "produce_electronic_circuit",
+        "automate_electronic_circuit_line",
+        "bootstrap_build_item_mall",
+        "research_logistics",
+        "build_iron_plate_logistic_line_to_gear_mall",
+    }:
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "plan_factory_site"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 93)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            "The gear/belt mall iron-plate site cost model prefers compact relocation or a trunk corridor "
+            "over this pre-rail belt recovery while construction belts are exhausted."
+        )
+        current_blockers = _string_list(decision.get("blockers"))
+        already_explains_issue = selected == "plan_factory_site" and "compact gear mall iron-plate site planning" in current_blockers
+        adjusted["reason"] = original_reason if already_explains_issue else f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(set(current_blockers + ["compact gear mall iron-plate site planning"]))
+        evidence = _string_list(decision.get("evidence"))
+        if selected != "plan_factory_site":
+            evidence.append(f"guardrail_adjusted_from={selected}")
+        for item in [
+            f"gear_assembler_unit={gear_mall_iron_plate_issue.get('gear_unit')}",
+            f"iron_source_unit={gear_mall_iron_plate_issue.get('source_unit')}",
+            f"source_distance_tiles={gear_mall_iron_plate_issue.get('source_distance_tiles')}",
+            f"belt_route_cost={gear_mall_iron_plate_issue.get('belt_route_cost')}",
+            f"relocation_power_poles_estimate={gear_mall_iron_plate_issue.get('relocation_power_poles_estimate')}",
+            f"relocation_cost={gear_mall_iron_plate_issue.get('relocation_cost')}",
+            f"route_cost_preference={gear_mall_iron_plate_issue.get('route_cost_preference')}",
+            "transport_belts_available_for_mall_logistics=false",
+            "gear_handcraft_blocked=true",
+        ]:
+            if item not in evidence:
+                evidence.append(item)
+        adjusted["evidence"] = evidence
+        adjusted["expected_effect"] = (
+            "Ask the layout planner/Qwen layer to co-locate the gear/belt mall with iron-plate production "
+            "or reserve a validated trunk corridor before more live construction."
+        )
+        if selected != "plan_factory_site":
+            adjusted["guardrail_adjusted"] = {
+                "from": selected,
+                "to": "plan_factory_site",
+                "reason": guardrail_reason,
+            }
+        else:
+            adjusted.pop("guardrail_adjusted", None)
+        return adjusted
     if gear_mall_iron_plate_issue is not None and selected in {
         "plan_factory_site",
         "produce_electronic_circuit",
@@ -1272,6 +1339,33 @@ def heuristic_strategy(
             expected_effect=(
                 "Use the gear-fed belt mall executor to seed or finish belt production without hand-crafted gears, "
                 "then resume the sustained iron-plate input route."
+            ),
+        ).to_dict()
+
+    if _gear_mall_plate_route_needs_compaction(gear_mall_iron_plate_issue):
+        return StrategicDecision(
+            selected_skill="plan_factory_site",
+            priority=93,
+            reason=(
+                "The powered gear/belt mall has no sustained iron-plate input, and the site placement cost "
+                "model prefers compact relocation or a trunk corridor over another starter-era ad-hoc belt "
+                "extension while construction belts are exhausted."
+            ),
+            evidence=[
+                f"gear_assembler_unit={gear_mall_iron_plate_issue.get('gear_unit')}",
+                f"iron_source_unit={gear_mall_iron_plate_issue.get('source_unit')}",
+                f"source_distance_tiles={gear_mall_iron_plate_issue.get('source_distance_tiles')}",
+                f"belt_route_cost={gear_mall_iron_plate_issue.get('belt_route_cost')}",
+                f"relocation_power_poles_estimate={gear_mall_iron_plate_issue.get('relocation_power_poles_estimate')}",
+                f"relocation_cost={gear_mall_iron_plate_issue.get('relocation_cost')}",
+                f"route_cost_preference={gear_mall_iron_plate_issue.get('route_cost_preference')}",
+                "transport_belts_available_for_mall_logistics=false",
+                "gear_handcraft_blocked=true",
+            ],
+            blockers=["compact gear mall iron-plate site planning"],
+            expected_effect=(
+                "Generate a site-level relocation or corridor plan so related starter sites become close enough "
+                "for short belts before downstream automation resumes."
             ),
         ).to_dict()
 
@@ -1828,6 +1922,7 @@ def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[s
                 continue
             if source_distance >= best_distance:
                 continue
+            route_cost = _gear_mall_plate_route_cost_estimate(observation, source_position, gear_position)
             best_distance = source_distance
             best_issue = {
                 "gear_unit": gear.get("unit_number"),
@@ -1836,8 +1931,82 @@ def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[s
                 "gear_assembler_iron_plate": entity_item_count(gear, "iron-plate"),
                 "gear_assembler_status": gear.get("status_name") or gear.get("status"),
                 "transport_belts_available": belts_available,
+                **route_cost,
             }
     return best_issue
+
+
+def _gear_mall_plate_route_needs_compaction(issue: dict[str, Any] | None) -> bool:
+    if not isinstance(issue, dict):
+        return False
+    if issue.get("route_cost_preference") == "relocate_mall_to_iron_source":
+        return not bool(issue.get("transport_belts_available"))
+    try:
+        source_distance = float(issue.get("source_distance_tiles") or 0.0)
+    except (TypeError, ValueError):
+        source_distance = 0.0
+    return (
+        source_distance > PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT
+        and not bool(issue.get("transport_belts_available"))
+    )
+
+
+def _gear_mall_plate_route_cost_estimate(
+    observation: dict[str, Any],
+    source_position: dict[str, float],
+    gear_position: dict[str, float],
+) -> dict[str, Any]:
+    source_distance = distance(source_position, gear_position)
+    belt_tiles = int(ceil(max(0.0, source_distance)))
+    belt_cost = round(belt_tiles * GEAR_MALL_PLATE_BELT_TILE_COST, 1)
+    power_distance = _nearest_power_anchor_distance(observation, source_position)
+    if power_distance is None:
+        return {
+            "belt_route_tiles_estimate": belt_tiles,
+            "belt_route_cost": belt_cost,
+            "power_anchor_distance_tiles": None,
+            "relocation_power_poles_estimate": None,
+            "relocation_cost": None,
+            "route_cost_preference": (
+                "relocate_mall_to_iron_source"
+                if source_distance > PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT
+                else "build_belt_route"
+            ),
+        }
+
+    power_poles = int(ceil(max(0.0, power_distance) / SMALL_POWER_POLE_REACH))
+    relocation_cost = round(
+        GEAR_MALL_RELOCATION_FIXED_COST + power_poles * GEAR_MALL_RELOCATION_POWER_POLE_COST,
+        1,
+    )
+    preference = (
+        "relocate_mall_to_iron_source"
+        if relocation_cost < belt_cost * GEAR_MALL_RELOCATION_ADVANTAGE_RATIO
+        else "build_belt_route"
+    )
+    return {
+        "belt_route_tiles_estimate": belt_tiles,
+        "belt_route_cost": belt_cost,
+        "power_anchor_distance_tiles": round(power_distance, 1),
+        "relocation_power_poles_estimate": power_poles,
+        "relocation_cost": relocation_cost,
+        "route_cost_preference": preference,
+    }
+
+
+def _nearest_power_anchor_distance(observation: dict[str, Any], target_position: dict[str, float]) -> float | None:
+    distances: list[float] = []
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("name") or "")
+        if name not in POWER_ANCHOR_ENTITY_NAMES and entity.get("electric_network_connected") is not True:
+            continue
+        position = entity.get("position")
+        if not isinstance(position, dict):
+            continue
+        distances.append(distance(position, target_position))
+    return min(distances) if distances else None
 
 
 def _gear_belt_mall_power_issue(observation: dict[str, Any]) -> dict[str, Any] | None:

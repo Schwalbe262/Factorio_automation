@@ -456,3 +456,19 @@
 - After: The route extends to x=64.5, source drill unit `42` was refueled with wood, source furnace unit `395` reached 18 iron plates, mixed fuel top-off is guarded, and current strategy selects `build_iron_plate_logistic_line_to_gear_mall` with `transport_belts_available_for_mall_logistics=false`.
 - Evidence: `{"tests":"461 passed","route_trace":"strategy-iron-plate-gear-mall-logistics-20260615-011408.jsonl","iron_trace":"strategy-iron-20260615-011914.jsonl","route_min_x_near_source":64.5,"source_furnace_unit":395,"source_furnace_iron_plate":18,"current_strategy":"build_iron_plate_logistic_line_to_gear_mall","transport_belts_available_for_mall_logistics":false,"direct_gear_craft":0}`
 - Remaining risk: The route is still incomplete and transport belts are exhausted; a non-hand-carry method to replenish belts or re-site related factories is still required.
+
+## 2026-06-15 10:54:28 +09:00 - Insight 56
+- Source loop: Loop 311
+- Improvement: setup_power completed after 3 step(s): steam power block is producing usable steam power
+- Before: not recorded
+- After: steam = 0
+- Evidence: `{"item":"steam","item_count":0,"source_loop":311,"steps":3,"target":1}`
+- Remaining risk: Target is not complete yet: 0/1.
+
+## 2026-06-15 10:57:09 +09:00 - Insight 57
+- Source loop: Loop 313
+- Improvement: Gear mall iron-plate recovery now uses explicit site placement cost evidence instead of blindly extending the pre-rail belt route.
+- Before: The current factory had a 152.5-tile gear mall iron dependency with no construction belts, and strategy could keep treating it as `build_iron_plate_logistic_line_to_gear_mall`.
+- After: Qwen-required strategy selects `plan_factory_site` with `belt_route_cost=153.0`, `relocation_power_poles_estimate=20`, `relocation_cost=58.0`, and `route_cost_preference=relocate_mall_to_iron_source`; short route test cases still select the belt-line skill.
+- Evidence: `{"tests":"466 passed","setup_power_trace":"strategy-power-20260615-015411.jsonl","layout_trace":"strategy-layout-improvement-20260615-015617.jsonl","selected_skill":"plan_factory_site","source":"llm","source_distance_tiles":152.5,"belt_route_cost":153.0,"relocation_power_poles_estimate":20,"relocation_cost":58.0,"route_cost_preference":"relocate_mall_to_iron_source","power_expansion_clearance_risk":true}`
+- Remaining risk: The system can now choose and record the better placement plan and power-clearance risk, but it still needs a deterministic relocation/corridor executor to rebuild the mall automatically.
