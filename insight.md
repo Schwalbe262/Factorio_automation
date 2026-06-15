@@ -696,12 +696,21 @@
 - Evidence: `{"coal_planner_tests":"10 passed","strategy_guardrail_tests":"6 passed","full_tests":"552 passed","live_read_only":{"action":"mine tree","reason":"mine tree for coal output chest","player":"AI/server"}}`
 - Remaining risk: The live coal chest/drill site has not yet been executed after this patch; next loop should run `setup_coal_supply` and verify adjacent drill/chest placement.
 
-## 2026-06-15 19:05:29 +09:00 - Insight 82
+## 2026-06-15 19:10:22 +09:00 - Insight 84
 
-- Source loop: Loop 401
+- Source loop: Loop 403
 - Improvement: The existing Web UI token panel now records newly sampled `tokens_used` from the current Factorio Codex thread's `threads.tokens_used` counter instead of the unrelated active Goal counter.
 - Before: Closeout workflow used `record-token-usage --tokens-used <current_goal_tokens>`, so the panel could show a much smaller or reset-like counter that did not represent total Codex thread/session usage.
 - After: `record-current-codex-thread-usage` opens `C:\Users\NEC\.codex\state_5.sqlite` read-only, chooses `--thread-id` when provided or the latest normalized Factorio cwd thread otherwise, and appends that `threads.tokens_used` value to the same `logs/token_usage.jsonl` panel data.
 - Evidence: `{"tests":"31 passed","thread_id":"019ec67d-31ec-72f2-a5c9-cc17c552702a","db_threads_tokens_used":548238295,"latest_log_tokens_used":548238295,"source":"codex_thread","web_description":"threads.tokens_used"}`
 - Remaining risk: The first new sample after older Goal-counter samples has a large migration delta because the absolute counter basis changed; future samples from the same thread counter will have meaningful increments.
+
+## 2026-06-15 19:12:46 +09:00 - Insight 85
+
+- Source loop: Loop 404
+- Improvement: The Web UI token panel no longer treats the Goal-counter to Codex-thread-counter migration as real token growth, and large token values are displayed in readable M/B units.
+- Before: The panel mixed older `source=codex` Goal-counter samples with new `source=codex_thread` samples, showing a misleading spike such as `증가량 580,269,146` and full raw counters like `595,082,062`.
+- After: The summary uses only the latest contiguous `codex_thread` segment for display, makes the first thread-counter sample a zero-delta baseline, and formats large token values as M/B in the token metrics, chart, table, quota, and hourly rate fields.
+- Evidence: `{"tests":"32 passed","sample_basis_source":"codex_thread","ignored_older_basis_samples":96,"latest_tokens":549320647,"latest_delta_tokens":1082352,"total_delta_tokens":1921985,"ui_examples":["549.3M","1.1M"]}`
+- Remaining risk: Raw historical JSONL rows still contain older Goal-counter samples and the raw first migration delta; this is intentional for auditability, but consumers outside `token_usage_summary` must avoid mixing counter bases directly.
 

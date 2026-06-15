@@ -1104,6 +1104,6 @@ git commit -m "Part XX: concise description"
 git push origin master
 ```
 
-Token usage samples in `logs/token_usage.jsonl` should use the current Factorio Codex thread counter from `C:\Users\NEC\.codex\state_5.sqlite` (`threads.tokens_used`). Do not pass the active goal counter to `record-token-usage`; that command remains only for backward compatibility with historical/manual samples.
+Token usage samples in `logs/token_usage.jsonl` should use the current Factorio Codex thread counter from `C:\Users\NEC\.codex\state_5.sqlite` (`threads.tokens_used`). Do not pass the active goal counter to `record-token-usage`; that command remains only for backward compatibility with historical/manual samples. The Web UI summarizes the latest contiguous `codex_thread` segment so the old Goal-counter to thread-counter migration is treated as a new baseline rather than real growth, while raw JSONL rows remain intact for auditability.
 
 Never revert user changes unless explicitly requested.

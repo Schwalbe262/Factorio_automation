@@ -8802,9 +8802,9 @@
 - Next action: Let the virtual AI run `setup_coal_supply`, then verify the coal burner drill and output chest are adjacent and feeding without moving `r1jae`.
 - Token usage: 549,320,647 raw current-thread Codex tokens / weekly quota unavailable; active goal tool counter at documentation time was 18,110,245.
 
-## 2026-06-15 19:05:29 +09:00 - Loop 401
+## 2026-06-15 19:10:22 +09:00 - Loop 403
 
-- Part: Codex thread token usage correction
+- Part: Part 124 Codex thread token usage verification
 - Goal: Make the existing Web UI `Codex 토큰 사용량` panel record and display the current Factorio Codex thread counter instead of the active goal counter.
 - Hypothesis: The active goal counter is not the full Codex session/thread token counter, so `logs/token_usage.jsonl` should be sampled from `C:\Users\NEC\.codex\state_5.sqlite` `threads.tokens_used` for the current Factorio working directory.
 - Actions:
@@ -8829,4 +8829,32 @@
 - Failure reason: None.
 - Next action: Use `python -m factorio_ai.cli record-current-codex-thread-usage --label "partXX short label"` for future part closeouts. Treat the first thread-counter delta as a baseline transition from older Goal-counter samples, not as a normal incremental work delta.
 - Token usage: current Factorio Codex thread counter `548,238,295` tokens / weekly quota unavailable.
+
+## 2026-06-15 19:12:46 +09:00 - Loop 404
+
+- Part: Codex token panel readability and migration-delta correction
+- Goal: Keep the existing `Codex 토큰 사용량` panel on the current Factorio Codex thread counter while removing the migration spike from older Goal-counter samples and making large token numbers easier to read.
+- Hypothesis: The first `codex_thread` sample after older `codex`/Goal-counter samples should start a new display basis, otherwise the UI treats the counter-basis migration as real token growth. Large token counters should be rendered as M/B units in the token panel without changing the stored raw JSONL values.
+- Actions:
+  - Updated token usage summary logic so when the latest samples use `source=codex_thread`, the panel summarizes only the contiguous latest `codex_thread` segment.
+  - Made the first sample in a new display basis use `delta_tokens=0` in the enriched summary, even if the raw JSONL delta is large because the counter basis changed.
+  - Added `sample_basis_source` and `ignored_older_basis_samples` to the summary for migration visibility.
+  - Added token-panel-only compact formatting: values at least 1,000,000 display as `M`, values at least 1,000,000,000 display as `B`; smaller values keep comma formatting.
+  - Applied compact token formatting to token metrics, chart labels, table deltas, table latest tokens, weekly quota, and hourly token rate.
+  - Added regression tests for the Goal-counter to `codex_thread` migration and M/B display.
+- Candidates:
+  - Rewrite `logs/token_usage.jsonl`: rejected because historical raw samples should remain intact.
+  - Keep all samples in one cumulative graph: rejected because mixed counter bases create a misleading spike.
+  - Start display from the latest contiguous `codex_thread` segment: selected because it preserves raw logs and keeps the existing panel meaningful.
+- Metrics:
+  - Related tests: `32 passed`.
+  - Actual `token-usage-summary` now reports `sample_basis_source=codex_thread`.
+  - Older basis samples ignored for display: `96`.
+  - Actual latest thread tokens: `549,320,647`.
+  - Actual latest delta: `1,082,352`.
+  - Actual total displayed delta since thread-counter baseline: `1,921,985`.
+- Result: The token panel should now show the current thread counter in readable M/B units and no longer display the Goal-counter-to-thread-counter migration as a 5억대 증가량.
+- Failure reason: None.
+- Next action: Refresh the Web UI; the latest token metric should render around `549.3M`, and displayed deltas should be based only on the latest `codex_thread` segment.
+- Token usage: current Factorio Codex thread counter observed in summary `549,320,647` tokens / weekly quota unavailable.
 
