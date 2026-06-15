@@ -145,6 +145,12 @@ Latest continuation after Part 105:
   - `SiteInputLogisticLineSkill` builds general producer-to-consumer belt routes for repeated inputs such as copper plates after transport-belt production exists; before belt automation, strategy routes the issue to `build_gear_belt_mall_logistics`.
   - The gear/belt mall's iron-plate route remains on the specialized `build_iron_plate_logistic_line_to_gear_mall` path, and generic site input logic excludes build-item mall iron/gear missing-source noise so target smelting deficits can still preempt layout diagnostics.
   - Full verification: `PYTHONPATH=src pytest -q` -> `509 passed`.
+- Part 114 preserves the exact site-input item from strategy through execution:
+  - `build_site_input_logistic_line` decisions now keep a dedicated `input_item` from Qwen normalization, guardrail fallback, heuristic fallback, controller `_skill_run_config`, and `SiteInputLogisticLineSkill`.
+  - Generic site-input issue selection now includes `manual_site_logistics_gap` kind text and breaks severity ties by item priority, so copper/iron plate gaps are not hidden by lower-priority derived intermediates when both are present.
+  - Live read-only verification shows `long-handed-inserter` is considered by layout optimization from recipe unlock state (`available=true`, `recipe_unlocked=true`, `stock=0`, `automated=false`); top candidates include `green-circuit-long-handed-3-cable-2-circuit-cell` and `unlock-aware-site-rerank-long-handed-inserter`.
+  - Live mutation was intentionally not run because the current live blocker is boiler 272 `no_fuel`, and the existing `setup_power` path would manually insert coal. Next missing executor: an automation-first boiler fuel feed using coal belt/inserter logistics.
+  - Full verification: `PYTHONPATH=src pytest -q` -> `510 passed`.
 
 Part 64 introduced:
 

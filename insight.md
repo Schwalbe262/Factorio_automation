@@ -591,3 +591,12 @@
 - After: Normalized Qwen decisions and heuristic fallbacks preserve `target_item=long-handed-inserter`; controller `_skill_run_config` runs `BuildItemMallSkill("long-handed-inserter", ...)`; `build_site_input_logistic_line` builds repeated input belt routes only after a transport-belt assembler exists, while pre-belt cases route to `build_gear_belt_mall_logistics`.
 - Evidence: `{"targeted_tests":"10 passed","related_suite":"350 passed","full_tests":"509 passed","strategy_paths":["bootstrap_build_item_mall target_item=long-handed-inserter","build_gear_belt_mall_logistics before belt automation","build_site_input_logistic_line after belt automation"],"executor":"SiteInputLogisticLineSkill"}`
 - Remaining risk: Live mutation was not run in this loop; the next live strategy/autopilot cycle should verify that current map input gaps select the new executor and that path placement is buildable in the observed terrain.
+
+## 2026-06-15 14:33:17 +09:00 - Insight 72
+
+- Source loop: Loop 336
+- Improvement: Site-input logistics execution now preserves the exact factory input item chosen by strategy while unlock-aware layout candidates continue to expose long-handed inserter availability and supply gaps.
+- Before: `build_site_input_logistic_line` could be selected from a specific missing input issue, but the normalized/controller path did not carry a dedicated `input_item`, so execution risked falling back to a default route target even when the layout issue was specifically copper plate, gears, cable, circuits, or science.
+- After: Strategy normalization, guardrail fallbacks, heuristic fallback, controller `_skill_run_config`, and `SiteInputLogisticLineSkill` now preserve `input_item=copper-plate` in regression coverage. Live layout payload also confirms `long-handed-inserter` is considered from recipe unlock state while reporting `stock=0`, `automated=false`, and missing `long-handed-inserter x7`.
+- Evidence: `{"targeted_tests":"4 passed","related_suite":"320 passed","full_tests":"510 passed","live_long_handed":{"available":true,"recipe_unlocked":true,"stock":0,"automated":false},"live_candidates":["green-circuit-long-handed-3-cable-2-circuit-cell","unlock-aware-site-rerank-long-handed-inserter"],"executor_target":"build_site_input_logistic_line input_item=copper-plate"}`
+- Remaining risk: This fixes strategy-to-executor target fidelity. The current live blocker is still boiler fuel, and the next implementation should replace manual boiler coal insertion with a belt/inserter fuel-feed path.

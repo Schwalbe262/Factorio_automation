@@ -7294,3 +7294,32 @@
 - Next action: Commit/push Part 113, then use the next live strategy/autopilot cycle to validate whether current copper/gear/cable input gaps select the new executor without moving items by hand.
 - Token usage: 14,842,895 cumulative Codex tokens / weekly quota unavailable; delta since Loop 334 record approximately 517,416 tokens.
 
+## 2026-06-15 14:33:17 +09:00 - Loop 336
+
+- Part: site input route target preservation and unlock-aware layout verification
+- Goal: Confirm that newly usable long-handed inserters are automatically considered in site layout optimization, and make executable site-input logistics preserve the exact item being routed.
+- Hypothesis: Layout candidates already rerank around `long-handed-inserter`, but if `build_site_input_logistic_line` loses the selected input item at normalization/controller boundaries, the executor can build the wrong kind of site input route.
+- Actions:
+  - Inspected planner, strategy, controller, tests, `goal.md`, `note.md`, `insight.md`, and `docs/CLI_HANDOFF.md`.
+  - Verified that layout capabilities include long-handed inserters, modules, higher-tier machines/furnaces, and beacons, and that candidates record considered/used unlocked items plus build-item supply state.
+  - Added normalization and guardrail preservation for `build_site_input_logistic_line` input targets such as `copper-plate`.
+  - Passed the preserved `input_item` from strategy decisions into controller `_skill_run_config` and `SiteInputLogisticLineSkill`.
+  - Ranked generic site input issues by factory-input priority so copper/iron plate links do not get hidden by lower-priority derived intermediates when both are present.
+  - Ran read-only live observe and layout payload checks without mutating the world.
+  - Ran targeted, related, and full test suites.
+- Candidates:
+  - Live long-handed layout candidate: `green-circuit-long-handed-3-cable-2-circuit-cell`.
+  - Live unlock reassessment candidate: `unlock-aware-site-rerank-long-handed-inserter`.
+  - Executable site-input route target verified in tests: `build_site_input_logistic_line input_item=copper-plate`.
+- Metrics:
+  - Live no-mod observe: `recipe_unlocks.long-handed-inserter.enabled=true`.
+  - Live layout capability: `available=true`, `recipe_unlocked=true`, `stock=0`, `automated=false`.
+  - Live long-handed candidate missing build items include `long-handed-inserter x7`, `transport-belt x39`, `assembling-machine-1 x5`, `inserter x5`, `iron-chest x2`, and `small-electric-pole x2`.
+  - Targeted tests: `4 passed`.
+  - Related suite: `320 passed`.
+  - Full test suite: `510 passed in 25.63s`.
+- Result: Layout optimization automatically considers the newly usable long-handed inserter, and strategy/controller execution now preserves the specific site input item when converting a layout/logistics diagnosis into a deterministic route-building skill.
+- Failure reason: No code/test failure remains. Live mutation was intentionally not run because the current strategy blocker is boiler fuel and the existing `setup_power` path would manually insert coal into boiler 272.
+- Next action: Commit/push Part 114, then add an automation-first boiler fuel feed path so the live loop does not rely on manual coal insertion while power is blocked.
+- Token usage: 15,236,325 cumulative Codex tokens / weekly quota unavailable; delta since Loop 335 record approximately 393,430 tokens.
+

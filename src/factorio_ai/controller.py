@@ -670,6 +670,7 @@ class FactorioController:
             )
 
         strategy_target_item = _strategy_target_item(strategy) if selected == "bootstrap_build_item_mall" else None
+        strategy_input_item = _strategy_site_input_item(strategy) if selected == "build_site_input_logistic_line" else None
         strategy_target_count = target_count
         if strategy_target_count is None and selected == "bootstrap_build_item_mall":
             strategy_target_count = _int_or_none(strategy.get("target_count"))
@@ -678,6 +679,7 @@ class FactorioController:
             target_count=strategy_target_count,
             max_steps=max_steps,
             target_item=strategy_target_item,
+            input_item=strategy_input_item,
         )
         if config is None:
             self._record_codex_wait_state(
@@ -1111,6 +1113,7 @@ class FactorioController:
         target_count: int | None = None,
         max_steps: int | None = None,
         target_item: str | None = None,
+        input_item: str | None = None,
     ) -> dict[str, Any] | None:
         if skill_name == "produce_iron_plate":
             target = target_count or 10
@@ -1322,9 +1325,11 @@ class FactorioController:
             }
         if skill_name == "build_site_input_logistic_line":
             target = target_count or 40
+            input_item = _strategy_site_input_item({"input_item": input_item})
             return {
-                "skill": SiteInputLogisticLineSkill(target),
+                "skill": SiteInputLogisticLineSkill(target, item=input_item),
                 "target_item": "transport-belt",
+                "input_item": input_item,
                 "target": target,
                 "goal": skill_name,
                 "max_steps": _max_steps(max_steps, 1200),
@@ -2732,6 +2737,21 @@ def _strategy_target_item(strategy: dict[str, Any]) -> str | None:
         "stone-furnace",
         "small-electric-pole",
         "assembling-machine-1",
+    }:
+        return item
+    return None
+
+
+def _strategy_site_input_item(strategy: dict[str, Any]) -> str | None:
+    item = str(strategy.get("input_item") or strategy.get("item") or "").strip()
+    if item in {
+        "iron-plate",
+        "copper-plate",
+        "iron-gear-wheel",
+        "copper-cable",
+        "electronic-circuit",
+        "automation-science-pack",
+        "logistic-science-pack",
     }:
         return item
     return None

@@ -935,6 +935,10 @@ def normalize_strategy_response(raw: dict[str, Any], fallback_objective: str = "
         target_count = _positive_int_or_none(raw.get("target_count") or raw.get("count"))
         if target_count is not None:
             result["target_count"] = target_count
+    if selected == "build_site_input_logistic_line":
+        input_item = _sanitize_site_input_target(raw.get("input_item") or raw.get("item") or raw.get("target_item"))
+        if input_item:
+            result["input_item"] = input_item
     return result
 
 
@@ -1413,7 +1417,11 @@ def reconcile_strategy_decision(
                 "to": target_skill,
                 "reason": guardrail_reason,
             }
-            return adjusted
+            return (
+                _with_site_input_target(adjusted, site_input_line_issue)
+                if target_skill == "build_site_input_logistic_line"
+                else adjusted
+            )
     bootstrap_site_logistics_issue = _bootstrap_mall_site_logistics_risk(observation)
     if bootstrap_site_logistics_issue is not None and selected == "bootstrap_build_item_mall":
         adjusted = dict(decision)
@@ -1974,7 +1982,7 @@ def heuristic_strategy(
     if automation_researched and site_input_line_issue is not None:
         belt_ready = _transport_belt_automation_ready(observation)
         target_skill = "build_site_input_logistic_line" if belt_ready else "build_gear_belt_mall_logistics"
-        return StrategicDecision(
+        decision = StrategicDecision(
             selected_skill=target_skill,
             priority=90,
             reason=(
@@ -2001,6 +2009,7 @@ def heuristic_strategy(
                 else "Replenish automated construction belts before spending them on repeated site input lines."
             ),
         ).to_dict()
+        return _with_site_input_target(decision, site_input_line_issue) if belt_ready else decision
 
     if automation_researched and automation_logistics_issue is not None:
         issue_text = " ".join(
@@ -2247,7 +2256,13 @@ def _top_layout_item(issues: list[Any], opportunities: list[Any]) -> dict[str, A
     candidates = [item for item in issues + opportunities if isinstance(item, dict)]
     if not candidates:
         return None
-    return max(candidates, key=lambda item: int(item.get("severity") or 0))
+    return max(
+        candidates,
+        key=lambda item: (
+            int(item.get("severity") or 0),
+            _site_input_issue_item_priority(str(item.get("item") or "")),
+        ),
+    )
 
 
 def _layout_unlocked_build_item_shortage(layout: dict[str, Any]) -> dict[str, Any] | None:
@@ -2377,7 +2392,7 @@ def _executable_layout_plan_fallback(
 
     if not skill:
         return None
-    return StrategicDecision(
+    decision = StrategicDecision(
         selected_skill=skill,
         priority=max(84, min(92, int(top_layout_item.get("severity") or 75))),
         reason=(
@@ -2394,6 +2409,7 @@ def _executable_layout_plan_fallback(
         expected_effect=expected_effect,
         source="heuristic",
     ).to_dict()
+    return _with_site_input_target(decision, _site_input_line_issue(observation)) if skill == "build_site_input_logistic_line" else decision
 
 
 def _first_automation_logistics_issue(issues: list[Any]) -> dict[str, Any] | None:
@@ -2448,7 +2464,7 @@ def _first_unserved_factory_input_issue(observation: dict[str, Any]) -> dict[str
         item = str(issue.get("item") or "")
         if item and item not in candidate_items:
             continue
-        text = " ".join(str(issue.get(key) or "") for key in ("site_id", "detail", "recommendation")).lower()
+        text = " ".join([kind, *(str(issue.get(key) or "") for key in ("site_id", "detail", "recommendation"))]).lower()
         if not any(token in text for token in ("missing_source", "incomplete", "missing", "route_needed", "manual")):
             continue
         candidates.append(issue)
@@ -2478,6 +2494,18 @@ def _site_input_line_issue(observation: dict[str, Any]) -> dict[str, Any] | None
     if item == "iron-plate" and ("gear" in text or "iron-gear-wheel" in text):
         return None
     return issue
+
+
+def _site_input_issue_item_priority(item: str) -> int:
+    return {
+        "copper-plate": 98,
+        "iron-plate": 95,
+        "iron-gear-wheel": 92,
+        "copper-cable": 90,
+        "electronic-circuit": 86,
+        "automation-science-pack": 82,
+        "logistic-science-pack": 78,
+    }.get(item, 60)
 
 
 def _plan_site_should_preempt_logistics(observation: dict[str, Any]) -> bool:
@@ -2524,6 +2552,30 @@ def _with_build_item_target(
     result["target_item"] = target_item
     if target_count is not None:
         result["target_count"] = target_count
+    return result
+
+
+def _sanitize_site_input_target(value: Any) -> str | None:
+    item = str(value or "").strip()
+    if item in {
+        "iron-plate",
+        "copper-plate",
+        "iron-gear-wheel",
+        "copper-cable",
+        "electronic-circuit",
+        "automation-science-pack",
+        "logistic-science-pack",
+    }:
+        return item
+    return None
+
+
+def _with_site_input_target(decision: dict[str, Any], issue: dict[str, Any] | None) -> dict[str, Any]:
+    input_item = _sanitize_site_input_target((issue or {}).get("item"))
+    if not input_item:
+        return decision
+    result = dict(decision)
+    result["input_item"] = input_item
     return result
 
 

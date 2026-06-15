@@ -1618,6 +1618,19 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(iron_line_config["goal"], "build_iron_plate_logistic_line_to_gear_mall")
             self.assertEqual(iron_line_config["target"], 44)
             self.assertEqual(iron_line_config["max_steps"], 667)
+            site_input_config = controller._skill_run_config(
+                "build_site_input_logistic_line",
+                target_count=33,
+                max_steps=668,
+                input_item="copper-plate",
+            )
+            self.assertIsNotNone(site_input_config)
+            self.assertEqual(site_input_config["goal"], "build_site_input_logistic_line")
+            self.assertEqual(site_input_config["target_item"], "transport-belt")
+            self.assertEqual(site_input_config["input_item"], "copper-plate")
+            self.assertEqual(site_input_config["target"], 33)
+            self.assertEqual(site_input_config["max_steps"], 668)
+            self.assertEqual(site_input_config["skill"].item, "copper-plate")
             expand_config = controller._skill_run_config("expand_iron_smelting", target_count=38, max_steps=777)
             self.assertIsNotNone(expand_config)
             self.assertEqual(expand_config["goal"], "expand_iron_smelting")

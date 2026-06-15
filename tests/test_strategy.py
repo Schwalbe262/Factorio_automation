@@ -1086,6 +1086,7 @@ class StrategyTests(unittest.TestCase):
         )
 
         self.assertEqual(result["selected_skill"], "build_site_input_logistic_line")
+        self.assertEqual(result["input_item"], "copper-plate")
         self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
         self.assertIn("site input logistic line", result["blockers"])
         self.assertIn("transport_belt_automation_ready=true", result["evidence"])
@@ -1708,6 +1709,18 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["target_item"], "long-handed-inserter")
         self.assertEqual(result["target_count"], 12)
 
+    def test_normalize_preserves_site_input_target(self):
+        result = normalize_strategy_response(
+            {
+                "selected_skill": "build_site_input_logistic_line",
+                "item": "copper-plate",
+                "priority": 80,
+            }
+        )
+
+        self.assertEqual(result["selected_skill"], "build_site_input_logistic_line")
+        self.assertEqual(result["input_item"], "copper-plate")
+
     def test_strategy_payload_exposes_automation_policy_context(self):
         payload = make_strategy_payload(
             "launch_rocket_program",
@@ -1769,6 +1782,7 @@ class StrategyTests(unittest.TestCase):
         )
 
         self.assertEqual(result["selected_skill"], "build_site_input_logistic_line")
+        self.assertEqual(result["input_item"], "copper-plate")
         self.assertIn("site input logistic line", result["blockers"])
         self.assertIn("transport_belt_automation_ready=true", result["evidence"])
 
