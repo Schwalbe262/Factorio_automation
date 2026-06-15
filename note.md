@@ -8111,3 +8111,578 @@
 - Next action: Continue `research_automation` from compact stone supply, then starter-local steam power, lab placement, and automation science. Avoid manual shuttle loops; direct bootstrap mining/crafting remains only a bounded starter exception.
 - Token usage: 17,669,291 raw Codex tokens / weekly quota unavailable; delta since Part 121 sample 253,948 tokens.
 
+## 2026-06-15 18:41:44 +09:00 - Loop 368
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:41:49 +09:00 - Loop 369
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 2.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:41:54 +09:00 - Loop 370
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / autopilot
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `autopilot`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `autopilot`.
+- Metrics:
+  - Steps: 3.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":false}`.
+- Result: Completed: autopilot is active: cycle_start
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:42:01 +09:00 - Loop 371
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_15_1s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_15_1s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_15_1s`.
+- Metrics:
+  - Steps: 4.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 15.1s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:42:08 +09:00 - Loop 372
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_21_9s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_21_9s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_21_9s`.
+- Metrics:
+  - Steps: 5.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 21.9s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:42:14 +09:00 - Loop 373
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_28_7s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_28_7s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_28_7s`.
+- Metrics:
+  - Steps: 6.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 28.7s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:42:21 +09:00 - Loop 374
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_35_5s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_35_5s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_35_5s`.
+- Metrics:
+  - Steps: 7.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 35.5s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:42:28 +09:00 - Loop 375
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_42_3s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_42_3s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_42_3s`.
+- Metrics:
+  - Steps: 8.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 42.3s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:42:35 +09:00 - Loop 376
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_49_2s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_49_2s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_49_2s`.
+- Metrics:
+  - Steps: 9.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 49.2s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:42:42 +09:00 - Loop 377
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_56_1s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_56_1s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_56_1s`.
+- Metrics:
+  - Steps: 10.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 56.1s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:42:49 +09:00 - Loop 378
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_62_9s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_62_9s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_62_9s`.
+- Metrics:
+  - Steps: 11.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 62.9s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:42:55 +09:00 - Loop 379
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_69_7s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_69_7s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_69_7s`.
+- Metrics:
+  - Steps: 12.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 69.7s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:43:02 +09:00 - Loop 380
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_76_6s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_76_6s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_76_6s`.
+- Metrics:
+  - Steps: 13.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 76.6s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:43:09 +09:00 - Loop 381
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_83_4s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_83_4s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_83_4s`.
+- Metrics:
+  - Steps: 14.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 83.4s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:43:16 +09:00 - Loop 382
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_90_3s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_90_3s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_90_3s`.
+- Metrics:
+  - Steps: 15.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 90.3s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:43:23 +09:00 - Loop 383
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_97_1s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_97_1s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_97_1s`.
+- Metrics:
+  - Steps: 16.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 97.1s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:43:30 +09:00 - Loop 384
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_103_9s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_103_9s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_103_9s`.
+- Metrics:
+  - Steps: 17.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 103.9s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:43:37 +09:00 - Loop 385
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_110_7s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_110_7s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_110_7s`.
+- Metrics:
+  - Steps: 18.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 110.7s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:43:43 +09:00 - Loop 386
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_117_6s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_117_6s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_117_6s`.
+- Metrics:
+  - Steps: 19.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 117.6s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:43:50 +09:00 - Loop 387
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_124_5s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_124_5s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_124_5s`.
+- Metrics:
+  - Steps: 20.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 124.5s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:43:57 +09:00 - Loop 388
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_131_5s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_131_5s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_131_5s`.
+- Metrics:
+  - Steps: 21.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 131.5s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:44:04 +09:00 - Loop 389
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_138_3s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_138_3s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_138_3s`.
+- Metrics:
+  - Steps: 22.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 138.3s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:44:11 +09:00 - Loop 390
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_145_1s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_145_1s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_145_1s`.
+- Metrics:
+  - Steps: 23.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 145.1s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:44:18 +09:00 - Loop 391
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_152_0s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_152_0s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_152_0s`.
+- Metrics:
+  - Steps: 24.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 152.0s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:44:25 +09:00 - Loop 392
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_158_9s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_158_9s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_158_9s`.
+- Metrics:
+  - Steps: 25.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 158.9s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:44:32 +09:00 - Loop 393
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_165_8s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_165_8s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_165_8s`.
+- Metrics:
+  - Steps: 26.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 165.8s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:44:38 +09:00 - Loop 394
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_172_7s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_172_7s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_172_7s`.
+- Metrics:
+  - Steps: 27.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 172.7s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:44:45 +09:00 - Loop 395
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_179_5s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_179_5s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_179_5s`.
+- Metrics:
+  - Steps: 28.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 179.5s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:44:52 +09:00 - Loop 396
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:autopilot_heartbeat_stale_for_186_3s
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:autopilot_heartbeat_stale_for_186_3s`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:autopilot_heartbeat_stale_for_186_3s`.
+- Metrics:
+  - Steps: 29.
+  - Status: ok.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle":true}`.
+- Result: Completed: autopilot heartbeat stale for 186.3s
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 18:45:20 +09:00 - Loop 397
+
+- Part: Part 123 idle layout stale threshold guard
+- Goal: Keep continuous LLM autopilot available while preventing the idle layout loop from spamming `note.md` during normal remote Qwen strategy latency.
+- Hypothesis: A 15-second stale threshold is too short for attached Slurm/Qwen strategy calls, so the idle layout loop can misclassify an active autopilot cycle as stale while the autopilot is still waiting on SSH/Qwen.
+- Actions:
+  - Started hidden virtual-agent no-mod autopilot with `FACTORIO_AI_AGENT_PLAYER=AI`; heartbeat reached `cycle_start`.
+  - Started hidden idle layout loop, then observed it append Loops 368-396 while the autopilot process was still alive and waiting inside an SSH/Qwen call.
+  - Stopped the idle layout parent process PID 67768, then found and stopped remaining child Python PID 74308.
+  - Stopped the autopilot parent/child processes before committing to prevent concurrent writes to tracked `note.md`.
+  - Updated `run_factorio_no_mod_idle_layout_loop.bat` from `--stale-seconds 15` to `--stale-seconds 180`.
+- Candidates:
+  - Autopilot process before stop: parent PID 51764, child Python PID 68268, child SSH PID 73408.
+  - Idle layout processes stopped: parent PID 67768, child Python PID 74308.
+  - Heartbeat before stop: `state=cycle_start`, `objective=launch_rocket_program`, `cycle=1`.
+- Metrics:
+  - Idle loop over-triggered Loops 368-396 while the autopilot heartbeat was stale but the remote strategy call was still active.
+  - New launcher stale threshold: 180 seconds.
+  - Full test suite after the launcher change: `542 passed in 29.16s`.
+- Result: Idle layout launcher is less likely to treat normal Qwen round-trip latency as idle/stale gameplay time.
+- Failure reason: Not a gameplay failure; this loop corrected an overly aggressive background layout trigger and stopped the over-triggering process.
+- Next action: After commit, restart only the virtual autopilot if continuous play is desired. Restart idle layout with the updated launcher or add heartbeat updates around long remote strategy calls if Qwen calls regularly exceed 180 seconds.
+- Token usage: 17,735,896 raw Codex tokens / weekly quota unavailable; delta since Part 122 sample 66,605 tokens.
+

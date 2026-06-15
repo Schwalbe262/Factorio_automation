@@ -212,6 +212,15 @@ Latest continuation after Part 105:
   - Current live state after the final capped loop: research automation has started gathering stone/chest prerequisites; inventory has `wooden-chest x1`, `coal x8`; drill unit 14 needs refuel soon and furnace unit 15 still has `coal x2`.
   - Next action: continue `research_automation` from compact stone supply, starter-local steam power, lab placement, and automation science. Keep manual coal/tree mining bounded to unavoidable starter bootstrap and avoid repeated shuttle loops.
   - Full verification: `PYTHONPATH=src pytest -q` -> `542 passed`.
+- Part 123 reduces idle-layout interference with active Qwen autopilot:
+  - Hidden virtual-agent autopilot was started with `FACTORIO_AI_AGENT_PLAYER=AI`; heartbeat reached `cycle_start` and no GUI/real-player control was used.
+  - The idle layout loop was also started, but with `--stale-seconds 15` it misclassified normal attached Slurm/Qwen latency as stale autopilot time and appended Loops 368-396 rapidly.
+  - Stopped idle layout parent PID 67768 and child Python PID 74308.
+  - Stopped virtual autopilot parent/child processes before committing so tracked `note.md` would not be written concurrently.
+  - Updated `run_factorio_no_mod_idle_layout_loop.bat` to use `--stale-seconds 180`.
+  - Current state after this operational fix: no continuous autopilot/idle layout process is intentionally left running; no-mod RCON server remains available.
+  - Full verification: `PYTHONPATH=src pytest -q` -> `542 passed`.
+  - Next follow-up if this repeats: write heartbeat updates around long remote strategy calls so layout work can distinguish active LLM waiting from a truly stalled autopilot.
 
 Part 64 introduced:
 
