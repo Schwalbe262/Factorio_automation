@@ -3,10 +3,11 @@
 Layered Factorio AI autoplayer MVP.
 
 For another LLM, Codex CLI session, Claude session, or future agent continuing
-this work, read `LLM_CONTINUATION.md` first. It contains the current
-architecture, Slurm worker state, strategy guardrails, no-mod runtime commands,
-layout-improvement workflow, training-data direction, and next implementation
-targets.
+this work, read `HANDOFF_CURRENT.md` first, then `AGENTS.md`, then only the
+minimal project metadata needed for commands. Old handoffs, long journals,
+logs, JSONL traces, generated reports, `note.md`, and `insight.md` are
+archive/search-only history; search them for specific facts instead of reading
+them in full.
 
 The local machine runs Factorio and controls it through RCON. There are two development adapters:
 
@@ -57,8 +58,12 @@ obvious regressions into repeated hand crafting.
 
 Do not confuse the Codex/handoff context with the local Slurm LLM prompt context.
 
-- `README.md`, `AGENT_HANDOFF.md`, and similar documents are long-form handoff material for humans,
-  Codex, and other coding agents. They are not injected wholesale into every strategy request.
+- `HANDOFF_CURRENT.md` is the short startup handoff for Codex and other agents.
+  It should stay concise and be updated by no more than 10 lines per completed
+  part.
+- `README.md`, `AGENT_HANDOFF.md`, `LLM_CONTINUATION.md`, `docs/CLI_HANDOFF.md`,
+  `note.md`, `insight.md`, logs, JSONL traces, and generated reports are not
+  startup context. Use targeted search and exact ranges for specific facts.
 - The active 4B and 9B Slurm workers run vLLM with `--max-model-len 32768` by default. This is an
   execution setting, not the native Qwen context limit. Qwen3.5 supports much longer contexts, but
   the worker setting should be increased in measured steps after checking GPU memory and latency.

@@ -1,5 +1,9 @@
 # Factorio Automation CLI Handoff
 
+Startup note: this file is superseded by root `HANDOFF_CURRENT.md`. Treat it as
+archive/search-only history; do not read it in full unless a specific fact is
+needed.
+
 Last updated: 2026-06-15 14:19 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
@@ -955,7 +959,8 @@ python -m factorio_ai.cli validate-layout-candidate --candidate-id green-circuit
 
 ## Core Commands
 
-Start a fresh Codex CLI session from this handoff, without relying on the Desktop conversation:
+Start a fresh Codex CLI session from the current root handoff, without relying
+on the Desktop conversation:
 
 ```powershell
 .\continue_factorio_cli.bat
@@ -964,7 +969,7 @@ Start a fresh Codex CLI session from this handoff, without relying on the Deskto
 The start prompt used by the bat is:
 
 ```text
-Read docs\CLI_HANDOFF.md only as the handoff context. Do not assume the previous desktop conversation is available. Continue the Factorio automation project from that document: verify current git status, run tests, commit/push the current validated changes if still uncommitted, then implement the next highest-priority item described in the handoff.
+Read HANDOFF_CURRENT.md first, then AGENTS.md and minimal project metadata only. Do not resume long old threads or read old handoffs/journals/logs in full. Verify current git status, use targeted source ranges, commit/push each completed part, then continue the next concrete step from the current handoff.
 ```
 
 Observe current game:

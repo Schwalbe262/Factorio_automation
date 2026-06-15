@@ -8858,3 +8858,12 @@
 - Next action: Refresh the Web UI; the latest token metric should render around `549.3M`, and displayed deltas should be based only on the latest `codex_thread` segment.
 - Token usage: current Factorio Codex thread counter observed in summary `549,320,647` tokens / weekly quota unavailable.
 
+## 2026-06-15 20:12:10 +09:00 - Loop 405
+
+- Part: Part 127 - Codex current handoff startup policy
+- Goal: Make `HANDOFF_CURRENT.md` the short startup source and move old handoffs/journals/logs to archive/search-only use.
+- Actions: Added root current handoff, aligned README and CLI launcher startup wording, and marked old handoff docs as archive/search-only.
+- Validation: Targeted `rg` checks found no stale default startup prompt in active startup files.
+- Result: Future Codex sessions should start from short current context instead of long historical handoffs.
+- Token usage: 1,165,030 / weekly quota unavailable.
+

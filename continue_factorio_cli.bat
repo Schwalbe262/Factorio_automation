@@ -2,8 +2,8 @@
 setlocal
 cd /d "%~dp0"
 
-set "HANDOFF=%CD%\docs\CLI_HANDOFF.md"
-set "PROMPT=Read docs\CLI_HANDOFF.md only as the handoff context. Do not assume the previous desktop conversation is available. Continue the Factorio automation project from that document: verify current git status, run tests, commit/push the current validated changes if still uncommitted, then implement the next highest-priority item described in the handoff."
+set "HANDOFF=%CD%\HANDOFF_CURRENT.md"
+set "PROMPT=Read HANDOFF_CURRENT.md first, then AGENTS.md and minimal project metadata only. Do not resume long old threads or read old handoffs/journals/logs in full. Verify current git status, use targeted source ranges, commit/push each completed part, then continue the next concrete step from the current handoff."
 
 echo Factorio Automation CLI handoff
 echo Workspace: %CD%

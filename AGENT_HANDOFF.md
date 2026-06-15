@@ -1,12 +1,16 @@
 # Factorio Automation Agent Handoff
 
-This file is the compact handoff context for running the project from Codex CLI,
+Startup note: this file is superseded by root `HANDOFF_CURRENT.md`. Treat it as
+archive/search-only history; do not read it in full unless a specific fact is
+needed.
+
+This file is historical handoff context for targeted lookup by Codex CLI,
 Claude, or another coding agent.
 
-For the most current and detailed continuation context, read:
+For current continuation context, read:
 
 ```text
-LLM_CONTINUATION.md
+HANDOFF_CURRENT.md
 ```
 
 That file supersedes older part-specific notes in this handoff when there is a

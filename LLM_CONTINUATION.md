@@ -1,8 +1,13 @@
 # Factorio Automation LLM Continuation Guide
 
-This document is the primary handoff for any LLM, Codex CLI session, Claude
-session, or future agent continuing this project. Read this before making
-strategy or implementation decisions.
+Startup note: this file is superseded by root `HANDOFF_CURRENT.md`. Treat it as
+archive/search-only history; do not read it in full unless a specific fact is
+needed.
+
+This document is historical continuation context for targeted lookup by an LLM,
+Codex CLI session, Claude session, or future agent continuing this project.
+Read `HANDOFF_CURRENT.md` before making current strategy or implementation
+decisions.
 
 ## Mission
 
