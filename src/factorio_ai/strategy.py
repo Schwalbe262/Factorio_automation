@@ -166,14 +166,15 @@ SKILL_CATALOG: dict[str, SkillContract] = {
     ),
     "connect_coal_fuel_feed": SkillContract(
         name="connect_coal_fuel_feed",
-        description="Connect a starter coal belt to nearby burner fuel consumers with belts and inserters.",
+        description="Connect a starter coal belt to nearby burner fuel consumers, including boilers, with belts and inserters.",
         executor="CoalFuelFeedSkill",
         preconditions=[
             "fueled coal mining patch with output belt",
             "nearby burner furnace or boiler fuel consumer, or room for a starter furnace fuel receiver",
-            "transport belt, burner inserter, and furnace available or craftable",
+            "transport-belt production automated or existing belt stock available for this route",
+            "burner inserter available for boiler feed, or an inserter appropriate for a powered local consumer",
         ],
-        completion=["coal route to the local fuel consumer is observed as belt-fed"],
+        completion=["coal route to the local fuel consumer is observed as belt-fed", "boiler fuel is delivered by belt/inserter rather than repeated manual insertion"],
         llm_scope=(
             "Choose this after coal mining exists but site-level coal links are still route_needed. "
             "Executor places exact belt extension, burner inserter, and fuel consumer connection."
@@ -1092,6 +1093,41 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
+    if selected in {
+        "setup_power",
+        "plan_factory_site",
+        "produce_electronic_circuit",
+        "automate_electronic_circuit_line",
+        "bootstrap_build_item_mall",
+        "bootstrap_power_pole_mall",
+        "build_iron_plate_logistic_line_to_gear_mall",
+        "build_site_input_logistic_line",
+        "research_electric_mining_drill",
+        "produce_automation_science_pack",
+    } and _boiler_coal_feed_should_preempt_power(observation):
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "connect_coal_fuel_feed"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 91)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            "LLM selected powered work or setup_power, but the starter boiler is fuel-starved and "
+            "belt-fed coal supply can be connected instead of repeating manual boiler insertion."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["boiler coal fuel feed"]))
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            "boiler_no_fuel=true",
+            "coal_supply_ready=true",
+            "transport_belt_automation_ready=true",
+        ]
+        adjusted["expected_effect"] = "Build a coal belt/inserter feed into the boiler instead of hand-feeding boiler fuel."
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": "connect_coal_fuel_feed",
+            "reason": guardrail_reason,
+        }
+        return adjusted
     critical_factory_power_issue = _critical_factory_power_issue(observation)
     gear_belt_mall_power_issue = _gear_belt_mall_power_issue(observation)
     gear_belt_mall_bootstrap_issue = _gear_belt_mall_bootstrap_issue(observation)
@@ -1750,6 +1786,23 @@ def heuristic_strategy(
             ],
             blockers=["automated coal fuel supply"],
             expected_effect="Build and fuel a burner coal drill with an output belt so smelting and power can be refueled locally.",
+        ).to_dict()
+
+    if _boiler_coal_feed_should_preempt_power(observation):
+        return StrategicDecision(
+            selected_skill="connect_coal_fuel_feed",
+            priority=91,
+            reason=(
+                "The starter boiler is fuel-starved, but coal supply and belt production are ready enough to build "
+                "a boiler coal feed instead of inserting more fuel by hand."
+            ),
+            evidence=[
+                "boiler_no_fuel=true",
+                "coal_supply_ready=true",
+                "transport_belt_automation_ready=true",
+            ],
+            blockers=["boiler coal fuel feed"],
+            expected_effect="Build a coal belt and burner inserter feed for the boiler before resuming powered work.",
         ).to_dict()
 
     if _coal_fuel_feed_needed(observation, objective, production_targets, monitor=monitor):
@@ -2904,6 +2957,19 @@ def _coal_fuel_feed_needed(
         if length <= 32.0:
             return True
     return False
+
+
+def _boiler_coal_feed_should_preempt_power(observation: dict[str, Any]) -> bool:
+    issue = _starter_steam_power_issue(observation)
+    if issue is None:
+        return False
+    if str(issue.get("entity") or "") != "boiler":
+        return False
+    if str(issue.get("status") or "") != "no_fuel":
+        return False
+    if not _critical_electric_factory_present(observation):
+        return False
+    return _coal_supply_ready(observation) and _transport_belt_automation_ready(observation)
 
 
 def _transport_belt_automation_ready(observation: dict[str, Any]) -> bool:

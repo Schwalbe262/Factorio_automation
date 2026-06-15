@@ -323,6 +323,84 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["item"], "coal")
         self.assertEqual(decision.action["unit_number"], 20)
 
+    def test_coal_fuel_feed_extends_coal_belt_to_boiler_before_furnace_receiver(self):
+        obs = base_observation()
+        obs["inventory"] = {"transport-belt": 4, "burner-inserter": 1, "coal": 1}
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 2, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertEqual(decision.action["position"], {"x": 3.0, "y": 0.0})
+        self.assertEqual(decision.action["direction"], 4)
+        self.assertIn("boiler", decision.reason)
+
+    def test_coal_fuel_feed_places_boiler_inserter_after_belt_route(self):
+        obs = base_observation()
+        obs["inventory"] = {"transport-belt": 1, "burner-inserter": 1, "coal": 1}
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 2, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 3, "y": 0}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 23, "position": {"x": 4, "y": 0}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 24, "position": {"x": 5, "y": 0}, "direction": 4, "inventories": {}},
+            {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "burner-inserter")
+        self.assertEqual(decision.action["position"], {"x": 6.0, "y": 0.0})
+        self.assertEqual(decision.action["direction"], 12)
+
+    def test_coal_fuel_feed_primes_boiler_feed_inserter_not_boiler(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 1}
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 2, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 3, "y": 0}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 23, "position": {"x": 4, "y": 0}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 24, "position": {"x": 5, "y": 0}, "direction": 4, "inventories": {}},
+            {"name": "burner-inserter", "unit_number": 25, "position": {"x": 6, "y": 0}, "direction": 12, "inventories": {}},
+            {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["unit_number"], 25)
+        self.assertEqual(decision.action["name"], "burner-inserter")
+
+    def test_coal_fuel_feed_done_when_boiler_receives_belt_fed_coal(self):
+        obs = base_observation()
+        obs["inventory"] = {}
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 2, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 3, "y": 0}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 23, "position": {"x": 4, "y": 0}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 24, "position": {"x": 5, "y": 0}, "direction": 4, "inventories": {}},
+            {"name": "burner-inserter", "unit_number": 25, "position": {"x": 6, "y": 0}, "direction": 12, "inventories": {"1": {"coal": 1}}},
+            {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "working", "inventories": {"1": {"coal": 1}}},
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertTrue(decision.done)
+        self.assertIn("boiler coal fuel feed is active", decision.reason)
+
     def test_factory_layout_flags_remote_manual_power_site(self):
         obs = base_observation()
         obs["base"] = {"spawn_position": {"x": 0, "y": 0}}
@@ -2375,6 +2453,59 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["item"], "wood")
         self.assertEqual(decision.action["count"], 10)
         self.assertEqual(decision.action["unit_number"], 602)
+
+    def test_setup_power_skill_delegates_boiler_refuel_to_coal_feed_when_route_exists(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 12.5, "y": 10.0}}
+        obs["inventory"] = {}
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 9.5}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 620, "position": {"x": 0, "y": 9.5}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+            {"name": "transport-belt", "unit_number": 621, "position": {"x": 2, "y": 9.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {
+                "name": "offshore-pump",
+                "unit_number": 601,
+                "position": {"x": 10.5, "y": 10.5},
+                "direction": 12,
+                "distance": 2,
+                "inventories": {},
+                "fluids": {"1": {"name": "water", "amount": 100}},
+            },
+            {
+                "name": "boiler",
+                "unit_number": 602,
+                "position": {"x": 12.5, "y": 9.5},
+                "direction": 0,
+                "status_name": "no_fuel",
+                "distance": 0,
+                "inventories": {},
+                "fluids": {"1": {"name": "water", "amount": 200}},
+            },
+            {
+                "name": "steam-engine",
+                "unit_number": 603,
+                "position": {"x": 12.5, "y": 6.5},
+                "direction": 0,
+                "status": 5,
+                "distance": 4,
+                "inventories": {},
+                "fluids": {},
+            },
+            {
+                "name": "small-electric-pole",
+                "unit_number": 604,
+                "position": {"x": 10.5, "y": 6.5},
+                "direction": 0,
+                "distance": 4,
+                "inventories": {},
+                "fluids": {},
+            },
+        ]
+
+        decision = SetupPowerSkill().next_action(obs)
+
+        self.assertIsNone(decision.action)
+        self.assertIn("boiler coal feed needs automated transport-belt production", decision.reason)
 
     def test_setup_power_skill_done_when_engine_has_steam_and_pole_connected(self):
         obs = base_observation()

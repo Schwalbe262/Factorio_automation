@@ -151,6 +151,12 @@ Latest continuation after Part 105:
   - Live read-only verification shows `long-handed-inserter` is considered by layout optimization from recipe unlock state (`available=true`, `recipe_unlocked=true`, `stock=0`, `automated=false`); top candidates include `green-circuit-long-handed-3-cable-2-circuit-cell` and `unlock-aware-site-rerank-long-handed-inserter`.
   - Live mutation was intentionally not run because the current live blocker is boiler 272 `no_fuel`, and the existing `setup_power` path would manually insert coal. Next missing executor: an automation-first boiler fuel feed using coal belt/inserter logistics.
   - Full verification: `PYTHONPATH=src pytest -q` -> `510 passed`.
+- Part 115 adds automation-first boiler coal feed handling:
+  - `CoalFuelFeedSkill` now has a boiler-first branch that routes a coal output belt to a boiler-side feed belt, places a burner inserter, primes only that inserter when a starter fuel item is already carried, and waits for belt-fed coal in the boiler.
+  - `SetupPowerSkill` delegates boiler refueling to the boiler coal feed path before falling back to generic direct burner fueling, so an existing coal output belt no longer sends the player to mine/insert boiler coal manually.
+  - Strategy can preempt ready boiler `no_fuel` recovery to `connect_coal_fuel_feed` when coal supply and belt automation are both ready.
+  - Live read-only verification: boiler 272 remains `no_fuel`, `belt_assembler_count=0`; both `CoalFuelFeedSkill` and `SetupPowerSkill` now return `boiler coal feed needs automated transport-belt production or existing belt stock; refusing repeated boiler hand-fueling` with no mutation.
+  - Full verification: `PYTHONPATH=src pytest -q` -> `517 passed`.
 
 Part 64 introduced:
 

@@ -32,6 +32,7 @@ WALK_FUEL_LOGISTICS_LIMIT = 160.0
 STARTER_SITE_RADIUS = 192.0
 STARTER_POWER_SITE_RADIUS = 160.0
 STARTER_ENTITY_CLUSTER_RADIUS = 224.0
+STARTER_BOILER_FUEL_FEED_ROUTE_LIMIT = 192.0
 STEAM_POWER_BOILER_FUEL_RESERVE = 10
 SMELTING_LINE_FUEL_RESERVE = {
     "drill": 8,
@@ -3428,13 +3429,19 @@ class CoalSupplySkill:
 
 
 class CoalFuelFeedSkill:
-    """Connect a starter coal belt to a nearby burner fuel consumer."""
+    """Connect a starter coal belt to burner fuel consumers without repeated hand feeding."""
 
     def __init__(self) -> None:
         self.support_skill = BeltSmeltingLineSkill(target_count=20)
 
     def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
         player = player_position(observation)
+        boiler_layout = _coal_boiler_fuel_feed_layout(observation)
+        if boiler_layout is not None:
+            decision = self._next_boiler_feed_action(observation, player, boiler_layout)
+            if decision is not None:
+                return decision
+
         layout = _coal_fuel_feed_layout(observation)
         if layout is None:
             supply = CoalSupplySkill(target_count=16).next_action(observation)
@@ -3529,6 +3536,205 @@ class CoalFuelFeedSkill:
         return PlannerDecision(
             {"type": "wait", "ticks": 180},
             "wait for coal fuel feed inserter to move coal into the fuel consumer",
+        )
+
+    def _next_boiler_feed_action(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        layout: dict[str, Any],
+    ) -> PlannerDecision | None:
+        missing_belt_segments = any(not isinstance(segment.get("entity"), dict) for segment in layout["segments"])
+        if (
+            missing_belt_segments
+            and not _transport_belt_assembler_exists(observation)
+            and inventory_count(observation, "transport-belt") <= 0
+        ):
+            return PlannerDecision(
+                None,
+                "boiler coal feed needs automated transport-belt production or existing belt stock; refusing repeated boiler hand-fueling",
+            )
+
+        belt_assembler = _transport_belt_output_assembler(observation)
+        if missing_belt_segments and inventory_count(observation, "transport-belt") <= 0:
+            if isinstance(belt_assembler, dict) and entity_item_count(belt_assembler, "transport-belt") > 0:
+                position = _position(belt_assembler)
+                if distance(player, position) > 20:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": position},
+                        "move near belt mall output to collect belts for boiler coal feed",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "take",
+                        "item": "transport-belt",
+                        "count": min(entity_item_count(belt_assembler, "transport-belt"), len(layout["segments"])),
+                        "unit_number": belt_assembler.get("unit_number"),
+                        "name": belt_assembler.get("name") or "assembling-machine-1",
+                        "position": position,
+                    },
+                    "take transport belts from the belt mall as construction material for boiler coal feed",
+                )
+            return PlannerDecision(
+                None,
+                "boiler coal feed needs transport belts from the belt mall; refusing hand-crafted belt workaround",
+            )
+
+        protected_units = {
+            int(entity.get("unit_number"))
+            for entity in (layout.get("boiler"), layout.get("source_drill"))
+            if isinstance(entity, dict) and entity.get("unit_number") is not None
+        }
+        for segment in layout["segments"]:
+            existing = segment.get("entity")
+            if isinstance(existing, dict):
+                if int(existing.get("direction") or segment["direction"]) != int(segment["direction"]):
+                    position = _position(existing)
+                    if distance(player, position) > 4.5:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": _stand_position(position, offset=1.5)},
+                            "move within reach of misoriented boiler coal feed belt",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "mine",
+                            "unit_number": existing.get("unit_number"),
+                            "name": "transport-belt",
+                            "position": position,
+                        },
+                        "remove misoriented transport belt from the boiler coal feed",
+                    )
+                continue
+            blocker = _belt_line_position_blocker(
+                observation,
+                segment["position"],
+                protected_unit_numbers=protected_units,
+            )
+            if blocker is not None:
+                blocker_position = _position(blocker)
+                if distance(player, blocker_position) > 8:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": blocker_position},
+                        f"move near blocking {blocker.get('name')} before extending boiler coal feed",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "unit_number": blocker.get("unit_number"),
+                        "name": blocker.get("name"),
+                        "position": blocker_position,
+                    },
+                    f"clear blocking {blocker.get('name')} before extending boiler coal feed",
+                )
+            position = segment["position"]
+            if distance(player, position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position, offset=3.0)},
+                    "move near next boiler coal feed belt segment",
+                )
+            return PlannerDecision(
+                {
+                    "type": "build",
+                    "name": "transport-belt",
+                    "position": position,
+                    "direction": segment["direction"],
+                    "allow_nearby": False,
+                },
+                "extend coal belt toward boiler without player coal shuttle",
+            )
+
+        inserter_spec = layout["target_inserter"]
+        inserter = inserter_spec.get("entity")
+        if isinstance(inserter, dict):
+            if int(inserter.get("direction") or 0) != int(inserter_spec["direction"]):
+                position = _position(inserter)
+                if distance(player, position) > 4.5:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": _stand_position(position, offset=1.5)},
+                        "move within reach of misoriented boiler coal feed inserter",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "unit_number": inserter.get("unit_number"),
+                        "name": inserter.get("name") or "burner-inserter",
+                        "position": position,
+                    },
+                    "remove misoriented inserter before rebuilding boiler coal feed",
+                )
+        else:
+            item_name = _available_boiler_feed_inserter_item(observation)
+            if item_name is None:
+                return PlannerDecision(None, "missing burner inserter for boiler coal feed; refusing boiler hand-fueling")
+            position = inserter_spec["position"]
+            blocker = _build_position_blocker(observation, position, allowed_names={"burner-inserter", "inserter", "fast-inserter"})
+            if blocker is not None:
+                blocker_position = _position(blocker)
+                if distance(player, blocker_position) > 8:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": blocker_position},
+                        f"move near blocking {blocker.get('name')} before placing boiler coal feed inserter",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "unit_number": blocker.get("unit_number"),
+                        "name": blocker.get("name"),
+                        "position": blocker_position,
+                    },
+                    f"clear blocking {blocker.get('name')} before placing boiler coal feed inserter",
+                )
+            if distance(player, position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position, offset=3.0)},
+                    "move near boiler coal feed inserter position",
+                )
+            return PlannerDecision(
+                {
+                    "type": "build",
+                    "name": item_name,
+                    "position": position,
+                    "direction": inserter_spec["direction"],
+                    "allow_nearby": False,
+                },
+                "place burner inserter for automated boiler coal feed",
+            )
+
+        if str(inserter.get("name") or "") == "burner-inserter" and _entity_burner_fuel_count(inserter) < 1:
+            fuel_item, fuel_count = _select_inventory_burner_fuel(observation)
+            if fuel_count <= 0:
+                return PlannerDecision(
+                    None,
+                    "boiler coal feed burner inserter needs one starter fuel item; refusing to mine or shuttle boiler fuel manually",
+                )
+            position = _position(inserter)
+            if distance(player, position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": position},
+                    "move near boiler coal feed burner inserter to prime it",
+                )
+            return PlannerDecision(
+                {
+                    "type": "insert",
+                    "item": fuel_item,
+                    "count": 1,
+                    "unit_number": inserter.get("unit_number"),
+                    "name": "burner-inserter",
+                    "position": position,
+                },
+                "prime boiler coal feed burner inserter; boiler itself remains belt-fed",
+            )
+
+        boiler = layout.get("boiler")
+        if isinstance(boiler, dict) and _entity_burner_fuel_count(boiler) > 0:
+            return PlannerDecision(
+                None,
+                "boiler coal fuel feed is active: belt and inserter are feeding the boiler fuel inventory",
+                done=True,
+            )
+        return PlannerDecision(
+            {"type": "wait", "ticks": 180},
+            "wait for boiler coal feed inserter to move coal into the boiler",
         )
 
 
@@ -3860,6 +4066,11 @@ class SetupPowerSkill:
 
         boiler = layout.get("boiler")
         if boiler and _entity_burner_fuel_count(boiler) < STEAM_POWER_BOILER_FUEL_RESERVE:
+            feed_layout = _coal_boiler_fuel_feed_layout(observation)
+            if feed_layout is not None:
+                feed_decision = CoalFuelFeedSkill()._next_boiler_feed_action(observation, player, feed_layout)
+                if feed_decision is not None:
+                    return feed_decision
             return _fuel_burner_line_entity(
                 observation,
                 player,
@@ -4790,6 +5001,115 @@ def _coal_fuel_feed_layout(observation: dict[str, Any]) -> dict[str, Any] | None
         "inserter": _entity_near(observation, "burner-inserter", inserter_position, radius=1.0),
         "consumer": _nearest_fuel_consumer_near(observation, consumer_position),
     }
+
+
+def _coal_boiler_fuel_feed_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
+    boilers = [
+        boiler
+        for boiler in entities_named(observation, "boiler")
+        if _within_allowed_factory_area(observation, _position(boiler))
+        and (_entity_burner_fuel_count(boiler) < STEAM_POWER_BOILER_FUEL_RESERVE or not _boiler_has_belt_fuel_feed(observation, boiler))
+    ]
+    if not boilers:
+        return None
+    sources = _coal_supply_output_belt_sources(observation)
+    if not sources:
+        return None
+    candidates: list[tuple[float, dict[str, Any]]] = []
+    for boiler in boilers:
+        boiler_position = _position(boiler)
+        for source in sources:
+            source_belt = source["belt"]
+            source_position = _position(source_belt)
+            route_distance = distance(source_position, boiler_position)
+            if route_distance > STARTER_BOILER_FUEL_FEED_ROUTE_LIMIT:
+                continue
+            endpoints = _boiler_fuel_feed_endpoints(source_position, boiler_position)
+            segments = _iron_plate_line_segments(observation, source_position, endpoints["target_belt"])
+            if not segments:
+                continue
+            candidates.append(
+                (
+                    route_distance,
+                    {
+                        "source_drill": source.get("drill"),
+                        "source_belt": source_belt,
+                        "boiler": boiler,
+                        "segments": segments,
+                        "target_belt_position": endpoints["target_belt"],
+                        "target_inserter": {
+                            "position": endpoints["target_inserter"],
+                            "direction": endpoints["inserter_direction"],
+                            "entity": _inserter_near(observation, endpoints["target_inserter"]),
+                        },
+                    },
+                )
+            )
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
+
+
+def _coal_supply_output_belt_sources(observation: dict[str, Any]) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+    for drill in entities_named(observation, "burner-mining-drill") + entities_named(observation, "electric-mining-drill"):
+        drill_position = _position(drill)
+        target_resource = _entity_resource_name(observation, drill, radius=4.5)
+        if target_resource != "coal":
+            continue
+        direction = _direction_to_orientation(int(drill.get("direction") or EAST))
+        layout = _coal_supply_layout_from_drill_position(drill_position, orientation=direction)
+        output_belt = _entity_near(observation, "transport-belt", layout["output_position"], radius=0.75)
+        if output_belt is None:
+            continue
+        if str(drill.get("name") or "") == "burner-mining-drill" and _entity_burner_fuel_count(drill) <= 0 and _entity_status_is(drill, "no_fuel", 53):
+            continue
+        if str(drill.get("name") or "") == "electric-mining-drill" and drill.get("electric_network_connected") is False:
+            continue
+        sources.append({"drill": drill, "belt": output_belt})
+    return sources
+
+
+def _boiler_fuel_feed_endpoints(
+    source_position: dict[str, float],
+    boiler_position: dict[str, float],
+) -> dict[str, Any]:
+    dx = float(source_position["x"]) - float(boiler_position["x"])
+    dy = float(source_position["y"]) - float(boiler_position["y"])
+    if abs(dx) >= abs(dy):
+        side = {"x": 1.0 if dx >= 0 else -1.0, "y": 0.0}
+    else:
+        side = {"x": 0.0, "y": 1.0 if dy >= 0 else -1.0}
+    target_inserter = _offset_along_axis(boiler_position, side, 2.0)
+    target_belt = _offset_along_axis(boiler_position, side, 3.0)
+    return {
+        "target_inserter": target_inserter,
+        "target_belt": target_belt,
+        "inserter_direction": _direction_from_axis_vector(side),
+    }
+
+
+def _boiler_has_belt_fuel_feed(observation: dict[str, Any], boiler: dict[str, Any]) -> bool:
+    boiler_position = _position(boiler)
+    inserters = [
+        item
+        for item in entities_named(observation, "burner-inserter")
+        + entities_named(observation, "inserter")
+        + entities_named(observation, "fast-inserter")
+        if distance(_position(item), boiler_position) <= 3.0
+    ]
+    for inserter in inserters:
+        if _entity_near(observation, "transport-belt", _position(inserter), radius=2.5) is not None:
+            return True
+    return False
+
+
+def _available_boiler_feed_inserter_item(observation: dict[str, Any]) -> str | None:
+    for item in ("burner-inserter", "inserter", "fast-inserter"):
+        if inventory_count(observation, item) > 0:
+            return item
+    return None
 
 
 def _nearest_fuel_consumer_near(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:

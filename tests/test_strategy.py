@@ -453,6 +453,74 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
         self.assertIn("transport-belt automation before site links", result["blockers"])
 
+    def test_boiler_no_fuel_prefers_coal_feed_when_belts_are_automated(self):
+        observation = {
+            "player": {"position": {"x": 0, "y": 0}},
+            "inventory": {"coal": 1},
+            "entities": [
+                {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+                {"name": "transport-belt", "unit_number": 21, "position": {"x": 2, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 22,
+                    "recipe": "transport-belt",
+                    "position": {"x": 1, "y": 3},
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"transport-belt": 4}},
+                },
+                {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+                {"name": "lab", "unit_number": 31, "position": {"x": 10, "y": 0}, "status": 54, "status_name": "no_power", "inventories": {}},
+            ],
+            "resources": [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}],
+            "research": {"technologies": {"automation": {"researched": True}}},
+        }
+
+        result = heuristic_strategy("launch_rocket_program", observation)
+
+        self.assertEqual(result["selected_skill"], "connect_coal_fuel_feed")
+        self.assertIn("boiler coal fuel feed", result["blockers"])
+        self.assertIn("boiler_no_fuel=true", result["evidence"])
+
+    def test_reconcile_promotes_power_repair_to_boiler_coal_feed_when_ready(self):
+        observation = {
+            "player": {"position": {"x": 0, "y": 0}},
+            "inventory": {"coal": 1},
+            "entities": [
+                {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+                {"name": "transport-belt", "unit_number": 21, "position": {"x": 2, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 22,
+                    "recipe": "transport-belt",
+                    "position": {"x": 1, "y": 3},
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"transport-belt": 4}},
+                },
+                {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+                {"name": "lab", "unit_number": 31, "position": {"x": 10, "y": 0}, "status": 54, "status_name": "no_power", "inventories": {}},
+            ],
+            "resources": [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}],
+            "research": {"technologies": {"automation": {"researched": True}}},
+        }
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 80,
+                "reason": "Improve layout.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "connect_coal_fuel_feed")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertIn("boiler coal fuel feed", result["blockers"])
+
     def test_coal_supply_ready_uses_mining_target_when_resource_list_is_remote(self):
         result = heuristic_strategy(
             "launch_rocket_program",

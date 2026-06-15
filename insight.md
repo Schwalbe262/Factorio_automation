@@ -600,3 +600,12 @@
 - After: Strategy normalization, guardrail fallbacks, heuristic fallback, controller `_skill_run_config`, and `SiteInputLogisticLineSkill` now preserve `input_item=copper-plate` in regression coverage. Live layout payload also confirms `long-handed-inserter` is considered from recipe unlock state while reporting `stock=0`, `automated=false`, and missing `long-handed-inserter x7`.
 - Evidence: `{"targeted_tests":"4 passed","related_suite":"320 passed","full_tests":"510 passed","live_long_handed":{"available":true,"recipe_unlocked":true,"stock":0,"automated":false},"live_candidates":["green-circuit-long-handed-3-cable-2-circuit-cell","unlock-aware-site-rerank-long-handed-inserter"],"executor_target":"build_site_input_logistic_line input_item=copper-plate"}`
 - Remaining risk: This fixes strategy-to-executor target fidelity. The current live blocker is still boiler fuel, and the next implementation should replace manual boiler coal insertion with a belt/inserter fuel-feed path.
+
+## 2026-06-15 14:51:38 +09:00 - Insight 73
+
+- Source loop: Loop 337
+- Improvement: Fuel-starved boilers now prefer an automation-first coal belt/inserter feed path, and `setup_power` no longer falls through to manual coal mining/insertion when that feed route is the correct recovery path.
+- Before: Live read-only showed boiler 272 `no_fuel`; `SetupPowerSkill` would issue `move near coal`, leading toward direct coal mining or boiler hand-fueling even though boiler fuel should become a belt/inserter logistics link.
+- After: `CoalFuelFeedSkill` can build a boiler coal feed route when belts/inserters are available, strategy can preempt ready boiler fuel repair to `connect_coal_fuel_feed`, and the current live `SetupPowerSkill` returns `boiler coal feed needs automated transport-belt production or existing belt stock; refusing repeated boiler hand-fueling`.
+- Evidence: `{"targeted_tests":"9 passed","related_suite":"327 passed","full_tests":"517 passed","live_before":"setup_power would move near coal","live_after":{"setup_power_action":null,"coal_feed_action":null,"reason":"boiler coal feed needs automated transport-belt production or existing belt stock; refusing repeated boiler hand-fueling"},"qwen_strategy_id":"strategy-f73133b9368b495185c7fb28543d318f"}`
+- Remaining risk: The current live map still has `belt_assembler_count=0`, so the new boiler feed executor is blocked on belt automation or existing belt stock before it can mutate the world.

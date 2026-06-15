@@ -7323,3 +7323,32 @@
 - Next action: Commit/push Part 114, then add an automation-first boiler fuel feed path so the live loop does not rely on manual coal insertion while power is blocked.
 - Token usage: 15,236,325 cumulative Codex tokens / weekly quota unavailable; delta since Loop 335 record approximately 393,430 tokens.
 
+## 2026-06-15 14:51:38 +09:00 - Loop 337
+
+- Part: automation-first boiler coal feed guard and executor
+- Goal: Stop `setup_power` from recovering a fuel-starved boiler by manually mining or inserting coal, and add an executable belt/inserter boiler coal feed path when route materials exist.
+- Hypothesis: The live loop is blocked because boiler 272 has `no_fuel`; if `setup_power` keeps using the generic burner-fuel helper, it can send the player to mine/insert coal manually. A boiler-specific branch in `CoalFuelFeedSkill`, plus `setup_power` delegation to that branch, should preserve automation-first behavior.
+- Actions:
+  - Inspected `SetupPowerSkill`, `CoalFuelFeedSkill`, strategy guardrails, factory-site monitor status, controller skill routing, and existing tests.
+  - Added boiler-first handling to `CoalFuelFeedSkill`: route coal output belt segments to a boiler-side feed belt, place a burner inserter, prime only the feed inserter with one carried fuel item if available, and wait until the boiler receives belt-fed coal.
+  - Added boiler feed layout helpers for coal output belt sources, boiler-side endpoints, existing belt-fed boiler detection, and boiler feed inserter selection.
+  - Made `SetupPowerSkill` delegate boiler refuel to the boiler coal feed path before falling back to direct boiler fueling.
+  - Added strategy preemption so a boiler `no_fuel` steam issue with coal supply and belt automation ready selects `connect_coal_fuel_feed` instead of `setup_power`.
+  - Updated the `connect_coal_fuel_feed` skill contract to explicitly cover boilers and belt/inserter fuel delivery.
+  - Ran live read-only smoke without mutating the world.
+- Candidates:
+  - New executable path: `connect_coal_fuel_feed` for boiler coal feed.
+  - Current live blocker: boiler 272 `no_fuel`, coal drill exists, but `belt_assembler_count=0`.
+  - Qwen read-only decision: raw `plan_factory_site`, guardrailed to `setup_power` because critical powered factory unit 318 has `no_power`.
+- Metrics:
+  - Targeted tests: `9 passed`.
+  - Related suite: `327 passed`.
+  - Full test suite: `517 passed in 26.16s`.
+  - Live read-only after change: `CoalFuelFeedSkill` action `null`, reason `boiler coal feed needs automated transport-belt production or existing belt stock; refusing repeated boiler hand-fueling`.
+  - Live read-only after change: `SetupPowerSkill` action `null` with the same refusal reason, instead of `move near coal`.
+  - Qwen read-only: strategy id `strategy-f73133b9368b495185c7fb28543d318f`, source `llm`, selected `setup_power` after guardrail; no world mutation executed.
+- Result: The code now has an executable boiler coal feed path for ready states, and the current live map no longer progresses through manual coal mining/insertion when `setup_power` sees the fuel-starved boiler.
+- Failure reason: Live route construction is not yet possible because the current map has no transport-belt assembler and no belt stock for the boiler fuel route. This is now surfaced as a prerequisite instead of a manual coal action.
+- Next action: Restore or build transport-belt automation without relying on powered assemblers if possible; otherwise define a tightly bounded emergency recovery policy for one-time power bootstrap that does not become repeated hand-carry.
+- Token usage: 15,496,079 cumulative Codex tokens / weekly quota unavailable; delta since Loop 336 record approximately 259,754 tokens.
+
