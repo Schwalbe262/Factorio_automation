@@ -1051,7 +1051,7 @@ def _combined_site_blueprint(
                 },
             }
             if entity.get("direction") is not None:
-                row["direction"] = int(entity.get("direction") or 0)
+                row["direction"] = _direction_or_default(entity.get("direction"), 0)
             if isinstance(entity.get("recipe"), str):
                 row["recipe"] = entity["recipe"]
             if isinstance(entity.get("items"), dict):
@@ -2642,7 +2642,7 @@ def _inserter_endpoints(entity: dict[str, Any]) -> tuple[dict[str, float], dict[
     position = entity.get("position") if isinstance(entity.get("position"), dict) else None
     if position is None:
         return None
-    direction = int(entity.get("direction") or 0)
+    direction = _direction_or_default(entity.get("direction"), 0)
     vectors = {
         NORTH: (0.0, -1.0),
         EAST: (1.0, 0.0),
@@ -3733,7 +3733,7 @@ class CoalFuelFeedSkill:
         for segment in layout["segments"]:
             existing = segment.get("entity")
             if isinstance(existing, dict):
-                if int(existing.get("direction") or segment["direction"]) != int(segment["direction"]):
+                if _direction_or_default(existing.get("direction"), segment["direction"]) != int(segment["direction"]):
                     position = _position(existing)
                     if distance(player, position) > 4.5:
                         return PlannerDecision(
@@ -3791,7 +3791,7 @@ class CoalFuelFeedSkill:
         inserter_spec = layout["target_inserter"]
         inserter = inserter_spec.get("entity")
         if isinstance(inserter, dict):
-            if int(inserter.get("direction") or 0) != int(inserter_spec["direction"]):
+            if _direction_or_default(inserter.get("direction"), 0) != int(inserter_spec["direction"]):
                 position = _position(inserter)
                 if distance(player, position) > 4.5:
                     return PlannerDecision(
@@ -4842,7 +4842,7 @@ def _find_direct_smelting_cell(observation: dict[str, Any], resource_name: str) 
             continue
         if not _within_starter_logistics_area(observation, drill_position):
             continue
-        orientation = _direction_to_orientation(int(drill.get("direction") or EAST))
+        orientation = _direction_to_orientation(_direction_or_default(drill.get("direction"), EAST))
         layout = _direct_smelting_layout_from_drill_position(drill_position, resource_name=resource_name, orientation=orientation)
         layout["drill"] = drill
         layout["furnace"] = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=0.75)
@@ -4931,7 +4931,7 @@ def _find_stone_supply_layout(observation: dict[str, Any]) -> dict[str, Any] | N
         target_resource = _entity_resource_name(observation, drill, radius=4.5)
         if target_resource != "stone":
             continue
-        orientation = _direction_to_orientation(int(drill.get("direction") or EAST))
+        orientation = _direction_to_orientation(_direction_or_default(drill.get("direction"), EAST))
         layout = _stone_supply_layout_from_drill_position(drill_position, orientation=orientation)
         layout["drill"] = drill
         layout["output_chest"] = _stone_output_chest_near(observation, layout["output_position"])
@@ -5031,7 +5031,7 @@ def _find_coal_supply_layout(observation: dict[str, Any]) -> dict[str, Any] | No
         target_resource = _entity_resource_name(observation, drill, radius=4.5)
         if target_resource != "coal":
             continue
-        direction = _direction_to_orientation(int(drill.get("direction") or EAST))
+        direction = _direction_to_orientation(_direction_or_default(drill.get("direction"), EAST))
         layout = _coal_supply_layout_from_drill_position(drill_position, orientation=direction)
         layout["drill"] = drill
         layout["output_belt"] = _entity_near(observation, "transport-belt", layout["output_position"], radius=0.75)
@@ -5171,7 +5171,9 @@ def _coal_fuel_feed_layout(observation: dict[str, Any]) -> dict[str, Any] | None
         return None
     output_belt = supply["output_belt"]
     output_position = _position(output_belt)
-    orientation = _direction_to_orientation(int(output_belt.get("direction") or supply.get("belt_direction") or EAST))
+    orientation = _direction_to_orientation(
+        _direction_or_default(output_belt.get("direction"), _direction_or_default(supply.get("belt_direction"), EAST))
+    )
     dx, dy, _drill_direction, belt_direction, inserter_direction = _smelting_orientation(orientation)
     belt2_position = {"x": output_position["x"] + dx, "y": output_position["y"] + dy}
     inserter_position = {"x": output_position["x"] + 2 * dx, "y": output_position["y"] + 2 * dy}
@@ -5247,7 +5249,7 @@ def _coal_supply_output_belt_sources(observation: dict[str, Any]) -> list[dict[s
         target_resource = _entity_resource_name(observation, drill, radius=4.5)
         if target_resource != "coal":
             continue
-        direction = _direction_to_orientation(int(drill.get("direction") or EAST))
+        direction = _direction_to_orientation(_direction_or_default(drill.get("direction"), EAST))
         layout = _coal_supply_layout_from_drill_position(drill_position, orientation=direction)
         output_belt = _entity_near(observation, "transport-belt", layout["output_position"], radius=0.75)
         if output_belt is None:
@@ -6210,6 +6212,8 @@ def _find_site_input_logistic_line_layout(
                 endpoints["source_belt"],
                 endpoints["target_belt"],
                 center_tiles=True,
+                start_direction=endpoints["source_direction"],
+                end_direction=endpoints["target_direction"],
             )
             source_inserter_position = _tile_center_position(endpoints["source_inserter"])
             target_inserter_position = _tile_center_position(endpoints["target_inserter"])
@@ -6317,7 +6321,7 @@ def _site_input_local_route_observed(
     inserter = _inserter_near(observation, target_inserter)
     if not isinstance(inserter, dict):
         return False
-    return int(inserter.get("direction") or endpoints["target_direction"]) == int(endpoints["target_direction"])
+    return _direction_or_default(inserter.get("direction"), endpoints["target_direction"]) == int(endpoints["target_direction"])
 
 
 def _site_input_line_endpoints(source: dict[str, Any], consumer: dict[str, Any]) -> dict[str, Any]:
@@ -6365,6 +6369,59 @@ def _direction_from_axis_vector(vector: dict[str, float]) -> int:
     if abs(float(vector.get("x") or 0.0)) >= abs(float(vector.get("y") or 0.0)):
         return EAST if float(vector.get("x") or 0.0) >= 0 else WEST
     return SOUTH if float(vector.get("y") or 0.0) >= 0 else NORTH
+
+
+def _direction_or_default(value: Any, fallback: int) -> int:
+    if value is None:
+        return int(fallback)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(fallback)
+
+
+def _direction_axis(direction: int) -> str:
+    return "x" if int(direction) in {EAST, WEST} else "y"
+
+
+def _route_detour_coordinate(start_value: float, end_value: float, direction: int) -> float:
+    sign = 1.0 if int(direction) in {EAST, SOUTH} else -1.0
+    distance_tiles = abs(float(end_value) - float(start_value))
+    if distance_tiles <= 1.25:
+        return round(float(end_value), 3)
+    whole_steps = max(1, int(round(distance_tiles)))
+    offset_steps = max(1, min(whole_steps - 1, whole_steps // 2))
+    return round(float(start_value) + sign * offset_steps, 3)
+
+
+def _role_aware_axis_line_waypoints(
+    start: dict[str, float],
+    end: dict[str, float],
+    start_direction: int,
+    end_direction: int,
+) -> list[dict[str, float]]:
+    start_x = float(start["x"])
+    start_y = float(start["y"])
+    end_x = float(end["x"])
+    end_y = float(end["y"])
+    start_axis = _direction_axis(start_direction)
+    end_axis = _direction_axis(end_direction)
+
+    waypoints = [{"x": start_x, "y": start_y}]
+    if start_axis == end_axis == "x":
+        if abs(start_y - end_y) > 0.25:
+            detour_x = _route_detour_coordinate(start_x, end_x, start_direction)
+            waypoints.extend([{"x": detour_x, "y": start_y}, {"x": detour_x, "y": end_y}])
+    elif start_axis == end_axis == "y":
+        if abs(start_x - end_x) > 0.25:
+            detour_y = _route_detour_coordinate(start_y, end_y, start_direction)
+            waypoints.extend([{"x": start_x, "y": detour_y}, {"x": end_x, "y": detour_y}])
+    elif start_axis == "x":
+        waypoints.append({"x": end_x, "y": start_y})
+    else:
+        waypoints.append({"x": start_x, "y": end_y})
+    waypoints.append({"x": end_x, "y": end_y})
+    return waypoints
 
 
 def _site_input_item_priority(item: str) -> int:
@@ -6707,23 +6764,28 @@ def _iron_plate_line_segments(
     end: dict[str, float],
     *,
     center_tiles: bool = False,
+    start_direction: int | None = None,
+    end_direction: int | None = None,
 ) -> list[dict[str, Any]]:
     start_x = float(start["x"])
     start_y = float(start["y"])
     end_x = float(end["x"])
     end_y = float(end["y"])
-    waypoints = [{"x": start_x, "y": start_y}]
-    if end_x < start_x - 0.25:
-        detour_x = start_x + 1.0
-        detour_y = _select_iron_plate_line_detour_y(observation, start_x, start_y, end_x, end_y, detour_x)
-        waypoints.extend(
-            [
-                {"x": detour_x, "y": start_y},
-                {"x": detour_x, "y": detour_y},
-                {"x": end_x, "y": detour_y},
-            ]
-        )
-    waypoints.append({"x": end_x, "y": end_y})
+    if start_direction is not None and end_direction is not None:
+        waypoints = _role_aware_axis_line_waypoints(start, end, int(start_direction), int(end_direction))
+    else:
+        waypoints = [{"x": start_x, "y": start_y}]
+        if end_x < start_x - 0.25:
+            detour_x = start_x + 1.0
+            detour_y = _select_iron_plate_line_detour_y(observation, start_x, start_y, end_x, end_y, detour_x)
+            waypoints.extend(
+                [
+                    {"x": detour_x, "y": start_y},
+                    {"x": detour_x, "y": detour_y},
+                    {"x": end_x, "y": detour_y},
+                ]
+            )
+        waypoints.append({"x": end_x, "y": end_y})
 
     positions = _axis_route_positions(waypoints)
     if not positions:
@@ -6948,7 +7010,7 @@ def _layout_from_power_site(site: dict[str, Any]) -> dict[str, Any] | None:
         specs[key] = {
             "name": str(raw_spec.get("name") or _power_spec_name(key)),
             "position": _position(raw_spec),
-            "direction": int(raw_spec.get("direction") or NORTH),
+            "direction": _direction_or_default(raw_spec.get("direction"), NORTH),
         }
     return _power_layout_from_specs(specs)
 
@@ -7061,7 +7123,7 @@ def _find_steam_power_block(
         reference_distance = distance(pump_position, reference_position) if reference_position is not None else 999999.0
         if not starter_local and not (allow_existing_remote and reference_distance <= 48.0):
             continue
-        layout = _power_layout_from_pump_position(pump_position, int(pump.get("direction") or WEST))
+        layout = _power_layout_from_pump_position(pump_position, _direction_or_default(pump.get("direction"), WEST))
         layout["offshore_pump"] = pump
         layout["boiler"] = _entity_near(observation, "boiler", layout["boiler_spec"]["position"], radius=1.0)
         layout["steam_engine"] = _entity_near(observation, "steam-engine", layout["steam_engine_spec"]["position"], radius=1.0)
@@ -7518,7 +7580,7 @@ class CircuitAutomationSkill:
                 "allow_nearby": False,
             }
             if key == "transfer_inserter":
-                action["direction"] = int(line.get("transfer_inserter_direction") or EAST)
+                action["direction"] = _direction_or_default(line.get("transfer_inserter_direction"), EAST)
             return PlannerDecision(action, f"place {name} for circuit automation cell")
 
         if line.get("pole_unit_number") and not _circuit_cell_powered(line):
@@ -8152,7 +8214,7 @@ class GearBeltMallLogisticsSkill:
                     },
                     f"replace burner {label} now that regular inserters are usable",
                 )
-            if int(inserter.get("direction") or 0) != int(spec["direction"]):
+            if _direction_or_default(inserter.get("direction"), 0) != int(spec["direction"]):
                 position = _position(inserter)
                 if distance(player, position) > 4.5:
                     return PlannerDecision(
@@ -8814,7 +8876,7 @@ class IronPlateLogisticLineToGearMallSkill:
         for segment in layout["segments"]:
             existing = segment.get("entity")
             if isinstance(existing, dict):
-                if int(existing.get("direction") or segment["direction"]) != int(segment["direction"]):
+                if _direction_or_default(existing.get("direction"), segment["direction"]) != int(segment["direction"]):
                     position = _position(existing)
                     if distance(player, position) > 4.5:
                         return PlannerDecision(
@@ -8875,7 +8937,7 @@ class IronPlateLogisticLineToGearMallSkill:
         ]:
             inserter = spec.get("entity")
             if isinstance(inserter, dict):
-                if int(inserter.get("direction") or 0) != int(spec["direction"]):
+                if _direction_or_default(inserter.get("direction"), 0) != int(spec["direction"]):
                     position = _position(inserter)
                     if distance(player, position) > 4.5:
                         return PlannerDecision(
@@ -8987,8 +9049,29 @@ class SiteInputLogisticLineSkill:
         }
         for segment in layout["segments"]:
             existing = segment.get("entity")
+            if not isinstance(existing, dict):
+                continue
+            if _direction_or_default(existing.get("direction"), segment["direction"]) == int(segment["direction"]):
+                continue
+            position = _position(existing)
+            if distance(player, position) > 4.5:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position, offset=1.5)},
+                    "move within reach of misoriented site input logistics belt",
+                )
+            return PlannerDecision(
+                {
+                    "type": "mine",
+                    "unit_number": existing.get("unit_number"),
+                    "name": "transport-belt",
+                    "position": position,
+                },
+                "remove misoriented transport belt from the site input logistics line before spending scarce belts",
+            )
+        for segment in layout["segments"]:
+            existing = segment.get("entity")
             if isinstance(existing, dict):
-                if int(existing.get("direction") or segment["direction"]) != int(segment["direction"]):
+                if _direction_or_default(existing.get("direction"), segment["direction"]) != int(segment["direction"]):
                     position = _position(existing)
                     if distance(player, position) > 4.5:
                         return PlannerDecision(
@@ -9072,7 +9155,7 @@ class SiteInputLogisticLineSkill:
         ]:
             inserter = spec.get("entity")
             if isinstance(inserter, dict):
-                if int(inserter.get("direction") or 0) != int(spec["direction"]):
+                if _direction_or_default(inserter.get("direction"), 0) != int(spec["direction"]):
                     position = _position(inserter)
                     if distance(player, position) > 4.5:
                         return PlannerDecision(
@@ -9456,7 +9539,7 @@ class BuildItemMallSkill:
                     },
                     f"replace {self.target_item} mall output burner inserter now that regular inserters are usable",
                 )
-            if int(inserter.get("direction") or 0) != direction:
+            if _direction_or_default(inserter.get("direction"), 0) != direction:
                 inserter_position = _position(inserter)
                 if distance(player, inserter_position) > 4.5:
                     return PlannerDecision(
@@ -10316,7 +10399,7 @@ def _select_circuit_automation_site(observation: dict[str, Any]) -> dict[str, An
                 "cable_assembler_position": _xy_position(site["cable_assembler_position"]),
                 "circuit_assembler_position": _xy_position(site["circuit_assembler_position"]),
                 "transfer_inserter_position": _xy_position(site["transfer_inserter_position"]),
-                "transfer_inserter_direction": int(site.get("transfer_inserter_direction") or EAST),
+                "transfer_inserter_direction": _direction_or_default(site.get("transfer_inserter_direction"), EAST),
                 "pole_unit_number": site.get("pole_unit_number"),
                 "source_pole_unit_number": site.get("source_pole_unit_number"),
                 "powered": site.get("powered"),

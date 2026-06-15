@@ -5282,19 +5282,111 @@ class PlannerTests(unittest.TestCase):
         )
 
         layout = planner_module._find_site_input_logistic_line_layout(obs, item="iron-plate")
-        corner = next(
+        first_corner = next(
             segment
             for segment in layout["segments"]
-            if abs(segment["position"]["x"] - 5.5) < 0.001 and abs(segment["position"]["y"] - 2.5) < 0.001
+            if abs(segment["position"]["x"] + 2.5) < 0.001 and abs(segment["position"]["y"] - 2.5) < 0.001
         )
-        before_corner = next(
+        before_first_corner = next(
             segment
             for segment in layout["segments"]
-            if abs(segment["position"]["x"] - 4.5) < 0.001 and abs(segment["position"]["y"] - 2.5) < 0.001
+            if abs(segment["position"]["x"] + 3.5) < 0.001 and abs(segment["position"]["y"] - 2.5) < 0.001
+        )
+        second_corner = next(
+            segment
+            for segment in layout["segments"]
+            if abs(segment["position"]["x"] + 2.5) < 0.001 and abs(segment["position"]["y"] - 8.5) < 0.001
         )
 
-        self.assertEqual(before_corner["direction"], planner_module.EAST)
-        self.assertEqual(corner["direction"], planner_module.SOUTH)
+        self.assertEqual(layout["segments"][0]["direction"], layout["source_inserter"]["direction"])
+        self.assertEqual(layout["segments"][-1]["direction"], layout["target_inserter"]["direction"])
+        self.assertEqual(before_first_corner["direction"], planner_module.EAST)
+        self.assertEqual(first_corner["direction"], planner_module.SOUTH)
+        self.assertEqual(second_corner["direction"], planner_module.EAST)
+
+    def test_site_input_logistic_line_keeps_vertical_output_and_input_directions(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 20}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt"),
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": 0, "y": 0},
+                    "recipe": "iron-plate",
+                    "inventories": {"3": {"iron-plate": 20}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 952,
+                    "position": {"x": 5, "y": 10},
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {},
+                },
+            ]
+        )
+
+        layout = planner_module._find_site_input_logistic_line_layout(obs, item="iron-plate")
+
+        self.assertEqual(layout["source_inserter"]["direction"], planner_module.SOUTH)
+        self.assertEqual(layout["target_inserter"]["direction"], planner_module.SOUTH)
+        self.assertEqual(layout["segments"][0]["direction"], planner_module.SOUTH)
+        self.assertEqual(layout["segments"][-1]["direction"], planner_module.SOUTH)
+        self.assertTrue(any(segment["direction"] == planner_module.EAST for segment in layout["segments"][2:-2]))
+
+    def test_site_input_logistic_line_repairs_misoriented_belt_before_missing_segment_when_belts_empty(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt"),
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": 0, "y": 0},
+                    "recipe": "iron-plate",
+                    "inventories": {"3": {"iron-plate": 20}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 952,
+                    "position": {"x": 5, "y": 10},
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {},
+                },
+            ]
+        )
+        layout = planner_module._find_site_input_logistic_line_layout(obs, item="iron-plate")
+        wrong_unit = 970
+        for index, segment in enumerate(layout["segments"]):
+            if index == 2:
+                continue
+            direction = segment["direction"]
+            unit_number = 980 + index
+            if index == 7:
+                direction = planner_module.NORTH if direction != planner_module.NORTH else planner_module.EAST
+                unit_number = wrong_unit
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": unit_number,
+                    "position": segment["position"],
+                    "direction": direction,
+                    "inventories": {},
+                }
+            )
+        obs["player"]["position"] = layout["segments"][7]["position"]
+
+        decision = SiteInputLogisticLineSkill(20, item="iron-plate").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], wrong_unit)
+        self.assertIn("misoriented transport belt", decision.reason)
 
     def test_site_input_logistic_line_does_not_relocate_existing_source_endpoint_inserter(self):
         obs = powered_automation_observation()

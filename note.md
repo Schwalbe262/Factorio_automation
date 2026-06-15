@@ -9428,3 +9428,123 @@ note.md rules:
 - Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
 - Token usage: not recorded for this loop / weekly quota unavailable
 
+## 2026-06-16 00:56:38 +09:00 - Loop 429
+- Part: skill
+- Goal: launch_rocket_program / build_gear_belt_mall_logistics
+- Hypothesis: Running `build_gear_belt_mall_logistics` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_gear_belt_mall_logistics` for up to 80 step(s).
+  - Tracked `transport-belt` from 0 to 6.
+  - Wrote raw action trace to `logs\codex-gear-belt-logistics-continue-20260616.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_gear_belt_mall_logistics`.
+  - Target item candidate: `transport-belt` target `20`.
+- Metrics:
+  - Steps: 4.
+  - Status: ok.
+  - Duration: 18.641s.
+  - transport-belt: 0 -> 6 (delta 6).
+  - Log: `logs\codex-gear-belt-logistics-continue-20260616.jsonl`.
+  - Metadata: `{"delta_item_count":6,"final_item_count":6,"initial_item_count":0,"max_steps":80,"target":20}`.
+- Result: Completed: gear-fed belt mall logistics produced transport belts in assembler output: 6
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 00:56:54 +09:00 - Loop 430
+- Part: skill
+- Goal: launch_rocket_program / build_site_input_logistic_line
+- Hypothesis: Running `build_site_input_logistic_line` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_site_input_logistic_line` for up to 100 step(s).
+  - Tracked `transport-belt` from 6 to 6.
+  - Wrote raw action trace to `logs\codex-site-input-line-continue-20260616.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_site_input_logistic_line`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 2.
+  - Status: failed.
+  - Duration: 2.812s.
+  - transport-belt: 6 -> 6 (delta 0).
+  - Log: `logs\codex-site-input-line-continue-20260616.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":6,"initial_item_count":6,"max_steps":100,"target":40}`.
+- Result: Loop stopped: missing inserter for site consumer input inserter; refusing hand-crafted gear workaround
+- Failure reason: missing inserter for site consumer input inserter; refusing hand-crafted gear workaround
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 00:57:27 +09:00 - Loop 431
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1 step(s).
+  - Tracked `transport-belt` from 6 to 6.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260615-155724.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 2.781s.
+  - transport-belt: 6 -> 6 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260615-155724.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":6,"initial_item_count":6,"max_steps":1,"target":40}`.
+- Result: Loop stopped: max steps reached: 1
+- Failure reason: max steps reached: 1
+- Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 01:08:34 +09:00 - Loop 432
+- Part: skill
+- Goal: launch_rocket_program / build_site_input_logistic_line
+- Hypothesis: Running `build_site_input_logistic_line` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_site_input_logistic_line` for up to 80 step(s).
+  - Tracked `transport-belt` from 6 to 0.
+  - Wrote raw action trace to `logs\codex-site-input-role-aware-repair-20260616.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_site_input_logistic_line`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 10.
+  - Status: failed.
+  - Duration: 19.672s.
+  - transport-belt: 6 -> 0 (delta -6).
+  - Log: `logs\codex-site-input-role-aware-repair-20260616.jsonl`.
+  - Metadata: `{"delta_item_count":-6,"final_item_count":0,"initial_item_count":6,"max_steps":80,"target":40}`.
+- Result: Loop stopped: site input logistics needs transport belts from the belt mall; refusing hand-crafted belts or item shuttle
+- Failure reason: site input logistics needs transport belts from the belt mall; refusing hand-crafted belts or item shuttle
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 01:17:19 +09:00 - Loop 433
+- Part: skill
+- Goal: launch_rocket_program / build_site_input_logistic_line
+- Hypothesis: Running `build_site_input_logistic_line` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_site_input_logistic_line` for up to 30 step(s).
+  - Tracked `transport-belt` from 0 to 0.
+  - Wrote raw action trace to `logs\codex-site-input-direction-zero-repair-20260616.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_site_input_logistic_line`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 8.
+  - Status: failed.
+  - Duration: 15.672s.
+  - transport-belt: 0 -> 0 (delta 0).
+  - Log: `logs\codex-site-input-direction-zero-repair-20260616.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":30,"target":40}`.
+- Result: Loop stopped: missing inserter for site consumer input inserter; refusing hand-crafted gear workaround
+- Failure reason: missing inserter for site consumer input inserter; refusing hand-crafted gear workaround
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 01:18:14 +09:00 - Part 129 layout correction
+- Applied user correction for L-shaped belt turns and inserter flow roles: site-input routes now use output-axis/cross-axis/input-axis doglegs and preserve `NORTH=0` direction values.
+- Validation: `pytest -q` passed with 602 tests; live iron-plate site-input route reports no missing or misoriented belt segments.
+- Remaining blocker: target site consumer input inserter is missing; no transport belts or inserters are currently available in inventory/output.
+

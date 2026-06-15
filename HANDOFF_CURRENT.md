@@ -3,14 +3,14 @@
 ## Current status
 
 - Branch `chore/part129-red-science-logistics` is active for Part 129 red-science logistics and layout repair.
-- Planner now covers resource-safe gear/belt relocation, early coal drill+chest supply, user-output mall chests, science/lab spacing, regular inserter preference, direct assembler transfer, and site-input belts.
+- Planner now covers role-aware site-input dogleg belts, NORTH=0 direction handling, resource-safe gear/belt relocation, early coal drill+chest supply, user-output mall chests, lab spacing, regular inserter preference, and direct assembler transfer.
 - Slurm idle layout work now requests confirmed `learned_skills` and records only evidence-backed reusable layout skills.
-- Live strategy now selects `setup_power` when the gear/belt mall is unpowered; current live power run hit max steps while waiting on boiler fuel burn.
+- Live site-input iron-plate belt route now has `missing_count=0` and `misoriented=[]`; current blocker is missing target input inserter.
 
 ## Current objective
 
 - Finish Part 129 by recording current Codex token usage, committing, and pushing.
-- Next gameplay work: continue `setup_power`, then resume belt mall output and site-input logistics once power is stable.
+- Next gameplay work: produce or recover a regular inserter for the site consumer input, then resume gear/belt and red-science logistics.
 
 ## Active branch / part
 
@@ -29,23 +29,21 @@
 
 ## Last validation
 
-- `pytest -q` passed: 600 tests.
-- Live site-input retry no longer fails on mixed integer/half-tile belt coordinates; latest blocker is powered belt automation.
-- Live strategy check selects `setup_power` with `gear_belt_mall_status=no_power`.
+- `pytest -q` passed: 602 tests.
+- Live site-input retry repaired role-aware dogleg belts; latest blocker is missing inserter for `site consumer input inserter`.
 
 ## Current blocker
 
-- Live gear/belt assemblers are placed off resources and 4 tiles apart, but currently report `no_power`.
-- `setup_power` run inserted boiler fuel then reached max steps waiting for fuel burn/steam recovery.
+- Inventory and belt assembler output currently have no transport belts or inserters; site-input route is built but target inserter is absent.
 
 ## Next steps
 
 1. Record current Codex thread token usage once.
 2. Commit and push Part 129 branch.
-3. Continue `run-no-mod-strategy-step --max-steps 60` or direct `setup_power` until steam/electric recovery is observed.
-4. Re-run `build_gear_belt_mall_logistics` to refill belt output.
-5. Re-run `build_site_input_logistic_line` for iron plates; verify corner belt direction and endpoint inserter roles.
-6. Then continue early coal supply/fuel logistics so hand-mined coal does not recur.
+3. Build or recover an `inserter` for the site consumer input without hand-crafted gear workaround.
+4. Re-run `build_site_input_logistic_line` and verify target inserter direction SOUTH into the gear assembler.
+5. Re-run `build_gear_belt_mall_logistics` to refill transport-belt output.
+6. Continue red science/logistics research once iron input and belt output recover.
 
 ## Token/context policy
 
@@ -65,8 +63,9 @@
 
 - Added confirmed idle Slurm `learned_skills` flow with journal promotion only for confirmed reusable lessons.
 - Added route corner belt direction, endpoint inserter role checks, and source endpoint protection for site-input logistics.
+- Added role-aware dogleg site-input routes and fixed `NORTH=0` direction comparisons so north-facing belts/inserters are not treated as missing direction.
 - Added strategy guardrail so unpowered gear/belt mall forces `setup_power` before iron/site logistics.
-- Full validation now passes `600 passed`.
+- Full validation now passes `602 passed`.
 
 ## Risks and gotchas
 

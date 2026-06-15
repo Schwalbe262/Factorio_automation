@@ -106,6 +106,7 @@ def layout_learning_request_context() -> dict[str, Any]:
             "replace burner inserters once regular inserters are available",
             "use direct assembler-to-assembler inserter transfer when machines are within reach",
             "turn belts by setting the corner belt tile to the outgoing segment direction",
+            "route offset site links as output-axis, cross-axis, input-axis doglegs so the first and last belts match endpoint inserter roles",
             "orient output inserters to drop away from producer machines and input inserters to drop into consumer machines",
             "connect automated producer/consumer sites with belts after belt automation starts",
         ],

@@ -323,6 +323,7 @@ def compact_layout_improvement_payload(payload: dict[str, Any]) -> dict[str, Any
             "Use site_placement_search to distinguish missing build items from a bad physical anchor.",
             "Flag belt-capacity risk when required item flow approaches or exceeds belt capacity.",
             "For routed belts, the corner tile must point toward the outgoing segment so the belt visually and mechanically turns.",
+            "For offset producer-consumer links, prefer dogleg routes whose first belt follows the producer output side and whose last belt follows the consumer input side.",
             "For inserters, output endpoints drop away from the producer and input endpoints drop into the consumer.",
             "Return learned_skills only for reusable techniques that are confirmed by candidate, sandbox, or before/after evidence; speculative lessons must be omitted.",
             "The output can be used later by a deterministic executor after explicit approval.",

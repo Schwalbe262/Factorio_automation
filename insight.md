@@ -827,3 +827,25 @@ Promote to insight.md only if:
 - Evidence: Site-input logistics tests now verify corner belt direction, source/output and target/input inserter direction, and protection against reusing an already-built source endpoint inserter as target material.
 - Remaining risk: The rule is covered for site-input logistics; broader generated layouts still need the same role-aware endpoint checks.
 
+## 2026-06-16 00:56:38 +09:00 - Insight 98
+- Source loop: Loop 429
+- Improvement: transport-belt increased by 6 during build_gear_belt_mall_logistics.
+- Before: transport-belt = 0
+- After: transport-belt = 6
+- Evidence: `{"delta":6,"final":6,"initial":0,"item":"transport-belt","source_loop":429,"target":20}`
+- Remaining risk: Target is not complete yet: 6/20.
+
+## 2026-06-16 00:56:38 +09:00 - Insight 99
+- Source loop: Loop 429
+- Improvement: build_gear_belt_mall_logistics completed after 4 step(s): gear-fed belt mall logistics produced transport belts in assembler output: 6
+- Before: not recorded
+- After: transport-belt = 6
+- Evidence: `{"item":"transport-belt","item_count":6,"source_loop":429,"steps":4,"target":20}`
+- Remaining risk: Target is not complete yet: 6/20.
+
+## 2026-06-16 01:18:14 +09:00 - Insight 100
+- Source: user correction and live site-input repair during Part 129.
+- Improvement: Offset producer-consumer belt links should use dogleg routes whose first belt follows the producer output side and whose last belt follows the consumer input side; direction value `0` is valid NORTH and must not fall through to defaults.
+- Evidence: Planner tests cover horizontal and vertical role-aware site-input doglegs plus scarce-belt repair of misoriented segments; live iron-plate site-input route now has no missing or misoriented belt segments.
+- Remaining risk: Target input inserter is still missing, so item delivery into the gear assembler is not yet complete.
+
