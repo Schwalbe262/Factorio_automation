@@ -335,11 +335,14 @@ def _scheduler_task_command(task: dict[str, Any]) -> str:
     task_id = str(task["id"])
     task_json = shlex.quote(f".factorio-ai-scheduler-tasks/{task_id}.json")
     result_json = shlex.quote(f".factorio-ai-scheduler-tasks/{task_id}.result.json")
+    safe_task_id = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in task_id)[:96] or "task"
+    vllm_log_base = shlex.quote(f"logs/vllm-scheduler-{safe_task_id}")
     startup_seconds = _int_env("FACTORIO_AI_VLLM_STARTUP_SECONDS", 240, 1)
     return f"""set -euo pipefail
 mkdir -p .factorio-ai-scheduler-tasks logs
 TASK_JSON={task_json}
 RESULT_JSON={result_json}
+VLLM_LOG_BASE={vllm_log_base}
 if [[ ! -s "$TASK_JSON" ]]; then
   python3 - "$TASK_JSON" <<'PY'
 import json
@@ -363,19 +366,40 @@ fi
 if [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ] && [ -z "${{FACTORIO_AI_LLM_BASE_URL:-}}" ]; then
   export FACTORIO_AI_LLM_BASE_URL="http://127.0.0.1:${{FACTORIO_AI_VLLM_PORT:-8000}}/v1"
 fi
-if [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ] && command -v vllm >/dev/null 2>&1; then
+if [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ]; then
+  VLLM_START_ERROR=""
   if ! python - <<'PY' >/dev/null 2>&1
 import os, urllib.request
 url = os.environ.get("FACTORIO_AI_LLM_BASE_URL", "").rstrip("/") + "/models"
 urllib.request.urlopen(url, timeout=5).read()
 PY
   then
-    nohup vllm serve "$FACTORIO_AI_VLLM_MODEL" \
-      --host 127.0.0.1 \
-      --port "${{FACTORIO_AI_VLLM_PORT:-8000}}" \
-      ${{FACTORIO_AI_VLLM_ARGS:-}} > "logs/vllm-scheduler-${{SLURM_JOB_ID:-task}}.out" 2> "logs/vllm-scheduler-${{SLURM_JOB_ID:-task}}.err" &
+    if command -v vllm >/dev/null 2>&1; then
+      nohup vllm serve "$FACTORIO_AI_VLLM_MODEL" --host 127.0.0.1 --port "${{FACTORIO_AI_VLLM_PORT:-8000}}" ${{FACTORIO_AI_VLLM_ARGS:-}} > "$VLLM_LOG_BASE.out" 2> "$VLLM_LOG_BASE.err" &
+    elif python - <<'PY' >/dev/null 2>&1
+import importlib.util
+raise SystemExit(0 if importlib.util.find_spec("vllm") else 1)
+PY
+    then
+      nohup python -m vllm.entrypoints.openai.api_server --model "$FACTORIO_AI_VLLM_MODEL" --host 127.0.0.1 --port "${{FACTORIO_AI_VLLM_PORT:-8000}}" ${{FACTORIO_AI_VLLM_ARGS:-}} > "$VLLM_LOG_BASE.out" 2> "$VLLM_LOG_BASE.err" &
+    else
+      VLLM_START_ERROR="vllm command/module not found after conda activation"
+      printf '%s\\n' "$VLLM_START_ERROR" > "$VLLM_LOG_BASE.err"
+    fi
   fi
-  python - <<'PY'
+  if [ -n "$VLLM_START_ERROR" ]; then
+    python - "$RESULT_JSON" "$FACTORIO_AI_LLM_BASE_URL" "$VLLM_LOG_BASE.err" "$VLLM_START_ERROR" <<'PY'
+import json
+import sys
+result_path, base_url, log_path, error = sys.argv[1:5]
+payload = {{"ok": False, "error": error, "llm_error": error, "llm_base_url": base_url, "vllm_log": log_path}}
+with open(result_path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle)
+PY
+    cat "$RESULT_JSON"
+    exit 1
+  fi
+  if ! python - <<'PY'
 import os, time, urllib.request
 deadline = time.time() + {startup_seconds}
 url = os.environ.get("FACTORIO_AI_LLM_BASE_URL", "").rstrip("/") + "/models"
@@ -385,8 +409,21 @@ while time.time() < deadline:
         raise SystemExit(0)
     except Exception:
         time.sleep(2)
-raise SystemExit(0)
+raise SystemExit(1)
 PY
+  then
+    python - "$RESULT_JSON" "$FACTORIO_AI_LLM_BASE_URL" "$VLLM_LOG_BASE.err" <<'PY'
+import json
+import sys
+result_path, base_url, log_path = sys.argv[1:4]
+error = "vllm endpoint not ready before FACTORIO_AI_VLLM_STARTUP_SECONDS"
+payload = {{"ok": False, "error": error, "llm_error": error, "llm_base_url": base_url, "vllm_log": log_path}}
+with open(result_path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle)
+PY
+    cat "$RESULT_JSON"
+    exit 1
+  fi
 fi
 python -m factorio_ai.slurm_worker --task "$TASK_JSON" --result "$RESULT_JSON"
 cat "$RESULT_JSON"
@@ -1215,6 +1252,11 @@ def _scheduler_status_payload(task_type: str | None = None) -> dict[str, Any]:
         needed_gpus=needed_gpus,
     )
     resource_fit_pending_gpu_tasks = sum(resource_fit_pending_by_model.values())
+    active_layout_tasks = (
+        _scheduler_active_layout_task_count(task_rows, wanted_gpu_models, account)
+        if task_type == LAYOUT_IMPROVEMENT_TASK_TYPE
+        else 0
+    )
     if wanted_gpu_models:
         has_gpu_queue_capacity = any(
             ready_slots_by_model.get(model, 0) > resource_fit_pending_by_model.get(model, 0)
@@ -1226,7 +1268,9 @@ def _scheduler_status_payload(task_type: str | None = None) -> dict[str, Any]:
     missing = []
     if not has_llm_runtime:
         missing.append("FACTORIO_AI_VLLM_MODEL or FACTORIO_AI_LLM_BASE_URL")
-    if not has_gpu_path:
+    if active_layout_tasks > 0:
+        missing.append("active scheduler layout task")
+    elif not has_gpu_path:
         if scheduler_ready_free_gpus <= 0:
             missing.append("ready scheduler GPU allocation")
         else:
@@ -1260,6 +1304,7 @@ def _scheduler_status_payload(task_type: str | None = None) -> dict[str, Any]:
             "scheduler_gpu_queue_capacity": has_gpu_queue_capacity,
             "pending_gpu_tasks": pending_gpu_tasks,
             "resource_fit_pending_gpu_tasks": resource_fit_pending_gpu_tasks,
+            "active_layout_tasks": active_layout_tasks,
             "recent_tasks": [_scheduler_compact_task_row(row) for row in task_rows[:5]],
         },
         "remediation": None
@@ -1273,6 +1318,31 @@ def _scheduler_status_payload(task_type: str | None = None) -> dict[str, Any]:
             "gpu_model_candidates": gpu_model_candidates,
         },
     }
+
+
+def _scheduler_active_layout_task_count(
+    task_rows: list[dict[str, Any]],
+    wanted_gpu_models: set[str],
+    account: str,
+) -> int:
+    active_states = {"attaching", "running", "starting"}
+    count = 0
+    for row in task_rows:
+        name = str(row.get("name") or "")
+        if not name.startswith("factorio-layout-improvement-request"):
+            continue
+        row_account = str(row.get("account_name") or account)
+        if row_account != account:
+            continue
+        if str(row.get("status") or "").lower() not in active_states:
+            continue
+        model = _scheduler_gpu_model_name(row.get("gpu_model"))
+        if wanted_gpu_models and model and model not in wanted_gpu_models:
+            continue
+        if int(row.get("gpus") or 0) <= 0:
+            continue
+        count += 1
+    return count
 
 
 def _scheduler_resource_fit_pending_gpu_tasks_by_model(

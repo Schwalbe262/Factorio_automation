@@ -582,6 +582,21 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertIn("/remote/factorio-ai/.factorio-ai-scheduler-tasks/.t1.", uploaded[0]["target"])
         self.assertTrue(any("mv \"$REMOTE_TEMP\" \"$REMOTE_TARGET\"" in script for script in remote_scripts))
 
+    def test_scheduler_task_command_requires_vllm_endpoint_when_model_requested(self):
+        from factorio_ai import remote_slurm
+
+        with patch.dict("os.environ", {"FACTORIO_AI_VLLM_STARTUP_SECONDS": "7"}, clear=True):
+            command = remote_slurm._scheduler_task_command(
+                {"id": "layout-test", "type": "layout_improvement_request", "payload": {}}
+            )
+
+        self.assertIn("python -m vllm.entrypoints.openai.api_server", command)
+        self.assertIn("vllm command/module not found after conda activation", command)
+        self.assertIn("vllm endpoint not ready before FACTORIO_AI_VLLM_STARTUP_SECONDS", command)
+        self.assertIn("VLLM_LOG_BASE=logs/vllm-scheduler-layout-test", command)
+        self.assertIn("$VLLM_LOG_BASE.err", command)
+        self.assertIn("exit 1", command)
+
     def test_layout_scheduler_task_submission_selects_ready_a6000_candidate(self):
         from factorio_ai import remote_slurm
 
@@ -788,6 +803,59 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertEqual(status["missing"], ["scheduler GPU queue capacity"])
         self.assertEqual(status["remote"]["scheduler_ready_gpu_slots"], 1)
         self.assertEqual(status["remote"]["resource_fit_pending_gpu_tasks"], 1)
+
+    def test_layout_scheduler_status_waits_when_layout_task_running(self):
+        from factorio_ai import remote_slurm
+
+        def fake_api(path, timeout=0):
+            if path == "/api/health":
+                return {"ok": True}
+            if path == "/api/allocations":
+                return [
+                    {
+                        "account_name": "r1jae262",
+                        "state": "warm",
+                        "total_gpus": 2,
+                        "free_gpus": 1,
+                        "total_cpus": 3,
+                        "free_cpus": 3,
+                        "total_memory_mb": 32768,
+                        "free_memory_mb": 32768,
+                        "gpu_model": "a6000",
+                    }
+                ]
+            if path == "/api/gpu-capacity":
+                return [{"gpu_model": "a6000", "scheduler_owned_gpus": 2, "scheduler_free_gpus": 1}]
+            if path == "/api/tasks":
+                return [
+                    {
+                        "name": "factorio-layout-improvement-request-current",
+                        "status": "running",
+                        "account_name": "r1jae262",
+                        "gpu_model": "a6000",
+                        "cpus": 3,
+                        "memory_mb": 32768,
+                        "gpus": 1,
+                    }
+                ]
+            raise AssertionError(path)
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FACTORIO_AI_SLURM_MODE": "scheduler",
+                    "FACTORIO_AI_VLLM_MODEL": "Qwen/Qwen3.5-4B",
+                    "FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS": "a6000ada,a6000",
+                },
+            ),
+            patch("factorio_ai.remote_slurm._scheduler_api_json", side_effect=fake_api),
+        ):
+            status = remote_slurm.layout_improvement_status()
+
+        self.assertFalse(status["llm_ready"])
+        self.assertEqual(status["missing"], ["active scheduler layout task"])
+        self.assertEqual(status["remote"]["active_layout_tasks"], 1)
 
     def test_scheduler_status_reports_ready_with_vllm_and_scheduler_gpu(self):
         from factorio_ai import remote_slurm
