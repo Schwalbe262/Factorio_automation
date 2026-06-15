@@ -643,7 +643,16 @@ local function technology_snapshot(technology)
   return { name = technology.name, researched = technology.researched, enabled = technology.enabled, research_unit_count = unit_count, research_unit_energy = unit_energy, ingredients = ingredients }
 end
 local function collect_research()
-  local watched = { "steam-power", "electronics", "automation-science-pack", "automation", "logistics", "steel-processing", "automation-2", "railway", "oil-processing", "rocket-silo" }
+  local watched = {
+    "steam-power", "electronics", "automation-science-pack", "automation", "logistics", "long-inserters",
+    "steel-processing", "advanced-material-processing", "advanced-material-processing-2",
+    "automation-2", "automation-3", "fast-inserter", "stack-inserter",
+    "modules", "speed-module", "speed-module-2", "speed-module-3",
+    "productivity-module", "productivity-module-2", "productivity-module-3",
+    "efficiency-module", "efficiency-module-2", "efficiency-module-3",
+    "effect-transmission", "electric-energy-distribution-1", "electric-energy-distribution-2",
+    "railway", "oil-processing", "rocket-silo"
+  }
   local technologies = {}
   for _, name in pairs(watched) do
     local snapshot = technology_snapshot(agent.force.technologies[name])
@@ -654,6 +663,25 @@ local function collect_research()
   pcall(function() if agent.force.current_research then current = agent.force.current_research.name end end)
   pcall(function() progress = agent.force.research_progress end)
   return { current = current, progress = progress, technologies = technologies }
+end
+local function collect_recipe_unlocks()
+  local watched = {
+    "long-handed-inserter", "fast-inserter", "stack-inserter", "bulk-inserter",
+    "assembling-machine-2", "assembling-machine-3",
+    "steel-furnace", "electric-furnace",
+    "speed-module", "speed-module-2", "speed-module-3",
+    "productivity-module", "productivity-module-2", "productivity-module-3",
+    "efficiency-module", "efficiency-module-2", "efficiency-module-3",
+    "beacon", "medium-electric-pole", "big-electric-pole", "substation"
+  }
+  local recipes = {}
+  for _, name in pairs(watched) do
+    local recipe = agent.force.recipes[name]
+    if recipe then
+      recipes[name] = { name = recipe.name, enabled = recipe.enabled }
+    end
+  end
+  return recipes
 end
 local function rotate_offset(offset, turns)
   local x = offset.x
@@ -940,7 +968,8 @@ json_reply({
   automation_sites = automation_sites,
   pollution = { at_player = surface_pollution(surface, origin) },
   factory_events = {},
-  research = collect_research()
+  research = collect_research(),
+  recipe_unlocks = collect_recipe_unlocks()
 })
 """
 

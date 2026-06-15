@@ -454,6 +454,22 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 100)
         self.assertIn("costed relocation", decision.reason)
 
+    def test_gear_belt_mall_relocation_continues_after_first_assembler_recovered(self):
+        obs = long_gear_mall_relocation_observation()
+        obs["inventory"] = {"small-electric-pole": 20, "assembling-machine-1": 1}
+        obs["player"]["position"] = {"x": 3.5, "y": 0.5}
+        obs["entities"] = [entity for entity in obs["entities"] if entity.get("unit_number") != 100]
+        for entity in obs["entities"]:
+            if entity.get("unit_number") == 101:
+                entity["recipe"] = "small-electric-pole"
+                entity["inventories"] = {}
+
+        decision = GearBeltMallRelocationSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 101)
+        self.assertIn("costed relocation", decision.reason)
+
     def test_power_pole_mall_reuses_existing_powered_assembler_before_crafting_new_assembler(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"wood": 4, "copper-cable": 8}
@@ -643,6 +659,79 @@ class PlannerTests(unittest.TestCase):
         entities = decoded["blueprint"]["entities"]
         self.assertTrue(any(entity["name"] == "long-handed-inserter" for entity in entities))
 
+    def test_factory_layout_marks_available_modules_as_considered_not_used(self):
+        obs = base_observation()
+        obs["inventory"]["speed-module"] = 1
+        obs["entities"] = [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 920,
+                "recipe": "electronic-circuit",
+                "position": {"x": 10, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        ]
+
+        candidate = next(
+            item
+            for item in factory_layout_simulation_candidates(obs)
+            if item["candidate_id"] == "green-circuit-3-cable-2-circuit-cell"
+        )
+
+        self.assertIn("speed-module", candidate["considered_unlocked_items"])
+        self.assertIn("speed-module", candidate["unused_unlocked_items"])
+        self.assertTrue(candidate["simulation"]["delta"]["unlock_aware_considered"])
+
+    def test_factory_layout_reranks_when_long_handed_recipe_is_enabled_without_technology(self):
+        obs = base_observation()
+        obs["recipe_unlocks"] = {"long-handed-inserter": {"enabled": True}}
+        obs["entities"] = [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 925,
+                "recipe": "electronic-circuit",
+                "position": {"x": 10, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        ]
+
+        candidate = next(
+            item
+            for item in factory_layout_simulation_candidates(obs)
+            if item["candidate_id"] == "green-circuit-long-handed-3-cable-2-circuit-cell"
+        )
+
+        self.assertTrue(candidate["layout_unlocks_considered"]["long_handed_inserter"]["recipe_unlocked"])
+        self.assertIn("long-handed-inserter", candidate["uses_unlocked_items"])
+
+    def test_factory_layout_uses_higher_tier_assembler_when_recipe_is_enabled(self):
+        obs = base_observation()
+        obs["recipe_unlocks"] = {"assembling-machine-2": {"enabled": True}}
+        obs["entities"] = [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 926,
+                "recipe": "electronic-circuit",
+                "position": {"x": 10, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        ]
+
+        candidate = next(
+            item
+            for item in factory_layout_simulation_candidates(obs)
+            if item["candidate_id"] == "green-circuit-3-cable-2-circuit-cell"
+        )
+
+        self.assertIn("assembling-machine-2", candidate["uses_unlocked_items"])
+        self.assertEqual(candidate["simulation"]["after"]["assembler_tier"], "assembling-machine-2")
+        decoded = decode_blueprint_string(candidate["blueprint"]["exchange_string"])
+        entities = decoded["blueprint"]["entities"]
+        self.assertTrue(any(entity["name"] == "assembling-machine-2" for entity in entities))
+
     def test_factory_layout_uses_long_handed_starter_mall_variant_after_unlock(self):
         obs = base_observation()
         obs["research"]["technologies"]["long-inserters"] = {"researched": True}
@@ -772,10 +861,39 @@ class PlannerTests(unittest.TestCase):
             {"name": "iron-ore", "position": {"x": 398, "y": 0}, "distance": 398},
         ]
         candidates = factory_layout_simulation_candidates(obs)
-        candidate = next(item for item in candidates if item["candidate_id"] == "iron-plate-parallel-smelting-columns")
+        candidate = next(item for item in candidates if item["candidate_id"] == "iron-plate-stone-furnace-parallel-smelting-columns")
         before_entities = decode_blueprint_string(candidate["before_blueprint"]["exchange_string"])["blueprint"]["entities"]
         xs = [float(entity["position"]["x"]) for entity in before_entities]
         self.assertLess(max(xs) - min(xs), 80.0)
+
+    def test_factory_layout_uses_higher_tier_furnace_when_recipe_is_enabled(self):
+        obs = base_observation()
+        obs["recipe_unlocks"] = {"steel-furnace": {"enabled": True}}
+        obs["entities"] = []
+        for base_x in (0, 400):
+            obs["entities"].extend(
+                [
+                    {"name": "burner-mining-drill", "unit_number": base_x + 1, "position": {"x": base_x - 2, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "transport-belt", "unit_number": base_x + 2, "position": {"x": base_x, "y": 0}, "direction": 4, "inventories": {}},
+                    {"name": "transport-belt", "unit_number": base_x + 3, "position": {"x": base_x + 1, "y": 0}, "direction": 4, "inventories": {}},
+                    {"name": "burner-inserter", "unit_number": base_x + 4, "position": {"x": base_x + 2, "y": 0}, "inventories": {"1": {"coal": 1}}},
+                    {"name": "stone-furnace", "unit_number": base_x + 5, "position": {"x": base_x + 3, "y": 0}, "inventories": {"1": {"coal": 1}, "2": {"iron-ore": 1}}},
+                ]
+            )
+        obs["resources"] = [
+            {"name": "iron-ore", "position": {"x": -2, "y": 0}, "distance": 2},
+            {"name": "iron-ore", "position": {"x": 398, "y": 0}, "distance": 398},
+        ]
+
+        candidate = next(
+            item
+            for item in factory_layout_simulation_candidates(obs)
+            if item["candidate_id"] == "iron-plate-steel-furnace-parallel-smelting-columns"
+        )
+
+        self.assertIn("steel-furnace", candidate["uses_unlocked_items"])
+        self.assertEqual(candidate["simulation"]["after"]["furnace_tier"], "steel-furnace")
+        self.assertGreater(candidate["simulation"]["delta"]["plate_per_minute"], 0)
 
     def test_factory_layout_simulates_belt_capacity_bottleneck(self):
         obs = base_observation()
@@ -3035,6 +3153,63 @@ class PlannerTests(unittest.TestCase):
         decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
         self.assertEqual(decision.action["type"], "insert")
         self.assertIn(decision.action["item"], {"iron-gear-wheel", "iron-plate"})
+
+    def test_power_pole_mall_takes_existing_copper_output_before_refueling_cell(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 6, "y": 0}}
+        obs["inventory"] = {}
+        obs["craftable"] = {}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="small-electric-pole"),
+                {
+                    "name": "burner-mining-drill",
+                    "unit_number": 930,
+                    "position": {"x": 4, "y": 0},
+                    "direction": 4,
+                    "distance": 2,
+                    "inventories": {},
+                },
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 931,
+                    "position": {"x": 6, "y": 0},
+                    "distance": 0,
+                    "recipe": "copper-plate",
+                    "status_name": "no_fuel",
+                    "inventories": {"3": {"copper-plate": 11}},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("small-electric-pole", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "copper-plate")
+        self.assertEqual(decision.action["unit_number"], 931)
+
+    def test_power_pole_mall_mines_tree_when_recipe_needs_wood(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 4, "y": 4}}
+        obs["inventory"] = {}
+        obs["craftable"] = {}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="small-electric-pole", inventory={"copper-cable": 8}),
+                {
+                    "name": "tree-11",
+                    "type": "tree",
+                    "position": {"x": 5, "y": 4},
+                    "distance": 1,
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("small-electric-pole", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "tree-11")
+        self.assertIn("build item mall wood", decision.reason)
 
     def test_build_item_mall_builds_gear_assembler_instead_of_handcrafting_science_input(self):
         obs = powered_automation_observation()

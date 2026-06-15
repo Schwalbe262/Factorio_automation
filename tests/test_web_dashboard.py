@@ -165,6 +165,13 @@ class WebDashboardTests(unittest.TestCase):
                             "candidate_id": "green-circuit-3-cable-2-circuit-cell",
                             "target_pattern": "3 copper-cable assemblers feeding 2 electronic-circuit assemblers",
                             "not_applied": True,
+                            "considered_unlocked_items": ["long-handed-inserter", "speed-module"],
+                            "uses_unlocked_items": ["long-handed-inserter"],
+                            "unused_unlocked_items": ["speed-module"],
+                            "layout_unlocks_considered": {
+                                "long_handed_inserter": {"available": True, "researched": True, "stock": 0},
+                                "modules": {"speed-module": {"available": True, "researched": False, "stock": 1}},
+                            },
                             "before_blueprint": {
                                 "label": "before-green-circuit",
                                 "format": "factorio-blueprint-string",
@@ -381,6 +388,10 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("virtual", html)
         self.assertIn("agent-map", html)
         self.assertIn("green-circuit-3-cable-2-circuit-cell", html)
+        self.assertIn("Unlock-aware", html)
+        self.assertIn("considered=long-handed-inserter, speed-module", html)
+        self.assertIn("used=long-handed-inserter", html)
+        self.assertIn("not_used=speed-module", html)
         self.assertIn("copy-blueprint", html)
         self.assertIn("layout-candidate-grid", html)
         self.assertIn("layout-candidate-card", html)

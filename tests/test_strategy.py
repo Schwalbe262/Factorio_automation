@@ -119,6 +119,15 @@ def gear_mall_needs_long_plate_line_without_belts_observation() -> dict:
     return observation
 
 
+def partial_gear_mall_relocation_observation() -> dict:
+    observation = gear_mall_needs_long_plate_line_without_belts_observation()
+    observation["inventory"] = {"small-electric-pole": 20, "assembling-machine-1": 1}
+    observation["entities"] = [entity for entity in observation["entities"] if entity.get("unit_number") != 100]
+    observation["entities"][0]["recipe"] = "small-electric-pole"
+    observation["entities"][0]["inventories"] = {}
+    return observation
+
+
 def burner_drill_replacement_observation(*, electric_researched: bool = False) -> dict:
     return {
         "inventory": {"automation-science-pack": 25, "iron-plate": 40, "copper-plate": 20},
@@ -788,6 +797,26 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("costed gear/belt mall relocation", result["blockers"])
         self.assertIn("source_distance_tiles=152.5", result["evidence"])
 
+    def test_reconcile_keeps_partial_relocation_ahead_of_electric_drill_research(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "research_electric_mining_drill",
+                "priority": 90,
+                "reason": "Burner drills remain.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            partial_gear_mall_relocation_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "research_electric_mining_drill")
+        self.assertIn("gear_assembler_unit=inventory", result["evidence"])
+        self.assertIn("costed gear/belt mall relocation", result["blockers"])
+
     def test_reconcile_promotes_fuel_dependent_expansion_to_coal_supply(self):
         result = reconcile_strategy_decision(
             {
@@ -1416,7 +1445,7 @@ class StrategyTests(unittest.TestCase):
         payload = make_strategy_payload(
             "launch_rocket_program",
             {
-                "inventory": {"speed-module": 1},
+                "inventory": {"speed-module": 1, "assembling-machine-2": 1, "beacon": 1},
                 "entities": [],
                 "resources": [],
                 "research": {"technologies": {"long-inserters": {"researched": True}}},
@@ -1428,6 +1457,33 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(capability["researched"])
         self.assertIn("denser", capability["layout_impact"])
         self.assertTrue(payload["layout_improvement"]["layout_capabilities"]["modules"]["speed-module"]["available"])
+        self.assertTrue(payload["layout_improvement"]["layout_capabilities"]["machines"]["assembling-machine-2"]["available"])
+        self.assertTrue(payload["layout_improvement"]["layout_capabilities"]["beacons"]["beacon"]["available"])
+        self.assertTrue(payload["layout_improvement"]["layout_capabilities"]["rerank_trigger"])
+
+    def test_layout_context_uses_recipe_unlock_when_technology_name_is_missing(self):
+        payload = make_strategy_payload(
+            "launch_rocket_program",
+            {
+                "inventory": {},
+                "entities": [],
+                "resources": [],
+                "research": {"technologies": {}},
+                "recipe_unlocks": {
+                    "long-handed-inserter": {"enabled": True},
+                    "assembling-machine-2": {"enabled": True},
+                    "beacon": {"enabled": True},
+                },
+            },
+        )
+
+        capabilities = payload["layout_improvement"]["layout_capabilities"]
+        self.assertTrue(capabilities["inserters"]["long-handed-inserter"]["available"])
+        self.assertTrue(capabilities["inserters"]["long-handed-inserter"]["recipe_unlocked"])
+        self.assertFalse(capabilities["inserters"]["long-handed-inserter"]["researched"])
+        self.assertTrue(capabilities["machines"]["assembling-machine-2"]["available"])
+        self.assertTrue(capabilities["beacons"]["beacon"]["available"])
+        self.assertTrue(capabilities["rerank_trigger"])
 
     def test_strategy_payload_exposes_build_item_supply_context(self):
         payload = make_strategy_payload(

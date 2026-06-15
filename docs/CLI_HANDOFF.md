@@ -1,6 +1,6 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-15 03:50 KST
+Last updated: 2026-06-15 12:55 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
@@ -106,6 +106,13 @@ Latest continuation after Part 105:
   - `bootstrap_power_pole_mall` lets Qwen/strategy choose pole automation before relocation when the corridor is short on poles.
   - `research_electric_mining_drill` and `bootstrap_electric_mining_drill_mall` let the strategy replace burner drills after Automation/stable power instead of extending burner mining longer than necessary.
   - Layout capability payloads now include long-handed inserter and module availability, and planner simulation candidates can rerank into long-handed green-circuit and starter-mall variants with `layout_unlocks_considered` and `uses_unlocked_items` evidence.
+- Part 108 makes unlock-aware layout optimization react to usable recipes as well as technology flags:
+  - Live no-mod Factorio reports `long-handed-inserter` recipe enabled while `long-inserters` technology is absent, so observation now includes `recipe_unlocks` for long inserters, higher-tier assemblers/furnaces, modules, beacons, and power distribution items.
+  - Planner, strategy payload, compact Slurm payload, and the web dashboard now distinguish `considered_unlocked_items`, `uses_unlocked_items`, and `unused_unlocked_items`.
+  - Green-circuit candidates can use long-handed inserters from recipe unlock state and switch blueprint/rate estimates to `assembling-machine-2/3` when available.
+  - Smelting candidates can switch blueprint/rate estimates to `steel-furnace` or `electric-furnace` when available.
+  - The dashboard candidate cards show an `Unlock-aware` row so the operator can see which unlocked tools were considered and which were actually used.
+  - Full verification: `pytest -q` -> `492 passed`.
 
 Part 64 introduced:
 

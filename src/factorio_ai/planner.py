@@ -612,7 +612,7 @@ def factory_layout_simulation_candidates(observation: dict[str, Any]) -> list[di
         if len(rows) >= 2:
             candidates.append(
                 _with_blueprint_variants(
-                    _smelting_standardization_candidate(item, rows),
+                    _smelting_standardization_candidate(item, rows, layout_unlocks=layout_unlocks),
                     _combined_site_blueprint(
                         f"before-{item}-smelting-sites",
                         rows,
@@ -672,29 +672,92 @@ def factory_layout_simulation_candidates(observation: dict[str, Any]) -> list[di
 def _layout_unlock_context(observation: dict[str, Any]) -> dict[str, Any]:
     long_handed = {
         "available": _technology_researched_for_layout(observation, "long-inserters")
+        or _recipe_unlocked_for_layout(observation, "long-handed-inserter")
         or total_item_count(observation, "long-handed-inserter") > 0
         or _recipe_assembler_exists_for_layout(observation, "long-handed-inserter"),
         "researched": _technology_researched_for_layout(observation, "long-inserters"),
+        "recipe_unlocked": _recipe_unlocked_for_layout(observation, "long-handed-inserter"),
         "stock": total_item_count(observation, "long-handed-inserter"),
         "automated": _recipe_assembler_exists_for_layout(observation, "long-handed-inserter"),
     }
     modules = {
         name: {
-            "available": _technology_researched_for_layout(observation, name) or total_item_count(observation, name) > 0,
+            "available": _technology_researched_for_layout(observation, name)
+            or _recipe_unlocked_for_layout(observation, name)
+            or total_item_count(observation, name) > 0,
             "researched": _technology_researched_for_layout(observation, name),
+            "recipe_unlocked": _recipe_unlocked_for_layout(observation, name),
             "stock": total_item_count(observation, name),
         }
         for name in ("speed-module", "productivity-module", "efficiency-module")
     }
+    machine_techs = {"assembling-machine-2": "automation-2", "assembling-machine-3": "automation-3"}
+    machines = {
+        name: {
+            "available": _technology_researched_for_layout(observation, technology)
+            or _recipe_unlocked_for_layout(observation, name)
+            or total_item_count(observation, name) > 0
+            or _entity_exists_for_layout(observation, name),
+            "researched": _technology_researched_for_layout(observation, technology),
+            "recipe_unlocked": _recipe_unlocked_for_layout(observation, name),
+            "stock": total_item_count(observation, name),
+            "built": _entity_count_for_layout(observation, name),
+            "layout_impact": "higher tier machines change recipe rate, module slot assumptions, power demand, and site footprint",
+        }
+        for name, technology in machine_techs.items()
+    }
+    furnace_techs = {"steel-furnace": "advanced-material-processing", "electric-furnace": "advanced-material-processing-2"}
+    furnaces = {
+        name: {
+            "available": _technology_researched_for_layout(observation, technology)
+            or _recipe_unlocked_for_layout(observation, name)
+            or total_item_count(observation, name) > 0
+            or _entity_exists_for_layout(observation, name),
+            "researched": _technology_researched_for_layout(observation, technology),
+            "recipe_unlocked": _recipe_unlocked_for_layout(observation, name),
+            "stock": total_item_count(observation, name),
+            "built": _entity_count_for_layout(observation, name),
+            "layout_impact": "higher tier furnaces change smelting column length, power/fuel routing, and pollution tradeoffs",
+        }
+        for name, technology in furnace_techs.items()
+    }
+    beacons = {
+        "beacon": {
+            "available": _technology_researched_for_layout(observation, "effect-transmission")
+            or _recipe_unlocked_for_layout(observation, "beacon")
+            or total_item_count(observation, "beacon") > 0
+            or _entity_exists_for_layout(observation, "beacon"),
+            "researched": _technology_researched_for_layout(observation, "effect-transmission"),
+            "recipe_unlocked": _recipe_unlocked_for_layout(observation, "beacon"),
+            "stock": total_item_count(observation, "beacon"),
+            "built": _entity_count_for_layout(observation, "beacon"),
+            "layout_impact": "beacons need reserved spacing and can make compact pre-beacon layouts obsolete",
+        }
+    }
     return {
         "long_handed_inserter": long_handed,
         "modules": modules,
-        "rerank_trigger": bool(long_handed["available"] or any(row["available"] for row in modules.values())),
+        "machines": machines,
+        "furnaces": furnaces,
+        "beacons": beacons,
+        "rerank_trigger": bool(
+            long_handed["available"]
+            or any(row["available"] for row in modules.values())
+            or any(row["available"] for row in machines.values())
+            or any(row["available"] for row in furnaces.values())
+            or any(row["available"] for row in beacons.values())
+        ),
     }
 
 
 def _technology_researched_for_layout(observation: dict[str, Any], technology: str) -> bool:
     return bool(_technology_state(observation, technology).get("researched"))
+
+
+def _recipe_unlocked_for_layout(observation: dict[str, Any], recipe: str) -> bool:
+    recipes = observation.get("recipe_unlocks") if isinstance(observation.get("recipe_unlocks"), dict) else {}
+    state = recipes.get(recipe)
+    return bool(isinstance(state, dict) and state.get("enabled"))
 
 
 def _recipe_assembler_exists_for_layout(observation: dict[str, Any], recipe: str) -> bool:
@@ -706,6 +769,55 @@ def _recipe_assembler_exists_for_layout(observation: dict[str, Any], recipe: str
         and entity.get("electric_network_connected") is not False
         for entity in entities
     )
+
+
+def _entity_exists_for_layout(observation: dict[str, Any], name: str) -> bool:
+    return _entity_count_for_layout(observation, name) > 0
+
+
+def _entity_count_for_layout(observation: dict[str, Any], name: str) -> int:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    return sum(1 for entity in entities if isinstance(entity, dict) and str(entity.get("name") or "") == name)
+
+
+def _layout_considered_unlocked_items(unlocks: dict[str, Any]) -> list[str]:
+    considered: list[str] = []
+    long_handed = unlocks.get("long_handed_inserter") if isinstance(unlocks.get("long_handed_inserter"), dict) else {}
+    if bool(long_handed.get("available")):
+        considered.append("long-handed-inserter")
+    for group_name in ("modules", "machines", "furnaces", "beacons"):
+        group = unlocks.get(group_name) if isinstance(unlocks.get(group_name), dict) else {}
+        for name, state in group.items():
+            if isinstance(state, dict) and bool(state.get("available")):
+                considered.append(str(name))
+    return sorted(dict.fromkeys(considered))
+
+
+def _layout_unused_unlocked_items(considered: list[str], used: list[str]) -> list[str]:
+    used_set = set(used)
+    return [item for item in considered if item not in used_set]
+
+
+def _layout_capability_available(unlocks: dict[str, Any], group_name: str, name: str) -> bool:
+    group = unlocks.get(group_name) if isinstance(unlocks.get(group_name), dict) else {}
+    state = group.get(name) if isinstance(group.get(name), dict) else {}
+    return bool(state.get("available"))
+
+
+def _preferred_assembler_for_layout(unlocks: dict[str, Any]) -> tuple[str, float]:
+    if _layout_capability_available(unlocks, "machines", "assembling-machine-3"):
+        return "assembling-machine-3", 1.25
+    if _layout_capability_available(unlocks, "machines", "assembling-machine-2"):
+        return "assembling-machine-2", 0.75
+    return "assembling-machine-1", 0.5
+
+
+def _preferred_furnace_for_layout(unlocks: dict[str, Any]) -> tuple[str, float, str]:
+    if _layout_capability_available(unlocks, "furnaces", "electric-furnace"):
+        return "electric-furnace", 37.5, "electric furnace column with ore input and plate output lanes"
+    if _layout_capability_available(unlocks, "furnaces", "steel-furnace"):
+        return "steel-furnace", 37.5, "steel furnace column with shared ore/fuel input and plate output lanes"
+    return "stone-furnace", 18.75, "stone furnace column with shared ore/fuel input and plate output lanes"
 
 
 def _with_blueprint_variants(
@@ -1596,6 +1708,11 @@ def _green_circuit_layout_candidate(
     unlocks = layout_unlocks if isinstance(layout_unlocks, dict) else {}
     long_handed_state = unlocks.get("long_handed_inserter") if isinstance(unlocks.get("long_handed_inserter"), dict) else {}
     use_long_handed = bool(long_handed_state.get("available"))
+    used_unlocked_items = ["long-handed-inserter"] if use_long_handed else []
+    considered_unlocked_items = _layout_considered_unlocked_items(unlocks)
+    assembler_tier, assembler_speed = _preferred_assembler_for_layout(unlocks)
+    if assembler_tier != "assembling-machine-1":
+        used_unlocked_items.append(assembler_tier)
     current_cable = int(recipe_counts.get("copper-cable", 0))
     current_circuit = int(recipe_counts.get("electronic-circuit", 0))
     current_circuit = max(current_circuit, 1)
@@ -1603,13 +1720,15 @@ def _green_circuit_layout_candidate(
     proposed_cable = groups * 3
     proposed_circuit = groups * 2
     before_rate = _green_circuit_rate_per_minute(current_cable, current_circuit)
-    after_rate = _green_circuit_rate_per_minute(proposed_cable, proposed_circuit)
+    after_rate = _green_circuit_rate_per_minute(proposed_cable, proposed_circuit, assembler_speed=assembler_speed)
     score = 70.0 + min(20.0, max(0.0, after_rate - before_rate) / 12.0)
     if current_cable == 0:
         score += 5.0
     if use_long_handed:
         score += 6.0
-    after_entities = _green_circuit_blueprint_entities(groups, use_long_handed=use_long_handed)
+    if assembler_tier != "assembling-machine-1":
+        score += 4.0
+    after_entities = _green_circuit_blueprint_entities(groups, use_long_handed=use_long_handed, assembler_name=assembler_tier)
     validation = _blueprint_operability_report(after_entities)
     placement_search = _site_placement_search(
         observation,
@@ -1665,7 +1784,9 @@ def _green_circuit_layout_candidate(
         ),
         "validation": validation,
         "layout_unlocks_considered": unlocks,
-        "uses_unlocked_items": ["long-handed-inserter"] if use_long_handed else [],
+        "considered_unlocked_items": considered_unlocked_items,
+        "uses_unlocked_items": used_unlocked_items,
+        "unused_unlocked_items": _layout_unused_unlocked_items(considered_unlocked_items, used_unlocked_items),
         "site_prebuild_gate": site_gate,
         "site_placement_search": placement_search,
         "prerequisite_tasks": layout_candidate_prerequisite_tasks(
@@ -1685,12 +1806,15 @@ def _green_circuit_layout_candidate(
                 "electronic_circuit_assemblers": proposed_circuit,
                 "electronic_circuit_per_minute": round(after_rate, 1),
                 "inserter_tier": inserter_tier,
+                "assembler_tier": assembler_tier,
                 "input_lane_pattern": "long_reach_two_lane" if use_long_handed else "standard_adjacent_lanes",
             },
             "delta": {
                 "electronic_circuit_per_minute": round(after_rate - before_rate, 1),
                 "ratio_error_reduced": True,
                 "unlock_aware_rerank": use_long_handed,
+                "unlock_aware_considered": bool(considered_unlocked_items),
+                "higher_tier_machine_used": assembler_tier != "assembling-machine-1",
                 "belt_doglegs_reduced": use_long_handed,
                 "static_operability": validation["status"],
             },
@@ -1703,10 +1827,9 @@ def _green_circuit_layout_candidate(
     }
 
 
-def _green_circuit_rate_per_minute(cable_assemblers: int, circuit_assemblers: int) -> float:
+def _green_circuit_rate_per_minute(cable_assemblers: int, circuit_assemblers: int, *, assembler_speed: float = 0.5) -> float:
     cable_recipe = RECIPES["copper-cable"]
     circuit_recipe = RECIPES["electronic-circuit"]
-    assembler_speed = 0.5
     cable_per_minute = (
         cable_assemblers
         * float(cable_recipe.products["copper-cable"])
@@ -1725,7 +1848,12 @@ def _green_circuit_rate_per_minute(cable_assemblers: int, circuit_assemblers: in
     return min(circuit_capacity, cable_limited_circuits)
 
 
-def _green_circuit_blueprint_entities(groups: int, *, use_long_handed: bool = False) -> list[dict[str, Any]]:
+def _green_circuit_blueprint_entities(
+    groups: int,
+    *,
+    use_long_handed: bool = False,
+    assembler_name: str = "assembling-machine-1",
+) -> list[dict[str, Any]]:
     entities: list[dict[str, Any]] = []
     group_count = max(1, min(4, groups))
     for group in range(group_count):
@@ -1736,11 +1864,11 @@ def _green_circuit_blueprint_entities(groups: int, *, use_long_handed: bool = Fa
                 _add_entity(entities, "transport-belt", 2, y + offset, direction=SOUTH)
                 _add_entity(entities, "transport-belt", 10, y + offset, direction=SOUTH)
             for offset in (0, 4, 8):
-                _add_entity(entities, "assembling-machine-1", 0, y + offset, recipe="copper-cable")
+                _add_entity(entities, assembler_name, 0, y + offset, recipe="copper-cable")
                 _add_entity(entities, "long-handed-inserter", -3, y + offset, direction=WEST)
                 _add_entity(entities, "inserter", 1, y + offset, direction=WEST)
             for offset in (1, 7):
-                _add_entity(entities, "assembling-machine-1", 6, y + offset, recipe="electronic-circuit")
+                _add_entity(entities, assembler_name, 6, y + offset, recipe="electronic-circuit")
                 _add_entity(entities, "long-handed-inserter", 4, y + offset, direction=WEST)
                 _add_entity(entities, "long-handed-inserter", 8, y + offset, direction=EAST)
                 _add_entity(entities, "inserter", 6, y + offset + 2, direction=NORTH)
@@ -1753,11 +1881,11 @@ def _green_circuit_blueprint_entities(groups: int, *, use_long_handed: bool = Fa
                 _add_entity(entities, "transport-belt", 3, y + offset, direction=SOUTH)
                 _add_entity(entities, "transport-belt", 9, y + offset, direction=SOUTH)
             for offset in (0, 4, 8):
-                _add_entity(entities, "assembling-machine-1", 0, y + offset, recipe="copper-cable")
+                _add_entity(entities, assembler_name, 0, y + offset, recipe="copper-cable")
                 _add_entity(entities, "inserter", -2, y + offset, direction=WEST)
                 _add_entity(entities, "inserter", 2, y + offset, direction=WEST)
             for offset in (1, 7):
-                _add_entity(entities, "assembling-machine-1", 6, y + offset, recipe="electronic-circuit")
+                _add_entity(entities, assembler_name, 6, y + offset, recipe="electronic-circuit")
                 _add_entity(entities, "inserter", 4, y + offset, direction=WEST)
                 _add_entity(entities, "inserter", 8, y + offset, direction=EAST)
                 _add_entity(entities, "inserter", 6, y + offset + 2, direction=NORTH)
@@ -1767,29 +1895,45 @@ def _green_circuit_blueprint_entities(groups: int, *, use_long_handed: bool = Fa
     return entities
 
 
-def _smelting_standardization_candidate(item: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _smelting_standardization_candidate(
+    item: str,
+    rows: list[dict[str, Any]],
+    *,
+    layout_unlocks: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    unlocks = layout_unlocks if isinstance(layout_unlocks, dict) else {}
+    furnace_tier, furnace_rate, target_pattern = _preferred_furnace_for_layout(unlocks)
+    used_unlocked_items = [furnace_tier] if furnace_tier != "stone-furnace" else []
+    considered_unlocked_items = _layout_considered_unlocked_items(unlocks)
     positions = [row.get("position") for row in rows if isinstance(row.get("position"), dict)]
     footprint = _layout_footprint(positions)
     furnace_count = sum(_machine_count(row, "stone-furnace") + _machine_count(row, "steel-furnace") for row in rows)
     if furnace_count <= 0:
         furnace_count = len(rows)
     before_rate = furnace_count * 18.75
+    after_rate = furnace_count * furnace_rate
     target_columns = max(1, min(4, (furnace_count + 11) // 12))
     after_footprint_area = max(16.0, float(footprint.get("area") or 16.0) * 0.72)
     area_reduction = max(0.0, float(footprint.get("area") or 0.0) - after_footprint_area)
     score = 58.0 + min(22.0, len(rows) * 4.0) + min(12.0, area_reduction / 20.0)
+    if furnace_tier != "stone-furnace":
+        score += 5.0
     return {
-        "candidate_id": f"{item}-parallel-smelting-columns",
+        "candidate_id": f"{item}-{furnace_tier}-parallel-smelting-columns",
         "simulation_only": True,
         "not_applied": True,
-        "source": "blueprint-pattern heuristic plus static furnace throughput",
-        "target_pattern": "parallel smelting columns with shared ore/fuel/input and plate output lanes",
+        "source": "blueprint-pattern heuristic plus unlocked furnace tier ranking",
+        "target_pattern": target_pattern,
         "requires_build_command": True,
         "blueprint": _blueprint_export(
-            f"{item}-parallel-smelting-columns",
-            _smelting_column_blueprint_entities(item, furnace_count, target_columns),
+            f"{item}-{furnace_tier}-parallel-smelting-columns",
+            _smelting_column_blueprint_entities(item, furnace_count, target_columns, furnace_name=furnace_tier),
             "Simulation-only smelting column block. Place near validated ore/fuel inputs; miners and long logistics are not included.",
         ),
+        "layout_unlocks_considered": unlocks,
+        "considered_unlocked_items": considered_unlocked_items,
+        "uses_unlocked_items": used_unlocked_items,
+        "unused_unlocked_items": _layout_unused_unlocked_items(considered_unlocked_items, used_unlocked_items),
         "simulation": {
             "before": {
                 "sites": len(rows),
@@ -1800,12 +1944,15 @@ def _smelting_standardization_candidate(item: str, rows: list[dict[str, Any]]) -
             "after": {
                 "columns": target_columns,
                 "furnaces": furnace_count,
-                "plate_per_minute": round(before_rate, 1),
+                "furnace_tier": furnace_tier,
+                "plate_per_minute": round(after_rate, 1),
                 "estimated_footprint_area": round(after_footprint_area, 1),
             },
             "delta": {
-                "plate_per_minute": 0.0,
+                "plate_per_minute": round(after_rate - before_rate, 1),
                 "footprint_area": round(-area_reduction, 1),
+                "unlock_aware_considered": bool(considered_unlocked_items),
+                "higher_tier_machine_used": furnace_tier != "stone-furnace",
                 "expandability": "higher; repeatable columns can be copied without re-solving local layout",
             },
             "score": round(min(score, 92.0), 1),
@@ -1813,7 +1960,13 @@ def _smelting_standardization_candidate(item: str, rows: list[dict[str, Any]]) -
     }
 
 
-def _smelting_column_blueprint_entities(item: str, furnace_count: int, columns: int) -> list[dict[str, Any]]:
+def _smelting_column_blueprint_entities(
+    item: str,
+    furnace_count: int,
+    columns: int,
+    *,
+    furnace_name: str = "stone-furnace",
+) -> list[dict[str, Any]]:
     entities: list[dict[str, Any]] = []
     columns = max(1, columns)
     rows_per_column = max(1, ceil(max(1, furnace_count) / columns))
@@ -1826,7 +1979,7 @@ def _smelting_column_blueprint_entities(item: str, furnace_count: int, columns: 
         _add_entity(entities, "transport-belt", x + 1, y, direction=SOUTH)
         _add_entity(entities, "transport-belt", x + 1, y + 1, direction=SOUTH)
         _add_entity(entities, "inserter", x + 2, y, direction=EAST)
-        _add_entity(entities, "stone-furnace", x + 4, y)
+        _add_entity(entities, furnace_name, x + 4, y)
         _add_entity(entities, "inserter", x + 6, y, direction=EAST)
         _add_entity(entities, "transport-belt", x + 7, y, direction=SOUTH)
     return entities
@@ -1988,6 +2141,8 @@ def _mall_compaction_candidate(
     unlocks = layout_unlocks if isinstance(layout_unlocks, dict) else {}
     long_handed_state = unlocks.get("long_handed_inserter") if isinstance(unlocks.get("long_handed_inserter"), dict) else {}
     use_long_handed = bool(long_handed_state.get("available"))
+    used_unlocked_items = ["long-handed-inserter"] if use_long_handed else []
+    considered_unlocked_items = _layout_considered_unlocked_items(unlocks)
     positions = [site.get("position") for site in mall_sites if isinstance(site.get("position"), dict)]
     footprint = _layout_footprint(positions)
     before_area = float(footprint.get("area") or 0.0)
@@ -2019,7 +2174,9 @@ def _mall_compaction_candidate(
             ),
         ),
         "layout_unlocks_considered": unlocks,
-        "uses_unlocked_items": ["long-handed-inserter"] if use_long_handed else [],
+        "considered_unlocked_items": considered_unlocked_items,
+        "uses_unlocked_items": used_unlocked_items,
+        "unused_unlocked_items": _layout_unused_unlocked_items(considered_unlocked_items, used_unlocked_items),
         "simulation": {
             "before": {"cells": len(mall_sites), "footprint_area": round(before_area, 1)},
             "after": {
@@ -2032,6 +2189,7 @@ def _mall_compaction_candidate(
                 "footprint_area": round(after_area - before_area, 1),
                 "shared_input_lanes": True,
                 "unlock_aware_rerank": use_long_handed,
+                "unlock_aware_considered": bool(considered_unlocked_items),
                 "belt_doglegs_reduced": use_long_handed,
             },
             "score": round(min(score, 95.0), 1),
@@ -5043,12 +5201,12 @@ def _find_iron_plate_logistic_line_to_gear_mall_layout(observation: dict[str, An
 def _find_gear_belt_mall_relocation_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
     existing_layout = _find_iron_plate_logistic_line_to_gear_mall_layout(observation)
     if existing_layout is None:
-        return None
+        return _find_partial_gear_belt_mall_relocation_layout(observation)
     source = existing_layout.get("source")
     gear_assembler = existing_layout.get("gear_assembler")
     belt_assembler = existing_layout.get("belt_assembler")
     if not isinstance(source, dict) or not isinstance(gear_assembler, dict) or not isinstance(belt_assembler, dict):
-        return None
+        return _find_partial_gear_belt_mall_relocation_layout(observation)
 
     source_position = _position(source)
     gear_position = _position(gear_assembler)
@@ -5069,6 +5227,52 @@ def _find_gear_belt_mall_relocation_layout(observation: dict[str, Any]) -> dict[
         "source_distance_tiles": round(distance(source_position, gear_position), 1),
         **route_cost,
     }
+
+
+def _find_partial_gear_belt_mall_relocation_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
+    if inventory_count(observation, "assembling-machine-1") <= 0:
+        return None
+    source = _nearest_to(_iron_plate_source_furnaces(observation), player_position(observation))
+    if not isinstance(source, dict):
+        return None
+    recoverable = _recoverable_relocation_assembler(observation)
+    anchor_position = _position(recoverable) if isinstance(recoverable, dict) else player_position(observation)
+    source_position = _position(source)
+    route_cost = _gear_mall_plate_layout_cost_estimate(observation, source_position, anchor_position)
+    if route_cost.get("route_cost_preference") != "relocate_mall_to_iron_source" and distance(source_position, anchor_position) < PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT:
+        return None
+    target_gear_position = {"x": round(source_position["x"] + 5.5, 1), "y": round(source_position["y"] - 5.0, 1)}
+    target_belt_position = {"x": round(target_gear_position["x"] + 3.0, 1), "y": target_gear_position["y"]}
+    return {
+        "source": source,
+        "gear_assembler": None,
+        "belt_assembler": recoverable,
+        "target_gear_position": target_gear_position,
+        "target_belt_position": target_belt_position,
+        "target_gear_assembler": _assembler_at_position(observation, target_gear_position),
+        "target_belt_assembler": _assembler_at_position(observation, target_belt_position),
+        "source_distance_tiles": round(distance(source_position, anchor_position), 1),
+        **route_cost,
+    }
+
+
+def _recoverable_relocation_assembler(observation: dict[str, Any]) -> dict[str, Any] | None:
+    candidates = [
+        item
+        for item in entities_named(observation, "assembling-machine-1")
+        if item.get("electric_network_connected") is not False
+        and item.get("recipe") not in {"copper-cable", "electronic-circuit"}
+        and _within_allowed_factory_area(observation, _position(item))
+    ]
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda item: (
+            0 if item.get("recipe") in {"small-electric-pole", "transport-belt", "iron-gear-wheel"} else 1,
+            float(item.get("distance") or distance(player_position(observation), _position(item))),
+        )
+    )
+    return candidates[0]
 
 
 def _iron_plate_source_furnaces(observation: dict[str, Any]) -> list[dict[str, Any]]:
@@ -7169,6 +7373,23 @@ class BuildItemMallSkill:
 
         if item == "small-electric-pole":
             return self.power_skill._ensure_item_quantity(observation, player, item, quantity)
+
+        if item == "wood":
+            tree = _nearest_tree(observation)
+            if tree is None:
+                return PlannerDecision(None, "missing wood for build item mall and no nearby tree is visible")
+            tree_pos = _position(tree)
+            if distance(player, tree_pos) > 8:
+                return PlannerDecision({"type": "move_to", "position": tree_pos}, "move near tree for build item mall wood")
+            return PlannerDecision(
+                {
+                    "type": "mine",
+                    "name": tree.get("name"),
+                    "position": tree_pos,
+                    "count": max(1, quantity - inventory_count(observation, "wood")),
+                },
+                "mine tree for build item mall wood",
+            )
 
         if craftable_count(observation, item) > 0:
             return PlannerDecision(

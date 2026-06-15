@@ -552,10 +552,12 @@ def make_layout_capability_context(observation: dict[str, Any]) -> dict[str, Any
         },
         "long-handed-inserter": {
             "available": _technology_researched(observation, "long-inserters")
+            or _recipe_unlocked(observation, "long-handed-inserter")
             or total_item_count(observation, "long-handed-inserter") > 0
             or _recipe_assembler_exists(observation, "long-handed-inserter"),
             "stock": total_item_count(observation, "long-handed-inserter"),
             "researched": _technology_researched(observation, "long-inserters"),
+            "recipe_unlocked": _recipe_unlocked(observation, "long-handed-inserter"),
             "automated": _recipe_assembler_exists(observation, "long-handed-inserter"),
             "layout_impact": (
                 "can reach across one intervening tile or belt lane, enabling denser 2-belt input layouts, "
@@ -565,12 +567,58 @@ def make_layout_capability_context(observation: dict[str, Any]) -> dict[str, Any
     }
     modules = {
         name: {
-            "available": _technology_researched(observation, name) or total_item_count(observation, name) > 0,
+            "available": _technology_researched(observation, name)
+            or _recipe_unlocked(observation, name)
+            or total_item_count(observation, name) > 0,
             "researched": _technology_researched(observation, name),
+            "recipe_unlocked": _recipe_unlocked(observation, name),
             "stock": total_item_count(observation, name),
             "layout_impact": "module availability can change assembler count, power demand, pollution, and beacon-ready spacing",
         }
         for name in ("speed-module", "productivity-module", "efficiency-module")
+    }
+    machine_techs = {"assembling-machine-2": "automation-2", "assembling-machine-3": "automation-3"}
+    machines = {
+        name: {
+            "available": _technology_researched(observation, technology)
+            or _recipe_unlocked(observation, name)
+            or total_item_count(observation, name) > 0
+            or _entity_count_by_name(observation, name) > 0,
+            "researched": _technology_researched(observation, technology),
+            "recipe_unlocked": _recipe_unlocked(observation, name),
+            "stock": total_item_count(observation, name),
+            "built": _entity_count_by_name(observation, name),
+            "layout_impact": "higher tier machines change throughput, module slots, power demand, and site footprint",
+        }
+        for name, technology in machine_techs.items()
+    }
+    furnace_techs = {"steel-furnace": "advanced-material-processing", "electric-furnace": "advanced-material-processing-2"}
+    furnaces = {
+        name: {
+            "available": _technology_researched(observation, technology)
+            or _recipe_unlocked(observation, name)
+            or total_item_count(observation, name) > 0
+            or _entity_count_by_name(observation, name) > 0,
+            "researched": _technology_researched(observation, technology),
+            "recipe_unlocked": _recipe_unlocked(observation, name),
+            "stock": total_item_count(observation, name),
+            "built": _entity_count_by_name(observation, name),
+            "layout_impact": "higher tier furnaces change column size, fuel or power routing, pollution, and output density",
+        }
+        for name, technology in furnace_techs.items()
+    }
+    beacons = {
+        "beacon": {
+            "available": _technology_researched(observation, "effect-transmission")
+            or _recipe_unlocked(observation, "beacon")
+            or total_item_count(observation, "beacon") > 0
+            or _entity_count_by_name(observation, "beacon") > 0,
+            "researched": _technology_researched(observation, "effect-transmission"),
+            "recipe_unlocked": _recipe_unlocked(observation, "beacon"),
+            "stock": total_item_count(observation, "beacon"),
+            "built": _entity_count_by_name(observation, "beacon"),
+            "layout_impact": "beacons require reserved spacing and can make earlier compact rows obsolete",
+        }
     }
     return {
         "llm_responsibility": (
@@ -579,6 +627,16 @@ def make_layout_capability_context(observation: dict[str, Any]) -> dict[str, Any
         ),
         "inserters": inserters,
         "modules": modules,
+        "machines": machines,
+        "furnaces": furnaces,
+        "beacons": beacons,
+        "rerank_trigger": bool(
+            inserters["long-handed-inserter"]["available"]
+            or any(row["available"] for row in modules.values())
+            or any(row["available"] for row in machines.values())
+            or any(row["available"] for row in furnaces.values())
+            or any(row["available"] for row in beacons.values())
+        ),
         "constraints": [
             "prefer long-handed inserters when they reduce belt crossings, input bottlenecks, or site footprint without harming expansion access",
             "re-evaluate existing sites after new machines, inserters, modules, beacons, rails, or quality tiers unlock",
@@ -1058,6 +1116,8 @@ def reconcile_strategy_decision(
         "automate_electronic_circuit_line",
         "bootstrap_build_item_mall",
         "bootstrap_power_pole_mall",
+        "research_electric_mining_drill",
+        "bootstrap_electric_mining_drill_mall",
         "research_logistics",
         "build_iron_plate_logistic_line_to_gear_mall",
     }:
@@ -1109,6 +1169,8 @@ def reconcile_strategy_decision(
         "automate_electronic_circuit_line",
         "bootstrap_build_item_mall",
         "bootstrap_power_pole_mall",
+        "research_electric_mining_drill",
+        "bootstrap_electric_mining_drill_mall",
         "research_logistics",
         "build_iron_plate_logistic_line_to_gear_mall",
     }:
@@ -2278,7 +2340,7 @@ def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[s
     ]
     source_furnaces = _iron_plate_source_furnaces(observation)
     if not gear_assemblers or not source_furnaces:
-        return None
+        return _partial_gear_mall_relocation_issue(observation, source_furnaces, belts_available)
     best_issue: dict[str, Any] | None = None
     best_distance = 999999.0
     for gear in gear_assemblers:
@@ -2308,6 +2370,61 @@ def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[s
                 **route_cost,
             }
     return best_issue
+
+
+def _partial_gear_mall_relocation_issue(
+    observation: dict[str, Any],
+    source_furnaces: list[dict[str, Any]],
+    belts_available: bool,
+) -> dict[str, Any] | None:
+    if inventory_count(observation, "assembling-machine-1") <= 0 or not source_furnaces:
+        return None
+    recoverable = _recoverable_relocation_assembler(observation)
+    recoverable_position = _position(recoverable) if isinstance(recoverable, dict) else None
+    if recoverable_position is None:
+        return None
+    source = min(
+        source_furnaces,
+        key=lambda item: _distance(_position(item), recoverable_position) or 999999.0,
+    )
+    source_position = _position(source)
+    source_distance = _distance(source_position, recoverable_position)
+    if source_position is None or source_distance is None or source_distance < 32.0:
+        return None
+    route_cost = _gear_mall_plate_route_cost_estimate(observation, source_position, recoverable_position)
+    if route_cost.get("route_cost_preference") != "relocate_mall_to_iron_source" and source_distance <= PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT:
+        return None
+    return {
+        "gear_unit": "inventory",
+        "source_unit": source.get("unit_number"),
+        "source_distance_tiles": round(source_distance, 1),
+        "gear_assembler_iron_plate": 0,
+        "gear_assembler_status": "relocation_in_progress",
+        "transport_belts_available": belts_available,
+        "relocation_in_progress": True,
+        "recoverable_assembler_unit": recoverable.get("unit_number"),
+        **route_cost,
+    }
+
+
+def _recoverable_relocation_assembler(observation: dict[str, Any]) -> dict[str, Any] | None:
+    candidates = [
+        entity
+        for entity in entities_named(observation, "assembling-machine-1")
+        if entity.get("electric_network_connected") is not False
+        and str(entity.get("recipe") or entity.get("recipe_name") or "") not in {"copper-cable", "electronic-circuit"}
+    ]
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda entity: (
+            0
+            if str(entity.get("recipe") or entity.get("recipe_name") or "") in {"small-electric-pole", "transport-belt", "iron-gear-wheel"}
+            else 1,
+            float(entity.get("distance") or 999999.0),
+        )
+    )
+    return candidates[0]
 
 
 def _gear_mall_plate_route_needs_compaction(issue: dict[str, Any] | None) -> bool:
@@ -2719,6 +2836,21 @@ def _technology_researched(observation: dict[str, Any], technology: str) -> bool
         return False
     state = technologies.get(technology)
     return bool(isinstance(state, dict) and state.get("researched"))
+
+
+def _recipe_unlocked(observation: dict[str, Any], recipe: str) -> bool:
+    recipes = observation.get("recipe_unlocks")
+    if not isinstance(recipes, dict):
+        return False
+    state = recipes.get(recipe)
+    return bool(isinstance(state, dict) and state.get("enabled"))
+
+
+def _entity_count_by_name(observation: dict[str, Any], name: str) -> int:
+    entities = observation.get("entities")
+    if not isinstance(entities, list):
+        return 0
+    return sum(1 for entity in entities if isinstance(entity, dict) and str(entity.get("name") or "") == name)
 
 
 def _circuit_automation_ready(observation: dict[str, Any]) -> bool:

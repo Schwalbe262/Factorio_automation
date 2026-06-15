@@ -489,3 +489,45 @@
 - After: `factory_layout_simulation_candidates` generates `green-circuit-long-handed-3-cable-2-circuit-cell` and `starter-mall-row-long-handed-inputs` only when long-handed inserters are researched/stocked/automated; candidates include `layout_unlocks_considered`, `uses_unlocked_items`, and rerank evidence. Full and compact strategy payloads expose long-handed inserter and module availability. Relocation waits for small-electric-pole corridor materials, strategy can choose `bootstrap_power_pole_mall`, and burner-drill replacement can choose electric mining drill research/mall skills.
 - Evidence: `{"tests":"483 passed","new_candidates":["green-circuit-long-handed-3-cable-2-circuit-cell","starter-mall-row-long-handed-inputs"],"payloads":["layout_capabilities.inserters.long-handed-inserter","layout_capabilities.modules","compact.layout_capabilities.rerank_trigger"],"deterministic_skills":["bootstrap_power_pole_mall","relocate_gear_belt_mall_to_iron_source","research_electric_mining_drill","bootstrap_electric_mining_drill_mall"]}`
 - Remaining risk: Long-handed variants are still simulation candidates, not live build-ready executors; they must pass sandbox validation and site pre-build gates before mutation. Live factory still needs pole/science throughput to finish the relocation and electric-drill transition.
+
+## 2026-06-15 12:24:22 +09:00 - Insight 60
+- Source loop: Loop 322
+- Improvement: small-electric-pole increased by 2 during bootstrap_power_pole_mall.
+- Before: small-electric-pole = 1
+- After: small-electric-pole = 3
+- Evidence: `{"delta":2,"final":3,"initial":1,"item":"small-electric-pole","source_loop":322,"target":20}`
+- Remaining risk: Target is not complete yet: 3/20.
+
+## 2026-06-15 12:26:06 +09:00 - Insight 61
+- Source loop: Loop 323
+- Improvement: small-electric-pole increased by 4 during bootstrap_power_pole_mall.
+- Before: small-electric-pole = 3
+- After: small-electric-pole = 7
+- Evidence: `{"delta":4,"final":7,"initial":3,"item":"small-electric-pole","source_loop":323,"target":20}`
+- Remaining risk: Target is not complete yet: 7/20.
+
+## 2026-06-15 12:28:30 +09:00 - Insight 62
+- Source loop: Loop 324
+- Improvement: small-electric-pole increased by 16 during bootstrap_power_pole_mall.
+- Before: small-electric-pole = 7
+- After: small-electric-pole = 23
+- Evidence: `{"delta":16,"final":23,"initial":7,"item":"small-electric-pole","source_loop":324,"target":20}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-15 12:28:30 +09:00 - Insight 63
+- Source loop: Loop 324
+- Improvement: bootstrap_power_pole_mall completed after 30 step(s): build item mall is producing small-electric-pole and target reached: 23/20
+- Before: not recorded
+- After: small-electric-pole = 23
+- Evidence: `{"item":"small-electric-pole","item_count":23,"source_loop":324,"steps":30,"target":20}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-15 12:55:23 +09:00 - Insight 64
+
+- Source loop: Loop 327
+- Improvement: Site layout optimization now detects usable long-handed inserters from live recipe unlock state and automatically reranks layout candidates even when the technology table lacks a separate `long-inserters` entry.
+- Before: The live observation returned `long-inserters=None`; layout candidates could only switch to long-handed variants through researched technology, stock, or an existing long-handed inserter assembler.
+- After: No-mod observation reports `recipe_unlocks.long-handed-inserter.enabled=true`; layout capability marks long-handed inserters available with `recipe_unlocked=true`; the live first layout candidate is `green-circuit-long-handed-3-cable-2-circuit-cell` with `uses_unlocked_items=["long-handed-inserter"]`.
+- Evidence: `{"tests":"492 passed","live_recipe_unlock":"long-handed-inserter.enabled=true","live_technology":"long-inserters=None","layout_capability":{"available":true,"recipe_unlocked":true,"researched":false,"rerank_trigger":true},"live_candidate":"green-circuit-long-handed-3-cable-2-circuit-cell","candidate_uses":["long-handed-inserter"],"additional_capabilities":["modules","assembling-machine-2/3","steel/electric-furnace","beacon"]}`
+- Remaining risk: Long-handed and higher-tier variants are still simulation candidates until sandbox validation and site pre-build gates pass; module-specific/beacon-specific physical layouts need further candidate generators beyond capability exposure.
+

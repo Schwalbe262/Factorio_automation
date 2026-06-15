@@ -940,26 +940,81 @@ def _layout_improvement_context(
 def _compact_layout_capabilities(observation: dict[str, Any]) -> dict[str, Any]:
     modules = {
         name: {
-            "available": _technology_researched_compact(observation, name) or _total_item_count_compact(observation, name) > 0,
+            "available": _technology_researched_compact(observation, name)
+            or _recipe_unlocked_compact(observation, name)
+            or _total_item_count_compact(observation, name) > 0,
             "researched": _technology_researched_compact(observation, name),
+            "recipe_unlocked": _recipe_unlocked_compact(observation, name),
             "stock": _total_item_count_compact(observation, name),
             "layout_impact": "changes assembler count, power demand, pollution, and beacon-ready spacing",
         }
         for name in ("speed-module", "productivity-module", "efficiency-module")
     }
+    machine_techs = {"assembling-machine-2": "automation-2", "assembling-machine-3": "automation-3"}
+    machines = {
+        name: {
+            "available": _technology_researched_compact(observation, technology)
+            or _recipe_unlocked_compact(observation, name)
+            or _total_item_count_compact(observation, name) > 0
+            or _entity_count_compact(observation, name) > 0,
+            "researched": _technology_researched_compact(observation, technology),
+            "recipe_unlocked": _recipe_unlocked_compact(observation, name),
+            "stock": _total_item_count_compact(observation, name),
+            "built": _entity_count_compact(observation, name),
+            "layout_impact": "changes throughput, module slots, power demand, and site footprint",
+        }
+        for name, technology in machine_techs.items()
+    }
+    furnace_techs = {"steel-furnace": "advanced-material-processing", "electric-furnace": "advanced-material-processing-2"}
+    furnaces = {
+        name: {
+            "available": _technology_researched_compact(observation, technology)
+            or _recipe_unlocked_compact(observation, name)
+            or _total_item_count_compact(observation, name) > 0
+            or _entity_count_compact(observation, name) > 0,
+            "researched": _technology_researched_compact(observation, technology),
+            "recipe_unlocked": _recipe_unlocked_compact(observation, name),
+            "stock": _total_item_count_compact(observation, name),
+            "built": _entity_count_compact(observation, name),
+            "layout_impact": "changes smelting column size, fuel or power routing, pollution, and output density",
+        }
+        for name, technology in furnace_techs.items()
+    }
+    beacons = {
+        "beacon": {
+            "available": _technology_researched_compact(observation, "effect-transmission")
+            or _recipe_unlocked_compact(observation, "beacon")
+            or _total_item_count_compact(observation, "beacon") > 0
+            or _entity_count_compact(observation, "beacon") > 0,
+            "researched": _technology_researched_compact(observation, "effect-transmission"),
+            "recipe_unlocked": _recipe_unlocked_compact(observation, "beacon"),
+            "stock": _total_item_count_compact(observation, "beacon"),
+            "built": _entity_count_compact(observation, "beacon"),
+            "layout_impact": "requires reserved spacing and can make earlier compact rows obsolete",
+        }
+    }
     return {
         "long_handed_inserter": {
             "available": _technology_researched_compact(observation, "long-inserters")
+            or _recipe_unlocked_compact(observation, "long-handed-inserter")
             or _total_item_count_compact(observation, "long-handed-inserter") > 0
             or _recipe_assembler_exists_compact(observation, "long-handed-inserter"),
             "researched": _technology_researched_compact(observation, "long-inserters"),
+            "recipe_unlocked": _recipe_unlocked_compact(observation, "long-handed-inserter"),
             "stock": _total_item_count_compact(observation, "long-handed-inserter"),
             "automated": _recipe_assembler_exists_compact(observation, "long-handed-inserter"),
             "layout_impact": "consider 2-tile pickup/drop for denser input lanes and fewer belt doglegs",
         },
         "modules": modules,
+        "machines": machines,
+        "furnaces": furnaces,
+        "beacons": beacons,
         "rerank_trigger": any(row["available"] for row in modules.values())
+        or any(row["available"] for row in machines.values())
+        or any(row["available"] for row in furnaces.values())
+        or any(row["available"] for row in beacons.values())
         or _technology_researched_compact(observation, "long-inserters")
+        or _recipe_unlocked_compact(observation, "long-handed-inserter")
         or _total_item_count_compact(observation, "long-handed-inserter") > 0
         or _recipe_assembler_exists_compact(observation, "long-handed-inserter"),
         "rule": "re-rank layouts when newly researched or stocked items change reach, footprint, power, pollution, or throughput.",
@@ -971,6 +1026,12 @@ def _technology_researched_compact(observation: dict[str, Any], technology: str)
     technologies = research.get("technologies") if isinstance(research.get("technologies"), dict) else {}
     state = technologies.get(technology)
     return bool(isinstance(state, dict) and state.get("researched"))
+
+
+def _recipe_unlocked_compact(observation: dict[str, Any], recipe: str) -> bool:
+    recipes = observation.get("recipe_unlocks") if isinstance(observation.get("recipe_unlocks"), dict) else {}
+    state = recipes.get(recipe)
+    return bool(isinstance(state, dict) and state.get("enabled"))
 
 
 def _total_item_count_compact(observation: dict[str, Any], item: str) -> int:
@@ -999,11 +1060,16 @@ def _recipe_assembler_exists_compact(observation: dict[str, Any], recipe: str) -
     entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
     return any(
         isinstance(entity, dict)
-        and entity.get("name") == "assembling-machine-1"
+        and entity.get("name") in {"assembling-machine-1", "assembling-machine-2", "assembling-machine-3"}
         and entity.get("recipe") == recipe
         and entity.get("electric_network_connected") is not False
         for entity in entities
     )
+
+
+def _entity_count_compact(observation: dict[str, Any], name: str) -> int:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    return sum(1 for entity in entities if isinstance(entity, dict) and str(entity.get("name") or "") == name)
 
 
 def _selected_improvement_site_from_payload(payload: dict[str, Any]) -> dict[str, Any]:

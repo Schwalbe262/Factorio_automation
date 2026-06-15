@@ -1967,6 +1967,7 @@ def _layout_candidate_table(rows: list[Any], lang: str) -> str:
             f"<span class=\"layout-candidate-score\">{escape(str(simulation.get('score') or 0))}</span>"
             "</div>"
             f"<p class=\"layout-candidate-pattern\">{escape(str(row.get('target_pattern') or ''))}</p>"
+            f"{_layout_unlock_panel(row)}"
             f"{_layout_validation_panel(row.get('validation'), lang)}"
             f"{_layout_validation_panel(row.get('sandbox_validation'), lang, title_key='sandbox_validation')}"
             f"{_layout_validation_panel(row.get('site_prebuild_gate'), lang, title_key='prebuild_gate')}"
@@ -1983,6 +1984,44 @@ def _layout_candidate_table(rows: list[Any], lang: str) -> str:
             "</article>"
         )
     return f"<div class=\"layout-candidate-grid\">{body}</div>"
+
+
+def _layout_unlock_panel(row: dict[str, Any]) -> str:
+    used = [str(item) for item in row.get("uses_unlocked_items") or [] if item]
+    considered = [str(item) for item in row.get("considered_unlocked_items") or [] if item]
+    unused = [str(item) for item in row.get("unused_unlocked_items") or [] if item]
+    unlocks = row.get("layout_unlocks_considered") if isinstance(row.get("layout_unlocks_considered"), dict) else {}
+    if not considered and unlocks:
+        considered = _layout_unlock_names_from_context(unlocks)
+        unused = [item for item in considered if item not in set(used)]
+    if not used and not considered and not unused:
+        return ""
+    detail_parts = []
+    if considered:
+        detail_parts.append(f"considered={', '.join(considered[:8])}")
+    if used:
+        detail_parts.append(f"used={', '.join(used[:8])}")
+    if unused:
+        detail_parts.append(f"not_used={', '.join(unused[:8])}")
+    return (
+        "<div class=\"layout-validation layout-validation-warning layout-unlocks\">"
+        "<strong>Unlock-aware</strong>"
+        f"<span>{escape('; '.join(detail_parts))}</span>"
+        "</div>"
+    )
+
+
+def _layout_unlock_names_from_context(unlocks: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    long_handed = unlocks.get("long_handed_inserter") if isinstance(unlocks.get("long_handed_inserter"), dict) else {}
+    if bool(long_handed.get("available")):
+        names.append("long-handed-inserter")
+    for group_name in ("modules", "machines", "furnaces", "beacons"):
+        group = unlocks.get(group_name) if isinstance(unlocks.get(group_name), dict) else {}
+        for name, state in group.items():
+            if isinstance(state, dict) and bool(state.get("available")):
+                names.append(str(name))
+    return sorted(dict.fromkeys(names))
 
 
 def _layout_validation_panel(value: Any, lang: str, *, title_key: str = "validation") -> str:

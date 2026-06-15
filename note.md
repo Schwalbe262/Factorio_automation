@@ -6928,3 +6928,169 @@
 - Next action: Commit/push Part 107, then let Qwen/autopilot continue from `bootstrap_power_pole_mall` or electric drill research depending on current observation.
 - Token usage: 12,471,522 absolute at checkpoint; +936,284 since Part 106 token checkpoint; weekly quota unavailable so percentage cannot be computed.
 
+## 2026-06-15 12:16:41 +09:00 - Loop 321
+- Part: skill
+- Goal: launch_rocket_program / bootstrap_power_pole_mall
+- Hypothesis: Running `bootstrap_power_pole_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `bootstrap_power_pole_mall` for up to 5 step(s).
+  - Tracked `small-electric-pole` from 1 to 1.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-power-pole-mall-20260615-031627.jsonl`.
+- Candidates:
+  - Selected goal/skill: `bootstrap_power_pole_mall`.
+  - Target item candidate: `small-electric-pole` target `20`.
+- Metrics:
+  - Steps: 5.
+  - Status: failed.
+  - Duration: 13.266s.
+  - small-electric-pole: 1 -> 1 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-power-pole-mall-20260615-031627.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":1,"initial_item_count":1,"max_steps":5,"target":20}`.
+- Result: Loop stopped: max steps reached: 5
+- Failure reason: max steps reached: 5
+- Next action: Inspect repeated actions in the raw log and remove the bottleneck before increasing max steps.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 12:24:22 +09:00 - Loop 322
+- Part: skill
+- Goal: launch_rocket_program / bootstrap_power_pole_mall
+- Hypothesis: Running `bootstrap_power_pole_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `bootstrap_power_pole_mall` for up to 10 step(s).
+  - Tracked `small-electric-pole` from 1 to 3.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-power-pole-mall-20260615-032355.jsonl`.
+- Candidates:
+  - Selected goal/skill: `bootstrap_power_pole_mall`.
+  - Target item candidate: `small-electric-pole` target `20`.
+- Metrics:
+  - Steps: 10.
+  - Status: failed.
+  - Duration: 26.953s.
+  - small-electric-pole: 1 -> 3 (delta 2).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-power-pole-mall-20260615-032355.jsonl`.
+  - Metadata: `{"delta_item_count":2,"final_item_count":3,"initial_item_count":1,"max_steps":10,"target":20}`.
+- Result: Partial progress despite loop stop: max steps reached: 10
+- Failure reason: max steps reached: 10
+- Next action: Continue only if the next decision still respects automation and site-logistics guardrails.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 12:26:06 +09:00 - Loop 323
+- Part: skill
+- Goal: launch_rocket_program / bootstrap_power_pole_mall
+- Hypothesis: Running `bootstrap_power_pole_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `bootstrap_power_pole_mall` for up to 12 step(s).
+  - Tracked `small-electric-pole` from 3 to 7.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-power-pole-mall-20260615-032528.jsonl`.
+- Candidates:
+  - Selected goal/skill: `bootstrap_power_pole_mall`.
+  - Target item candidate: `small-electric-pole` target `20`.
+- Metrics:
+  - Steps: 12.
+  - Status: failed.
+  - Duration: 37.515s.
+  - small-electric-pole: 3 -> 7 (delta 4).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-power-pole-mall-20260615-032528.jsonl`.
+  - Metadata: `{"delta_item_count":4,"final_item_count":7,"initial_item_count":3,"max_steps":12,"target":20}`.
+- Result: Partial progress despite loop stop: max steps reached: 12
+- Failure reason: max steps reached: 12
+- Next action: Continue only if the next decision still respects automation and site-logistics guardrails.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 12:28:30 +09:00 - Loop 324
+- Part: skill
+- Goal: launch_rocket_program / bootstrap_power_pole_mall
+- Hypothesis: Running `bootstrap_power_pole_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `bootstrap_power_pole_mall` for up to 40 step(s).
+  - Tracked `small-electric-pole` from 7 to 23.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-power-pole-mall-20260615-032658.jsonl`.
+- Candidates:
+  - Selected goal/skill: `bootstrap_power_pole_mall`.
+  - Target item candidate: `small-electric-pole` target `20`.
+- Metrics:
+  - Steps: 30.
+  - Status: ok.
+  - Duration: 92.281s.
+  - small-electric-pole: 7 -> 23 (delta 16).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-power-pole-mall-20260615-032658.jsonl`.
+  - Metadata: `{"delta_item_count":16,"final_item_count":23,"initial_item_count":7,"max_steps":40,"target":20}`.
+- Result: Completed: build item mall is producing small-electric-pole and target reached: 23/20
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 12:30:19 +09:00 - Loop 325
+- Part: skill
+- Goal: launch_rocket_program / relocate_gear_belt_mall_to_iron_source
+- Hypothesis: Running `relocate_gear_belt_mall_to_iron_source` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `relocate_gear_belt_mall_to_iron_source` for up to 20 step(s).
+  - Tracked `transport-belt` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-gear-belt-mall-relocation-20260615-033013.jsonl`.
+- Candidates:
+  - Selected goal/skill: `relocate_gear_belt_mall_to_iron_source`.
+  - Target item candidate: `transport-belt` target `20`.
+- Metrics:
+  - Steps: 2.
+  - Status: failed.
+  - Duration: 6.032s.
+  - transport-belt: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-gear-belt-mall-relocation-20260615-033013.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":20,"target":20}`.
+- Result: Loop stopped: no costed gear/belt mall relocation target was found
+- Failure reason: no costed gear/belt mall relocation target was found
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 12:33:08 +09:00 - Loop 326
+- Part: skill
+- Goal: launch_rocket_program / research_electric_mining_drill
+- Hypothesis: Running `research_electric_mining_drill` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `research_electric_mining_drill` for up to 20 step(s).
+  - Tracked `automation-science-pack` from 0 to 0.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-electric-mining-drill-research-20260615-033301.jsonl`.
+- Candidates:
+  - Selected goal/skill: `research_electric_mining_drill`.
+  - Target item candidate: `automation-science-pack` target `25`.
+- Metrics:
+  - Steps: 3.
+  - Status: failed.
+  - Duration: 6.859s.
+  - automation-science-pack: 0 -> 0 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-electric-mining-drill-research-20260615-033301.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":20,"target":25}`.
+- Result: Loop stopped: automation-science-pack mall assembler needs a copper-plate logistic line from entity-source:copper-plate:stone-furnace:316 (99 tiles); refusing repeated hand-carry between distant sites
+- Failure reason: automation-science-pack mall assembler needs a copper-plate logistic line from entity-source:copper-plate:stone-furnace:316 (99 tiles); refusing repeated hand-carry between distant sites
+- Next action: Plan or build the missing site-to-site logistic line before repeating the consumer loop.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 12:55:23 +09:00 - Loop 327
+
+- Part: unlock-aware layout capability and current mall recovery fixes
+- Goal: Ensure newly usable long-handed inserters, modules, higher-tier machines, furnaces, and beacons are automatically considered by site layout optimization and visible to the operator/LLM.
+- Hypothesis: If the no-mod observation reports recipe enabled state as well as researched technologies, layout candidates can react to usable items even when Factorio's current technology list does not expose a separate `long-inserters` technology.
+- Actions:
+  - Inspected `goal.md`, `docs/CLI_HANDOFF.md`, current code, and live no-mod observations.
+  - Confirmed the live server has `long-handed-inserter` recipe enabled while `long-inserters` technology is absent from the current Factorio technology table.
+  - Added `recipe_unlocks` to no-mod observation for long inserters, higher-tier assemblers/furnaces, modules, beacons, and power distribution items.
+  - Expanded planner, strategy payload, compact Slurm payload, and web dashboard layout capability data to distinguish considered, used, and unused unlocked layout tools.
+  - Updated green-circuit candidates to use long-handed inserters from recipe unlocks and to switch blueprint/rate estimates to higher-tier assemblers when available.
+  - Updated smelting candidates to switch blueprint/rate estimates to higher-tier furnaces when available.
+  - Kept the current power-pole mall wood sourcing and partial gear/belt mall relocation recovery fixes in the same validated batch.
+  - Ran targeted tests and the full test suite.
+- Candidates:
+  - `green-circuit-long-handed-3-cable-2-circuit-cell` from live `long-handed-inserter` recipe unlock.
+  - `green-circuit-3-cable-2-circuit-cell` with `assembling-machine-2` when that recipe is enabled.
+  - `iron-plate-steel-furnace-parallel-smelting-columns` when `steel-furnace` is enabled.
+- Metrics:
+  - Full test suite: `492 passed in 26.22s`.
+  - Live recipe probe: `long-handed-inserter.enabled=true`, `long-inserters technology=None`.
+  - Live layout context: `long_handed_available=true`, `recipe_unlocked=true`, `rerank_trigger=true`.
+  - Live first candidate: `green-circuit-long-handed-3-cable-2-circuit-cell`, `uses_unlocked_items=["long-handed-inserter"]`.
+- Result: Unlock-aware site layout optimization now reacts to recipe-enabled usable items, not only researched technology flags.
+- Failure reason: None.
+- Next action: Continue with the live power/logistics blocker: restore factory power before repeating electric mining drill research or science production loops.
+- Token usage: not recorded for this loop / weekly quota unavailable
+

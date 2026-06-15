@@ -702,8 +702,9 @@ class RemoteSlurmTests(unittest.TestCase):
         payload = {
             "objective": "launch_rocket_program",
             "observation": {
-                "inventory": {"productivity-module": 1},
+                "inventory": {"productivity-module": 1, "assembling-machine-2": 1, "steel-furnace": 1},
                 "research": {"technologies": {"long-inserters": {"researched": True}}},
+                "recipe_unlocks": {"long-handed-inserter": {"enabled": True}, "beacon": {"enabled": True}},
                 "entities": [
                     {
                         "name": "assembling-machine-1",
@@ -725,6 +726,10 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertEqual(layout["site_structure"]["machine_counts"]["assembling-machine-1"], 1)
         self.assertTrue(layout["layout_capabilities"]["long_handed_inserter"]["available"])
         self.assertTrue(layout["layout_capabilities"]["modules"]["productivity-module"]["available"])
+        self.assertTrue(layout["layout_capabilities"]["machines"]["assembling-machine-2"]["available"])
+        self.assertTrue(layout["layout_capabilities"]["furnaces"]["steel-furnace"]["available"])
+        self.assertTrue(layout["layout_capabilities"]["beacons"]["beacon"]["available"])
+        self.assertTrue(layout["layout_capabilities"]["long_handed_inserter"]["recipe_unlocked"])
         self.assertTrue(layout["layout_capabilities"]["rerank_trigger"])
         self.assertIn("rebalance_green_circuit_ratio", {item["kind"] for item in layout["opportunities"]})
 
