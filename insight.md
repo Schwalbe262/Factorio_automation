@@ -574,3 +574,11 @@
 - Evidence: `{"tests":"502 passed","live_strategy_id":"strategy-e7840d7f4e2a4796b9f92a431f25a7a2","raw_llm_skill":"bootstrap_build_item_mall","guardrailed_skill":"plan_factory_site","layout_kind":"incomplete_logistics_link","item":"copper-plate","site_id":"site-link:copper-plate:missing_source:copper-plate->assembler_cell:537","hand_carry_seed_risk":true}`
 - Remaining risk: This prevents the unsafe strategy choice but still leaves the factory waiting on an executable general site-to-site logistics correction.
 
+## 2026-06-15 13:51:04 +09:00 - Insight 70
+
+- Source loop: Loop 334
+- Improvement: Unlock-aware layout optimization now exposes both the use of newly available tools and whether those tools are actually supplied.
+- Before: Long-handed inserter candidates could be generated from recipe unlock state, but compact Qwen payloads did not preserve candidate-level used unlock metadata or the missing build-item count, making `recipe_unlocked` easier to confuse with build readiness.
+- After: Planner candidates, Slurm/Qwen compact payloads, and the web dashboard preserve `used_unlocked_item_state` plus `build_item_supply`; the live long-handed green-circuit candidate reports `long-handed-inserter x7` missing while still showing the tool as `recipe_unlocked=true`, `stock=0`, `automated=false`.
+- Evidence: `{"targeted_tests":"220 passed","full_tests":"503 passed","live_candidates":["green-circuit-long-handed-3-cable-2-circuit-cell","unlock-aware-site-rerank-long-handed-inserter"],"live_state":{"long-handed-inserter":{"available":true,"researched":false,"recipe_unlocked":true,"stock":0,"automated":false}},"live_missing":{"long-handed-inserter":7,"transport-belt":39,"assembling-machine-1":5,"inserter":5,"iron-chest":2},"ui":"Build items row renders unlocked_tool_shortage"}`
+- Remaining risk: This is planning and monitoring visibility; a deterministic executor still needs to supply long-handed inserters and safely rebuild selected sites after validation.

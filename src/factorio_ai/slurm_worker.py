@@ -1246,11 +1246,50 @@ def _compact_layout_candidate(value: dict[str, Any]) -> dict[str, Any]:
         "site_placement_search": _compact_site_placement_search(placement_search) if placement_search else {},
         "sandbox_validation_lesson": _compact_value(value.get("sandbox_validation_lesson"), string_limit=180),
         "sandbox_lesson": _compact_value(value.get("sandbox_validation_lesson"), string_limit=180),
+        "considered_unlocked_items": _compact_value(value.get("considered_unlocked_items"), string_limit=70, list_limit=8),
+        "uses_unlocked_items": _compact_value(value.get("uses_unlocked_items"), string_limit=70, list_limit=8),
+        "unused_unlocked_items": _compact_value(value.get("unused_unlocked_items"), string_limit=70, list_limit=8),
+        "used_unlocked_item_state": _compact_used_unlocked_item_state(value.get("used_unlocked_item_state")),
+        "build_item_supply": _compact_candidate_build_item_supply(value.get("build_item_supply")),
         "simulation": {
             "score": simulation.get("score"),
             "before": _compact_value(simulation.get("before"), string_limit=80, list_limit=5),
             "after": _compact_value(simulation.get("after"), string_limit=80, list_limit=5),
             "delta": _compact_value(simulation.get("delta"), string_limit=80, list_limit=5),
+        },
+    }
+
+
+def _compact_used_unlocked_item_state(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    output: dict[str, Any] = {}
+    for name, state in list(value.items())[:8]:
+        if not isinstance(state, dict):
+            continue
+        output[str(name)] = _compact_dict(
+            state,
+            ("available", "researched", "recipe_unlocked", "stock", "automated", "built"),
+        )
+    return output
+
+
+def _compact_candidate_build_item_supply(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    unlocked_supply = (
+        value.get("used_unlocked_item_supply")
+        if isinstance(value.get("used_unlocked_item_supply"), dict)
+        else {}
+    )
+    return {
+        "status": value.get("status"),
+        "summary": _compact_value(value.get("summary"), string_limit=140),
+        "missing": _compact_value(value.get("missing"), string_limit=80, list_limit=8),
+        "used_unlocked_item_supply": {
+            str(name): _compact_dict(state, ("required", "available", "missing", "sufficient"))
+            for name, state in list(unlocked_supply.items())[:8]
+            if isinstance(state, dict)
         },
     }
 

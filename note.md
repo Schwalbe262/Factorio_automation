@@ -7239,3 +7239,30 @@
 - Next action: Implement or route an executable logistics correction for the current missing copper-plate, iron-gear-wheel, and copper-cable links so the loop can advance beyond diagnostic `plan_factory_site`.
 - Token usage: 14,139,245 cumulative Codex tokens / weekly quota unavailable
 
+## 2026-06-15 13:51:04 +09:00 - Loop 334
+
+- Part: unlock-aware layout supply visibility
+- Goal: Ensure newly usable long-handed inserters and future layout tools are automatically considered by site optimization while still separating unlock availability from actual build-item supply.
+- Hypothesis: The planner already reranks some candidates after long-handed inserter unlocks, but Qwen and the web UI need explicit `stock`/`automated`/missing-build-item fields to avoid treating a recipe unlock as immediately build-ready.
+- Actions:
+  - Inspected planner, strategy capability context, web dashboard candidate rendering, and Slurm compact layout payloads.
+  - Added `build_item_supply` to blueprint-backed layout candidates so required, available, and missing entity counts are recorded from the exact candidate blueprint.
+  - Added `used_unlocked_item_state` to layout candidates so Qwen can see per-tool `recipe_unlocked`, `stock`, `automated`, and built/researched state.
+  - Added compact Slurm payload fields for `considered_unlocked_items`, `uses_unlocked_items`, `unused_unlocked_items`, `used_unlocked_item_state`, and candidate-level `build_item_supply`.
+  - Added a web dashboard `Build items` row for layout candidates.
+  - Added regression tests for long-handed green-circuit supply, starter mall long-handed metadata, Slurm compact payload preservation, and dashboard rendering.
+  - Ran read-only live no-mod smoke without executing a skill.
+- Candidates:
+  - Live current long-handed candidates: `green-circuit-long-handed-3-cable-2-circuit-cell`, `unlock-aware-site-rerank-long-handed-inserter`.
+  - Live current state: `long-handed-inserter` is available by recipe unlock, but has `stock=0` and `automated=false`.
+- Metrics:
+  - Targeted tests: planner/web/slurm targeted tests passed.
+  - Related suite: `220 passed in 0.73s` for `tests/test_planner.py tests/test_slurm_worker.py tests/test_web_dashboard.py`.
+  - Full test suite: `503 passed in 26.18s`.
+  - Live smoke: compact Qwen payload preserved `used_unlocked_item_state.long-handed-inserter={available:true, researched:false, recipe_unlocked:true, stock:0, automated:false}`.
+  - Live smoke: long-handed green-circuit candidate reports missing build items including `long-handed-inserter x7`, `transport-belt x39`, `assembling-machine-1 x5`, `inserter x5`, and `iron-chest x2`.
+- Result: Layout optimization now automatically considers long-handed inserters as an unlocked layout tool while making the supply gap explicit to Qwen and the UI.
+- Failure reason: None for metadata/planning visibility. This does not itself build long-handed inserters or rebuild a site.
+- Next action: Commit/push Part 112, then continue toward deterministic site-to-site logistics correction.
+- Token usage: 14,325,479 cumulative Codex tokens / weekly quota unavailable
+

@@ -706,6 +706,14 @@ class PlannerTests(unittest.TestCase):
 
         self.assertTrue(candidate["layout_unlocks_considered"]["long_handed_inserter"]["recipe_unlocked"])
         self.assertIn("long-handed-inserter", candidate["uses_unlocked_items"])
+        self.assertTrue(candidate["used_unlocked_item_state"]["long-handed-inserter"]["recipe_unlocked"])
+        self.assertEqual(candidate["used_unlocked_item_state"]["long-handed-inserter"]["stock"], 0)
+        self.assertFalse(candidate["used_unlocked_item_state"]["long-handed-inserter"]["automated"])
+        supply = candidate["build_item_supply"]
+        self.assertEqual(supply["used_unlocked_item_supply"]["long-handed-inserter"]["required"], 7)
+        self.assertEqual(supply["used_unlocked_item_supply"]["long-handed-inserter"]["available"], 0)
+        self.assertEqual(supply["used_unlocked_item_supply"]["long-handed-inserter"]["missing"], 7)
+        self.assertIn("long-handed-inserter", supply["missing"])
 
     def test_factory_layout_adds_unlock_reassessment_when_long_handed_changes_site_options(self):
         obs = base_observation()
@@ -816,8 +824,11 @@ class PlannerTests(unittest.TestCase):
         candidate = next(item for item in candidates if item["candidate_id"] == "starter-mall-row-long-handed-inputs")
 
         self.assertIn("long-handed-inserter", candidate["uses_unlocked_items"])
+        self.assertIn("long-handed-inserter", candidate["used_unlocked_item_state"])
         self.assertTrue(candidate["simulation"]["delta"]["unlock_aware_rerank"])
         self.assertEqual(candidate["simulation"]["after"]["shared_input_lanes"], 2)
+        self.assertIn("build_item_supply", candidate)
+        self.assertIn("long-handed-inserter", candidate["build_item_supply"]["used_unlocked_item_supply"])
         decoded = decode_blueprint_string(candidate["blueprint"]["exchange_string"])
         entities = decoded["blueprint"]["entities"]
         self.assertTrue(any(entity["name"] == "long-handed-inserter" for entity in entities))

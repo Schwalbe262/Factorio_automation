@@ -1968,6 +1968,7 @@ def _layout_candidate_table(rows: list[Any], lang: str) -> str:
             "</div>"
             f"<p class=\"layout-candidate-pattern\">{escape(str(row.get('target_pattern') or ''))}</p>"
             f"{_layout_unlock_panel(row)}"
+            f"{_layout_build_item_supply_panel(row)}"
             f"{_layout_validation_panel(row.get('validation'), lang)}"
             f"{_layout_validation_panel(row.get('sandbox_validation'), lang, title_key='sandbox_validation')}"
             f"{_layout_validation_panel(row.get('site_prebuild_gate'), lang, title_key='prebuild_gate')}"
@@ -2022,6 +2023,45 @@ def _layout_unlock_names_from_context(unlocks: dict[str, Any]) -> list[str]:
             if isinstance(state, dict) and bool(state.get("available")):
                 names.append(str(name))
     return sorted(dict.fromkeys(names))
+
+
+def _layout_build_item_supply_panel(row: dict[str, Any]) -> str:
+    supply = row.get("build_item_supply") if isinstance(row.get("build_item_supply"), dict) else {}
+    if not supply:
+        return ""
+    status = str(supply.get("status") or "warning")
+    css_status = status if status in {"pass", "warning", "fail"} else "warning"
+    missing = supply.get("missing") if isinstance(supply.get("missing"), dict) else {}
+    unlocked_supply = (
+        supply.get("used_unlocked_item_supply")
+        if isinstance(supply.get("used_unlocked_item_supply"), dict)
+        else {}
+    )
+    detail_parts: list[str] = []
+    if missing:
+        missing_text = ", ".join(f"{name} x{count}" for name, count in list(missing.items())[:5])
+        if len(missing) > 5:
+            missing_text += f" (+{len(missing) - 5} more)"
+        detail_parts.append(f"missing={missing_text}")
+    else:
+        detail_parts.append("all required blueprint items available")
+    unlocked_missing = {
+        str(name): int(state.get("missing") or 0)
+        for name, state in unlocked_supply.items()
+        if isinstance(state, dict) and int(state.get("missing") or 0) > 0
+    }
+    if unlocked_missing:
+        unlocked_text = ", ".join(f"{name} x{count}" for name, count in list(unlocked_missing.items())[:5])
+        detail_parts.append(f"unlocked_tool_shortage={unlocked_text}")
+    summary = str(supply.get("summary") or "")
+    if summary and summary not in detail_parts:
+        detail_parts.append(summary)
+    return (
+        f"<div class=\"layout-validation layout-validation-{escape(css_status, quote=True)} layout-build-items\">"
+        "<strong>Build items</strong>"
+        f"<span>{escape('; '.join(detail_parts))}</span>"
+        "</div>"
+    )
 
 
 def _layout_validation_panel(value: Any, lang: str, *, title_key: str = "validation") -> str:

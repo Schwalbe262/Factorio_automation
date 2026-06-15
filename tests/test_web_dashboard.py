@@ -168,6 +168,19 @@ class WebDashboardTests(unittest.TestCase):
                             "considered_unlocked_items": ["long-handed-inserter", "speed-module"],
                             "uses_unlocked_items": ["long-handed-inserter"],
                             "unused_unlocked_items": ["speed-module"],
+                            "build_item_supply": {
+                                "status": "fail",
+                                "missing": {"long-handed-inserter": 7, "assembling-machine-1": 5},
+                                "used_unlocked_item_supply": {
+                                    "long-handed-inserter": {
+                                        "required": 7,
+                                        "available": 0,
+                                        "missing": 7,
+                                        "sufficient": False,
+                                    }
+                                },
+                                "summary": "missing build items: long-handed-inserter x7, assembling-machine-1 x5",
+                            },
                             "layout_unlocks_considered": {
                                 "long_handed_inserter": {"available": True, "researched": True, "stock": 0},
                                 "modules": {"speed-module": {"available": True, "researched": False, "stock": 1}},
@@ -392,6 +405,8 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("considered=long-handed-inserter, speed-module", html)
         self.assertIn("used=long-handed-inserter", html)
         self.assertIn("not_used=speed-module", html)
+        self.assertIn("Build items", html)
+        self.assertIn("unlocked_tool_shortage=long-handed-inserter x7", html)
         self.assertIn("copy-blueprint", html)
         self.assertIn("layout-candidate-grid", html)
         self.assertIn("layout-candidate-card", html)

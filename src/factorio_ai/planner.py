@@ -744,7 +744,7 @@ def factory_layout_simulation_candidates(observation: dict[str, Any]) -> list[di
         if len(rows) >= 2:
             candidates.append(
                 _with_blueprint_variants(
-                    _smelting_standardization_candidate(item, rows, layout_unlocks=layout_unlocks),
+                    _smelting_standardization_candidate(item, rows, observation, layout_unlocks=layout_unlocks),
                     _combined_site_blueprint(
                         f"before-{item}-smelting-sites",
                         rows,
@@ -784,7 +784,7 @@ def factory_layout_simulation_candidates(observation: dict[str, Any]) -> list[di
     if len(mall_sites) >= 4:
         candidates.append(
             _with_blueprint_variants(
-                _mall_compaction_candidate(mall_sites, layout_unlocks=layout_unlocks),
+                _mall_compaction_candidate(mall_sites, observation, layout_unlocks=layout_unlocks),
                 _combined_site_blueprint(
                     "before-starter-mall-sites",
                     mall_sites,
@@ -928,6 +928,30 @@ def _layout_considered_unlocked_items(unlocks: dict[str, Any]) -> list[str]:
 def _layout_unused_unlocked_items(considered: list[str], used: list[str]) -> list[str]:
     used_set = set(used)
     return [item for item in considered if item not in used_set]
+
+
+def _layout_used_unlocked_item_state(unlocks: dict[str, Any], used: list[str]) -> dict[str, dict[str, Any]]:
+    output: dict[str, dict[str, Any]] = {}
+    for item in used:
+        state: dict[str, Any] = {}
+        if item == "long-handed-inserter":
+            raw = unlocks.get("long_handed_inserter")
+            if isinstance(raw, dict):
+                state = raw
+        else:
+            for group_name in ("modules", "machines", "furnaces", "beacons"):
+                group = unlocks.get(group_name) if isinstance(unlocks.get(group_name), dict) else {}
+                raw = group.get(item)
+                if isinstance(raw, dict):
+                    state = raw
+                    break
+        if state:
+            output[str(item)] = {
+                key: state.get(key)
+                for key in ("available", "researched", "recipe_unlocked", "stock", "automated", "built", "layout_impact")
+                if key in state
+            }
+    return output
 
 
 def _layout_capability_available(unlocks: dict[str, Any], group_name: str, name: str) -> bool:
@@ -1430,6 +1454,38 @@ def _site_gate_build_item_check(
     }
 
 
+def _layout_build_item_supply(
+    observation: dict[str, Any],
+    blueprint_entities: list[dict[str, Any]],
+    *,
+    used_unlocked_items: list[str],
+) -> dict[str, Any]:
+    check = _site_gate_build_item_check(observation, blueprint_entities)
+    required = check.get("required") if isinstance(check.get("required"), dict) else {}
+    available = check.get("available") if isinstance(check.get("available"), dict) else {}
+    missing = check.get("missing") if isinstance(check.get("missing"), dict) else {}
+    used = [str(item) for item in used_unlocked_items if item]
+    unlocked_supply = {}
+    for item in used:
+        need = int(required.get(item) or 0)
+        have = int(available.get(item) or 0)
+        unlocked_supply[item] = {
+            "required": need,
+            "available": have,
+            "missing": max(0, need - have),
+            "sufficient": have >= need,
+        }
+    return {
+        "status": check.get("status"),
+        "required": dict(sorted((str(key), int(value)) for key, value in required.items())),
+        "available": dict(sorted((str(key), int(value)) for key, value in available.items())),
+        "missing": dict(sorted((str(key), int(value)) for key, value in missing.items())),
+        "used_unlocked_items": used,
+        "used_unlocked_item_supply": unlocked_supply,
+        "summary": check.get("summary"),
+    }
+
+
 def _site_gate_collision_check(
     observation: dict[str, Any],
     planned_entities: list[dict[str, Any]],
@@ -1861,6 +1917,11 @@ def _green_circuit_layout_candidate(
     if assembler_tier != "assembling-machine-1":
         score += 4.0
     after_entities = _green_circuit_blueprint_entities(groups, use_long_handed=use_long_handed, assembler_name=assembler_tier)
+    build_item_supply = _layout_build_item_supply(
+        observation,
+        after_entities,
+        used_unlocked_items=used_unlocked_items,
+    )
     validation = _blueprint_operability_report(after_entities)
     placement_search = _site_placement_search(
         observation,
@@ -1919,6 +1980,8 @@ def _green_circuit_layout_candidate(
         "considered_unlocked_items": considered_unlocked_items,
         "uses_unlocked_items": used_unlocked_items,
         "unused_unlocked_items": _layout_unused_unlocked_items(considered_unlocked_items, used_unlocked_items),
+        "used_unlocked_item_state": _layout_used_unlocked_item_state(unlocks, used_unlocked_items),
+        "build_item_supply": build_item_supply,
         "site_prebuild_gate": site_gate,
         "site_placement_search": placement_search,
         "prerequisite_tasks": layout_candidate_prerequisite_tasks(
@@ -2102,6 +2165,7 @@ def _unlock_retooling_candidate(
         "considered_unlocked_items": considered_unlocked_items,
         "uses_unlocked_items": retool_tools,
         "unused_unlocked_items": _layout_unused_unlocked_items(considered_unlocked_items, retool_tools),
+        "used_unlocked_item_state": _layout_used_unlocked_item_state(unlocks, retool_tools),
         "simulation": {
             "before": {
                 "affected_sites": len(affected_sites),
@@ -2130,6 +2194,7 @@ def _unlock_retooling_candidate(
 def _smelting_standardization_candidate(
     item: str,
     rows: list[dict[str, Any]],
+    observation: dict[str, Any],
     *,
     layout_unlocks: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -2150,6 +2215,7 @@ def _smelting_standardization_candidate(
     score = 58.0 + min(22.0, len(rows) * 4.0) + min(12.0, area_reduction / 20.0)
     if furnace_tier != "stone-furnace":
         score += 5.0
+    after_entities = _smelting_column_blueprint_entities(item, furnace_count, target_columns, furnace_name=furnace_tier)
     return {
         "candidate_id": f"{item}-{furnace_tier}-parallel-smelting-columns",
         "simulation_only": True,
@@ -2159,13 +2225,19 @@ def _smelting_standardization_candidate(
         "requires_build_command": True,
         "blueprint": _blueprint_export(
             f"{item}-{furnace_tier}-parallel-smelting-columns",
-            _smelting_column_blueprint_entities(item, furnace_count, target_columns, furnace_name=furnace_tier),
+            after_entities,
             "Simulation-only smelting column block. Place near validated ore/fuel inputs; miners and long logistics are not included.",
         ),
         "layout_unlocks_considered": unlocks,
         "considered_unlocked_items": considered_unlocked_items,
         "uses_unlocked_items": used_unlocked_items,
         "unused_unlocked_items": _layout_unused_unlocked_items(considered_unlocked_items, used_unlocked_items),
+        "used_unlocked_item_state": _layout_used_unlocked_item_state(unlocks, used_unlocked_items),
+        "build_item_supply": _layout_build_item_supply(
+            observation,
+            after_entities,
+            used_unlocked_items=used_unlocked_items,
+        ),
         "simulation": {
             "before": {
                 "sites": len(rows),
@@ -2367,6 +2439,7 @@ def _lab_daisy_chain_blueprint_entities(lab_count: int) -> list[dict[str, Any]]:
 
 def _mall_compaction_candidate(
     mall_sites: list[dict[str, Any]],
+    observation: dict[str, Any],
     *,
     layout_unlocks: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -2384,6 +2457,7 @@ def _mall_compaction_candidate(
     score = 60.0 + min(22.0, max(0.0, before_area - after_area) / 16.0)
     if use_long_handed:
         score += 7.0
+    after_entities = _starter_mall_row_blueprint_entities(len(mall_sites), use_long_handed=use_long_handed)
     return {
         "candidate_id": candidate_id,
         "simulation_only": True,
@@ -2397,7 +2471,7 @@ def _mall_compaction_candidate(
         "requires_build_command": True,
         "blueprint": _blueprint_export(
             candidate_id,
-            _starter_mall_row_blueprint_entities(len(mall_sites), use_long_handed=use_long_handed),
+            after_entities,
             (
                 "Simulation-only starter mall row using long-handed inserters for a second input lane. "
                 "Validate input belts, recipes, power, and chest positions before applying."
@@ -2409,6 +2483,12 @@ def _mall_compaction_candidate(
         "considered_unlocked_items": considered_unlocked_items,
         "uses_unlocked_items": used_unlocked_items,
         "unused_unlocked_items": _layout_unused_unlocked_items(considered_unlocked_items, used_unlocked_items),
+        "used_unlocked_item_state": _layout_used_unlocked_item_state(unlocks, used_unlocked_items),
+        "build_item_supply": _layout_build_item_supply(
+            observation,
+            after_entities,
+            used_unlocked_items=used_unlocked_items,
+        ),
         "simulation": {
             "before": {"cells": len(mall_sites), "footprint_area": round(before_area, 1)},
             "after": {

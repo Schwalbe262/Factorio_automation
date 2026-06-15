@@ -248,6 +248,48 @@ class SlurmWorkerTests(unittest.TestCase):
         )
         self.assertEqual(compact["layout_improvement"]["opportunities"][0]["kind"], "operator_selected_site")
 
+    def test_layout_payload_preserves_long_handed_candidate_supply_for_qwen(self):
+        compact = compact_layout_improvement_payload(
+            {
+                "objective": "launch_rocket_program",
+                "active_skill": "bootstrap_build_item_mall",
+                "active_step": 2,
+                "observation": {
+                    "inventory": {},
+                    "recipe_unlocks": {"long-handed-inserter": {"enabled": True}},
+                    "entities": [
+                        {
+                            "name": "assembling-machine-1",
+                            "unit_number": 10,
+                            "recipe": "electronic-circuit",
+                            "position": {"x": 0, "y": 0},
+                            "electric_network_connected": True,
+                            "inventories": {},
+                        }
+                    ],
+                    "resources": [],
+                },
+                "production_targets": {},
+            }
+        )
+
+        candidates = compact["layout_improvement"]["simulation_candidates"]
+        candidate = next(
+            item
+            for item in candidates
+            if item["candidate_id"] == "green-circuit-long-handed-3-cable-2-circuit-cell"
+        )
+        self.assertIn("long-handed-inserter", candidate["uses_unlocked_items"])
+        self.assertIn("long-handed-inserter", candidate["considered_unlocked_items"])
+        self.assertTrue(candidate["used_unlocked_item_state"]["long-handed-inserter"]["recipe_unlocked"])
+        self.assertEqual(candidate["used_unlocked_item_state"]["long-handed-inserter"]["stock"], 0)
+        self.assertFalse(candidate["used_unlocked_item_state"]["long-handed-inserter"]["automated"])
+        self.assertEqual(candidate["build_item_supply"]["status"], "fail")
+        self.assertEqual(
+            candidate["build_item_supply"]["used_unlocked_item_supply"]["long-handed-inserter"]["missing"],
+            7,
+        )
+
     def test_layout_payload_includes_sandbox_validation_feedback(self):
         feedback = {
             "entry_count": 1,

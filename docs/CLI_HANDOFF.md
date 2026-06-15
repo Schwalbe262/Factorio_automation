@@ -1,6 +1,6 @@
 # Factorio Automation CLI Handoff
 
-Last updated: 2026-06-15 13:40 KST
+Last updated: 2026-06-15 13:51 KST
 Repository: `C:\Users\NEC\Documents\Factorio`
 GitHub: `https://github.com/Schwalbe262/Factorio_automation`
 Current branch: `master`
@@ -133,6 +133,12 @@ Latest continuation after Part 105:
   - Live smoke changed Qwen's raw mall choice into `plan_factory_site` with `hand_carry_seed_risk=true`, `transport_belt_automation_ready=false`, and `assembling_machine_1_inventory=0`.
   - This is intentionally a no-hand-carry safety guard, not a full logistics executor; the next missing feature is an executable general site-to-site logistics correction for copper/gear/cable inputs.
   - Full verification: `pytest -q` -> `502 passed`.
+- Part 112 makes unlock-aware layout candidates explicit about build-item supply:
+  - Long-handed inserters, modules, higher-tier machines/furnaces, and beacons remain automatic layout inputs via `layout_unlocks_considered`, but candidates now also record `used_unlocked_item_state` so Qwen can see `recipe_unlocked`, `stock`, and `automated` separately.
+  - Blueprint-backed candidates now include `build_item_supply`, including missing unlocked tools such as `long-handed-inserter x7`, so the UI and Slurm/Qwen payload distinguish "use this better layout" from "first automate/supply the build items".
+  - The web dashboard candidate cards now render a `Build items` row next to `Unlock-aware`.
+  - Live read-only smoke: current no-mod state reports `long-handed-inserter` as `available=true`, `recipe_unlocked=true`, `stock=0`, `automated=false`; compact Qwen payload preserves that state and the long-handed green-circuit candidate's missing build items.
+  - Related verification: `pytest -q tests/test_planner.py tests/test_slurm_worker.py tests/test_web_dashboard.py` -> `220 passed`; full verification `pytest -q` -> `503 passed`.
 
 Part 64 introduced:
 
