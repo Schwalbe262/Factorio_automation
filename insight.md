@@ -645,3 +645,12 @@
 - After: `GearBeltMallRelocationSkill` first places missing corridor poles, refuses teardown while the corridor is incomplete, and strategy treats gear/belt mall `no_power` as a narrow relocation-first case when relocation is already cost-preferred and small-pole supply is sufficient. Live Qwen strategy `strategy-179dff4ec49a48fcad54cf83fbcc589e` selected `relocate_gear_belt_mall_to_iron_source`.
 - Evidence: `{"tests":"531 passed","live_first_pole":{"unit":599,"position":{"x":-28.5,"y":6.5}},"next_action":"move near next relocation power corridor target","live_strategy_id":"strategy-179dff4ec49a48fcad54cf83fbcc589e","guardrailed_skill":"relocate_gear_belt_mall_to_iron_source","source_distance_tiles":149.1,"belt_route_cost":150.0,"relocation_cost":56.0,"small_electric_pole_deficit":0}`
 - Remaining risk: The corridor is not complete yet and transport belts are still not being produced; the autopilot must continue placing corridor poles, then move units 537 and 318 beside the iron source before the steady-state boiler coal feed can be built.
+
+## 2026-06-15 17:12:47 +09:00 - Insight 78
+
+- Source loop: Loop 363
+- Improvement: Gear/belt mall relocation can now survive crash-site detours and in-progress rebuild states, and the live mall is relocated beside iron plates.
+- Before: Exact pole placement failed near the crash-site spaceship/wreckage, strategy fell back to `setup_power` when power recovery was waiting on belt mall output, and relocation state disappeared after old assemblers were mined, after the agent reached the source with inventory assemblers, and after target assemblers were built with one blank recipe.
+- After: Corridor poles use protected-artifact detours and nearby placement, strategy tracks `power_recovery_waits_on_belt_mall` and `relocation_in_progress`, and planner/strategy keep partial target rebuilds active until recipes are set. Live state has unit 664 `iron-gear-wheel` and unit 665 `transport-belt` near unit 395.
+- Evidence: `{"tests":"540 passed","live_done":true,"old_units_mined":[537,318],"new_units":{"gear":664,"belt":665},"recipes":{"664":"iron-gear-wheel","665":"transport-belt"},"protected_crash_site":"detoured, not mined","strategy_ids":["strategy-b7b9d422aef440cd87942a537c4e0740"]}`
+- Remaining risk: Units 664 and 665 are unpowered/unconnected and no local plate/gear/belt logistics exists yet; transport-belt count is still 0.

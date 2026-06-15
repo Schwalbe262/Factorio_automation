@@ -532,7 +532,36 @@ class PlannerTests(unittest.TestCase):
 
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "small-electric-pole")
+        self.assertIs(decision.action["allow_nearby"], True)
         self.assertIn("power corridor before mining existing mall", decision.reason)
+
+    def test_gear_belt_mall_relocation_detours_power_corridor_around_crash_artifact(self):
+        obs = long_gear_mall_relocation_observation()
+        obs["inventory"] = {"small-electric-pole": 23}
+        obs["player"]["position"] = {"x": 0.5, "y": 0.5}
+        layout = planner_module._find_gear_belt_mall_relocation_layout(obs)
+        first_position = planner_module._gear_belt_mall_relocation_power_corridor_positions(obs, layout)[0]
+        obs["entities"].append(
+            {
+                "name": "crash-site-spaceship",
+                "unit_number": 999,
+                "type": "container",
+                "position": {"x": first_position["x"] + 5.0, "y": first_position["y"]},
+                "inventories": {},
+            }
+        )
+
+        decision = GearBeltMallRelocationSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "small-electric-pole")
+        self.assertIs(decision.action["allow_nearby"], True)
+        self.assertNotEqual(decision.action["position"], first_position)
+        self.assertGreater(
+            planner_module.distance(decision.action["position"], {"x": first_position["x"] + 5.0, "y": first_position["y"]}),
+            6.0,
+        )
+        self.assertIn("detoured", decision.reason)
 
     def test_gear_belt_mall_relocation_recovers_existing_assembler_when_corridor_exists(self):
         obs = long_gear_mall_relocation_observation()
@@ -545,6 +574,67 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "mine")
         self.assertEqual(decision.action["unit_number"], 100)
         self.assertIn("costed relocation", decision.reason)
+
+    def test_gear_belt_mall_relocation_does_not_require_spare_poles_after_corridor_exists(self):
+        obs = long_gear_mall_relocation_observation()
+        obs["inventory"] = {}
+        obs["player"]["position"] = {"x": 0.5, "y": 0.5}
+        _add_existing_relocation_power_corridor(obs)
+
+        decision = GearBeltMallRelocationSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 100)
+        self.assertIn("costed relocation", decision.reason)
+
+    def test_gear_belt_mall_relocation_rebuilds_from_inventory_after_reaching_source(self):
+        obs = long_gear_mall_relocation_observation()
+        _add_existing_relocation_power_corridor(obs)
+        obs["entities"] = [
+            entity for entity in obs["entities"] if entity.get("unit_number") not in {100, 101}
+        ]
+        obs["inventory"] = {"assembling-machine-1": 2}
+        obs["player"]["position"] = {"x": 158.5, "y": -4.5}
+
+        decision = GearBeltMallRelocationSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "assembling-machine-1")
+        self.assertEqual(decision.action["position"], {"x": 158.5, "y": -4.5})
+        self.assertIn("place relocated gear assembler", decision.reason)
+
+    def test_gear_belt_mall_relocation_sets_recipe_after_target_rebuild(self):
+        obs = long_gear_mall_relocation_observation()
+        _add_existing_relocation_power_corridor(obs)
+        obs["entities"] = [
+            entity for entity in obs["entities"] if entity.get("unit_number") not in {100, 101}
+        ]
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 800,
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 158.5, "y": -4.0},
+                    "inventories": {},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 801,
+                    "position": {"x": 161.5, "y": -4.0},
+                    "inventories": {},
+                },
+            ]
+        )
+        obs["inventory"] = {}
+        obs["player"]["position"] = {"x": 158.5, "y": -4.5}
+
+        decision = GearBeltMallRelocationSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "set_recipe")
+        self.assertEqual(decision.action["unit_number"], 801)
+        self.assertEqual(decision.action["recipe"], "transport-belt")
+        self.assertIn("set relocated belt assembler recipe", decision.reason)
 
     def test_gear_belt_mall_relocation_continues_after_first_assembler_recovered(self):
         obs = long_gear_mall_relocation_observation()

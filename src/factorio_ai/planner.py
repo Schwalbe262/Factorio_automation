@@ -6205,20 +6205,25 @@ def _find_gear_belt_mall_relocation_layout(observation: dict[str, Any]) -> dict[
 
     source_position = _position(source)
     gear_position = _position(gear_assembler)
+    target_gear_position = {"x": round(source_position["x"] + 5.5, 1), "y": round(source_position["y"] - 5.0, 1)}
+    target_belt_position = {"x": round(target_gear_position["x"] + 3.0, 1), "y": target_gear_position["y"]}
+    target_gear_assembler = _assembler_at_position(observation, target_gear_position)
+    target_belt_assembler = _assembler_at_position(observation, target_belt_position)
+    target_rebuild_in_progress = isinstance(target_gear_assembler, dict) or isinstance(target_belt_assembler, dict)
     route_cost = _gear_mall_plate_layout_cost_estimate(observation, source_position, gear_position)
+    if target_rebuild_in_progress:
+        route_cost = {**route_cost, "route_cost_preference": "relocate_mall_to_iron_source"}
     if route_cost.get("route_cost_preference") != "relocate_mall_to_iron_source":
         return None
 
-    target_gear_position = {"x": round(source_position["x"] + 5.5, 1), "y": round(source_position["y"] - 5.0, 1)}
-    target_belt_position = {"x": round(target_gear_position["x"] + 3.0, 1), "y": target_gear_position["y"]}
     return {
         "source": source,
         "gear_assembler": gear_assembler,
         "belt_assembler": belt_assembler,
         "target_gear_position": target_gear_position,
         "target_belt_position": target_belt_position,
-        "target_gear_assembler": _assembler_at_position(observation, target_gear_position),
-        "target_belt_assembler": _assembler_at_position(observation, target_belt_position),
+        "target_gear_assembler": target_gear_assembler,
+        "target_belt_assembler": target_belt_assembler,
         "source_distance_tiles": round(distance(source_position, gear_position), 1),
         **route_cost,
     }
@@ -6226,15 +6231,22 @@ def _find_gear_belt_mall_relocation_layout(observation: dict[str, Any]) -> dict[
 
 def _find_partial_gear_belt_mall_relocation_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
     if inventory_count(observation, "assembling-machine-1") <= 0:
-        return None
+        return _find_relocated_gear_belt_mall_target_layout(observation)
     source = _nearest_to(_iron_plate_source_furnaces(observation), player_position(observation))
     if not isinstance(source, dict):
         return None
     recoverable = _recoverable_relocation_assembler(observation)
+    inventory_rebuild = not isinstance(recoverable, dict)
     anchor_position = _position(recoverable) if isinstance(recoverable, dict) else player_position(observation)
     source_position = _position(source)
     route_cost = _gear_mall_plate_layout_cost_estimate(observation, source_position, anchor_position)
-    if route_cost.get("route_cost_preference") != "relocate_mall_to_iron_source" and distance(source_position, anchor_position) < PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT:
+    if inventory_rebuild:
+        route_cost = {**route_cost, "route_cost_preference": "relocate_mall_to_iron_source"}
+    if (
+        not inventory_rebuild
+        and route_cost.get("route_cost_preference") != "relocate_mall_to_iron_source"
+        and distance(source_position, anchor_position) < PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT
+    ):
         return None
     target_gear_position = {"x": round(source_position["x"] + 5.5, 1), "y": round(source_position["y"] - 5.0, 1)}
     target_belt_position = {"x": round(target_gear_position["x"] + 3.0, 1), "y": target_gear_position["y"]}
@@ -6249,6 +6261,34 @@ def _find_partial_gear_belt_mall_relocation_layout(observation: dict[str, Any]) 
         "source_distance_tiles": round(distance(source_position, anchor_position), 1),
         **route_cost,
     }
+
+
+def _find_relocated_gear_belt_mall_target_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
+    sources = _iron_plate_source_furnaces(observation)
+    if not sources:
+        return None
+    for source in sources:
+        source_position = _position(source)
+        target_gear_position = {"x": round(source_position["x"] + 5.5, 1), "y": round(source_position["y"] - 5.0, 1)}
+        target_belt_position = {"x": round(target_gear_position["x"] + 3.0, 1), "y": target_gear_position["y"]}
+        target_gear_assembler = _assembler_at_position(observation, target_gear_position)
+        target_belt_assembler = _assembler_at_position(observation, target_belt_position)
+        if not isinstance(target_gear_assembler, dict) and not isinstance(target_belt_assembler, dict):
+            continue
+        route_cost = _gear_mall_plate_layout_cost_estimate(observation, source_position, player_position(observation))
+        route_cost = {**route_cost, "route_cost_preference": "relocate_mall_to_iron_source"}
+        return {
+            "source": source,
+            "gear_assembler": None,
+            "belt_assembler": None,
+            "target_gear_position": target_gear_position,
+            "target_belt_position": target_belt_position,
+            "target_gear_assembler": target_gear_assembler,
+            "target_belt_assembler": target_belt_assembler,
+            "source_distance_tiles": round(distance(source_position, player_position(observation)), 1),
+            **route_cost,
+        }
+    return None
 
 
 def _recoverable_relocation_assembler(observation: dict[str, Any]) -> dict[str, Any] | None:
@@ -7786,7 +7826,7 @@ class GearBeltMallRelocationSkill:
                 None,
                 "gear/belt mall relocation needs a connected power anchor before moving existing assemblers",
             )
-        required_for_corridor = max(int(required_poles), len(missing_corridor_positions))
+        required_for_corridor = len(missing_corridor_positions)
         if available_poles < required_for_corridor:
             return PlannerDecision(
                 None,
@@ -7797,28 +7837,32 @@ class GearBeltMallRelocationSkill:
             )
         if missing_corridor_positions:
             position = missing_corridor_positions[0]
-            blocker = _build_position_blocker(observation, position, allowed_names=POWER_CONNECTOR_NAMES)
+            build_position = _select_power_corridor_build_position(observation, corridor_positions, position)
+            blocker = _power_corridor_position_blocker(observation, build_position)
             if blocker is not None:
                 return PlannerDecision(
                     None,
                     (
                         f"gear/belt mall relocation power corridor is blocked by {blocker.get('name')} "
-                        f"near {position}; refusing to mine existing mall first"
+                        f"near {build_position}; refusing to mine existing mall first"
                     ),
                 )
-            if distance(player, position) > 20:
+            if distance(player, build_position) > 20:
                 return PlannerDecision(
-                    {"type": "move_to", "position": _stand_position(position)},
+                    {"type": "move_to", "position": _stand_position(build_position)},
                     "move near gear/belt mall relocation power corridor",
                 )
+            reason = "build gear/belt mall relocation power corridor before mining existing mall"
+            if _position_tuple(build_position) != _position_tuple(position):
+                reason = "build detoured gear/belt mall relocation power corridor before mining existing mall"
             return PlannerDecision(
                 {
                     "type": "build",
                     "name": "small-electric-pole",
-                    "position": position,
-                    "allow_nearby": False,
+                    "position": build_position,
+                    "allow_nearby": True,
                 },
-                "build gear/belt mall relocation power corridor before mining existing mall",
+                reason,
             )
 
         target_specs = [
@@ -7965,12 +8009,91 @@ def _missing_power_corridor_positions(
     missing: list[dict[str, float]] = []
     for position in positions:
         if any(
-            _entity_at_build_position(observation, name, position, radius=0.8) is not None
+            _entity_at_build_position(observation, name, position, radius=1.6) is not None
             for name in POWER_CONNECTOR_NAMES
         ):
             continue
         missing.append(position)
     return missing
+
+
+def _select_power_corridor_build_position(
+    observation: dict[str, Any],
+    corridor_positions: list[dict[str, float]],
+    desired_position: dict[str, float],
+) -> dict[str, float]:
+    desired_key = _position_tuple(desired_position)
+    try:
+        desired_index = next(
+            index for index, position in enumerate(corridor_positions) if _position_tuple(position) == desired_key
+        )
+    except StopIteration:
+        desired_index = -1
+    previous_anchor = _previous_power_corridor_anchor(observation, corridor_positions, desired_index)
+    candidates = _nearby_half_tile_positions(desired_position, radius=6.0)
+    reach = _power_wire_reach("small-electric-pole")
+    for candidate in candidates:
+        if previous_anchor is not None and distance(candidate, previous_anchor) > reach:
+            continue
+        if _power_corridor_position_blocker(observation, candidate) is None:
+            return candidate
+    return desired_position
+
+
+def _previous_power_corridor_anchor(
+    observation: dict[str, Any],
+    corridor_positions: list[dict[str, float]],
+    desired_index: int,
+) -> dict[str, float] | None:
+    if desired_index <= 0:
+        target = corridor_positions[0] if corridor_positions else {"x": 0.0, "y": 0.0}
+        anchor = _nearest_connected_power_anchor(observation, target)
+        return _position(anchor) if anchor is not None else None
+    for index in range(desired_index - 1, -1, -1):
+        planned = corridor_positions[index]
+        candidates = [
+            entity
+            for name in POWER_CONNECTOR_NAMES
+            if (entity := _entity_at_build_position(observation, name, planned, radius=2.0)) is not None
+        ]
+        if candidates:
+            return _position(candidates[0])
+    return None
+
+
+def _nearby_half_tile_positions(position: dict[str, float], *, radius: float) -> list[dict[str, float]]:
+    base_x = float(position.get("x") or 0.0)
+    base_y = float(position.get("y") or 0.0)
+    offsets: list[tuple[float, float]] = []
+    steps = int(radius * 2)
+    for dx_step in range(-steps, steps + 1):
+        for dy_step in range(-steps, steps + 1):
+            dx = dx_step / 2.0
+            dy = dy_step / 2.0
+            if (dx * dx + dy * dy) ** 0.5 > radius:
+                continue
+            offsets.append((dx, dy))
+    offsets.sort(key=lambda item: (item[0] * item[0] + item[1] * item[1], abs(item[1]), abs(item[0])))
+    return [{"x": _round_half(base_x + dx), "y": _round_half(base_y + dy)} for dx, dy in offsets]
+
+
+def _power_corridor_position_blocker(
+    observation: dict[str, Any],
+    position: dict[str, float],
+) -> dict[str, Any] | None:
+    blocker = _build_position_blocker(observation, position, allowed_names=POWER_CONNECTOR_NAMES)
+    if blocker is not None:
+        return blocker
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict) or not isinstance(entity.get("position"), dict):
+            continue
+        if _is_preserved_starter_artifact(observation, entity) and distance(_position(entity), position) <= 6.0:
+            return entity
+        entity_type = str(entity.get("type") or "")
+        name = str(entity.get("name") or "")
+        if (entity_type in {"simple-entity", "tree", "cliff"} or name.endswith("rock")) and distance(_position(entity), position) <= 1.25:
+            return entity
+    return None
 
 
 def _dedupe_positions(positions: list[dict[str, float]]) -> list[dict[str, float]]:

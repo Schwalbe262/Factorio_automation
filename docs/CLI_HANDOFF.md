@@ -193,6 +193,15 @@ Latest continuation after Part 105:
   - Live read-only after the no-power guard fix: Qwen raw `bootstrap_build_item_mall` was guardrailed to `relocate_gear_belt_mall_to_iron_source` with `source_distance_tiles=149.1`, `belt_route_cost=150.0`, `relocation_cost=56.0`, and `small_electric_pole_deficit=0`.
   - Full verification: `PYTHONPATH=src pytest -q` -> `531 passed`.
   - Current next action: continue the relocation corridor toward the iron source, then mine/rebuild unit 537 (`iron-gear-wheel`) and unit 318 (`transport-belt`) near unit 395. After transport belts exist, build the steady-state boiler coal feed route.
+- Part 121 completes the live gear/belt mall relocation before reboot:
+  - Relocation power-corridor placement now detours around protected crash-site spaceship/wreckage and uses nearby valid pole placement instead of failing on exact blocked tiles.
+  - Strategy keeps `relocate_gear_belt_mall_to_iron_source` selected when power recovery itself waits on belt mall output, and while relocation is in progress after teardown or partial rebuild.
+  - The executor no longer requires spare pole stock after the actual missing corridor count reaches zero.
+  - Live mutation through the `AI/server` virtual agent mined old unit 537 (`iron-gear-wheel`) and unit 318 (`transport-belt`) only after the corridor existed, without moving `r1jae`.
+  - The mall was rebuilt near the iron source: unit 664 at `{94.5,-69.5}` with recipe `iron-gear-wheel`, and unit 665 at `{97.5,-69.5}` with recipe `transport-belt`.
+  - Current live blocker: units 664 and 665 are `no_power`/not connected, transport-belt count is still 0, and local plate/gear/belt logistics has not been built yet.
+  - Reboot resume action: start the no-mod server/dashboard if needed, ensure the Slurm worker successor is queued, then continue from local gear-to-belt logistics and power connection near units 664/665. Do not hand-carry iron plates and do not mine the preserved crash-site spaceship.
+  - Full verification: `PYTHONPATH=src pytest -q` -> `540 passed`.
 
 Part 64 introduced:
 

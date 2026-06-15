@@ -119,6 +119,70 @@ def gear_mall_needs_long_plate_line_without_belts_observation() -> dict:
     return observation
 
 
+def gear_mall_relocation_with_downstream_power_block_observation() -> dict:
+    observation = gear_mall_needs_long_plate_line_without_belts_observation()
+    observation["inventory"] = {"small-electric-pole": 20}
+    observation["entities"].extend(
+        [
+            {
+                "name": "boiler",
+                "unit_number": 300,
+                "position": {"x": -2, "y": 0},
+                "status_name": "no_fuel",
+                "inventories": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 301,
+                "recipe": "electronic-circuit",
+                "position": {"x": 8.5, "y": 2.5},
+                "electric_network_connected": True,
+                "status_name": "no_power",
+                "inventories": {},
+            },
+        ]
+    )
+    return observation
+
+
+def gear_mall_inventory_rebuild_with_downstream_power_block_observation() -> dict:
+    observation = gear_mall_relocation_with_downstream_power_block_observation()
+    observation["inventory"] = {"small-electric-pole": 20, "assembling-machine-1": 2}
+    observation["entities"] = [
+        entity
+        for entity in observation["entities"]
+        if entity.get("unit_number") not in {100, 101}
+    ]
+    return observation
+
+
+def gear_mall_target_rebuild_with_downstream_power_block_observation() -> dict:
+    observation = gear_mall_inventory_rebuild_with_downstream_power_block_observation()
+    observation["inventory"] = {"small-electric-pole": 20}
+    observation["entities"].extend(
+        [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 401,
+                "recipe": "iron-gear-wheel",
+                "position": {"x": 158.5, "y": -4.0},
+                "electric_network_connected": False,
+                "status_name": "no_power",
+                "inventories": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 402,
+                "position": {"x": 161.5, "y": -4.0},
+                "electric_network_connected": False,
+                "status_name": "no_recipe",
+                "inventories": {},
+            },
+        ]
+    )
+    return observation
+
+
 def partial_gear_mall_relocation_observation() -> dict:
     observation = gear_mall_needs_long_plate_line_without_belts_observation()
     observation["inventory"] = {"small-electric-pole": 20, "assembling-machine-1": 1}
@@ -487,6 +551,39 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
         self.assertIn("costed gear/belt mall relocation", result["blockers"])
         self.assertIn("small_electric_pole_deficit=0", result["evidence"])
+
+    def test_rocket_goal_relocates_long_gear_mall_when_power_recovery_waits_on_belt_mall(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            gear_mall_relocation_with_downstream_power_block_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertIn("costed gear/belt mall relocation", result["blockers"])
+        self.assertIn("small_electric_pole_deficit=0", result["evidence"])
+        self.assertIn("power_recovery_waits_on_belt_mall=true", result["evidence"])
+
+    def test_rocket_goal_continues_inventory_rebuild_relocation_before_power_repair(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            gear_mall_inventory_rebuild_with_downstream_power_block_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertIn("costed gear/belt mall relocation", result["blockers"])
+        self.assertIn("gear_assembler_unit=inventory", result["evidence"])
+        self.assertIn("relocation_in_progress=true", result["evidence"])
+
+    def test_rocket_goal_continues_target_rebuild_relocation_before_power_repair(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            gear_mall_target_rebuild_with_downstream_power_block_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertIn("costed gear/belt mall relocation", result["blockers"])
+        self.assertIn("gear_assembler_unit=401", result["evidence"])
+        self.assertIn("relocation_in_progress=true", result["evidence"])
 
     def test_rocket_goal_bootstraps_belt_mall_when_belts_are_exhausted(self):
         result = heuristic_strategy("launch_rocket_program", gear_belt_mall_needs_bootstrap_observation())
@@ -1108,6 +1205,46 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["guardrail_adjusted"]["from"], "setup_power")
         self.assertIn("costed gear/belt mall relocation before repeated emergency power", result["blockers"])
         self.assertIn("small_electric_pole_deficit=0", result["evidence"])
+
+    def test_reconcile_routes_power_block_to_relocation_when_power_needs_belt_mall(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 84,
+                "reason": "Layout issue.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            gear_mall_relocation_with_downstream_power_block_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertIn("costed gear/belt mall relocation before repeated emergency power", result["blockers"])
+        self.assertIn("power_recovery_waits_on_belt_mall=true", result["evidence"])
+
+    def test_reconcile_continues_inventory_rebuild_relocation_before_power_repair(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "setup_power",
+                "priority": 94,
+                "reason": "Circuit block has no power.",
+                "evidence": [],
+                "blockers": ["factory power"],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            gear_mall_inventory_rebuild_with_downstream_power_block_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "setup_power")
+        self.assertIn("gear_assembler_unit=inventory", result["evidence"])
+        self.assertIn("relocation_in_progress=true", result["evidence"])
 
     def test_reconcile_keeps_partial_relocation_ahead_of_electric_drill_research(self):
         result = reconcile_strategy_decision(
