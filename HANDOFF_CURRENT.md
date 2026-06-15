@@ -33,19 +33,20 @@
 \## Last validation
 
 \- `py_compile`, focused planner/monitor/web/slurm tests (`335`), full `pytest -q` (`612`) passed.
-\- Live observe at tick `1638338`: `coal_miners=1` at `{x:106,y:24}`.
-\- Token sample recorded: `153,495,118` Factorio Codex thread tokens; delta `5,538,957`; weekly quota unknown.
+\- Full `pytest -q` passed: `617 passed`.
+\- Live coal supply output corrected to `{x:107.5,y:24.5}` for burner drill `{x:106,y:24}`; coal feed belt route is extending but still short of boiler.
+\- Token sample recorded: `162,147,720` Factorio Codex thread tokens; delta `8,652,602`; weekly quota unknown.
 
 \## Current blocker
 
-\- No code/test blocker. Live gameplay still needs continued coal fuel feed and red-science logistics validation.
+\- No code/test blocker. Live gameplay still needs more belt batches to finish `connect_coal_fuel_feed` to the boiler.
 
 \## Next steps
 
 1\. Push Part 129 branch if the current session has not already pushed it.
 2\. Refresh/restart the dashboard process if it is still serving old code.
-3\. Continue `connect_coal_fuel_feed` and verify boiler feed from the coal miner.
-4\. Continue red science/logistics research once fuel and belt output are stable.
+3\. Refill belt mall as needed, then continue `connect_coal_fuel_feed` until boiler receives belt-fed coal.
+4\. Continue red science/logistics research once fuel, belt output, and site input routes are stable.
 
 \## Token/context policy
 
@@ -68,6 +69,7 @@
 \- Applied escaped `md/` marker format to current root Markdown files.
 \- Added confirmed idle Slurm `learned_skills` flow with journal promotion only for confirmed reusable lessons.
 \- Added route corner belt direction, endpoint inserter role checks, and source endpoint protection for site-input logistics.
+\- Fixed site-input/iron-line inserter pickup/drop semantics, corrected integer-center coal drill output tiles, and stopped boiler feed from treating the next route belt as the coal source.
 \- Added role-aware dogleg site-input routes and fixed `NORTH=0` direction comparisons so north-facing belts/inserters are not treated as missing direction.
 \- Full validation now passes `612 passed`.
 

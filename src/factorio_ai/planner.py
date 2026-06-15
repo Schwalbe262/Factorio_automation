@@ -3427,6 +3427,7 @@ class CoalSupplySkill:
                 return PlannerDecision(
                     {
                         "type": "mine",
+                        "unit_number": blocker.get("unit_number"),
                         "name": blocker.get("name"),
                         "position": blocker_position,
                         "count": 1,
@@ -3502,6 +3503,7 @@ class CoalSupplySkill:
                 return PlannerDecision(
                     {
                         "type": "mine",
+                        "unit_number": blocker.get("unit_number"),
                         "name": blocker.get("name"),
                         "position": blocker_position,
                         "count": 1,
@@ -3689,7 +3691,7 @@ class CoalFuelFeedSkill:
             if layout.get(existing_key) is not None:
                 continue
             position = layout[key]
-            blocker = _blocking_obstacle_near(observation, position)
+            blocker = _coal_fuel_feed_position_blocker(observation, position)
             if blocker is not None:
                 blocker_position = _position(blocker)
                 if distance(player, blocker_position) > 8:
@@ -3700,6 +3702,7 @@ class CoalFuelFeedSkill:
                 return PlannerDecision(
                     {
                         "type": "mine",
+                        "unit_number": blocker.get("unit_number"),
                         "name": blocker.get("name"),
                         "position": blocker_position,
                         "count": 1,
@@ -5399,6 +5402,7 @@ def _coal_supply_output_belt_sources(observation: dict[str, Any]) -> list[dict[s
             continue
         direction = _direction_to_orientation(_direction_or_default(drill.get("direction"), EAST))
         layout = _coal_supply_layout_from_drill_position(drill_position, orientation=direction)
+        layout["output_position"] = _burner_drill_output_position(drill)
         output_belt = _entity_near(observation, "transport-belt", layout["output_position"], radius=0.75)
         if output_belt is None:
             continue
@@ -5478,6 +5482,17 @@ def _coal_fuel_feed_entity_key(entity_name: str) -> str:
     if entity_name in {"stone-furnace", "boiler"}:
         return "consumer"
     return entity_name
+
+
+def _coal_fuel_feed_position_blocker(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:
+    blocker = _blocking_obstacle_near(observation, position)
+    if blocker is not None:
+        return blocker
+    for entity_name in ("wooden-chest", "iron-chest", "steel-chest"):
+        for entity in entities_named(observation, entity_name):
+            if distance(_position(entity), position) <= 0.45:
+                return entity
+    return None
 
 
 def _ceil_div(value: int, divisor: int) -> int:
@@ -7066,6 +7081,9 @@ def _belt_line_position_blocker(
         if name in {"character", "transport-belt"}:
             continue
         if _is_preserved_starter_artifact(observation, entity):
+            continue
+        if name in {"wooden-chest", "iron-chest", "steel-chest"} and distance(_position(entity), position) < 0.45:
+            blockers.append(entity)
             continue
         if name in large_entities and _point_inside_machine(position, entity):
             blockers.append(entity)

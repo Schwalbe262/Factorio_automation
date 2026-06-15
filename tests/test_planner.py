@@ -204,6 +204,19 @@ class PlannerTests(unittest.TestCase):
 
         self.assertEqual(output_position, {"x": 107.5, "y": 24.5})
 
+    def test_boiler_feed_source_uses_corrected_integer_center_drill_output(self):
+        obs = base_observation()
+        obs["resources"] = [{"name": "coal", "position": {"x": 4, "y": 0}, "distance": 4}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 4, "y": 0}, "direction": planner_module.EAST, "inventories": {"1": {"coal": 6}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 5.5, "y": 0.5}, "direction": planner_module.EAST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 6.5, "y": 0.5}, "direction": planner_module.NORTH, "inventories": {}},
+        ]
+
+        sources = planner_module._coal_supply_output_belt_sources(obs)
+
+        self.assertEqual(sources[0]["belt"]["unit_number"], 21)
+
     def test_coal_supply_recovers_misplaced_upper_row_output_belt(self):
         obs = base_observation()
         obs["player"]["position"] = {"x": 7.5, "y": -0.5}
@@ -546,6 +559,23 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["name"], "transport-belt")
         self.assertEqual(decision.action["position"], {"x": 7, "y": 0})
 
+    def test_coal_fuel_feed_clears_chest_blocking_next_belt(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 6.5, "y": 0.5}
+        obs["inventory"] = {"transport-belt": 1, "burner-inserter": 1, "stone-furnace": 1, "coal": 8}
+        obs["resources"] = [{"name": "coal", "position": {"x": 4, "y": 0}, "distance": 4}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 4, "y": 0}, "direction": planner_module.EAST, "inventories": {"1": {"coal": 6}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 5.5, "y": 0.5}, "direction": planner_module.EAST, "inventories": {}},
+            {"name": "wooden-chest", "unit_number": 22, "position": {"x": 6.5, "y": 0.5}, "inventories": {}},
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 22)
+        self.assertIn("clear blocking wooden-chest", decision.reason)
+
     def test_coal_fuel_feed_places_inserter_after_belt_extension(self):
         obs = base_observation()
         obs["inventory"] = {"burner-inserter": 1, "stone-furnace": 1, "coal": 8}
@@ -639,6 +669,24 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["position"], {"x": 3.0, "y": 0.0})
         self.assertEqual(decision.action["direction"], 4)
         self.assertIn("boiler", decision.reason)
+
+    def test_coal_fuel_feed_clears_chest_blocking_boiler_belt_route(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 3, "y": 0}
+        obs["inventory"] = {"transport-belt": 4, "burner-inserter": 1, "coal": 1}
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 2, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "wooden-chest", "unit_number": 22, "position": {"x": 3, "y": 0}, "inventories": {}},
+            {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 22)
+        self.assertIn("clear blocking wooden-chest", decision.reason)
 
     def test_coal_fuel_feed_places_boiler_inserter_after_belt_route(self):
         obs = base_observation()

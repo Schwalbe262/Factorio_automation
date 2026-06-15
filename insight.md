@@ -881,3 +881,75 @@ Promote to insight.md only if:
 \- Evidence: `{"item":"coal","item_count":8,"source_loop":441,"steps":6,"target":16}`
 \- Remaining risk: Target is not complete yet: 8/16.
 
+## 2026-06-16 02:11:03 +09:00 - Insight 105
+- Source loop: Loop 442
+- Improvement: iron-plate increased by 20 during produce_iron_plate.
+- Before: iron-plate = 0
+- After: iron-plate = 20
+- Evidence: `{"delta":20,"final":20,"initial":0,"item":"iron-plate","source_loop":442,"target":20}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-16 02:11:03 +09:00 - Insight 106
+- Source loop: Loop 442
+- Improvement: produce_iron_plate completed after 24 step(s): iron plate target reached: 20/20
+- Before: not recorded
+- After: iron-plate = 20
+- Evidence: `{"item":"iron-plate","item_count":20,"source_loop":442,"steps":24,"target":20}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-16 02:11:46 +09:00 - Insight 107
+- Source loop: Loop 443
+- Improvement: transport-belt increased by 8 during build_gear_belt_mall_logistics.
+- Before: transport-belt = 0
+- After: transport-belt = 8
+- Evidence: `{"delta":8,"final":8,"initial":0,"item":"transport-belt","source_loop":443,"target":20}`
+- Remaining risk: Target is not complete yet: 8/20.
+
+## 2026-06-16 02:11:46 +09:00 - Insight 108
+- Source loop: Loop 443
+- Improvement: build_gear_belt_mall_logistics completed after 4 step(s): gear-fed belt mall logistics produced transport belts in assembler output: 8
+- Before: not recorded
+- After: transport-belt = 8
+- Evidence: `{"item":"transport-belt","item_count":8,"source_loop":443,"steps":4,"target":20}`
+- Remaining risk: Target is not complete yet: 8/20.
+
+## 2026-06-16 02:13:39 +09:00 - Insight 109
+- Source loop: Loop 444
+- Improvement: coal increased by 5 during connect_coal_fuel_feed.
+- Before: coal = 7
+- After: coal = 12
+- Evidence: `{"delta":5,"final":12,"initial":7,"item":"coal","source_loop":444,"target":1}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-16 02:24:47 +09:00 - Insight 110
+- Source loop: Loop 449
+- Improvement: transport-belt increased by 8 during build_gear_belt_mall_logistics.
+- Before: transport-belt = 0
+- After: transport-belt = 8
+- Evidence: `{"delta":8,"final":8,"initial":0,"item":"transport-belt","source_loop":449,"target":20}`
+- Remaining risk: Target is not complete yet: 8/20.
+
+## 2026-06-16 02:24:47 +09:00 - Insight 111
+- Source loop: Loop 449
+- Improvement: build_gear_belt_mall_logistics completed after 5 step(s): gear-fed belt mall logistics produced transport belts in assembler output: 8
+- Before: not recorded
+- After: transport-belt = 8
+- Evidence: `{"item":"transport-belt","item_count":8,"source_loop":449,"steps":5,"target":20}`
+- Remaining risk: Target is not complete yet: 8/20.
+
+## 2026-06-16 02:25:57 +09:00 - Insight 112
+- Source loop: Loop 451
+- Improvement: transport-belt increased by 8 during build_gear_belt_mall_logistics.
+- Before: transport-belt = 0
+- After: transport-belt = 8
+- Evidence: `{"delta":8,"final":8,"initial":0,"item":"transport-belt","source_loop":451,"target":20}`
+- Remaining risk: Target is not complete yet: 8/20.
+
+## 2026-06-16 02:25:57 +09:00 - Insight 113
+- Source loop: Loop 451
+- Improvement: build_gear_belt_mall_logistics completed after 5 step(s): gear-fed belt mall logistics produced transport belts in assembler output: 8
+- Before: not recorded
+- After: transport-belt = 8
+- Evidence: `{"item":"transport-belt","item_count":8,"source_loop":451,"steps":5,"target":20}`
+- Remaining risk: Target is not complete yet: 8/20.
+
