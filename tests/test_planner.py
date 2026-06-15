@@ -708,6 +708,89 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["item"], "wood")
         self.assertNotEqual(decision.action.get("name"), "coal")
 
+    def test_iron_skill_refuels_direct_cell_before_taking_output_for_total_target(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 4, "y": 0}}
+        obs["inventory"] = {"wood": 5}
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 101,
+                "position": {"x": 4, "y": 0},
+                "direction": 4,
+                "distance": 0,
+                "inventories": {},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 102,
+                "position": {"x": 6, "y": 0},
+                "distance": 2,
+                "inventories": {"3": {"iron-plate": 5}},
+            },
+        ]
+
+        decision = IronPlateSkill(target_count=20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "wood")
+        self.assertEqual(decision.action["unit_number"], 101)
+
+    def test_iron_skill_inventory_only_can_take_furnace_output(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 6, "y": 0}}
+        obs["inventory"] = {"wood": 5}
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 101,
+                "position": {"x": 4, "y": 0},
+                "direction": 4,
+                "distance": 2,
+                "inventories": {},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 102,
+                "position": {"x": 6, "y": 0},
+                "distance": 0,
+                "inventories": {"3": {"iron-plate": 5}},
+            },
+        ]
+
+        decision = IronPlateSkill(target_count=20).next_action(obs, target_count=20, inventory_only=True)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertEqual(decision.action["unit_number"], 102)
+
+    def test_iron_skill_does_not_mix_wood_into_furnace_with_existing_coal(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 6, "y": 0}}
+        obs["inventory"] = {"wood": 5}
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 101,
+                "position": {"x": 4, "y": 0},
+                "direction": 4,
+                "distance": 2,
+                "inventories": {"1": {"wood": 3}},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 102,
+                "position": {"x": 6, "y": 0},
+                "distance": 0,
+                "inventories": {"1": {"coal": 2}, "3": {"iron-plate": 5}},
+            },
+        ]
+
+        decision = IronPlateSkill(target_count=20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "wait")
+        self.assertIn("before mixing burner fuel", decision.reason)
+
     def test_iron_skill_ignores_distant_empty_furnace(self):
         obs = base_observation()
         obs["player"]["position"] = {"x": 102, "y": 0}
@@ -1834,6 +1917,58 @@ class PlannerTests(unittest.TestCase):
 
         self.assertEqual(decision.action["type"], "insert")
         self.assertEqual(decision.action["item"], "wood")
+        self.assertEqual(decision.action["count"], 8)
+        self.assertEqual(decision.action["unit_number"], 602)
+
+    def test_setup_power_skill_fills_boiler_fuel_reserve_when_wood_is_available(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 12.5, "y": 10.0}}
+        obs["inventory"] = {"wood": 16}
+        obs["entities"] = [
+            {
+                "name": "offshore-pump",
+                "unit_number": 601,
+                "position": {"x": 10.5, "y": 10.5},
+                "direction": 12,
+                "distance": 2,
+                "inventories": {},
+                "fluids": {"1": {"name": "water", "amount": 100}},
+            },
+            {
+                "name": "boiler",
+                "unit_number": 602,
+                "position": {"x": 12.5, "y": 10.0},
+                "direction": 0,
+                "distance": 0,
+                "inventories": {},
+                "fluids": {"1": {"name": "water", "amount": 200}},
+            },
+            {
+                "name": "steam-engine",
+                "unit_number": 603,
+                "position": {"x": 12.5, "y": 6.5},
+                "direction": 0,
+                "status": 5,
+                "distance": 4,
+                "inventories": {},
+                "fluids": {},
+            },
+            {
+                "name": "small-electric-pole",
+                "unit_number": 604,
+                "position": {"x": 10.5, "y": 6.5},
+                "direction": 0,
+                "distance": 4,
+                "inventories": {},
+                "fluids": {},
+            },
+        ]
+
+        decision = SetupPowerSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "wood")
+        self.assertEqual(decision.action["count"], 10)
         self.assertEqual(decision.action["unit_number"], 602)
 
     def test_setup_power_skill_done_when_engine_has_steam_and_pole_connected(self):

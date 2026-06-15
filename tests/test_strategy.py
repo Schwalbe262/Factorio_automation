@@ -105,6 +105,13 @@ def gear_belt_mall_has_local_plate_seed_observation() -> dict:
     return observation
 
 
+def gear_mall_needs_plate_line_without_belts_observation() -> dict:
+    observation = gear_mall_needs_plate_line_observation()
+    observation["inventory"] = {}
+    observation["entities"][1]["inventories"] = {}
+    return observation
+
+
 class StrategyTests(unittest.TestCase):
     def test_electronic_circuit_goal_detects_iron_bottleneck(self):
         result = heuristic_strategy(
@@ -178,6 +185,13 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
         self.assertIn("iron-plate logistic line to gear mall", result["blockers"])
         self.assertIn("transport_belts_available_for_mall_logistics=true", result["evidence"])
+
+    def test_rocket_goal_keeps_gear_mall_plate_logistics_visible_without_belts(self):
+        result = heuristic_strategy("launch_rocket_program", gear_mall_needs_plate_line_without_belts_observation())
+
+        self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertIn("iron-plate logistic line to gear mall", result["blockers"])
+        self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
 
     def test_rocket_goal_bootstraps_belt_mall_when_belts_are_exhausted(self):
         result = heuristic_strategy("launch_rocket_program", gear_belt_mall_needs_bootstrap_observation())
@@ -589,6 +603,25 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "setup_power")
         self.assertEqual(result["guardrail_adjusted"]["from"], "automate_electronic_circuit_line")
         self.assertIn("gear/belt mall power", result["blockers"])
+
+    def test_reconcile_blocks_circuit_when_gear_mall_plate_line_lacks_belts(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "automate_electronic_circuit_line",
+                "priority": 84,
+                "reason": "Need more circuits.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            gear_mall_needs_plate_line_without_belts_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "automate_electronic_circuit_line")
+        self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
 
     def test_reconcile_promotes_fuel_dependent_expansion_to_coal_supply(self):
         result = reconcile_strategy_decision(

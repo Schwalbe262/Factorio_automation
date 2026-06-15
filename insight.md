@@ -432,3 +432,27 @@
 - After: `setup_power` completed in 3 live steps, `build_gear_belt_mall_logistics` recovered local iron plates from unit `342`, produced transport belts in unit `320`, and the next strategy selected `build_iron_plate_logistic_line_to_gear_mall`.
 - Evidence: `{"tests":"453 passed","power_trace":"strategy-power-20260615-005358.jsonl","belt_mall_trace":"strategy-gear-belt-mall-20260615-010249.jsonl","local_plate_seed_source_unit":342,"belt_assembler_unit":320,"post_run_belt_output":8,"next_strategy":"build_iron_plate_logistic_line_to_gear_mall","direct_gear_craft":0}`
 - Remaining risk: The sustained iron-plate route is still incomplete and must consume the newly produced belts to remove the remaining distant plate dependency.
+
+## 2026-06-15 10:13:20 +09:00 - Insight 53
+- Source loop: Loop 305
+- Improvement: setup_power completed after 2 step(s): steam power block is producing usable steam power
+- Before: not recorded
+- After: steam = 0
+- Evidence: `{"item":"steam","item_count":0,"source_loop":305,"steps":2,"target":1}`
+- Remaining risk: Target is not complete yet: 0/1.
+
+## 2026-06-15 10:19:38 +09:00 - Insight 54
+- Source loop: Loop 307
+- Improvement: iron-plate increased by 1 during produce_iron_plate.
+- Before: iron-plate = 5
+- After: iron-plate = 6
+- Evidence: `{"delta":1,"final":6,"initial":5,"item":"iron-plate","source_loop":307,"target":10}`
+- Remaining risk: Target is not complete yet: 6/10.
+
+## 2026-06-15 10:27:15 +09:00 - Insight 55
+- Source loop: Loop 309
+- Improvement: Iron route recovery now extends the route and restarts source production without remote plate hand-carry, invalid mixed-fuel insertion, or circuit automation masking the gear mall logistics blocker.
+- Before: The route stopped at x=72.5 when belts ran out, `produce_iron_plate` would move toward remote furnace output, mixed `wood` into a coal-filled furnace slot and failed, and strategy could select `automate_electronic_circuit_line` only to hit the gear mall plate-line blocker.
+- After: The route extends to x=64.5, source drill unit `42` was refueled with wood, source furnace unit `395` reached 18 iron plates, mixed fuel top-off is guarded, and current strategy selects `build_iron_plate_logistic_line_to_gear_mall` with `transport_belts_available_for_mall_logistics=false`.
+- Evidence: `{"tests":"461 passed","route_trace":"strategy-iron-plate-gear-mall-logistics-20260615-011408.jsonl","iron_trace":"strategy-iron-20260615-011914.jsonl","route_min_x_near_source":64.5,"source_furnace_unit":395,"source_furnace_iron_plate":18,"current_strategy":"build_iron_plate_logistic_line_to_gear_mall","transport_belts_available_for_mall_logistics":false,"direct_gear_craft":0}`
+- Remaining risk: The route is still incomplete and transport belts are exhausted; a non-hand-carry method to replenish belts or re-site related factories is still required.

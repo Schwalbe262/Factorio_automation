@@ -926,7 +926,7 @@ def reconcile_strategy_decision(
             f"iron_source_unit={gear_mall_iron_plate_issue.get('source_unit')}",
             f"source_distance_tiles={gear_mall_iron_plate_issue.get('source_distance_tiles')}",
             f"gear_assembler_status={gear_mall_iron_plate_issue.get('gear_assembler_status')}",
-            "transport_belts_available_for_mall_logistics=true",
+            f"transport_belts_available_for_mall_logistics={str(bool(gear_mall_iron_plate_issue.get('transport_belts_available'))).lower()}",
             "gear_handcraft_blocked=true",
         ]
         adjusted["expected_effect"] = (
@@ -1290,7 +1290,7 @@ def heuristic_strategy(
                 f"source_distance_tiles={gear_mall_iron_plate_issue.get('source_distance_tiles')}",
                 f"gear_assembler_iron_plate={gear_mall_iron_plate_issue.get('gear_assembler_iron_plate')}",
                 f"gear_assembler_status={gear_mall_iron_plate_issue.get('gear_assembler_status')}",
-                "transport_belts_available_for_mall_logistics=true",
+                f"transport_belts_available_for_mall_logistics={str(bool(gear_mall_iron_plate_issue.get('transport_belts_available'))).lower()}",
             ],
             blockers=["iron-plate logistic line to gear mall"],
             expected_effect=(
@@ -1796,8 +1796,7 @@ def _transport_belt_automation_ready(observation: dict[str, Any]) -> bool:
 def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
     if not _technology_researched(observation, "automation"):
         return None
-    if not _transport_belts_available_for_mall_logistics(observation):
-        return None
+    belts_available = _transport_belts_available_for_mall_logistics(observation)
     assemblers = (
         entities_named(observation, "assembling-machine-1")
         + entities_named(observation, "assembling-machine-2")
@@ -1836,6 +1835,7 @@ def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[s
                 "source_distance_tiles": round(source_distance, 1),
                 "gear_assembler_iron_plate": entity_item_count(gear, "iron-plate"),
                 "gear_assembler_status": gear.get("status_name") or gear.get("status"),
+                "transport_belts_available": belts_available,
             }
     return best_issue
 

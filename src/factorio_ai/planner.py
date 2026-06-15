@@ -32,6 +32,7 @@ WALK_FUEL_LOGISTICS_LIMIT = 160.0
 STARTER_SITE_RADIUS = 192.0
 STARTER_POWER_SITE_RADIUS = 160.0
 STARTER_ENTITY_CLUSTER_RADIUS = 224.0
+STEAM_POWER_BOILER_FUEL_RESERVE = 10
 SMELTING_LINE_FUEL_RESERVE = {
     "drill": 8,
     "inserter": 4,
@@ -3090,17 +3091,18 @@ class SetupPowerSkill:
             )
 
         boiler = layout.get("boiler")
-        if boiler and _entity_burner_fuel_count(boiler) < 3:
+        if boiler and _entity_burner_fuel_count(boiler) < STEAM_POWER_BOILER_FUEL_RESERVE:
             return _fuel_burner_line_entity(
                 observation,
                 player,
                 boiler,
                 entity_name="boiler",
-                threshold=3,
-                insert_count=10,
+                threshold=STEAM_POWER_BOILER_FUEL_RESERVE,
+                insert_count=STEAM_POWER_BOILER_FUEL_RESERVE,
                 context="first steam power block",
                 support_skill=self.iron_skill,
                 far_fuel_reason="steam power boiler needs local fuel before it can run",
+                wait_for_existing_fuel=True,
             )
 
         return PlannerDecision(
@@ -3514,7 +3516,7 @@ def _direct_plate_smelting_decision(
 
     player = player_position(observation)
     output_furnace = _select_plate_output_furnace(observation, resource_name, product_name)
-    if output_furnace and entity_item_count(output_furnace, product_name) > 0:
+    if inventory_only and output_furnace and entity_item_count(output_furnace, product_name) > 0:
         furnace_pos = _position(output_furnace)
         if distance(player, furnace_pos) > 20:
             return PlannerDecision(
@@ -3538,7 +3540,7 @@ def _direct_plate_smelting_decision(
         return PlannerDecision(None, f"cannot find open {resource_name} site for direct burner-drill smelting cell")
 
     furnace = layout.get("furnace")
-    if furnace and entity_item_count(furnace, product_name) > 0:
+    if inventory_only and furnace and entity_item_count(furnace, product_name) > 0:
         furnace_pos = _position(furnace)
         if distance(player, furnace_pos) > 20:
             return PlannerDecision(
@@ -3628,6 +3630,7 @@ def _direct_plate_smelting_decision(
                 context=f"direct {product_name} smelting cell",
                 support_skill=support_skill,
                 far_fuel_reason=f"direct {product_name} smelting needs local fuel before it can run",
+                wait_for_existing_fuel=True,
             )
 
     return PlannerDecision(
@@ -4235,10 +4238,23 @@ def _fuel_burner_line_entity(
     support_skill: IronPlateSkill,
     far_fuel_reason: str,
     exclude_source_units: set[Any] | None = None,
+    wait_for_existing_fuel: bool = False,
 ) -> PlannerDecision:
     position = _position(entity)
-    inventory_fuel_item, inventory_fuel_count = _select_inventory_burner_fuel(observation)
     current_fuel = _entity_burner_fuel_count(entity)
+    existing_fuel_item = _entity_existing_burner_fuel_item(entity)
+    if existing_fuel_item is not None:
+        inventory_fuel_item = existing_fuel_item
+        inventory_fuel_count = inventory_count(observation, existing_fuel_item)
+        if inventory_fuel_count <= 0 and current_fuel > 0:
+            if not wait_for_existing_fuel:
+                return PlannerDecision(None, far_fuel_reason)
+            return PlannerDecision(
+                {"type": "wait", "ticks": 180},
+                f"wait for existing {existing_fuel_item} in {entity_name} before mixing burner fuel for {context}",
+            )
+    else:
+        inventory_fuel_item, inventory_fuel_count = _select_inventory_burner_fuel(observation)
     desired_insert = min(insert_count, max(1, threshold - current_fuel))
     if inventory_fuel_count <= 0:
         coal = _nearest_resource_to_position(observation, position, "coal")
@@ -4364,6 +4380,13 @@ def _inventory_burner_fuel_count(observation: dict[str, Any]) -> int:
 
 def _entity_burner_fuel_count(entity: dict[str, Any]) -> int:
     return sum(entity_item_count(entity, item) for item in BURNER_FUEL_ITEMS)
+
+
+def _entity_existing_burner_fuel_item(entity: dict[str, Any]) -> str | None:
+    for item in BURNER_FUEL_ITEMS:
+        if entity_item_count(entity, item) > 0:
+            return item
+    return None
 
 
 def _fuel_reserve_for_entity(entity_name: str) -> int:
