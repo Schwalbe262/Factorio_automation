@@ -659,6 +659,7 @@ class RemoteSlurmTests(unittest.TestCase):
 
         self.assertEqual(row["id"], 43)
         self.assertEqual(posted[0]["gpu_model"], "a6000")
+        self.assertEqual(posted[0]["cpus"], 3)
 
     def test_layout_scheduler_status_accepts_a6000_candidates(self):
         from factorio_ai import remote_slurm
@@ -700,7 +701,17 @@ class RemoteSlurmTests(unittest.TestCase):
                     {"gpu_model": "rtx3090", "scheduler_owned_gpus": 1, "scheduler_free_gpus": 1},
                 ]
             if path == "/api/tasks":
-                return []
+                return [
+                    {
+                        "name": "factorio-layout-improvement-request-old",
+                        "status": "queued",
+                        "account_name": "r1jae262",
+                        "gpu_model": "a6000",
+                        "cpus": 4,
+                        "memory_mb": 32768,
+                        "gpus": 1,
+                    }
+                ]
             raise AssertionError(path)
 
         with (
@@ -720,7 +731,63 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertEqual(status["remote"]["gpu_model_candidates"], ["a6000ada", "a6000"])
         self.assertEqual(status["remote"]["selected_gpu_model"], "a6000")
         self.assertEqual(status["remote"]["resources"]["gpu_model"], "a6000")
+        self.assertEqual(status["remote"]["resources"]["cpus"], 3)
         self.assertEqual(status["remote"]["scheduler_ready_free_gpus"], 1)
+        self.assertEqual(status["remote"]["resource_fit_pending_gpu_tasks"], 0)
+
+    def test_layout_scheduler_status_waits_when_resource_fit_pending_task_fills_slot(self):
+        from factorio_ai import remote_slurm
+
+        def fake_api(path, timeout=0):
+            if path == "/api/health":
+                return {"ok": True}
+            if path == "/api/allocations":
+                return [
+                    {
+                        "account_name": "r1jae262",
+                        "state": "warm",
+                        "total_gpus": 1,
+                        "free_gpus": 1,
+                        "total_cpus": 3,
+                        "free_cpus": 3,
+                        "total_memory_mb": 32768,
+                        "free_memory_mb": 32768,
+                        "gpu_model": "a6000",
+                    }
+                ]
+            if path == "/api/gpu-capacity":
+                return [{"gpu_model": "a6000", "scheduler_owned_gpus": 1, "scheduler_free_gpus": 1}]
+            if path == "/api/tasks":
+                return [
+                    {
+                        "name": "factorio-layout-improvement-request-current",
+                        "status": "queued",
+                        "account_name": "r1jae262",
+                        "gpu_model": "a6000",
+                        "cpus": 3,
+                        "memory_mb": 32768,
+                        "gpus": 1,
+                    }
+                ]
+            raise AssertionError(path)
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FACTORIO_AI_SLURM_MODE": "scheduler",
+                    "FACTORIO_AI_VLLM_MODEL": "Qwen/Qwen3.5-4B",
+                    "FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS": "a6000ada,a6000",
+                },
+            ),
+            patch("factorio_ai.remote_slurm._scheduler_api_json", side_effect=fake_api),
+        ):
+            status = remote_slurm.layout_improvement_status()
+
+        self.assertFalse(status["llm_ready"])
+        self.assertEqual(status["missing"], ["scheduler GPU queue capacity"])
+        self.assertEqual(status["remote"]["scheduler_ready_gpu_slots"], 1)
+        self.assertEqual(status["remote"]["resource_fit_pending_gpu_tasks"], 1)
 
     def test_scheduler_status_reports_ready_with_vllm_and_scheduler_gpu(self):
         from factorio_ai import remote_slurm
@@ -821,7 +888,17 @@ class RemoteSlurmTests(unittest.TestCase):
             if path == "/api/gpu-capacity":
                 return [{"gpu_model": "rtx3090", "scheduler_owned_gpus": 1, "scheduler_free_gpus": 1, "pending_gpu_tasks": 1}]
             if path == "/api/tasks":
-                return [{"name": "factorio-layout-improvement-request-test", "status": "queued", "gpus": 1}]
+                return [
+                    {
+                        "name": "factorio-layout-improvement-request-test",
+                        "status": "queued",
+                        "account_name": "r1jae262",
+                        "gpu_model": "rtx3090",
+                        "cpus": 4,
+                        "memory_mb": 32768,
+                        "gpus": 1,
+                    }
+                ]
             raise AssertionError(path)
 
         with (

@@ -312,7 +312,7 @@ def _scheduler_task_resources(
     if not selected_gpu_model:
         selected_gpu_model = candidates[0] if candidates else ""
     return {
-        "cpus": _int_env("FACTORIO_AI_SLURM_SCHEDULER_CPUS", 4, 1),
+        "cpus": _scheduler_task_cpus(task_type),
         "memory_mb": _int_env("FACTORIO_AI_SLURM_SCHEDULER_MEMORY_MB", 32768, 1024),
         "gpus": _int_env("FACTORIO_AI_SLURM_SCHEDULER_GPUS", 1, 0),
         "gpu_model": selected_gpu_model,
@@ -321,6 +321,14 @@ def _scheduler_task_resources(
         "exclusive_node": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_EXCLUSIVE_NODE", "0").strip().lower()
         in {"1", "true", "yes", "on"},
     }
+
+
+def _scheduler_task_cpus(task_type: str | None = None) -> int:
+    if task_type == LAYOUT_IMPROVEMENT_TASK_TYPE:
+        if os.getenv("FACTORIO_AI_SLURM_LAYOUT_CPUS", "").strip():
+            return _int_env("FACTORIO_AI_SLURM_LAYOUT_CPUS", 3, 1)
+        return _int_env("FACTORIO_AI_SLURM_SCHEDULER_CPUS", 3, 1)
+    return _int_env("FACTORIO_AI_SLURM_SCHEDULER_CPUS", 4, 1)
 
 
 def _scheduler_task_command(task: dict[str, Any]) -> str:
@@ -1162,9 +1170,24 @@ def _scheduler_status_payload(task_type: str | None = None) -> dict[str, Any]:
     ]
     scheduler_ready_free_gpus = sum(int(row.get("free_gpus") or 0) for row in ready_gpu_allocations)
     ready_free_by_model: dict[str, int] = {}
+    ready_slots_by_model: dict[str, int] = {}
+    needed_cpus = max(1, int(resources.get("cpus") or 1))
+    needed_memory_mb = max(1, int(resources.get("memory_mb") or 1))
+    needed_gpus = max(1, int(resources.get("gpus") or 1))
     for row in ready_gpu_allocations:
         model = _scheduler_gpu_model_name(row.get("gpu_model"))
-        ready_free_by_model[model] = ready_free_by_model.get(model, 0) + int(row.get("free_gpus") or 0)
+        free_gpus = int(row.get("free_gpus") or 0)
+        free_cpus = int(row.get("free_cpus") or row.get("total_cpus") or (needed_cpus * max(1, free_gpus)))
+        free_memory_mb = int(
+            row.get("free_memory_mb") or row.get("total_memory_mb") or (needed_memory_mb * max(1, free_gpus))
+        )
+        ready_free_by_model[model] = ready_free_by_model.get(model, 0) + free_gpus
+        slots = min(
+            free_gpus // needed_gpus,
+            free_cpus // needed_cpus,
+            free_memory_mb // needed_memory_mb,
+        )
+        ready_slots_by_model[model] = ready_slots_by_model.get(model, 0) + max(0, slots)
     scheduler_free_gpus = 0
     scheduler_owned_gpus = 0
     pending_gpu_tasks = 0
@@ -1183,13 +1206,22 @@ def _scheduler_status_payload(task_type: str | None = None) -> dict[str, Any]:
         or os.getenv("FACTORIO_AI_VLLM_MODEL", "").strip()
     )
     needs_gpu = int(resources.get("gpus") or 0) > 0 and not os.getenv("FACTORIO_AI_LLM_BASE_URL", "").strip()
+    resource_fit_pending_by_model = _scheduler_resource_fit_pending_gpu_tasks_by_model(
+        task_rows,
+        wanted_gpu_models,
+        account,
+        needed_cpus=needed_cpus,
+        needed_memory_mb=needed_memory_mb,
+        needed_gpus=needed_gpus,
+    )
+    resource_fit_pending_gpu_tasks = sum(resource_fit_pending_by_model.values())
     if wanted_gpu_models:
         has_gpu_queue_capacity = any(
-            ready_free_by_model.get(model, 0) > pending_by_model.get(model, 0)
+            ready_slots_by_model.get(model, 0) > resource_fit_pending_by_model.get(model, 0)
             for model in wanted_gpu_models
         )
     else:
-        has_gpu_queue_capacity = scheduler_ready_free_gpus > pending_gpu_tasks
+        has_gpu_queue_capacity = sum(ready_slots_by_model.values()) > resource_fit_pending_gpu_tasks
     has_gpu_path = not needs_gpu or has_gpu_queue_capacity
     missing = []
     if not has_llm_runtime:
@@ -1224,8 +1256,10 @@ def _scheduler_status_payload(task_type: str | None = None) -> dict[str, Any]:
             "scheduler_owned_gpus": scheduler_owned_gpus,
             "scheduler_free_gpus": scheduler_free_gpus,
             "scheduler_ready_free_gpus": scheduler_ready_free_gpus,
+            "scheduler_ready_gpu_slots": sum(ready_slots_by_model.values()),
             "scheduler_gpu_queue_capacity": has_gpu_queue_capacity,
             "pending_gpu_tasks": pending_gpu_tasks,
+            "resource_fit_pending_gpu_tasks": resource_fit_pending_gpu_tasks,
             "recent_tasks": [_scheduler_compact_task_row(row) for row in task_rows[:5]],
         },
         "remediation": None
@@ -1239,6 +1273,37 @@ def _scheduler_status_payload(task_type: str | None = None) -> dict[str, Any]:
             "gpu_model_candidates": gpu_model_candidates,
         },
     }
+
+
+def _scheduler_resource_fit_pending_gpu_tasks_by_model(
+    task_rows: list[dict[str, Any]],
+    wanted_gpu_models: set[str],
+    account: str,
+    *,
+    needed_cpus: int,
+    needed_memory_mb: int,
+    needed_gpus: int,
+) -> dict[str, int]:
+    pending_by_model: dict[str, int] = {}
+    pending_states = {"queued", "pending"}
+    for row in task_rows:
+        if str(row.get("account_name") or "") != account:
+            continue
+        if str(row.get("status") or "") not in pending_states:
+            continue
+        model = _scheduler_gpu_model_name(row.get("gpu_model"))
+        if wanted_gpu_models and model not in wanted_gpu_models:
+            continue
+        if int(row.get("gpus") or 0) <= 0:
+            continue
+        if int(row.get("gpus") or 0) > needed_gpus:
+            continue
+        if int(row.get("cpus") or 0) > needed_cpus:
+            continue
+        if int(row.get("memory_mb") or 0) > needed_memory_mb:
+            continue
+        pending_by_model[model] = pending_by_model.get(model, 0) + 1
+    return pending_by_model
 
 
 def _scheduler_not_ready_result(status_payload: dict[str, Any]) -> dict[str, Any]:
