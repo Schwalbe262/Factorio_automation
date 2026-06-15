@@ -2454,13 +2454,13 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["count"], 10)
         self.assertEqual(decision.action["unit_number"], 602)
 
-    def test_setup_power_skill_delegates_boiler_refuel_to_coal_feed_when_route_exists(self):
+    def test_setup_power_skill_takes_surplus_fuel_for_bounded_emergency_when_feed_materials_missing(self):
         obs = base_observation()
-        obs["player"] = {"position": {"x": 12.5, "y": 10.0}}
+        obs["player"] = {"position": {"x": 0.0, "y": 9.5}}
         obs["inventory"] = {}
         obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 9.5}, "distance": 0}]
         obs["entities"] = [
-            {"name": "burner-mining-drill", "unit_number": 620, "position": {"x": 0, "y": 9.5}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+            {"name": "burner-mining-drill", "unit_number": 620, "position": {"x": 0, "y": 9.5}, "direction": 4, "inventories": {"1": {"coal": 9}}},
             {"name": "transport-belt", "unit_number": 621, "position": {"x": 2, "y": 9.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
             {
                 "name": "offshore-pump",
@@ -2500,12 +2500,89 @@ class PlannerTests(unittest.TestCase):
                 "inventories": {},
                 "fluids": {},
             },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 605,
+                "recipe": "small-electric-pole",
+                "position": {"x": 11, "y": 7},
+                "status_name": "no_power",
+                "inventories": {},
+            },
         ]
 
         decision = SetupPowerSkill().next_action(obs)
 
-        self.assertIsNone(decision.action)
-        self.assertIn("boiler coal feed needs automated transport-belt production", decision.reason)
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["unit_number"], 620)
+        self.assertLessEqual(decision.action["count"], 5)
+        self.assertTrue(decision.action["emergency_bootstrap"])
+        self.assertIn("one-time emergency boiler bootstrap", decision.reason)
+
+    def test_setup_power_skill_inserts_carried_emergency_fuel_into_boiler(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 12.5, "y": 10.0}}
+        obs["inventory"] = {"coal": 5}
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 9.5}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 620, "position": {"x": 0, "y": 9.5}, "direction": 4, "inventories": {"1": {"coal": 4}}},
+            {"name": "transport-belt", "unit_number": 621, "position": {"x": 2, "y": 9.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {
+                "name": "offshore-pump",
+                "unit_number": 601,
+                "position": {"x": 10.5, "y": 10.5},
+                "direction": 12,
+                "distance": 2,
+                "inventories": {},
+                "fluids": {"1": {"name": "water", "amount": 100}},
+            },
+            {
+                "name": "boiler",
+                "unit_number": 602,
+                "position": {"x": 12.5, "y": 9.5},
+                "direction": 0,
+                "status_name": "no_fuel",
+                "distance": 0,
+                "inventories": {},
+                "fluids": {"1": {"name": "water", "amount": 200}},
+            },
+            {
+                "name": "steam-engine",
+                "unit_number": 603,
+                "position": {"x": 12.5, "y": 6.5},
+                "direction": 0,
+                "status": 5,
+                "distance": 4,
+                "inventories": {},
+                "fluids": {},
+            },
+            {
+                "name": "small-electric-pole",
+                "unit_number": 604,
+                "position": {"x": 10.5, "y": 6.5},
+                "direction": 0,
+                "distance": 4,
+                "inventories": {},
+                "fluids": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 605,
+                "recipe": "small-electric-pole",
+                "position": {"x": 11, "y": 7},
+                "status_name": "no_power",
+                "inventories": {},
+            },
+        ]
+
+        decision = SetupPowerSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["unit_number"], 602)
+        self.assertEqual(decision.action["count"], 5)
+        self.assertTrue(decision.action["emergency_bootstrap"])
+        self.assertIn("one-time emergency boiler fuel bootstrap", decision.reason)
 
     def test_setup_power_skill_done_when_engine_has_steam_and_pole_connected(self):
         obs = base_observation()

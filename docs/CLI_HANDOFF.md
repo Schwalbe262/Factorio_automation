@@ -157,6 +157,12 @@ Latest continuation after Part 105:
   - Strategy can preempt ready boiler `no_fuel` recovery to `connect_coal_fuel_feed` when coal supply and belt automation are both ready.
   - Live read-only verification: boiler 272 remains `no_fuel`, `belt_assembler_count=0`; both `CoalFuelFeedSkill` and `SetupPowerSkill` now return `boiler coal feed needs automated transport-belt production or existing belt stock; refusing repeated boiler hand-fueling` with no mutation.
   - Full verification: `PYTHONPATH=src pytest -q` -> `517 passed`.
+- Part 116 adds a bounded emergency bootstrap path for the current no-belt-stock power deadlock:
+  - `SetupPowerSkill` can now take at most 5 surplus fuel from an existing fuel source or insert at most 5 already-carried fuel into a zero-fuel boiler when the normal boiler coal feed route is blocked by missing belts/inserters.
+  - The emergency action is labeled `emergency_bootstrap`, refuses direct resource mining, and only runs when a critical electric factory exists, so it does not become a normal repeated boiler-fueling loop.
+  - Live read-only verification: current action is `move_to {x:113,y:18}` with reason `move near surplus fuel source for one-time emergency power bootstrap`; the source is the existing coal drill with 9 coal and the target remains boiler 272.
+  - Full verification: `PYTHONPATH=src pytest -q` -> `518 passed`.
+  - Immediate follow-up after emergency power returns: build/restore transport-belt automation, then build the boiler coal feed route so steady-state fuel is belt/inserter fed.
 
 Part 64 introduced:
 

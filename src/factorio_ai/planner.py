@@ -33,6 +33,7 @@ STARTER_SITE_RADIUS = 192.0
 STARTER_POWER_SITE_RADIUS = 160.0
 STARTER_ENTITY_CLUSTER_RADIUS = 224.0
 STARTER_BOILER_FUEL_FEED_ROUTE_LIMIT = 192.0
+EMERGENCY_BOILER_BOOTSTRAP_FUEL_INSERT = 5
 STEAM_POWER_BOILER_FUEL_RESERVE = 10
 SMELTING_LINE_FUEL_RESERVE = {
     "drill": 8,
@@ -4070,6 +4071,9 @@ class SetupPowerSkill:
             if feed_layout is not None:
                 feed_decision = CoalFuelFeedSkill()._next_boiler_feed_action(observation, player, feed_layout)
                 if feed_decision is not None:
+                    emergency = _emergency_boiler_bootstrap_fuel_decision(observation, player, boiler, feed_decision)
+                    if emergency is not None:
+                        return emergency
                     return feed_decision
             return _fuel_burner_line_entity(
                 observation,
@@ -5410,6 +5414,102 @@ def _fuel_burner_line_entity(
         },
         f"fuel {entity_name} in {context}",
     )
+
+
+def _emergency_boiler_bootstrap_fuel_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    boiler: dict[str, Any],
+    blocked_feed_decision: PlannerDecision,
+) -> PlannerDecision | None:
+    if blocked_feed_decision.action is not None or blocked_feed_decision.done:
+        return None
+    if _entity_burner_fuel_count(boiler) > 0:
+        return None
+    if not _critical_electric_factory_present_for_planner(observation):
+        return None
+    reason = str(blocked_feed_decision.reason or "")
+    if not any(token in reason for token in ("needs automated transport-belt production", "needs transport belts", "missing burner inserter")):
+        return None
+
+    boiler_position = _position(boiler)
+    fuel_item, fuel_count = _select_inventory_burner_fuel(observation)
+    if fuel_count > 0:
+        if distance(player, boiler_position) > 20:
+            return PlannerDecision(
+                {"type": "move_to", "position": boiler_position},
+                "move near boiler for one-time emergency power bootstrap fuel insert",
+            )
+        return PlannerDecision(
+            {
+                "type": "insert",
+                "item": fuel_item,
+                "count": min(EMERGENCY_BOILER_BOOTSTRAP_FUEL_INSERT, fuel_count),
+                "unit_number": boiler.get("unit_number"),
+                "name": "boiler",
+                "position": boiler_position,
+                "emergency_bootstrap": True,
+            },
+            "one-time emergency boiler fuel bootstrap to restore power for belt automation; do not use as repeated fuel logistics",
+        )
+
+    source = _nearest_surplus_fuel_source(
+        observation,
+        boiler_position,
+        exclude_units={boiler.get("unit_number")},
+    )
+    if source is None:
+        return None
+    source_position = _position(source)
+    if distance(boiler_position, source_position) > STARTER_BOILER_FUEL_FEED_ROUTE_LIMIT:
+        return None
+    if distance(player, source_position) > 20:
+        return PlannerDecision(
+            {"type": "move_to", "position": source_position},
+            "move near surplus fuel source for one-time emergency power bootstrap",
+        )
+    source_item, source_count = _select_surplus_fuel_item(source)
+    if source_count <= 0:
+        return None
+    return PlannerDecision(
+        {
+            "type": "take",
+            "item": source_item,
+            "count": min(EMERGENCY_BOILER_BOOTSTRAP_FUEL_INSERT, source_count),
+            "unit_number": source.get("unit_number"),
+            "name": source.get("name"),
+            "position": source_position,
+            "emergency_bootstrap": True,
+        },
+        "take surplus fuel from existing fuel source for one-time emergency boiler bootstrap",
+    )
+
+
+def _critical_electric_factory_present_for_planner(observation: dict[str, Any]) -> bool:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    critical_recipes = {
+        "automation-science-pack",
+        "logistic-science-pack",
+        "chemical-science-pack",
+        "copper-cable",
+        "electronic-circuit",
+        "iron-gear-wheel",
+        "transport-belt",
+        "small-electric-pole",
+        "assembling-machine-1",
+        "long-handed-inserter",
+        "electric-mining-drill",
+    }
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("name") or "")
+        if name == "lab":
+            return True
+        recipe = str(entity.get("recipe") or entity.get("recipe_name") or "")
+        if name in ASSEMBLER_ENTITY_NAMES and recipe in critical_recipes:
+            return True
+    return False
 
 
 def _nearest_surplus_fuel_source(

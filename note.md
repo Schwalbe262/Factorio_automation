@@ -7352,3 +7352,29 @@
 - Next action: Restore or build transport-belt automation without relying on powered assemblers if possible; otherwise define a tightly bounded emergency recovery policy for one-time power bootstrap that does not become repeated hand-carry.
 - Token usage: 15,496,079 cumulative Codex tokens / weekly quota unavailable; delta since Loop 336 record approximately 259,754 tokens.
 
+## 2026-06-15 14:59:11 +09:00 - Loop 338
+
+- Part: bounded emergency power bootstrap
+- Goal: Unblock the live map when boiler fuel automation cannot be built yet because both transport-belt stock and transport-belt automation are missing, without restoring the old repeated manual boiler-fueling behavior.
+- Hypothesis: The current map is in a bootstrap deadlock: the factory needs power to automate belts, but the boiler needs belts to automate fuel. A tightly labeled emergency path that only moves surplus fuel from an existing fuel source, caps the amount, and marks the action as emergency bootstrap is safer than generic coal mining or repeated boiler refueling.
+- Actions:
+  - Read live no-mod state without mutation: boiler 272 is `no_fuel`, player inventory is empty, there are no transport-belt assemblers, and the coal drill at `{x:113,y:18}` contains 9 coal.
+  - Added `EMERGENCY_BOILER_BOOTSTRAP_FUEL_INSERT=5`.
+  - Added `_emergency_boiler_bootstrap_fuel_decision` so `SetupPowerSkill` can take at most 5 surplus fuel from an existing source or insert at most 5 carried fuel into the boiler when the boiler coal feed path is blocked by missing belts/inserters.
+  - The emergency path refuses direct resource mining and only runs when a critical electric factory exists, the boiler has zero fuel, and the normal boiler coal feed action is blocked by route material prerequisites.
+  - Added regression tests for taking surplus fuel from a coal drill and inserting carried emergency fuel into the boiler.
+  - Ran live read-only smoke without mutating the world.
+- Candidates:
+  - Current live emergency source: burner mining drill unit 45 at `{x:113,y:18}`, status `waiting_for_space_in_destination`, fuel inventory `coal=9`.
+  - Current live target: boiler unit 272 at `{x:-43.5,y:19}`, status `no_fuel`.
+  - Current live action after change: move to the surplus fuel source for one-time emergency power bootstrap.
+- Metrics:
+  - Targeted tests: `6 passed`.
+  - Related suite: `328 passed`.
+  - Full test suite: `518 passed in 25.78s`.
+  - Live read-only after change: `setup_power_action={"type":"move_to","position":{"x":113.0,"y":18.0}}`, reason `move near surplus fuel source for one-time emergency power bootstrap`.
+- Result: The live deadlock can now progress through an explicit one-time emergency bootstrap path instead of generic coal mining or an unbounded manual boiler-fuel loop.
+- Failure reason: No code/test failure remains. Live mutation was not executed in this loop, so the boiler is still unfueled until autopilot or an operator executes the new emergency sequence.
+- Next action: After emergency power is restored, immediately build/restore transport-belt automation and then use the boiler coal feed executor so future boiler fuel is belt/inserter fed.
+- Token usage: 15,659,459 cumulative Codex tokens / weekly quota unavailable; delta since Loop 337 record approximately 163,380 tokens.
+

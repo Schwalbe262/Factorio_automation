@@ -609,3 +609,12 @@
 - After: `CoalFuelFeedSkill` can build a boiler coal feed route when belts/inserters are available, strategy can preempt ready boiler fuel repair to `connect_coal_fuel_feed`, and the current live `SetupPowerSkill` returns `boiler coal feed needs automated transport-belt production or existing belt stock; refusing repeated boiler hand-fueling`.
 - Evidence: `{"targeted_tests":"9 passed","related_suite":"327 passed","full_tests":"517 passed","live_before":"setup_power would move near coal","live_after":{"setup_power_action":null,"coal_feed_action":null,"reason":"boiler coal feed needs automated transport-belt production or existing belt stock; refusing repeated boiler hand-fueling"},"qwen_strategy_id":"strategy-f73133b9368b495185c7fb28543d318f"}`
 - Remaining risk: The current live map still has `belt_assembler_count=0`, so the new boiler feed executor is blocked on belt automation or existing belt stock before it can mutate the world.
+
+## 2026-06-15 14:59:11 +09:00 - Insight 74
+
+- Source loop: Loop 338
+- Improvement: A no-belt-stock power deadlock now has an explicit bounded emergency bootstrap path instead of either stalling forever or falling back to generic repeated manual boiler fueling.
+- Before: After Part 115, the live map correctly refused repeated boiler hand-fueling, but with `belt_assembler_count=0`, empty inventory, and boiler 272 `no_fuel`, `setup_power` had no executable recovery action.
+- After: `SetupPowerSkill` can take up to 5 surplus fuel from an existing fuel source or insert up to 5 carried fuel into the boiler, labels the action with `emergency_bootstrap`, refuses direct resource mining, and only runs when a critical powered factory exists and the normal boiler coal feed route is blocked by missing route materials. Live read-only now returns `move near surplus fuel source for one-time emergency power bootstrap`.
+- Evidence: `{"targeted_tests":"6 passed","related_suite":"328 passed","full_tests":"518 passed","live_action":{"type":"move_to","position":{"x":113.0,"y":18.0}},"live_reason":"move near surplus fuel source for one-time emergency power bootstrap","fuel_cap":5,"direct_resource_mining":false}`
+- Remaining risk: This is a bounded bootstrap exception, not a steady-state logistics solution. After power is restored, the agent must build transport-belt automation and the boiler coal feed route.
