@@ -7777,15 +7777,48 @@ class GearBeltMallRelocationSkill:
 
         required_poles = layout.get("relocation_power_poles_estimate")
         available_poles = inventory_count(observation, "small-electric-pole")
+        corridor_positions = _gear_belt_mall_relocation_power_corridor_positions(observation, layout)
+        missing_corridor_positions = _missing_power_corridor_positions(observation, corridor_positions)
         if required_poles is None:
             return PlannerDecision(None, "gear/belt mall relocation needs a known power anchor before moving existing assemblers")
-        if available_poles < int(required_poles):
+        if not corridor_positions:
+            return PlannerDecision(
+                None,
+                "gear/belt mall relocation needs a connected power anchor before moving existing assemblers",
+            )
+        required_for_corridor = max(int(required_poles), len(missing_corridor_positions))
+        if available_poles < required_for_corridor:
             return PlannerDecision(
                 None,
                 (
-                    f"gear/belt mall relocation needs {int(required_poles)} small-electric-pole for the power corridor "
+                    f"gear/belt mall relocation needs {required_for_corridor} small-electric-pole for the power corridor "
                     f"before mining the existing mall; available {available_poles}"
                 ),
+            )
+        if missing_corridor_positions:
+            position = missing_corridor_positions[0]
+            blocker = _build_position_blocker(observation, position, allowed_names=POWER_CONNECTOR_NAMES)
+            if blocker is not None:
+                return PlannerDecision(
+                    None,
+                    (
+                        f"gear/belt mall relocation power corridor is blocked by {blocker.get('name')} "
+                        f"near {position}; refusing to mine existing mall first"
+                    ),
+                )
+            if distance(player, position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position)},
+                    "move near gear/belt mall relocation power corridor",
+                )
+            return PlannerDecision(
+                {
+                    "type": "build",
+                    "name": "small-electric-pole",
+                    "position": position,
+                    "allow_nearby": False,
+                },
+                "build gear/belt mall relocation power corridor before mining existing mall",
             )
 
         target_specs = [
@@ -7873,6 +7906,87 @@ class GearBeltMallRelocationSkill:
             "gear/belt mall assemblers are relocated near the iron-plate source; next build local gear-to-belt logistics",
             done=True,
         )
+
+
+def _gear_belt_mall_relocation_power_corridor_positions(
+    observation: dict[str, Any],
+    layout: dict[str, Any],
+) -> list[dict[str, float]]:
+    target = _gear_belt_mall_relocation_power_target(layout)
+    anchor = _nearest_connected_power_anchor(observation, target)
+    if anchor is None:
+        return []
+    anchor_position = _position(anchor)
+    span = distance(anchor_position, target)
+    if span <= _power_wire_reach("small-electric-pole"):
+        return [target]
+    step_reach = _power_wire_reach("small-electric-pole")
+    steps = max(1, int(ceil(span / step_reach)))
+    positions: list[dict[str, float]] = []
+    for index in range(1, steps + 1):
+        ratio = index / steps
+        positions.append(
+            {
+                "x": _round_half(anchor_position["x"] + (target["x"] - anchor_position["x"]) * ratio),
+                "y": _round_half(anchor_position["y"] + (target["y"] - anchor_position["y"]) * ratio),
+            }
+        )
+    return _dedupe_positions(positions)
+
+
+def _gear_belt_mall_relocation_power_target(layout: dict[str, Any]) -> dict[str, float]:
+    gear = layout.get("target_gear_position") if isinstance(layout.get("target_gear_position"), dict) else {}
+    belt = layout.get("target_belt_position") if isinstance(layout.get("target_belt_position"), dict) else gear
+    gear_position = _xy_position(gear) if gear else {"x": 0.0, "y": 0.0}
+    belt_position = _xy_position(belt) if belt else gear_position
+    return {
+        "x": _round_half((gear_position["x"] + belt_position["x"]) / 2.0),
+        "y": _round_half(gear_position["y"] + 2.0),
+    }
+
+
+def _nearest_connected_power_anchor(observation: dict[str, Any], target: dict[str, float]) -> dict[str, Any] | None:
+    names = POWER_CONNECTOR_NAMES | {"steam-engine", "steam-turbine", "solar-panel", "accumulator"}
+    candidates = [
+        entity
+        for entity in observation.get("entities") or []
+        if isinstance(entity, dict)
+        and str(entity.get("name") or "") in names
+        and isinstance(entity.get("position"), dict)
+        and (str(entity.get("name") or "") in POWER_CONNECTOR_NAMES or entity.get("electric_network_connected") is True)
+    ]
+    return _nearest_to(candidates, target) if candidates else None
+
+
+def _missing_power_corridor_positions(
+    observation: dict[str, Any],
+    positions: list[dict[str, float]],
+) -> list[dict[str, float]]:
+    missing: list[dict[str, float]] = []
+    for position in positions:
+        if any(
+            _entity_at_build_position(observation, name, position, radius=0.8) is not None
+            for name in POWER_CONNECTOR_NAMES
+        ):
+            continue
+        missing.append(position)
+    return missing
+
+
+def _dedupe_positions(positions: list[dict[str, float]]) -> list[dict[str, float]]:
+    rows: list[dict[str, float]] = []
+    seen: set[tuple[float, float]] = set()
+    for position in positions:
+        key = _position_tuple(position)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(position)
+    return rows
+
+
+def _round_half(value: float) -> float:
+    return round(round(float(value) * 2.0) / 2.0, 1)
 
 
 class IronPlateLogisticLineToGearMallSkill:

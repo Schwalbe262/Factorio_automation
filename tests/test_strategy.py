@@ -458,6 +458,36 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("route_cost_preference=relocate_mall_to_iron_source", result["evidence"])
         self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
 
+    def test_rocket_goal_relocates_long_gear_mall_before_repeating_emergency_power(self):
+        observation = gear_mall_needs_long_plate_line_without_belts_observation()
+        observation["inventory"] = {"small-electric-pole": 20}
+        observation["entities"].append(
+            {
+                "name": "boiler",
+                "unit_number": 300,
+                "position": {"x": -2, "y": 0},
+                "status_name": "no_fuel",
+                "inventories": {},
+            }
+        )
+
+        result = heuristic_strategy("launch_rocket_program", observation)
+
+        self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertIn("costed gear/belt mall relocation", result["blockers"])
+        self.assertIn("small_electric_pole_deficit=0", result["evidence"])
+
+    def test_rocket_goal_relocates_long_gear_mall_before_repeating_mall_power_repair(self):
+        observation = gear_mall_needs_long_plate_line_without_belts_observation()
+        observation["inventory"] = {"small-electric-pole": 20}
+        observation["entities"][1]["status_name"] = "no_power"
+
+        result = heuristic_strategy("launch_rocket_program", observation)
+
+        self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertIn("costed gear/belt mall relocation", result["blockers"])
+        self.assertIn("small_electric_pole_deficit=0", result["evidence"])
+
     def test_rocket_goal_bootstraps_belt_mall_when_belts_are_exhausted(self):
         result = heuristic_strategy("launch_rocket_program", gear_belt_mall_needs_bootstrap_observation())
 
@@ -1022,6 +1052,62 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
         self.assertIn("costed gear/belt mall relocation", result["blockers"])
         self.assertIn("source_distance_tiles=152.5", result["evidence"])
+
+    def test_reconcile_routes_setup_power_to_relocation_when_power_window_keeps_expiring(self):
+        observation = gear_mall_needs_long_plate_line_without_belts_observation()
+        observation["inventory"] = {"small-electric-pole": 20}
+        observation["entities"].append(
+            {
+                "name": "boiler",
+                "unit_number": 300,
+                "position": {"x": -2, "y": 0},
+                "status_name": "no_fuel",
+                "inventories": {},
+            }
+        )
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "setup_power",
+                "priority": 94,
+                "reason": "Boiler is empty again.",
+                "evidence": [],
+                "blockers": ["factory power"],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "setup_power")
+        self.assertIn("costed gear/belt mall relocation before repeated emergency power", result["blockers"])
+        self.assertIn("small_electric_pole_deficit=0", result["evidence"])
+
+    def test_reconcile_routes_setup_power_to_relocation_when_mall_power_is_out(self):
+        observation = gear_mall_needs_long_plate_line_without_belts_observation()
+        observation["inventory"] = {"small-electric-pole": 20}
+        observation["entities"][1]["status_name"] = "no_power"
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "setup_power",
+                "priority": 94,
+                "reason": "Belt mall has no power.",
+                "evidence": [],
+                "blockers": ["factory power", "gear/belt mall power"],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "setup_power")
+        self.assertIn("costed gear/belt mall relocation before repeated emergency power", result["blockers"])
+        self.assertIn("small_electric_pole_deficit=0", result["evidence"])
 
     def test_reconcile_keeps_partial_relocation_ahead_of_electric_drill_research(self):
         result = reconcile_strategy_decision(

@@ -184,6 +184,15 @@ Latest continuation after Part 105:
   - Live Qwen read-only changed from repeated `setup_power` to `bootstrap_build_item_mall target_item=transport-belt`, preserving unit 318 and selecting unit 537 for gear retooling. A capped live step then set unit 537 to `iron-gear-wheel` through the `AI/server` virtual agent.
   - Full verification: `PYTHONPATH=src pytest -q` -> `526 passed`.
   - Current live blocker after this part: unit 537 now needs iron plates, but the nearest source is about 149 tiles away, so hand-carry is correctly refused. Next work should solve this with placement/logistics cost handling rather than manual transfer.
+- Part 120 starts the costed gear/belt mall relocation safely:
+  - `GearBeltMallRelocationSkill` now computes the relocation power-corridor positions and builds missing `small-electric-pole` placements before mining the existing gear/belt mall assemblers.
+  - The executor refuses to tear down the current mall while the corridor is incomplete, checks for blockers at the next corridor position, and requires enough pole stock for the remaining corridor.
+  - Strategy small-pole deficit calculation now uses the executor's actual missing corridor count when available, so Qwen does not choose a relocation step that the executor will immediately reject for missing poles.
+  - Strategy/heuristic guardrails now route repeated `setup_power`, `plan_factory_site`, build/research, and gear/belt mall `no_power` cases to `relocate_gear_belt_mall_to_iron_source` when relocation is cheaper than a 100+ tile pre-belt iron-plate route and pole supply is sufficient.
+  - Live capped mutation placed the first relocation corridor pole: requested `{-29.0, 6.0}`, placed unit 599 at `{-28.5, 6.5}` through the `AI/server` virtual agent, without moving `r1jae`.
+  - Live read-only after the no-power guard fix: Qwen raw `bootstrap_build_item_mall` was guardrailed to `relocate_gear_belt_mall_to_iron_source` with `source_distance_tiles=149.1`, `belt_route_cost=150.0`, `relocation_cost=56.0`, and `small_electric_pole_deficit=0`.
+  - Full verification: `PYTHONPATH=src pytest -q` -> `531 passed`.
+  - Current next action: continue the relocation corridor toward the iron source, then mine/rebuild unit 537 (`iron-gear-wheel`) and unit 318 (`transport-belt`) near unit 395. After transport belts exist, build the steady-state boiler coal feed route.
 
 Part 64 introduced:
 

@@ -8,6 +8,9 @@ from .knowledge import dependency_tree_for_objective
 from .monitor import recent_damage_events, summarize_factory
 from .models import distance, entities_named, entity_item_count, inventory_count, total_item_count
 from .planner import (
+    _find_gear_belt_mall_relocation_layout,
+    _gear_belt_mall_relocation_power_corridor_positions,
+    _missing_power_corridor_positions,
     factory_layout_issues,
     factory_layout_opportunities,
     factory_layout_simulation_candidates,
@@ -1133,6 +1136,8 @@ def reconcile_strategy_decision(
     gear_belt_mall_bootstrap_issue = _gear_belt_mall_bootstrap_issue(observation)
     transport_belt_mall_gear_retool_issue = _transport_belt_mall_gear_retool_issue(observation)
     transport_belt_mall_retool_issue = _transport_belt_mall_retool_issue(observation)
+    gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
+    relocation_power_pole_deficit = _gear_mall_relocation_power_pole_deficit(gear_mall_iron_plate_issue, observation)
     if transport_belt_mall_gear_retool_issue is not None and selected in {
         "setup_power",
         "plan_factory_site",
@@ -1214,6 +1219,67 @@ def reconcile_strategy_decision(
         adjusted["guardrail_adjusted"] = {
             "from": selected,
             "to": "bootstrap_build_item_mall",
+            "reason": guardrail_reason,
+        }
+        return adjusted
+    if (
+        _gear_mall_plate_route_needs_compaction(gear_mall_iron_plate_issue)
+        and relocation_power_pole_deficit <= 0
+        and _power_issue_allows_pre_power_relocation(critical_factory_power_issue)
+        and selected in {
+            "setup_power",
+            "plan_factory_site",
+            "relocate_gear_belt_mall_to_iron_source",
+            "produce_electronic_circuit",
+            "automate_electronic_circuit_line",
+            "bootstrap_build_item_mall",
+            "bootstrap_power_pole_mall",
+            "research_electric_mining_drill",
+            "bootstrap_electric_mining_drill_mall",
+            "research_logistics",
+            "build_iron_plate_logistic_line_to_gear_mall",
+            "build_site_input_logistic_line",
+        }
+    ):
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "relocate_gear_belt_mall_to_iron_source"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 94 if selected == "setup_power" else 93)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            f"LLM selected {selected}, but emergency power bootstrapping is only buying short windows while "
+            "the gear/belt mall is 100+ tiles from iron plates; build the relocation power corridor and move "
+            "the mall instead of repeating hand-fuel recovery."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(
+            set(
+                _string_list(decision.get("blockers"))
+                + [
+                    "costed gear/belt mall relocation",
+                    "costed gear/belt mall relocation before repeated emergency power",
+                ]
+            )
+        )
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            f"gear_assembler_unit={gear_mall_iron_plate_issue.get('gear_unit')}",
+            f"iron_source_unit={gear_mall_iron_plate_issue.get('source_unit')}",
+            f"source_distance_tiles={gear_mall_iron_plate_issue.get('source_distance_tiles')}",
+            f"belt_route_cost={gear_mall_iron_plate_issue.get('belt_route_cost')}",
+            f"relocation_power_poles_estimate={gear_mall_iron_plate_issue.get('relocation_power_poles_estimate')}",
+            f"relocation_cost={gear_mall_iron_plate_issue.get('relocation_cost')}",
+            f"route_cost_preference={gear_mall_iron_plate_issue.get('route_cost_preference')}",
+            f"small_electric_pole_deficit={relocation_power_pole_deficit}",
+            "transport_belts_available_for_mall_logistics=false",
+            "gear_handcraft_blocked=true",
+        ]
+        adjusted["expected_effect"] = (
+            "Build the relocation power corridor first, then move the gear/belt mall beside the iron-plate source "
+            "so belt automation no longer depends on 149-tile hand-carry or emergency boiler windows."
+        )
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": "relocate_gear_belt_mall_to_iron_source",
             "reason": guardrail_reason,
         }
         return adjusted
@@ -1333,8 +1399,6 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
-    gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
-    relocation_power_pole_deficit = _gear_mall_relocation_power_pole_deficit(gear_mall_iron_plate_issue, observation)
     if relocation_power_pole_deficit > 0 and selected in {
         "plan_factory_site",
         "relocate_gear_belt_mall_to_iron_source",
@@ -1918,6 +1982,39 @@ def heuristic_strategy(
                 blockers=["coal fuel feed route"],
                 expected_effect="Build belt/inserter fuel feed from the coal supply belt to the nearby burner consumer.",
             ).to_dict()
+
+    relocation_power_pole_deficit = _gear_mall_relocation_power_pole_deficit(gear_mall_iron_plate_issue, observation)
+    if (
+        _gear_mall_plate_route_needs_compaction(gear_mall_iron_plate_issue)
+        and relocation_power_pole_deficit <= 0
+        and _power_issue_allows_pre_power_relocation(critical_factory_power_issue)
+    ):
+        return StrategicDecision(
+            selected_skill="relocate_gear_belt_mall_to_iron_source",
+            priority=94 if critical_factory_power_issue is not None else 93,
+            reason=(
+                "The powered gear/belt mall has no sustained iron-plate input, and repeated emergency boiler "
+                "fueling only creates short windows. Build the relocation power corridor and move the mall "
+                "toward iron-plate production before trying more long-route recovery."
+            ),
+            evidence=[
+                f"gear_assembler_unit={gear_mall_iron_plate_issue.get('gear_unit')}",
+                f"iron_source_unit={gear_mall_iron_plate_issue.get('source_unit')}",
+                f"source_distance_tiles={gear_mall_iron_plate_issue.get('source_distance_tiles')}",
+                f"belt_route_cost={gear_mall_iron_plate_issue.get('belt_route_cost')}",
+                f"relocation_power_poles_estimate={gear_mall_iron_plate_issue.get('relocation_power_poles_estimate')}",
+                f"relocation_cost={gear_mall_iron_plate_issue.get('relocation_cost')}",
+                f"route_cost_preference={gear_mall_iron_plate_issue.get('route_cost_preference')}",
+                f"small_electric_pole_deficit={relocation_power_pole_deficit}",
+                "transport_belts_available_for_mall_logistics=false",
+                "gear_handcraft_blocked=true",
+            ],
+            blockers=["costed gear/belt mall relocation"],
+            expected_effect=(
+                "Build the relocation power corridor before teardown, then rebuild the gear/belt mall beside "
+                "iron-plate production."
+            ),
+        ).to_dict()
 
     if power_issue:
         return StrategicDecision(
@@ -2767,6 +2864,16 @@ def _critical_factory_power_blockers(issue: dict[str, Any]) -> list[str]:
     return blockers
 
 
+def _power_issue_allows_pre_power_relocation(issue: dict[str, Any] | None) -> bool:
+    if issue is None:
+        return True
+    recipe = str(issue.get("recipe") or "")
+    entity = str(issue.get("entity") or "")
+    if recipe == "steam-power" and entity in {"boiler", "steam-engine"}:
+        return True
+    return entity in ASSEMBLER_ENTITY_NAMES and recipe in {"iron-gear-wheel", "transport-belt"}
+
+
 def _critical_electric_factory_present(observation: dict[str, Any]) -> bool:
     entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
     for entity in entities:
@@ -3204,6 +3311,10 @@ def _gear_mall_relocation_power_pole_deficit(issue: dict[str, Any] | None, obser
     required = issue.get("relocation_power_poles_estimate") if isinstance(issue, dict) else None
     if not isinstance(required, (int, float)):
         return 0
+    layout = _find_gear_belt_mall_relocation_layout(observation)
+    if layout is not None:
+        corridor = _gear_belt_mall_relocation_power_corridor_positions(observation, layout)
+        required = max(float(required), float(len(_missing_power_corridor_positions(observation, corridor))))
     available = total_item_count(observation, "small-electric-pole")
     return max(0, int(ceil(float(required))) - int(available))
 

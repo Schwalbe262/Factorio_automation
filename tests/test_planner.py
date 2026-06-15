@@ -520,13 +520,25 @@ class PlannerTests(unittest.TestCase):
         decision = GearBeltMallRelocationSkill(20).next_action(obs)
 
         self.assertIsNone(decision.action)
-        self.assertIn("needs 20 small-electric-pole", decision.reason)
+        self.assertIn("needs 21 small-electric-pole", decision.reason)
         self.assertIn("before mining the existing mall", decision.reason)
 
-    def test_gear_belt_mall_relocation_recovers_existing_assembler_when_ready(self):
+    def test_gear_belt_mall_relocation_builds_power_corridor_before_teardown(self):
         obs = long_gear_mall_relocation_observation()
-        obs["inventory"] = {"small-electric-pole": 20}
+        obs["inventory"] = {"small-electric-pole": 23}
         obs["player"]["position"] = {"x": 0.5, "y": 0.5}
+
+        decision = GearBeltMallRelocationSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "small-electric-pole")
+        self.assertIn("power corridor before mining existing mall", decision.reason)
+
+    def test_gear_belt_mall_relocation_recovers_existing_assembler_when_corridor_exists(self):
+        obs = long_gear_mall_relocation_observation()
+        obs["inventory"] = {"small-electric-pole": 23}
+        obs["player"]["position"] = {"x": 0.5, "y": 0.5}
+        _add_existing_relocation_power_corridor(obs)
 
         decision = GearBeltMallRelocationSkill(20).next_action(obs)
 
@@ -536,13 +548,14 @@ class PlannerTests(unittest.TestCase):
 
     def test_gear_belt_mall_relocation_continues_after_first_assembler_recovered(self):
         obs = long_gear_mall_relocation_observation()
-        obs["inventory"] = {"small-electric-pole": 20, "assembling-machine-1": 1}
+        obs["inventory"] = {"small-electric-pole": 23, "assembling-machine-1": 1}
         obs["player"]["position"] = {"x": 3.5, "y": 0.5}
         obs["entities"] = [entity for entity in obs["entities"] if entity.get("unit_number") != 100]
         for entity in obs["entities"]:
             if entity.get("unit_number") == 101:
                 entity["recipe"] = "small-electric-pole"
                 entity["inventories"] = {}
+        _add_existing_relocation_power_corridor(obs)
 
         decision = GearBeltMallRelocationSkill(20).next_action(obs)
 
@@ -4651,6 +4664,22 @@ def long_gear_mall_relocation_observation():
         },
     ]
     return obs
+
+
+def _add_existing_relocation_power_corridor(obs):
+    layout = planner_module._find_gear_belt_mall_relocation_layout(obs)
+    positions = planner_module._gear_belt_mall_relocation_power_corridor_positions(obs, layout)
+    start_unit = 7000
+    for index, position in enumerate(positions):
+        obs["entities"].append(
+            {
+                "name": "small-electric-pole",
+                "unit_number": start_unit + index,
+                "position": position,
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
 
 
 def complete_belt_smelting_entities(drill_x, drill_y, base_unit, resource="iron-ore", product="iron-plate", reserve_fuel=False):

@@ -7604,3 +7604,65 @@
 - Next action: Solve the unit 537 iron-plate input by relocating the gear/belt mall closer to iron or building an automation-first logistics route once belt supply is available; do not hand-carry iron plates across the 149-tile gap.
 - Token usage: 16,414,262 raw Codex tokens / weekly quota unavailable; delta since Part 118 final sample 402,172 tokens.
 
+## 2026-06-15 16:10:02 +09:00 - Loop 348
+- Part: live gear/belt mall relocation step
+- Goal: Start moving the transport-belt and iron-gear mall toward the iron-plate source without hand-carrying plates across the 149-tile gap.
+- Hypothesis: The relocation executor should build the power corridor toward the target iron source before mining the existing gear/belt mall assemblers, so the current belt mall is not torn down into an unpowered remote site.
+- Actions:
+  - Ran deterministic skill `relocate_gear_belt_mall_to_iron_source` for one capped live step through the `AI/server` virtual agent.
+  - Qwen/guardrail selected the costed relocation path instead of hand-carrying iron plates or building a 149-tile pre-belt logistics route.
+  - Built the first relocation power-corridor `small-electric-pole` at requested position `{-29.0, 6.0}`; Factorio placed unit 599 at `{-28.5, 6.5}`.
+  - Confirmed the observing/manual `r1jae` player was not moved; the action response used `agent.kind=server`, `character_valid=false`, `execution.virtual=true`.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-gear-belt-mall-relocation-20260615-070953.jsonl`.
+- Candidates:
+  - Selected goal/skill: `relocate_gear_belt_mall_to_iron_source`.
+  - Target gear assembler to move: unit 537, recipe `iron-gear-wheel`, current position `{-36.5, 15.5}`.
+  - Target belt assembler to move: unit 318, recipe `transport-belt`, current position `{-40.5, 15.5}`.
+  - Iron source: stone furnace unit 395 near `{89, -65}`, about 149.1 tiles from the current gear assembler.
+  - Planned target positions: gear at `{94.5, -70.0}`, belt at `{97.5, -70.0}`.
+- Metrics:
+  - Steps: 1.
+  - Status: capped after one successful action.
+  - Duration: 9.015s.
+  - transport-belt: 0 -> 0 (delta 0).
+  - small-electric-pole inventory after action: 22.
+  - Remaining missing corridor positions after action: 20.
+  - Next relocation executor action after observation: move near `{-22.5, 3.0}` / stand at `{-20.5, 3.0}` for the next corridor pole.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-gear-belt-mall-relocation-20260615-070953.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":0,"initial_item_count":0,"max_steps":1,"target":20}`.
+- Result: The relocation power corridor was started before mining the existing mall, preserving unit 318 and unit 537 for now.
+- Failure reason: No action failure. The loop ended because `max_steps=1` intentionally capped the live mutation after the first build.
+- Next action: Continue the relocation corridor, then mine/rebuild the gear and belt assemblers beside the iron source; do not hand-carry iron plates across the long route.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-15 16:20:15 +09:00 - Loop 349
+
+- Part: Part 120 gear/belt mall relocation power corridor
+- Goal: Make the costed gear/belt mall relocation executable and keep Qwen/guardrails from returning to repeated emergency power recovery while the mall is 149 tiles from iron plates.
+- Hypothesis: If the executor builds the relocation power corridor before teardown, and strategy treats gear/belt mall `no_power` as compatible with relocation-first recovery, the agent can keep progressing toward belt automation without hand-carrying plates or repeatedly fueling the boiler by hand.
+- Actions:
+  - Added relocation power-corridor planning to `GearBeltMallRelocationSkill`.
+  - The executor now computes corridor pole positions, refuses to mine the existing mall before the corridor exists, checks blockers at each corridor position, and requires enough `small-electric-pole` stock for the remaining corridor.
+  - Added strategy and heuristic guardrails that route `setup_power`, `plan_factory_site`, and downstream build/research choices to `relocate_gear_belt_mall_to_iron_source` when relocation is cheaper than a long pre-belt iron-plate route and pole supply is sufficient.
+  - Aligned strategy's small-pole deficit calculation with the executor's actual missing corridor positions, not only the coarse route estimate.
+  - Fixed the live follow-up case where the first new pole made the belt mall report `no_power`; gear/belt mall `no_power` is now a narrow allowed pre-power relocation case instead of forcing another `setup_power` loop.
+  - Ran Qwen-required read-only strategy verification after the fix.
+- Candidates:
+  - Existing gear assembler: unit 537, recipe `iron-gear-wheel`.
+  - Existing belt assembler: unit 318, recipe `transport-belt`.
+  - Iron source: unit 395, `stone-furnace`, source distance about 149.1 tiles.
+  - Live route preference: `relocate_mall_to_iron_source`, belt-route cost `150.0`, relocation cost `56.0`, relocation power-pole estimate `19` after the first corridor pole.
+  - Qwen strategy before the no-power guard fix: `strategy-b8e12432350b46d789c1913456d3583b` selected `setup_power` after guardrail because unit 318 was `no_power`.
+  - Qwen strategy after the no-power guard fix: `strategy-179dff4ec49a48fcad54cf83fbcc589e` guardrailed raw `bootstrap_build_item_mall` to `relocate_gear_belt_mall_to_iron_source`.
+- Metrics:
+  - Focused planner relocation tests: `4 passed, 199 deselected`.
+  - Focused strategy relocation/no-power tests: `8 passed, 81 deselected`.
+  - Full test suite: `531 passed in 28.97s`.
+  - Live first corridor pole: unit 599 placed at `{-28.5, 6.5}`.
+  - Live next executor action: move near the next corridor target before building the next pole.
+  - Live read-only evidence after fix: `small_electric_pole_deficit=0`, `transport_belts_available_for_mall_logistics=false`, `gear_handcraft_blocked=true`.
+- Result: The relocation path is now executable without tearing down the current mall first, and required-Qwen strategy stays on relocation even when the staged gear/belt mall is unpowered during the short boiler outage.
+- Failure reason: Transport-belt production is still not complete because the relocation corridor and assembler move have not finished yet.
+- Next action: Let the Qwen/no-mod autopilot continue `relocate_gear_belt_mall_to_iron_source` until the corridor is complete and units 537/318 are rebuilt near the iron source; after belt output exists, build the steady-state boiler coal feed.
+- Token usage: 17,079,475 raw Codex tokens / weekly quota unavailable; delta since Part 119 final sample 665,213 tokens.
+
