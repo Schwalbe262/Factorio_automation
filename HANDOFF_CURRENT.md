@@ -7,7 +7,7 @@
 \- `setup_coal_supply` now places a coal burner mining drill before output chest/belt work when a drill is available.
 \- Factory sites now fold dedicated intermediate assemblers into parent sites via `subitems`, such as `iron-gear-wheel` under `transport-belt`.
 \- Root current Markdown files now use the escaped `md/` marker format.
-\- Slurm scheduler mode defaults to `rtx3090`/`r1jae262`; client task payloads are uploaded to remote files so `/tasks` commands stay small.
+\- Slurm scheduler mode defaults to `rtx3090`/`r1jae262`; layout improvement requests use `a6000ada,a6000` candidates and submit the ready single `gpu_model`.
 \- Live map: belt mall output inserter now points assembler-to-chest and produced belts into chest; boiler coal route reached about `x=0.5` but still needs more belts to reach boiler at `x=-43.5`.
 
 \## Current objective
@@ -33,13 +33,13 @@
 \## Last validation
 
 \- `py_compile`, focused planner/monitor/web/slurm tests (`335`), full `pytest -q` (`612`) passed.
-\- Full `pytest -q` passed: `634 passed`.
-\- Live validation: task command length now about `2KB`; output inserter `708` has pickup at assembler and drop at chest.
-\- Token sample recorded: `225,528,048` Factorio Codex thread tokens; delta `63,380,328`; weekly quota unknown.
+\- Full `pytest -q` passed: `636 passed`.
+\- Live validation: scheduler layout status ready with candidates `a6000ada,a6000`, selected `a6000`, free ready GPUs `2`; output inserter `708` has pickup at assembler and drop at chest.
+\- Token sample recorded: `235,845,416` Factorio Codex thread tokens; delta `10,317,368`; weekly quota unknown.
 
 \## Current blocker
 
-\- Idle layout loop stopped because scheduler task 50 failed before user command: `srun` invoked `~/slurm_scheduler/.../task.sh` as argv and the shell did not expand `~`.
+\- Idle layout loop is not restarted in this closeout; scheduler route now targets A6000 candidates, but live gameplay work should resume deliberately.
 
 \## Next steps
 
@@ -72,7 +72,7 @@
 \- Added route corner belt direction, endpoint inserter role checks, and source endpoint protection for site-input logistics.
 \- Fixed site-input/iron-line inserter pickup/drop semantics, corrected integer-center coal drill output tiles, and stopped boiler feed from treating the next route belt as the coal source.
 \- Added role-aware dogleg site-input routes and fixed `NORTH=0` direction comparisons so north-facing belts/inserters are not treated as missing direction.
-\- Fixed scheduler task payload size, belt mall output inserter direction, belt-chest consumption for boiler feed, and local gear-output bootstrap for belt/inserter infrastructure.
+\- Fixed scheduler task payload size, A6000 layout routing, belt mall output inserter direction, belt-chest consumption for boiler feed, and local gear-output bootstrap for belt/inserter infrastructure.
 
 \## Risks and gotchas
 
