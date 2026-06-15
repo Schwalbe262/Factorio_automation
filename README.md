@@ -686,6 +686,7 @@ Common environment variables:
 - `FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT=r1jae262`
 - `FACTORIO_AI_SLURM_SCHEDULER_GPUS=1`
 - `FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=rtx3090`
+- `FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS=a6000ada,a6000`
 - `FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker`
 - `FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.5-4B`
 - `FACTORIO_AI_LLM_BASE_URL=http://127.0.0.1:8000/v1`
@@ -714,6 +715,7 @@ $env:FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT="r1jae262"
 $env:FACTORIO_AI_SLURM_REMOTE_DIR="~/factorio-ai-worker"
 $env:FACTORIO_AI_SLURM_SCHEDULER_GPUS="1"
 $env:FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL="rtx3090"
+$env:FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS="a6000ada,a6000"
 $env:FACTORIO_AI_VLLM_MODEL="Qwen/Qwen3.5-4B"
 $env:FACTORIO_AI_VLLM_ARGS="--max-model-len 32768 --gpu-memory-utilization 0.85 --enforce-eager"
 $env:FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER="0"
@@ -734,9 +736,11 @@ The no-mod autopilot, real-player autopilot, idle layout loop, and 4B launcher u
 Older 9B/27B direct-worker launchers are legacy queue experiments and should not be used for normal
 local LLM operation unless this project explicitly needs an isolated comparison run.
 
-The normal 4B local LLM path defaults to `rtx3090` because it can use warm scheduler capacity and does not
-need to wait for `a6000ada`. If a specific model or experiment needs another GPU, override
-`FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL` for that run.
+The normal 4B local LLM path defaults to `rtx3090` because it can use warm scheduler capacity. Layout
+improvement requests use `FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS`, defaulting to `a6000ada,a6000`; the client
+checks scheduler capacity and submits the task with the first ready candidate because `/tasks` accepts one
+`gpu_model` value. If a specific model or experiment needs another GPU, override
+`FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL` or `FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS` for that run.
 
 If the scheduler GPU allocation is still pending or unavailable, `slurm-llm-status` reports
 `ready scheduler GPU allocation` in `missing` and lists pending allocations separately. Queued tasks do not

@@ -31,6 +31,8 @@ DEFAULT_JOB_NAME = "factorio-ai-worker"
 DEFAULT_CONDA_ENV = "factorio-ai"
 DEFAULT_SCHEDULER_URL = "http://100.112.168.31:8000"
 DEFAULT_SCHEDULER_ACCOUNT = "r1jae262"
+LAYOUT_IMPROVEMENT_TASK_TYPE = "layout_improvement_request"
+DEFAULT_LAYOUT_SCHEDULER_GPU_MODELS = ("a6000ada", "a6000")
 LLM_ENV_VARS = (
     "FACTORIO_AI_LLM_BASE_URL",
     "FACTORIO_AI_LLM_MODEL",
@@ -231,12 +233,89 @@ def _scheduler_env_setup() -> str:
     return "\n".join(lines)
 
 
-def _scheduler_task_resources() -> dict[str, Any]:
+def _scheduler_gpu_model_name(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _split_scheduler_gpu_models(value: str) -> list[str]:
+    models: list[str] = []
+    for raw in value.replace(";", ",").split(","):
+        model = _scheduler_gpu_model_name(raw)
+        if model and model not in models:
+            models.append(model)
+    return models
+
+
+def _scheduler_gpu_model_candidates(task_type: str | None = None) -> list[str]:
+    if task_type == LAYOUT_IMPROVEMENT_TASK_TYPE:
+        configured = os.getenv("FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS", "").strip()
+        if not configured:
+            configured = os.getenv("FACTORIO_AI_SLURM_LAYOUT_GPU_MODEL", "").strip()
+        return _split_scheduler_gpu_models(configured) or list(DEFAULT_LAYOUT_SCHEDULER_GPU_MODELS)
+    model = _scheduler_gpu_model_name(os.getenv("FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL", "rtx3090"))
+    return [model] if model else []
+
+
+def _select_scheduler_gpu_model(
+    candidates: list[str],
+    allocation_rows: list[dict[str, Any]],
+    capacity_rows: list[dict[str, Any]],
+    account: str,
+) -> str:
+    if not candidates:
+        return ""
+    ready_free_by_model: dict[str, int] = {}
+    for row in allocation_rows:
+        if str(row.get("account_name") or "") != account:
+            continue
+        if int(row.get("total_gpus") or 0) <= 0:
+            continue
+        if str(row.get("state") or "") not in {"warm", "running", "active"}:
+            continue
+        model = _scheduler_gpu_model_name(row.get("gpu_model"))
+        ready_free_by_model[model] = ready_free_by_model.get(model, 0) + int(row.get("free_gpus") or 0)
+
+    pending_by_model: dict[str, int] = {}
+    for row in capacity_rows:
+        model = _scheduler_gpu_model_name(row.get("gpu_model"))
+        pending_by_model[model] = pending_by_model.get(model, 0) + int(row.get("pending_gpu_tasks") or 0)
+
+    for model in candidates:
+        if ready_free_by_model.get(model, 0) > pending_by_model.get(model, 0):
+            return model
+    for model in candidates:
+        if ready_free_by_model.get(model, 0) > 0:
+            return model
+    return candidates[0]
+
+
+def _scheduler_selected_gpu_model(task_type: str | None = None) -> str:
+    candidates = _scheduler_gpu_model_candidates(task_type)
+    if len(candidates) <= 1:
+        return candidates[0] if candidates else ""
+    try:
+        allocations = _scheduler_api_json("/api/allocations", timeout=10)
+        gpu_capacity = _scheduler_api_json("/api/gpu-capacity", timeout=10)
+    except Exception:  # noqa: BLE001
+        return candidates[0]
+    allocation_rows = allocations if isinstance(allocations, list) else []
+    capacity_rows = gpu_capacity if isinstance(gpu_capacity, list) else []
+    return _select_scheduler_gpu_model(candidates, allocation_rows, capacity_rows, _scheduler_account())
+
+
+def _scheduler_task_resources(
+    task_type: str | None = None,
+    gpu_model: str | None = None,
+) -> dict[str, Any]:
+    candidates = _scheduler_gpu_model_candidates(task_type)
+    selected_gpu_model = _scheduler_gpu_model_name(gpu_model)
+    if not selected_gpu_model:
+        selected_gpu_model = candidates[0] if candidates else ""
     return {
         "cpus": _int_env("FACTORIO_AI_SLURM_SCHEDULER_CPUS", 4, 1),
         "memory_mb": _int_env("FACTORIO_AI_SLURM_SCHEDULER_MEMORY_MB", 32768, 1024),
         "gpus": _int_env("FACTORIO_AI_SLURM_SCHEDULER_GPUS", 1, 0),
-        "gpu_model": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL", "rtx3090").strip(),
+        "gpu_model": selected_gpu_model,
         "partition": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_PARTITION", "auto").strip() or "auto",
         "node_name": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_NODE", "").strip(),
         "exclusive_node": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_EXCLUSIVE_NODE", "0").strip().lower()
@@ -363,7 +442,9 @@ mv "$REMOTE_TEMP" "$REMOTE_TARGET"
 
 
 def _submit_scheduler_task(task: dict[str, Any], cfg: RemoteSlurmConfig) -> dict[str, Any]:
-    resources = _scheduler_task_resources()
+    task_type = str(task.get("type") or "")
+    selected_gpu_model = _scheduler_selected_gpu_model(task_type)
+    resources = _scheduler_task_resources(task_type, gpu_model=selected_gpu_model)
     name = f"factorio-{str(task.get('type') or 'task').replace('_', '-')}-{uuid.uuid4().hex[:8]}"
     remote_cwd = _resolve_scheduler_remote_cwd(cfg)
     _upload_scheduler_task_payload(task, cfg, remote_cwd)
@@ -1020,9 +1101,16 @@ srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/nu
     }
 
 
-def _scheduler_status_payload() -> dict[str, Any]:
+def layout_improvement_status(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
+    cfg = cfg or config()
+    if _use_scheduler_tasks():
+        return _scheduler_status_payload(LAYOUT_IMPROVEMENT_TASK_TYPE)
+    return llm_status(cfg)
+
+
+def _scheduler_status_payload(task_type: str | None = None) -> dict[str, Any]:
     local_env = _llm_env_presence(os.environ)
-    resources = _scheduler_task_resources()
+    gpu_model_candidates = _scheduler_gpu_model_candidates(task_type)
     scheduler_url = _scheduler_url()
     account = _scheduler_account()
     try:
@@ -1048,14 +1136,21 @@ def _scheduler_status_payload() -> dict[str, Any]:
     allocation_rows = allocations if isinstance(allocations, list) else []
     capacity_rows = gpu_capacity if isinstance(gpu_capacity, list) else []
     task_rows = tasks if isinstance(tasks, list) else []
-    wanted_gpu_model = str(resources.get("gpu_model") or "")
+    selected_gpu_model = _select_scheduler_gpu_model(
+        gpu_model_candidates,
+        allocation_rows,
+        capacity_rows,
+        account,
+    )
+    resources = _scheduler_task_resources(task_type, selected_gpu_model)
+    wanted_gpu_models = {_scheduler_gpu_model_name(model) for model in gpu_model_candidates if model}
     active_gpu_allocations = [
         row
         for row in allocation_rows
         if str(row.get("account_name") or "") == account
         and int(row.get("total_gpus") or 0) > 0
         and str(row.get("state") or "") not in {"closed", "failed", "cancelled"}
-        and (not wanted_gpu_model or str(row.get("gpu_model") or "") == wanted_gpu_model)
+        and (not wanted_gpu_models or _scheduler_gpu_model_name(row.get("gpu_model")) in wanted_gpu_models)
     ]
     ready_gpu_allocations = [
         row
@@ -1066,21 +1161,35 @@ def _scheduler_status_payload() -> dict[str, Any]:
         row for row in active_gpu_allocations if str(row.get("state") or "") == "pending"
     ]
     scheduler_ready_free_gpus = sum(int(row.get("free_gpus") or 0) for row in ready_gpu_allocations)
+    ready_free_by_model: dict[str, int] = {}
+    for row in ready_gpu_allocations:
+        model = _scheduler_gpu_model_name(row.get("gpu_model"))
+        ready_free_by_model[model] = ready_free_by_model.get(model, 0) + int(row.get("free_gpus") or 0)
     scheduler_free_gpus = 0
     scheduler_owned_gpus = 0
     pending_gpu_tasks = 0
+    pending_by_model: dict[str, int] = {}
     for row in capacity_rows:
-        if wanted_gpu_model and str(row.get("gpu_model") or "") != wanted_gpu_model:
+        model = _scheduler_gpu_model_name(row.get("gpu_model"))
+        if wanted_gpu_models and model not in wanted_gpu_models:
             continue
+        pending_tasks = int(row.get("pending_gpu_tasks") or 0)
         scheduler_free_gpus += int(row.get("scheduler_free_gpus") or 0)
         scheduler_owned_gpus += int(row.get("scheduler_owned_gpus") or 0)
-        pending_gpu_tasks += int(row.get("pending_gpu_tasks") or 0)
+        pending_gpu_tasks += pending_tasks
+        pending_by_model[model] = pending_by_model.get(model, 0) + pending_tasks
     has_llm_runtime = bool(
         os.getenv("FACTORIO_AI_LLM_BASE_URL", "").strip()
         or os.getenv("FACTORIO_AI_VLLM_MODEL", "").strip()
     )
     needs_gpu = int(resources.get("gpus") or 0) > 0 and not os.getenv("FACTORIO_AI_LLM_BASE_URL", "").strip()
-    has_gpu_queue_capacity = scheduler_ready_free_gpus > pending_gpu_tasks
+    if wanted_gpu_models:
+        has_gpu_queue_capacity = any(
+            ready_free_by_model.get(model, 0) > pending_by_model.get(model, 0)
+            for model in wanted_gpu_models
+        )
+    else:
+        has_gpu_queue_capacity = scheduler_ready_free_gpus > pending_gpu_tasks
     has_gpu_path = not needs_gpu or has_gpu_queue_capacity
     missing = []
     if not has_llm_runtime:
@@ -1101,6 +1210,8 @@ def _scheduler_status_payload() -> dict[str, Any]:
         "remote": {
             "health": health,
             "resources": resources,
+            "gpu_model_candidates": gpu_model_candidates,
+            "selected_gpu_model": selected_gpu_model,
             "active_gpu_allocations": [
                 _scheduler_compact_allocation_row(row) for row in active_gpu_allocations
             ],
@@ -1124,7 +1235,8 @@ def _scheduler_status_payload() -> dict[str, Any]:
             "required_local_env": ["FACTORIO_AI_SLURM_MODE=scheduler", "FACTORIO_AI_VLLM_MODEL or FACTORIO_AI_LLM_BASE_URL"],
             "scheduler_url": scheduler_url,
             "account": account,
-            "gpu_model": wanted_gpu_model,
+            "gpu_model": selected_gpu_model,
+            "gpu_model_candidates": gpu_model_candidates,
         },
     }
 
@@ -1557,7 +1669,7 @@ def request_layout_improvement(
 ) -> dict[str, Any]:
     cfg = cfg or config()
     if _use_scheduler_tasks():
-        status_payload = _scheduler_status_payload()
+        status_payload = _scheduler_status_payload(LAYOUT_IMPROVEMENT_TASK_TYPE)
         if not status_payload.get("llm_ready"):
             return _scheduler_not_ready_result(status_payload)
     task = {

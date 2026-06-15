@@ -556,7 +556,7 @@ class ControllerTests(unittest.TestCase):
                     },
                 ),
                 patch.object(controller, "_maybe_ensure_slurm_worker"),
-                patch("factorio_ai.remote_slurm.llm_status", return_value=status),
+                patch("factorio_ai.remote_slurm.layout_improvement_status", return_value=status),
                 patch("factorio_ai.remote_slurm.request_layout_improvement") as request_layout,
             ):
                 controller._maybe_progress_background_layout_work(

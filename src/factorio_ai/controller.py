@@ -1866,7 +1866,7 @@ class FactorioController:
             if now - self._background_layout_last_submit < interval:
                 return
             if mode in {"scheduler", "slurm_scheduler"}:
-                status = remote_slurm.llm_status()
+                status = remote_slurm.layout_improvement_status()
                 if not status.get("llm_ready"):
                     self._background_layout_last_submit = now
                     remote = status.get("remote") if isinstance(status.get("remote"), dict) else {}
@@ -1877,6 +1877,8 @@ class FactorioController:
                             "active_skill": active_skill,
                             "active_step": active_step,
                             "missing": status.get("missing") or [],
+                            "gpu_model_candidates": remote.get("gpu_model_candidates") or [],
+                            "selected_gpu_model": remote.get("selected_gpu_model"),
                             "scheduler_ready_free_gpus": remote.get("scheduler_ready_free_gpus"),
                             "pending_gpu_tasks": remote.get("pending_gpu_tasks"),
                             "pending_gpu_allocations": remote.get("pending_gpu_allocations") or [],

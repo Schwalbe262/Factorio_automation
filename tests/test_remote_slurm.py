@@ -262,7 +262,7 @@ class RemoteSlurmTests(unittest.TestCase):
         }
         with (
             patch.dict(os.environ, {"FACTORIO_AI_SLURM_MODE": "scheduler"}),
-            patch("factorio_ai.remote_slurm._scheduler_status_payload", return_value=status),
+            patch("factorio_ai.remote_slurm._scheduler_status_payload", return_value=status) as status_payload,
             patch("factorio_ai.remote_slurm._request_task_via_scheduler") as request_task,
         ):
             result = request_layout_improvement(
@@ -278,6 +278,7 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertIn("ready scheduler GPU allocation", result["missing"])
         self.assertEqual(result["remote"]["pending_gpu_tasks"], 2)
         request_task.assert_not_called()
+        status_payload.assert_called_once_with("layout_improvement_request")
 
     def test_llm_status_remediation_marks_pending_gpu_allocation(self):
         cfg = RemoteSlurmConfig(
@@ -557,6 +558,7 @@ class RemoteSlurmTests(unittest.TestCase):
                 {
                     "FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262",
                     "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "rtx3090",
+                    "FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS": "rtx3090",
                 },
             ),
             patch("factorio_ai.remote_slurm._run_remote", side_effect=fake_run_remote),
@@ -579,6 +581,146 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertEqual(json.loads(uploaded[0]["payload"])["payload"]["blob"], large_blob)
         self.assertIn("/remote/factorio-ai/.factorio-ai-scheduler-tasks/.t1.", uploaded[0]["target"])
         self.assertTrue(any("mv \"$REMOTE_TEMP\" \"$REMOTE_TARGET\"" in script for script in remote_scripts))
+
+    def test_layout_scheduler_task_submission_selects_ready_a6000_candidate(self):
+        from factorio_ai import remote_slurm
+
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="factorio-ai-worker",
+            conda_env="factorio-ai",
+            partition="gpu4",
+            cpus_per_task=8,
+            gpus_per_node=1,
+            gres="gpu:1",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        posted: list[dict] = []
+
+        def fake_post(path, data, timeout=0):
+            posted.append(data)
+            return "ok"
+
+        def fake_rows():
+            return [{"id": 43, "name": posted[0]["name"], "status": "queued"}] if posted else []
+
+        def fake_api(path, timeout=0):
+            if path == "/api/allocations":
+                return [
+                    {
+                        "account_name": "r1jae262",
+                        "state": "pending",
+                        "total_gpus": 1,
+                        "free_gpus": 1,
+                        "gpu_model": "a6000ada",
+                    },
+                    {
+                        "account_name": "r1jae262",
+                        "state": "warm",
+                        "total_gpus": 1,
+                        "free_gpus": 1,
+                        "gpu_model": "a6000",
+                    },
+                ]
+            if path == "/api/gpu-capacity":
+                return [
+                    {"gpu_model": "a6000ada", "scheduler_owned_gpus": 1, "scheduler_free_gpus": 0},
+                    {"gpu_model": "a6000", "scheduler_owned_gpus": 1, "scheduler_free_gpus": 1},
+                ]
+            raise AssertionError(path)
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262",
+                    "FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS": "A6000ada,A6000",
+                },
+            ),
+            patch("factorio_ai.remote_slurm._scheduler_api_json", side_effect=fake_api),
+            patch("factorio_ai.remote_slurm._run_remote", return_value="/remote/factorio-ai"),
+            patch("factorio_ai.remote_slurm._run_scp"),
+            patch("factorio_ai.remote_slurm._scheduler_post_form", side_effect=fake_post),
+            patch("factorio_ai.remote_slurm._scheduler_task_rows", side_effect=fake_rows),
+        ):
+            row = remote_slurm._submit_scheduler_task(
+                {"id": "layout1", "type": "layout_improvement_request", "payload": {}},
+                cfg,
+            )
+
+        self.assertEqual(row["id"], 43)
+        self.assertEqual(posted[0]["gpu_model"], "a6000")
+
+    def test_layout_scheduler_status_accepts_a6000_candidates(self):
+        from factorio_ai import remote_slurm
+
+        def fake_api(path, timeout=0):
+            if path == "/api/health":
+                return {"ok": True}
+            if path == "/api/allocations":
+                return [
+                    {
+                        "account_name": "r1jae262",
+                        "state": "warm",
+                        "total_gpus": 1,
+                        "free_gpus": 1,
+                        "gpu_model": "a6000",
+                    },
+                    {
+                        "account_name": "r1jae262",
+                        "state": "warm",
+                        "total_gpus": 1,
+                        "free_gpus": 1,
+                        "gpu_model": "rtx3090",
+                    },
+                ]
+            if path == "/api/gpu-capacity":
+                return [
+                    {
+                        "gpu_model": "a6000ada",
+                        "scheduler_owned_gpus": 1,
+                        "scheduler_free_gpus": 0,
+                        "pending_gpu_tasks": 1,
+                    },
+                    {
+                        "gpu_model": "a6000",
+                        "scheduler_owned_gpus": 1,
+                        "scheduler_free_gpus": 1,
+                        "pending_gpu_tasks": 0,
+                    },
+                    {"gpu_model": "rtx3090", "scheduler_owned_gpus": 1, "scheduler_free_gpus": 1},
+                ]
+            if path == "/api/tasks":
+                return []
+            raise AssertionError(path)
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FACTORIO_AI_SLURM_MODE": "scheduler",
+                    "FACTORIO_AI_VLLM_MODEL": "Qwen/Qwen3.5-4B",
+                    "FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS": "a6000ada,a6000",
+                },
+            ),
+            patch("factorio_ai.remote_slurm._scheduler_api_json", side_effect=fake_api),
+        ):
+            status = remote_slurm.layout_improvement_status()
+
+        self.assertTrue(status["llm_ready"])
+        self.assertEqual(status["remote"]["gpu_model_candidates"], ["a6000ada", "a6000"])
+        self.assertEqual(status["remote"]["selected_gpu_model"], "a6000")
+        self.assertEqual(status["remote"]["resources"]["gpu_model"], "a6000")
+        self.assertEqual(status["remote"]["scheduler_ready_free_gpus"], 1)
 
     def test_scheduler_status_reports_ready_with_vllm_and_scheduler_gpu(self):
         from factorio_ai import remote_slurm
