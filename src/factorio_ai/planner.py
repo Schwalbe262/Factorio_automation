@@ -3351,12 +3351,104 @@ class CoalSupplySkill:
 
         need = _coal_supply_missing_item(observation, layout, use_output_chest=use_output_chest)
         if need:
+            if need == "transport-belt":
+                misplaced_belt = _find_misplaced_coal_supply_output_belt(observation, layout)
+                if misplaced_belt is not None:
+                    position = _position(misplaced_belt)
+                    if distance(player, position) > 4.5:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": _stand_position(position, offset=1.5)},
+                            "move within reach of misplaced coal supply output belt",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "mine",
+                            "unit_number": misplaced_belt.get("unit_number"),
+                            "name": "transport-belt",
+                            "position": position,
+                        },
+                        "recover misplaced coal supply output belt before rebuilding the drill output",
+                    )
+                belt_assembler = _transport_belt_output_assembler(observation)
+                if isinstance(belt_assembler, dict) and entity_item_count(belt_assembler, "transport-belt") > 0:
+                    position = _position(belt_assembler)
+                    if distance(player, position) > 20:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": position},
+                            "move near belt mall output to collect a transport belt for coal supply construction",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "take",
+                            "item": "transport-belt",
+                            "count": 1,
+                            "unit_number": belt_assembler.get("unit_number"),
+                            "name": belt_assembler.get("name") or "assembling-machine-1",
+                            "position": position,
+                        },
+                        "take transport belt from belt mall output for coal supply construction",
+                    )
+            if need == "burner-mining-drill":
+                reusable = _find_relocatable_burner_drill_for_coal_supply(observation, layout["drill_position"])
+                if reusable is not None:
+                    position = _position(reusable)
+                    if distance(player, position) > 4.5:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": _stand_position(position, offset=1.5)},
+                            "move within reach of idle burner mining drill for coal supply relocation",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "mine",
+                            "unit_number": reusable.get("unit_number"),
+                            "name": "burner-mining-drill",
+                            "position": position,
+                        },
+                        "relocate idle burner mining drill to coal supply instead of hand-carrying iron plates for a new drill",
+                    )
             if need in {"wooden-chest", "iron-chest"}:
                 decision = self._ensure_output_chest_item(observation, player, need)
             else:
                 decision = self.support_skill._ensure_item(observation, player, need)
             if decision is not None:
                 return decision
+
+        drill = layout.get("drill")
+        if drill is None:
+            position = layout["drill_position"]
+            blocker = _blocking_obstacle_near(observation, position)
+            if blocker is not None:
+                blocker_position = _position(blocker)
+                if distance(player, blocker_position) > 8:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": blocker_position},
+                        f"move near blocking {blocker.get('name')} before placing coal drill",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "name": blocker.get("name"),
+                        "position": blocker_position,
+                        "count": 1,
+                    },
+                    f"clear blocking {blocker.get('name')} before placing coal drill",
+                )
+            if distance(player, position) > 20 or distance(player, position) < 2.0:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position, offset=3.0)},
+                    "move near planned coal burner mining drill",
+                )
+            return PlannerDecision(
+                {
+                    "type": "build",
+                    "name": "burner-mining-drill",
+                    "position": position,
+                    "direction": layout["drill_direction"],
+                    "required_resource": "coal",
+                    "allow_nearby": True,
+                },
+                "place burner mining drill on coal supply patch",
+            )
 
         if use_output_chest:
             chest = layout.get("output_chest")
@@ -3430,45 +3522,33 @@ class CoalSupplySkill:
                 },
                 "place output belt for coal supply site",
             )
-
-        drill = layout.get("drill")
-        if drill is None:
-            position = layout["drill_position"]
-            blocker = _blocking_obstacle_near(observation, position)
-            if blocker is not None:
-                blocker_position = _position(blocker)
-                if distance(player, blocker_position) > 8:
+        if not use_output_chest and isinstance(belt, dict):
+            expected_direction = int(layout["belt_direction"])
+            if _direction_or_default(belt.get("direction"), expected_direction) != expected_direction:
+                position = _position(belt)
+                if distance(player, position) > 4.5:
                     return PlannerDecision(
-                        {"type": "move_to", "position": blocker_position},
-                        f"move near blocking {blocker.get('name')} before placing coal drill",
+                        {"type": "move_to", "position": _stand_position(position, offset=1.5)},
+                        "move within reach of misoriented coal supply output belt",
                     )
                 return PlannerDecision(
                     {
                         "type": "mine",
-                        "name": blocker.get("name"),
-                        "position": blocker_position,
-                        "count": 1,
+                        "unit_number": belt.get("unit_number"),
+                        "name": "transport-belt",
+                        "position": position,
                     },
-                    f"clear blocking {blocker.get('name')} before placing coal drill",
+                    "remove misoriented coal supply output belt before fueling the coal drill",
                 )
-            if distance(player, position) > 20 or distance(player, position) < 2.0:
-                return PlannerDecision(
-                    {"type": "move_to", "position": _stand_position(position, offset=3.0)},
-                    "move near planned coal burner mining drill",
-                )
-            return PlannerDecision(
-                {
-                    "type": "build",
-                    "name": "burner-mining-drill",
-                    "position": position,
-                    "direction": layout["drill_direction"],
-                    "required_resource": "coal",
-                    "allow_nearby": True,
-                },
-                "place burner mining drill on coal supply patch",
-            )
 
-        if _entity_burner_fuel_count(drill) < 12:
+        drill_fuel = _entity_burner_fuel_count(drill)
+        drill_fuel_item = _entity_existing_burner_fuel_item(drill)
+        matching_fuel_available = (
+            inventory_count(observation, drill_fuel_item) > 0
+            if drill_fuel_item is not None
+            else _select_inventory_burner_fuel(observation)[1] > 0
+        )
+        if drill_fuel < 12 and (drill_fuel <= 0 or matching_fuel_available):
             return _fuel_burner_line_entity(
                 observation,
                 player,
@@ -4690,6 +4770,9 @@ def _direct_plate_smelting_decision(
         )
 
     if _inventory_burner_fuel_count(observation) <= 0:
+        source = _nearest_surplus_fuel_source(observation, player)
+        if source is not None and _surplus_fuel_source_is_logistic_output(source, observation):
+            return _take_surplus_fuel_source_decision(player, source, f"direct {product_name} smelting")
         coal = nearest_resource(observation, "coal")
         if coal is None:
             return PlannerDecision(None, f"cannot find nearby burner fuel for direct {product_name} smelting")
@@ -4933,6 +5016,7 @@ def _find_stone_supply_layout(observation: dict[str, Any]) -> dict[str, Any] | N
             continue
         orientation = _direction_to_orientation(_direction_or_default(drill.get("direction"), EAST))
         layout = _stone_supply_layout_from_drill_position(drill_position, orientation=orientation)
+        layout["output_position"] = _burner_drill_output_position(drill)
         layout["drill"] = drill
         layout["output_chest"] = _stone_output_chest_near(observation, layout["output_position"])
         candidates.append(
@@ -5033,6 +5117,7 @@ def _find_coal_supply_layout(observation: dict[str, Any]) -> dict[str, Any] | No
             continue
         direction = _direction_to_orientation(_direction_or_default(drill.get("direction"), EAST))
         layout = _coal_supply_layout_from_drill_position(drill_position, orientation=direction)
+        layout["output_position"] = _burner_drill_output_position(drill)
         layout["drill"] = drill
         layout["output_belt"] = _entity_near(observation, "transport-belt", layout["output_position"], radius=0.75)
         layout["output_chest"] = _coal_output_chest_near(observation, layout["output_position"])
@@ -5087,6 +5172,40 @@ def _coal_supply_layout_from_drill_position(
     }
 
 
+def _burner_drill_output_position(drill: dict[str, Any]) -> dict[str, float]:
+    position = _position(drill)
+    direction = _direction_or_default(drill.get("direction"), EAST)
+    integer_center = abs(position["x"] - round(position["x"])) < 0.01 and abs(position["y"] - round(position["y"])) < 0.01
+    if not integer_center:
+        orientation = _direction_to_orientation(direction)
+        dx, dy, _drill_direction, _belt_direction, _inserter_direction = _smelting_orientation(orientation)
+        return {"x": position["x"] + 2 * dx, "y": position["y"] + 2 * dy}
+    if direction == WEST:
+        return {"x": round(position["x"] - 1.5, 3), "y": round(position["y"] + 0.5, 3)}
+    if direction == SOUTH:
+        return {"x": round(position["x"] + 0.5, 3), "y": round(position["y"] + 1.5, 3)}
+    if direction == NORTH:
+        return {"x": round(position["x"] + 0.5, 3), "y": round(position["y"] - 1.5, 3)}
+    return {"x": round(position["x"] + 1.5, 3), "y": round(position["y"] + 0.5, 3)}
+
+
+def _find_misplaced_coal_supply_output_belt(observation: dict[str, Any], layout: dict[str, Any]) -> dict[str, Any] | None:
+    output_position = layout.get("output_position")
+    if not isinstance(output_position, dict):
+        return None
+    candidates = []
+    for belt in entities_named(observation, "transport-belt"):
+        belt_position = _position(belt)
+        if distance(belt_position, output_position) <= 0.35:
+            continue
+        if distance(belt_position, output_position) <= 1.6:
+            candidates.append((distance(belt_position, output_position), belt))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
+
+
 def _coal_supply_layout_blocked_by_factory_entities(layout: dict[str, Any], entities: list[Any]) -> bool:
     layout_entities = {
         id(entity)
@@ -5116,9 +5235,11 @@ def _coal_supply_layout_blocked_by_factory_entities(layout: dict[str, Any], enti
 def _coal_supply_should_use_output_chest(observation: dict[str, Any], layout: dict[str, Any]) -> bool:
     if layout.get("output_belt") is not None:
         return False
+    if _find_misplaced_coal_supply_output_belt(observation, layout) is not None:
+        return False
     if layout.get("output_chest") is not None:
         return True
-    return not _transport_belt_automation_factory_output_ready(observation)
+    return not _transport_belt_automation_output_ready(observation)
 
 
 def _coal_supply_missing_item(
@@ -5127,6 +5248,11 @@ def _coal_supply_missing_item(
     *,
     use_output_chest: bool = False,
 ) -> str | None:
+    if layout.get("drill") is None:
+        if inventory_count(observation, "burner-mining-drill") <= 0:
+            return "burner-mining-drill"
+        return None
+
     if use_output_chest:
         if layout.get("output_chest") is None and _available_coal_output_chest_name(observation) is None:
             if (
@@ -5136,19 +5262,41 @@ def _coal_supply_missing_item(
             ):
                 return "wooden-chest"
             return "iron-chest"
-        if layout.get("drill") is None and inventory_count(observation, "burner-mining-drill") <= 0:
-            return "burner-mining-drill"
-        return None
-
-    if layout.get("output_belt") is None and inventory_count(observation, "transport-belt") <= 0:
+    elif layout.get("output_belt") is None and inventory_count(observation, "transport-belt") <= 0:
         return "transport-belt"
-    if layout.get("drill") is None and inventory_count(observation, "burner-mining-drill") <= 0:
-        return "burner-mining-drill"
+
     return None
 
 
 def _available_coal_output_chest_name(observation: dict[str, Any]) -> str | None:
     return _available_stone_output_chest_name(observation)
+
+
+def _find_relocatable_burner_drill_for_coal_supply(
+    observation: dict[str, Any],
+    target_position: dict[str, float],
+) -> dict[str, Any] | None:
+    candidates: list[tuple[int, float, dict[str, Any]]] = []
+    priority_by_resource = {"stone": 0, "copper-ore": 1, "iron-ore": 2}
+    for drill in entities_named(observation, "burner-mining-drill"):
+        if _entity_burner_fuel_count(drill) > 0:
+            continue
+        resource_name = _entity_resource_name(observation, drill, radius=4.5) or ""
+        if resource_name == "coal":
+            continue
+        if resource_name and resource_name not in priority_by_resource:
+            continue
+        candidates.append(
+            (
+                priority_by_resource.get(resource_name, 3),
+                distance(_position(drill), target_position),
+                drill,
+            )
+        )
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return candidates[0][2]
 
 
 def _coal_output_chest_near(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:
@@ -5549,7 +5697,7 @@ def _fuel_burner_line_entity(
         excluded_units.add(entity.get("unit_number"))
         source = _nearest_surplus_fuel_source(observation, position, exclude_units=excluded_units)
         source_surplus = _surplus_fuel_count(source) if source is not None else 0
-        if source is not None and _surplus_fuel_source_is_logistic_output(source):
+        if source is not None and _surplus_fuel_source_is_logistic_output(source, observation):
             return _take_surplus_fuel_source_decision(player, source, context)
         if coal is not None and distance(position, _position(coal)) <= WALK_FUEL_LOGISTICS_LIMIT and source_surplus < 8:
             return support_skill._mine_resource(player, coal, "coal", 16)
@@ -5596,8 +5744,13 @@ def _coal_supply_can_reduce_hand_mining(observation: dict[str, Any]) -> bool:
     return _find_coal_supply_layout(observation) is not None or _select_coal_supply_layout(observation) is not None
 
 
-def _surplus_fuel_source_is_logistic_output(entity: dict[str, Any]) -> bool:
-    return str(entity.get("name") or "") in {"wooden-chest", "iron-chest", "steel-chest"}
+def _surplus_fuel_source_is_logistic_output(entity: dict[str, Any], observation: dict[str, Any] | None = None) -> bool:
+    name = str(entity.get("name") or "")
+    if name in {"wooden-chest", "iron-chest", "steel-chest"}:
+        return True
+    if observation is not None and name == "burner-mining-drill":
+        return _entity_resource_name(observation, entity, radius=4.5) == "coal"
+    return False
 
 
 def _take_surplus_fuel_source_decision(
@@ -6142,12 +6295,12 @@ def _find_iron_plate_logistic_line_to_gear_mall_layout(observation: dict[str, An
         "segments": segments,
         "source_inserter": {
             "position": source_inserter_position,
-            "direction": EAST,
+            "direction": WEST,
             "entity": _inserter_near(observation, source_inserter_position),
         },
         "target_inserter": {
             "position": target_inserter_position,
-            "direction": SOUTH,
+            "direction": NORTH,
             "entity": _inserter_near(observation, target_inserter_position),
         },
     }
@@ -6212,8 +6365,8 @@ def _find_site_input_logistic_line_layout(
                 endpoints["source_belt"],
                 endpoints["target_belt"],
                 center_tiles=True,
-                start_direction=endpoints["source_direction"],
-                end_direction=endpoints["target_direction"],
+                start_direction=endpoints["source_belt_direction"],
+                end_direction=endpoints["target_belt_direction"],
             )
             source_inserter_position = _tile_center_position(endpoints["source_inserter"])
             target_inserter_position = _tile_center_position(endpoints["target_inserter"])
@@ -6328,16 +6481,19 @@ def _site_input_line_endpoints(source: dict[str, Any], consumer: dict[str, Any])
     source_position = _position(source)
     consumer_position = _position(consumer)
     vector = _dominant_axis_vector(source_position, consumer_position)
+    pickup_vector = _opposite_axis_vector(vector)
     source_radius = _site_input_endpoint_radius(source)
     target_radius = _site_input_endpoint_radius(consumer)
     target_side = {"x": -vector["x"], "y": -vector["y"]}
     return {
         "source_inserter": _offset_along_axis(source_position, vector, source_radius),
         "source_belt": _offset_along_axis(source_position, vector, source_radius + 1.0),
-        "source_direction": _direction_from_axis_vector(vector),
+        "source_direction": _direction_from_axis_vector(pickup_vector),
+        "source_belt_direction": _direction_from_axis_vector(vector),
         "target_inserter": _offset_along_axis(consumer_position, target_side, target_radius),
         "target_belt": _offset_along_axis(consumer_position, target_side, target_radius + 1.0),
-        "target_direction": _direction_from_axis_vector(vector),
+        "target_direction": _direction_from_axis_vector(pickup_vector),
+        "target_belt_direction": _direction_from_axis_vector(vector),
     }
 
 
@@ -6347,6 +6503,10 @@ def _dominant_axis_vector(source: dict[str, float], target: dict[str, float]) ->
     if abs(dx) >= abs(dy):
         return {"x": 1.0 if dx >= 0 else -1.0, "y": 0.0}
     return {"x": 0.0, "y": 1.0 if dy >= 0 else -1.0}
+
+
+def _opposite_axis_vector(vector: dict[str, float]) -> dict[str, float]:
+    return {"x": -float(vector.get("x") or 0.0), "y": -float(vector.get("y") or 0.0)}
 
 
 def _offset_along_axis(origin: dict[str, float], vector: dict[str, float], amount: float) -> dict[str, float]:

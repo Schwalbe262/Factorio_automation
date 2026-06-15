@@ -1508,6 +1508,7 @@ def _compact_factory_site(item: dict[str, Any]) -> dict[str, Any]:
         "position": _compact_position(item.get("position")),
         "automation_level": item.get("automation_level"),
         "machines": _compact_value(item.get("machines"), string_limit=80, list_limit=6),
+        "subitems": _compact_value(item.get("subitems"), string_limit=60, list_limit=6),
         "notes": _compact_value(item.get("notes"), string_limit=80, list_limit=2),
     }
 

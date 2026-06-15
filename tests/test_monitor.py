@@ -465,6 +465,68 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(assembler_sites[0].status, "unconfigured")
         self.assertIn("assembling-machine-1 x2", assembler_sites[0].machines)
 
+    def test_factory_sites_fold_gear_subsite_under_transport_belt_site(self):
+        observation = {
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 20,
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 2, "y": 2},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 21,
+                    "recipe": "transport-belt",
+                    "position": {"x": 4, "y": 2},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+            ],
+            "resources": [],
+        }
+
+        sites = estimate_factory_sites(observation)
+
+        mall_sites = [item for item in sites if item.kind == "build_item_mall"]
+        self.assertEqual(len(mall_sites), 1)
+        self.assertEqual(mall_sites[0].item, "transport-belt")
+        self.assertEqual(mall_sites[0].subitems, ["iron-gear-wheel"])
+        self.assertIn("iron-gear-wheel", " ".join(mall_sites[0].notes))
+        self.assertNotIn("iron-gear-wheel", {link.item for link in estimate_logistics_links(observation)})
+
+    def test_factory_sites_fold_cable_subsite_under_circuit_site(self):
+        sites = estimate_factory_sites(
+            {
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "unit_number": 20,
+                        "recipe": "copper-cable",
+                        "position": {"x": 2, "y": 2},
+                        "electric_network_connected": True,
+                        "inventories": {},
+                    },
+                    {
+                        "name": "assembling-machine-1",
+                        "unit_number": 21,
+                        "recipe": "electronic-circuit",
+                        "position": {"x": 4, "y": 2},
+                        "electric_network_connected": True,
+                        "inventories": {},
+                    },
+                ],
+                "resources": [],
+            }
+        )
+
+        circuit_sites = [item for item in sites if item.kind == "circuit_automation"]
+        self.assertEqual(len(circuit_sites), 1)
+        self.assertEqual(circuit_sites[0].item, "electronic-circuit")
+        self.assertEqual(circuit_sites[0].subitems, ["copper-cable"])
+
     def test_factory_sites_group_lab_daisy_chain_block(self):
         sites = estimate_factory_sites(
             {

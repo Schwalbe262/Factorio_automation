@@ -2399,13 +2399,21 @@ def _factory_site_table(
         if not isinstance(row, dict):
             continue
         machines = row.get("machines") if isinstance(row.get("machines"), list) else []
+        subitems = row.get("subitems") if isinstance(row.get("subitems"), list) else []
+        item_html = _item_cell(str(row.get("item") or "")) if row.get("item") else ""
+        if subitems:
+            item_html += (
+                "<br><span class=\"muted\">"
+                f"subitems: {escape(', '.join(str(item) for item in subitems[:5]))}"
+                "</span>"
+            )
         related = _site_logistics_links(row, link_rows)
         is_selected = str(selected_improvement_site.get("site_id") or "") == str(row.get("site_id") or "")
         row_class = " class=\"site-selected-row\"" if is_selected else ""
         body_parts.append(
             f"<tr{row_class}>"
             f"<td>{escape(str(row.get('kind') or ''))}</td>"
-            f"<td>{_item_cell(str(row.get('item') or '')) if row.get('item') else ''}</td>"
+            f"<td>{item_html}</td>"
             f"<td>{escape(str(row.get('status') or ''))}</td>"
             f"<td>{escape(_position_text(row.get('position')))}</td>"
             f"<td>{escape(str(row.get('automation_level') or ''))}</td>"

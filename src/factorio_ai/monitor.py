@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from .blueprints import encode_blueprint_entities
@@ -65,6 +65,7 @@ class FactorySiteEstimate:
     automation_level: str
     notes: list[str]
     blueprint: dict[str, Any] | None = None
+    subitems: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -687,6 +688,7 @@ def estimate_factory_sites(observation: dict[str, Any]) -> list[FactorySiteEstim
         kind = "assembler_cell"
         automation_level = "powered" if assembler.get("electric_network_connected") else "unpowered"
         if recipe in {
+            "iron-gear-wheel",
             "transport-belt",
             "inserter",
             "burner-inserter",
@@ -986,19 +988,61 @@ def _merge_factory_site_cluster(cluster: list[FactorySiteEstimate]) -> FactorySi
 
     position = _centroid([site.position for site in cluster])
     items = sorted({item for site in cluster if (item := site.item)})
+    parent_item, subitems, hierarchy_notes = _factory_site_cluster_item_hierarchy(items)
     automation_levels = Counter(site.automation_level for site in cluster)
     notes = sorted({note for site in cluster for note in site.notes})
     notes.insert(0, f"grouped {len(cluster)} adjacent site records")
+    for note in reversed(hierarchy_notes):
+        notes.insert(1, note)
+    site_item = parent_item if parent_item else (items[0] if len(items) == 1 else None)
+    group_item = site_item if site_item else "mixed"
     return FactorySiteEstimate(
-        site_id=_position_site_id(f"{cluster[0].kind}:group:{items[0] if len(items) == 1 else 'mixed'}", position),
+        site_id=_position_site_id(f"{cluster[0].kind}:group:{group_item}", position),
         kind=cluster[0].kind,
         status=_summarize_site_values(site.status for site in cluster),
         position=position,
-        item=items[0] if len(items) == 1 else None,
+        item=site_item,
         machines=_summarize_machine_counts(cluster),
         automation_level=automation_levels.most_common(1)[0][0] if len(automation_levels) == 1 else _summarize_site_values(automation_levels.elements()),
         notes=notes,
+        subitems=subitems,
     )
+
+
+def _factory_site_cluster_item_hierarchy(items: list[str]) -> tuple[str | None, list[str], list[str]]:
+    if len(items) <= 1:
+        return (items[0], [], []) if items else (None, [], [])
+    ingredient_items: set[str] = set()
+    for item in items:
+        recipe = RECIPES.get(item)
+        if recipe is not None:
+            ingredient_items.update(str(ingredient) for ingredient in recipe.ingredients)
+    terminal_items = [item for item in items if item not in ingredient_items]
+    if len(terminal_items) != 1:
+        return None, [], []
+    parent = terminal_items[0]
+    reachable = _cluster_dependency_items(parent, set(items))
+    subitems = sorted(item for item in items if item != parent and item in reachable)
+    if not subitems:
+        return None, [], []
+    return parent, subitems, [f"subitems {', '.join(subitems)} feed {parent} inside this site"]
+
+
+def _cluster_dependency_items(parent: str, allowed_items: set[str]) -> set[str]:
+    found: set[str] = set()
+    stack = [parent]
+    while stack:
+        item = stack.pop()
+        recipe = RECIPES.get(item)
+        if recipe is None:
+            continue
+        for ingredient in recipe.ingredients:
+            ingredient_name = str(ingredient)
+            if ingredient_name not in allowed_items or ingredient_name in found:
+                continue
+            found.add(ingredient_name)
+            stack.append(ingredient_name)
+    return found
 
 
 def _attach_site_blueprints(
@@ -1016,6 +1060,7 @@ def _attach_site_blueprints(
             automation_level=site.automation_level,
             notes=site.notes,
             blueprint=_site_blueprint_export(observation, site),
+            subitems=site.subitems,
         )
         for site in sites
     ]
@@ -1107,6 +1152,7 @@ def _site_blueprint_entities(observation: dict[str, Any], site: FactorySiteEstim
 def _site_blueprint_entity_allowed(site: FactorySiteEstimate, entity: dict[str, Any]) -> bool:
     name = str(entity.get("name") or "")
     recipe = str(entity.get("recipe") or "")
+    site_recipes = {item for item in [site.item, *site.subitems] if item}
     logistics = {
         "transport-belt",
         "fast-transport-belt",
@@ -1162,21 +1208,22 @@ def _site_blueprint_entity_allowed(site: FactorySiteEstimate, entity: dict[str, 
     if site.kind == "circuit_automation":
         if name in logistics:
             return True
-        return name in ASSEMBLER_SPEEDS and recipe in {"copper-cable", "electronic-circuit"}
+        return name in ASSEMBLER_SPEEDS and recipe in (site_recipes or {"copper-cable", "electronic-circuit"})
     if site.kind == "build_item_mall":
         if name in logistics:
             return True
-        return name in ASSEMBLER_SPEEDS and recipe in {
+        return name in ASSEMBLER_SPEEDS and recipe in (site_recipes or {
             "transport-belt",
+            "iron-gear-wheel",
             "inserter",
             "burner-inserter",
             "burner-mining-drill",
             "stone-furnace",
             "assembling-machine-1",
             "small-electric-pole",
-        }
+        })
     if site.kind == "assembler_cell":
-        return name in logistics or name in ASSEMBLER_SPEEDS
+        return name in logistics or (name in ASSEMBLER_SPEEDS and (not site_recipes or recipe in site_recipes))
     return True
 
 
@@ -1305,6 +1352,13 @@ def _site_required_input_items(site: FactorySiteEstimate) -> list[str]:
         recipe = RECIPES.get(site.item)
         if recipe:
             required.extend(recipe.ingredients.keys())
+        for subitem in site.subitems:
+            while subitem in required:
+                required.remove(subitem)
+            sub_recipe = RECIPES.get(subitem)
+            if sub_recipe:
+                required.extend(sub_recipe.ingredients.keys())
+        required = [item for item in required if item not in set(site.subitems)]
     return sorted(set(required))
 
 

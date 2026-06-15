@@ -2000,7 +2000,7 @@ def heuristic_strategy(
     layout = make_layout_improvement_context(observation, selected_improvement_site=selected_improvement_site)
     layout_issues = layout.get("issues") if isinstance(layout.get("issues"), list) else []
     layout_opportunities = layout.get("opportunities") if isinstance(layout.get("opportunities"), list) else []
-    top_layout_item = _top_layout_item(layout_issues, layout_opportunities)
+    top_layout_item = _top_layout_item(layout_issues, layout_opportunities, observation)
     automation_logistics_issue = _first_automation_logistics_issue(layout_issues)
     site_input_line_issue = _site_input_line_issue(observation)
     layout_build_item_shortage = _layout_unlocked_build_item_shortage(layout)
@@ -2598,8 +2598,16 @@ def heuristic_strategy(
     ).to_dict()
 
 
-def _top_layout_item(issues: list[Any], opportunities: list[Any]) -> dict[str, Any] | None:
-    candidates = [item for item in issues + opportunities if isinstance(item, dict)]
+def _top_layout_item(
+    issues: list[Any],
+    opportunities: list[Any],
+    observation: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    candidates = [
+        item
+        for item in issues + opportunities
+        if isinstance(item, dict) and not _factory_input_issue_can_bootstrap_from_inventory(observation or {}, item)
+    ]
     if not candidates:
         return None
     return max(
@@ -2689,7 +2697,7 @@ def _executable_layout_plan_fallback(
     layout = make_layout_improvement_context(observation)
     issues = layout.get("issues") if isinstance(layout.get("issues"), list) else []
     opportunities = layout.get("opportunities") if isinstance(layout.get("opportunities"), list) else []
-    top_layout_item = _top_layout_item(issues, opportunities)
+    top_layout_item = _top_layout_item(issues, opportunities, observation)
     shortage = _layout_unlocked_build_item_shortage(layout)
     if top_layout_item is None or int(top_layout_item.get("severity") or 0) < 75:
         if (
@@ -2813,10 +2821,33 @@ def _first_unserved_factory_input_issue(observation: dict[str, Any]) -> dict[str
         text = " ".join([kind, *(str(issue.get(key) or "") for key in ("site_id", "detail", "recommendation"))]).lower()
         if not any(token in text for token in ("missing_source", "incomplete", "missing", "route_needed", "manual")):
             continue
+        if _factory_input_issue_can_bootstrap_from_inventory(observation, issue):
+            continue
         candidates.append(issue)
     if not candidates:
         return None
     return max(candidates, key=lambda item: int(item.get("severity") or 0))
+
+
+def _factory_input_issue_can_bootstrap_from_inventory(
+    observation: dict[str, Any],
+    issue: dict[str, Any],
+) -> bool:
+    item = str(issue.get("item") or "")
+    if item not in {"iron-plate", "copper-plate"}:
+        return False
+    kind = str(issue.get("kind") or "")
+    if kind != "incomplete_logistics_link":
+        return False
+    text = " ".join(
+        str(issue.get(key) or "")
+        for key in ("site_id", "detail", "recommendation")
+    ).lower()
+    if "circuit_automation" not in text:
+        return False
+    if "missing_source" not in text:
+        return False
+    return True
 
 
 def _site_input_line_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
