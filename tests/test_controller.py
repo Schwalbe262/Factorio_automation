@@ -1,5 +1,6 @@
 import json
 import tempfile
+import threading
 import time
 import unittest
 from dataclasses import replace
@@ -587,6 +588,85 @@ class ControllerTests(unittest.TestCase):
         self.assertIsNone(controller._background_layout_thread)
         self.assertIn("layout_scheduler_waiting_for_ready_gpu", log_text)
         self.assertIn("ready scheduler GPU allocation", log_text)
+
+    def test_scheduler_background_layout_starts_workers_until_configured_limit(self):
+        observation = {
+            "tick": 1,
+            "inventory": {},
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 10,
+                    "recipe": "electronic-circuit",
+                    "position": {"x": 0, "y": 0},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                }
+            ],
+            "resources": [],
+            "research": {"technologies": {}},
+        }
+        status = {
+            "llm_ready": True,
+            "missing": [],
+            "remote": {
+                "active_layout_tasks": 0,
+                "max_active_layout_tasks": 2,
+                "active_layout_capacity_remaining": 2,
+            },
+        }
+        release = threading.Event()
+        started: list[int | None] = []
+
+        def fake_request(*_args, **kwargs):
+            started.append(kwargs.get("max_active_layout_tasks"))
+            release.wait(timeout=2)
+            return {"ok": True, "source": "llm"}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            controller = FactorioController(cfg)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS": "0",
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "scheduler",
+                    },
+                ),
+                patch.object(controller, "_maybe_ensure_slurm_worker"),
+                patch("factorio_ai.remote_slurm.layout_improvement_status", return_value=status),
+                patch("factorio_ai.remote_slurm.request_layout_improvement", side_effect=fake_request) as request_layout,
+            ):
+                controller._maybe_progress_background_layout_work(
+                    observation,
+                    "launch_rocket_program",
+                    "bootstrap_build_item_mall",
+                    4,
+                )
+                controller._maybe_progress_background_layout_work(
+                    observation,
+                    "launch_rocket_program",
+                    "bootstrap_build_item_mall",
+                    5,
+                )
+                deadline = time.monotonic() + 1.0
+                while request_layout.call_count < 2 and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                controller._maybe_progress_background_layout_work(
+                    observation,
+                    "launch_rocket_program",
+                    "bootstrap_build_item_mall",
+                    6,
+                )
+                self.assertEqual(request_layout.call_count, 2)
+                self.assertEqual(len(controller._background_layout_threads), 2)
+                release.set()
+                for thread in list(controller._background_layout_threads):
+                    thread.join(timeout=2)
+                controller._collect_background_layout_threads()
+
+        self.assertEqual(started, [2, 2])
 
     def test_blocked_strategy_submits_background_layout_work(self):
         observation = {
@@ -1500,6 +1580,54 @@ class ControllerTests(unittest.TestCase):
         submitted = submit_task.call_args.args[0]
         self.assertIn("autopilot_heartbeat_stale", submitted["payload"]["active_skill"])
 
+    def test_idle_layout_loop_logs_stale_process_file_before_restart(self):
+        observation = {
+            "tick": 5,
+            "inventory": {},
+            "entities": [],
+            "resources": [],
+            "research": {"technologies": {}},
+        }
+
+        class IdleController(FactorioController):
+            def observe(self):
+                return observation
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+            (cfg.runtime_dir / "idle-layout-loop.json").write_text(
+                json.dumps(
+                    {
+                        "pid": 987654,
+                        "started_at": "2026-06-15T22:17:11+00:00",
+                        "objective": "launch_rocket_program",
+                        "state": "running",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            controller = IdleController(cfg)
+            with (
+                patch.dict("os.environ", {"FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "queue"}),
+                patch("factorio_ai.controller._pid_is_running", return_value=False),
+                patch("factorio_ai.remote_slurm.submit_task", return_value="layout-stale.json"),
+                patch("factorio_ai.remote_slurm.read_task_state", return_value=("running", None, "")),
+            ):
+                summary = controller.run_idle_layout_loop(
+                    cycles=1,
+                    sleep_seconds=0,
+                    stale_seconds=15,
+                    min_submit_interval_seconds=0,
+                )
+            rows = [
+                json.loads(line)
+                for line in (cfg.log_dir / "layout-improvement-background.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertTrue(summary.ok)
+        self.assertTrue(any(row["event"] == "layout_idle_loop_stale_pid_recovered" for row in rows))
+
     def test_no_mod_idle_layout_loop_uses_lightweight_observe(self):
         class FakeModless:
             def __init__(self):
@@ -1792,6 +1920,96 @@ class ControllerTests(unittest.TestCase):
         submit_task.assert_not_called()
         self.assertTrue(any(row["event"] == "layout_idle_scheduler_busy" for row in rows))
 
+    def test_idle_layout_loop_skips_when_live_skill_heartbeat_is_fresh_busy(self):
+        class BusyController(FactorioController):
+            def observe(self):
+                raise AssertionError("fresh live skill should not be observed by idle layout loop")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+            (cfg.runtime_dir / "live-skill-heartbeat.json").write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "state": "step",
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                        "objective": "launch_rocket_program",
+                        "skill": "connect_coal_fuel_feed",
+                        "step": 3,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            controller = BusyController(cfg)
+            with patch("factorio_ai.remote_slurm.submit_task") as submit_task:
+                summary = controller.run_idle_layout_loop(cycles=1, sleep_seconds=0, stale_seconds=15)
+
+            rows = [
+                json.loads(line)
+                for line in (cfg.log_dir / "layout-improvement-background.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(summary.idle_cycles, 0)
+        self.assertEqual(summary.busy_cycles, 1)
+        submit_task.assert_not_called()
+        self.assertTrue(any(row["event"] == "layout_idle_scheduler_busy" for row in rows))
+        busy_row = next(row for row in rows if row["event"] == "layout_idle_scheduler_busy")
+        self.assertIn("live skill is active", busy_row["idle_reason"])
+
+    def test_idle_layout_loop_recovers_stale_live_skill_pid(self):
+        observation = {
+            "tick": 5,
+            "inventory": {},
+            "entities": [],
+            "resources": [],
+            "research": {"technologies": {}},
+        }
+
+        class IdleController(FactorioController):
+            def observe(self):
+                return observation
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+            (cfg.runtime_dir / "live-skill-heartbeat.json").write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "state": "step",
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                        "objective": "launch_rocket_program",
+                        "skill": "connect_coal_fuel_feed",
+                        "step": 2,
+                        "pid": 987654,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            controller = IdleController(cfg)
+            with (
+                patch.dict("os.environ", {"FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "queue"}),
+                patch("factorio_ai.controller._pid_is_running", return_value=False),
+                patch("factorio_ai.remote_slurm.submit_task", return_value="layout-after-stale-live.json") as submit_task,
+                patch("factorio_ai.remote_slurm.read_task_state", return_value=("running", None, "")),
+            ):
+                summary = controller.run_idle_layout_loop(
+                    cycles=1,
+                    sleep_seconds=0,
+                    stale_seconds=15,
+                    min_submit_interval_seconds=0,
+                )
+            heartbeat = json.loads((cfg.runtime_dir / "live-skill-heartbeat.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(summary.idle_cycles, 1)
+        submit_task.assert_called_once()
+        self.assertFalse(heartbeat["active"])
+        self.assertEqual(heartbeat["state"], "stale")
+        self.assertIn("pid is not running", heartbeat["stale_reason"])
+
     def test_autopilot_loop_writes_heartbeat(self):
         class OneStepController(FactorioController):
             def run_strategy_step(self, **kwargs):
@@ -1813,6 +2031,39 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(heartbeat["state"], "stopped")
         self.assertEqual(heartbeat["cycle"], 1)
         self.assertEqual(heartbeat["objective"], "launch_rocket_program")
+
+    def test_run_skill_writes_live_skill_heartbeat(self):
+        class DoneSkill:
+            def next_action(self, observation):
+                return PlannerDecision(None, "test skill complete", done=True)
+
+        class DoneController(FactorioController):
+            def observe(self):
+                return {
+                    "inventory": {"iron-plate": 1},
+                    "entities": [],
+                    "resources": [],
+                    "research": {"technologies": {}},
+                }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = make_test_config(Path(temp_dir))
+            controller = DoneController(cfg)
+            summary = controller._run_skill(
+                DoneSkill(),
+                target_item="iron-plate",
+                target=1,
+                goal="produce_iron_plate",
+                max_steps=1,
+                log_prefix="test-live-skill",
+            )
+            heartbeat = json.loads((cfg.runtime_dir / "live-skill-heartbeat.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(summary.ok)
+        self.assertFalse(heartbeat["active"])
+        self.assertEqual(heartbeat["state"], "stopped")
+        self.assertEqual(heartbeat["skill"], "produce_iron_plate")
+        self.assertEqual(heartbeat["step"], 1)
 
     def test_strategy_runner_maps_implemented_material_skills(self):
         with tempfile.TemporaryDirectory() as temp_dir:

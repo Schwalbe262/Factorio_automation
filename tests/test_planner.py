@@ -393,6 +393,29 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.done)
         self.assertIn("coal supply site is active", decision.reason)
 
+    def test_coal_supply_counts_currently_burning_drill_as_fueled(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 12}
+        obs["resources"] = [{"name": "coal", "position": {"x": 6, "y": 0}, "distance": 6}]
+        obs["entities"] = [
+            {"name": "transport-belt", "unit_number": 10, "position": {"x": 7.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 11,
+                "position": {"x": 6, "y": 0},
+                "direction": 4,
+                "inventories": {},
+                "burner": {"currently_burning": "coal", "remaining_burning_fuel": 1900000},
+            },
+        ]
+
+        decision = CoalSupplySkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["count"], 11)
+        self.assertEqual(decision.action["unit_number"], 11)
+
     def test_coal_supply_done_when_fueled_and_belted(self):
         obs = base_observation()
         obs["inventory"] = {}
@@ -920,6 +943,83 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["position"], {"x": 2.5, "y": 0.5})
         self.assertEqual(decision.action["direction"], 4)
         self.assertIn("boiler", decision.reason)
+
+    def test_coal_fuel_feed_refuels_inactive_coal_source_before_boiler_hand_fuel(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 0, "y": 0}
+        obs["inventory"] = {"coal": 8}
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 20,
+                "position": {"x": 0, "y": 0},
+                "direction": planner_module.EAST,
+                "status_name": "no_fuel",
+                "mining_target": "coal",
+                "drop_position": {"x": 1.3, "y": 0.5},
+                "inventories": {},
+            },
+            {
+                "name": "transport-belt",
+                "unit_number": 21,
+                "position": {"x": 1.5, "y": 0.5},
+                "direction": planner_module.EAST,
+                "inventories": {},
+            },
+            {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["unit_number"], 20)
+        self.assertIn("coal supply site", decision.reason)
+
+    def test_coal_fuel_feed_reuses_existing_boiler_line_with_safe_join(self):
+        obs = base_observation()
+        obs["inventory"] = {"transport-belt": 20, "burner-inserter": 1, "coal": 1}
+        obs["resources"] = [{"name": "coal", "position": {"x": 7, "y": 7}, "distance": 7}]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 20,
+                "position": {"x": 7, "y": 7},
+                "direction": planner_module.EAST,
+                "mining_target": "coal",
+                "drop_position": {"x": 8.3, "y": 6.5},
+                "inventories": {"1": {"coal": 3}},
+            },
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 8.5, "y": 6.5}, "direction": planner_module.EAST, "inventories": {"1": {"coal": 1}}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 9.5, "y": 6.5}, "direction": planner_module.SOUTH, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 23, "position": {"x": 9.5, "y": 7.5}, "direction": planner_module.SOUTH, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 24, "position": {"x": 9.5, "y": 8.5}, "direction": planner_module.SOUTH, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 25, "position": {"x": 9.5, "y": 9.5}, "direction": planner_module.WEST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 26, "position": {"x": 8.5, "y": 9.5}, "direction": planner_module.WEST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 27, "position": {"x": 7.5, "y": 9.5}, "direction": planner_module.WEST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 40, "position": {"x": 5.5, "y": 3.5}, "direction": planner_module.WEST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 41, "position": {"x": 4.5, "y": 3.5}, "direction": planner_module.WEST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 42, "position": {"x": 3.5, "y": 3.5}, "direction": planner_module.WEST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 43, "position": {"x": 2.5, "y": 3.5}, "direction": planner_module.WEST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 44, "position": {"x": 1.5, "y": 3.5}, "direction": planner_module.WEST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 45, "position": {"x": 0.5, "y": 3.5}, "direction": planner_module.WEST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 46, "position": {"x": -0.5, "y": 3.5}, "direction": planner_module.WEST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 47, "position": {"x": -1.5, "y": 3.5}, "direction": planner_module.WEST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 48, "position": {"x": -2.5, "y": 3.5}, "direction": planner_module.WEST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 49, "position": {"x": -3.5, "y": 3.5}, "direction": planner_module.NORTH, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 50, "position": {"x": -3.5, "y": 2.5}, "direction": planner_module.NORTH, "inventories": {}},
+            {"name": "boiler", "unit_number": 30, "position": {"x": -6.5, "y": 2}, "status_name": "no_fuel", "inventories": {}},
+        ]
+
+        layout = planner_module._coal_boiler_fuel_feed_layout(obs)
+        missing = [segment for segment in layout["segments"] if not isinstance(segment.get("entity"), dict)]
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertLessEqual(len(missing), 8)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["position"], {"x": 6.5, "y": 9.5})
+        self.assertEqual(decision.action["direction"], planner_module.WEST)
+        self.assertNotIn({"x": 6.5, "y": 8.5}, [segment["position"] for segment in missing])
 
     def test_coal_fuel_feed_takes_belts_from_belt_mall_output_chest_for_boiler_feed(self):
         obs = base_observation()
@@ -1835,6 +1935,43 @@ class PlannerTests(unittest.TestCase):
 
         self.assertIn("long-handed-inserter", opportunity["parameters"]["retool_tools"])
         self.assertIn("build_item_mall", opportunity["parameters"]["affected_site_kinds"])
+
+    def test_factory_layout_flags_splitter_fanout_for_one_source_two_consumers(self):
+        class Link:
+            def __init__(self, row):
+                self.row = row
+
+            def to_dict(self):
+                return self.row
+
+        obs = base_observation()
+        obs["research"]["technologies"]["logistics"] = {"researched": True}
+        links = [
+            Link(
+                {
+                    "from_site": "gear:1",
+                    "to_site": "science:1",
+                    "item": "iron-gear-wheel",
+                    "status": "route_needed",
+                }
+            ),
+            Link(
+                {
+                    "from_site": "gear:1",
+                    "to_site": "inserter:1",
+                    "item": "iron-gear-wheel",
+                    "status": "route_needed",
+                }
+            ),
+        ]
+
+        with patch("factorio_ai.planner.estimate_logistics_links", return_value=links):
+            opportunities = factory_layout_opportunities(obs)
+
+        opportunity = next(item for item in opportunities if item["kind"] == "splitter_output_fanout_needed")
+        self.assertEqual(opportunity["item"], "iron-gear-wheel")
+        self.assertEqual(opportunity["parameters"]["required_item"], "splitter")
+        self.assertIn("do not pull two separate belts", opportunity["recommendation"])
 
     def test_factory_layout_unlock_reassessment_candidate_records_retool_tools(self):
         obs = base_observation()
@@ -4760,6 +4897,255 @@ class PlannerTests(unittest.TestCase):
 
         self.assertEqual(decision.action["type"], "wait")
         self.assertIn("refusing player collection of iron gear wheels", decision.reason)
+
+    def test_build_item_mall_routes_gear_input_to_distant_science_assembler(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 6, "inserter": 2}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 930,
+                    "position": {"x": 0.0, "y": 0.0},
+                    "distance": 4,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"iron-gear-wheel": 4}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 931,
+                    "position": {"x": 8.0, "y": 0.0},
+                    "distance": 8,
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "inventories": {"2": {"copper-plate": 4}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 932,
+                    "position": {"x": 0.0, "y": 8.0},
+                    "distance": 8,
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"transport-belt": 8}},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("automation-science-pack", 20).next_action(obs)
+
+        self.assertNotEqual(decision.action["type"], "wait")
+        self.assertIn("site input", decision.reason)
+
+    def test_gear_mall_output_routes_to_referenced_science_consumer(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 6, "inserter": 2}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 940,
+                    "position": {"x": 0.0, "y": 0.0},
+                    "distance": 4,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"iron-gear-wheel": 4}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 941,
+                    "position": {"x": 8.0, "y": 0.0},
+                    "distance": 8,
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "inventories": {"2": {"copper-plate": 4}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 942,
+                    "position": {"x": 0.0, "y": 8.0},
+                    "distance": 8,
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"transport-belt": 8}},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("iron-gear-wheel", 4).next_action(
+            obs,
+            reference_position={"x": 8.0, "y": 0.0},
+        )
+
+        self.assertNotEqual(decision.action["type"], "wait")
+        self.assertIn("site input", decision.reason)
+
+    def test_site_input_logistics_uses_underground_bridge_for_crossing_belt_line(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 4.0, "y": 0.5}}
+        obs["inventory"] = {"transport-belt": 10, "inserter": 2, "underground-belt": 2}
+        obs["research"]["technologies"]["logistics"] = {"researched": True}
+        obs["recipe_unlocks"] = {"underground-belt": {"enabled": True}}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 943,
+                    "position": {"x": 0.0, "y": 0.0},
+                    "distance": 4,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"iron-gear-wheel": 4}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 944,
+                    "position": {"x": 8.0, "y": 0.0},
+                    "distance": 8,
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "inventories": {"2": {}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 945,
+                    "position": {"x": 0.0, "y": 8.0},
+                    "distance": 8,
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"transport-belt": 8}},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 946,
+                    "position": {"x": 4.5, "y": 0.5},
+                    "direction": planner_module.SOUTH,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = SiteInputLogisticLineSkill(20, item="iron-gear-wheel").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "underground-belt")
+        self.assertEqual(decision.action["position"], {"x": 3.5, "y": 0.5})
+        self.assertEqual(decision.action["direction"], planner_module.EAST)
+        self.assertEqual(decision.action["underground_type"], "input")
+        self.assertIn("crosses another belt line", decision.reason)
+
+    def test_site_input_logistics_finishes_underground_bridge_output(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 5.0, "y": 0.5}}
+        obs["inventory"] = {"transport-belt": 10, "inserter": 2, "underground-belt": 1}
+        obs["research"]["technologies"]["logistics"] = {"researched": True}
+        obs["recipe_unlocks"] = {"underground-belt": {"enabled": True}}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 947,
+                    "position": {"x": 0.0, "y": 0.0},
+                    "distance": 4,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"iron-gear-wheel": 4}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 948,
+                    "position": {"x": 8.0, "y": 0.0},
+                    "distance": 8,
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "inventories": {"2": {}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 949,
+                    "position": {"x": 0.0, "y": 8.0},
+                    "distance": 8,
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"transport-belt": 8}},
+                },
+                {
+                    "name": "underground-belt",
+                    "unit_number": 950,
+                    "position": {"x": 3.5, "y": 0.5},
+                    "direction": planner_module.EAST,
+                    "belt_to_ground_type": "input",
+                    "inventories": {},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 951,
+                    "position": {"x": 4.5, "y": 0.5},
+                    "direction": planner_module.SOUTH,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = SiteInputLogisticLineSkill(20, item="iron-gear-wheel").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "underground-belt")
+        self.assertEqual(decision.action["position"], {"x": 5.5, "y": 0.5})
+        self.assertEqual(decision.action["underground_type"], "output")
+
+    def test_site_input_underground_bridge_preserves_north_direction_zero(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 0.5, "y": -3.5}}
+        obs["inventory"] = {"transport-belt": 10, "inserter": 2, "underground-belt": 2}
+        obs["research"]["technologies"]["logistics"] = {"researched": True}
+        obs["recipe_unlocks"] = {"underground-belt": {"enabled": True}}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 952,
+                    "position": {"x": 0.0, "y": 0.0},
+                    "distance": 4,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"iron-gear-wheel": 4}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 953,
+                    "position": {"x": 0.0, "y": -8.0},
+                    "distance": 8,
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "inventories": {"2": {}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 954,
+                    "position": {"x": 8.0, "y": 0.0},
+                    "distance": 8,
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"transport-belt": 8}},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 955,
+                    "position": {"x": 0.5, "y": -3.5},
+                    "direction": planner_module.EAST,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = SiteInputLogisticLineSkill(20, item="iron-gear-wheel").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "underground-belt")
+        self.assertEqual(decision.action["direction"], planner_module.NORTH)
+        self.assertEqual(decision.action["underground_type"], "input")
 
     def test_build_item_mall_refuses_player_gear_output_collection_after_automation(self):
         obs = powered_automation_observation()

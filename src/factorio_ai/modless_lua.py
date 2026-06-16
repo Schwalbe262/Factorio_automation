@@ -385,6 +385,19 @@ local function entity_fluidbox_snapshot(entity)
   end
   return result
 end
+local function entity_burner_snapshot(entity)
+  local ok, burner = pcall(function() return entity.burner end)
+  if not ok or not burner then return nil end
+  return {{
+    currently_burning = burner.currently_burning and burner.currently_burning.name or nil,
+    remaining_burning_fuel = round(burner.remaining_burning_fuel or 0)
+  }}
+end
+local function entity_belt_to_ground_type(entity)
+  local ok, value = pcall(function() return entity.belt_to_ground_type end)
+  if ok and value then return tostring(value) end
+  return nil
+end
 local function entity_mining_target_name(entity)
   local ok, target = pcall(function() return entity.mining_target end)
   if ok and target and target.valid then return target.name end
@@ -417,6 +430,8 @@ local function entity_snapshot(entity, origin)
     pickup_position = optional_entity_position(entity, "pickup_position"),
     distance = round(distance(origin, entity.position)),
     inventories = entity_inventory_snapshot(entity),
+    belt_to_ground_type = entity_belt_to_ground_type(entity),
+    burner = entity_burner_snapshot(entity),
     fluids = entity_fluidbox_snapshot(entity)
   }}
 end
@@ -1407,7 +1422,11 @@ local function action_build()
     end
   end
   inventory.remove({ name = action.name, count = 1 })
-  local entity = agent.surface.create_entity({ name = action.name, position = place_position, direction = direction, force = agent.force })
+  local create_request = { name = action.name, position = place_position, direction = direction, force = agent.force }
+  if action.underground_type == "input" or action.underground_type == "output" then
+    create_request.type = action.underground_type
+  end
+  local entity = agent.surface.create_entity(create_request)
   if not entity then
     inventory.insert({ name = action.name, count = 1 })
     return err("create_entity failed", { name = action.name })

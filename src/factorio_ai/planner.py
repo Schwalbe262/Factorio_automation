@@ -458,6 +458,54 @@ def _nearest_power_anchor_distance(observation: dict[str, Any], target_position:
     return min(distances) if distances else None
 
 
+def _splitter_fanout_opportunities(observation: dict[str, Any], links: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        item = str(link.get("item") or "")
+        source = str(link.get("from_site") or "")
+        target = str(link.get("to_site") or "")
+        if not item or not source or not target:
+            continue
+        if item not in AUTOMATED_SITE_INPUT_ITEMS:
+            continue
+        status = str(link.get("status") or "")
+        if status not in {"route_needed", "missing_source", "incomplete", "blocked", "active"}:
+            continue
+        grouped.setdefault((source, item), []).append(link)
+
+    researched = bool(_technology_state(observation, "logistics").get("researched"))
+    opportunities: list[dict[str, Any]] = []
+    for (source, item), rows in sorted(grouped.items()):
+        targets = sorted({str(row.get("to_site") or "") for row in rows if row.get("to_site")})
+        if len(targets) < 2:
+            continue
+        statuses = Counter(str(row.get("status") or "") for row in rows)
+        opportunities.append(
+            {
+                "kind": "splitter_output_fanout_needed",
+                "severity": 86 if researched else 66,
+                "site_id": f"fanout:{source}:{item}",
+                "item": item,
+                "detail": f"{source} sends {item} to {len(targets)} consumers: {', '.join(targets[:4])}",
+                "recommendation": (
+                    "place a splitter near the source output and branch from that splitter; do not pull two separate belts directly "
+                    "from the same assembler output"
+                ),
+                "parameters": {
+                    "source_site": source,
+                    "consumer_sites": targets[:8],
+                    "consumer_count": len(targets),
+                    "logistics_researched": researched,
+                    "required_item": "splitter",
+                    "link_status_counts": dict(statuses),
+                },
+            }
+        )
+    return opportunities
+
+
 def factory_layout_opportunities(observation: dict[str, Any]) -> list[dict[str, Any]]:
     sites = [site.to_dict() for site in estimate_factory_sites(observation)]
     links = [link.to_dict() for link in estimate_logistics_links(observation)]
@@ -467,6 +515,7 @@ def factory_layout_opportunities(observation: dict[str, Any]) -> list[dict[str, 
     unlock_opportunity = _unlock_retool_opportunity(observation, sites, entities)
     if unlock_opportunity is not None:
         opportunities.append(unlock_opportunity)
+    opportunities.extend(_splitter_fanout_opportunities(observation, links))
 
     smelting_by_item: dict[str, list[dict[str, Any]]] = {}
     for site in sites:
@@ -2848,6 +2897,15 @@ class AutomationScienceSkill:
         copper_plate_inventory = inventory_count(observation, "copper-plate")
         gear_total = inventory_count(observation, "iron-gear-wheel")
         science_needed = self.target_count - science_total
+        science_assemblers = [
+            entity
+            for entity in observation.get("entities") or []
+            if isinstance(entity, dict)
+            and str(entity.get("name") or "") in ASSEMBLER_ENTITY_NAMES
+            and str(entity.get("recipe") or "") == "automation-science-pack"
+        ]
+        science_assembler = _nearest_to(science_assemblers, player_position(observation)) if science_assemblers else None
+        science_reference = _position(science_assembler) if isinstance(science_assembler, dict) else None
 
         if craftable_count(observation, "automation-science-pack") > 0:
             return PlannerDecision(
@@ -2864,6 +2922,7 @@ class AutomationScienceSkill:
                 observation,
                 science_needed,
                 pre_automation_reason="craft iron gear wheels for automation science",
+                reference_position=science_reference,
             )
             if decision is not None:
                 return decision
@@ -3722,6 +3781,11 @@ class CoalFuelFeedSkill:
             decision = self._next_boiler_feed_action(observation, player, boiler_layout)
             if decision is not None:
                 return decision
+
+        if not _coal_supply_output_belt_sources(observation):
+            supply = CoalSupplySkill(target_count=16).next_action(observation)
+            if not supply.done:
+                return supply
 
         layout = _coal_fuel_feed_layout(observation)
         if layout is None:
@@ -5510,7 +5574,7 @@ def _coal_boiler_fuel_feed_layout(observation: dict[str, Any]) -> dict[str, Any]
     sources = _coal_supply_output_belt_sources(observation)
     if not sources:
         return None
-    candidates: list[tuple[float, dict[str, Any]]] = []
+    candidates: list[tuple[float, float, dict[str, Any]]] = []
     for boiler in boilers:
         boiler_position = _position(boiler)
         for source in sources:
@@ -5520,11 +5584,22 @@ def _coal_boiler_fuel_feed_layout(observation: dict[str, Any]) -> dict[str, Any]
             if route_distance > STARTER_BOILER_FUEL_FEED_ROUTE_LIMIT:
                 continue
             endpoints = _boiler_fuel_feed_endpoints(source_position, boiler_position)
-            segments = _iron_plate_line_segments(observation, source_position, endpoints["target_belt"])
+            segments = _coal_boiler_fuel_feed_route_segments(
+                observation,
+                source_belt,
+                source.get("drill"),
+                endpoints["target_belt"],
+            )
             if not segments:
                 continue
+            route_score = _coal_boiler_fuel_feed_route_score(
+                observation,
+                segments,
+                source_drill=source.get("drill"),
+            )
             candidates.append(
                 (
+                    route_score,
                     route_distance,
                     {
                         "source_drill": source.get("drill"),
@@ -5543,7 +5618,221 @@ def _coal_boiler_fuel_feed_layout(observation: dict[str, Any]) -> dict[str, Any]
     if not candidates:
         return None
     candidates.sort(key=lambda item: item[0])
-    return candidates[0][1]
+    return candidates[0][2]
+
+
+def _coal_boiler_fuel_feed_route_segments(
+    observation: dict[str, Any],
+    source_belt: dict[str, Any],
+    source_drill: dict[str, Any] | None,
+    target_belt: dict[str, float],
+) -> list[dict[str, Any]]:
+    source_position = _position(source_belt)
+    candidates = _coal_boiler_existing_line_route_candidates(observation, source_belt, source_drill, target_belt)
+    if not candidates:
+        candidates = [_iron_plate_line_segments(observation, source_position, target_belt)]
+    candidates = [candidate for candidate in candidates if candidate]
+    if not candidates:
+        return []
+    return min(
+        candidates,
+        key=lambda segments: _coal_boiler_fuel_feed_route_score(
+            observation,
+            segments,
+            source_drill=source_drill,
+        ),
+    )
+
+
+def _coal_boiler_existing_line_route_candidates(
+    observation: dict[str, Any],
+    source_belt: dict[str, Any],
+    source_drill: dict[str, Any] | None,
+    target_belt: dict[str, float],
+) -> list[list[dict[str, Any]]]:
+    source_position = _position(source_belt)
+    source_x = float(source_position["x"])
+    source_y = float(source_position["y"])
+    target_x = float(target_belt["x"])
+    target_y = float(target_belt["y"])
+    if abs(source_x - target_x) < 2.0:
+        return []
+
+    line_direction = WEST if target_x < source_x else EAST
+    min_x = min(source_x, target_x) - 0.25
+    max_x = max(source_x, target_x) + 0.25
+    belts = entities_named(observation, "transport-belt")
+    horizontal_lanes: dict[float, list[dict[str, Any]]] = {}
+    for belt in belts:
+        belt_position = _position(belt)
+        belt_x = float(belt_position["x"])
+        if belt_x < min_x or belt_x > max_x:
+            continue
+        if abs(float(belt_position["y"]) - source_y) > STARTER_BOILER_FUEL_FEED_ROUTE_LIMIT:
+            continue
+        if _direction_or_default(belt.get("direction"), line_direction) != line_direction:
+            continue
+        lane_y = round(float(belt_position["y"]), 3)
+        horizontal_lanes.setdefault(lane_y, []).append(belt)
+
+    candidates: list[list[dict[str, Any]]] = []
+    ranked_lanes = sorted(horizontal_lanes.items(), key=lambda item: (-len(item[1]), abs(item[0] - source_y)))[:3]
+    for lane_y, lane_belts in ranked_lanes:
+        if len(lane_belts) < 6:
+            continue
+        join_belts = sorted(
+            lane_belts,
+            key=lambda belt: (
+                abs(float(_position(belt)["x"]) - source_x),
+                abs(float(_position(belt)["y"]) - source_y),
+            ),
+        )[:2]
+        accepted_join_count = 0
+        for join_belt in join_belts:
+            join_position = _position(join_belt)
+            join_x = float(join_position["x"])
+            for detour_y in _coal_boiler_source_detour_y_candidates(source_y, lane_y)[:3]:
+                if _coal_boiler_join_crosses_source_drill(join_x, detour_y, lane_y, source_drill):
+                    continue
+                waypoints = _coal_boiler_existing_line_waypoints(
+                    source_position,
+                    _direction_or_default(source_belt.get("direction"), EAST),
+                    detour_y,
+                    {"x": join_x, "y": lane_y},
+                    {"x": target_x, "y": target_y},
+                )
+                segments = _iron_plate_segments_from_waypoints(observation, waypoints, center_tiles=False)
+                if not _existing_belt_segments_match_generated_directions(segments):
+                    continue
+                candidates.append(_preserve_existing_belt_segment_directions(segments))
+                accepted_join_count += 1
+                break
+            if accepted_join_count >= 1:
+                break
+        if len(candidates) >= 3:
+            break
+    return candidates
+
+
+def _coal_boiler_join_crosses_source_drill(
+    join_x: float,
+    detour_y: float,
+    lane_y: float,
+    source_drill: dict[str, Any] | None,
+) -> bool:
+    if not isinstance(source_drill, dict):
+        return False
+    drill_position = _position(source_drill)
+    if abs(float(join_x) - float(drill_position["x"])) > 1.5:
+        return False
+    lower_y = min(float(detour_y), float(lane_y))
+    upper_y = max(float(detour_y), float(lane_y))
+    return lower_y <= float(drill_position["y"]) + 1.5 and upper_y >= float(drill_position["y"]) - 1.5
+
+
+def _coal_boiler_source_detour_y_candidates(source_y: float, lane_y: float) -> list[float]:
+    candidates: list[float] = []
+    for offset in (3.0, -3.0, 5.0, -5.0, 7.0, -7.0, 9.0, -9.0):
+        candidates.append(round(float(source_y) + offset, 3))
+    candidates.append(round(float(lane_y), 3))
+    seen: set[float] = set()
+    ordered: list[float] = []
+    for value in candidates:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _coal_boiler_existing_line_waypoints(
+    source_position: dict[str, float],
+    source_direction: int,
+    detour_y: float,
+    join_position: dict[str, float],
+    target_belt: dict[str, float],
+) -> list[dict[str, float]]:
+    source_x = float(source_position["x"])
+    source_y = float(source_position["y"])
+    direction = int(source_direction)
+    if direction == WEST:
+        lead = {"x": source_x - 1.0, "y": source_y}
+    elif direction == NORTH:
+        lead = {"x": source_x, "y": source_y - 1.0}
+    elif direction == SOUTH:
+        lead = {"x": source_x, "y": source_y + 1.0}
+    else:
+        lead = {"x": source_x + 1.0, "y": source_y}
+    return [
+        {"x": source_x, "y": source_y},
+        lead,
+        {"x": lead["x"], "y": detour_y},
+        {"x": float(join_position["x"]), "y": detour_y},
+        {"x": float(join_position["x"]), "y": float(join_position["y"])},
+        {"x": float(target_belt["x"]), "y": float(join_position["y"])},
+        {"x": float(target_belt["x"]), "y": float(target_belt["y"])},
+    ]
+
+
+def _preserve_existing_belt_segment_directions(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    preserved: list[dict[str, Any]] = []
+    for segment in segments:
+        item = dict(segment)
+        entity = item.get("entity")
+        if isinstance(entity, dict):
+            item["direction"] = _direction_or_default(entity.get("direction"), item["direction"])
+        preserved.append(item)
+    return preserved
+
+
+def _existing_belt_segments_match_generated_directions(segments: list[dict[str, Any]]) -> bool:
+    for segment in segments:
+        entity = segment.get("entity")
+        if not isinstance(entity, dict):
+            continue
+        if _direction_or_default(entity.get("direction"), segment["direction"]) != int(segment["direction"]):
+            return False
+    return True
+
+
+def _coal_boiler_fuel_feed_route_score(
+    observation: dict[str, Any],
+    segments: list[dict[str, Any]],
+    *,
+    source_drill: dict[str, Any] | None = None,
+) -> float:
+    source_drill_unit = None
+    if isinstance(source_drill, dict) and source_drill.get("unit_number") is not None:
+        try:
+            source_drill_unit = int(source_drill.get("unit_number"))
+        except (TypeError, ValueError):
+            source_drill_unit = None
+
+    score = len(segments) / 100.0
+    for segment in segments:
+        entity = segment.get("entity")
+        if isinstance(entity, dict):
+            if _direction_or_default(entity.get("direction"), segment["direction"]) != int(segment["direction"]):
+                score += 250.0
+            else:
+                score -= 0.25
+            continue
+        score += 10.0
+        blocker = _belt_line_position_blocker(observation, segment["position"])
+        if blocker is None:
+            continue
+        blocker_name = str(blocker.get("name") or "")
+        try:
+            blocker_unit = int(blocker.get("unit_number"))
+        except (TypeError, ValueError):
+            blocker_unit = None
+        if source_drill_unit is not None and blocker_unit == source_drill_unit:
+            score += 10000.0
+        elif blocker_name in {"burner-mining-drill", "boiler", "steam-engine"} or blocker_name in ASSEMBLER_ENTITY_NAMES:
+            score += 1000.0
+        else:
+            score += 150.0
+    return score
 
 
 def _coal_supply_output_belt_sources(observation: dict[str, Any]) -> list[dict[str, Any]]:
@@ -6198,14 +6487,29 @@ def _inventory_burner_fuel_count(observation: dict[str, Any]) -> int:
 
 
 def _entity_burner_fuel_count(entity: dict[str, Any]) -> int:
-    return sum(entity_item_count(entity, item) for item in BURNER_FUEL_ITEMS)
+    stored_fuel = sum(entity_item_count(entity, item) for item in BURNER_FUEL_ITEMS)
+    burner = entity.get("burner") if isinstance(entity.get("burner"), dict) else {}
+    if _burner_remaining_fuel(burner) > 0:
+        return max(1, stored_fuel)
+    return stored_fuel
 
 
 def _entity_existing_burner_fuel_item(entity: dict[str, Any]) -> str | None:
     for item in BURNER_FUEL_ITEMS:
         if entity_item_count(entity, item) > 0:
             return item
+    burner = entity.get("burner") if isinstance(entity.get("burner"), dict) else {}
+    currently_burning = str(burner.get("currently_burning") or "")
+    if currently_burning in BURNER_FUEL_ITEMS and _burner_remaining_fuel(burner) > 0:
+        return currently_burning
     return None
+
+
+def _burner_remaining_fuel(burner: dict[str, Any]) -> float:
+    try:
+        return float(burner.get("remaining_burning_fuel") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _fuel_reserve_for_entity(entity_name: str) -> int:
@@ -6831,6 +7135,142 @@ def _site_input_local_route_observed(
     return _direction_or_default(inserter.get("direction"), endpoints["target_direction"]) == int(endpoints["target_direction"])
 
 
+def _logistics_researched_or_underground_unlocked(observation: dict[str, Any]) -> bool:
+    return bool(_technology_state(observation, "logistics").get("researched")) or _recipe_unlocked_for_layout(
+        observation,
+        "underground-belt",
+    )
+
+
+def _site_input_underground_bridge_plan(observation: dict[str, Any], layout: dict[str, Any]) -> dict[str, Any] | None:
+    segments = layout.get("segments") if isinstance(layout.get("segments"), list) else []
+    if len(segments) < 3:
+        return None
+    for index in range(1, len(segments) - 1):
+        segment = segments[index]
+        existing = segment.get("entity") if isinstance(segment, dict) else None
+        if not isinstance(existing, dict) or str(existing.get("name") or "") != "transport-belt":
+            continue
+        planned_direction = _direction_or_default(segment.get("direction"), EAST)
+        existing_direction = _direction_or_default(existing.get("direction"), planned_direction)
+        if _direction_axis(existing_direction) == _direction_axis(planned_direction):
+            continue
+        before = segments[index - 1]
+        after = segments[index + 1]
+        if _direction_or_default(before.get("direction"), planned_direction) != planned_direction:
+            continue
+        if _direction_or_default(after.get("direction"), planned_direction) != planned_direction:
+            continue
+        return {
+            "crossing": segment,
+            "entry": before,
+            "exit": after,
+            "direction": planned_direction,
+            "existing_cross_direction": existing_direction,
+        }
+    return None
+
+
+def _underground_belt_entity_at(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:
+    return _entity_at_build_position(observation, "underground-belt", position, radius=0.75)
+
+
+def _underground_belt_matches(entity: dict[str, Any], direction: int, underground_type: str) -> bool:
+    return (
+        str(entity.get("name") or "") == "underground-belt"
+        and _direction_or_default(entity.get("direction"), direction) == int(direction)
+        and str(entity.get("belt_to_ground_type") or "") == underground_type
+    )
+
+
+def _site_input_underground_bridge_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    bridge: dict[str, Any],
+) -> PlannerDecision | None:
+    if not _logistics_researched_or_underground_unlocked(observation):
+        return PlannerDecision(
+            None,
+            "site input logistics crossing needs underground-belt bridge after logistics research; refusing to mine the crossing belt",
+        )
+    endpoints = [
+        ("entrance", bridge["entry"], "input"),
+        ("exit", bridge["exit"], "output"),
+    ]
+    required = 0
+    for _label, segment, underground_type in endpoints:
+        underground = _underground_belt_entity_at(observation, segment["position"])
+        if isinstance(underground, dict) and _underground_belt_matches(underground, bridge["direction"], underground_type):
+            continue
+        required += 1
+    if required > inventory_count(observation, "underground-belt"):
+        if craftable_count(observation, "underground-belt") > 0:
+            return PlannerDecision(
+                {"type": "craft", "recipe": "underground-belt", "count": 1},
+                "craft underground belts for crossing site input logistics bridge",
+            )
+        decision = BuildItemMallSkill("underground-belt", 2).next_action(observation, reference_position=bridge["entry"]["position"])
+        if not decision.done:
+            return decision
+        return PlannerDecision(None, "site input logistics crossing needs two underground belts")
+
+    for label, segment, underground_type in endpoints:
+        position = segment["position"]
+        underground = _underground_belt_entity_at(observation, position)
+        if isinstance(underground, dict):
+            if _underground_belt_matches(underground, bridge["direction"], underground_type):
+                continue
+            underground_position = _position(underground)
+            if distance(player, underground_position) > 4.5:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(underground_position, offset=1.5)},
+                    f"move within reach of wrong underground-belt {label} for site input bridge",
+                )
+            return PlannerDecision(
+                {
+                    "type": "mine",
+                    "unit_number": underground.get("unit_number"),
+                    "name": "underground-belt",
+                    "position": underground_position,
+                },
+                f"remove wrong underground-belt {label} before rebuilding site input bridge",
+            )
+        existing = segment.get("entity") if isinstance(segment, dict) else None
+        if isinstance(existing, dict):
+            existing_position = _position(existing)
+            if distance(player, existing_position) > 4.5:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(existing_position, offset=1.5)},
+                    f"move within reach of belt segment to convert it into underground bridge {label}",
+                )
+            return PlannerDecision(
+                {
+                    "type": "mine",
+                    "unit_number": existing.get("unit_number"),
+                    "name": existing.get("name") or "transport-belt",
+                    "position": existing_position,
+                },
+                f"replace regular site input belt with underground bridge {label}",
+            )
+        if distance(player, position) > 20:
+            return PlannerDecision(
+                {"type": "move_to", "position": _stand_position(position, offset=3.0)},
+                f"move near underground-belt bridge {label} position",
+            )
+        return PlannerDecision(
+            {
+                "type": "build",
+                "name": "underground-belt",
+                "position": position,
+                "direction": bridge["direction"],
+                "underground_type": underground_type,
+                "allow_nearby": False,
+            },
+            f"build underground-belt bridge {label} so site input logistics crosses another belt line",
+        )
+    return None
+
+
 def _site_input_line_endpoints(source: dict[str, Any], consumer: dict[str, Any]) -> dict[str, Any]:
     source_position = _position(source)
     consumer_position = _position(consumer)
@@ -6896,6 +7336,16 @@ def _direction_or_default(value: Any, fallback: int) -> int:
 
 def _direction_axis(direction: int) -> str:
     return "x" if int(direction) in {EAST, WEST} else "y"
+
+
+def _direction_vector(direction: int) -> dict[str, float]:
+    if int(direction) == EAST:
+        return {"x": 1.0, "y": 0.0}
+    if int(direction) == WEST:
+        return {"x": -1.0, "y": 0.0}
+    if int(direction) == SOUTH:
+        return {"x": 0.0, "y": 1.0}
+    return {"x": 0.0, "y": -1.0}
 
 
 def _route_detour_coordinate(start_value: float, end_value: float, direction: int) -> float:
@@ -9731,6 +10181,11 @@ class SiteInputLogisticLineSkill:
             for entity in (layout.get("source"), layout.get("consumer"))
             if isinstance(entity, dict) and entity.get("unit_number") is not None
         }
+        bridge = _site_input_underground_bridge_plan(observation, layout)
+        if bridge is not None:
+            bridge_decision = _site_input_underground_bridge_decision(observation, player, bridge)
+            if bridge_decision is not None:
+                return bridge_decision
         for segment in layout["segments"]:
             existing = segment.get("entity")
             if not isinstance(existing, dict):
@@ -10063,6 +10518,19 @@ class BuildItemMallSkill:
                         f"wait for {self.target_item} mall output inserter to buffer items into chest",
                     )
             if _block_player_mall_output_collection_after_automation(observation, self.target_item):
+                if reference_position is not None:
+                    logistics_layout = _find_site_input_logistic_line_layout(observation, item="iron-gear-wheel")
+                    consumer = logistics_layout.get("consumer") if isinstance(logistics_layout, dict) else None
+                    if isinstance(consumer, dict) and distance(_position(consumer), reference_position) <= 4.5:
+                        logistics_decision = SiteInputLogisticLineSkill(max(12, self.target_count), item="iron-gear-wheel").next_action(
+                            observation
+                        )
+                        if not logistics_decision.done:
+                            return logistics_decision
+                        return PlannerDecision(
+                            {"type": "wait", "ticks": 300},
+                            f"wait for iron gear wheel site input logistics to feed {self.target_item} consumer",
+                        )
                 return PlannerDecision(
                     {"type": "wait", "ticks": 300},
                     (
@@ -10476,6 +10944,22 @@ class BuildItemMallSkill:
                         "craft one-time iron gears for first assembling-machine-1 bootstrap",
                     )
                 if self.target_item != "iron-gear-wheel":
+                    logistics_layout = _find_site_input_logistic_line_layout(observation, item="iron-gear-wheel")
+                    if logistics_layout is not None:
+                        consumer = logistics_layout.get("consumer")
+                        if (
+                            reference_position is None
+                            or (isinstance(consumer, dict) and distance(_position(consumer), reference_position) <= 4.5)
+                        ):
+                            logistics_decision = SiteInputLogisticLineSkill(max(12, quantity), item="iron-gear-wheel").next_action(
+                                observation
+                            )
+                            if not logistics_decision.done:
+                                return logistics_decision
+                            return PlannerDecision(
+                                {"type": "wait", "ticks": 300},
+                                f"wait for iron gear wheel site input logistics to feed {self.target_item} assembler",
+                            )
                     decision = BuildItemMallSkill("iron-gear-wheel", max(quantity, 4)).next_action(
                         observation,
                         allow_existing_remote=allow_existing_remote,
@@ -10513,12 +10997,34 @@ class BuildItemMallSkill:
             return None
 
         if item == "iron-plate":
+            if reference_position is not None:
+                logistics_layout = _find_site_input_logistic_line_layout(observation, item="iron-plate")
+                consumer = logistics_layout.get("consumer") if isinstance(logistics_layout, dict) else None
+                if isinstance(consumer, dict) and distance(_position(consumer), reference_position) <= 4.5:
+                    logistics_decision = SiteInputLogisticLineSkill(max(12, quantity), item="iron-plate").next_action(observation)
+                    if not logistics_decision.done:
+                        return logistics_decision
+                    return PlannerDecision(
+                        {"type": "wait", "ticks": 300},
+                        f"wait for iron plate site input logistics to feed {self.target_item} assembler",
+                    )
             decision = self.iron_skill.next_action(observation, target_count=quantity, inventory_only=True)
             if not decision.done:
                 return decision
             return None
 
         if item == "copper-plate":
+            if reference_position is not None:
+                logistics_layout = _find_site_input_logistic_line_layout(observation, item="copper-plate")
+                consumer = logistics_layout.get("consumer") if isinstance(logistics_layout, dict) else None
+                if isinstance(consumer, dict) and distance(_position(consumer), reference_position) <= 4.5:
+                    logistics_decision = SiteInputLogisticLineSkill(max(12, quantity), item="copper-plate").next_action(observation)
+                    if not logistics_decision.done:
+                        return logistics_decision
+                    return PlannerDecision(
+                        {"type": "wait", "ticks": 300},
+                        f"wait for copper plate site input logistics to feed {self.target_item} assembler",
+                    )
             decision = self.copper_skill.next_action(observation, target_count=quantity, inventory_only=True)
             if not decision.done:
                 return decision

@@ -13,6 +13,7 @@ from typing import Any
 
 from .llm_log import record_llm_decision, strategy_request_summary
 from .config import AppConfig, REPO_ROOT
+from .layout_llm_settings import load_layout_llm_settings
 from .layout_validation import layout_validation_feedback_summary
 from .models import (
     ActionValidationError,
@@ -348,8 +349,12 @@ class FactorioController:
         self._remote_llm_status_cache_until = 0.0
         self._background_layout_task_name: str | None = None
         self._background_layout_last_submit = 0.0
+        self._background_layout_scheduler_not_ready_until = 0.0
         self._background_layout_thread: threading.Thread | None = None
         self._background_layout_thread_result: dict[str, Any] | None = None
+        self._background_layout_threads: list[threading.Thread] = []
+        self._background_layout_thread_results: list[dict[str, Any]] = []
+        self._background_layout_thread_result_lock = threading.Lock()
 
     def observe(self) -> dict[str, Any]:
         with self._client() as client:
@@ -1001,6 +1006,19 @@ class FactorioController:
                 busy_cycles=0,
                 log_path=log_path,
             )
+        if existing_pid and existing_pid != os.getpid() and not _pid_is_running(existing_pid):
+            existing["state"] = "stale"
+            existing["stale_detected_at"] = datetime.now(timezone.utc).isoformat()
+            existing["stale_reason"] = "recorded idle layout loop pid is not running"
+            with process_path.open("w", encoding="utf-8") as file:
+                json.dump(existing, file, ensure_ascii=False, indent=2)
+            self._write_background_layout_log(
+                {
+                    "event": "layout_idle_loop_stale_pid_recovered",
+                    "pid": existing_pid,
+                    "objective": objective,
+                }
+            )
         self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
         with process_path.open("w", encoding="utf-8") as file:
             json.dump(
@@ -1435,6 +1453,7 @@ class FactorioController:
         log_path = log_path or self.cfg.log_dir / f"{log_prefix}-{_timestamp()}.jsonl"
         started_at = time.monotonic()
         initial_item_count: int | None = None
+        last_step = 0
 
         def finish(ok: bool, reason: str, step: int, observation: dict[str, Any]) -> RunSummary:
             nonlocal initial_item_count
@@ -1442,6 +1461,13 @@ class FactorioController:
             if initial_item_count is None:
                 initial_item_count = final_item_count
             summary = RunSummary(ok, reason, step, final_item_count, log_path, target_item)
+            self._write_live_skill_heartbeat(
+                objective,
+                goal,
+                "stopped" if ok else "failed",
+                step=step,
+                reason=reason,
+            )
             record_skill_run_journal(
                 self.cfg.log_dir,
                 objective=objective,
@@ -1460,46 +1486,65 @@ class FactorioController:
             )
             return summary
 
-        with log_path.open("a", encoding="utf-8") as log_file:
-            for step in range(1, max_steps + 1):
-                self._wait_for_review_window()
-                observation = self._observe_for_skill_loop(goal, step)
-                if initial_item_count is None:
-                    initial_item_count = total_item_count(observation, target_item)
-                self._maybe_progress_background_layout_work(observation, objective, goal, step)
-                decision = skill.next_action(observation)
-                observation, decision = self._maybe_retry_skill_with_planning_sites(skill, observation, decision)
-                decision = _guard_post_automation_handcraft(observation, decision)
-                self._write_log(log_file, step, observation, decision, None)
-                if decision.done:
-                    self._maybe_progress_background_layout_work(observation, objective, goal, step, force_poll=True)
-                    return finish(True, decision.reason, step, observation)
-                if decision.action is None:
-                    self._maybe_progress_background_layout_work(observation, objective, goal, step, force_poll=True)
-                    return finish(False, decision.reason, step, observation)
+        self._write_live_skill_heartbeat(
+            objective,
+            goal,
+            "starting",
+            step=0,
+            reason=f"target {target} {target_item}",
+        )
+        try:
+            with log_path.open("a", encoding="utf-8") as log_file:
+                for step in range(1, max_steps + 1):
+                    last_step = step
+                    self._write_live_skill_heartbeat(objective, goal, "step", step=step)
+                    self._wait_for_review_window()
+                    observation = self._observe_for_skill_loop(goal, step)
+                    if initial_item_count is None:
+                        initial_item_count = total_item_count(observation, target_item)
+                    self._maybe_progress_background_layout_work(observation, objective, goal, step)
+                    decision = skill.next_action(observation)
+                    observation, decision = self._maybe_retry_skill_with_planning_sites(skill, observation, decision)
+                    decision = _guard_post_automation_handcraft(observation, decision)
+                    self._write_log(log_file, step, observation, decision, None)
+                    if decision.done:
+                        self._maybe_progress_background_layout_work(observation, objective, goal, step, force_poll=True)
+                        return finish(True, decision.reason, step, observation)
+                    if decision.action is None:
+                        self._maybe_progress_background_layout_work(observation, objective, goal, step, force_poll=True)
+                        return finish(False, decision.reason, step, observation)
 
-                action = self._maybe_apply_remote_hint(observation, decision, goal)
-                response = self.act(action)
-                self._write_log(log_file, step, observation, decision, response)
-                if not response.get("ok"):
-                    if _stale_take_response(action, response):
+                    action = self._maybe_apply_remote_hint(observation, decision, goal)
+                    response = self.act(action)
+                    self._write_log(log_file, step, observation, decision, response)
+                    if not response.get("ok"):
+                        if _stale_take_response(action, response):
+                            time.sleep(0.2)
+                            continue
+                        return finish(False, f"action failed: {response.get('reason')}", step, observation)
+                    if action.get("type") == "wait":
+                        ticks = int(action.get("ticks") or 60)
+                        time.sleep(max(0.05, ticks / 60.0))
+                    elif action.get("type") == "move_to":
+                        arrived, reason = self._wait_for_move(action)
+                        if not arrived:
+                            observation = self._observe_for_skill_loop(goal, step)
+                            return finish(False, reason, step, observation)
+                    else:
                         time.sleep(0.2)
-                        continue
-                    return finish(False, f"action failed: {response.get('reason')}", step, observation)
-                if action.get("type") == "wait":
-                    ticks = int(action.get("ticks") or 60)
-                    time.sleep(max(0.05, ticks / 60.0))
-                elif action.get("type") == "move_to":
-                    arrived, reason = self._wait_for_move(action)
-                    if not arrived:
-                        observation = self._observe_for_skill_loop(goal, step)
-                        return finish(False, reason, step, observation)
-                else:
-                    time.sleep(0.2)
 
-        observation = self._observe_for_skill_loop(goal, max_steps)
-        self._maybe_progress_background_layout_work(observation, objective, goal, max_steps, force_poll=True)
-        return finish(False, f"max steps reached: {max_steps}", max_steps, observation)
+            observation = self._observe_for_skill_loop(goal, max_steps)
+            self._maybe_progress_background_layout_work(observation, objective, goal, max_steps, force_poll=True)
+            return finish(False, f"max steps reached: {max_steps}", max_steps, observation)
+        except Exception as exc:
+            self._write_live_skill_heartbeat(
+                objective,
+                goal,
+                "error",
+                step=last_step,
+                reason=f"{type(exc).__name__}: {exc}",
+            )
+            raise
 
     def _observe_for_skill_loop(self, goal: str, step: int) -> dict[str, Any]:
         return self.observe()
@@ -1517,6 +1562,35 @@ class FactorioController:
 
     def _idle_layout_process_path(self) -> Path:
         return self.cfg.runtime_dir / "idle-layout-loop.json"
+
+    def _live_skill_heartbeat_path(self) -> Path:
+        return self.cfg.runtime_dir / "live-skill-heartbeat.json"
+
+    def _write_live_skill_heartbeat(
+        self,
+        objective: str,
+        goal: str,
+        state: str,
+        *,
+        step: int,
+        reason: str = "",
+    ) -> None:
+        self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "active": state not in {"stopped", "failed", "error", "interrupted"},
+            "state": state,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "objective": objective,
+            "skill": goal,
+            "step": step,
+            "reason": reason,
+            "pid": os.getpid(),
+        }
+        with self._live_skill_heartbeat_path().open("w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False, indent=2)
+
+    def _read_live_skill_heartbeat(self) -> dict[str, Any]:
+        return _read_json_file(self._live_skill_heartbeat_path())
 
     def _write_autopilot_heartbeat(
         self,
@@ -1543,6 +1617,34 @@ class FactorioController:
         return _read_json_file(self._autopilot_heartbeat_path())
 
     def _autopilot_idle_for_layout(self, stale_seconds: float) -> tuple[bool, str, dict[str, Any]]:
+        live_skill = self._read_live_skill_heartbeat()
+        if live_skill.get("active"):
+            live_pid = _int_or_none(live_skill.get("pid"))
+            if live_pid and not _pid_is_running(live_pid):
+                live_skill = dict(live_skill)
+                live_skill["active"] = False
+                live_skill["state"] = "stale"
+                live_skill["stale_detected_at"] = datetime.now(timezone.utc).isoformat()
+                live_skill["stale_reason"] = "recorded live skill pid is not running"
+                with self._live_skill_heartbeat_path().open("w", encoding="utf-8") as file:
+                    json.dump(live_skill, file, ensure_ascii=False, indent=2)
+            else:
+                live_updated_at = _parse_datetime(live_skill.get("updated_at"))
+                live_stale_seconds = max(
+                    stale_seconds,
+                    _float_env("FACTORIO_AI_LIVE_SKILL_BUSY_STALE_SECONDS", 900.0),
+                )
+                if live_updated_at is not None:
+                    live_age_seconds = (datetime.now(timezone.utc) - live_updated_at).total_seconds()
+                    if live_age_seconds < live_stale_seconds:
+                        heartbeat: dict[str, Any] = {"live_skill": dict(live_skill)}
+                        heartbeat["live_skill"]["age_seconds"] = round(max(0.0, live_age_seconds), 3)
+                        autopilot = self._read_autopilot_heartbeat()
+                        if autopilot:
+                            heartbeat["autopilot"] = autopilot
+                        skill_name = str(live_skill.get("skill") or "unknown")
+                        state = str(live_skill.get("state") or "active")
+                        return False, f"live skill is active: {skill_name} {state}", heartbeat
         heartbeat = self._read_autopilot_heartbeat()
         if not heartbeat:
             return True, "autopilot heartbeat missing", {}
@@ -1649,6 +1751,19 @@ class FactorioController:
                 }
             )
             return
+        if existing_pid and not _pid_is_running(existing_pid):
+            existing["state"] = "stale"
+            existing["stale_detected_at"] = datetime.now(timezone.utc).isoformat()
+            existing["stale_reason"] = "recorded Codex wait layout loop pid is not running"
+            with process_path.open("w", encoding="utf-8") as file:
+                json.dump(existing, file, ensure_ascii=False, indent=2)
+            self._write_background_layout_log(
+                {
+                    "event": "layout_codex_wait_loop_stale_pid_recovered",
+                    "pid": existing_pid,
+                    "objective": objective,
+                }
+            )
 
         sleep_seconds = os.getenv(
             "FACTORIO_AI_CODEX_WAIT_LAYOUT_SLEEP_SECONDS",
@@ -1793,6 +1908,27 @@ class FactorioController:
             0,
         )
 
+    def _background_layout_max_active_tasks(self) -> int:
+        return int(load_layout_llm_settings(self.cfg.runtime_dir)["max_active_layout_tasks"])
+
+    def _record_background_layout_thread_result(self, payload: dict[str, Any]) -> None:
+        self._background_layout_thread_result = payload
+        with self._background_layout_thread_result_lock:
+            self._background_layout_thread_results.append(payload)
+
+    def _collect_background_layout_threads(self) -> None:
+        running = [thread for thread in self._background_layout_threads if thread.is_alive()]
+        self._background_layout_threads = running
+        self._background_layout_thread = running[0] if running else None
+
+        with self._background_layout_thread_result_lock:
+            results = list(self._background_layout_thread_results)
+            self._background_layout_thread_results.clear()
+        for result in results:
+            self._write_background_layout_log(result)
+        if results:
+            self._background_layout_thread_result = results[-1]
+
     def _maybe_progress_background_layout_work(
         self,
         observation: dict[str, Any],
@@ -1812,13 +1948,7 @@ class FactorioController:
             self._maybe_ensure_slurm_worker(reason="background_layout_work")
             from . import remote_slurm
 
-            if self._background_layout_thread is not None:
-                if self._background_layout_thread.is_alive():
-                    return
-                thread_result = self._background_layout_thread_result or {}
-                self._write_background_layout_log(thread_result)
-                self._background_layout_thread = None
-                self._background_layout_thread_result = None
+            self._collect_background_layout_threads()
 
             if self._background_layout_task_name:
                 state, data, raw = remote_slurm.read_task_state(self._background_layout_task_name)
@@ -1855,23 +1985,29 @@ class FactorioController:
             if force_poll:
                 return
             mode = os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_MODE", "attach").strip().lower()
+            max_active_layout_tasks = self._background_layout_max_active_tasks()
+            running_layout_workers = len(self._background_layout_threads)
+            if mode in {"attach", "attached", "srun", "scheduler", "slurm_scheduler"} and (
+                running_layout_workers >= max_active_layout_tasks
+            ):
+                return
             interval = (
                 float(minimum_interval_seconds)
                 if minimum_interval_seconds is not None
                 else float(os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS", "20"))
             )
-            if mode in {"scheduler", "slurm_scheduler"}:
-                interval = max(
-                    interval,
-                    float(os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_SCHEDULER_NOT_READY_INTERVAL_SECONDS", "60")),
-                )
             now = time.monotonic()
+            if mode in {"scheduler", "slurm_scheduler"} and now < self._background_layout_scheduler_not_ready_until:
+                return
             if now - self._background_layout_last_submit < interval:
                 return
             if mode in {"scheduler", "slurm_scheduler"}:
-                status = remote_slurm.layout_improvement_status()
+                status = remote_slurm.layout_improvement_status(max_active_layout_tasks=max_active_layout_tasks)
                 if not status.get("llm_ready"):
                     self._background_layout_last_submit = now
+                    self._background_layout_scheduler_not_ready_until = now + float(
+                        os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_SCHEDULER_NOT_READY_INTERVAL_SECONDS", "60")
+                    )
                     remote = status.get("remote") if isinstance(status.get("remote"), dict) else {}
                     self._write_background_layout_log(
                         {
@@ -1884,10 +2020,14 @@ class FactorioController:
                             "selected_gpu_model": remote.get("selected_gpu_model"),
                             "scheduler_ready_free_gpus": remote.get("scheduler_ready_free_gpus"),
                             "pending_gpu_tasks": remote.get("pending_gpu_tasks"),
+                            "active_layout_tasks": remote.get("active_layout_tasks"),
+                            "max_active_layout_tasks": remote.get("max_active_layout_tasks"),
+                            "active_layout_capacity_remaining": remote.get("active_layout_capacity_remaining"),
                             "pending_gpu_allocations": remote.get("pending_gpu_allocations") or [],
                         }
                     )
                     return
+                self._background_layout_scheduler_not_ready_until = 0.0
 
             targets = load_targets(self.cfg.runtime_dir, objective)
             monitor = summarize_factory(observation, objective, production_targets=targets.per_minute)
@@ -1895,8 +2035,7 @@ class FactorioController:
             selected_improvement_site = load_selected_improvement_site(self.cfg.runtime_dir, objective)
             self._background_layout_last_submit = now
             if mode in {"attach", "attached", "srun", "scheduler", "slurm_scheduler"}:
-                self._background_layout_thread_result = None
-                self._background_layout_thread = threading.Thread(
+                thread = threading.Thread(
                     target=self._background_layout_attached_worker,
                     args=(
                         objective,
@@ -1910,13 +2049,17 @@ class FactorioController:
                     ),
                     daemon=True,
                 )
-                self._background_layout_thread.start()
+                self._background_layout_threads.append(thread)
+                self._background_layout_thread = thread
+                thread.start()
                 self._write_background_layout_log(
                     {
                         "event": "layout_attached_started",
                         "mode": mode,
                         "active_skill": active_skill,
                         "active_step": active_step,
+                        "running_layout_workers": running_layout_workers + 1,
+                        "max_active_layout_tasks": max_active_layout_tasks,
                     }
                 )
             else:
@@ -1979,23 +2122,28 @@ class FactorioController:
                 selected_improvement_site=selected_improvement_site,
                 timeout_seconds=int(os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_TIMEOUT_SECONDS", "180")),
                 force_attached=True,
+                max_active_layout_tasks=self._background_layout_max_active_tasks(),
             )
-            self._background_layout_thread_result = {
-                "event": "layout_result",
-                "mode": "attach",
-                "objective": objective,
-                "active_skill": active_skill,
-                "active_step": active_step,
-                "result": result,
-            }
+            self._record_background_layout_thread_result(
+                {
+                    "event": "layout_result",
+                    "mode": "attach",
+                    "objective": objective,
+                    "active_skill": active_skill,
+                    "active_step": active_step,
+                    "result": result,
+                }
+            )
         except Exception as exc:  # noqa: BLE001
-            self._background_layout_thread_result = {
-                "event": "layout_background_error",
-                "mode": "attach",
-                "active_skill": active_skill,
-                "active_step": active_step,
-                "error": f"{type(exc).__name__}: {exc}",
-            }
+            self._record_background_layout_thread_result(
+                {
+                    "event": "layout_background_error",
+                    "mode": "attach",
+                    "active_skill": active_skill,
+                    "active_step": active_step,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
 
     def _write_background_layout_log(self, payload: dict[str, Any]) -> None:
         self.cfg.log_dir.mkdir(parents=True, exist_ok=True)

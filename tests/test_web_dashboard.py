@@ -518,6 +518,22 @@ class WebDashboardTests(unittest.TestCase):
             self.assertEqual(load_selected_improvement_site(cfg.runtime_dir, "launch_rocket_program"), {})
             self.assertFalse((cfg.runtime_dir / "production-targets.json").exists())
 
+    def test_dashboard_post_saves_layout_llm_settings_without_saving_targets(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = SimpleNamespace(runtime_dir=Path(temp_dir), log_dir=Path(temp_dir) / "logs")
+            _handle_dashboard_post_values(
+                cfg,
+                "launch_rocket_program",
+                {
+                    "action": ["save_layout_llm_settings"],
+                    "max_active_layout_tasks": ["3"],
+                },
+            )
+
+            settings = (cfg.runtime_dir / "layout-llm-settings.json").read_text(encoding="utf-8")
+            self.assertIn('"max_active_layout_tasks": 3', settings)
+            self.assertFalse((cfg.runtime_dir / "production-targets.json").exists())
+
     def test_dashboard_state_feeds_selected_site_into_layout_context(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             cfg = SimpleNamespace(runtime_dir=Path(temp_dir), log_dir=Path(temp_dir) / "logs")

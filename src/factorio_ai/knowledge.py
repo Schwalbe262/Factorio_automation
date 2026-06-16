@@ -80,6 +80,20 @@ RECIPES: dict[str, Recipe] = {
         {"automation-science-pack": 1},
     ),
     "transport-belt": Recipe("transport-belt", 0.5, {"iron-plate": 1, "iron-gear-wheel": 1}, {"transport-belt": 2}),
+    "underground-belt": Recipe(
+        "underground-belt",
+        1.0,
+        {"iron-plate": 5, "transport-belt": 10},
+        {"underground-belt": 2},
+        technology="logistics",
+    ),
+    "splitter": Recipe(
+        "splitter",
+        1.0,
+        {"electronic-circuit": 5, "iron-plate": 5, "transport-belt": 4},
+        {"splitter": 1},
+        technology="logistics",
+    ),
     "inserter": Recipe(
         "inserter",
         0.5,

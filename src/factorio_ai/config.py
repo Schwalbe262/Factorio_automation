@@ -43,6 +43,13 @@ def _bool_value(value: Any, fallback: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _scheduler_mode_enabled() -> bool:
+    mode = os.getenv("FACTORIO_AI_SLURM_MODE", "").strip().lower()
+    if mode in {"scheduler", "slurm_scheduler", "scheduler_tasks"}:
+        return True
+    return _bool_value(os.getenv("FACTORIO_AI_SLURM_SCHEDULER_ENABLED"), False)
+
+
 def _int_value(value: Any, fallback: int) -> int:
     try:
         return int(value)
@@ -78,6 +85,8 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     save_path = _repo_path(os.getenv("FACTORIO_AI_SAVE_PATH") or raw.get("save_path") or runtime_dir / "saves" / "ai-mvp.zip")
     log_dir = _repo_path(os.getenv("FACTORIO_AI_LOG_DIR") or raw.get("log_dir") or "logs")
 
+    slurm_default = _scheduler_mode_enabled() or _bool_value(raw.get("slurm_enabled"), False)
+
     return AppConfig(
         factorio_exe=factorio_exe,
         runtime_dir=runtime_dir,
@@ -89,5 +98,5 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         server_port=_int_value(os.getenv("FACTORIO_AI_SERVER_PORT") or raw.get("server_port"), 34197),
         log_dir=log_dir,
         agent_player_name=str(os.getenv("FACTORIO_AI_AGENT_PLAYER") or raw.get("agent_player_name") or "AI"),
-        slurm_enabled=_bool_value(os.getenv("FACTORIO_AI_SLURM_ENABLED"), _bool_value(raw.get("slurm_enabled"), False)),
+        slurm_enabled=_bool_value(os.getenv("FACTORIO_AI_SLURM_ENABLED"), slurm_default),
     )

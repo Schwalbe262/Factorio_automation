@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 from .config import AppConfig
 from .controller import FactorioController
 from .item_icons import read_item_icon_png
+from .layout_llm_settings import load_layout_llm_settings, save_layout_llm_settings
 from .layout_validation import layout_validation_feedback_summary, merge_sandbox_validation_feedback
 from .llm_log import llm_decision_summary
 from .monitor import summarize_factory
@@ -404,6 +405,10 @@ TEXT["en"].update(
         "archive_root": "Archive Root",
         "high_value": "High Value",
         "categories": "Categories",
+        "layout_llm_settings": "Local LLM Layout Jobs",
+        "max_active_layout_tasks": "Max active jobs",
+        "layout_llm_hint": "Each job requests one GPU. The idle layout loop keeps submitting until this limit is full.",
+        "save_layout_llm_settings": "Save LLM Setting",
     }
 )
 TEXT["ko"].update(
@@ -425,6 +430,10 @@ TEXT["ko"].update(
         "archive_root": "Archive Root",
         "high_value": "High Value",
         "categories": "Categories",
+        "layout_llm_settings": "Local LLM Layout Jobs",
+        "max_active_layout_tasks": "Max active jobs",
+        "layout_llm_hint": "Each job requests one GPU. The idle layout loop keeps submitting until this limit is full.",
+        "save_layout_llm_settings": "Save LLM Setting",
     }
 )
 
@@ -552,6 +561,12 @@ def _handle_dashboard_post_values(cfg: AppConfig, objective: str, values: dict[s
         return
     if action == "clear_improvement_site":
         clear_selected_improvement_site(cfg.runtime_dir, objective)
+        return
+    if action == "save_layout_llm_settings":
+        save_layout_llm_settings(
+            cfg.runtime_dir,
+            (values.get("max_active_layout_tasks") or [""])[0],
+        )
         return
     targets = parse_target_form(values)
     save_targets(cfg.runtime_dir, targets)
@@ -773,6 +788,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
     worker_comparison = strategy_worker_comparison_summary(cfg.log_dir)
     layout_background = layout_background_summary(cfg.log_dir)
     layout_validation_feedback = layout_validation_feedback_summary(cfg.log_dir)
+    layout_llm_settings = load_layout_llm_settings(cfg.runtime_dir)
     run_journal = run_journal_summary(cfg.log_dir)
     trace_archives = trace_archive_summary(cfg.runtime_dir / "trace_archives")
     world_map_memory = summarize_world_map_memory(load_world_map_memory(cfg.runtime_dir))
@@ -810,6 +826,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "layout_improvement": layout_improvement,
             "layout_background": layout_background,
             "layout_validation_feedback": layout_validation_feedback,
+            "layout_llm_settings": layout_llm_settings,
             "strategy": strategy,
             "token_usage": token_usage,
             "llm_decisions": llm_decisions,
@@ -828,6 +845,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "error": friendly_dashboard_error(exc),
             "layout_background": layout_background,
             "layout_validation_feedback": layout_validation_feedback,
+            "layout_llm_settings": layout_llm_settings,
             "token_usage": token_usage,
             "llm_decisions": llm_decisions,
             "strategy_worker_comparison": worker_comparison,
@@ -928,6 +946,10 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
               <h2>{_t(lang, "layout_background")}</h2>
               {_layout_background_panel(state.get("layout_background"), lang)}
             </section>
+            <section class="panel">
+              <h2>{_t(lang, "layout_llm_settings")}</h2>
+              {_layout_llm_settings_panel(state.get("layout_llm_settings"), lang, state.get("objective"))}
+            </section>
             {_goal_panel(state.get("run_journal"), lang)}
             {_run_notes_panel(state.get("run_journal"), lang)}
             {_run_insights_panel(state.get("run_journal"), lang)}
@@ -966,6 +988,9 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     execution = state.get("execution") if isinstance(state.get("execution"), dict) else {}
     layout_improvement = state.get("layout_improvement") if isinstance(state.get("layout_improvement"), dict) else {}
     layout_background = state.get("layout_background") if isinstance(state.get("layout_background"), dict) else {}
+    layout_llm_settings = (
+        state.get("layout_llm_settings") if isinstance(state.get("layout_llm_settings"), dict) else {}
+    )
     run_journal = state.get("run_journal") if isinstance(state.get("run_journal"), dict) else {}
     trace_archives = state.get("trace_archives") if isinstance(state.get("trace_archives"), dict) else {}
     world_map_memory = state.get("world_map_memory") if isinstance(state.get("world_map_memory"), dict) else {}
@@ -1070,6 +1095,11 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     <section class="panel">
       <h2>{_t(lang, "layout_background")}</h2>
       {_layout_background_panel(layout_background, lang)}
+    </section>
+
+    <section class="panel">
+      <h2>{_t(lang, "layout_llm_settings")}</h2>
+      {_layout_llm_settings_panel(layout_llm_settings, lang, state.get("objective"))}
     </section>
 
     {_run_notes_panel(run_journal, lang)}
@@ -1310,6 +1340,23 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
     }}
     .site-improvement-form {{
       margin: 0;
+    }}
+    .layout-llm-settings-form {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: end;
+      gap: 10px 12px;
+      margin: 0 0 8px;
+    }}
+    .layout-llm-settings-form label {{
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      color: #9aa4af;
+      font-size: 12px;
+    }}
+    .layout-llm-settings-form input {{
+      width: 110px;
     }}
     .site-improvement-summary {{
       display: flex;
@@ -2188,6 +2235,27 @@ def _candidate_blueprint_copy_cells(row: dict[str, Any], lang: str) -> str:
             f"title=\"{escape(label, quote=True)}\">{escape(_t(lang, label_key))}</button>"
         )
     return "<span class=\"blueprint-actions\">" + "".join(buttons) + "</span>" if buttons else ""
+
+
+def _layout_llm_settings_panel(value: Any, lang: str, objective: Any) -> str:
+    settings = value if isinstance(value, dict) else {}
+    current = int(settings.get("max_active_layout_tasks") or 2)
+    minimum = int(settings.get("min_active_layout_tasks") or 1)
+    maximum = int(settings.get("max_allowed_active_layout_tasks") or 8)
+    source = str(settings.get("source") or "")
+    return (
+        f"<form class=\"layout-llm-settings-form\" method=\"post\" "
+        f"action=\"{escape(dashboard_path(lang, str(objective or '')), quote=True)}\">"
+        "<input type=\"hidden\" name=\"action\" value=\"save_layout_llm_settings\">"
+        f"<input type=\"hidden\" name=\"lang\" value=\"{escape(lang, quote=True)}\">"
+        f"<input type=\"hidden\" name=\"objective\" value=\"{escape(str(objective or ''), quote=True)}\">"
+        f"<label>{escape(_t(lang, 'max_active_layout_tasks'))}"
+        f"<input name=\"max_active_layout_tasks\" type=\"number\" min=\"{minimum}\" max=\"{maximum}\" "
+        f"step=\"1\" value=\"{current}\"></label>"
+        f"<button type=\"submit\">{escape(_t(lang, 'save_layout_llm_settings'))}</button>"
+        "</form>"
+        f"<p class=\"muted\">{escape(_t(lang, 'layout_llm_hint'))} {escape(source)}</p>"
+    )
 
 
 def _layout_background_panel(value: Any, lang: str) -> str:

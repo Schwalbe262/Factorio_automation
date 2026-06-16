@@ -20,6 +20,7 @@ import uuid
 from typing import Any
 
 from .config import REPO_ROOT
+from .layout_llm_settings import clamp_max_active_layout_tasks, default_max_active_layout_tasks
 
 
 DEFAULT_HOST = "172.16.10.37"
@@ -1183,14 +1184,25 @@ srun --jobid="$JOB_ID" --overlap -N1 -n1 -c1 bash -lc "$INNER_COMMAND" < /dev/nu
     }
 
 
-def layout_improvement_status(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
+def layout_improvement_status(
+    cfg: RemoteSlurmConfig | None = None,
+    *,
+    max_active_layout_tasks: int | None = None,
+) -> dict[str, Any]:
     cfg = cfg or config()
     if _use_scheduler_tasks():
-        return _scheduler_status_payload(LAYOUT_IMPROVEMENT_TASK_TYPE)
+        return _scheduler_status_payload(
+            LAYOUT_IMPROVEMENT_TASK_TYPE,
+            max_active_layout_tasks=max_active_layout_tasks,
+        )
     return llm_status(cfg)
 
 
-def _scheduler_status_payload(task_type: str | None = None) -> dict[str, Any]:
+def _scheduler_status_payload(
+    task_type: str | None = None,
+    *,
+    max_active_layout_tasks: int | None = None,
+) -> dict[str, Any]:
     local_env = _llm_env_presence(os.environ)
     gpu_model_candidates = _scheduler_gpu_model_candidates(task_type)
     scheduler_url = _scheduler_url()
@@ -1294,6 +1306,10 @@ def _scheduler_status_payload(task_type: str | None = None) -> dict[str, Any]:
         if task_type == LAYOUT_IMPROVEMENT_TASK_TYPE
         else 0
     )
+    layout_task_limit = clamp_max_active_layout_tasks(
+        max_active_layout_tasks if max_active_layout_tasks is not None else default_max_active_layout_tasks()
+    )
+    has_layout_task_capacity = task_type != LAYOUT_IMPROVEMENT_TASK_TYPE or active_layout_tasks < layout_task_limit
     if wanted_gpu_models:
         has_gpu_queue_capacity = any(
             ready_slots_by_model.get(model, 0) > resource_fit_pending_by_model.get(model, 0)
@@ -1305,8 +1321,8 @@ def _scheduler_status_payload(task_type: str | None = None) -> dict[str, Any]:
     missing = []
     if not has_llm_runtime:
         missing.append("FACTORIO_AI_VLLM_MODEL or FACTORIO_AI_LLM_BASE_URL")
-    if active_layout_tasks > 0:
-        missing.append("active scheduler layout task")
+    if not has_layout_task_capacity:
+        missing.append("active scheduler layout task capacity")
     elif not has_gpu_path:
         if scheduler_ready_free_gpus <= 0:
             missing.append("ready scheduler GPU allocation")
@@ -1342,6 +1358,8 @@ def _scheduler_status_payload(task_type: str | None = None) -> dict[str, Any]:
             "pending_gpu_tasks": pending_gpu_tasks,
             "resource_fit_pending_gpu_tasks": resource_fit_pending_gpu_tasks,
             "active_layout_tasks": active_layout_tasks,
+            "max_active_layout_tasks": layout_task_limit,
+            "active_layout_capacity_remaining": max(0, layout_task_limit - active_layout_tasks),
             "recent_tasks": [_scheduler_compact_task_row(row) for row in task_rows[:5]],
         },
         "remediation": None
@@ -1838,10 +1856,14 @@ def request_layout_improvement(
     cfg: RemoteSlurmConfig | None = None,
     timeout_seconds: int | None = None,
     force_attached: bool = False,
+    max_active_layout_tasks: int | None = None,
 ) -> dict[str, Any]:
     cfg = cfg or config()
     if _use_scheduler_tasks():
-        status_payload = _scheduler_status_payload(LAYOUT_IMPROVEMENT_TASK_TYPE)
+        status_payload = _scheduler_status_payload(
+            LAYOUT_IMPROVEMENT_TASK_TYPE,
+            max_active_layout_tasks=max_active_layout_tasks,
+        )
         if not status_payload.get("llm_ready"):
             return _scheduler_not_ready_result(status_payload)
     task = {
