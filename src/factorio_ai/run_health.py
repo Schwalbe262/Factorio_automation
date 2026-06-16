@@ -1,0 +1,193 @@
+"""One-shot health digest of an unattended autonomous run.
+
+Reads the runtime heartbeats, the generated-skill registry/queue, recent LLM
+decisions, and (optionally) a lightweight live observation, so an operator can
+check "how is the run doing / where is it stuck" at a glance without digging
+through logs. Read-only; never mutates anything.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+from typing import Any
+
+from .config import AppConfig
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {}
+
+
+def _age_seconds(value: Any) -> float | None:
+    if not value:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return round((datetime.now(timezone.utc) - ts.astimezone(timezone.utc)).total_seconds(), 1)
+
+
+def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]:
+    runtime = Path(cfg.runtime_dir)
+    autopilot = _read_json(runtime / "autopilot-heartbeat.json")
+    live = _read_json(runtime / "live-skill-heartbeat.json")
+    foundry = _read_json(runtime / "skill-foundry-loop.json")
+    supervisor = _read_json(runtime / "unattended-llm-supervisor.json")
+
+    registered: list[str] = []
+    failed: list[str] = []
+    queue: list[Any] = []
+    try:
+        from . import skill_foundry
+
+        skills = skill_foundry.load_registry().get("skills") or {}
+        if isinstance(skills, dict):
+            registered = sorted(n for n, e in skills.items() if isinstance(e, dict) and e.get("status") == "registered")
+            failed = sorted(
+                n for n, e in skills.items()
+                if isinstance(e, dict) and e.get("status") in {"failed", "quarantined", "disabled"}
+            )
+        queue = [i.get("skill_name") for i in skill_foundry.load_foundry_queue(runtime) if isinstance(i, dict)]
+    except Exception:  # noqa: BLE001
+        pass
+
+    recent: list[dict[str, Any]] = []
+    try:
+        from .llm_log import llm_decision_summary
+
+        entries = llm_decision_summary(cfg.log_dir).get("entries") or []
+        recent = [
+            {
+                "time": d.get("timestamp"),
+                "skill": d.get("selected_skill"),
+                "source": d.get("source"),
+                "ok": d.get("ok"),
+            }
+            for d in entries[-6:]
+            if isinstance(d, dict)
+        ]
+    except Exception:  # noqa: BLE001
+        pass
+
+    game: dict[str, Any] = {"reachable": False}
+    if observe:
+        try:
+            from .modless_lua import ModlessLuaController
+
+            obs = ModlessLuaController(cfg).observe(include_planning_sites=False)
+            inventory = obs.get("inventory") if isinstance(obs.get("inventory"), dict) else {}
+            research = obs.get("research") if isinstance(obs.get("research"), dict) else {}
+            techs = research.get("technologies") if isinstance(research.get("technologies"), dict) else {}
+            researched = sorted(n for n, t in techs.items() if isinstance(t, dict) and t.get("researched"))
+            game = {
+                "reachable": True,
+                "tick": obs.get("tick"),
+                "inventory": inventory,
+                "researched_count": len(researched),
+                "researched": researched,
+                "entity_count": len(obs.get("entities") or []),
+            }
+        except Exception as exc:  # noqa: BLE001
+            game = {"reachable": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "server_reachable": bool(game.get("reachable")),
+        "game": game,
+        "supervisor": {
+            "state": supervisor.get("state"),
+            "autopilot_gate": supervisor.get("autopilot_gate"),
+            "age_seconds": _age_seconds(supervisor.get("updated_at")),
+            "autopilot_processes": supervisor.get("autopilot_processes"),
+            "idle_layout_processes": supervisor.get("idle_layout_processes"),
+            "skill_foundry_processes": supervisor.get("skill_foundry_processes"),
+        },
+        "autopilot": {
+            "state": autopilot.get("state"),
+            "cycle": autopilot.get("cycle"),
+            "reason": autopilot.get("reason"),
+            "age_seconds": _age_seconds(autopilot.get("updated_at")),
+        },
+        "live_skill": {
+            "skill": live.get("skill"),
+            "step": live.get("step"),
+            "state": live.get("state"),
+            "reason": live.get("reason"),
+            "age_seconds": _age_seconds(live.get("updated_at")),
+        },
+        "foundry": {
+            "state": foundry.get("state"),
+            "current_skill": foundry.get("current_skill"),
+            "generated_total": foundry.get("generated_total"),
+            "failed_total": foundry.get("failed_total"),
+            "age_seconds": _age_seconds(foundry.get("updated_at")),
+        },
+        "generated_skills": {"registered": registered, "queue": queue, "failed": failed},
+        "recent_decisions": recent,
+    }
+
+
+def _fmt_age(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    flag = " ⚠stale" if isinstance(value, (int, float)) and value > 900 else ""
+    return f"{value}s{flag}"
+
+
+def format_run_health(summary: dict[str, Any]) -> str:
+    lines = [f"=== Factorio AI run health @ {summary.get('generated_at')} ==="]
+
+    game = summary.get("game") or {}
+    if summary.get("server_reachable"):
+        inv = game.get("inventory") if isinstance(game.get("inventory"), dict) else {}
+        keys = ["iron-plate", "copper-plate", "coal", "stone", "electronic-circuit", "automation-science-pack", "transport-belt"]
+        shown = ", ".join(f"{k}={inv.get(k, 0)}" for k in keys if k in inv) or "(empty)"
+        lines.append(f"server   : UP  tick={game.get('tick')}  entities={game.get('entity_count')}  researched={game.get('researched_count')}")
+        lines.append(f"  inventory: {shown}")
+    else:
+        lines.append(f"server   : DOWN ({game.get('error') or 'no RCON / use --no-observe'})")
+
+    sup = summary.get("supervisor") or {}
+    lines.append(
+        f"supervisor: state={sup.get('state')} gate={sup.get('autopilot_gate')} age={_fmt_age(sup.get('age_seconds'))}"
+    )
+    lines.append(
+        "  procs: autopilot={a} idle_layout={i} foundry={f}".format(
+            a=sup.get("autopilot_processes"), i=sup.get("idle_layout_processes"), f=sup.get("skill_foundry_processes")
+        )
+    )
+
+    ap = summary.get("autopilot") or {}
+    lines.append(f"autopilot: state={ap.get('state')} cycle={ap.get('cycle')} age={_fmt_age(ap.get('age_seconds'))}")
+    ls = summary.get("live_skill") or {}
+    lines.append(
+        f"live skill: {ls.get('skill')} step={ls.get('step')} state={ls.get('state')} "
+        f"age={_fmt_age(ls.get('age_seconds'))} reason={ls.get('reason')}"
+    )
+
+    fo = summary.get("foundry") or {}
+    lines.append(
+        f"foundry  : state={fo.get('state')} current={fo.get('current_skill')} "
+        f"+{fo.get('generated_total') or 0}/-{fo.get('failed_total') or 0} age={_fmt_age(fo.get('age_seconds'))}"
+    )
+    gs = summary.get("generated_skills") or {}
+    lines.append(f"  generated: registered={gs.get('registered')} queue={gs.get('queue')} failed={gs.get('failed')}")
+
+    lines.append("recent decisions (oldest->newest):")
+    decisions = summary.get("recent_decisions") or []
+    if not decisions:
+        lines.append("  (none recorded)")
+    for d in decisions:
+        lines.append(f"  {d.get('time')}  src={d.get('source')}  skill={d.get('skill')}  ok={d.get('ok')}")
+    return "\n".join(lines)

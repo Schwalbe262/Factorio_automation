@@ -310,6 +310,14 @@ def main(argv: list[str] | None = None) -> None:
         _foundry_parser.add_argument("--require-idle", action="store_true", help="Only generate while autopilot is idle/sleeping")
         _foundry_parser.add_argument("--throttle-seconds", type=float, default=0.0, help="Minimum seconds between generation attempts")
 
+    for _health_name in ("run-health", "no-mod-run-health"):
+        _health_parser = subparsers.add_parser(
+            _health_name,
+            help="Print a one-shot health digest of the unattended run (heartbeats, generated skills, decisions)",
+        )
+        _health_parser.add_argument("--json", action="store_true", help="Emit raw JSON instead of the text digest")
+        _health_parser.add_argument("--no-observe", action="store_true", help="Skip the live game observation (faster, no RCON)")
+
     begin_codex_parser = subparsers.add_parser(
         "begin-codex-work",
         help="Mark a missing executor as being implemented by Codex and keep LLM layout work running",
@@ -613,6 +621,16 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "no-mod-server-save":
         result = save_no_mod_server(cfg)
         print_json({"ok": True, "result": str(result).strip(), "mode": "no-mod-rcon-lua"})
+        return
+
+    if args.command in {"run-health", "no-mod-run-health"}:
+        from .run_health import format_run_health, gather_run_health
+
+        summary = gather_run_health(cfg, observe=not args.no_observe)
+        if args.json:
+            print_json(summary)
+        else:
+            print(format_run_health(summary))
         return
 
     if args.command == "start-no-mod-server":
