@@ -1047,6 +1047,41 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
+    # Advance past an already-satisfied bootstrap stock skill. The local LLM sometimes re-picks
+    # produce_iron_plate / produce_copper_plate every cycle even when that stock is full (the plates
+    # sit in the furnace output so the target stays met), which stalls the run. If the deterministic
+    # planner sees a different next step, defer to it so progression keeps moving.
+    if selected in _STOCK_BOOTSTRAP_SKILLS:
+        planner = heuristic_strategy(objective, observation, production_targets or {})
+        planner_skill = str(planner.get("selected_skill") or planner.get("selected_goal") or "")
+        if planner_skill and planner_skill != selected:
+            adjusted = dict(decision)
+            adjusted["selected_skill"] = planner_skill
+            adjusted["priority"] = max(
+                _bounded_int(decision.get("priority"), 50, 0, 100),
+                _bounded_int(planner.get("priority"), 60, 0, 100),
+            )
+            original_reason = str(decision.get("reason") or "").strip()
+            guardrail_reason = (
+                f"LLM re-selected {selected}, but that stock is already satisfied; "
+                f"advancing to the next planner step ({planner_skill})."
+            )
+            adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+            adjusted["blockers"] = _string_list(decision.get("blockers")) or _string_list(planner.get("blockers"))
+            adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+                f"guardrail_adjusted_from={selected}",
+                f"iron_plate_total={total_item_count(observation, 'iron-plate')}",
+                f"copper_plate_total={total_item_count(observation, 'copper-plate')}",
+            ]
+            adjusted["expected_effect"] = (
+                str(planner.get("expected_effect") or "") or str(decision.get("expected_effect") or "")
+            )
+            adjusted["guardrail_adjusted"] = {
+                "from": selected,
+                "to": planner_skill,
+                "reason": guardrail_reason,
+            }
+            return adjusted
     if selected == "bootstrap_build_item_mall" and not _technology_researched(observation, "automation"):
         iron_total = total_item_count(observation, "iron-plate")
         if rocket_objective and iron_total < 10:
@@ -3199,6 +3234,10 @@ _COAL_DEPENDENT_SKILLS = {
     "research_automation",
     "setup_power",
 }
+
+# Early "stock" skills the LLM tends to re-pick even after their target is met (plates sit in the
+# furnace output so the count stays satisfied). When that happens, defer to the deterministic planner.
+_STOCK_BOOTSTRAP_SKILLS = {"produce_iron_plate", "produce_copper_plate"}
 
 
 def _coal_supply_needed(observation: dict[str, Any]) -> bool:

@@ -778,6 +778,45 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["guardrail_adjusted"]["from"], "research_automation")
         self.assertIn("automated coal fuel supply", result["blockers"])
 
+    def test_reconcile_advances_past_satisfied_produce_iron_plate(self):
+        # The local LLM re-picks produce_iron_plate even when iron is already stocked (plates sit in
+        # the furnace output), stalling the run. Reconcile should defer to the deterministic planner.
+        observation = {
+            "player": {"position": {"x": 0, "y": 0}},
+            "inventory": {"iron-plate": 22, "coal": 1},
+            "entities": [
+                {"name": "stone-furnace", "position": {"x": 4, "y": 0}, "inventories": {}},
+            ],
+            "resources": [{"name": "coal", "position": {"x": 8, "y": 0}, "distance": 8}],
+            "research": {"technologies": {"automation": {"researched": False}}},
+        }
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "produce_iron_plate",
+                "priority": 60,
+                "reason": "Make more iron.",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+        self.assertNotEqual(result["selected_skill"], "produce_iron_plate")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "produce_iron_plate")
+
+    def test_reconcile_keeps_produce_iron_plate_when_planner_agrees(self):
+        # When the planner also wants iron (none stocked), the choice must be left alone.
+        observation = {
+            "player": {"position": {"x": 0, "y": 0}},
+            "inventory": {},
+            "entities": [],
+            "resources": [{"name": "iron-ore", "position": {"x": 6, "y": 0}, "distance": 6}],
+            "research": {"technologies": {"automation": {"researched": False}}},
+        }
+        decision = {"selected_skill": "produce_iron_plate", "priority": 60, "source": "llm"}
+        result = reconcile_strategy_decision(dict(decision), "launch_rocket_program", observation)
+        if heuristic_strategy("launch_rocket_program", observation, {}).get("selected_skill") == "produce_iron_plate":
+            self.assertEqual(result["selected_skill"], "produce_iron_plate")
+
     def test_coal_fuel_feed_is_prioritized_after_coal_supply_exists(self):
         result = heuristic_strategy(
             "launch_rocket_program",
