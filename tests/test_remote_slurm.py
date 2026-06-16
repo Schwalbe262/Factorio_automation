@@ -2013,5 +2013,48 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertIn("rebalance_green_circuit_ratio", {item["kind"] for item in layout["opportunities"]})
 
 
+class VllmServiceDetectionTests(unittest.TestCase):
+    def test_active_service_rows_match_comma_joined_gpu_model(self):
+        # A vLLM service task is submitted with gpu_model = "a6000ada,a6000" (the joined candidate
+        # list). Detection must still recognize it against the split wanted set, otherwise
+        # ensure_vllm_service keeps submitting duplicate services that pile up and starve GPUs.
+        from factorio_ai import remote_slurm
+
+        rows = [
+            {
+                "name": "factorio-vllm-service-qwen-x",
+                "account_name": "r1jae262",
+                "status": "running",
+                "gpu_model": "a6000ada,a6000",
+            },
+            {
+                "name": "factorio-vllm-service-qwen-y",
+                "account_name": "r1jae262",
+                "status": "queued",
+                "gpu_model": "a6000",
+            },
+            {
+                "name": "some-other-job",
+                "account_name": "r1jae262",
+                "status": "running",
+                "gpu_model": "a6000ada",
+            },
+            {
+                "name": "factorio-vllm-service-qwen-z",
+                "account_name": "r1jae262",
+                "status": "running",
+                "gpu_model": "rtx3090",
+            },
+        ]
+        matched = remote_slurm._scheduler_active_vllm_service_rows(
+            rows, "r1jae262", {"a6000ada", "a6000"}
+        )
+        names = {row["name"] for row in matched}
+        self.assertIn("factorio-vllm-service-qwen-x", names)  # comma-joined -> matched
+        self.assertIn("factorio-vllm-service-qwen-y", names)  # single member -> matched
+        self.assertNotIn("some-other-job", names)             # not a service task
+        self.assertNotIn("factorio-vllm-service-qwen-z", names)  # different model -> excluded
+
+
 if __name__ == "__main__":
     unittest.main()

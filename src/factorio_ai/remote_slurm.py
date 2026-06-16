@@ -804,8 +804,12 @@ def _scheduler_active_vllm_service_rows(
             continue
         if str(row.get("status") or "").lower() not in active_states:
             continue
-        model = _scheduler_gpu_model_name(row.get("gpu_model"))
-        if wanted_gpu_models and model and model not in wanted_gpu_models:
+        # A task's gpu_model may be a comma-joined candidate list (e.g. "a6000ada,a6000"); match if it
+        # intersects the wanted set rather than requiring the whole joined string to be a member.
+        # Without this, a running service is never recognized and ensure_vllm_service keeps submitting
+        # duplicate service tasks that pile up and starve GPUs.
+        row_models = set(_split_scheduler_gpu_models(str(row.get("gpu_model") or "")))
+        if wanted_gpu_models and row_models and not (row_models & wanted_gpu_models):
             continue
         rows.append(row)
     return rows
