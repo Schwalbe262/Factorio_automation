@@ -24,6 +24,10 @@
 
 ## No-mod 운영 (메인)
 
+- **`restart_factorio_no_mod_unattended_llm.bat`** — 🔁 **깨끗한 재시작.** 현재 월드를 저장(best-effort)하고,
+  옛 supervisor + 모든 루프(autopilot/idle/foundry) + 서버 + 대시보드 + Factorio를 종료한 뒤, 최신 코드로
+  supervisor를 다시 띄웁니다. 코드를 고친 뒤 "옛 프로세스가 안 죽고 남아" 새 코드가 적용 안 될 때 이걸 쓰세요.
+
 - **`run_factorio_no_mod_unattended_llm.bat`** — ⭐ 메인 무인 supervisor(`*.ps1` 호출).
   서버 + 웹 대시보드(:18889) + 스케줄러 Qwen(vLLM 서비스) + autopilot + idle layout 루프 +
   **skill foundry 루프**를 살아있게 유지하고, 죽으면 재시작합니다. **5분마다 `/server-save`로
