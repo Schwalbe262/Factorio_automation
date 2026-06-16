@@ -165,7 +165,7 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
 def _fmt_age(value: Any) -> str:
     if value is None:
         return "n/a"
-    flag = " ⚠stale" if isinstance(value, (int, float)) and value > 900 else ""
+    flag = " (stale)" if isinstance(value, (int, float)) and value > 900 else ""
     return f"{value}s{flag}"
 
 
@@ -187,7 +187,7 @@ def format_run_health(summary: dict[str, Any]) -> str:
         if sch.get("vllm_services") is None:
             lines.append(f"scheduler: vLLM services=unavailable (api slow: {sch.get('error')})")
         else:
-            warn = "" if sch.get("healthy") else "  ⚠ MULTIPLE (pileup)"
+            warn = "" if sch.get("healthy") else "  (!) MULTIPLE (pileup)"
             lines.append(
                 f"scheduler: vLLM services={sch.get('vllm_services')} ids={sch.get('vllm_service_ids')}{warn}"
             )
