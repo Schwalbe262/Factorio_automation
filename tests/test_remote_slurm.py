@@ -1190,6 +1190,57 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertEqual(status["remote"]["active_layout_tasks"], 1)
         self.assertEqual(status["remote"]["max_active_layout_tasks"], 1)
 
+    def test_layout_scheduler_status_counts_running_layout_without_gpus_field(self):
+        from factorio_ai import remote_slurm
+
+        def fake_api(path, timeout=0):
+            if path == "/api/health":
+                return {"ok": True}
+            if path == "/api/allocations":
+                return [
+                    {
+                        "account_name": "r1jae262",
+                        "state": "warm",
+                        "total_gpus": 1,
+                        "free_gpus": 1,
+                        "total_cpus": 3,
+                        "free_cpus": 3,
+                        "total_memory_mb": 32768,
+                        "free_memory_mb": 32768,
+                        "gpu_model": "a6000",
+                    }
+                ]
+            if path == "/api/gpu-capacity":
+                return [{"gpu_model": "a6000", "scheduler_owned_gpus": 1, "scheduler_free_gpus": 1}]
+            if path == "/api/tasks":
+                return [
+                    {
+                        "name": "factorio-layout-improvement-request-current",
+                        "status": "running",
+                        "account_name": "r1jae262",
+                        "gpu_model": "a6000",
+                    }
+                ]
+            raise AssertionError(path)
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FACTORIO_AI_SLURM_MODE": "scheduler",
+                    "FACTORIO_AI_VLLM_MODEL": "Qwen/Qwen3.5-4B",
+                    "FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS": "a6000ada,a6000",
+                    "FACTORIO_AI_BACKGROUND_LAYOUT_MAX_ACTIVE_TASKS": "1",
+                },
+            ),
+            patch("factorio_ai.remote_slurm._scheduler_api_json", side_effect=fake_api),
+        ):
+            status = remote_slurm.layout_improvement_status()
+
+        self.assertFalse(status["llm_ready"])
+        self.assertEqual(status["missing"], ["active scheduler layout task capacity"])
+        self.assertEqual(status["remote"]["active_layout_tasks"], 1)
+
     def test_layout_scheduler_status_allows_running_layout_task_below_capacity(self):
         from factorio_ai import remote_slurm
 

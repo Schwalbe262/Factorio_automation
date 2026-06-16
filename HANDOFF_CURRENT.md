@@ -3,9 +3,10 @@
 - Startup context: read this file and targeted `goal.md`; never read `note.md`/`insight.md` in full.
 - No-mod helpers use `Qwen/Qwen3.5-9B`, vLLM service duration 10800s, and ordered scheduler GPU candidates `a6000ada,a6000`.
 - Service task `8224` is running/ready on allocation `40/n104`; scheduler service-mode readiness accepts the ready vLLM service even when free GPU slots are 0.
+- Layout status now counts running layout tasks even when the scheduler API omits `gpus`, preventing background layout from oversubmitting and blocking strategy clients.
 - Strategy now detects short `iron-plate` site-input `route_needed` layouts into the gear assembler and preempts smelting/coal/site choices with `build_iron_plate_logistic_line_to_gear_mall`.
 - Live validation: `expand_copper_smelting` reconciled to `build_iron_plate_logistic_line_to_gear_mall` for source `1458` -> gear assembler `146`, distance `7.9`.
 - Live skill completed: `iron-plate logistics line to the gear mall is built with belts and endpoint inserters`.
-- Runtime: supervisor PID `40908`, autopilot PID `72548`, idle layout PID `26688`, autopilot gate `ready`; restarted workers are on patched code and cycle 2 is waiting on Qwen strategy.
-- Validation: `py_compile src/factorio_ai/strategy.py src/factorio_ai/remote_slurm.py`; `PYTHONPATH=src pytest tests/test_remote_slurm.py tests/test_strategy.py tests/test_controller.py -q` -> 218 passed.
+- Runtime: supervisor PID `40908`, autopilot PID `72548`, idle layout PID `26688`, autopilot gate `ready`; cycle 2 strategy task `8339` is running on allocation `40`.
+- Validation: `py_compile src/factorio_ai/strategy.py src/factorio_ai/remote_slurm.py`; `PYTHONPATH=src pytest tests/test_remote_slurm.py tests/test_strategy.py tests/test_controller.py -q` -> 219 passed.
 - Next: watch several Qwen strategy cycles; only intervene on a new deterministic skill gap, not normal runtime progress.

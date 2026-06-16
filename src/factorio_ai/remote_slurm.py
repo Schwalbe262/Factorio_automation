@@ -1889,7 +1889,7 @@ def _scheduler_active_layout_task_count(
         model = _scheduler_gpu_model_name(row.get("gpu_model"))
         if wanted_gpu_models and model and model not in wanted_gpu_models:
             continue
-        if int(row.get("gpus") or 0) <= 0:
+        if row.get("gpus") is not None and int(row.get("gpus") or 0) <= 0:
             continue
         count += 1
     return count
