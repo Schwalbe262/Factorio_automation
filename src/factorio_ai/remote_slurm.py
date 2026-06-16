@@ -1608,6 +1608,14 @@ def ensure_vllm_service(
             "action": "unavailable",
             "status": status_payload,
         }
+    # If the scheduler API itself was unreachable we cannot see existing services; submitting now would
+    # stack a duplicate service every cycle the API is slow. Back off instead of piling up.
+    if "Slurm scheduler API" in (status_payload.get("missing") or []) or status_payload.get("error"):
+        return {
+            "ok": False,
+            "action": "scheduler_api_unavailable",
+            "status": status_payload,
+        }
     active_services = status_payload.get("active_services") if isinstance(status_payload.get("active_services"), list) else []
     cancelled_services: list[dict[str, Any]] = []
     if active_services and not status_payload.get("service_ready"):

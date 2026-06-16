@@ -9,6 +9,7 @@ param(
     [int]$FoundryStaleSeconds = 900,
     [int]$FoundrySleepSeconds = 20,
     [int]$ServerSaveIntervalSeconds = 300,
+    [int]$LlmReadyGraceSeconds = 300,
     [switch]$NoDashboard
 )
 
@@ -71,6 +72,7 @@ $supervisorLog = Join-Path $logDir "unattended-llm-supervisor.log"
 $statusPath = Join-Path $runtimeDir "unattended-llm-supervisor.json"
 $lastSchedulerCheck = [DateTime]::MinValue
 $lastServerSave = [DateTime]::MinValue
+$lastLlmReadyAt = [DateTime]::MinValue
 $lastSchedulerStatus = $null
 $lastVllmServiceStatus = $null
 
@@ -358,13 +360,25 @@ function Ensure-SchedulerLlm {
 }
 
 function Test-SchedulerLlmReady {
+    $strict = $true
     if ($null -eq $script:lastSchedulerStatus -or $script:lastSchedulerStatus.llm_ready -ne $true) {
-        return $false
+        $strict = $false
     }
-    if ($env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED -in @("0", "false", "False", "FALSE", "no", "off")) {
+    elseif ($env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED -notin @("0", "false", "False", "FALSE", "no", "off")) {
+        if (-not ($null -ne $script:lastVllmServiceStatus -and $script:lastVllmServiceStatus.service_ready -eq $true)) {
+            $strict = $false
+        }
+    }
+    if ($strict) {
+        $script:lastLlmReadyAt = Get-Date
         return $true
     }
-    return $null -ne $script:lastVllmServiceStatus -and $script:lastVllmServiceStatus.service_ready -eq $true
+    # Ride through transient scheduler-API blips: if the LLM was confirmed ready very recently, keep the
+    # loops alive instead of tearing them down on a single failed/timed-out status check.
+    if ($script:lastLlmReadyAt -ne [DateTime]::MinValue -and ((Get-Date) - $script:lastLlmReadyAt).TotalSeconds -lt $LlmReadyGraceSeconds) {
+        return $true
+    }
+    return $false
 }
 
 function Test-AutopilotActiveCycle {
