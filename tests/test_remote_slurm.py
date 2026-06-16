@@ -2055,6 +2055,20 @@ class VllmServiceDetectionTests(unittest.TestCase):
         self.assertNotIn("some-other-job", names)             # not a service task
         self.assertNotIn("factorio-vllm-service-qwen-z", names)  # different model -> excluded
 
+    def test_cancelable_rows_match_all_service_models_queued_first(self):
+        from factorio_ai import remote_slurm
+
+        rows = [
+            {"id": 3, "name": "factorio-vllm-service-a", "account_name": "r1jae262", "status": "running", "gpu_model": "rtx3090"},
+            {"id": 2, "name": "factorio-vllm-service-b", "account_name": "r1jae262", "status": "queued", "gpu_model": "a6000ada,a6000"},
+            {"id": 9, "name": "other-job", "account_name": "r1jae262", "status": "running", "gpu_model": "a6000"},
+            {"id": 5, "name": "factorio-vllm-service-c", "account_name": "someone-else", "status": "running", "gpu_model": "a6000"},
+        ]
+        out = remote_slurm._cancelable_vllm_service_rows(rows, "r1jae262")
+        ids = [r["id"] for r in out]
+        self.assertEqual(set(ids), {2, 3})       # any model, this account, service tasks only
+        self.assertEqual(ids[0], 2)              # queued before running
+
 
 if __name__ == "__main__":
     unittest.main()

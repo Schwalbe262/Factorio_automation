@@ -815,6 +815,54 @@ def _scheduler_active_vllm_service_rows(
     return rows
 
 
+def _cancelable_vllm_service_rows(task_rows: list[dict[str, Any]], account: str) -> list[dict[str, Any]]:
+    """All active Factorio vLLM service tasks for the account, regardless of gpu_model, queued-first.
+
+    Used by :func:`cancel_vllm_services` to wipe stray/duplicate services for a clean reset.
+    """
+
+    active_states = {"queued", "pending", "attaching", "starting", "running"}
+    rows = [
+        row
+        for row in task_rows
+        if isinstance(row, dict)
+        and str(row.get("name") or "").startswith(VLLM_SERVICE_TASK_NAME_PREFIX)
+        and str(row.get("status") or "").lower() in active_states
+        and str(row.get("account_name") or account) == account
+    ]
+    order = {"queued": 0, "pending": 0, "attaching": 1, "starting": 1, "running": 2}
+    rows.sort(key=lambda row: order.get(str(row.get("status") or "").lower(), 3))
+    return rows
+
+
+def cancel_vllm_services(cfg: RemoteSlurmConfig | None = None, *, timeout: int = 30) -> dict[str, Any]:
+    """Cancel every active Factorio vLLM service task on the scheduler.
+
+    Use for a clean reset; the next ensure_vllm_service / supervisor start spins up a single fresh
+    service (slow ~minutes reload). Normal restarts should NOT call this -- reusing the warm service
+    is intended.
+    """
+
+    cfg = cfg or config()
+    if not _use_scheduler_tasks():
+        return {"ok": False, "action": "not_scheduler_mode", "missing": ["FACTORIO_AI_SLURM_MODE=scheduler"]}
+    account = _scheduler_account()
+    try:
+        tasks = _scheduler_api_json_retry("/api/tasks", timeout=timeout, attempts=3)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "action": "scheduler_api_unavailable", "error": f"{type(exc).__name__}: {exc}"}
+    targets = _cancelable_vllm_service_rows(tasks if isinstance(tasks, list) else [], account)
+    cancelled: list[dict[str, Any]] = []
+    for row in targets:
+        task_id = row.get("id")
+        try:
+            _scheduler_cancel_task(task_id)
+            cancelled.append({"id": task_id, "status": row.get("status"), "ok": True})
+        except Exception as exc:  # noqa: BLE001 - a running-service cancel can time out client-side but still registers
+            cancelled.append({"id": task_id, "status": row.get("status"), "ok": False, "error": f"{type(exc).__name__}"})
+    return {"ok": True, "account": account, "found": len(targets), "cancelled": cancelled}
+
+
 def _scheduler_running_vllm_service_node_name() -> str:
     account = _scheduler_account()
     candidates = _scheduler_gpu_model_candidates()

@@ -318,6 +318,11 @@ def main(argv: list[str] | None = None) -> None:
         _health_parser.add_argument("--json", action="store_true", help="Emit raw JSON instead of the text digest")
         _health_parser.add_argument("--no-observe", action="store_true", help="Skip the live game observation (faster, no RCON)")
 
+    subparsers.add_parser(
+        "slurm-cancel-vllm-services",
+        help="Cancel all active Factorio vLLM service tasks on the scheduler (forces a fresh service next start)",
+    )
+
     begin_codex_parser = subparsers.add_parser(
         "begin-codex-work",
         help="Mark a missing executor as being implemented by Codex and keep LLM layout work running",
@@ -621,6 +626,12 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "no-mod-server-save":
         result = save_no_mod_server(cfg)
         print_json({"ok": True, "result": str(result).strip(), "mode": "no-mod-rcon-lua"})
+        return
+
+    if args.command == "slurm-cancel-vllm-services":
+        from . import remote_slurm
+
+        print_json(remote_slurm.cancel_vllm_services())
         return
 
     if args.command in {"run-health", "no-mod-run-health"}:

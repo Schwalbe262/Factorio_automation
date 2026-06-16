@@ -27,6 +27,9 @@
 - **`restart_factorio_no_mod_unattended_llm.bat`** — 🔁 **깨끗한 재시작.** 현재 월드를 저장(best-effort)하고,
   옛 supervisor + 모든 루프(autopilot/idle/foundry) + 서버 + 대시보드 + Factorio를 종료한 뒤, 최신 코드로
   supervisor를 다시 띄웁니다. 코드를 고친 뒤 "옛 프로세스가 안 죽고 남아" 새 코드가 적용 안 될 때 이걸 쓰세요.
+  **원격 vLLM 서비스(워밍업된 9B)는 일부러 그대로 둬서 재사용**합니다(빠름). vLLM까지 새로 띄우는 완전 초기화가
+  필요하면 `restart_factorio_no_mod_unattended_llm.bat reset-vllm` (느린 ~몇 분 재로드). 직접 취소만 하려면
+  `python -m factorio_ai.cli slurm-cancel-vllm-services`.
 
 - **`run_factorio_no_mod_unattended_llm.bat`** — ⭐ 메인 무인 supervisor(`*.ps1` 호출).
   서버 + 웹 대시보드(:18889) + 스케줄러 Qwen(vLLM 서비스) + autopilot + idle layout 루프 +
