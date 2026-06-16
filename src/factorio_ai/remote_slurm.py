@@ -389,7 +389,7 @@ def _scheduler_vllm_service_duration_seconds(value: Any = None) -> int:
             return max(300, int(value))
         except (TypeError, ValueError):
             pass
-    return _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS", 10800, 300)
+    return _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS", 43200, 300)
 
 
 def _scheduler_vllm_service_heartbeat_filename() -> str:
