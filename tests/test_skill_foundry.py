@@ -264,5 +264,27 @@ class DevelopSkillTests(unittest.TestCase):
         self.assertTrue(attempts)
 
 
+class CodegenPromptTests(unittest.TestCase):
+    def test_hand_examples_pass_static_safety_gate(self):
+        # The examples we feed the model must themselves be gate-valid, or we teach it bad patterns.
+        for index, src in enumerate(skill_foundry._HAND_EXAMPLES):
+            result = skill_foundry.static_safety_gate(src)
+            self.assertTrue(result.passed, msg=f"example {index} failed static gate: {result.reasons}")
+
+    def test_hand_examples_pass_offline_replay_gate(self):
+        samples = skill_foundry._synthetic_samples()
+        with tempfile.TemporaryDirectory() as tmp:
+            for index, src in enumerate(skill_foundry._HAND_EXAMPLES):
+                path = Path(tmp) / f"example_{index}.py"
+                path.write_text(src, encoding="utf-8")
+                result = skill_foundry.offline_replay_gate(path, samples)
+                self.assertTrue(result.passed, msg=f"example {index} failed replay gate: {result.reasons}")
+
+    def test_vocabulary_lists_real_names(self):
+        vocab = skill_foundry._codegen_vocabulary()
+        for name in ("stone-furnace", "iron-plate", "transport-belt", "coal"):
+            self.assertIn(name, vocab)
+
+
 if __name__ == "__main__":
     unittest.main()

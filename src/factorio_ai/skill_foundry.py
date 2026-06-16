@@ -21,7 +21,6 @@ from __future__ import annotations
 import ast
 import hashlib
 import importlib.util
-import inspect
 import json
 import os
 import py_compile
@@ -822,6 +821,8 @@ HARD RULES (a validator rejects any violation):
 - Pure function of `observation`: NO file/network/process/threads, NO `open`/`exec`/`eval`/`compile`/`getattr`/`__import__`,
   NO dunder escapes (`__class__`, `__subclasses__`, ...), NO `print`, NO `global`/`nonlocal`, NO `with`.
 - Never raise on a malformed observation. When unsure, return `PlannerDecision(None, "<why>")` or a `wait` action.
+- Use ONLY exact names from the "VALID NAMES" list in the user message for recipe/item/entity/resource
+  strings; never invent names. Always return `done=True` once the target is reached.
 
 ACTION TYPES and their required fields (must satisfy the validator):
 - move_to: {"type":"move_to","position":{"x":<num>,"y":<num>}}
@@ -862,28 +863,24 @@ _CODEGEN_SCHEMA = {
 
 
 def _example_skill_source() -> str:
-    examples: list[str] = []
-    try:
-        from . import planner
+    """Several short, gate-compliant examples covering different action patterns.
 
-        candidate = getattr(planner, "FactoryLayoutImprovementSkill", None)
-        if candidate is not None:
-            src = inspect.getsource(candidate)
-            if len(src) <= 2500:
-                examples.append(src)
-    except (OSError, TypeError, ImportError):
-        pass
-    examples.append(_HAND_EXAMPLE)
-    return "\n\n# ---- example ----\n\n".join(examples)
+    Showing the model gather/mine, craft-with-prerequisite, and build/insert templates (not just one)
+    materially raises the rate of generated skills that pass the gates and run.
+    """
+
+    return "\n\n# ---- example ----\n\n".join(_HAND_EXAMPLES)
 
 
-_HAND_EXAMPLE = '''from __future__ import annotations
+_HAND_EXAMPLES = (
+    # Pattern 1: gather a raw resource until a target (move_to + mine + done + wait fallback).
+    '''from __future__ import annotations
 
 from factorio_ai.models import PlannerDecision, total_item_count, nearest_resource, player_position, distance
 
 
 class StockpileWoodSkill:
-    """Example skill: gather wood until a target count is reached."""
+    """Gather wood until a target count is reached."""
 
     def __init__(self, target: int = 20):
         self.target = target
@@ -893,15 +890,89 @@ class StockpileWoodSkill:
         if have >= self.target:
             return PlannerDecision(None, "wood target reached", done=True)
         tree = nearest_resource(observation, "tree")
-        if tree is None:
+        if tree is None or not isinstance(tree.get("position"), dict):
             return PlannerDecision({"type": "wait", "ticks": 60}, "no tree visible; waiting")
-        position = tree.get("position") if isinstance(tree.get("position"), dict) else None
-        if position is None:
-            return PlannerDecision({"type": "wait", "ticks": 60}, "tree has no position")
+        position = tree["position"]
         if distance(player_position(observation), position) > 3:
             return PlannerDecision({"type": "move_to", "position": position}, "move to the nearest tree")
         return PlannerDecision({"type": "mine", "position": position}, "mine wood")
-'''
+''',
+    # Pattern 2: craft an item, mining the missing ingredient first (craft + prerequisite).
+    '''from __future__ import annotations
+
+from factorio_ai.models import PlannerDecision, inventory_count, total_item_count, nearest_resource, player_position, distance
+
+
+class CraftStoneFurnaceSkill:
+    """Craft stone furnaces, mining stone first when short of the recipe ingredient."""
+
+    def __init__(self, target: int = 2):
+        self.target = target
+
+    def next_action(self, observation):
+        if total_item_count(observation, "stone-furnace") >= self.target:
+            return PlannerDecision(None, "stone-furnace target reached", done=True)
+        if inventory_count(observation, "stone") >= 5:
+            return PlannerDecision({"type": "craft", "recipe": "stone-furnace", "count": 1}, "craft a stone furnace")
+        stone = nearest_resource(observation, "stone")
+        if stone is None or not isinstance(stone.get("position"), dict):
+            return PlannerDecision({"type": "wait", "ticks": 60}, "no stone visible; waiting")
+        position = stone["position"]
+        if distance(player_position(observation), position) > 3:
+            return PlannerDecision({"type": "move_to", "position": position}, "move to stone")
+        return PlannerDecision({"type": "mine", "position": position}, "mine stone for the recipe")
+''',
+    # Pattern 3: act on a nearby machine by unit_number (insert into an entity).
+    '''from __future__ import annotations
+
+from factorio_ai.models import PlannerDecision, nearest_entity, entity_item_count, inventory_count
+
+
+class FuelNearbyFurnaceSkill:
+    """Keep the nearest stone furnace fueled with coal from inventory."""
+
+    def __init__(self, min_fuel: int = 2):
+        self.min_fuel = min_fuel
+
+    def next_action(self, observation):
+        furnace = nearest_entity(observation, "stone-furnace")
+        if furnace is None:
+            return PlannerDecision(None, "no stone furnace to fuel", done=True)
+        if entity_item_count(furnace, "coal") >= self.min_fuel:
+            return PlannerDecision(None, "furnace already fueled", done=True)
+        if inventory_count(observation, "coal") <= 0:
+            return PlannerDecision({"type": "wait", "ticks": 60}, "no coal in inventory; waiting")
+        unit = furnace.get("unit_number")
+        if unit is None:
+            return PlannerDecision({"type": "wait", "ticks": 60}, "furnace has no unit_number")
+        return PlannerDecision({"type": "insert", "item": "coal", "unit_number": unit, "count": 1}, "insert coal into furnace")
+''',
+)
+
+
+def _codegen_vocabulary() -> str:
+    """Real recipe/resource/item names so generated code uses valid strings (a top failure cause)."""
+
+    try:
+        from . import knowledge
+        from .models import ALLOWED_ACTION_TYPES
+
+        recipes = sorted(knowledge.RECIPES.keys())
+        raws = sorted(knowledge.RAW_RESOURCES)
+        items: set[str] = set()
+        for recipe in knowledge.RECIPES.values():
+            items.update(recipe.products.keys())
+            items.update(recipe.ingredients.keys())
+        actions = sorted(ALLOWED_ACTION_TYPES)
+    except Exception:  # noqa: BLE001 - vocabulary is best-effort
+        return ""
+    return (
+        "VALID NAMES - use ONLY these exact strings for action types and recipe/item/entity/resource names:\n"
+        f"- action types: {', '.join(actions)}\n"
+        f"- recipe names (for craft/set_recipe; also the buildable entity name for placeable items): {', '.join(recipes)}\n"
+        f"- raw resources (for a mine target): {', '.join(raws)}\n"
+        f"- item names (inventory/insert/take): {', '.join(sorted(items))}"
+    )
 
 
 def _build_codegen_prompt(
@@ -919,7 +990,9 @@ def _build_codegen_prompt(
         f"Expected effect: {spec.get('expected_effect') or '(unspecified)'}",
         f"Suggested primary item/target: {spec.get('target_item') or '(infer from name)'}",
         "",
-        "Reference example skill(s) showing the exact contract:",
+        _codegen_vocabulary(),
+        "",
+        "Reference example skill(s) showing the exact contract (imitate this style):",
         "```python",
         _example_skill_source(),
         "```",
