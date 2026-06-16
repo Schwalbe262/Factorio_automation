@@ -411,6 +411,30 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.done)
         self.assertIn("coal supply site is active", decision.reason)
 
+    def test_coal_supply_recovers_drill_with_no_minable_resources(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 6, "y": 0}
+        obs["inventory"] = {}
+        obs["resources"] = [{"name": "coal", "position": {"x": 8, "y": 0}, "distance": 8}]
+        obs["entities"] = [
+            {"name": "transport-belt", "unit_number": 10, "position": {"x": 7.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 11,
+                "position": {"x": 6, "y": 0},
+                "direction": 4,
+                "status_name": "no_minable_resources",
+                "inventories": {"1": {"coal": 3}},
+                "mining_target": "coal",
+            },
+        ]
+
+        decision = CoalSupplySkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 11)
+        self.assertIn("no minable resources", decision.reason)
+
     def test_coal_supply_takes_coal_from_output_chest(self):
         obs = base_observation()
         obs["inventory"] = {}

@@ -3416,6 +3416,22 @@ class CoalSupplySkill:
                 return decision
 
         drill = layout.get("drill")
+        if isinstance(drill, dict) and _entity_status_is(drill, "no_minable_resources", 21):
+            position = _position(drill)
+            if distance(player, position) > 8:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position, offset=2.0)},
+                    "move near invalid coal supply mining drill before relocating it",
+                )
+            return PlannerDecision(
+                {
+                    "type": "mine",
+                    "unit_number": drill.get("unit_number"),
+                    "name": "burner-mining-drill",
+                    "position": position,
+                },
+                "recover invalid coal supply mining drill with no minable resources",
+            )
         if drill is None:
             position = layout["drill_position"]
             blocker = _blocking_obstacle_near(observation, position)
