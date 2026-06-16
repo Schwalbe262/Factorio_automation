@@ -660,6 +660,24 @@ local function collect_entities()
   for _, entity in pairs(nearby_trees) do add_unique_entity_snapshot(rows, seen, entity, origin) end
   local trees = surface.find_entities_filtered({ position = origin, radius = OBSERVE_RADIUS, type = "tree", limit = 80 })
   for _, entity in pairs(trees) do add_unique_entity_snapshot(rows, seen, entity, origin) end
+  for _, obstacle_type in pairs({ "simple-entity", "simple-entity-with-owner", "cliff" }) do
+    local ok_near_obstacles, near_obstacles = pcall(function()
+      return surface.find_entities_filtered({ position = origin, radius = 48, type = obstacle_type, limit = 160 })
+    end)
+    if ok_near_obstacles and near_obstacles then
+      for _, entity in pairs(near_obstacles) do
+        if entity.valid and entity.name ~= "character" and entity.type ~= "resource" then add_unique_entity_snapshot(rows, seen, entity, origin) end
+      end
+    end
+    local ok_obstacles, obstacles = pcall(function()
+      return surface.find_entities_filtered({ position = origin, radius = OBSERVE_RADIUS, type = obstacle_type, limit = 160 })
+    end)
+    if ok_obstacles and obstacles then
+      for _, entity in pairs(obstacles) do
+        if entity.valid and entity.name ~= "character" and entity.type ~= "resource" then add_unique_entity_snapshot(rows, seen, entity, origin) end
+      end
+    end
+  end
   local nearby = surface.find_entities_filtered({ position = origin, radius = 32, limit = 120 })
   for _, entity in pairs(nearby) do
     if entity.valid and entity.name ~= "character" and entity.type ~= "resource" then add_unique_entity_snapshot(rows, seen, entity, origin) end
@@ -1131,8 +1149,19 @@ local function find_entity(surface, request)
   end
   local position = normalize_position(request.position)
   if not position then return nil end
-  local found = surface.find_entities_filtered({ position = position, radius = request.radius or 1.0, name = request.name, limit = 1 })
-  return found[1]
+  local found = surface.find_entities_filtered({ position = position, radius = request.radius or 1.0, name = request.name, limit = 16 })
+  local nearest = nil
+  local nearest_distance = nil
+  for _, entity in pairs(found) do
+    if entity.valid then
+      local entity_distance = distance(position, entity.position)
+      if not nearest or entity_distance < nearest_distance then
+        nearest = entity
+        nearest_distance = entity_distance
+      end
+    end
+  end
+  return nearest
 end
 local function entity_wire_connector(entity)
   if not entity or not entity.valid then return nil end
@@ -1296,7 +1325,15 @@ local function action_mine()
   for _ = 1, count do
     if not target.valid then break end
     local mined_ok = target.mine({ inventory = inventory, force = false })
-    if mined_ok then mined = mined + 1 else break end
+    if mined_ok then
+      mined = mined + 1
+      if target.valid then
+        local destroyed = pcall(function() target.destroy({ raise_destroy = true }) end)
+        if not destroyed then break end
+      end
+    else
+      break
+    end
   end
   if mined <= 0 then return err("mine failed") end
   return ok({ action = "mine", mined = mined, inventory = inventory_contents(inventory) })

@@ -137,6 +137,19 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("preserved starter artifact is protected", command)
         self.assertIn("allow_preserved_artifact", command)
 
+    def test_mine_action_destroys_entity_when_mine_leaves_it_valid(self):
+        command = build_modless_action_command({"type": "mine", "position": {"x": 1, "y": 2}})
+
+        self.assertIn("if target.valid then", command)
+        self.assertIn("target.destroy({ raise_destroy = true })", command)
+
+    def test_mine_action_selects_nearest_entity_when_unit_lookup_falls_back(self):
+        command = build_modless_action_command({"type": "mine", "name": "transport-belt", "position": {"x": 1, "y": 2}})
+
+        self.assertIn("limit = 16", command)
+        self.assertIn("entity_distance = distance(position, entity.position)", command)
+        self.assertIn("entity_distance < nearest_distance", command)
+
     def test_action_handles_virtual_lab_trigger_research(self):
         command = build_modless_action_command({"type": "craft", "recipe": "lab", "count": 1})
         self.assertIn('recipe_name == "lab"', command)

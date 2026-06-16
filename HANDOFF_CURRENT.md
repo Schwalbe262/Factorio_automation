@@ -9,7 +9,7 @@
 \- Root current Markdown files now use the escaped `md/` marker format.
 \- Slurm scheduler mode defaults to `rtx3090`/`r1jae262`; layout improvement requests use `a6000ada,a6000` candidates and submit the ready single `gpu_model`.
 \- Scheduler Qwen layout tasks now fail visibly, map vLLM env, disable flashinfer sampler, use guided JSON/detail polling, clean up vLLM children, and have the idle loop running again.
-\- Live map: belt mall output inserter now points assembler-to-chest and produced belts into chest; boiler coal route reached about `x=0.5` but still needs more belts to reach boiler at `x=-43.5`.
+\- Live map: iron plate -> gear mall route now avoids protected gear-output lanes; remaining route work is a few belts plus source/target inserters before logistics research can continue.
 
 \## Current objective
 
@@ -33,21 +33,20 @@
 
 \## Last validation
 
-\- `py_compile`, focused planner/monitor/web/slurm tests (`335`), full `pytest -q` (`612`) passed.
-\- Full `pytest -q` passed: `639 passed`.
-\- Live validation: scheduler deploy ok; layout smoke `runtime/logs/scheduler-layout-smoke-20260616-071003.json` returned `ok=true`, `source=llm`, `llm_error=null`.
-\- Token sample recorded: `268,178,970` Factorio Codex thread tokens; delta `14,361,435`; weekly quota unknown.
+\- Full `pytest -q` passed: `650 passed`.
+\- Live validation: protected-output route runs no longer mine `83.5,-60.5`; nearest-position mine fallback removed/rebuilt unit `332` correctly.
+\- Token sample recorded: `281,339,156` Factorio Codex thread tokens; delta `13,160,186`; weekly quota unknown.
 
 \## Current blocker
 
-\- Scheduler `/tasks` currently ignores submitted `priority=80` for layout work; task `4060` stored priority `0` even though the client posted priority.
+\- `logistics` research is still incomplete; finish iron plate -> gear mall input inserters, then continue red science/lab feeding.
 
 \## Next steps
 
-1\. Tell the scheduler maintainer that `/tasks` form `priority=80` is ignored and should be persisted/applied.
-2\. Refresh/restart the dashboard process if it is still serving old code.
-3\. Fuel iron/coal burner drills as needed, refill belt mall, then continue `connect_coal_fuel_feed` until boiler receives belt-fed coal.
-4\. Continue red science/logistics research once fuel, belt output, and site input routes are stable.
+1\. Pull the pushed protected iron-route/no-mod mine fixes, then continue short live strategy chunks.
+2\. Continue `run-no-mod-strategy-step --objective launch_rocket_program` with short `--max-steps` chunks until source/target inserters finish.
+3\. Confirm iron plates flow into the gear assembler without hand-carry or mining the gear-output lane.
+4\. Continue automation science/lab feeding until `logistics` research completes.
 
 \## Token/context policy
 

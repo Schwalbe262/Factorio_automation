@@ -6400,16 +6400,31 @@ def _find_iron_plate_logistic_line_to_gear_mall_layout(observation: dict[str, An
         return None
     source = min(sources, key=lambda item: distance(_position(item), gear_position))
     source_position = _position(source)
-    source_belt_position = {"x": source_position["x"] + 2.0, "y": source_position["y"]}
-    source_inserter_position = {"x": source_position["x"] + 1.0, "y": source_position["y"]}
-    target_belt_position = {"x": gear_position["x"] + 1.0, "y": gear_position["y"] - 3.0}
-    target_inserter_position = {"x": gear_position["x"] + 1.0, "y": gear_position["y"] - 2.0}
-    segments = _iron_plate_line_segments(observation, source_belt_position, target_belt_position)
+    source_belt_position = _tile_center_position({"x": source_position["x"] + 2.0, "y": source_position["y"]})
+    source_inserter_position = _tile_center_position({"x": source_position["x"] + 1.0, "y": source_position["y"]})
+    avoid_positions = _gear_mall_output_avoid_positions(gear_layout)
+    endpoints = _gear_mall_iron_input_endpoints(
+        observation,
+        source_belt_position,
+        gear_assembler,
+        avoid_positions=avoid_positions,
+    )
+    target_belt_position = endpoints["target_belt"]
+    target_inserter_position = endpoints["target_inserter"]
+    segments = _iron_plate_line_segments(
+        observation,
+        source_belt_position,
+        target_belt_position,
+        center_tiles=True,
+        avoid_positions=avoid_positions,
+    )
     return {
         "source": source,
         "gear_assembler": gear_assembler,
         "belt_assembler": gear_layout.get("belt_assembler"),
         "segments": segments,
+        "source_belt": source_belt_position,
+        "target_belt": target_belt_position,
         "source_inserter": {
             "position": source_inserter_position,
             "direction": WEST,
@@ -6417,10 +6432,81 @@ def _find_iron_plate_logistic_line_to_gear_mall_layout(observation: dict[str, An
         },
         "target_inserter": {
             "position": target_inserter_position,
-            "direction": NORTH,
+            "direction": endpoints["target_direction"],
             "entity": _inserter_near(observation, target_inserter_position),
         },
     }
+
+
+def _gear_mall_output_avoid_positions(gear_layout: dict[str, Any]) -> set[tuple[float, float]]:
+    positions: set[tuple[float, float]] = set()
+    for belt in gear_layout.get("gear_belts") or []:
+        if isinstance(belt, dict) and isinstance(belt.get("position"), dict):
+            positions.add(_position_tuple(belt["position"]))
+    for key in ("gear_output_inserter", "belt_input_inserter", "direct_gear_transfer_inserter"):
+        spec = gear_layout.get(key)
+        if isinstance(spec, dict) and isinstance(spec.get("position"), dict):
+            positions.add(_position_tuple(spec["position"]))
+    return positions
+
+
+def _gear_mall_iron_input_endpoints(
+    observation: dict[str, Any],
+    source_belt_position: dict[str, float],
+    gear_assembler: dict[str, Any],
+    *,
+    avoid_positions: set[tuple[float, float]] | None = None,
+) -> dict[str, Any]:
+    gear_position = _position(gear_assembler)
+    avoid = set(avoid_positions or set())
+    candidates = [
+        {
+            "target_inserter": _tile_center_position({"x": gear_position["x"] + 1.0, "y": gear_position["y"] - 2.0}),
+            "target_belt": _tile_center_position({"x": gear_position["x"] + 1.0, "y": gear_position["y"] - 3.0}),
+            "target_direction": NORTH,
+        },
+        {
+            "target_inserter": _tile_center_position({"x": gear_position["x"] + 1.0, "y": gear_position["y"] + 2.0}),
+            "target_belt": _tile_center_position({"x": gear_position["x"] + 1.0, "y": gear_position["y"] + 3.0}),
+            "target_direction": SOUTH,
+        },
+        {
+            "target_inserter": _tile_center_position({"x": gear_position["x"] - 2.0, "y": gear_position["y"]}),
+            "target_belt": _tile_center_position({"x": gear_position["x"] - 3.0, "y": gear_position["y"]}),
+            "target_direction": WEST,
+        },
+        {
+            "target_inserter": _tile_center_position({"x": gear_position["x"] + 2.0, "y": gear_position["y"]}),
+            "target_belt": _tile_center_position({"x": gear_position["x"] + 3.0, "y": gear_position["y"]}),
+            "target_direction": EAST,
+        },
+    ]
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for candidate in candidates:
+        penalty = 0.0
+        inserter = _inserter_near(observation, candidate["target_inserter"], radius=0.75)
+        if isinstance(inserter, dict) and _direction_or_default(inserter.get("direction"), -1) != int(candidate["target_direction"]):
+            penalty += 100.0
+        belt = _entity_at_build_position(observation, "transport-belt", candidate["target_belt"], radius=0.75)
+        if isinstance(belt, dict):
+            penalty += 25.0
+        for point in (candidate["target_inserter"], candidate["target_belt"]):
+            if _position_tuple(point) in avoid:
+                penalty += 2500.0
+            blocker = _belt_line_position_blocker(observation, point)
+            if blocker is not None and str(blocker.get("name") or "") != "transport-belt":
+                penalty += 50.0
+        segments = _iron_plate_line_segments(
+            observation,
+            source_belt_position,
+            candidate["target_belt"],
+            center_tiles=True,
+            avoid_positions=avoid,
+        )
+        penalty += _iron_plate_line_route_score(observation, segments, avoid_positions=avoid)
+        scored.append((penalty, candidate))
+    scored.sort(key=lambda item: item[0])
+    return scored[0][1]
 
 
 def _find_site_input_logistic_line_layout(
@@ -7055,27 +7141,83 @@ def _iron_plate_line_segments(
     center_tiles: bool = False,
     start_direction: int | None = None,
     end_direction: int | None = None,
+    avoid_positions: set[tuple[float, float]] | None = None,
 ) -> list[dict[str, Any]]:
     start_x = float(start["x"])
     start_y = float(start["y"])
     end_x = float(end["x"])
     end_y = float(end["y"])
     if start_direction is not None and end_direction is not None:
-        waypoints = _role_aware_axis_line_waypoints(start, end, int(start_direction), int(end_direction))
+        waypoint_candidates = [_role_aware_axis_line_waypoints(start, end, int(start_direction), int(end_direction))]
     else:
-        waypoints = [{"x": start_x, "y": start_y}]
-        if end_x < start_x - 0.25:
-            detour_x = start_x + 1.0
-            detour_y = _select_iron_plate_line_detour_y(observation, start_x, start_y, end_x, end_y, detour_x)
-            waypoints.extend(
-                [
-                    {"x": detour_x, "y": start_y},
-                    {"x": detour_x, "y": detour_y},
-                    {"x": end_x, "y": detour_y},
-                ]
-            )
-        waypoints.append({"x": end_x, "y": end_y})
+        waypoint_candidates = _iron_plate_line_waypoint_candidates(observation, start_x, start_y, end_x, end_y)
 
+    scored: list[tuple[float, list[dict[str, Any]]]] = []
+    avoid = set(avoid_positions or set())
+    for waypoints in waypoint_candidates:
+        segments = _iron_plate_segments_from_waypoints(observation, waypoints, center_tiles=center_tiles)
+        scored.append((_iron_plate_line_route_score(observation, segments, avoid_positions=avoid), segments))
+    scored.sort(key=lambda item: item[0])
+    return scored[0][1] if scored else []
+
+
+def _iron_plate_line_waypoint_candidates(
+    observation: dict[str, Any],
+    start_x: float,
+    start_y: float,
+    end_x: float,
+    end_y: float,
+) -> list[list[dict[str, float]]]:
+    candidates: list[list[dict[str, float]]] = []
+    seen: set[tuple[tuple[float, float], ...]] = set()
+
+    def add(waypoints: list[dict[str, float]]) -> None:
+        key = tuple(_position_tuple(point) for point in waypoints)
+        if key not in seen:
+            seen.add(key)
+            candidates.append(waypoints)
+
+    start_point = {"x": start_x, "y": start_y}
+    end_point = {"x": end_x, "y": end_y}
+    default_waypoints = [start_point]
+    if end_x < start_x - 0.25:
+        detour_x = start_x + 1.0
+        detour_y = _select_iron_plate_line_detour_y(observation, start_x, start_y, end_x, end_y, detour_x)
+        default_waypoints.extend(
+            [
+                {"x": detour_x, "y": start_y},
+                {"x": detour_x, "y": detour_y},
+                {"x": end_x, "y": detour_y},
+            ]
+        )
+    default_waypoints.append(end_point)
+    add(default_waypoints)
+
+    if abs(start_x - end_x) > 0.25 and abs(start_y - end_y) > 0.25:
+        add([start_point, {"x": end_x, "y": start_y}, end_point])
+        add([start_point, {"x": start_x, "y": end_y}, end_point])
+        for offset in (1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 5.0, -5.0, 7.0, -7.0, 9.0, -9.0, 11.0, -11.0):
+            for base_x in (start_x, end_x):
+                lane_x = round(base_x + offset, 3)
+                if abs(lane_x - start_x) <= 0.25 or abs(lane_x - end_x) <= 0.25:
+                    continue
+                add([start_point, {"x": lane_x, "y": start_y}, {"x": lane_x, "y": end_y}, end_point])
+            for base_y in (start_y, end_y):
+                lane_y = round(base_y + offset, 3)
+                if abs(lane_y - start_y) <= 0.25 or abs(lane_y - end_y) <= 0.25:
+                    continue
+                add([start_point, {"x": start_x, "y": lane_y}, {"x": end_x, "y": lane_y}, end_point])
+    return candidates
+
+
+def _iron_plate_segments_from_waypoints(
+    observation: dict[str, Any],
+    waypoints: list[dict[str, float]],
+    *,
+    center_tiles: bool,
+) -> list[dict[str, Any]]:
+    end_x = float(waypoints[-1]["x"])
+    end_y = float(waypoints[-1]["y"])
     positions = _axis_route_positions(waypoints)
     if not positions:
         positions.append(({"x": end_x, "y": end_y}, EAST))
@@ -7098,6 +7240,41 @@ def _iron_plate_line_segments(
             }
         )
     return segments
+
+
+def _iron_plate_line_route_score(
+    observation: dict[str, Any],
+    segments: list[dict[str, Any]],
+    *,
+    avoid_positions: set[tuple[float, float]] | None = None,
+) -> float:
+    score = len(segments) / 100.0
+    avoid = set(avoid_positions or set())
+    for segment in segments:
+        if _position_tuple(segment["position"]) in avoid:
+            score += 2500.0
+        entity = segment.get("entity")
+        if isinstance(entity, dict):
+            if _direction_or_default(entity.get("direction"), segment["direction"]) != int(segment["direction"]):
+                score += 500.0
+            else:
+                score -= 0.25
+        blocker = _belt_line_position_blocker(observation, segment["position"])
+        if blocker is None:
+            continue
+        blocker_name = str(blocker.get("name") or "")
+        blocker_type = str(blocker.get("type") or "")
+        if blocker_type == "tree":
+            score += 2.0
+        elif blocker_name in {"inserter", "burner-inserter", "fast-inserter"}:
+            score += 200.0
+        elif blocker_name == "small-electric-pole":
+            score += 260.0
+        elif blocker_name in ASSEMBLER_ENTITY_NAMES or blocker_name in {"stone-furnace", "burner-mining-drill", "boiler", "steam-engine"}:
+            score += 400.0
+        else:
+            score += 650.0
+    return score
 
 
 def _rounded_position(position: dict[str, float]) -> dict[str, float]:
@@ -7206,7 +7383,10 @@ def _belt_line_position_blocker(
             blockers.append(entity)
             continue
         entity_type = str(entity.get("type") or "")
-        if (entity_type in {"simple-entity", "tree", "cliff"} or name.endswith("rock")) and distance(_position(entity), position) < 1.25:
+        if entity_type == "tree" and distance(_position(entity), position) < 1.25:
+            blockers.append(entity)
+            continue
+        if (entity_type in {"simple-entity", "cliff"} or name.endswith("rock")) and distance(_position(entity), position) < 1.75:
             blockers.append(entity)
     return _nearest_to(blockers, position) if blockers else None
 
@@ -9139,6 +9319,25 @@ class IronPlateLogisticLineToGearMallSkill:
 
         belt_assembler = layout.get("belt_assembler")
         if inventory_count(observation, "transport-belt") <= 0:
+            belt_chest = _transport_belt_output_chest(observation)
+            if isinstance(belt_chest, dict) and entity_item_count(belt_chest, "transport-belt") > 0:
+                position = _position(belt_chest)
+                if distance(player, position) > 20:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": position},
+                        "move near belt mall output chest to collect transport belts for iron-plate logistics construction",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "take",
+                        "item": "transport-belt",
+                        "count": min(entity_item_count(belt_chest, "transport-belt"), max(1, self.target_segments)),
+                        "unit_number": belt_chest.get("unit_number"),
+                        "name": belt_chest.get("name") or "wooden-chest",
+                        "position": position,
+                    },
+                    "take transport belts from the belt mall output chest as construction material for the iron-plate logistics line",
+                )
             if isinstance(belt_assembler, dict) and entity_item_count(belt_assembler, "transport-belt") > 0:
                 position = _position(belt_assembler)
                 if distance(player, position) > 20:

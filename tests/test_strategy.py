@@ -593,6 +593,22 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
         self.assertIn("gear_handcraft_blocked=true", result["evidence"])
 
+    def test_rocket_goal_uses_belt_output_chest_as_available_mall_stock(self):
+        observation = gear_belt_mall_needs_bootstrap_observation()
+        observation["entities"].append(
+            {
+                "name": "wooden-chest",
+                "unit_number": 300,
+                "position": {"x": 6.5, "y": 0.5},
+                "inventories": {"1": {"transport-belt": 48}},
+            }
+        )
+
+        result = heuristic_strategy("launch_rocket_program", observation)
+
+        self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertIn("transport_belts_available_for_mall_logistics=true", result["evidence"])
+
     def test_rocket_goal_bootstraps_belt_mall_from_local_plate_seed_before_circuit(self):
         result = heuristic_strategy("launch_rocket_program", gear_belt_mall_has_local_plate_seed_observation())
 

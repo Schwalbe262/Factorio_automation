@@ -3354,6 +3354,8 @@ def _boiler_coal_feed_should_preempt_power(observation: dict[str, Any]) -> bool:
 
 
 def _transport_belt_automation_ready(observation: dict[str, Any]) -> bool:
+    if total_item_count(observation, "transport-belt") > 0:
+        return True
     assemblers = (
         entities_named(observation, "assembling-machine-1")
         + entities_named(observation, "assembling-machine-2")
@@ -3685,7 +3687,7 @@ def _gear_belt_mall_power_issue(observation: dict[str, Any]) -> dict[str, Any] |
 
 
 def _transport_belts_available_for_mall_logistics(observation: dict[str, Any]) -> bool:
-    if inventory_count(observation, "transport-belt") > 0:
+    if total_item_count(observation, "transport-belt") > 0:
         return True
     assemblers = (
         entities_named(observation, "assembling-machine-1")

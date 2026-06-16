@@ -5458,6 +5458,35 @@ class PlannerTests(unittest.TestCase):
         self.assertNotEqual(decision.action.get("item"), "iron-plate")
         self.assertNotEqual(decision.action.get("recipe"), "iron-gear-wheel")
 
+    def test_iron_plate_logistic_line_takes_belts_from_belt_mall_output_chest(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].append(
+            {
+                "name": "wooden-chest",
+                "unit_number": 912,
+                "position": {"x": 9, "y": 2},
+                "inventories": {"1": {"transport-belt": 8}},
+            }
+        )
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 2},
+                "recipe": "iron-plate",
+                "inventories": {"3": {"iron-plate": 20}},
+            }
+        )
+
+        decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "transport-belt")
+        self.assertEqual(decision.action["unit_number"], 912)
+        self.assertIn("output chest", decision.reason)
+
     def test_iron_plate_logistic_line_places_belt_without_plate_or_gear_handcarry(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"transport-belt": 4}
@@ -5478,6 +5507,181 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["name"], "transport-belt")
         self.assertNotIn(decision.action.get("item"), {"iron-plate", "iron-gear-wheel"})
         self.assertNotEqual(decision.action.get("recipe"), "iron-gear-wheel")
+
+    def test_iron_plate_logistic_line_uses_tile_centered_belt_positions(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 4}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 2},
+                "recipe": "iron-plate",
+                "inventories": {"3": {"iron-plate": 20}},
+            }
+        )
+
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+
+        self.assertTrue(layout["segments"])
+        for segment in layout["segments"][:3]:
+            self.assertAlmostEqual(segment["position"]["x"] % 1, 0.5)
+            self.assertAlmostEqual(segment["position"]["y"] % 1, 0.5)
+        self.assertAlmostEqual(layout["source_inserter"]["position"]["x"] % 1, 0.5)
+        self.assertAlmostEqual(layout["target_inserter"]["position"]["y"] % 1, 0.5)
+
+    def test_iron_plate_logistic_line_avoids_existing_gear_output_side(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 4}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].extend(
+            [
+                {
+                    "name": "inserter",
+                    "unit_number": 930,
+                    "position": {"x": 3.5, "y": 0.5},
+                    "direction": planner_module.SOUTH,
+                    "inventories": {},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 931,
+                    "position": {"x": 3.5, "y": -0.5},
+                    "direction": planner_module.EAST,
+                    "inventories": {},
+                },
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": -8, "y": 2},
+                    "recipe": "iron-plate",
+                    "inventories": {"3": {"iron-plate": 20}},
+                },
+            ]
+        )
+
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+
+        self.assertNotEqual(layout["target_inserter"]["position"], {"x": 3.5, "y": 0.5})
+        self.assertNotEqual(layout["target_belt"], {"x": 3.5, "y": -0.5})
+
+    def test_iron_plate_logistic_line_detours_around_existing_gear_output_lane(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 20}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 910,
+                    "position": {"x": 82.5, "y": -57.5},
+                    "distance": 2,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"1": {}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 911,
+                    "position": {"x": 86.5, "y": -57.5},
+                    "distance": 6,
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"1": {}},
+                },
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": 77.5, "y": -68.5},
+                    "recipe": "iron-plate",
+                    "inventories": {"3": {"iron-plate": 20}},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 930,
+                    "position": {"x": 83.5, "y": -59.5},
+                    "direction": planner_module.SOUTH,
+                    "inventories": {},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 931,
+                    "position": {"x": 83.5, "y": -60.5},
+                    "direction": planner_module.EAST,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+        route_positions = {planner_module._position_tuple(segment["position"]) for segment in layout["segments"]}
+
+        self.assertNotEqual(layout["target_inserter"]["position"], {"x": 83.5, "y": -59.5})
+        self.assertNotIn((83.5, -60.5), route_positions)
+        self.assertNotIn((83.5, -59.5), route_positions)
+
+    def test_iron_plate_logistic_line_prefers_wider_detour_over_power_pole(self):
+        start = {"x": 79.5, "y": -68.5}
+        end = {"x": 83.5, "y": -54.5}
+        offsets = (1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 5.0, -5.0, 7.0, -7.0, 9.0, -9.0, 11.0, -11.0)
+        blocked_lanes = {
+            round(base_x + offset, 3)
+            for base_x in (start["x"], end["x"])
+            for offset in offsets
+        } | {start["x"], end["x"]}
+        obs = {"entities": []}
+        unit_number = 930
+        for lane_x in sorted(blocked_lanes - {90.5, 92.5, 94.5}):
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": unit_number,
+                    "position": {"x": lane_x, "y": -60.5},
+                    "direction": planner_module.EAST,
+                    "inventories": {},
+                }
+            )
+            unit_number += 1
+        obs["entities"].extend(
+            [
+                {
+                    "name": "inserter",
+                    "unit_number": unit_number,
+                    "position": {"x": 83.5, "y": -59.5},
+                    "direction": planner_module.SOUTH,
+                    "inventories": {},
+                },
+                {
+                    "name": "small-electric-pole",
+                    "unit_number": unit_number + 1,
+                    "position": {"x": 90.5, "y": -63.5},
+                    "inventories": {},
+                },
+            ]
+        )
+
+        segments = planner_module._iron_plate_line_segments(obs, start, end, center_tiles=True)
+        route_positions = {planner_module._position_tuple(segment["position"]) for segment in segments}
+
+        self.assertNotIn((90.5, -63.5), route_positions)
+        self.assertIn((92.5, -63.5), route_positions)
+
+    def test_iron_plate_logistic_line_treats_nearby_big_rock_as_blocker(self):
+        obs = {
+            "entities": [
+                {
+                    "name": "big-rock",
+                    "type": "simple-entity",
+                    "position": {"x": 85.69, "y": -53.31},
+                    "inventories": {},
+                }
+            ]
+        }
+
+        blocker = planner_module._belt_line_position_blocker(obs, {"x": 86.5, "y": -54.5})
+
+        self.assertIsNotNone(blocker)
+        self.assertEqual(blocker["name"], "big-rock")
 
     def test_iron_plate_logistic_line_endpoint_inserters_move_items_out_and_in(self):
         obs = powered_automation_observation()
