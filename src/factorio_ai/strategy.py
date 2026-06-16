@@ -8,7 +8,9 @@ from .knowledge import dependency_tree_for_objective
 from .monitor import recent_damage_events, summarize_factory
 from .models import distance, entities_named, entity_item_count, inventory_count, player_position, total_item_count
 from .planner import (
+    _direct_gear_transfer_blocked,
     _find_gear_belt_mall_relocation_layout,
+    _find_gear_belt_mall_logistics_layout,
     _gear_belt_mall_relocation_power_corridor_positions,
     _missing_power_corridor_positions,
     factory_layout_issues,
@@ -56,6 +58,23 @@ CRITICAL_FACTORY_POWER_RECIPES = set(BUILD_ITEM_MALL_ITEMS) | {
     "electronic-circuit",
     "iron-gear-wheel",
     "long-handed-inserter",
+}
+GEAR_MALL_OUTPUT_LOGISTICS_PREEMPT_SKILLS = {
+    "build_belt_smelting_line",
+    "expand_iron_smelting",
+    "expand_copper_smelting",
+    "setup_coal_supply",
+    "connect_coal_fuel_feed",
+    "plan_factory_site",
+    "produce_electronic_circuit",
+    "automate_electronic_circuit_line",
+    "bootstrap_build_item_mall",
+    "bootstrap_power_pole_mall",
+    "build_iron_plate_logistic_line_to_gear_mall",
+    "build_site_input_logistic_line",
+    "research_electric_mining_drill",
+    "bootstrap_electric_mining_drill_mall",
+    "produce_automation_science_pack",
 }
 
 
@@ -980,6 +999,9 @@ def reconcile_strategy_decision(
         decision["expected_effect"] = ""
         decision.pop("guardrail_adjusted", None)
         selected = "bootstrap_build_item_mall"
+    gear_mall_output_logistics_issue = _gear_mall_output_logistics_issue(observation)
+    if gear_mall_output_logistics_issue is not None and selected in GEAR_MALL_OUTPUT_LOGISTICS_PREEMPT_SKILLS:
+        return _gear_mall_output_logistics_guardrail_adjustment(decision, selected, gear_mall_output_logistics_issue)
     if selected in _COAL_DEPENDENT_SKILLS and _coal_supply_needed(observation):
         adjusted = dict(decision)
         adjusted["selected_skill"] = "setup_coal_supply"
@@ -2054,6 +2076,7 @@ def heuristic_strategy(
     critical_factory_power_issue = _critical_factory_power_issue(observation)
     gear_belt_mall_power_issue = _gear_belt_mall_power_issue(observation)
     gear_belt_mall_bootstrap_issue = _gear_belt_mall_bootstrap_issue(observation)
+    gear_mall_output_logistics_issue = _gear_mall_output_logistics_issue(observation)
     burner_drill_replacement_issue = _burner_drill_replacement_issue(observation)
     if threats["danger_level"] in {"critical", "high"} and int(threats.get("armed_gun_turret_count") or 0) <= 0:
         nearest = threats.get("nearest_enemy") if isinstance(threats.get("nearest_enemy"), dict) else {}
@@ -2070,6 +2093,9 @@ def heuristic_strategy(
             blockers=["enemy threat"],
             expected_effect="Pause expansion and build armed gun turrets plus firearm-magazine supply around threatened factory sites.",
         ).to_dict()
+
+    if gear_mall_output_logistics_issue is not None:
+        return _gear_mall_output_logistics_strategy_decision(gear_mall_output_logistics_issue)
 
     if _coal_supply_needed(observation):
         return StrategicDecision(
@@ -3474,6 +3500,99 @@ def _transport_belt_automation_ready(observation: dict[str, Any]) -> bool:
         if entity_item_count(assembler, "iron-gear-wheel") > 0 and entity_item_count(assembler, "iron-plate") > 0:
             return True
     return False
+
+
+def _gear_mall_output_logistics_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
+    if not _technology_researched(observation, "automation"):
+        return None
+    layout = _find_gear_belt_mall_logistics_layout(observation)
+    if not isinstance(layout, dict):
+        return None
+    gear_assembler = layout.get("gear_assembler")
+    belt_assembler = layout.get("belt_assembler")
+    if not isinstance(gear_assembler, dict) or not isinstance(belt_assembler, dict):
+        return None
+    gear_output = entity_item_count(gear_assembler, "iron-gear-wheel")
+    if gear_output <= 0:
+        return None
+    belt_output = entity_item_count(belt_assembler, "transport-belt")
+    if belt_output > 0:
+        return None
+    return {
+        "gear_unit": gear_assembler.get("unit_number"),
+        "belt_unit": belt_assembler.get("unit_number"),
+        "gear_assembler_status": gear_assembler.get("status_name") or gear_assembler.get("status"),
+        "belt_assembler_status": belt_assembler.get("status_name") or belt_assembler.get("status"),
+        "gear_assembler_iron_gear": gear_output,
+        "belt_assembler_iron_gear": entity_item_count(belt_assembler, "iron-gear-wheel"),
+        "belt_assembler_iron_plate": entity_item_count(belt_assembler, "iron-plate"),
+        "belt_assembler_transport_belt": belt_output,
+        "direct_transfer_blocked": _direct_gear_transfer_blocked(layout),
+    }
+
+
+def _gear_mall_output_logistics_guardrail_adjustment(
+    decision: dict[str, Any],
+    selected: str,
+    issue: dict[str, Any],
+) -> dict[str, Any]:
+    adjusted = dict(decision)
+    adjusted["selected_skill"] = "build_gear_belt_mall_logistics"
+    adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 93)
+    original_reason = str(decision.get("reason") or "").strip()
+    guardrail_reason = (
+        f"LLM selected {selected}, but iron-gear output is buffered in the gear mall and "
+        "post-Automation rules forbid player gear collection; finish gear-to-belt output logistics first."
+    )
+    adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+    adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["gear mall output logistics"]))
+    adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+        f"guardrail_adjusted_from={selected}",
+        f"gear_assembler_unit={issue.get('gear_unit')}",
+        f"belt_assembler_unit={issue.get('belt_unit')}",
+        f"gear_assembler_iron_gear={issue.get('gear_assembler_iron_gear')}",
+        f"belt_assembler_iron_gear={issue.get('belt_assembler_iron_gear')}",
+        f"belt_assembler_iron_plate={issue.get('belt_assembler_iron_plate')}",
+        f"belt_assembler_transport_belt={issue.get('belt_assembler_transport_belt')}",
+        f"direct_transfer_blocked={str(issue.get('direct_transfer_blocked')).lower()}",
+        "gear_handcraft_blocked=true",
+    ]
+    adjusted["expected_effect"] = (
+        "Transfer gear output into the transport-belt assembler and seed any missing belt ingredients, "
+        "so smelting expansion can consume automated belts instead of hand-carried gears."
+    )
+    adjusted["guardrail_adjusted"] = {
+        "from": selected,
+        "to": "build_gear_belt_mall_logistics",
+        "reason": guardrail_reason,
+    }
+    return adjusted
+
+
+def _gear_mall_output_logistics_strategy_decision(issue: dict[str, Any]) -> dict[str, Any]:
+    return StrategicDecision(
+        selected_skill="build_gear_belt_mall_logistics",
+        priority=93,
+        reason=(
+            "Iron gears are buffered in the gear mall, but post-Automation expansion must not collect gear "
+            "output by hand. Finish the gear-to-belt mall logistics so belt output can feed construction."
+        ),
+        evidence=[
+            f"gear_assembler_unit={issue.get('gear_unit')}",
+            f"belt_assembler_unit={issue.get('belt_unit')}",
+            f"gear_assembler_iron_gear={issue.get('gear_assembler_iron_gear')}",
+            f"belt_assembler_iron_gear={issue.get('belt_assembler_iron_gear')}",
+            f"belt_assembler_iron_plate={issue.get('belt_assembler_iron_plate')}",
+            f"belt_assembler_transport_belt={issue.get('belt_assembler_transport_belt')}",
+            f"direct_transfer_blocked={str(issue.get('direct_transfer_blocked')).lower()}",
+            "gear_handcraft_blocked=true",
+        ],
+        blockers=["gear mall output logistics"],
+        expected_effect=(
+            "Run the gear/belt mall logistics executor to move gear output into belt production before more "
+            "smelting or site expansion."
+        ),
+    ).to_dict()
 
 
 def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[str, Any] | None:

@@ -105,6 +105,35 @@ def gear_belt_mall_has_local_plate_seed_observation() -> dict:
     return observation
 
 
+def gear_mall_output_logistics_blocked_observation() -> dict:
+    return {
+        "player": {"position": {"x": 0, "y": 0}},
+        "inventory": {"iron-plate": 8, "transport-belt": 3},
+        "entities": [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 146,
+                "recipe": "iron-gear-wheel",
+                "position": {"x": 0.5, "y": 0.5},
+                "electric_network_connected": True,
+                "status_name": "full_output",
+                "inventories": {"3": {"iron-gear-wheel": 5}},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 1779,
+                "recipe": "transport-belt",
+                "position": {"x": 4.5, "y": 0.5},
+                "electric_network_connected": True,
+                "status_name": "item_ingredient_shortage",
+                "inventories": {"2": {"iron-gear-wheel": 3}},
+            },
+        ],
+        "resources": [{"name": "coal", "position": {"x": 2, "y": 0}, "distance": 2}],
+        "research": {"technologies": {"automation": {"researched": True}}},
+    }
+
+
 def gear_mall_needs_plate_line_without_belts_observation() -> dict:
     observation = gear_mall_needs_plate_line_observation()
     observation["inventory"] = {}
@@ -616,6 +645,14 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("transport-belt mall bootstrap before iron-plate logistics", result["blockers"])
         self.assertIn("local_iron_plate_seed_source_unit=102", result["evidence"])
 
+    def test_rocket_goal_finishes_gear_output_logistics_before_smelting_expansion(self):
+        result = heuristic_strategy("launch_rocket_program", gear_mall_output_logistics_blocked_observation())
+
+        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
+        self.assertIn("gear mall output logistics", result["blockers"])
+        self.assertIn("gear_handcraft_blocked=true", result["evidence"])
+        self.assertIn("gear_assembler_unit=146", result["evidence"])
+
     def test_rocket_goal_repairs_power_before_unpowered_gear_mall_logistics(self):
         observation = gear_mall_needs_plate_line_observation()
         for entity in observation["entities"]:
@@ -1084,6 +1121,27 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["guardrail_adjusted"]["from"], "build_iron_plate_logistic_line_to_gear_mall")
         self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
         self.assertIn("gear_handcraft_blocked=true", result["evidence"])
+
+    def test_reconcile_routes_smelting_expansion_to_gear_output_logistics(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "expand_copper_smelting",
+                "priority": 50,
+                "reason": "Need more copper plates.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            gear_mall_output_logistics_blocked_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "expand_copper_smelting")
+        self.assertIn("gear mall output logistics", result["blockers"])
+        self.assertIn("gear_assembler_unit=146", result["evidence"])
 
     def test_reconcile_promotes_coal_supply_to_gear_belt_bootstrap_when_belts_are_exhausted(self):
         observation = gear_belt_mall_needs_bootstrap_observation()
