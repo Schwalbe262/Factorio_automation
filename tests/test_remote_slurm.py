@@ -1561,7 +1561,7 @@ class RemoteSlurmTests(unittest.TestCase):
     def test_strategy_llm_retries_with_ultra_compact_payload_on_context_limit(self):
         calls = []
 
-        def fake_call(system, prompt, schema=None):
+        def fake_call(system, prompt, schema=None, **kwargs):
             calls.append(prompt)
             if len(calls) == 1:
                 return None, {"llm_error": "This model's maximum context length is 4096 tokens"}

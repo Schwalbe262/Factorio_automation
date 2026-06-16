@@ -272,6 +272,38 @@ Important distinction:
 - `plan_factory_site` is simulation-only and must not build, mine, demolish, or
   move entities.
 
+## Self-Development (Skill Foundry)
+
+Codex/Claude are no longer required to add missing executors. When the strategy layer
+selects a skill that has no hand-written executor, the local Qwen authors one through
+`factorio_ai.skill_foundry`:
+
+1. The missing skill is recorded (`runtime/missing-skills.jsonl`) and enqueued with a
+   priority (`runtime/skill-foundry-priority.json`). A blocked strategy no longer stalls:
+   the controller redirects to a safe progressing skill while the foundry works.
+2. `run-no-mod-skill-foundry-loop` (run by the unattended supervisor, or
+   `run_factorio_no_mod_skill_foundry_loop.bat`) drains that queue while autopilot is idle.
+3. For each skill the local LLM writes one Python module that must pass:
+   - Gate 1 `static_safety_gate`: AST import/builtin allowlist (only `factorio_ai.models`,
+     `factorio_ai.planner`, and `math`/`dataclasses`/`typing`) plus `py_compile`;
+   - Gate 2 `offline_replay_gate`: `next_action` is replayed against recorded observation
+     samples and every emitted action must pass `models.validate_action`;
+   - Gate 3 `sandbox_dryrun_gate`: a headless dry-run on a file COPY of the live save
+     (`FACTORIO_AI_FOUNDRY_SANDBOX_ENABLED=1`); the live save is never mutated.
+4. A passing module is written to `src/factorio_ai/generated_skills/<name>.py` and recorded
+   `registered` in the git-tracked `src/factorio_ai/generated_skills/registry.json`. The
+   controller then loads and runs it like any built-in skill, and auto-quarantines it after
+   repeated live failures (`FACTORIO_AI_GEN_LIVE_FAIL_LIMIT`, default 3).
+
+Generated skills, the queue, recent failures, and the foundry heartbeat
+(`runtime/skill-foundry-loop.json`) are shown on the dashboard's
+"Generated Skills (self-developed)" panel. Useful env: `FACTORIO_AI_FOUNDRY_INLINE`
+(generate on the autopilot hot path, off by default), `FACTORIO_AI_FOUNDRY_MAX_ATTEMPTS`,
+`FACTORIO_AI_FOUNDRY_MAX_TOKENS`, `FACTORIO_AI_FOUNDRY_SANDBOX_*` (ports/timeout).
+
+A consistently-successful generated skill can later be promoted into a hand-written core
+skill in `controller.py` / `IMPLEMENTED_SKILLS`; until then it stays isolated and reversible.
+
 ## Current Runtime Situation
 
 The current no-mod observation has recently shown:

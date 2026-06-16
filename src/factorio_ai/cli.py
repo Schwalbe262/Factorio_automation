@@ -13,6 +13,7 @@ from .factorio import (
     create_no_mod_save,
     create_save,
     install_mod,
+    save_no_mod_server,
     start_gui_client,
     start_no_mod_gui_client,
     start_no_mod_server,
@@ -90,6 +91,11 @@ def main(argv: list[str] | None = None) -> None:
         help="Start a vanilla-compatible local/LAN server with RCON Lua enabled but no custom mod",
     )
     start_no_mod_server_parser.add_argument("--no-wait-rcon", action="store_true")
+
+    subparsers.add_parser(
+        "no-mod-server-save",
+        help="Persist the running no-mod server state to its save file via RCON /server-save",
+    )
 
     no_mod_gui_parser = subparsers.add_parser(
         "launch-no-mod-gui",
@@ -291,6 +297,18 @@ def main(argv: list[str] | None = None) -> None:
     no_mod_idle_layout_parser.add_argument("--sleep-seconds", type=float, default=5.0)
     no_mod_idle_layout_parser.add_argument("--stale-seconds", type=float, default=15.0)
     no_mod_idle_layout_parser.add_argument("--min-submit-interval-seconds", type=float, default=0.0)
+
+    for _foundry_name in ("run-skill-foundry-loop", "run-no-mod-skill-foundry-loop"):
+        _foundry_parser = subparsers.add_parser(
+            _foundry_name,
+            help="Continuously let the local LLM author + validate new skill executors for un-built skills (idle GPU)",
+        )
+        _foundry_parser.add_argument("--objective", default="launch_rocket_program")
+        _foundry_parser.add_argument("--cycles", type=int, default=0, help="Number of cycles; 0 means run until interrupted")
+        _foundry_parser.add_argument("--sleep-seconds", type=float, default=30.0)
+        _foundry_parser.add_argument("--max-attempts", type=int, default=None, help="Generation attempts per skill per cycle")
+        _foundry_parser.add_argument("--require-idle", action="store_true", help="Only generate while autopilot is idle/sleeping")
+        _foundry_parser.add_argument("--throttle-seconds", type=float, default=0.0, help="Minimum seconds between generation attempts")
 
     begin_codex_parser = subparsers.add_parser(
         "begin-codex-work",
@@ -590,6 +608,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "create-no-mod-save":
         path = create_no_mod_save(cfg, overwrite=args.overwrite)
         print_json({"ok": True, "savePath": str(path), "mode": "no-mod-rcon-lua"})
+        return
+
+    if args.command == "no-mod-server-save":
+        result = save_no_mod_server(cfg)
+        print_json({"ok": True, "result": str(result).strip(), "mode": "no-mod-rcon-lua"})
         return
 
     if args.command == "start-no-mod-server":
@@ -981,6 +1004,24 @@ def main(argv: list[str] | None = None) -> None:
         payload["adapter"] = "no-mod-rcon-lua"
         print_json(payload)
         if not summary.ok:
+            raise SystemExit(1)
+        return
+
+    if args.command in {"run-skill-foundry-loop", "run-no-mod-skill-foundry-loop"}:
+        no_mod = args.command.startswith("run-no-mod")
+        controller = ModlessFactorioController(cfg) if no_mod else FactorioController(cfg)
+        result = controller.run_skill_foundry_loop(
+            objective=args.objective,
+            cycles=args.cycles,
+            sleep_seconds=args.sleep_seconds,
+            max_attempts=args.max_attempts,
+            require_idle=args.require_idle,
+            throttle_seconds=args.throttle_seconds,
+        )
+        if no_mod:
+            result["adapter"] = "no-mod-rcon-lua"
+        print_json(result)
+        if not result.get("ok"):
             raise SystemExit(1)
         return
 

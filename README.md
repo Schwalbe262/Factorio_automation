@@ -164,7 +164,9 @@ players can join the LAN server without installing the Factorio AI mod, assuming
 Factorio/Space Age content matches.
 `run_factorio_no_mod_unattended_llm.bat` is the normal long-running local LLM mode when Codex is
 not supervising the run. It keeps the no-custom-mod server, dashboard, scheduler-managed Qwen path,
-continuous no-mod autopilot, and idle layout loop alive. If the autopilot process is missing or its
+continuous no-mod autopilot, idle layout loop, and the self-development skill foundry loop alive.
+The foundry loop lets the local Qwen author and validate missing skill executors on its own (see
+"Self-Development Skill Foundry" below), so the project keeps progressing without Codex/Claude. If the autopilot process is missing or its
 heartbeat is stale with no fresh live skill heartbeat, the supervisor restarts it. The supervisor uses
 `FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=a6000ada,a6000` and
 `FACTORIO_AI_SLURM_SCHEDULER_CPUS=3` for strategy requests so A6000 Ada can fall back to ready
@@ -644,6 +646,40 @@ selection is logged for Codex implementation.
 
 Resource-specific miner placement is validated with `required_resource` so a copper expansion drill
 cannot silently slide onto iron ore when `allow_nearby` is used.
+
+## Self-Development Skill Foundry
+
+When the strategic LLM selects a skill that has no hand-written executor, the project no longer
+needs Codex/Claude to implement it. The local Qwen authors the executor itself through
+`factorio_ai.skill_foundry`, and every candidate must pass layered automated gates before it can
+run on the live game:
+
+1. static safety: an AST import/builtin allowlist (only `factorio_ai.models`,
+   `factorio_ai.planner`, and `math`/`dataclasses`/`typing`) plus `py_compile`;
+2. offline replay: `next_action` is replayed against recorded observation samples and every
+   emitted action must pass the normal action validator;
+3. sandbox dry-run: a headless run on a file COPY of the live save
+   (`FACTORIO_AI_FOUNDRY_SANDBOX_ENABLED=1`); the live save is never mutated.
+
+A passing module is written to `src/factorio_ai/generated_skills/` and recorded `registered` in
+the git-tracked `generated_skills/registry.json`; the controller then runs it like any built-in
+skill and auto-quarantines it after repeated live failures. A blocked strategy never stalls: the
+skill is queued for the foundry and the controller redirects to a progressing skill meanwhile.
+
+Run the loop on its own with:
+
+```bat
+run_factorio_no_mod_skill_foundry_loop.bat
+```
+
+```powershell
+$env:PYTHONPATH="src"
+python -m factorio_ai.cli run-no-mod-skill-foundry-loop --objective launch_rocket_program --cycles 0 --require-idle
+```
+
+The unattended supervisor (`run_factorio_no_mod_unattended_llm.bat`) starts and keeps this loop
+alive automatically. The dashboard's "Generated Skills (self-developed)" panel shows registered
+skills, the generation queue, recent failures/quarantine, and the foundry heartbeat.
 
 ## Learning Loop
 

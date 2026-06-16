@@ -2240,6 +2240,55 @@ def request_strategy(
     raise TimeoutError(f"remote strategy task timed out: {task_name}")
 
 
+def request_skill_foundry_code(
+    spec: dict[str, Any],
+    *,
+    observation_samples: list[dict[str, Any]] | None = None,
+    previous_failure: str = "",
+    max_tokens: int | None = None,
+    task_id: str = "",
+    cfg: RemoteSlurmConfig | None = None,
+    timeout_seconds: int | None = None,
+) -> dict[str, Any]:
+    """Offload one skill-foundry codegen call to a scheduler/attached node where vLLM is local.
+
+    Mirrors :func:`request_strategy`; the node runs ``run_skill_foundry_request`` and returns
+    ``{ok, code, class_name, notes, ...diagnostics}``.
+    """
+
+    cfg = cfg or config()
+    # Codegen is heavier than strategy (more output tokens) and the client task may also wait for the
+    # vLLM service endpoint to come up, so allow a longer default deadline than the base task timeout.
+    if timeout_seconds is None:
+        timeout_seconds = max(cfg.task_timeout_seconds, _int_env("FACTORIO_AI_FOUNDRY_TASK_TIMEOUT_SECONDS", 900, 120))
+    task = {
+        "id": task_id or f"foundry-{uuid.uuid4().hex}",
+        "type": "skill_foundry_request",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "payload": {
+            "spec": spec,
+            "observation_samples": observation_samples or [],
+            "previous_failure": previous_failure,
+            "max_tokens": max_tokens,
+        },
+    }
+    if _use_attached_srun(cfg):
+        return _request_task_via_attached_srun(task, cfg, timeout_seconds)
+    if _use_scheduler_tasks():
+        return _request_task_via_scheduler(task, cfg, timeout_seconds)
+
+    task_name = submit_task(task, cfg)
+    deadline = time.monotonic() + (timeout_seconds or cfg.task_timeout_seconds)
+    while time.monotonic() < deadline:
+        state, data, _raw = read_task_state(task_name, cfg)
+        if state == "result" and data is not None:
+            return data
+        if state == "failed":
+            raise RemoteSlurmError(f"remote skill foundry task failed: {data}")
+        time.sleep(2)
+    raise TimeoutError(f"remote skill foundry task timed out: {task_name}")
+
+
 def parse_strategy_worker_specs(value: str | None) -> list[StrategyWorkerSpec]:
     if not value or not value.strip():
         return list(DEFAULT_STRATEGY_WORKERS)

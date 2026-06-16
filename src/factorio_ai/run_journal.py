@@ -419,6 +419,59 @@ def goal_summary(*, repo_root: Path = REPO_ROOT) -> dict[str, Any]:
     return {"exists": True, "path": str(path), "title": title, "summary": summary}
 
 
+def record_foundry_attempt_journal(
+    log_dir: Path,
+    *,
+    objective: str,
+    skill_name: str,
+    result: dict[str, Any],
+    repo_root: Path = REPO_ROOT,
+) -> None:
+    """Journal one skill-foundry generation attempt (note always; insight on register)."""
+
+    ok = bool(result.get("ok"))
+    status = str(result.get("status") or ("registered" if ok else "failed"))
+    reason = str(result.get("failure_reason") or ("registered generated executor" if ok else "generation failed"))
+    note = RunNote(
+        timestamp=_now(),
+        loop_type="skill_foundry",
+        objective=objective,
+        goal=f"generate:{skill_name}",
+        ok=ok,
+        reason=reason,
+        steps=int(result.get("attempts") or 0),
+        item_name=skill_name,
+        metadata={
+            "status": status,
+            "gates_passed": result.get("gates_passed"),
+            "version": result.get("version"),
+            "file_path": result.get("file_path"),
+        },
+    )
+    record_run_note(log_dir, note, repo_root=repo_root)
+    if ok:
+        record_run_insight(
+            log_dir,
+            RunInsight(
+                timestamp=note.timestamp,
+                objective=objective,
+                goal=f"generate:{skill_name}",
+                kind="generated_skill_registered",
+                detail=(
+                    f"Qwen authored and registered a new executor for {skill_name} "
+                    f"(v{result.get('version')}, gates {result.get('gates_passed')})."
+                ),
+                evidence={
+                    "gates_passed": result.get("gates_passed"),
+                    "file_path": result.get("file_path"),
+                    "attempts": result.get("attempts"),
+                    "version": result.get("version"),
+                },
+            ),
+            repo_root=repo_root,
+        )
+
+
 def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as file:

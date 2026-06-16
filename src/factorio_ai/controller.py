@@ -57,7 +57,7 @@ from .planner import (
 )
 from .rcon import FactorioRconClient
 from .site_selection import load_selected_improvement_site
-from .skill_registry import annotate_strategy_with_skill_status
+from .skill_registry import IMPLEMENTED_SKILLS, annotate_strategy_with_skill_status
 from .strategy import heuristic_strategy, make_strategy_payload, reconcile_strategy_decision, skill_catalog_payload
 from .targets import load_targets
 from .world_memory import (
@@ -773,23 +773,12 @@ class FactorioController:
         selected = str(strategy.get("selected_skill") or strategy.get("selected_goal") or "")
         status = strategy.get("skill_status") if isinstance(strategy.get("skill_status"), dict) else {}
         if status.get("codex_required"):
-            self._record_codex_wait_state(
+            return self._handle_missing_executor(
                 objective,
                 selected,
-                "executor missing; waiting for Codex implementation",
                 strategy,
-            )
-            self._maybe_progress_background_layout_for_blocked_strategy(
-                objective,
-                selected,
-                "executor missing; waiting for Codex implementation",
-            )
-            return StrategyStepSummary(
-                ok=False,
-                reason=f"executor missing for selected skill: {selected}",
-                objective=objective,
-                selected_skill=selected,
-                strategy=strategy,
+                "executor missing; foundry will attempt to generate it",
+                max_steps=max_steps,
             )
 
         strategy_target_item = _strategy_target_item(strategy) if selected == "bootstrap_build_item_mall" else None
@@ -805,23 +794,12 @@ class FactorioController:
             input_item=strategy_input_item,
         )
         if config is None:
-            self._record_codex_wait_state(
+            return self._handle_missing_executor(
                 objective,
                 selected,
-                "selected skill has no local runner; waiting for Codex implementation",
                 strategy,
-            )
-            self._maybe_progress_background_layout_for_blocked_strategy(
-                objective,
-                selected,
-                "selected skill has no local runner; waiting for Codex implementation",
-            )
-            return StrategyStepSummary(
-                ok=False,
-                reason=f"selected skill is not executable by the local runner: {selected}",
-                objective=objective,
-                selected_skill=selected,
-                strategy=strategy,
+                "selected skill has no local runner; foundry will attempt to generate it",
+                max_steps=max_steps,
             )
         self._clear_codex_wait_state(selected)
         run_config_keys = {
@@ -835,7 +813,10 @@ class FactorioController:
         }
         run_config = {key: value for key, value in config.items() if key in run_config_keys}
         run_config["objective"] = objective
-        run = self._run_skill(**run_config)
+        if self._is_generated_skill(selected):
+            run = self._run_generated_skill(selected, run_config)
+        else:
+            run = self._run_skill(**run_config)
         return StrategyStepSummary(
             ok=run.ok,
             reason=run.reason,
@@ -844,6 +825,219 @@ class FactorioController:
             strategy=strategy,
             run=run,
         )
+
+    # ------------------------------------------------------------------ #
+    # Self-development: never-stuck missing-executor handling
+    # ------------------------------------------------------------------ #
+
+    def _foundry_inline_enabled(self) -> bool:
+        return os.getenv("FACTORIO_AI_FOUNDRY_INLINE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _is_generated_skill(self, skill_name: str) -> bool:
+        if skill_name in IMPLEMENTED_SKILLS:
+            return False
+        from . import skill_foundry
+
+        try:
+            entry = skill_foundry.registry_status(skill_name)
+        except Exception:  # noqa: BLE001
+            return False
+        return isinstance(entry, dict) and entry.get("status") == "registered"
+
+    def _foundry_spec_from_strategy(self, selected: str, strategy: dict[str, Any]) -> dict[str, Any]:
+        blockers = strategy.get("blockers")
+        return {
+            "skill_name": selected,
+            "reason": str(strategy.get("reason") or ""),
+            "blockers": list(blockers) if isinstance(blockers, list) else [],
+            "expected_effect": str(strategy.get("expected_effect") or ""),
+            "target_item": _strategy_target_item(strategy) or strategy.get("target_item"),
+            "goal": selected,
+        }
+
+    def _enqueue_foundry_request(
+        self, selected: str, strategy: dict[str, Any], *, source: str = "autopilot_gap"
+    ) -> dict[str, Any]:
+        from . import skill_foundry
+
+        spec = self._foundry_spec_from_strategy(selected, strategy)
+        priority = strategy.get("priority")
+        priority = int(priority) if isinstance(priority, (int, float)) else 60
+        try:
+            skill_foundry.enqueue_foundry_request(
+                self.cfg.runtime_dir,
+                selected,
+                reason=spec["reason"],
+                blockers=spec["blockers"],
+                expected_effect=spec["expected_effect"],
+                target_item=spec["target_item"],
+                source=source,
+                priority=max(0, min(100, priority)),
+            )
+        except Exception:  # noqa: BLE001 - enqueue must never break the loop
+            pass
+        return spec
+
+    def _try_inline_foundry(self, spec: dict[str, Any], objective: str) -> None:
+        from . import skill_foundry
+
+        ok, _why = skill_foundry.eligible_for_generation(spec["skill_name"])
+        if not ok:
+            return
+        try:
+            result = skill_foundry.develop_skill(self.cfg, spec, max_attempts=1)
+        except Exception:  # noqa: BLE001
+            return
+        try:
+            from .run_journal import record_foundry_attempt_journal
+
+            record_foundry_attempt_journal(
+                self.cfg.log_dir,
+                objective=objective,
+                skill_name=spec["skill_name"],
+                result=result,
+                repo_root=self._journal_repo_root(),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _handle_missing_executor(
+        self,
+        objective: str,
+        selected: str,
+        strategy: dict[str, Any],
+        reason: str,
+        *,
+        max_steps: int | None = None,
+    ) -> StrategyStepSummary:
+        """Never block forever: record, enqueue for the foundry, run it if ready, else redirect."""
+
+        self._record_codex_wait_state(objective, selected, reason, strategy)
+        spec = self._enqueue_foundry_request(selected, strategy, source="autopilot_gap")
+        if self._foundry_inline_enabled():
+            self._try_inline_foundry(spec, objective)
+
+        config = self._skill_run_config(selected, max_steps=max_steps)
+        if config is not None:
+            self._clear_codex_wait_state(selected, clear_reason="generated executor registered")
+            run_config_keys = {"skill", "target_item", "target", "goal", "max_steps", "log_prefix", "log_path"}
+            run_config = {key: value for key, value in config.items() if key in run_config_keys}
+            run_config["objective"] = objective
+            run = self._run_generated_skill(selected, run_config)
+            return StrategyStepSummary(
+                ok=run.ok,
+                reason=run.reason,
+                objective=objective,
+                selected_skill=selected,
+                strategy=strategy,
+                run=run,
+            )
+
+        self._maybe_progress_background_layout_for_blocked_strategy(objective, selected, reason)
+        return self._keep_progressing_redirect(objective, selected, strategy, reason)
+
+    def _choose_keep_progressing_skill(self) -> str:
+        from . import strategy as strategy_mod
+
+        try:
+            observation = self.observe()
+        except Exception:  # noqa: BLE001
+            return "plan_factory_site"
+        try:
+            coal_needed = getattr(strategy_mod, "_coal_supply_needed", None)
+            if callable(coal_needed) and coal_needed(observation):
+                return "setup_coal_supply"
+            if total_item_count(observation, "iron-plate") < 10:
+                return "produce_iron_plate"
+            if total_item_count(observation, "copper-plate") < 10:
+                return "produce_copper_plate"
+            researched = getattr(strategy_mod, "_technology_researched", None)
+            if callable(researched) and not researched(observation, "automation"):
+                return "research_automation"
+        except Exception:  # noqa: BLE001
+            return "plan_factory_site"
+        return "plan_factory_site"
+
+    def _keep_progressing_redirect(
+        self, objective: str, selected: str, strategy: dict[str, Any], reason: str
+    ) -> StrategyStepSummary:
+        choice = self._choose_keep_progressing_skill()
+        config = self._skill_run_config(choice)
+        if config is None:
+            return StrategyStepSummary(
+                ok=False,
+                reason=f"missing executor for {selected}; no safe redirect available",
+                objective=objective,
+                selected_skill=selected,
+                strategy=strategy,
+            )
+        redirect_strategy = dict(strategy)
+        redirect_strategy["foundry_redirect"] = {"from": selected, "to": choice, "reason": reason}
+        run_config_keys = {"skill", "target_item", "target", "goal", "max_steps", "log_prefix"}
+        run_config = {key: value for key, value in config.items() if key in run_config_keys}
+        run_config["objective"] = objective
+        run = self._run_skill(**run_config)
+        return StrategyStepSummary(
+            ok=run.ok,
+            reason=f"redirected {selected} -> {choice}: {run.reason}",
+            objective=objective,
+            selected_skill=choice,
+            strategy=redirect_strategy,
+            run=run,
+        )
+
+    def _run_generated_skill(self, skill_name: str, run_config: dict[str, Any]) -> RunSummary:
+        """Run a registered generated skill with live failure rollback (auto-quarantine)."""
+
+        from . import skill_foundry
+
+        try:
+            run = self._run_skill(**run_config)
+        except Exception as exc:  # noqa: BLE001 - a generated skill must never crash the loop
+            failure = f"generated skill raised: {type(exc).__name__}: {exc}"
+            self._quarantine_generated_skill(skill_name, failure, signal="exception")
+            return RunSummary(False, failure, 0, 0, self.cfg.log_dir / "generated-error.log", run_config.get("target_item", "generated"))
+        if run.ok:
+            try:
+                entry = skill_foundry.registry_status(skill_name) or {}
+                skill_foundry.update_skill(skill_name, live_runs=int(entry.get("live_runs") or 0) + 1, live_failures=0)
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            self._record_generated_skill_failure(skill_name, run.reason)
+        return run
+
+    def _quarantine_generated_skill(self, skill_name: str, reason: str, *, signal: str) -> None:
+        from . import skill_foundry
+
+        try:
+            skill_foundry.set_skill_status(skill_name, "quarantined", reason)
+            skill_foundry.log_foundry_event(
+                self.cfg.log_dir, "live_disabled", {"skill_name": skill_name, "reason": reason, "signal": signal}
+            )
+            skill_foundry.write_runtime_mirror(self.cfg.runtime_dir)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _record_generated_skill_failure(self, skill_name: str, reason: str) -> None:
+        from . import skill_foundry
+
+        try:
+            entry = skill_foundry.registry_status(skill_name) or {}
+            failures = int(entry.get("live_failures") or 0) + 1
+            try:
+                limit = max(1, int(os.getenv("FACTORIO_AI_GEN_LIVE_FAIL_LIMIT", "3")))
+            except (TypeError, ValueError):
+                limit = 3
+            if failures >= limit:
+                self._quarantine_generated_skill(
+                    skill_name, f"live failures >= {limit}: {reason}", signal="repeated_failure"
+                )
+                skill_foundry.update_skill(skill_name, live_failures=failures)
+            else:
+                skill_foundry.update_skill(skill_name, live_failures=failures, last_failure_reason=reason)
+        except Exception:  # noqa: BLE001
+            pass
 
     def run_autopilot_loop(
         self,
@@ -1487,7 +1681,50 @@ class FactorioController:
                 "max_steps": _max_steps(max_steps, 1),
                 "log_prefix": "strategy-layout-improvement",
             }
+        generated = self._generated_skill_run_config(skill_name, target_count, max_steps)
+        if generated is not None:
+            return generated
         return None
+
+    def _generated_skill_run_config(
+        self,
+        skill_name: str,
+        target_count: int | None = None,
+        max_steps: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Run config for a registered Qwen-generated skill, or None.
+
+        Generated skills only expose ``next_action`` so the standard ``_run_skill``
+        loop drives them exactly like hand-written skills. A load failure disables
+        the entry so the autopilot redirects instead of crashing.
+        """
+
+        from . import skill_foundry
+
+        try:
+            entry = skill_foundry.registry_status(skill_name)
+            if not isinstance(entry, dict) or entry.get("status") != "registered":
+                return None
+            skill_class = skill_foundry.load_generated_skill_class(entry)
+            instance = skill_class()
+        except Exception as exc:  # noqa: BLE001 - never crash the strategy loop
+            try:
+                skill_foundry.set_skill_status(skill_name, "failed", f"load failed: {exc}")
+            except Exception:  # noqa: BLE001
+                pass
+            return None
+        default_target = entry.get("default_target")
+        default_steps = entry.get("default_max_steps")
+        target = target_count or (int(default_target) if isinstance(default_target, (int, float)) else 20)
+        default_max = int(default_steps) if isinstance(default_steps, (int, float)) else 1200
+        return {
+            "skill": instance,
+            "target_item": entry.get("target_item") or "generated-skill",
+            "target": target,
+            "goal": skill_name,
+            "max_steps": _max_steps(max_steps, default_max),
+            "log_prefix": entry.get("log_prefix") or f"strategy-generated-{skill_name}",
+        }
 
     def _run_skill(
         self,
@@ -1551,6 +1788,8 @@ class FactorioController:
                     self._write_live_skill_heartbeat(objective, goal, "step", step=step)
                     self._wait_for_review_window()
                     observation = self._observe_for_skill_loop(goal, step)
+                    if step == 1 or step % 25 == 0:
+                        self._bank_observation_sample(observation)
                     if initial_item_count is None:
                         initial_item_count = total_item_count(observation, target_item)
                     self._maybe_progress_background_layout_work(observation, objective, goal, step)
@@ -1613,6 +1852,159 @@ class FactorioController:
 
     def _idle_layout_process_path(self) -> Path:
         return self.cfg.runtime_dir / "idle-layout-loop.json"
+
+    def _bank_observation_sample(self, observation: dict[str, Any]) -> None:
+        from . import skill_foundry
+
+        try:
+            skill_foundry.record_observation_sample(self.cfg.log_dir, observation)
+        except Exception:  # noqa: BLE001 - sampling is best-effort
+            pass
+
+    # ------------------------------------------------------------------ #
+    # Self-development foundry loop (off the hot autopilot path)
+    # ------------------------------------------------------------------ #
+
+    def _skill_foundry_loop_path(self) -> Path:
+        return self.cfg.runtime_dir / "skill-foundry-loop.json"
+
+    def _write_skill_foundry_heartbeat(self, objective: str, state: str, **fields: Any) -> None:
+        self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, Any] = {
+            "pid": os.getpid(),
+            "state": state,
+            "objective": objective,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        payload.update(fields)
+        try:
+            with self._skill_foundry_loop_path().open("w", encoding="utf-8") as file:
+                json.dump(payload, file, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+
+    def _foundry_candidates(self) -> list[dict[str, Any]]:
+        """Specs to generate, priority-queue first then distinct unbuilt missing skills."""
+
+        from . import skill_foundry
+
+        candidates: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in skill_foundry.load_foundry_queue(self.cfg.runtime_dir):
+            name = item.get("skill_name")
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            if name in IMPLEMENTED_SKILLS:
+                # Already has a hand-written executor; never spend codegen on it. Stale
+                # missing-skills backlog entries can name skills that were implemented later.
+                skill_foundry.remove_from_queue(self.cfg.runtime_dir, name)
+                continue
+            candidates.append(
+                {
+                    "skill_name": name,
+                    "reason": item.get("reason") or "",
+                    "blockers": item.get("blockers") or [],
+                    "expected_effect": item.get("expected_effect") or "",
+                    "target_item": item.get("target_item"),
+                    "goal": name,
+                    "priority": int(item.get("priority") or 50),
+                }
+            )
+        for record in skill_foundry.distinct_missing_skills(self.cfg.runtime_dir):
+            name = record.get("selected_skill")
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            if name in IMPLEMENTED_SKILLS:
+                continue
+            candidates.append(
+                {
+                    "skill_name": name,
+                    "reason": record.get("reason") or "",
+                    "blockers": record.get("blockers") or [],
+                    "expected_effect": record.get("expected_effect") or "",
+                    "target_item": None,
+                    "goal": name,
+                    "priority": 40,
+                }
+            )
+        candidates.sort(key=lambda spec: spec.get("priority", 0), reverse=True)
+        return candidates
+
+    def run_skill_foundry_loop(
+        self,
+        objective: str = "launch_rocket_program",
+        *,
+        cycles: int = 0,
+        sleep_seconds: float = 30.0,
+        max_attempts: int | None = None,
+        require_idle: bool = False,
+        throttle_seconds: float = 0.0,
+    ) -> dict[str, Any]:
+        """Continuously generate+validate executors for un-built skills using idle GPU."""
+
+        from . import skill_foundry
+        from .run_journal import record_foundry_attempt_journal
+
+        self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+        completed = 0
+        generated = 0
+        failed = 0
+        last_attempt = 0.0
+        while True:
+            try:
+                self._maybe_ensure_slurm_worker(reason="skill_foundry_cycle")
+            except Exception:  # noqa: BLE001
+                pass
+            candidates = self._foundry_candidates()
+            picked: dict[str, Any] | None = None
+            skip_reason = "queue empty"
+            for spec in candidates:
+                ok, why = skill_foundry.eligible_for_generation(spec["skill_name"])
+                if ok:
+                    picked = spec
+                    break
+                skip_reason = f"{spec['skill_name']}: {why}"
+            idle_ok = True
+            if require_idle and picked is not None:
+                idle_ok, idle_reason, _hb = self._autopilot_idle_for_layout(15.0)
+                if not idle_ok:
+                    skip_reason = f"waiting for idle: {idle_reason}"
+            throttled = throttle_seconds > 0 and (time.monotonic() - last_attempt) < throttle_seconds
+            if picked is not None and idle_ok and not throttled:
+                self._write_skill_foundry_heartbeat(
+                    objective, "generating", current_skill=picked["skill_name"], queue=[c["skill_name"] for c in candidates]
+                )
+                result = skill_foundry.develop_skill(self.cfg, picked, max_attempts=max_attempts)
+                last_attempt = time.monotonic()
+                skill_foundry.remove_from_queue(self.cfg.runtime_dir, picked["skill_name"])
+                try:
+                    record_foundry_attempt_journal(
+                        self.cfg.log_dir,
+                        objective=objective,
+                        skill_name=picked["skill_name"],
+                        result=result,
+                        repo_root=self._journal_repo_root(),
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                if result.get("ok"):
+                    generated += 1
+                    self._clear_codex_wait_state(picked["skill_name"], clear_reason="generated executor registered")
+                else:
+                    failed += 1
+            else:
+                self._write_skill_foundry_heartbeat(
+                    objective, "idle", reason=skip_reason, queue=[c["skill_name"] for c in candidates]
+                )
+            completed += 1
+            if cycles and completed >= cycles:
+                break
+            self._write_skill_foundry_heartbeat(objective, "sleeping", generated_total=generated, failed_total=failed)
+            time.sleep(max(0.0, sleep_seconds))
+        self._write_skill_foundry_heartbeat(objective, "stopped", generated_total=generated, failed_total=failed)
+        return {"ok": True, "cycles": completed, "generated": generated, "failed": failed}
 
     def _live_skill_heartbeat_path(self) -> Path:
         return self.cfg.runtime_dir / "live-skill-heartbeat.json"

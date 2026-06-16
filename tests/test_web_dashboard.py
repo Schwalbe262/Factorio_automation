@@ -12,6 +12,7 @@ from factorio_ai.web_dashboard import (
     FACTORIO_BLUEPRINT_ROUTE,
     LLM_API_ROUTE,
     _candidate_blueprint_response,
+    _generated_skills_panel,
     _handle_dashboard_post_values,
     _site_blueprint_response,
     _token_usage_panel,
@@ -22,6 +23,7 @@ from factorio_ai.web_dashboard import (
     clear_dashboard_state_cache,
     dashboard_path,
     friendly_dashboard_error,
+    generated_skills_summary,
     is_factorio_route,
     llm_trace_api_response,
     llm_trace_path,
@@ -1035,6 +1037,123 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("Known water anchors", html)
         self.assertIn("Resource patches", html)
         self.assertIn("Factory zones", html)
+
+
+class GeneratedSkillsPanelTests(unittest.TestCase):
+    def test_panel_empty_state(self):
+        html = _generated_skills_panel({}, "en")
+        self.assertIn("Generated Skills (self-developed)", html)
+        self.assertIn("has not registered any self-developed", html)
+
+    def test_panel_renders_registered_queue_and_failures(self):
+        html = _generated_skills_panel(
+            {
+                "registered": [
+                    {
+                        "skill_name": "stockpile_wood",
+                        "class_name": "StockpileWoodSkill",
+                        "version": 2,
+                        "gates_passed": ["static_safety", "offline_replay", "sandbox_dryrun"],
+                        "target_item": "wood",
+                        "updated_at": "2026-06-17T00:00:00+00:00",
+                    }
+                ],
+                "failures": [
+                    {
+                        "skill_name": "build_rail_supply_line",
+                        "status": "quarantined",
+                        "attempts": 4,
+                        "last_failure_reason": "offline replay: invalid action",
+                    }
+                ],
+                "queue": [
+                    {"skill_name": "plan_rail_network", "priority": 70, "reason": "far resource patch"}
+                ],
+                "heartbeat": {
+                    "state": "generating",
+                    "current_skill": "plan_rail_network",
+                    "generated_total": 1,
+                    "failed_total": 1,
+                    "updated_at": "2026-06-17T00:01:00+00:00",
+                },
+            },
+            "en",
+        )
+        self.assertIn("stockpile_wood", html)
+        self.assertIn("StockpileWoodSkill", html)
+        self.assertIn("sandbox_dryrun", html)
+        self.assertIn("plan_rail_network", html)
+        self.assertIn("build_rail_supply_line", html)
+        self.assertIn("quarantined", html)
+        self.assertIn("generating", html)
+
+    def test_dashboard_includes_generated_skills_panel_in_korean(self):
+        html = render_dashboard(
+            {
+                "ok": True,
+                "objective": "launch_rocket_program",
+                "updated_at": "now",
+                "observation_tick": 1,
+                "adapter": "no-mod-rcon-lua",
+                "monitor": {},
+                "strategy": {},
+                "generated_skills": {
+                    "registered": [],
+                    "failures": [],
+                    "queue": [{"skill_name": "plan_rail_network", "priority": 50}],
+                    "heartbeat": {"state": "idle", "reason": "queue empty"},
+                },
+            },
+            lang="ko",
+        )
+        self.assertIn("생성된 스킬 (자가 개발)", html)
+        self.assertIn("plan_rail_network", html)
+
+    def test_generated_skills_summary_reads_registry_queue_and_heartbeat(self):
+        from factorio_ai import skill_foundry
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = Path(temp_dir)
+            gen_dir = runtime / "generated_skills"
+            gen_dir.mkdir(parents=True, exist_ok=True)
+            prev = os.environ.get("FACTORIO_AI_GENERATED_SKILLS_DIR")
+            os.environ["FACTORIO_AI_GENERATED_SKILLS_DIR"] = str(gen_dir)
+            try:
+                skill_foundry.update_skill(
+                    "stockpile_wood",
+                    status="registered",
+                    class_name="StockpileWoodSkill",
+                    version=1,
+                    gates_passed=["static_safety", "offline_replay"],
+                    target_item="wood",
+                )
+                skill_foundry.update_skill(
+                    "build_rail_supply_line",
+                    status="quarantined",
+                    last_failure_reason="repeated live failures",
+                    attempts=3,
+                )
+                skill_foundry.enqueue_foundry_request(
+                    runtime, "plan_rail_network", reason="far patch", priority=70
+                )
+                (runtime / "skill-foundry-loop.json").write_text(
+                    '{"state": "sleeping", "updated_at": "2026-06-17T00:00:00+00:00"}',
+                    encoding="utf-8",
+                )
+                cfg = SimpleNamespace(runtime_dir=runtime, log_dir=runtime / "logs")
+                summary = generated_skills_summary(cfg)
+            finally:
+                if prev is None:
+                    os.environ.pop("FACTORIO_AI_GENERATED_SKILLS_DIR", None)
+                else:
+                    os.environ["FACTORIO_AI_GENERATED_SKILLS_DIR"] = prev
+
+        self.assertEqual(summary["registered_count"], 1)
+        self.assertEqual(summary["registered"][0]["skill_name"], "stockpile_wood")
+        self.assertEqual(summary["queue_count"], 1)
+        self.assertEqual(summary["queue"][0]["skill_name"], "plan_rail_network")
+        self.assertEqual(summary["failures"][0]["skill_name"], "build_rail_supply_line")
+        self.assertEqual(summary["heartbeat"]["state"], "sleeping")
 
 
 if __name__ == "__main__":

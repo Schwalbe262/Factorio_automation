@@ -393,3 +393,15 @@ def wait_for_rcon(cfg: AppConfig, timeout_seconds: int = 120) -> None:
             last_error = exc
             time.sleep(1)
     raise TimeoutError(f"RCON did not become ready within {timeout_seconds}s: {last_error}")
+
+
+def save_no_mod_server(cfg: AppConfig, drain_seconds: float = 0.4) -> str:
+    """Persist the live no-mod server state back into its save file via RCON ``/server-save``.
+
+    The dedicated server is started with ``--start-server <no-mod-rcon.zip>`` and never writes that
+    file back on its own (and a force-kill skips the graceful save), so without periodic saves every
+    restart reloads the original map. Calling this keeps the named save current so restarts resume.
+    """
+
+    with FactorioRconClient(cfg.rcon_host, cfg.rcon_port, cfg.rcon_password, timeout=15) as client:
+        return client.execute("/server-save", drain_seconds=drain_seconds)

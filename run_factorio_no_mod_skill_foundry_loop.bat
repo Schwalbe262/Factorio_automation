@@ -1,0 +1,49 @@
+@echo off
+setlocal
+cd /d "%~dp0"
+
+set PYTHONPATH=src
+set FACTORIO_AI_SLURM_ENABLED=1
+set FACTORIO_AI_SLURM_MODE=scheduler
+set FACTORIO_AI_SLURM_SCHEDULER_URL=http://100.112.168.31:8000
+set FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT=r1jae262
+set FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker
+set FACTORIO_AI_SLURM_TASK_TIMEOUT_SECONDS=900
+set FACTORIO_AI_SLURM_SCHEDULER_CPUS=3
+set FACTORIO_AI_SLURM_SCHEDULER_GPUS=1
+set FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=a6000ada,a6000
+set FACTORIO_AI_SLURM_SCHEDULER_PRIORITY=100
+set FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.5-9B
+set FACTORIO_AI_VLLM_ARGS=--max-model-len 32768 --gpu-memory-utilization 0.90 --enforce-eager
+set FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER=0
+set FACTORIO_AI_VLLM_PORT=8000
+set FACTORIO_AI_VLLM_STARTUP_SECONDS=420
+set FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED=1
+set FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS=10800
+set FACTORIO_AI_SCHEDULER_VLLM_SERVICE_HEARTBEAT_SECONDS=30
+set FACTORIO_AI_SCHEDULER_VLLM_SERVICE_STALE_SECONDS=120
+set FACTORIO_AI_SCHEDULER_VLLM_SERVICE_QUEUE_STALE_SECONDS=180
+set FACTORIO_AI_SCHEDULER_VLLM_SERVICE_CPUS=1
+set FACTORIO_AI_SCHEDULER_VLLM_CLIENT_CPUS=1
+set FACTORIO_AI_SCHEDULER_VLLM_CLIENT_GPUS=1
+set FACTORIO_AI_SCHEDULER_VLLM_SERVICE_PRIORITY=120
+set FACTORIO_AI_LLM_GUIDED_JSON=1
+set FACTORIO_AI_LLM_TIMEOUT=600
+set FACTORIO_AI_REMOTE_STRATEGY_TIMEOUT_SECONDS=900
+set FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES=360
+set FACTORIO_AI_SLURM_RENEW_CHECK_INTERVAL_SECONDS=1800
+rem Self-development: validate every generated skill on a throwaway COPY of the live save first.
+set FACTORIO_AI_FOUNDRY_SANDBOX_ENABLED=1
+set FACTORIO_AI_FOUNDRY_SANDBOX_SERVER_PORT=34297
+set FACTORIO_AI_FOUNDRY_SANDBOX_RCON_PORT=27115
+set FACTORIO_AI_FOUNDRY_SANDBOX_RCON_TIMEOUT=180
+set FACTORIO_AI_FOUNDRY_MAX_ATTEMPTS=3
+set FACTORIO_AI_FOUNDRY_MAX_TOKENS=3072
+
+echo [factorio-ai] Running no-mod skill foundry loop.
+echo [factorio-ai] The local Qwen authors + validates missing skill executors whenever autopilot is idle.
+echo [factorio-ai] Each candidate is exercised on a throwaway copy of the live save before it can run live.
+echo [factorio-ai] Checking scheduler-managed Qwen local LLM path before self-development work.
+python -m factorio_ai.cli slurm-ensure-worker --renew-before-minutes %FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES% || exit /b 1
+python -m factorio_ai.cli slurm-ensure-vllm-service --duration-seconds %FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS% || exit /b 1
+python -m factorio_ai.cli run-no-mod-skill-foundry-loop --objective launch_rocket_program --cycles 0 --sleep-seconds 20 --require-idle --max-attempts 3

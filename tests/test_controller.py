@@ -760,12 +760,21 @@ class ControllerTests(unittest.TestCase):
                     },
                 ),
                 patch("factorio_ai.remote_slurm.submit_task", return_value="layout-blocked.json") as submit_task,
+                # The foundry now redirects a blocked strategy to a progressing skill instead of
+                # stopping. Stub the redirect's skill run so the test stays off the live RCON path
+                # and isolates the blocked-strategy bookkeeping (codex-wait, foundry enqueue, layout).
+                patch.object(
+                    controller,
+                    "_run_skill",
+                    return_value=RunSummary(False, "redirect stubbed in test", 0, 0, cfg.log_dir / "redirect.log", "iron-plate"),
+                ),
             ):
                 summary = controller.run_strategy_step("launch_rocket_program")
 
             log_path = cfg.log_dir / "layout-improvement-background.jsonl"
             rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
             wait_state = json.loads((cfg.runtime_dir / "codex-wait.json").read_text(encoding="utf-8"))
+            foundry_queue = json.loads((cfg.runtime_dir / "skill-foundry-priority.json").read_text(encoding="utf-8"))
 
         self.assertFalse(summary.ok)
         submit_task.assert_called_once()
@@ -777,6 +786,9 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(wait_state["active"])
         self.assertEqual(wait_state["selected_skill"], "future_build_item_skill")
         self.assertEqual(wait_state["active_skill"], "codex_wait:future_build_item_skill")
+        # The blocked skill is queued for the local-LLM skill foundry to self-develop.
+        queued_skills = {item["skill_name"] for item in foundry_queue["queue"]}
+        self.assertIn("future_build_item_skill", queued_skills)
 
     def test_blocked_no_mod_strategy_can_autostart_codex_wait_layout_loop(self):
         observation = {
@@ -830,6 +842,13 @@ class ControllerTests(unittest.TestCase):
                 ),
                 patch("factorio_ai.controller.subprocess.Popen", return_value=DummyProcess()) as popen,
                 patch("factorio_ai.remote_slurm.submit_task", return_value="layout-blocked.json"),
+                # Keep the new foundry redirect off the live RCON path so the test isolates the
+                # codex-wait-layout-loop autostart behavior on a blocked strategy.
+                patch.object(
+                    controller,
+                    "_run_skill",
+                    return_value=RunSummary(False, "redirect stubbed in test", 0, 0, cfg.log_dir / "redirect.log", "iron-plate"),
+                ),
             ):
                 summary = controller.run_strategy_step("launch_rocket_program")
 

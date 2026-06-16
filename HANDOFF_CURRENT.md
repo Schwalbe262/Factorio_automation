@@ -1,11 +1,9 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; Part 131 - local LLM I/O trace dashboard.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; Part 132 - local-LLM self-development (skill foundry) wired into the unattended loop.
 - Startup context: read this file and targeted `goal.md`; never read `note.md`/`insight.md` in full.
-- Added append-only `logs/llm_io_traces.jsonl` support with full system prompt, input prompt, raw output, parsed JSON, latency, model/base URL, task id, and ok/error metadata.
-- Local/shared LLM calls now attach trace diagnostics for strategy/layout/planner; `controller.strategy_decision` records strategy traces locally and strips full prompt/output from returned strategy data.
-- Added `/factorio/llm` HTML trace page, `/api/factorio/llm` JSON endpoint, and dashboard nav link; rendered text is escaped and capped while JSONL keeps full content.
-- Trace archives classify `llm_io_traces.jsonl` as high-value training data.
-- Validation: `py_compile src/factorio_ai/llm_log.py src/factorio_ai/slurm_worker.py src/factorio_ai/controller.py src/factorio_ai/web_dashboard.py`; `PYTHONPATH=src pytest tests/test_llm_log.py tests/test_slurm_worker.py tests/test_controller.py tests/test_web_dashboard.py -q` -> 105 passed.
-- Extra validation: trace archive targeted tests passed; HTTP route/API smoke check passed; in-app Browser `iab` was unavailable.
-- Token usage: current sample not recorded because `C:\Users\NEC\.codex\state_5.sqlite` is malformed; weekly quota unavailable.
-- Next: use `/factorio/llm` during live Qwen strategy cycles to inspect raw decisions and watch log growth.
+- Codex/Claude are not required to run gameplay anymore: when strategy picks a skill with no executor, `skill_foundry.py` has the local Qwen author one, validated by Gate 1 (AST allowlist + `py_compile`), Gate 2 (offline replay), and Gate 3 (sandbox dry-run on a COPY of the live save), then registers it under `src/factorio_ai/generated_skills/`.
+- `run_factorio_no_mod_unattended_llm.ps1` now starts/keeps-alive a 4th managed process `run-no-mod-skill-foundry-loop` (LLM-ready gated, `--require-idle`, sandbox gate ON), so the missing-skill queue is actually consumed unattended. Standalone: `run_factorio_no_mod_skill_foundry_loop.bat`.
+- Dashboard has a new "Generated Skills (self-developed)" panel (registered / queue / failures / foundry heartbeat), bilingual EN/KR.
+- A blocked strategy no longer stalls: it records codex-wait, enqueues the skill for the foundry, and redirects to a progressing skill.
+- Validation: `PYTHONPATH=src python -m unittest discover -s tests` -> 739 passed.
+- Next: run the unattended supervisor and watch `runtime/skill-foundry-loop.json` + the dashboard panel as Qwen authors real executors; raise foundry codegen to the 27B worker if 9B's success rate is low.

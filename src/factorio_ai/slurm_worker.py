@@ -191,7 +191,53 @@ def execute_task(task: dict[str, Any]) -> dict[str, Any]:
         return run_layout_improvement_request(payload)
     if task_type == "strategy_model_benchmark":
         return run_strategy_model_benchmark(payload)
+    if task_type == "skill_foundry_request":
+        return run_skill_foundry_request(payload)
     raise ValueError(f"unsupported task type: {task_type}")
+
+
+def run_skill_foundry_request(payload: dict[str, Any]) -> dict[str, Any]:
+    """Author one skill module with the local LLM. Runs on the node where vLLM is reachable.
+
+    The client (:func:`factorio_ai.skill_foundry.generate_skill_code`) submits this task so codegen
+    happens where the OpenAI-compatible endpoint is local, exactly like ``strategy_request``.
+    """
+
+    from . import skill_foundry
+
+    spec = payload.get("spec") if isinstance(payload.get("spec"), dict) else {}
+    samples = payload.get("observation_samples") if isinstance(payload.get("observation_samples"), list) else []
+    previous_failure = str(payload.get("previous_failure") or "")
+    task_id = str(payload.get("task_id") or "")
+    raw_max_tokens = payload.get("max_tokens")
+    try:
+        max_tokens = skill_foundry._codegen_max_tokens() if raw_max_tokens is None else max(512, min(4096, int(raw_max_tokens)))
+    except (TypeError, ValueError):
+        max_tokens = skill_foundry._codegen_max_tokens()
+
+    prompt = skill_foundry._build_codegen_prompt(spec, samples, previous_failure)
+    parsed, diagnostics = call_llm_json_with_diagnostics(
+        skill_foundry._CODEGEN_SYSTEM,
+        prompt,
+        skill_foundry._CODEGEN_SCHEMA,
+        kind="skill_foundry",
+        task_id=task_id,
+        max_tokens=max_tokens,
+    )
+    # Keep the returned stdout small: drop the full I/O trace, keep compact diagnostics.
+    result: dict[str, Any] = {"ok": True, "type": "skill_foundry_request"}
+    for key, value in diagnostics.items():
+        if key in {"llm_trace", "llm_traces"}:
+            continue
+        if value not in (None, ""):
+            result[key] = value
+    if isinstance(parsed, dict):
+        result["code"] = parsed.get("code")
+        result["class_name"] = parsed.get("class_name")
+        result["notes"] = parsed.get("notes")
+    else:
+        result.setdefault("foundry_error", diagnostics.get("llm_error") or "LLM returned no JSON object")
+    return result
 
 
 def run_planner_request(payload: dict[str, Any]) -> dict[str, Any]:
@@ -677,13 +723,14 @@ def call_llm_json_with_diagnostics(
     *,
     kind: str = "llm",
     task_id: str = "",
+    max_tokens: int | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     base_url = "".join(os.getenv("FACTORIO_AI_LLM_BASE_URL", "").split()).rstrip("/")
     model = os.getenv("FACTORIO_AI_LLM_MODEL", "").strip()
     if not base_url or not model:
         return None, {"llm_error": "LLM base URL or model is not configured"}
     started = time.monotonic()
-    max_tokens = _llm_max_tokens()
+    max_tokens = _llm_max_tokens() if max_tokens is None else max(64, min(4096, int(max_tokens)))
 
     def diagnostics(
         *,

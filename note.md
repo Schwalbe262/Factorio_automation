@@ -20514,3 +20514,1260 @@ note.md rules:
 - Failure reason: none for implementation; current Codex token sample could not be recorded because `C:\Users\NEC\.codex\state_5.sqlite` is malformed.
 - Next action: inspect `/factorio/llm` during live Qwen cycles and watch log growth.
 - Token usage: unavailable for this loop; absolute counter read failed and weekly quota is unavailable.
+
+## 2026-06-16 22:17:29 +09:00 - Loop 944
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-131649.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 39.062s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-131649.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 22:17:29 +09:00 - Loop 945
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 3.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 3.
+  - Status: ok.
+  - Duration: 513.906s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":3,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 22:22:50 +09:00 - Loop 946
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-132210.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 40.078s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-132210.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 22:22:50 +09:00 - Loop 947
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 4.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 4.
+  - Status: ok.
+  - Duration: 261.000s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":4,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 22:28:56 +09:00 - Loop 948
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-132814.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 41.953s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-132814.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 22:28:56 +09:00 - Loop 949
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 5.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 5.
+  - Status: ok.
+  - Duration: 306.203s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":5,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 22:35:43 +09:00 - Loop 950
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-133502.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 40.813s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-133502.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 22:35:43 +09:00 - Loop 951
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 6.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 6.
+  - Status: ok.
+  - Duration: 346.593s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":6,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 22:42:07 +09:00 - Loop 952
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-134127.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 39.313s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-134127.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 22:42:07 +09:00 - Loop 953
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 7.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 7.
+  - Status: ok.
+  - Duration: 323.937s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":7,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 22:49:54 +09:00 - Loop 954
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-134913.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 41.125s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-134913.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 22:49:54 +09:00 - Loop 955
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 8.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 8.
+  - Status: ok.
+  - Duration: 407.266s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":8,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 22:55:59 +09:00 - Loop 956
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-135506.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 53.469s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-135506.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 22:55:59 +09:00 - Loop 957
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 9.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 9.
+  - Status: ok.
+  - Duration: 305.296s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":9,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:03:17 +09:00 - Loop 958
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-140223.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 53.359s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-140223.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:03:17 +09:00 - Loop 959
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 10.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 10.
+  - Status: ok.
+  - Duration: 377.375s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":10,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:09:23 +09:00 - Loop 960
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-140820.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 63.516s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-140820.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:09:23 +09:00 - Loop 961
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 11.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 11.
+  - Status: ok.
+  - Duration: 306.266s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":11,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:16:34 +09:00 - Loop 962
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-141539.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 54.578s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-141539.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:16:34 +09:00 - Loop 963
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 12.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 12.
+  - Status: ok.
+  - Duration: 370.516s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":12,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:22:11 +09:00 - Loop 964
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-142118.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 52.844s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-142118.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:22:11 +09:00 - Loop 965
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 13.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 13.
+  - Status: ok.
+  - Duration: 277.391s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":13,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:29:43 +09:00 - Loop 966
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-142850.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 53.453s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-142850.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:29:43 +09:00 - Loop 967
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 14.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 14.
+  - Status: ok.
+  - Duration: 391.922s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":14,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:35:23 +09:00 - Loop 968
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-143429.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 53.438s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-143429.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:35:23 +09:00 - Loop 969
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 15.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 15.
+  - Status: ok.
+  - Duration: 279.469s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":15,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:42:40 +09:00 - Loop 970
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-144200.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 40.484s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-144200.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:42:40 +09:00 - Loop 971
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 16.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 16.
+  - Status: ok.
+  - Duration: 377.484s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":16,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:50:15 +09:00 - Loop 972
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-144922.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 53.469s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-144922.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:50:15 +09:00 - Loop 973
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 17.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 17.
+  - Status: ok.
+  - Duration: 395.032s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":17,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:56:37 +09:00 - Loop 974
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-145541.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 56.031s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-145541.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-16 23:56:37 +09:00 - Loop 975
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 18.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 18.
+  - Status: ok.
+  - Duration: 321.265s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":18,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:02:24 +09:00 - Loop 976
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-150131.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 53.078s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-150131.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:02:24 +09:00 - Loop 977
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 19.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 19.
+  - Status: ok.
+  - Duration: 287.062s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":19,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:07:53 +09:00 - Loop 978
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-150700.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 53.641s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-150700.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:07:54 +09:00 - Loop 979
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 20.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 20.
+  - Status: ok.
+  - Duration: 269.625s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":20,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:15:35 +09:00 - Loop 980
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-151455.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 39.969s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-151455.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:15:35 +09:00 - Loop 981
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 21.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 21.
+  - Status: ok.
+  - Duration: 401.609s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":21,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:20:55 +09:00 - Loop 982
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-152004.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 50.765s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-152004.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:20:55 +09:00 - Loop 983
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 22.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 22.
+  - Status: ok.
+  - Duration: 259.844s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":22,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:28:07 +09:00 - Loop 984
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-152732.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 35.594s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-152732.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:28:07 +09:00 - Loop 985
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 23.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 23.
+  - Status: ok.
+  - Duration: 372.204s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":23,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:34:04 +09:00 - Loop 986
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-153319.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 44.828s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-153319.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:34:04 +09:00 - Loop 987
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 24.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 24.
+  - Status: ok.
+  - Duration: 296.296s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":24,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:40:28 +09:00 - Loop 988
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-153956.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 31.563s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-153956.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:40:28 +09:00 - Loop 989
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 25.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 25.
+  - Status: ok.
+  - Duration: 324.109s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":25,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:46:46 +09:00 - Loop 990
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-154604.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 41.875s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-154604.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:46:46 +09:00 - Loop 991
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 26.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 26.
+  - Status: ok.
+  - Duration: 317.750s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":26,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:54:18 +09:00 - Loop 992
+- Part: skill
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: Running `build_iron_plate_logistic_line_to_gear_mall` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `build_iron_plate_logistic_line_to_gear_mall` for up to 1200 step(s).
+  - Tracked `transport-belt` from 35 to 35.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-155340.jsonl`.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Target item candidate: `transport-belt` target `40`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 38.140s.
+  - transport-belt: 35 -> 35 (delta 0).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-plate-gear-mall-logistics-20260616-155340.jsonl`.
+  - Metadata: `{"delta_item_count":0,"final_item_count":35,"initial_item_count":35,"max_steps":1200,"target":40}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 00:54:19 +09:00 - Loop 993
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / build_iron_plate_logistic_line_to_gear_mall
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 27.
+  - Selected `build_iron_plate_logistic_line_to_gear_mall` with priority `92` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `build_iron_plate_logistic_line_to_gear_mall`.
+  - Strategy priority: `92`.
+- Metrics:
+  - Steps: 27.
+  - Status: ok.
+  - Duration: 392.578s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-125536.jsonl`.
+  - Metadata: `{"cycle":27,"priority":92,"strategy_source":"llm"}`.
+- Result: Completed: iron-plate logistics line to the gear mall is built with belts and endpoint inserters
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 01:02:31 +09:00 - Loop 994
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / 
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 1.
+  - Selected `` with priority `None` from `None` strategy.
+- Candidates:
+  - Selected goal/skill: ``.
+- Metrics:
+  - Steps: 1.
+  - Status: failed.
+  - Duration: 2.016s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-160227.jsonl`.
+  - Metadata: `{"cycle":1,"priority":null,"strategy_source":null}`.
+- Result: Loop stopped: strategy cycle failed: ConnectionRefusedError: [WinError 10061] 대상 컴퓨터에서 연결을 거부했으므로 연결하지 못했습니다
+- Failure reason: strategy cycle failed: ConnectionRefusedError: [WinError 10061] 대상 컴퓨터에서 연결을 거부했으므로 연결하지 못했습니다
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 01:02:37 +09:00 - Loop 995
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:observe_failed
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:observe_failed`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:observe_failed`.
+- Metrics:
+  - Steps: 2.
+  - Status: failed.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle_reason":"autopilot state is sleeping"}`.
+- Result: Loop stopped: observe failed: ConnectionRefusedError: [WinError 10061] 대상 컴퓨터에서 연결을 거부했으므로 연결하지 못했습니다
+- Failure reason: observe failed: ConnectionRefusedError: [WinError 10061] 대상 컴퓨터에서 연결을 거부했으므로 연결하지 못했습니다
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 01:02:48 +09:00 - Loop 996
+- Part: idle_layout_cycle
+- Goal: launch_rocket_program / idle:observe_failed
+- Hypothesis: Idle or planning time can be used to identify safer, denser, more automated factory-site improvements.
+- Actions:
+  - Ran layout loop `idle_layout_cycle` for active skill `idle:observe_failed`.
+  - Stored layout loop trace at `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+- Candidates:
+  - Selected goal/skill: `idle:observe_failed`.
+- Metrics:
+  - Steps: 3.
+  - Status: failed.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\layout-improvement-background.jsonl`.
+  - Metadata: `{"idle_reason":"autopilot state is sleeping"}`.
+- Result: Loop stopped: observe failed: ConnectionRefusedError: [WinError 10061] 대상 컴퓨터에서 연결을 거부했으므로 연결하지 못했습니다
+- Failure reason: observe failed: ConnectionRefusedError: [WinError 10061] 대상 컴퓨터에서 연결을 거부했으므로 연결하지 못했습니다
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 03:51:09 +09:00 - Loop 997
+- Part: skill_foundry
+- Goal: launch_rocket_program / generate:stockpile_coal
+- Hypothesis: This loop should either advance the current goal or produce evidence for the next safe action.
+- Actions:
+  - Recorded loop `skill_foundry` for `generate:stockpile_coal`.
+- Candidates:
+  - Selected goal/skill: `generate:stockpile_coal`.
+- Metrics:
+  - Steps: 2.
+  - Status: failed.
+  - stockpile_coal: unknown -> 0 (delta unknown).
+  - Metadata: `{"file_path":null,"gates_passed":null,"status":"failed","version":null}`.
+- Result: Loop stopped: remote foundry codegen failed: TimeoutError: scheduler task timed out: 8635
+- Failure reason: remote foundry codegen failed: TimeoutError: scheduler task timed out: 8635
+- Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 04:03:41 +09:00 - Loop 998
+- Part: skill_foundry
+- Goal: launch_rocket_program / generate:stockpile_coal
+- Hypothesis: This loop should either advance the current goal or produce evidence for the next safe action.
+- Actions:
+  - Recorded loop `skill_foundry` for `generate:stockpile_coal`.
+- Candidates:
+  - Selected goal/skill: `generate:stockpile_coal`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - stockpile_coal: unknown -> 0 (delta unknown).
+  - Metadata: `{"file_path":"runtime/foundry-live-test/generated/stockpile_coal.py","gates_passed":["static_safety","offline_replay"],"status":"registered","version":1}`.
+- Result: Completed: registered generated executor
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 04:13:20 +09:00 - Loop 999
+- Part: skill
+- Goal: launch_rocket_program / produce_iron_plate
+- Hypothesis: Running `produce_iron_plate` should move the factory toward `launch_rocket_program`; item counts and the raw action log verify progress.
+- Actions:
+  - Ran deterministic skill `produce_iron_plate` for up to 200 step(s).
+  - Tracked `iron-plate` from 7 to 11.
+  - Wrote raw action trace to `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-20260616-191151.jsonl`.
+- Candidates:
+  - Selected goal/skill: `produce_iron_plate`.
+  - Target item candidate: `iron-plate` target `10`.
+- Metrics:
+  - Steps: 15.
+  - Status: ok.
+  - Duration: 89.125s.
+  - iron-plate: 7 -> 11 (delta 4).
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\strategy-iron-20260616-191151.jsonl`.
+  - Metadata: `{"delta_item_count":4,"final_item_count":11,"initial_item_count":7,"max_steps":200,"target":10}`.
+- Result: Completed: iron plate target reached: 11/10
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 04:13:20 +09:00 - Loop 1000
+- Part: autopilot_cycle
+- Goal: launch_rocket_program / produce_iron_plate
+- Hypothesis: The selected strategic skill is the highest-priority next loop given current factory, research, threat, and layout state.
+- Actions:
+  - Ran autopilot cycle 1.
+  - Selected `produce_iron_plate` with priority `95` from `llm` strategy.
+- Candidates:
+  - Selected goal/skill: `produce_iron_plate`.
+  - Strategy priority: `95`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - Duration: 280.609s.
+  - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260616-190836.jsonl`.
+  - Metadata: `{"cycle":1,"priority":95,"strategy_source":"llm"}`.
+- Result: Completed: iron plate target reached: 11/10
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+
+## 2026-06-17 04:13:27 +09:00 - Loop 1001
+- Part: skill_foundry
+- Goal: launch_rocket_program / generate:build_starter_defense
+- Hypothesis: This loop should either advance the current goal or produce evidence for the next safe action.
+- Actions:
+  - Recorded loop `skill_foundry` for `generate:build_starter_defense`.
+- Candidates:
+  - Selected goal/skill: `generate:build_starter_defense`.
+- Metrics:
+  - Steps: 1.
+  - Status: ok.
+  - build_starter_defense: unknown -> 0 (delta unknown).
+  - Metadata: `{"file_path":"src/factorio_ai/generated_skills/build_starter_defense.py","gates_passed":["static_safety","offline_replay"],"status":"registered","version":1}`.
+- Result: Completed: registered generated executor
+- Failure reason: None
+- Next action: Advance to the next highest-priority goal from `goal.md`.
+- Token usage: not recorded for this loop / weekly quota unavailable
+

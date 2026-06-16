@@ -6,6 +6,9 @@ param(
     [int]$AutopilotSleepSeconds = 60,
     [int]$IdleLoopStaleSeconds = 180,
     [int]$LayoutMaxActiveTasks = 1,
+    [int]$FoundryStaleSeconds = 900,
+    [int]$FoundrySleepSeconds = 20,
+    [int]$ServerSaveIntervalSeconds = 300,
     [switch]$NoDashboard
 )
 
@@ -51,6 +54,14 @@ $env:FACTORIO_AI_BACKGROUND_LAYOUT_MAX_ACTIVE_TASKS = [string]$LayoutMaxActiveTa
 $env:FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS = "0"
 $env:FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES = "360"
 $env:FACTORIO_AI_SLURM_RENEW_CHECK_INTERVAL_SECONDS = "1800"
+# Self-development (skill foundry): the local Qwen authors missing executors and each
+# candidate is exercised on a throwaway COPY of the live save before it can run live.
+$env:FACTORIO_AI_FOUNDRY_SANDBOX_ENABLED = "1"
+$env:FACTORIO_AI_FOUNDRY_SANDBOX_SERVER_PORT = "34297"
+$env:FACTORIO_AI_FOUNDRY_SANDBOX_RCON_PORT = "27115"
+$env:FACTORIO_AI_FOUNDRY_SANDBOX_RCON_TIMEOUT = "180"
+$env:FACTORIO_AI_FOUNDRY_MAX_ATTEMPTS = "3"
+$env:FACTORIO_AI_FOUNDRY_MAX_TOKENS = "3072"
 
 $runtimeDir = Join-Path $repoRoot "runtime"
 $logDir = Join-Path $repoRoot "logs"
@@ -59,6 +70,7 @@ New-Item -ItemType Directory -Force -Path $runtimeDir, $logDir | Out-Null
 $supervisorLog = Join-Path $logDir "unattended-llm-supervisor.log"
 $statusPath = Join-Path $runtimeDir "unattended-llm-supervisor.json"
 $lastSchedulerCheck = [DateTime]::MinValue
+$lastServerSave = [DateTime]::MinValue
 $lastSchedulerStatus = $null
 $lastVllmServiceStatus = $null
 
@@ -246,14 +258,36 @@ function Compact-VllmServiceStatus {
 }
 
 function Ensure-NoModServer {
-    $observeExit = Invoke-Cli @("-m", "factorio_ai.cli", "no-mod-observe")
+    # Quiet probe: when no server is running yet, no-mod-observe raises ConnectionRefused and prints a
+    # full traceback. That is expected on first boot (we just start the server), so suppress the noise
+    # and only act on the exit code.
+    & python -m factorio_ai.cli no-mod-observe *> $null
+    $observeExit = $LASTEXITCODE
     if ($observeExit -eq 0) {
         return
     }
-    Write-SupervisorLog "no-mod RCON observe failed; ensuring save and starting server"
+    Write-SupervisorLog "no-mod RCON not reachable yet; ensuring save and starting server"
     Invoke-Cli @("-m", "factorio_ai.cli", "create-no-mod-save") | Out-Null
     Start-ManagedPython "unattended-no-mod-server" @("-m", "factorio_ai.cli", "start-no-mod-server") | Out-Null
     Start-Sleep -Seconds 12
+}
+
+function Ensure-NoModServerSave {
+    # Periodically persist the live world to its save file so a restart resumes instead of reloading
+    # the original map. The server is started with --start-server <save> and never writes it back on
+    # its own, so without this every restart begins from scratch on the same seed.
+    if ($ServerSaveIntervalSeconds -le 0) {
+        return
+    }
+    $now = Get-Date
+    if (($now - $script:lastServerSave).TotalSeconds -lt $ServerSaveIntervalSeconds) {
+        return
+    }
+    & python -m factorio_ai.cli no-mod-server-save *> $null
+    if ($LASTEXITCODE -eq 0) {
+        $script:lastServerSave = $now
+        Write-SupervisorLog "no-mod server state saved (/server-save)"
+    }
 }
 
 function Ensure-LayoutCapacityLimit {
@@ -401,6 +435,58 @@ function Ensure-IdleLayoutLoop {
     ) | Out-Null
 }
 
+function Write-FoundryWaitingHeartbeat {
+    $payload = [ordered]@{
+        pid = $null
+        updated_at = [DateTimeOffset]::UtcNow.ToString("o")
+        objective = $Objective
+        state = "waiting_for_scheduler_llm"
+        reason = "waiting for scheduler local LLM readiness"
+    }
+    $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $runtimeDir "skill-foundry-loop.json") -Encoding UTF8
+}
+
+function Ensure-SkillFoundryLoop {
+    if (-not (Test-SchedulerLlmReady)) {
+        Stop-ManagedProcesses "skill-foundry-loop" "run-no-mod-skill-foundry-loop"
+        Write-FoundryWaitingHeartbeat
+        return
+    }
+    $processes = @(Get-ManagedProcesses "run-no-mod-skill-foundry-loop")
+    $heartbeat = Read-JsonFile (Join-Path $runtimeDir "skill-foundry-loop.json")
+    $ageSeconds = Get-JsonAgeSeconds $heartbeat
+    $staleState = $false
+    if ($processes.Count -eq 0) {
+        $staleState = $true
+    } elseif ($null -eq $heartbeat) {
+        $staleState = $true
+    } elseif ($heartbeat.state -in @("stopped", "failed", "interrupted")) {
+        $staleState = $true
+    } elseif ($ageSeconds -gt $FoundryStaleSeconds) {
+        $staleState = $true
+    }
+
+    if (-not $staleState) {
+        return
+    }
+
+    if ($processes.Count -gt 0) {
+        Write-SupervisorLog "restarting stale skill foundry loop process"
+        foreach ($process in $processes) {
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Seconds 3
+    }
+    Start-ManagedPython "unattended-skill-foundry-loop" @(
+        "-m", "factorio_ai.cli", "run-no-mod-skill-foundry-loop",
+        "--objective", $Objective,
+        "--cycles", "0",
+        "--sleep-seconds", [string]$FoundrySleepSeconds,
+        "--require-idle",
+        "--max-attempts", "3"
+    ) | Out-Null
+}
+
 function Test-LiveSkillFresh {
     $live = Read-JsonFile (Join-Path $runtimeDir "live-skill-heartbeat.json")
     if ($null -eq $live -or $live.active -ne $true) {
@@ -464,6 +550,7 @@ function Write-SupervisorStatus {
     $autopilot = Read-JsonFile (Join-Path $runtimeDir "autopilot-heartbeat.json")
     $idle = Read-JsonFile (Join-Path $runtimeDir "idle-layout-loop.json")
     $live = Read-JsonFile (Join-Path $runtimeDir "live-skill-heartbeat.json")
+    $foundry = Read-JsonFile (Join-Path $runtimeDir "skill-foundry-loop.json")
     $autopilotGate = "waiting_for_scheduler_llm"
     if (Test-SchedulerLlmReady) {
         $autopilotGate = "ready"
@@ -481,11 +568,13 @@ function Write-SupervisorStatus {
         autopilot_gate = $autopilotGate
         autopilot_processes = @((Get-ManagedProcesses "run-no-mod-autopilot" | ForEach-Object { $_.ProcessId }))
         idle_layout_processes = @((Get-ManagedProcesses "run-no-mod-idle-layout-loop" | ForEach-Object { $_.ProcessId }))
+        skill_foundry_processes = @((Get-ManagedProcesses "run-no-mod-skill-foundry-loop" | ForEach-Object { $_.ProcessId }))
         vllm_service_status = $lastVllmServiceStatus
         scheduler_llm_status = $lastSchedulerStatus
         autopilot_heartbeat = $autopilot
         live_skill_heartbeat = $live
         idle_layout_heartbeat = $idle
+        skill_foundry_heartbeat = $foundry
     }
     $status | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $statusPath -Encoding UTF8
 }
@@ -494,11 +583,13 @@ Write-SupervisorLog "unattended local LLM supervisor started for $Objective"
 while ($true) {
     try {
         Ensure-NoModServer
+        Ensure-NoModServerSave
         Ensure-Dashboard
         Ensure-LayoutCapacityLimit
         Ensure-SchedulerLlm
         Ensure-Autopilot
         Ensure-IdleLayoutLoop
+        Ensure-SkillFoundryLoop
         Write-SupervisorStatus
     } catch {
         Write-SupervisorLog "supervisor loop error: $($_.Exception.GetType().Name): $($_.Exception.Message)"

@@ -303,6 +303,14 @@ TEXT["en"].update(
         "no_layout_improvement": "No layout issues, optimization opportunities, or simulation candidates inferred yet.",
         "layout_background": "Background Layout Work",
         "no_layout_background": "No background layout work has been recorded yet.",
+        "generated_skills": "Generated Skills (self-developed)",
+        "no_generated_skills": "The local LLM has not registered any self-developed skill executors yet.",
+        "foundry_state": "Foundry State",
+        "foundry_queue": "Generation Queue",
+        "registered_skills": "Registered Skills",
+        "foundry_gates": "Gates Passed",
+        "foundry_failures": "Recent Failures / Quarantine",
+        "version": "Version",
         "event": "Event",
         "active_skill": "Active Skill",
         "candidate": "Candidate",
@@ -358,6 +366,14 @@ TEXT["ko"].update(
         "no_layout_improvement": "\uc544\uc9c1 \ucd94\uc815\ub41c \ub808\uc774\uc544\uc6c3 \ubb38\uc81c, \uac1c\uc120 \uae30\ud68c, \uc2dc\ubbac\ub808\uc774\uc158 \ud6c4\ubcf4\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.",
         "layout_background": "\ubc31\uadf8\ub77c\uc6b4\ub4dc \ub808\uc774\uc544\uc6c3 \uc791\uc5c5",
         "no_layout_background": "\uc544\uc9c1 \uae30\ub85d\ub41c \ubc31\uadf8\ub77c\uc6b4\ub4dc \ub808\uc774\uc544\uc6c3 \uc791\uc5c5\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "generated_skills": "\uc0dd\uc131\ub41c \uc2a4\ud0ac (\uc790\uac00 \uac1c\ubc1c)",
+        "no_generated_skills": "\ub85c\uceec LLM\uc774 \uc544\uc9c1 \uc790\uac00 \uac1c\ubc1c\ud55c \uc2a4\ud0ac \uc2e4\ud589\uae30\ub97c \ub4f1\ub85d\ud558\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4.",
+        "foundry_state": "\ud30c\uc6b4\ub4dc\ub9ac \uc0c1\ud0dc",
+        "foundry_queue": "\uc0dd\uc131 \ub300\uae30\uc5f4",
+        "registered_skills": "\ub4f1\ub85d\ub41c \uc2a4\ud0ac",
+        "foundry_gates": "\ud1b5\uacfc\ud55c \uac8c\uc774\ud2b8",
+        "foundry_failures": "\ucd5c\uadfc \uc2e4\ud328 / \uaca9\ub9ac",
+        "version": "\ubc84\uc804",
         "event": "\uc774\ubca4\ud2b8",
         "active_skill": "\uc9c4\ud589 \uc2a4\ud0ac",
         "candidate": "\ud6c4\ubcf4",
@@ -848,6 +864,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
     run_journal = run_journal_summary(cfg.log_dir)
     trace_archives = trace_archive_summary(cfg.runtime_dir / "trace_archives")
     world_map_memory = summarize_world_map_memory(load_world_map_memory(cfg.runtime_dir))
+    generated_skills = generated_skills_summary(cfg)
     try:
         observation, adapter = observe_dashboard_state(cfg)
         monitor = summarize_factory(observation, objective, production_targets=targets.per_minute)
@@ -890,6 +907,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "run_journal": run_journal,
             "trace_archives": trace_archives,
             "world_map_memory": world_map_memory,
+            "generated_skills": generated_skills,
         }
     except Exception as exc:  # noqa: BLE001
         return {
@@ -908,6 +926,7 @@ def build_dashboard_state(cfg: AppConfig, objective: str) -> dict[str, Any]:
             "run_journal": run_journal,
             "trace_archives": trace_archives,
             "world_map_memory": world_map_memory,
+            "generated_skills": generated_skills,
         }
 
 
@@ -932,6 +951,58 @@ def layout_background_summary(log_dir: Any, *, limit: int = 20) -> dict[str, Any
         "entry_count": len(rows),
         "latest": entries[-1] if entries else None,
         "log_path": str(path),
+    }
+
+
+def generated_skills_summary(cfg: AppConfig) -> dict[str, Any]:
+    """Self-development status: registered Qwen-authored executors, the generation queue,
+    recent failures/quarantine, and the foundry loop heartbeat."""
+
+    from . import skill_foundry
+
+    registry = skill_foundry.load_registry()
+    skills = registry.get("skills") if isinstance(registry.get("skills"), dict) else {}
+    registered: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    for name, entry in sorted(skills.items()):
+        if not isinstance(entry, dict):
+            continue
+        status = entry.get("status")
+        row = {
+            "skill_name": name,
+            "status": status,
+            "version": entry.get("version"),
+            "class_name": entry.get("class_name"),
+            "target_item": entry.get("target_item"),
+            "gates_passed": entry.get("gates_passed") if isinstance(entry.get("gates_passed"), list) else [],
+            "updated_at": entry.get("updated_at"),
+            "attempts": entry.get("attempts"),
+            "last_failure_reason": entry.get("last_failure_reason") or "",
+        }
+        if status == "registered":
+            registered.append(row)
+        elif status in {"failed", "quarantined", "disabled"}:
+            failures.append(row)
+    try:
+        queue = skill_foundry.load_foundry_queue(cfg.runtime_dir)
+    except Exception:  # noqa: BLE001
+        queue = []
+    heartbeat: dict[str, Any] = {}
+    hb_path = cfg.runtime_dir / "skill-foundry-loop.json"
+    if hb_path.exists():
+        try:
+            raw = json.loads(hb_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                heartbeat = raw
+        except (OSError, json.JSONDecodeError):
+            heartbeat = {}
+    return {
+        "registered": registered,
+        "failures": failures,
+        "queue": queue,
+        "heartbeat": heartbeat,
+        "registered_count": len(registered),
+        "queue_count": len(queue),
     }
 
 
@@ -1089,6 +1160,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
             </section>
             {_llm_decision_panel(state.get("llm_decisions"), lang)}
             {_strategy_worker_comparison_panel(state.get("strategy_worker_comparison"), lang)}
+            {_generated_skills_panel(state.get("generated_skills"), lang)}
             <section class="panel">
               <h2>{_t(lang, "layout_background")}</h2>
               {_layout_background_panel(state.get("layout_background"), lang)}
@@ -1141,6 +1213,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     run_journal = state.get("run_journal") if isinstance(state.get("run_journal"), dict) else {}
     trace_archives = state.get("trace_archives") if isinstance(state.get("trace_archives"), dict) else {}
     world_map_memory = state.get("world_map_memory") if isinstance(state.get("world_map_memory"), dict) else {}
+    generated_skills = state.get("generated_skills") if isinstance(state.get("generated_skills"), dict) else {}
     selected_improvement_site = (
         state.get("selected_improvement_site") if isinstance(state.get("selected_improvement_site"), dict) else {}
     )
@@ -1238,6 +1311,8 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
       <h2>{_t(lang, "layout_improvement")}</h2>
       {_layout_improvement_panel(layout_improvement, lang)}
     </section>
+
+    {_generated_skills_panel(generated_skills, lang)}
 
     <section class="panel">
       <h2>{_t(lang, "layout_background")}</h2>
@@ -2592,6 +2667,91 @@ def _run_insights_panel(value: Any, lang: str) -> str:
         f"</tr></thead><tbody>{body}</tbody></table>"
         "</section>"
     )
+
+
+def _generated_skills_panel(value: Any, lang: str) -> str:
+    summary = value if isinstance(value, dict) else {}
+    registered = summary.get("registered") if isinstance(summary.get("registered"), list) else []
+    failures = summary.get("failures") if isinstance(summary.get("failures"), list) else []
+    queue = summary.get("queue") if isinstance(summary.get("queue"), list) else []
+    heartbeat = summary.get("heartbeat") if isinstance(summary.get("heartbeat"), dict) else {}
+
+    parts: list[str] = [f"<h2>{_t(lang, 'generated_skills')}</h2>"]
+
+    if heartbeat:
+        state_bits = [
+            f"<span class=\"label\">{_t(lang, 'foundry_state')}</span> "
+            f"<strong>{escape(str(heartbeat.get('state') or 'unknown'))}</strong>"
+        ]
+        if heartbeat.get("current_skill"):
+            state_bits.append(escape(str(heartbeat.get("current_skill"))))
+        if heartbeat.get("generated_total") is not None or heartbeat.get("failed_total") is not None:
+            state_bits.append(
+                f"+{escape(str(heartbeat.get('generated_total') or 0))} / "
+                f"-{escape(str(heartbeat.get('failed_total') or 0))}"
+            )
+        if heartbeat.get("reason"):
+            state_bits.append(escape(str(heartbeat.get("reason"))))
+        if heartbeat.get("updated_at"):
+            state_bits.append(escape(_format_kst_timestamp(heartbeat.get("updated_at"))))
+        parts.append(f"<p class=\"muted\">{' &middot; '.join(state_bits)}</p>")
+
+    if not registered and not queue and not failures:
+        parts.append(f"<p class=\"muted\">{_t(lang, 'no_generated_skills')}</p>")
+        return "<section class=\"panel\">" + "".join(parts) + "</section>"
+
+    if registered:
+        body = "".join(
+            "<tr>"
+            f"<td>{escape(str(row.get('skill_name') or ''))}</td>"
+            f"<td>{escape(str(row.get('class_name') or ''))}</td>"
+            f"<td>v{escape(str(row.get('version') or 0))}</td>"
+            f"<td>{escape(', '.join(str(g) for g in row.get('gates_passed') or []))}</td>"
+            f"<td>{escape(str(row.get('target_item') or ''))}</td>"
+            f"<td>{escape(_format_kst_timestamp(row.get('updated_at')))}</td>"
+            "</tr>"
+            for row in registered
+            if isinstance(row, dict)
+        )
+        parts.append(
+            f"<h3 class=\"subhead\">{_t(lang, 'registered_skills')}</h3>"
+            f"<table><thead><tr><th>{_t(lang, 'generated_skills')}</th><th>Class</th>"
+            f"<th>{_t(lang, 'version')}</th><th>{_t(lang, 'foundry_gates')}</th>"
+            f"<th>{_t(lang, 'item')}</th><th>{_t(lang, 'updated')}</th></tr></thead>"
+            f"<tbody>{body}</tbody></table>"
+        )
+
+    if queue:
+        items = "".join(
+            "<li>"
+            f"{escape(str(item.get('skill_name') or ''))}"
+            f" <span class=\"muted\">(p{escape(str(item.get('priority') or 0))}"
+            f"{(' &middot; ' + escape(str(item.get('reason')))) if item.get('reason') else ''})</span>"
+            "</li>"
+            for item in queue[:12]
+            if isinstance(item, dict)
+        )
+        parts.append(f"<h3 class=\"subhead\">{_t(lang, 'foundry_queue')}</h3><ul>{items}</ul>")
+
+    if failures:
+        body = "".join(
+            "<tr>"
+            f"<td>{escape(str(row.get('skill_name') or ''))}</td>"
+            f"<td>{escape(str(row.get('status') or ''))}</td>"
+            f"<td>{escape(str(row.get('attempts') or 0))}</td>"
+            f"<td>{escape(str(row.get('last_failure_reason') or ''))}</td>"
+            "</tr>"
+            for row in failures[:12]
+            if isinstance(row, dict)
+        )
+        parts.append(
+            f"<h3 class=\"subhead\">{_t(lang, 'foundry_failures')}</h3>"
+            f"<table><thead><tr><th>{_t(lang, 'generated_skills')}</th><th>{_t(lang, 'foundry_state')}</th>"
+            f"<th>{_t(lang, 'count')}</th><th>{_t(lang, 'reason')}</th></tr></thead>"
+            f"<tbody>{body}</tbody></table>"
+        )
+
+    return "<section class=\"panel\">" + "".join(parts) + "</section>"
 
 
 def _trace_archive_panel(value: Any, lang: str) -> str:

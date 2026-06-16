@@ -46,8 +46,28 @@ class SkillImplementationStatus:
         return asdict(self)
 
 
-def skill_status(skill_name: str) -> SkillImplementationStatus:
+def _generated_executor(skill_name: str) -> str | None:
+    """Return the class name of a registered Qwen-generated executor, or None.
+
+    Looked up lazily so the static registry never hard-depends on the foundry
+    module and there is no import cycle.
+    """
+
+    try:
+        from . import skill_foundry
+
+        entry = skill_foundry.registry_status(skill_name)
+    except Exception:  # noqa: BLE001 - registry problems must never block strategy status
+        return None
+    if isinstance(entry, dict) and entry.get("status") == "registered":
+        return str(entry.get("class_name") or "GeneratedSkill")
+    return None
+
+
+def skill_status(skill_name: str, runtime_dir: Path | None = None) -> SkillImplementationStatus:
     executor = IMPLEMENTED_SKILLS.get(skill_name)
+    if executor is None:
+        executor = _generated_executor(skill_name)
     return SkillImplementationStatus(
         name=skill_name,
         implemented=executor is not None,
@@ -58,7 +78,7 @@ def skill_status(skill_name: str) -> SkillImplementationStatus:
 
 def annotate_strategy_with_skill_status(strategy: dict[str, Any], runtime_dir: Path | None = None) -> dict[str, Any]:
     selected = str(strategy.get("selected_skill") or strategy.get("selected_goal") or "")
-    status = skill_status(selected)
+    status = skill_status(selected, runtime_dir)
     annotated = dict(strategy)
     annotated["skill_status"] = status.to_dict()
     if status.codex_required and runtime_dir is not None:
