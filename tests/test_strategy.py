@@ -1684,6 +1684,37 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("site input logistic line", result["blockers"])
         self.assertIn("transport_belt_automation_ready=true", result["evidence"])
 
+    def test_heuristic_builds_copper_source_before_missing_source_site_route(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            _missing_copper_source_site_input_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "expand_copper_smelting")
+        self.assertIn("copper-plate source", result["blockers"])
+        self.assertIn("site_input_status=missing_source", result["evidence"])
+        self.assertIn("source_builder_skill=expand_copper_smelting", result["evidence"])
+
+    def test_reconcile_redirects_site_input_route_when_source_is_missing(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "build_site_input_logistic_line",
+                "priority": 50,
+                "reason": "Build the copper route.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            _missing_copper_source_site_input_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "expand_copper_smelting")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "build_site_input_logistic_line")
+        self.assertIn("copper-plate source", result["blockers"])
+        self.assertIn("site_input_status=missing_source", result["evidence"])
+
     def test_reconcile_promotes_layout_planning_to_actionable_target_deficit(self):
         result = reconcile_strategy_decision(
             {
@@ -2521,6 +2552,37 @@ def _distant_copper_source_and_science_consumer_entities():
             "inventories": {},
         },
     ]
+
+
+def _missing_copper_source_site_input_observation():
+    return {
+        "inventory": {"iron-plate": 20, "copper-plate": 0},
+        "entities": [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 200,
+                "recipe": "automation-science-pack",
+                "position": {"x": 180, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 300,
+                "recipe": "transport-belt",
+                "position": {"x": 20, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {"1": {"transport-belt": 8}},
+            },
+        ],
+        "resources": [{"name": "copper-ore", "position": {"x": 0, "y": 0}, "distance_from_base": 20}],
+        "research": {
+            "technologies": {
+                "automation": {"researched": True},
+                "logistics": {"researched": True},
+            }
+        },
+    }
 
 
 if __name__ == "__main__":

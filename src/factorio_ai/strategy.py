@@ -392,7 +392,8 @@ SKILL_CATALOG: dict[str, SkillContract] = {
             "the consumer no longer depends on player inventory shuttle loops for that repeated input",
         ],
         llm_scope=(
-            "Choose this for route_needed or missing input links such as copper-plate, copper-cable, gears, or circuits "
+            "Choose this for route_needed input links such as copper-plate, copper-cable, gears, or circuits "
+            "when a producing or buffering source entity already exists "
             "after belt production exists. Executor chooses the exact route, blockers, and endpoint inserters."
         ),
     ),
@@ -1650,6 +1651,50 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
+    missing_input_source_issue = _site_input_missing_source_issue(observation)
+    if (
+        _technology_researched(observation, "automation")
+        and missing_input_source_issue is not None
+        and selected
+        in {
+            "plan_factory_site",
+            "produce_electronic_circuit",
+            "automate_electronic_circuit_line",
+            "bootstrap_build_item_mall",
+            "research_logistics",
+            "build_site_input_logistic_line",
+        }
+    ):
+        item = str(missing_input_source_issue.get("item") or "")
+        target_skill = _skill_for_bottleneck_item(item, observation)
+        if target_skill and selected != target_skill:
+            adjusted = dict(decision)
+            adjusted["selected_skill"] = target_skill
+            adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 91)
+            original_reason = str(decision.get("reason") or "").strip()
+            guardrail_reason = (
+                f"LLM selected {selected}, but the repeated {item} input link has no producer source yet; "
+                "build the source before attempting a site-to-site input route."
+            )
+            adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+            adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + [f"{item} source"]))
+            adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+                f"guardrail_adjusted_from={selected}",
+                f"layout_kind={missing_input_source_issue.get('kind')}",
+                f"item={item}",
+                f"site_id={missing_input_source_issue.get('site_id')}",
+                "site_input_status=missing_source",
+                f"source_builder_skill={target_skill}",
+            ]
+            adjusted["expected_effect"] = (
+                f"Create an automated {item} source so a later site-input logistics route has a real producer endpoint."
+            )
+            adjusted["guardrail_adjusted"] = {
+                "from": selected,
+                "to": target_skill,
+                "reason": guardrail_reason,
+            }
+            return adjusted
     site_input_line_issue = _site_input_line_issue(observation)
     if (
         _technology_researched(observation, "automation")
@@ -2002,7 +2047,8 @@ def heuristic_strategy(
     layout_opportunities = layout.get("opportunities") if isinstance(layout.get("opportunities"), list) else []
     top_layout_item = _top_layout_item(layout_issues, layout_opportunities, observation)
     automation_logistics_issue = _first_automation_logistics_issue(layout_issues)
-    site_input_line_issue = _site_input_line_issue(observation)
+    missing_input_source_issue = _site_input_missing_source_issue(observation, layout_issues)
+    site_input_line_issue = _site_input_line_issue(observation, layout_issues)
     layout_build_item_shortage = _layout_unlocked_build_item_shortage(layout)
     gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
     critical_factory_power_issue = _critical_factory_power_issue(observation)
@@ -2324,6 +2370,30 @@ def heuristic_strategy(
             blockers=["electric mining drill mall"],
             expected_effect="Produce electric mining drills by assembler so burner miners can be replaced without hand-crafting.",
         ).to_dict()
+
+    if automation_researched and missing_input_source_issue is not None:
+        item = str(missing_input_source_issue.get("item") or "")
+        target_skill = _skill_for_bottleneck_item(item, observation)
+        if target_skill:
+            return StrategicDecision(
+                selected_skill=target_skill,
+                priority=91,
+                reason=(
+                    f"A repeated {item} input link is marked missing_source; build an automated source before "
+                    "attempting a site-to-site logistics route."
+                ),
+                evidence=[
+                    f"layout_kind={missing_input_source_issue.get('kind')}",
+                    f"item={item}",
+                    f"site_id={missing_input_source_issue.get('site_id')}",
+                    "site_input_status=missing_source",
+                    f"source_builder_skill={target_skill}",
+                ],
+                blockers=[f"{item} source"],
+                expected_effect=(
+                    f"Create an automated {item} producer endpoint so the later input route can be built by belts."
+                ),
+            ).to_dict()
 
     if automation_researched and site_input_line_issue is not None:
         belt_ready = _transport_belt_automation_ready(observation)
@@ -2794,9 +2864,13 @@ def _bootstrap_mall_site_logistics_risk(observation: dict[str, Any]) -> dict[str
     return None
 
 
-def _first_unserved_factory_input_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
-    layout = make_layout_improvement_context(observation)
-    issues = layout.get("issues") if isinstance(layout.get("issues"), list) else []
+def _first_unserved_factory_input_issue(
+    observation: dict[str, Any],
+    issues: list[Any] | None = None,
+) -> dict[str, Any] | None:
+    if issues is None:
+        layout = make_layout_improvement_context(observation)
+        issues = layout.get("issues") if isinstance(layout.get("issues"), list) else []
     candidate_items = {
         "iron-plate",
         "copper-plate",
@@ -2850,8 +2924,11 @@ def _factory_input_issue_can_bootstrap_from_inventory(
     return True
 
 
-def _site_input_line_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
-    issue = _first_unserved_factory_input_issue(observation)
+def _site_input_line_issue(
+    observation: dict[str, Any],
+    issues: list[Any] | None = None,
+) -> dict[str, Any] | None:
+    issue = _first_unserved_factory_input_issue(observation, issues)
     if issue is None:
         return None
     item = str(issue.get("item") or "")
@@ -2870,7 +2947,30 @@ def _site_input_line_issue(observation: dict[str, Any]) -> dict[str, Any] | None
         return None
     if item == "iron-plate" and ("gear" in text or "iron-gear-wheel" in text):
         return None
+    if "missing_source" in text:
+        return None
     return issue
+
+
+def _site_input_missing_source_issue(
+    observation: dict[str, Any],
+    issues: list[Any] | None = None,
+) -> dict[str, Any] | None:
+    issue = _first_unserved_factory_input_issue(observation, issues)
+    if issue is None:
+        return None
+    item = str(issue.get("item") or "")
+    if item not in {
+        "iron-plate",
+        "copper-plate",
+        "copper-cable",
+        "electronic-circuit",
+        "automation-science-pack",
+        "logistic-science-pack",
+    }:
+        return None
+    text = " ".join(str(issue.get(key) or "") for key in ("site_id", "detail", "recommendation")).lower()
+    return issue if "missing_source" in text else None
 
 
 def _site_input_issue_item_priority(item: str) -> int:

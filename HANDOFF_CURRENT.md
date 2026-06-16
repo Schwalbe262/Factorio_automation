@@ -4,7 +4,8 @@
 - No-mod helpers use `Qwen/Qwen3.5-9B`, vLLM service duration 10800s, and ordered scheduler GPU candidates `a6000ada,a6000`.
 - `/tasks` GPU submissions preserve ordered `gpu_model` candidates; service-mode strategy/layout clients now attach to the running vLLM service node.
 - Client tasks default to `FACTORIO_AI_SCHEDULER_VLLM_CLIENT_GPUS=1` so scheduler placement stays on the service node where `127.0.0.1` vLLM is reachable.
-- Strategy metadata such as `input_item` is filtered before `_run_skill`, while mapped skill arguments still reach the selected skill.
-- Live runtime: supervisor PID 76388; vLLM service task 8224 ready on allocation 40/n104; strategy task 8229 completed on allocation 40 and started `build_site_input_logistic_line`.
-- Current gameplay blocker: selected site-input route failed because no executable repeated logistics route was found; layout tasks 8226 and 8233 are running on allocation 40, and 8232 completed.
-- Validation: py_compile ok; PowerShell parser ok; `PYTHONPATH=src pytest tests/test_controller.py tests/test_remote_slurm.py -q` -> 109 passed.
+- Strategy now separates `missing_source` input links from `route_needed`: source-missing copper routes guardrail to `expand_copper_smelting`, not `build_site_input_logistic_line`.
+- Old supervisor PID 76388 and stale child workers were stopped; vLLM service task 8224 remains running/ready on allocation 40/n104.
+- Live validation: old `build_site_input_logistic_line` route choice reconciles to `expand_copper_smelting`; heuristic currently prefers `setup_coal_supply` because coal supply is not automated.
+- Validation: `py_compile src/factorio_ai/strategy.py`; `PYTHONPATH=src pytest tests/test_strategy.py tests/test_controller.py -q` -> 165 passed.
+- Next: commit/push this part, restart unattended supervisor with the new strategy code, then verify the next cycle does not repeat the missing-source site-input failure.
