@@ -16,6 +16,22 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("lab_sites = collect_lab_sites", command)
         self.assertIn("automation_sites = collect_automation_sites", command)
         self.assertIn("GLOBAL_FORCE_ENTITY_LIMIT", command)
+        self.assertIn("STARTER_FORCE_ENTITY_LIMIT = 1000", command)
+        self.assertIn("local nearby_entity_radius = 64", command)
+        self.assertIn("radius = nearby_entity_radius, name = name, limit = GLOBAL_FORCE_ENTITY_LIMIT", command)
+        self.assertIn("local starter_entity_anchor = force_spawn_position(surface, agent.force)", command)
+        self.assertIn(
+            "position = starter_entity_anchor, radius = STARTER_RESOURCE_RADIUS, name = name, limit = STARTER_FORCE_ENTITY_LIMIT",
+            command,
+        )
+        self.assertLess(
+            command.index("radius = nearby_entity_radius, name = name"),
+            command.index("position = starter_entity_anchor, radius = STARTER_RESOURCE_RADIUS"),
+        )
+        self.assertLess(
+            command.index("position = starter_entity_anchor, radius = STARTER_RESOURCE_RADIUS"),
+            command.index("radius = OBSERVE_RADIUS, name = name, limit = 160"),
+        )
         self.assertIn("AGENT_VISION_CHART_RADIUS = 96", command)
         self.assertIn("force = agent.force", command)
         self.assertIn("base = { anchor_position", command)

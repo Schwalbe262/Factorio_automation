@@ -4863,6 +4863,23 @@ def _direct_plate_smelting_decision(
             return decision
 
     drill = layout.get("drill")
+    if isinstance(drill, dict) and _entity_status_is(drill, "no_minable_resources", 21):
+        position = _position(drill)
+        if distance(player, position) > 8:
+            return PlannerDecision(
+                {"type": "move_to", "position": _stand_position(position, offset=2.0)},
+                f"move near invalid direct {product_name} mining drill before relocating it",
+            )
+        return PlannerDecision(
+            {
+                "type": "mine",
+                "unit_number": drill.get("unit_number"),
+                "name": "burner-mining-drill",
+                "position": position,
+            },
+            f"recover invalid direct {product_name} mining drill with no minable resources",
+        )
+
     if drill is None:
         position = layout["drill_position"]
         if distance(player, position) > 20:
@@ -5191,7 +5208,12 @@ def _find_coal_supply_layout(observation: dict[str, Any]) -> dict[str, Any] | No
         layout = _coal_supply_layout_from_drill_position(drill_position, orientation=direction)
         layout["output_position"] = _burner_drill_output_position(drill)
         layout["drill"] = drill
-        layout["output_belt"] = _entity_near(observation, "transport-belt", layout["output_position"], radius=0.75)
+        layout["output_belt"] = _entity_at_build_position(
+            observation,
+            "transport-belt",
+            layout["output_position"],
+            radius=0.75,
+        )
         layout["output_chest"] = _coal_output_chest_near(observation, layout["output_position"])
         candidates.append(
             (
@@ -5219,7 +5241,12 @@ def _select_coal_supply_layout(observation: dict[str, Any]) -> dict[str, Any] | 
         for orientation in ("east", "west", "south", "north"):
             layout = _coal_supply_layout_from_drill_position(_position(resource), orientation=orientation)
             layout["drill"] = _entity_near(observation, "burner-mining-drill", layout["drill_position"], radius=2.0)
-            layout["output_belt"] = _entity_near(observation, "transport-belt", layout["output_position"], radius=0.75)
+            layout["output_belt"] = _entity_at_build_position(
+                observation,
+                "transport-belt",
+                layout["output_position"],
+                radius=0.75,
+            )
             layout["output_chest"] = _coal_output_chest_near(observation, layout["output_position"])
             if not _coal_supply_layout_blocked_by_factory_entities(layout, entities):
                 return layout
@@ -5475,7 +5502,12 @@ def _coal_supply_output_belt_sources(observation: dict[str, Any]) -> list[dict[s
         direction = _direction_to_orientation(_direction_or_default(drill.get("direction"), EAST))
         layout = _coal_supply_layout_from_drill_position(drill_position, orientation=direction)
         layout["output_position"] = _burner_drill_output_position(drill)
-        output_belt = _entity_near(observation, "transport-belt", layout["output_position"], radius=0.75)
+        output_belt = _entity_at_build_position(
+            observation,
+            "transport-belt",
+            layout["output_position"],
+            radius=0.75,
+        )
         if output_belt is None:
             continue
         if str(drill.get("name") or "") == "burner-mining-drill" and _entity_burner_fuel_count(drill) <= 0 and _entity_status_is(drill, "no_fuel", 53):
@@ -5797,6 +5829,20 @@ def _fuel_burner_line_entity(
         if inventory_fuel_count <= 0 and current_fuel > 0:
             if not wait_for_existing_fuel:
                 return PlannerDecision(None, far_fuel_reason)
+            excluded_units = set(exclude_source_units or set())
+            excluded_units.add(entity.get("unit_number"))
+            matching_source = _nearest_surplus_fuel_source_with_item(
+                observation,
+                position,
+                existing_fuel_item,
+                exclude_units=excluded_units,
+            )
+            if matching_source is not None:
+                return _take_surplus_fuel_source_decision(player, matching_source, context)
+            if existing_fuel_item == "coal" and entity_name == "burner-mining-drill":
+                coal = _nearest_resource_to_position(observation, position, "coal")
+                if coal is not None and distance(position, _position(coal)) <= WALK_FUEL_LOGISTICS_LIMIT:
+                    return support_skill._mine_resource(player, coal, "coal", 16)
             return PlannerDecision(
                 {"type": "wait", "ticks": 180},
                 f"wait for existing {existing_fuel_item} in {entity_name} before mixing burner fuel for {context}",
@@ -6012,6 +6058,30 @@ def _nearest_surplus_fuel_source(
                 continue
             entity_position = _position(entity)
             candidates.append((distance(target_position, entity_position), -surplus, entity))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return candidates[0][2]
+
+
+def _nearest_surplus_fuel_source_with_item(
+    observation: dict[str, Any],
+    target_position: dict[str, float],
+    fuel_item: str,
+    *,
+    exclude_units: set[Any] | None = None,
+) -> dict[str, Any] | None:
+    excluded = set(exclude_units or set())
+    candidates = []
+    for entity_name in ("wooden-chest", "iron-chest", "steel-chest", "stone-furnace", "burner-mining-drill", "burner-inserter", "boiler"):
+        for entity in entities_named(observation, entity_name):
+            if entity.get("unit_number") in excluded:
+                continue
+            source_item, source_count = _select_surplus_fuel_item(entity)
+            if source_item != fuel_item or source_count <= 0:
+                continue
+            entity_position = _position(entity)
+            candidates.append((distance(target_position, entity_position), -source_count, entity))
     if not candidates:
         return None
     candidates.sort(key=lambda item: (item[0], item[1]))
@@ -6485,8 +6555,11 @@ def _gear_mall_iron_input_endpoints(
     for candidate in candidates:
         penalty = 0.0
         inserter = _inserter_near(observation, candidate["target_inserter"], radius=0.75)
-        if isinstance(inserter, dict) and _direction_or_default(inserter.get("direction"), -1) != int(candidate["target_direction"]):
-            penalty += 100.0
+        if isinstance(inserter, dict):
+            if _direction_or_default(inserter.get("direction"), -1) != int(candidate["target_direction"]):
+                penalty += 100.0
+            else:
+                penalty -= 1000.0
         belt = _entity_at_build_position(observation, "transport-belt", candidate["target_belt"], radius=0.75)
         if isinstance(belt, dict):
             penalty += 25.0
@@ -7130,7 +7203,23 @@ def _iron_plate_source_furnaces(observation: dict[str, Any]) -> list[dict[str, A
         for entity in entities_named(observation, name):
             if entity_item_count(entity, "iron-plate") > 0 or str(entity.get("recipe") or "") == "iron-plate":
                 furnaces.append(entity)
+            elif _furnace_has_plate_output_belt(observation, entity):
+                furnaces.append(entity)
     return furnaces
+
+
+def _furnace_has_plate_output_belt(observation: dict[str, Any], furnace: dict[str, Any]) -> bool:
+    for name in ("inserter", "burner-inserter", "fast-inserter"):
+        for inserter in entities_named(observation, name):
+            endpoints = _inserter_endpoints(inserter)
+            if endpoints is None:
+                continue
+            pickup, drop = endpoints
+            if not _point_inside_machine(pickup, furnace) or _point_inside_machine(drop, furnace):
+                continue
+            if _entity_at_build_position(observation, "transport-belt", _tile_center_position(drop), radius=0.75):
+                return True
+    return False
 
 
 def _iron_plate_line_segments(
@@ -9318,7 +9407,8 @@ class IronPlateLogisticLineToGearMallSkill:
             )
 
         belt_assembler = layout.get("belt_assembler")
-        if inventory_count(observation, "transport-belt") <= 0:
+        missing_belt_segments = [segment for segment in layout["segments"] if not isinstance(segment.get("entity"), dict)]
+        if missing_belt_segments and inventory_count(observation, "transport-belt") <= 0:
             belt_chest = _transport_belt_output_chest(observation)
             if isinstance(belt_chest, dict) and entity_item_count(belt_chest, "transport-belt") > 0:
                 position = _position(belt_chest)
@@ -9443,6 +9533,31 @@ class IronPlateLogisticLineToGearMallSkill:
                             "position": position,
                         },
                         f"remove misoriented {label} before rebuilding the iron-plate logistics endpoint",
+                    )
+                if (
+                    str(inserter.get("name") or "") == "burner-inserter"
+                    and _entity_burner_fuel_count(inserter) < 1
+                    and _entity_status_is(inserter, "no_fuel", 53)
+                ):
+                    fuel_item, fuel_count = _select_inventory_burner_fuel(observation)
+                    if fuel_count <= 0:
+                        return PlannerDecision(None, f"{label} burner inserter needs fuel")
+                    position = _position(inserter)
+                    if distance(player, position) > 20:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": position},
+                            f"move near {label} burner inserter to fuel it",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "insert",
+                            "item": fuel_item,
+                            "count": 1,
+                            "unit_number": inserter.get("unit_number"),
+                            "name": "burner-inserter",
+                            "position": position,
+                        },
+                        f"fuel {label} burner inserter",
                     )
                 continue
             item_name = _available_logistics_line_inserter_item(observation)

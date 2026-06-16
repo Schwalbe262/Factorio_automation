@@ -140,6 +140,7 @@ local LAB_SITE_RADIUS = 96
 local POLE_WIRE_REACH = 7.5
 local STARTER_POLE_SUPPLY_REACH = 2.5
 local GLOBAL_FORCE_ENTITY_LIMIT = 240
+local STARTER_FORCE_ENTITY_LIMIT = 1000
 local AGENT_VISION_CHART_RADIUS = 96
 local PRESERVED_STARTER_ARTIFACT_RADIUS = 192
 local VIRTUAL_STARTER_ITEMS = {{
@@ -629,6 +630,18 @@ local function collect_entities()
     "locomotive", "cargo-wagon", "fluid-wagon",
     "pumpjack", "oil-refinery", "chemical-plant", "centrifuge", "rocket-silo", "roboport"
   }
+  local nearby_entity_radius = 64
+  for _, name in pairs(names) do
+    local found = surface.find_entities_filtered({ position = origin, radius = nearby_entity_radius, name = name, limit = GLOBAL_FORCE_ENTITY_LIMIT })
+    for _, entity in pairs(found) do add_unique_entity_snapshot(rows, seen, entity, origin) end
+  end
+  local starter_entity_anchor = force_spawn_position(surface, agent.force)
+  if starter_entity_anchor then
+    for _, name in pairs(names) do
+      local found = surface.find_entities_filtered({ position = starter_entity_anchor, radius = STARTER_RESOURCE_RADIUS, name = name, limit = STARTER_FORCE_ENTITY_LIMIT })
+      for _, entity in pairs(found) do add_unique_entity_snapshot(rows, seen, entity, origin) end
+    end
+  end
   for _, name in pairs(names) do
     local found = surface.find_entities_filtered({ position = origin, radius = OBSERVE_RADIUS, name = name, limit = 160 })
     for _, entity in pairs(found) do add_unique_entity_snapshot(rows, seen, entity, origin) end

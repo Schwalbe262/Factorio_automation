@@ -9,7 +9,7 @@
 \- Root current Markdown files now use the escaped `md/` marker format.
 \- Slurm scheduler mode defaults to `rtx3090`/`r1jae262`; layout improvement requests use `a6000ada,a6000` candidates and submit the ready single `gpu_model`.
 \- Scheduler Qwen layout tasks now fail visibly, map vLLM env, disable flashinfer sampler, use guided JSON/detail polling, clean up vLLM children, and have the idle loop running again.
-\- Live map: iron plate -> gear mall route now avoids protected gear-output lanes; remaining route work is a few belts plus source/target inserters before logistics research can continue.
+\- Live map: iron plate -> gear mall route completed; coal supply output belt is observed reliably, and invalid no-resource iron drill was recovered/rebuilt.
 
 \## Current objective
 
@@ -33,20 +33,19 @@
 
 \## Last validation
 
-\- Full `pytest -q` passed: `650 passed`.
-\- Live validation: protected-output route runs no longer mine `83.5,-60.5`; nearest-position mine fallback removed/rebuilt unit `332` correctly.
-\- Token sample recorded: `281,339,156` Factorio Codex thread tokens; delta `13,160,186`; weekly quota unknown.
+\- Full `pytest -q` passed: `657 passed`.
+\- Live validation: `setup_coal_supply` completed; observe includes coal belt unit `646` from iron-site position; invalid iron drill unit `14` was mined and rebuilt as unit `1457`.
+\- Token sample recorded: `281,339,156` Factorio Codex thread tokens; delta `0`; weekly quota unknown.
 
 \## Current blocker
 
-\- `logistics` research is still incomplete; finish iron plate -> gear mall input inserters, then continue red science/lab feeding.
+\- `logistics` research is still incomplete; coal boiler fuel feed and red science/lab feeding still need short live chunks.
 
 \## Next steps
 
-1\. Pull the pushed protected iron-route/no-mod mine fixes, then continue short live strategy chunks.
-2\. Continue `run-no-mod-strategy-step --objective launch_rocket_program` with short `--max-steps` chunks until source/target inserters finish.
-3\. Confirm iron plates flow into the gear assembler without hand-carry or mining the gear-output lane.
-4\. Continue automation science/lab feeding until `logistics` research completes.
+1\. Continue `connect_coal_fuel_feed` or `run-no-mod-strategy-step --objective launch_rocket_program` in short chunks.
+2\. Confirm the rebuilt iron direct smelting cell produces enough plates for remaining burner inserter/material needs.
+3\. Continue automation science/lab feeding until `logistics` research completes.
 
 \## Token/context policy
 
@@ -71,6 +70,7 @@
 \- Added route corner belt direction, endpoint inserter role checks, and source endpoint protection for site-input logistics.
 \- Fixed site-input/iron-line inserter pickup/drop semantics, corrected integer-center coal drill output tiles, and stopped boiler feed from treating the next route belt as the coal source.
 \- Added role-aware dogleg site-input routes and fixed `NORTH=0` direction comparisons so north-facing belts/inserters are not treated as missing direction.
+\- Fixed no-mod observe belt-limit drops, coal output belt recognition, matching-fuel sourcing, and invalid direct-smelting drill recovery.
 \- Fixed scheduler task payload size, A6000 layout routing, vLLM startup failure reporting, active layout task throttling, belt mall output direction, belt-chest consumption, and local gear-output bootstrap.
 
 \## Risks and gotchas

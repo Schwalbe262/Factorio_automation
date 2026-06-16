@@ -216,6 +216,39 @@ class PlannerTests(unittest.TestCase):
 
         self.assertEqual(output_position, {"x": 107.5, "y": 23.5})
 
+    def test_coal_supply_finds_existing_belt_at_live_drop_output_tile(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 108, "y": 24}
+        obs["inventory"] = {"coal": 8}
+        obs["resources"] = [{"name": "coal", "position": {"x": 106.5, "y": 23.5}, "distance": 3}]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 405,
+                "position": {"x": 106, "y": 24},
+                "direction": planner_module.EAST,
+                "drop_position": {"x": 107.3, "y": 23.5},
+                "mining_target": "coal",
+                "status_name": "no_fuel",
+                "inventories": {},
+            },
+            {
+                "name": "transport-belt",
+                "unit_number": 646,
+                "position": {"x": 107.5, "y": 23.5},
+                "direction": planner_module.EAST,
+                "inventories": {},
+            },
+        ]
+
+        layout = planner_module._find_coal_supply_layout(obs)
+        decision = CoalSupplySkill().next_action(obs)
+
+        self.assertEqual(layout["output_belt"]["unit_number"], 646)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["unit_number"], 405)
+        self.assertNotEqual(decision.action["type"], "build")
+
     def test_boiler_feed_source_uses_corrected_integer_center_drill_output(self):
         obs = base_observation()
         obs["resources"] = [{"name": "coal", "position": {"x": 4, "y": 0}, "distance": 4}]
@@ -467,6 +500,45 @@ class PlannerTests(unittest.TestCase):
             far_fuel_reason="too far",
         )
         self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["unit_number"], 10)
+
+    def test_fuel_burner_with_existing_coal_takes_matching_surplus_before_waiting(self):
+        obs = base_observation()
+        obs["inventory"] = {"wood": 5}
+        obs["resources"] = [{"name": "coal", "position": {"x": 6, "y": 0}, "distance": 6}]
+        target = {
+            "name": "burner-mining-drill",
+            "unit_number": 11,
+            "position": {"x": 0, "y": 0},
+            "inventories": {"1": {"coal": 1}},
+        }
+        obs["entities"] = [
+            target,
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 10,
+                "position": {"x": 6, "y": 0},
+                "direction": planner_module.EAST,
+                "mining_target": "coal",
+                "inventories": {"1": {"coal": 8}},
+            },
+        ]
+
+        decision = planner_module._fuel_burner_line_entity(
+            obs,
+            obs["player"]["position"],
+            target,
+            entity_name="burner-mining-drill",
+            threshold=3,
+            insert_count=5,
+            context="test burner",
+            support_skill=IronPlateSkill(),
+            far_fuel_reason="too far",
+            wait_for_existing_fuel=True,
+        )
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "coal")
         self.assertEqual(decision.action["unit_number"], 10)
 
     def test_direct_smelting_takes_surplus_from_coal_supply_drill_before_hand_mining(self):
@@ -2011,6 +2083,35 @@ class PlannerTests(unittest.TestCase):
 
         self.assertEqual(decision.action["type"], "wait")
         self.assertIn("before mixing burner fuel", decision.reason)
+
+    def test_iron_skill_recovers_direct_drill_with_no_minable_resources(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 75, "y": -69}}
+        obs["inventory"] = {"wood": 5}
+        obs["resources"] = [{"name": "iron-ore", "position": {"x": 78, "y": -69}, "distance": 3}]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 14,
+                "position": {"x": 75, "y": -69},
+                "direction": planner_module.EAST,
+                "status_name": "no_minable_resources",
+                "inventories": {"1": {"coal": 3}},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 15,
+                "position": {"x": 77, "y": -69},
+                "status_name": "no_ingredients",
+                "inventories": {"1": {"wood": 3}},
+            },
+        ]
+
+        decision = IronPlateSkill(target_count=20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 14)
+        self.assertIn("no minable resources", decision.reason)
 
     def test_iron_skill_ignores_distant_empty_furnace(self):
         obs = base_observation()
@@ -5683,6 +5784,43 @@ class PlannerTests(unittest.TestCase):
         self.assertIsNotNone(blocker)
         self.assertEqual(blocker["name"], "big-rock")
 
+    def test_iron_plate_logistic_line_keeps_empty_furnace_with_output_belt_as_source(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 4}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].extend(
+            [
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": -8, "y": 2},
+                    "status_name": "no_ingredients",
+                    "inventories": {"1": {"coal": 1}},
+                },
+                {
+                    "name": "burner-inserter",
+                    "unit_number": 951,
+                    "position": {"x": -6.5, "y": 2.5},
+                    "direction": planner_module.WEST,
+                    "inventories": {},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 952,
+                    "position": {"x": -5.5, "y": 2.5},
+                    "direction": planner_module.EAST,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        sources = planner_module._iron_plate_source_furnaces(obs)
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+
+        self.assertEqual([source["unit_number"] for source in sources], [950])
+        self.assertIsNotNone(layout)
+        self.assertEqual(layout["source"]["unit_number"], 950)
+
     def test_iron_plate_logistic_line_endpoint_inserters_move_items_out_and_in(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"transport-belt": 4}
@@ -5715,6 +5853,154 @@ class PlannerTests(unittest.TestCase):
         self.assertFalse(planner_module._point_inside_machine(source_drop, layout["source"]))
         self.assertFalse(planner_module._point_inside_machine(target_pickup, layout["gear_assembler"]))
         self.assertTrue(planner_module._point_inside_machine(target_drop, layout["gear_assembler"]))
+
+    def test_iron_plate_logistic_line_keeps_existing_correct_target_endpoint(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 20}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 910,
+                    "position": {"x": 82.5, "y": -57.5},
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"1": {}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 911,
+                    "position": {"x": 86.5, "y": -57.5},
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"1": {}},
+                },
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": 77.5, "y": -68.5},
+                    "recipe": "iron-plate",
+                    "inventories": {"3": {"iron-plate": 20}},
+                },
+                {
+                    "name": "burner-inserter",
+                    "unit_number": 951,
+                    "position": {"x": 83.5, "y": -55.5},
+                    "direction": planner_module.SOUTH,
+                    "inventories": {"1": {"coal": 1}},
+                },
+            ]
+        )
+
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+
+        self.assertEqual(layout["target_inserter"]["position"], {"x": 83.5, "y": -55.5})
+        self.assertEqual(layout["target_inserter"]["direction"], planner_module.SOUTH)
+
+    def test_iron_plate_logistic_line_fuels_burner_endpoint_inserter(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"coal": 2}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 2},
+                "recipe": "iron-plate",
+                "inventories": {"3": {"iron-plate": 20}},
+            }
+        )
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+        unit_number = 960
+        for segment in layout["segments"]:
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": unit_number,
+                    "position": segment["position"],
+                    "direction": segment["direction"],
+                    "inventories": {},
+                }
+            )
+            unit_number += 1
+        obs["entities"].extend(
+            [
+                {
+                    "name": "burner-inserter",
+                    "unit_number": 980,
+                    "position": layout["source_inserter"]["position"],
+                    "direction": layout["source_inserter"]["direction"],
+                    "inventories": {"1": {"coal": 1}},
+                },
+                {
+                    "name": "burner-inserter",
+                    "unit_number": 981,
+                    "position": layout["target_inserter"]["position"],
+                    "direction": layout["target_inserter"]["direction"],
+                    "status_name": "no_fuel",
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["unit_number"], 981)
+        self.assertIn("fuel gear mall iron input inserter", decision.reason)
+
+    def test_iron_plate_logistic_line_does_not_refuel_burning_endpoint_inserter(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 2},
+                "recipe": "iron-plate",
+                "inventories": {"3": {"iron-plate": 20}},
+            }
+        )
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+        unit_number = 960
+        for segment in layout["segments"]:
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": unit_number,
+                    "position": segment["position"],
+                    "direction": segment["direction"],
+                    "inventories": {},
+                }
+            )
+            unit_number += 1
+        obs["entities"].extend(
+            [
+                {
+                    "name": "burner-inserter",
+                    "unit_number": 980,
+                    "position": layout["source_inserter"]["position"],
+                    "direction": layout["source_inserter"]["direction"],
+                    "status_name": "waiting_for_source_items",
+                    "inventories": {},
+                },
+                {
+                    "name": "burner-inserter",
+                    "unit_number": 981,
+                    "position": layout["target_inserter"]["position"],
+                    "direction": layout["target_inserter"]["direction"],
+                    "status_name": "waiting_for_source_items",
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
+
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
 
     def test_iron_plate_logistic_line_clears_tree_without_rerouting(self):
         obs = powered_automation_observation()
