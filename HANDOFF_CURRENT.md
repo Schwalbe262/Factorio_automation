@@ -5,7 +5,7 @@
 - `/tasks` GPU submissions preserve ordered `gpu_model` candidates; service-mode strategy/layout clients now attach to the running vLLM service node.
 - Client tasks default to `FACTORIO_AI_SCHEDULER_VLLM_CLIENT_GPUS=1` so scheduler placement stays on the service node where `127.0.0.1` vLLM is reachable.
 - Strategy now separates `missing_source` input links from `route_needed`: source-missing copper routes guardrail to `expand_copper_smelting`, not `build_site_input_logistic_line`.
-- Old supervisor PID 76388 and stale child workers were stopped; vLLM service task 8224 remains running/ready on allocation 40/n104.
-- Live validation: old `build_site_input_logistic_line` route choice reconciles to `expand_copper_smelting`; heuristic currently prefers `setup_coal_supply` because coal supply is not automated.
+- Live runtime: supervisor PID 3716; vLLM service task 8224 remains running/ready on allocation 40/n104; strategy task 8256 completed on allocation 40.
+- Live validation: old `build_site_input_logistic_line` route choice reconciles to `expand_copper_smelting`, and the restarted autopilot is running `expand_copper_smelting` step 8.
 - Validation: `py_compile src/factorio_ai/strategy.py`; `PYTHONPATH=src pytest tests/test_strategy.py tests/test_controller.py -q` -> 165 passed.
-- Next: commit/push this part, restart unattended supervisor with the new strategy code, then verify the next cycle does not repeat the missing-source site-input failure.
+- Next blocker: `expand_copper_smelting` is waiting for iron-gear-wheel mall output logistics instead of repeating the impossible missing-source site-input route.
