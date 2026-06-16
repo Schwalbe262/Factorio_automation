@@ -5839,6 +5839,15 @@ def _fuel_burner_line_entity(
             )
             if matching_source is not None:
                 return _take_surplus_fuel_source_decision(player, matching_source, context)
+            if (
+                prefer_coal_supply
+                and existing_fuel_item == "coal"
+                and _established_coal_supply_output_exists(observation)
+            ):
+                return PlannerDecision(
+                    {"type": "wait", "ticks": 240},
+                    f"wait for established coal supply output before refueling {context}; refusing repeated hand-mining",
+                )
             if existing_fuel_item == "coal" and entity_name == "burner-mining-drill":
                 coal = _nearest_resource_to_position(observation, position, "coal")
                 if coal is not None and distance(position, _position(coal)) <= WALK_FUEL_LOGISTICS_LIMIT:
@@ -5862,6 +5871,15 @@ def _fuel_burner_line_entity(
         source_surplus = _surplus_fuel_count(source) if source is not None else 0
         if source is not None and _surplus_fuel_source_is_logistic_output(source, observation):
             return _take_surplus_fuel_source_decision(player, source, context)
+        if (
+            prefer_coal_supply
+            and source_surplus <= 0
+            and _established_coal_supply_output_exists(observation)
+        ):
+            return PlannerDecision(
+                {"type": "wait", "ticks": 240},
+                f"wait for established coal supply output before refueling {context}; refusing repeated hand-mining",
+            )
         if coal is not None and distance(position, _position(coal)) <= WALK_FUEL_LOGISTICS_LIMIT and source_surplus < 8:
             return support_skill._mine_resource(player, coal, "coal", 16)
         local_coal = _nearest_resource_to_position(observation, player, "coal")
@@ -5905,6 +5923,11 @@ def _fuel_burner_line_entity(
 
 def _coal_supply_can_reduce_hand_mining(observation: dict[str, Any]) -> bool:
     return _find_coal_supply_layout(observation) is not None or _select_coal_supply_layout(observation) is not None
+
+
+def _established_coal_supply_output_exists(observation: dict[str, Any]) -> bool:
+    layout = _find_coal_supply_layout(observation)
+    return bool(layout and (layout.get("output_belt") is not None or layout.get("output_chest") is not None))
 
 
 def _surplus_fuel_source_is_logistic_output(entity: dict[str, Any], observation: dict[str, Any] | None = None) -> bool:
