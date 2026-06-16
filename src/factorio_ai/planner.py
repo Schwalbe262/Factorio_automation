@@ -3371,6 +3371,25 @@ class CoalSupplySkill:
                         },
                         "recover misplaced coal supply output belt before rebuilding the drill output",
                     )
+                belt_chest = _transport_belt_output_chest(observation)
+                if isinstance(belt_chest, dict) and entity_item_count(belt_chest, "transport-belt") > 0:
+                    position = _position(belt_chest)
+                    if distance(player, position) > 20:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": position},
+                            "move near belt mall output chest to collect a transport belt for coal supply construction",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "take",
+                            "item": "transport-belt",
+                            "count": 1,
+                            "unit_number": belt_chest.get("unit_number"),
+                            "name": belt_chest.get("name") or "wooden-chest",
+                            "position": position,
+                        },
+                        "take transport belt from belt mall output chest for coal supply construction",
+                    )
                 belt_assembler = _transport_belt_output_assembler(observation)
                 if isinstance(belt_assembler, dict) and entity_item_count(belt_assembler, "transport-belt") > 0:
                     position = _position(belt_assembler)
@@ -3510,6 +3529,23 @@ class CoalSupplySkill:
         belt = layout.get("output_belt")
         if not use_output_chest and belt is None:
             position = layout["output_position"]
+            chest = layout.get("output_chest")
+            if isinstance(chest, dict):
+                chest_position = _position(chest)
+                if distance(player, chest_position) > 8:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": chest_position},
+                        "move near coal output chest before replacing it with an output belt",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "unit_number": chest.get("unit_number"),
+                        "name": chest.get("name"),
+                        "position": chest_position,
+                    },
+                    "recover coal output chest before placing coal output belt",
+                )
             blocker = _blocking_obstacle_near(observation, position)
             if blocker is not None:
                 blocker_position = _position(blocker)
@@ -5354,6 +5390,8 @@ def _coal_supply_should_use_output_chest(observation: dict[str, Any], layout: di
     if layout.get("output_belt") is not None:
         return False
     if _find_misplaced_coal_supply_output_belt(observation, layout) is not None:
+        return False
+    if inventory_count(observation, "transport-belt") > 0 or _transport_belt_automation_output_ready(observation):
         return False
     if layout.get("output_chest") is not None:
         return True
