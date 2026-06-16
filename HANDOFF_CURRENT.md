@@ -9,7 +9,7 @@
 \- Root current Markdown files now use the escaped `md/` marker format.
 \- Slurm scheduler mode defaults to `rtx3090`/`r1jae262`; layout improvement requests use `a6000ada,a6000` candidates and submit the ready single `gpu_model`.
 \- Scheduler Qwen layout tasks now fail visibly, map vLLM env, disable flashinfer sampler, use guided JSON/detail polling, clean up vLLM children, and have the idle loop running again.
-\- Live map: coal feed is active; `logistics` remains incomplete, and red-science input logistics now refuses to mine existing belts/assemblers when no safe pre-logistics route exists.
+\- Live map: coal feed is active; `logistics` remains incomplete, stone drill fuel false-stop is fixed, and red science is now blocked on gear-to-science automation/rebuild rather than stone fuel.
 \- Local layout LLM idle loop is running again with runtime max active layout jobs set to 2.
 
 \## Current objective
@@ -34,18 +34,18 @@
 
 \## Last validation
 
-\- Full `pytest -q` passed: `687 passed`.
-\- Live validation: belt assembler was restored after a probe mistake; site-input gear logistics now reports no executable route instead of mining existing belt/assembler infrastructure.
+\- Full `pytest -q` passed: `688 passed`.
+\- Live validation: `research_logistics` progressed through stone supply, then repeated waits on iron-gear-wheel output logistics; local layout loop restarted with PID `71388`.
 \- Token sample recorded: `281,339,156` Factorio Codex thread tokens; delta `0`; weekly quota unknown.
 
 \## Current blocker
 
-\- `logistics` research is still incomplete; current red-science gear route is too cramped for a safe pre-logistics belt, so continue research/bootstrap path until underground belts/splitters unlock or relocate the site.
+\- `logistics` research is still incomplete; current red-science gear route is too cramped for a safe pre-logistics belt, so add/execute a compact gear-to-science relocation or direct-transfer rebuild.
 
 \## Next steps
 
 1\. Continue `connect_coal_fuel_feed` or `run-no-mod-strategy-step --objective launch_rocket_program` in short chunks.
-2\. Continue `research_logistics`; current next decision is crafting/fueling a burner drill for the copper/fuel path before science can resume.
+2\. Add a deterministic red-science gear feed rebuild: avoid player gear shuttles, prefer direct assembler transfer or a short clean belt lane.
 3\. Continue automation science/lab feeding until `logistics` research completes; after unlock, use underground belts for crossings and splitters for fan-out.
 
 \## Token/context policy
@@ -73,7 +73,7 @@
 \- Added role-aware dogleg site-input routes and fixed `NORTH=0` direction comparisons so north-facing belts/inserters are not treated as missing direction.
 \- Fixed no-mod observe belt-limit drops, coal output belt recognition, matching-fuel sourcing, and invalid direct-smelting drill recovery.
 \- Fixed scheduler task payload size, A6000 layout routing, vLLM startup failure reporting, active layout task throttling, belt mall output direction, belt-chest consumption, local gear-output bootstrap, buffered belt-mall gears, stale take races, established-coal-output/surplus hand-mining fallback, invalid coal supply drill recovery, and coal chest-to-belt conversion.
-\- Added Web UI/runtime setting for max active local layout LLM jobs, multi-worker background layout filling, underground-belt crossing bridge planning, splitter fan-out detection, and safe pre-logistics site-input route rejection/detours.
+\- Added Web UI/runtime setting for max active local layout LLM jobs, multi-worker background layout filling, underground-belt crossing bridge planning, splitter fan-out detection, safe pre-logistics site-input route rejection/detours, and one-fuel starter stone drill waiting.
 
 \## Risks and gotchas
 

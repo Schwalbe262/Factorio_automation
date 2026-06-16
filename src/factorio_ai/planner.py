@@ -3074,14 +3074,14 @@ class StoneSupplySkill:
                 "place burner mining drill for starter stone supply",
             )
 
-        if _entity_burner_fuel_count(drill) < 3:
+        if _entity_burner_fuel_count(drill) < 1:
             return _fuel_burner_line_entity(
                 observation,
                 player,
                 drill,
                 entity_name="burner-mining-drill",
-                threshold=3,
-                insert_count=5,
+                threshold=1,
+                insert_count=1,
                 context="starter stone supply",
                 support_skill=self.support_skill,
                 far_fuel_reason="starter stone supply needs local fuel before the drill can run",
