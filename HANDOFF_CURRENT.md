@@ -1,9 +1,9 @@
 # Current Handoff
 - Branch: `chore/part130-unattended-qwen9-supervisor`; Part 130 - unattended no-mod Qwen 9B local LLM supervisor.
 - Startup context: read `AGENTS.md`, this file, `goal.md`, then exact source ranges; never read `note.md`/`insight.md` in full.
-- Added `run_factorio_no_mod_unattended_llm.{bat,ps1}` to keep server, dashboard, scheduler LLM path, autopilot, and idle layout loop supervised.
-- Normal no-mod LLM helpers now use `Qwen/Qwen3.5-9B`, A6000-first scheduler candidates, 3 scheduler CPUs, and strategy priority 100.
-- `runtime/unattended-llm-supervisor.json` reports vLLM model, GPU candidates, LLM readiness, gate state, and loop PIDs.
-- Live processes: supervisor PID 52740; autopilot/idle layout are waiting with no worker PIDs while scheduler LLM is not ready.
-- Current scheduler state: 9B configured, 900s strategy/task timeout, `autopilot_gate=waiting_for_scheduler_llm`, and no 5-second failure-log retry loop.
-- Validation: PowerShell parser ok; `pytest tests/test_remote_slurm.py -q` -> 42 passed; next verify first successful 9B strategy result after GPU readiness.
+- Persistent scheduler vLLM service is implemented: `slurm-ensure-vllm-service` keeps Qwen 9B warm for 10800s and supervisor gates autopilot/layout on service heartbeat.
+- No-mod helpers use `Qwen/Qwen3.5-9B`, 900s strategy/task timeouts, 600s LLM timeout, and `FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=a6000ada,a6000`.
+- `/tasks` GPU submissions now pass ordered `gpu_model` candidates such as `a6000ada,a6000`, per scheduler docs, instead of collapsing to one A6000 model.
+- Live runtime: supervisor PID 64396; service task 8211 ready; `autopilot_gate=ready`; autopilot PID 64416; idle layout PID 12984.
+- Validation: PowerShell parser ok; `PYTHONPATH=src pytest tests/test_remote_slurm.py -q` -> 47 passed.
+- Next: investigate latest autopilot failure `FactorioController._run_skill() got an unexpected keyword argument 'input_item'`.

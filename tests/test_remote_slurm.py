@@ -603,6 +603,239 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertIn('VLLM_PID="$!"', command)
         self.assertIn("exit 1", command)
 
+    def test_scheduler_task_command_uses_persistent_vllm_service_without_task_gpu(self):
+        from factorio_ai import remote_slurm
+
+        with patch.dict(
+            "os.environ",
+            {
+                "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED": "1",
+                "FACTORIO_AI_SLURM_SCHEDULER_GPUS": "1",
+                "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000ada,a6000",
+                "FACTORIO_AI_VLLM_MODEL": "Qwen/test",
+                "FACTORIO_AI_VLLM_STARTUP_SECONDS": "7",
+            },
+            clear=True,
+        ):
+            command = remote_slurm._scheduler_task_command(
+                {"id": "strategy-test", "type": "strategy_request", "payload": {}}
+            )
+            client_resources = remote_slurm._scheduler_task_resources(
+                "strategy_request",
+                gpu_model="a6000",
+            )
+            service_resources = remote_slurm._scheduler_task_resources(
+                remote_slurm.VLLM_SERVICE_TASK_TYPE,
+                gpu_model="a6000",
+            )
+
+        self.assertEqual(client_resources["gpus"], 0)
+        self.assertEqual(client_resources["gpu_model"], "")
+        self.assertEqual(service_resources["gpus"], 1)
+        self.assertEqual(service_resources["gpu_model"], "a6000ada,a6000")
+        self.assertIn("VLLM_SERVICE_ENABLED=1", command)
+        self.assertIn('if [ "$VLLM_SERVICE_ENABLED" != "1" ]; then', command)
+        self.assertIn("vllm service endpoint not ready before FACTORIO_AI_VLLM_STARTUP_SECONDS", command)
+
+    def test_ensure_vllm_service_does_not_submit_when_active_service_is_ready(self):
+        from factorio_ai import remote_slurm
+
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="factorio-ai-worker",
+            conda_env="factorio-ai",
+            partition="gpu4",
+            cpus_per_task=8,
+            gpus_per_node=1,
+            gres="gpu:1",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        rows = [
+            {
+                "id": 77,
+                "name": "factorio-vllm-service-qwen-test-abcd1234",
+                "status": "running",
+                "account_name": "r1jae262",
+                "gpu_model": "a6000",
+            }
+        ]
+        heartbeat = {"state": "ready", "updated_at": "2026-01-01T00:00:00+00:00", "model": "Qwen/test"}
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FACTORIO_AI_SLURM_MODE": "scheduler",
+                    "FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262",
+                    "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000",
+                    "FACTORIO_AI_VLLM_MODEL": "Qwen/test",
+                },
+                clear=True,
+            ),
+            patch("factorio_ai.remote_slurm._scheduler_task_rows", return_value=rows),
+            patch("factorio_ai.remote_slurm._read_scheduler_vllm_service_heartbeat", return_value=heartbeat),
+            patch("factorio_ai.remote_slurm._iso_age_seconds", return_value=1.0),
+            patch("factorio_ai.remote_slurm._submit_scheduler_task") as submit_task,
+        ):
+            result = remote_slurm.ensure_vllm_service(cfg, duration_seconds=10800)
+
+        self.assertEqual(result["action"], "already_active")
+        self.assertTrue(result["status"]["service_ready"])
+        submit_task.assert_not_called()
+
+    def test_ensure_vllm_service_submits_when_no_active_service_exists(self):
+        from factorio_ai import remote_slurm
+
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="factorio-ai-worker",
+            conda_env="factorio-ai",
+            partition="gpu4",
+            cpus_per_task=8,
+            gpus_per_node=1,
+            gres="gpu:1",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FACTORIO_AI_SLURM_MODE": "scheduler",
+                    "FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262",
+                    "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000",
+                    "FACTORIO_AI_VLLM_MODEL": "Qwen/test",
+                },
+                clear=True,
+            ),
+            patch("factorio_ai.remote_slurm._scheduler_task_rows", return_value=[]),
+            patch("factorio_ai.remote_slurm._read_scheduler_vllm_service_heartbeat", return_value=None),
+            patch(
+                "factorio_ai.remote_slurm._submit_scheduler_task",
+                return_value={
+                    "id": 78,
+                    "name": "factorio-vllm-service-qwen-test-efgh5678",
+                    "status": "queued",
+                    "account_name": "r1jae262",
+                    "gpu_model": "a6000",
+                },
+            ) as submit_task,
+        ):
+            result = remote_slurm.ensure_vllm_service(cfg, duration_seconds=10800)
+
+        self.assertEqual(result["action"], "submitted")
+        task = submit_task.call_args.args[0]
+        self.assertEqual(task["type"], remote_slurm.VLLM_SERVICE_TASK_TYPE)
+        self.assertEqual(task["payload"]["duration_seconds"], 10800)
+        self.assertEqual(task["payload"]["model"], "Qwen/test")
+
+    def test_ensure_vllm_service_replaces_stale_queued_service(self):
+        from factorio_ai import remote_slurm
+
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="factorio-ai-worker",
+            conda_env="factorio-ai",
+            partition="gpu4",
+            cpus_per_task=8,
+            gpus_per_node=1,
+            gres="gpu:1",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        queued = {
+            "id": 77,
+            "name": "factorio-vllm-service-qwen-test-stale",
+            "status": "queued",
+            "account_name": "r1jae262",
+            "gpu_model": "a6000",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        submitted = {
+            "id": 78,
+            "name": "factorio-vllm-service-qwen-test-new",
+            "status": "queued",
+            "account_name": "r1jae262",
+            "gpu_model": "a6000",
+        }
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FACTORIO_AI_SLURM_MODE": "scheduler",
+                    "FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262",
+                    "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000",
+                    "FACTORIO_AI_VLLM_MODEL": "Qwen/test",
+                    "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_QUEUE_STALE_SECONDS": "180",
+                },
+                clear=True,
+            ),
+            patch("factorio_ai.remote_slurm._scheduler_task_rows", side_effect=[[queued], [], []]),
+            patch("factorio_ai.remote_slurm._read_scheduler_vllm_service_heartbeat", return_value=None),
+            patch("factorio_ai.remote_slurm._iso_age_seconds", return_value=181.0),
+            patch("factorio_ai.remote_slurm._scheduler_cancel_task", return_value={"ok": True}) as cancel_task,
+            patch("factorio_ai.remote_slurm._submit_scheduler_task", return_value=submitted) as submit_task,
+        ):
+            result = remote_slurm.ensure_vllm_service(cfg, duration_seconds=10800)
+
+        self.assertEqual(result["action"], "replaced_stale_queue")
+        cancel_task.assert_called_once_with(77)
+        submit_task.assert_called_once()
+
+    def test_vllm_service_heartbeat_reader_expands_tilde_remote_path(self):
+        from factorio_ai import remote_slurm
+
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="factorio-ai-worker",
+            conda_env="factorio-ai",
+            partition="gpu4",
+            cpus_per_task=8,
+            gpus_per_node=1,
+            gres="gpu:1",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        with patch("factorio_ai.remote_slurm._run_remote", return_value='{"state":"ready"}') as run_remote:
+            heartbeat = remote_slurm._read_scheduler_vllm_service_heartbeat(cfg)
+
+        script = run_remote.call_args.args[0]
+        self.assertEqual(heartbeat["state"], "ready")
+        self.assertIn("HEARTBEAT_PATH_RAW=", script)
+        self.assertIn('HEARTBEAT_PATH="$HOME/${HEARTBEAT_PATH_RAW:2}"', script)
+
     def test_scheduler_task_polling_uses_detail_endpoint_after_submit(self):
         from factorio_ai import remote_slurm
 
@@ -729,7 +962,7 @@ class RemoteSlurmTests(unittest.TestCase):
             )
 
         self.assertEqual(row["id"], 43)
-        self.assertEqual(posted[0]["gpu_model"], "a6000")
+        self.assertEqual(posted[0]["gpu_model"], "a6000ada,a6000")
         self.assertEqual(posted[0]["cpus"], 3)
         self.assertEqual(posted[0]["priority"], 80)
 
@@ -802,7 +1035,7 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertTrue(status["llm_ready"])
         self.assertEqual(status["remote"]["gpu_model_candidates"], ["a6000ada", "a6000"])
         self.assertEqual(status["remote"]["selected_gpu_model"], "a6000")
-        self.assertEqual(status["remote"]["resources"]["gpu_model"], "a6000")
+        self.assertEqual(status["remote"]["resources"]["gpu_model"], "a6000ada,a6000")
         self.assertEqual(status["remote"]["resources"]["cpus"], 3)
         self.assertEqual(status["remote"]["scheduler_ready_free_gpus"], 1)
         self.assertEqual(status["remote"]["resource_fit_pending_gpu_tasks"], 0)
@@ -1052,7 +1285,7 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertTrue(status["llm_ready"])
         self.assertEqual(status["remote"]["gpu_model_candidates"], ["rtx3090", "a6000ada", "a6000"])
         self.assertEqual(status["remote"]["selected_gpu_model"], "a6000")
-        self.assertEqual(status["remote"]["resources"]["gpu_model"], "a6000")
+        self.assertEqual(status["remote"]["resources"]["gpu_model"], "rtx3090,a6000ada,a6000")
 
     def test_scheduler_status_reports_pending_gpu_not_ready(self):
         from factorio_ai import remote_slurm
@@ -1151,7 +1384,10 @@ class RemoteSlurmTests(unittest.TestCase):
     def test_attached_env_setup_loads_remote_worker_config(self):
         setup = _attached_env_setup("/home/user/kakao-bot-worker")
         self.assertIn("/home/user/kakao-bot-worker/config.env", setup)
-        self.assertIn("FACTORIO_AI_LLM_*|FACTORIO_AI_VLLM_*|FACTORIO_AI_CONDA_ENV", setup)
+        self.assertIn(
+            "FACTORIO_AI_LLM_*|FACTORIO_AI_VLLM_*|FACTORIO_AI_SCHEDULER_VLLM_SERVICE_*|FACTORIO_AI_CONDA_ENV",
+            setup,
+        )
         self.assertIn('export "$key=$value"', setup)
 
     def test_strategy_model_benchmark_runs_same_payload_per_model(self):

@@ -166,13 +166,16 @@ Factorio/Space Age content matches.
 not supervising the run. It keeps the no-custom-mod server, dashboard, scheduler-managed Qwen path,
 continuous no-mod autopilot, and idle layout loop alive. If the autopilot process is missing or its
 heartbeat is stale with no fresh live skill heartbeat, the supervisor restarts it. The supervisor uses
-`FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=a6000ada,a6000,rtx3090` and
-`FACTORIO_AI_SLURM_SCHEDULER_CPUS=3` for strategy requests so a missing RTX 3090 allocation can fall
-back to ready scheduler A6000 capacity. It also sets strategy task priority above background layout
+`FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=a6000ada,a6000` and
+`FACTORIO_AI_SLURM_SCHEDULER_CPUS=3` for strategy requests so A6000 Ada can fall back to ready
+scheduler A6000 capacity. It also sets strategy task priority above background layout
 and writes `runtime\layout-llm-settings.json` with one max active layout job so background layout does
-not occupy every ready GPU. Until scheduler LLM readiness is true, the supervisor stops unattended
-autopilot and idle layout workers instead of letting them retry every few seconds and grow logs
-without progress. Status, including compact LLM readiness, is written to
+not occupy every ready GPU. It keeps a scheduler vLLM service warm for three hours at a time so the
+9B model is not reloaded for every strategy/layout task; the supervisor checks the service heartbeat
+and resubmits it if the scheduler pool times out or is replaced. Until scheduler LLM readiness and
+the vLLM service heartbeat are true, the supervisor stops unattended autopilot and idle layout
+workers instead of letting them retry every few seconds and grow logs without progress. Status,
+including compact LLM readiness and vLLM service readiness, is written to
 `runtime\unattended-llm-supervisor.json`, and restart logs go to
 `logs\unattended-llm-supervisor.log`.
 `run_factorio_no_mod_llm_autopilot.bat` starts the foreground continuous no-custom-mod autopilot
@@ -702,11 +705,17 @@ Common environment variables:
 - `FACTORIO_AI_SLURM_SCHEDULER_CPUS=3`
 - `FACTORIO_AI_SLURM_SCHEDULER_GPUS=1`
 - `FACTORIO_AI_SLURM_SCHEDULER_PRIORITY=100`
-- `FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=a6000ada,a6000,rtx3090`
+- `FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=a6000ada,a6000`
 - `FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS=a6000ada,a6000`
 - `FACTORIO_AI_SLURM_LAYOUT_CPUS=3`
 - `FACTORIO_AI_SLURM_LAYOUT_PRIORITY=80`
 - `FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker`
+- `FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED=1`
+- `FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS=10800`
+- `FACTORIO_AI_SCHEDULER_VLLM_SERVICE_HEARTBEAT_SECONDS=30`
+- `FACTORIO_AI_SCHEDULER_VLLM_SERVICE_STALE_SECONDS=120`
+- `FACTORIO_AI_SCHEDULER_VLLM_SERVICE_QUEUE_STALE_SECONDS=180`
+- `FACTORIO_AI_SCHEDULER_VLLM_SERVICE_PRIORITY=120`
 - `FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.5-9B`
 - `FACTORIO_AI_LLM_GUIDED_JSON=1`
 - `FACTORIO_AI_LLM_TIMEOUT=600`
@@ -739,10 +748,16 @@ $env:FACTORIO_AI_SLURM_TASK_TIMEOUT_SECONDS="900"
 $env:FACTORIO_AI_SLURM_SCHEDULER_CPUS="3"
 $env:FACTORIO_AI_SLURM_SCHEDULER_GPUS="1"
 $env:FACTORIO_AI_SLURM_SCHEDULER_PRIORITY="100"
-$env:FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL="a6000ada,a6000,rtx3090"
+$env:FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL="a6000ada,a6000"
 $env:FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS="a6000ada,a6000"
 $env:FACTORIO_AI_SLURM_LAYOUT_CPUS="3"
 $env:FACTORIO_AI_SLURM_LAYOUT_PRIORITY="80"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED="1"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS="10800"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_HEARTBEAT_SECONDS="30"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_STALE_SECONDS="120"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_QUEUE_STALE_SECONDS="180"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_PRIORITY="120"
 $env:FACTORIO_AI_VLLM_MODEL="Qwen/Qwen3.5-9B"
 $env:FACTORIO_AI_VLLM_ARGS="--max-model-len 32768 --gpu-memory-utilization 0.90 --enforce-eager"
 $env:FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER="0"
@@ -750,6 +765,8 @@ $env:FACTORIO_AI_VLLM_STARTUP_SECONDS="420"
 $env:FACTORIO_AI_LLM_GUIDED_JSON="1"
 $env:FACTORIO_AI_LLM_TIMEOUT="600"
 $env:FACTORIO_AI_REMOTE_STRATEGY_TIMEOUT_SECONDS="900"
+python -m factorio_ai.cli slurm-ensure-vllm-service --duration-seconds 10800
+python -m factorio_ai.cli slurm-vllm-service-status
 python -m factorio_ai.cli slurm-llm-status
 ```
 
@@ -767,11 +784,18 @@ The no-mod autopilot, real-player autopilot, unattended supervisor, and idle lay
 scheduler mode. Older direct-worker 9B/27B launchers are legacy queue experiments and should not be
 used for normal local LLM operation unless this project explicitly needs an isolated comparison run.
 
+For Qwen 9B, repeatedly starting short Slurm tasks is inefficient because vLLM model load time can
+dominate the useful planning time. Normal no-mod helpers call `slurm-ensure-vllm-service` before
+submitting strategy or layout work. With
+`FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED=1`, only the persistent service task requests a GPU;
+strategy and layout tasks attach as CPU clients and fail fast if the local service endpoint is not
+ready.
+
 The normal 9B local LLM path prefers A6000-class capacity, but
-`FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL` may contain a comma-separated strategy candidate list such as
-`a6000ada,a6000,rtx3090`; the client selects the first candidate with scheduler capacity and submits
-the task with one concrete
-`gpu_model` value. Layout improvement requests use `FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS`, defaulting
+`FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL` may contain an ordered scheduler candidate list such as
+`a6000ada,a6000`; GPU service tasks submit that list as the `/tasks` `gpu_model` value so the
+scheduler can prefer A6000 Ada while allowing A6000 fallback. Layout improvement requests use
+`FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS`, defaulting
 to `a6000ada,a6000`, and follow the same ready-candidate selection. Layout requests default to
 `FACTORIO_AI_SLURM_LAYOUT_CPUS=3` so they can attach to the warm A6000 allocation that exposes three
 free CPUs, and `FACTORIO_AI_SLURM_LAYOUT_PRIORITY=80` so they are not starved behind lower-priority

@@ -33,6 +33,8 @@ DEFAULT_CONDA_ENV = "factorio-ai"
 DEFAULT_SCHEDULER_URL = "http://100.112.168.31:8000"
 DEFAULT_SCHEDULER_ACCOUNT = "r1jae262"
 LAYOUT_IMPROVEMENT_TASK_TYPE = "layout_improvement_request"
+VLLM_SERVICE_TASK_TYPE = "vllm_service"
+VLLM_SERVICE_TASK_NAME_PREFIX = "factorio-vllm-service"
 DEFAULT_LAYOUT_SCHEDULER_GPU_MODELS = ("a6000ada", "a6000")
 LLM_ENV_VARS = (
     "FACTORIO_AI_LLM_BASE_URL",
@@ -49,6 +51,16 @@ VLLM_ENV_VARS = (
     "FACTORIO_AI_VLLM_CUDA_VISIBLE_DEVICES",
     "FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER",
     "FACTORIO_AI_VLLM_STARTUP_SECONDS",
+)
+SCHEDULER_VLLM_SERVICE_ENV_VARS = (
+    "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED",
+    "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS",
+    "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_HEARTBEAT_SECONDS",
+    "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_STALE_SECONDS",
+    "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_QUEUE_STALE_SECONDS",
+    "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_CPUS",
+    "FACTORIO_AI_SCHEDULER_VLLM_CLIENT_CPUS",
+    "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_PRIORITY",
 )
 GPU_ENV_VARS = (
     "CUDA_VISIBLE_DEVICES",
@@ -197,6 +209,20 @@ def _scheduler_api_json(path: str, *, timeout: int = 30) -> Any:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _scheduler_api_json_retry(path: str, *, timeout: int = 30, attempts: int = 3) -> Any:
+    last_exc: Exception | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+            return _scheduler_api_json(path, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt + 1 < max(1, attempts):
+                time.sleep(0.75)
+    if last_exc is not None:
+        raise last_exc
+    raise RemoteSlurmError(f"scheduler API request failed without exception: {path}")
+
+
 def _scheduler_post_form(path: str, data: dict[str, Any], *, timeout: int = 30) -> str:
     url = urljoin(_scheduler_url() + "/", path.lstrip("/"))
     encoded = urlencode({key: str(value) for key, value in data.items()}).encode("utf-8")
@@ -210,7 +236,7 @@ def _worker_env_values(cfg: RemoteSlurmConfig) -> dict[str, str]:
     values = {
         "FACTORIO_AI_SLURM_CONDA_ENV": cfg.conda_env,
     }
-    for name in LLM_ENV_VARS + VLLM_ENV_VARS:
+    for name in LLM_ENV_VARS + VLLM_ENV_VARS + SCHEDULER_VLLM_SERVICE_ENV_VARS:
         value = os.getenv(name)
         if value is not None:
             values[name] = _normalize_worker_env_value(name, value)
@@ -224,7 +250,7 @@ def _worker_env_values(cfg: RemoteSlurmConfig) -> dict[str, str]:
 
 def _scheduler_env_setup() -> str:
     lines = []
-    for name in LLM_ENV_VARS + VLLM_ENV_VARS:
+    for name in LLM_ENV_VARS + VLLM_ENV_VARS + SCHEDULER_VLLM_SERVICE_ENV_VARS:
         value = os.getenv(name)
         if value:
             lines.append(f"export {name}={shlex.quote(_normalize_worker_env_value(name, value))}")
@@ -312,11 +338,15 @@ def _scheduler_task_resources(
     selected_gpu_model = _scheduler_gpu_model_name(gpu_model)
     if not selected_gpu_model:
         selected_gpu_model = candidates[0] if candidates else ""
+    gpus = _int_env("FACTORIO_AI_SLURM_SCHEDULER_GPUS", 1, 0)
+    if task_type != VLLM_SERVICE_TASK_TYPE and _scheduler_vllm_service_enabled():
+        gpus = 0
+    requested_gpu_model = ",".join(candidates) if gpus > 0 and candidates else selected_gpu_model
     return {
         "cpus": _scheduler_task_cpus(task_type),
         "memory_mb": _int_env("FACTORIO_AI_SLURM_SCHEDULER_MEMORY_MB", 32768, 1024),
-        "gpus": _int_env("FACTORIO_AI_SLURM_SCHEDULER_GPUS", 1, 0),
-        "gpu_model": selected_gpu_model,
+        "gpus": gpus,
+        "gpu_model": requested_gpu_model if gpus > 0 else "",
         "partition": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_PARTITION", "auto").strip() or "auto",
         "node_name": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_NODE", "").strip(),
         "exclusive_node": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_EXCLUSIVE_NODE", "0").strip().lower()
@@ -325,6 +355,10 @@ def _scheduler_task_resources(
 
 
 def _scheduler_task_cpus(task_type: str | None = None) -> int:
+    if task_type == VLLM_SERVICE_TASK_TYPE:
+        return _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_CPUS", 1, 1)
+    if _scheduler_vllm_service_enabled():
+        return _int_env("FACTORIO_AI_SCHEDULER_VLLM_CLIENT_CPUS", 1, 1)
     if task_type == LAYOUT_IMPROVEMENT_TASK_TYPE:
         if os.getenv("FACTORIO_AI_SLURM_LAYOUT_CPUS", "").strip():
             return _int_env("FACTORIO_AI_SLURM_LAYOUT_CPUS", 3, 1)
@@ -333,23 +367,196 @@ def _scheduler_task_cpus(task_type: str | None = None) -> int:
 
 
 def _scheduler_task_priority(task_type: str | None = None) -> int:
+    if task_type == VLLM_SERVICE_TASK_TYPE:
+        return _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_PRIORITY", 120, 0)
     if task_type == LAYOUT_IMPROVEMENT_TASK_TYPE:
         return _int_env("FACTORIO_AI_SLURM_LAYOUT_PRIORITY", 80, 0)
     return _int_env("FACTORIO_AI_SLURM_SCHEDULER_PRIORITY", 0, 0)
 
 
+def _scheduler_vllm_service_enabled() -> bool:
+    value = os.getenv("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED", "").strip().lower()
+    return value not in {"", "0", "false", "no", "off"}
+
+
+def _scheduler_vllm_service_duration_seconds(value: Any = None) -> int:
+    if value is not None:
+        try:
+            return max(300, int(value))
+        except (TypeError, ValueError):
+            pass
+    return _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS", 10800, 300)
+
+
+def _scheduler_vllm_service_heartbeat_filename() -> str:
+    port = os.getenv("FACTORIO_AI_VLLM_PORT", "8000").strip() or "8000"
+    safe_port = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in port)[:32] or "8000"
+    return f"vllm-service-{safe_port}.heartbeat.json"
+
+
+def _scheduler_vllm_service_model_slug() -> str:
+    model = os.getenv("FACTORIO_AI_VLLM_MODEL", "model").strip() or "model"
+    return "".join(ch.lower() if ch.isalnum() else "-" for ch in model)[:64].strip("-") or "model"
+
+
+def _scheduler_vllm_service_command(task: dict[str, Any]) -> str:
+    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    duration_seconds = _scheduler_vllm_service_duration_seconds(payload.get("duration_seconds"))
+    heartbeat_seconds = _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_HEARTBEAT_SECONDS", 30, 5)
+    startup_seconds = _int_env("FACTORIO_AI_VLLM_STARTUP_SECONDS", 240, 1)
+    task_id = str(task["id"])
+    task_json = shlex.quote(f".factorio-ai-scheduler-tasks/{task_id}.json")
+    result_json = shlex.quote(f".factorio-ai-scheduler-tasks/{task_id}.result.json")
+    heartbeat_json = shlex.quote(f".factorio-ai-scheduler-tasks/{_scheduler_vllm_service_heartbeat_filename()}")
+    safe_task_id = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in task_id)[:96] or "vllm-service"
+    vllm_log_base = shlex.quote(f"logs/vllm-service-{safe_task_id}")
+    return f"""set -euo pipefail
+mkdir -p .factorio-ai-scheduler-tasks logs
+TASK_JSON={task_json}
+RESULT_JSON={result_json}
+HEARTBEAT_JSON={heartbeat_json}
+VLLM_LOG_BASE={vllm_log_base}
+SERVICE_DURATION_SECONDS={duration_seconds}
+SERVICE_HEARTBEAT_SECONDS={heartbeat_seconds}
+rm -f "$RESULT_JSON"
+if command -v conda >/dev/null 2>&1; then
+  eval "$(conda shell.bash hook)" || true
+  conda activate "${{FACTORIO_AI_SLURM_CONDA_ENV:-factorio-ai}}" || true
+elif [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+  . "$HOME/miniconda3/etc/profile.d/conda.sh"
+  conda activate "${{FACTORIO_AI_SLURM_CONDA_ENV:-factorio-ai}}" || true
+fi
+export PYTHONPATH="${{PWD}}/src:${{PYTHONPATH:-}}"
+if [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ] && [ -z "${{FACTORIO_AI_LLM_MODEL:-}}" ]; then
+  export FACTORIO_AI_LLM_MODEL="$FACTORIO_AI_VLLM_MODEL"
+fi
+if [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ] && [ -z "${{FACTORIO_AI_LLM_BASE_URL:-}}" ]; then
+  export FACTORIO_AI_LLM_BASE_URL="http://127.0.0.1:${{FACTORIO_AI_VLLM_PORT:-8000}}/v1"
+fi
+if [ -n "${{FACTORIO_AI_HF_HOME:-}}" ]; then
+  export HF_HOME="$FACTORIO_AI_HF_HOME"
+fi
+if [ -n "${{FACTORIO_AI_VLLM_CUDA_VISIBLE_DEVICES:-}}" ]; then
+  export CUDA_VISIBLE_DEVICES="$FACTORIO_AI_VLLM_CUDA_VISIBLE_DEVICES"
+fi
+if [ -n "${{FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER:-}}" ]; then
+  export VLLM_USE_FLASHINFER_SAMPLER="$FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER"
+fi
+VLLM_PID=""
+write_heartbeat() {{
+  HEARTBEAT_JSON="$HEARTBEAT_JSON" SERVICE_DURATION_SECONDS="$SERVICE_DURATION_SECONDS" SERVICE_STATE="$1" SERVICE_REASON="${{2:-}}" VLLM_PID_VALUE="${{VLLM_PID:-}}" python - <<'PY'
+from datetime import datetime, timezone
+import json
+import os
+payload = {{
+    "state": os.environ.get("SERVICE_STATE", ""),
+    "reason": os.environ.get("SERVICE_REASON", ""),
+    "updated_at": datetime.now(timezone.utc).isoformat(),
+    "model": os.environ.get("FACTORIO_AI_VLLM_MODEL", ""),
+    "base_url": os.environ.get("FACTORIO_AI_LLM_BASE_URL", ""),
+    "pid": os.environ.get("VLLM_PID_VALUE") or None,
+    "duration_seconds": int(os.environ.get("SERVICE_DURATION_SECONDS") or 0),
+}}
+with open(os.environ["HEARTBEAT_JSON"], "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
+    handle.write("\\n")
+PY
+}}
+cleanup_vllm() {{
+  write_heartbeat "stopping" "service task exiting" || true
+  if [ -n "$VLLM_PID" ]; then
+    kill "$VLLM_PID" >/dev/null 2>&1 || true
+    wait "$VLLM_PID" >/dev/null 2>&1 || true
+  fi
+}}
+trap cleanup_vllm EXIT
+if [ -z "${{FACTORIO_AI_VLLM_MODEL:-}}" ]; then
+  write_heartbeat "failed" "FACTORIO_AI_VLLM_MODEL is not configured"
+  printf '{{"ok":false,"error":"FACTORIO_AI_VLLM_MODEL is not configured"}}\\n' > "$RESULT_JSON"
+  cat "$RESULT_JSON"
+  exit 1
+fi
+write_heartbeat "starting" "starting vLLM service"
+if ! python - <<'PY' >/dev/null 2>&1
+import os, urllib.request
+url = os.environ.get("FACTORIO_AI_LLM_BASE_URL", "").rstrip("/") + "/models"
+urllib.request.urlopen(url, timeout=5).read()
+PY
+then
+  if command -v vllm >/dev/null 2>&1; then
+    nohup vllm serve "$FACTORIO_AI_VLLM_MODEL" --host 127.0.0.1 --port "${{FACTORIO_AI_VLLM_PORT:-8000}}" ${{FACTORIO_AI_VLLM_ARGS:-}} > "$VLLM_LOG_BASE.out" 2> "$VLLM_LOG_BASE.err" &
+    VLLM_PID="$!"
+  elif python - <<'PY' >/dev/null 2>&1
+import importlib.util
+raise SystemExit(0 if importlib.util.find_spec("vllm") else 1)
+PY
+  then
+    nohup python -m vllm.entrypoints.openai.api_server --model "$FACTORIO_AI_VLLM_MODEL" --host 127.0.0.1 --port "${{FACTORIO_AI_VLLM_PORT:-8000}}" ${{FACTORIO_AI_VLLM_ARGS:-}} > "$VLLM_LOG_BASE.out" 2> "$VLLM_LOG_BASE.err" &
+    VLLM_PID="$!"
+  else
+    write_heartbeat "failed" "vllm command/module not found after conda activation"
+    printf '{{"ok":false,"error":"vllm command/module not found after conda activation"}}\\n' > "$RESULT_JSON"
+    cat "$RESULT_JSON"
+    exit 1
+  fi
+fi
+if ! python - <<'PY'
+import os, time, urllib.request
+deadline = time.time() + {startup_seconds}
+url = os.environ.get("FACTORIO_AI_LLM_BASE_URL", "").rstrip("/") + "/models"
+while time.time() < deadline:
+    try:
+        urllib.request.urlopen(url, timeout=5).read()
+        raise SystemExit(0)
+    except Exception:
+        time.sleep(2)
+raise SystemExit(1)
+PY
+then
+  write_heartbeat "failed" "vLLM endpoint not ready before startup timeout"
+  printf '{{"ok":false,"error":"vLLM endpoint not ready before startup timeout"}}\\n' > "$RESULT_JSON"
+  cat "$RESULT_JSON"
+  exit 1
+fi
+write_heartbeat "ready" "vLLM service ready"
+SERVICE_END=$(( $(date +%s) + SERVICE_DURATION_SECONDS ))
+while [ "$(date +%s)" -lt "$SERVICE_END" ]; do
+  if ! python - <<'PY' >/dev/null 2>&1
+import os, urllib.request
+url = os.environ.get("FACTORIO_AI_LLM_BASE_URL", "").rstrip("/") + "/models"
+urllib.request.urlopen(url, timeout=5).read()
+PY
+  then
+    write_heartbeat "failed" "vLLM endpoint health check failed"
+    printf '{{"ok":false,"error":"vLLM endpoint health check failed"}}\\n' > "$RESULT_JSON"
+    cat "$RESULT_JSON"
+    exit 1
+  fi
+  write_heartbeat "ready" "vLLM service ready"
+  sleep "$SERVICE_HEARTBEAT_SECONDS"
+done
+write_heartbeat "finished" "service duration elapsed"
+printf '{{"ok":true,"source":"vllm_service","duration_seconds":%s}}\\n' "$SERVICE_DURATION_SECONDS" > "$RESULT_JSON"
+cat "$RESULT_JSON"
+"""
+
+
 def _scheduler_task_command(task: dict[str, Any]) -> str:
+    if str(task.get("type") or "") == VLLM_SERVICE_TASK_TYPE:
+        return _scheduler_vllm_service_command(task)
     task_id = str(task["id"])
     task_json = shlex.quote(f".factorio-ai-scheduler-tasks/{task_id}.json")
     result_json = shlex.quote(f".factorio-ai-scheduler-tasks/{task_id}.result.json")
     safe_task_id = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in task_id)[:96] or "task"
     vllm_log_base = shlex.quote(f"logs/vllm-scheduler-{safe_task_id}")
     startup_seconds = _int_env("FACTORIO_AI_VLLM_STARTUP_SECONDS", 240, 1)
+    vllm_service_enabled = "1" if _scheduler_vllm_service_enabled() else "0"
     return f"""set -euo pipefail
 mkdir -p .factorio-ai-scheduler-tasks logs
 TASK_JSON={task_json}
 RESULT_JSON={result_json}
 VLLM_LOG_BASE={vllm_log_base}
+VLLM_SERVICE_ENABLED={vllm_service_enabled}
 if [[ ! -s "$TASK_JSON" ]]; then
   python3 - "$TASK_JSON" <<'PY'
 import json
@@ -392,25 +599,27 @@ cleanup_vllm() {{
 trap cleanup_vllm EXIT
 if [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ]; then
   VLLM_START_ERROR=""
-  if ! python - <<'PY' >/dev/null 2>&1
+  if [ "$VLLM_SERVICE_ENABLED" != "1" ]; then
+    if ! python - <<'PY' >/dev/null 2>&1
 import os, urllib.request
 url = os.environ.get("FACTORIO_AI_LLM_BASE_URL", "").rstrip("/") + "/models"
 urllib.request.urlopen(url, timeout=5).read()
 PY
-  then
-    if command -v vllm >/dev/null 2>&1; then
-      nohup vllm serve "$FACTORIO_AI_VLLM_MODEL" --host 127.0.0.1 --port "${{FACTORIO_AI_VLLM_PORT:-8000}}" ${{FACTORIO_AI_VLLM_ARGS:-}} > "$VLLM_LOG_BASE.out" 2> "$VLLM_LOG_BASE.err" &
-      VLLM_PID="$!"
-    elif python - <<'PY' >/dev/null 2>&1
+    then
+      if command -v vllm >/dev/null 2>&1; then
+        nohup vllm serve "$FACTORIO_AI_VLLM_MODEL" --host 127.0.0.1 --port "${{FACTORIO_AI_VLLM_PORT:-8000}}" ${{FACTORIO_AI_VLLM_ARGS:-}} > "$VLLM_LOG_BASE.out" 2> "$VLLM_LOG_BASE.err" &
+        VLLM_PID="$!"
+      elif python - <<'PY' >/dev/null 2>&1
 import importlib.util
 raise SystemExit(0 if importlib.util.find_spec("vllm") else 1)
 PY
-    then
-      nohup python -m vllm.entrypoints.openai.api_server --model "$FACTORIO_AI_VLLM_MODEL" --host 127.0.0.1 --port "${{FACTORIO_AI_VLLM_PORT:-8000}}" ${{FACTORIO_AI_VLLM_ARGS:-}} > "$VLLM_LOG_BASE.out" 2> "$VLLM_LOG_BASE.err" &
-      VLLM_PID="$!"
-    else
-      VLLM_START_ERROR="vllm command/module not found after conda activation"
-      printf '%s\\n' "$VLLM_START_ERROR" > "$VLLM_LOG_BASE.err"
+      then
+        nohup python -m vllm.entrypoints.openai.api_server --model "$FACTORIO_AI_VLLM_MODEL" --host 127.0.0.1 --port "${{FACTORIO_AI_VLLM_PORT:-8000}}" ${{FACTORIO_AI_VLLM_ARGS:-}} > "$VLLM_LOG_BASE.out" 2> "$VLLM_LOG_BASE.err" &
+        VLLM_PID="$!"
+      else
+        VLLM_START_ERROR="vllm command/module not found after conda activation"
+        printf '%s\\n' "$VLLM_START_ERROR" > "$VLLM_LOG_BASE.err"
+      fi
     fi
   fi
   if [ -n "$VLLM_START_ERROR" ]; then
@@ -438,11 +647,14 @@ while time.time() < deadline:
 raise SystemExit(1)
 PY
   then
-    python - "$RESULT_JSON" "$FACTORIO_AI_LLM_BASE_URL" "$VLLM_LOG_BASE.err" <<'PY'
+    python - "$RESULT_JSON" "$FACTORIO_AI_LLM_BASE_URL" "$VLLM_LOG_BASE.err" "$VLLM_SERVICE_ENABLED" <<'PY'
 import json
 import sys
-result_path, base_url, log_path = sys.argv[1:4]
-error = "vllm endpoint not ready before FACTORIO_AI_VLLM_STARTUP_SECONDS"
+result_path, base_url, log_path, service_enabled = sys.argv[1:5]
+if service_enabled == "1":
+    error = "vllm service endpoint not ready before FACTORIO_AI_VLLM_STARTUP_SECONDS"
+else:
+    error = "vllm endpoint not ready before FACTORIO_AI_VLLM_STARTUP_SECONDS"
 payload = {{"ok": False, "error": error, "llm_error": error, "llm_base_url": base_url, "vllm_log": log_path}}
 with open(result_path, "w", encoding="utf-8") as handle:
     json.dump(payload, handle)
@@ -516,7 +728,10 @@ def _submit_scheduler_task(task: dict[str, Any], cfg: RemoteSlurmConfig) -> dict
     task_type = str(task.get("type") or "")
     selected_gpu_model = _scheduler_selected_gpu_model(task_type)
     resources = _scheduler_task_resources(task_type, gpu_model=selected_gpu_model)
-    name = f"factorio-{str(task.get('type') or 'task').replace('_', '-')}-{uuid.uuid4().hex[:8]}"
+    if task_type == VLLM_SERVICE_TASK_TYPE:
+        name = f"{VLLM_SERVICE_TASK_NAME_PREFIX}-{_scheduler_vllm_service_model_slug()}-{uuid.uuid4().hex[:8]}"
+    else:
+        name = f"factorio-{str(task.get('type') or 'task').replace('_', '-')}-{uuid.uuid4().hex[:8]}"
     remote_cwd = _resolve_scheduler_remote_cwd(cfg)
     _upload_scheduler_task_payload(task, cfg, remote_cwd)
     data = {
@@ -541,7 +756,7 @@ def _submit_scheduler_task(task: dict[str, Any], cfg: RemoteSlurmConfig) -> dict
 
 
 def _scheduler_task_rows() -> list[dict[str, Any]]:
-    rows = _scheduler_api_json("/api/tasks", timeout=30)
+    rows = _scheduler_api_json_retry("/api/tasks", timeout=30, attempts=2)
     return rows if isinstance(rows, list) else []
 
 
@@ -553,6 +768,91 @@ def _scheduler_task_detail(task_id: Any) -> dict[str, Any] | None:
     except Exception:  # noqa: BLE001
         return None
     return row if isinstance(row, dict) else None
+
+
+def _scheduler_cancel_task(task_id: Any) -> dict[str, Any] | None:
+    if task_id is None:
+        return None
+    try:
+        response = _scheduler_post_form(f"/api/tasks/{task_id}/cancel", {}, timeout=30)
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        parsed = json.loads(response)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _scheduler_active_vllm_service_rows(
+    task_rows: list[dict[str, Any]],
+    account: str,
+    wanted_gpu_models: set[str],
+) -> list[dict[str, Any]]:
+    active_states = {"queued", "pending", "attaching", "starting", "running"}
+    rows: list[dict[str, Any]] = []
+    for row in task_rows:
+        name = str(row.get("name") or "")
+        if not name.startswith(VLLM_SERVICE_TASK_NAME_PREFIX):
+            continue
+        row_account = str(row.get("account_name") or account)
+        if row_account != account:
+            continue
+        if str(row.get("status") or "").lower() not in active_states:
+            continue
+        model = _scheduler_gpu_model_name(row.get("gpu_model"))
+        if wanted_gpu_models and model and model not in wanted_gpu_models:
+            continue
+        rows.append(row)
+    return rows
+
+
+def _scheduler_vllm_service_heartbeat_path(cfg: RemoteSlurmConfig) -> str:
+    return f"{_scheduler_remote_cwd(cfg).rstrip('/')}/.factorio-ai-scheduler-tasks/{_scheduler_vllm_service_heartbeat_filename()}"
+
+
+def _read_scheduler_vllm_service_heartbeat(cfg: RemoteSlurmConfig) -> dict[str, Any] | None:
+    path = _scheduler_vllm_service_heartbeat_path(cfg)
+    try:
+        output = _run_remote(
+            f"""set -euo pipefail
+HEARTBEAT_PATH_RAW={json.dumps(path)}
+if [[ "$HEARTBEAT_PATH_RAW" == "~" ]]; then
+  HEARTBEAT_PATH="$HOME"
+elif [[ "$HEARTBEAT_PATH_RAW" == "~/"* ]]; then
+  HEARTBEAT_PATH="$HOME/${{HEARTBEAT_PATH_RAW:2}}"
+else
+  HEARTBEAT_PATH="$HEARTBEAT_PATH_RAW"
+fi
+if [ -s "$HEARTBEAT_PATH" ]; then
+  cat "$HEARTBEAT_PATH"
+fi
+""",
+            cfg,
+            timeout=15,
+        ).strip()
+    except Exception:  # noqa: BLE001
+        return None
+    if not output:
+        return None
+    try:
+        parsed = json.loads(output.splitlines()[-1])
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _iso_age_seconds(value: Any) -> float:
+    if not value:
+        return float("inf")
+    try:
+        text = str(value)
+        timestamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - timestamp.astimezone(timezone.utc)).total_seconds()
+    except (TypeError, ValueError):
+        return float("inf")
 
 
 def _scheduler_compact_task_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -1004,7 +1304,7 @@ import subprocess
 import urllib.error
 import urllib.request
 
-env_names = {json.dumps(list(LLM_ENV_VARS + VLLM_ENV_VARS))}
+env_names = {json.dumps(list(LLM_ENV_VARS + VLLM_ENV_VARS + SCHEDULER_VLLM_SERVICE_ENV_VARS))}
 gpu_env_names = {json.dumps(list(GPU_ENV_VARS))}
 safe_value_names = {json.dumps(["FACTORIO_AI_LLM_BASE_URL", "FACTORIO_AI_LLM_MODEL", "FACTORIO_AI_VLLM_MODEL", "FACTORIO_AI_VLLM_PORT"])}
 factorio_ai_path = {json.dumps(remote_dir + "/factorio-ai")}
@@ -1198,6 +1498,135 @@ def layout_improvement_status(
     return llm_status(cfg)
 
 
+def vllm_service_status(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
+    cfg = cfg or config()
+    if not _use_scheduler_tasks():
+        return {
+            "ok": False,
+            "provider": "legacy_slurm",
+            "service_ready": False,
+            "missing": ["FACTORIO_AI_SLURM_MODE=scheduler"],
+        }
+    scheduler_url = _scheduler_url()
+    account = _scheduler_account()
+    candidates = _scheduler_gpu_model_candidates()
+    wanted_gpu_models = {_scheduler_gpu_model_name(model) for model in candidates if model}
+    try:
+        tasks = _scheduler_task_rows()
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": True,
+            "provider": "slurm_scheduler",
+            "schedulerUrl": scheduler_url,
+            "account": account,
+            "service_ready": False,
+            "missing": ["Slurm scheduler API"],
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    active_rows = _scheduler_active_vllm_service_rows(tasks, account, wanted_gpu_models)
+    running_rows = [row for row in active_rows if str(row.get("status") or "").lower() == "running"]
+    heartbeat = _read_scheduler_vllm_service_heartbeat(cfg)
+    heartbeat_age_seconds = _iso_age_seconds(heartbeat.get("updated_at") if heartbeat else None)
+    expected_model = os.getenv("FACTORIO_AI_VLLM_MODEL", "").strip()
+    heartbeat_model = str((heartbeat or {}).get("model") or "").strip()
+    heartbeat_ready = bool(
+        heartbeat
+        and heartbeat.get("state") == "ready"
+        and heartbeat_age_seconds <= _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_STALE_SECONDS", 120, 10)
+        and (not expected_model or heartbeat_model == expected_model)
+    )
+    missing: list[str] = []
+    if not active_rows:
+        missing.append("running scheduler vLLM service task")
+    elif not running_rows:
+        missing.append("running scheduler vLLM service task")
+    if not heartbeat_ready:
+        missing.append("ready scheduler vLLM service heartbeat")
+    return {
+        "ok": True,
+        "provider": "slurm_scheduler",
+        "schedulerUrl": scheduler_url,
+        "account": account,
+        "service_ready": not missing,
+        "missing": missing,
+        "vllm_model": expected_model,
+        "duration_seconds": _scheduler_vllm_service_duration_seconds(),
+        "heartbeat": heartbeat,
+        "heartbeat_age_seconds": None if heartbeat_age_seconds == float("inf") else round(heartbeat_age_seconds, 3),
+        "heartbeat_path": _scheduler_vllm_service_heartbeat_path(cfg),
+        "active_services": [_scheduler_compact_task_row(row) for row in active_rows],
+    }
+
+
+def ensure_vllm_service(
+    cfg: RemoteSlurmConfig | None = None,
+    *,
+    duration_seconds: int | None = None,
+) -> dict[str, Any]:
+    cfg = cfg or config()
+    status_payload = vllm_service_status(cfg)
+    if status_payload.get("provider") != "slurm_scheduler":
+        return {
+            "ok": False,
+            "action": "unavailable",
+            "status": status_payload,
+        }
+    active_services = status_payload.get("active_services") if isinstance(status_payload.get("active_services"), list) else []
+    cancelled_services: list[dict[str, Any]] = []
+    if active_services and not status_payload.get("service_ready"):
+        running_services = [
+            row
+            for row in active_services
+            if str(row.get("status") or "").lower() == "running"
+        ]
+        queue_stale_seconds = _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_QUEUE_STALE_SECONDS", 180, 30)
+        stale_queued_services = []
+        if not running_services:
+            for row in active_services:
+                status = str(row.get("status") or "").lower()
+                age_seconds = _iso_age_seconds(row.get("created_at"))
+                if status in {"queued", "pending", "attaching", "starting"} and age_seconds != float("inf") and age_seconds >= queue_stale_seconds:
+                    stale_queued_services.append(row)
+        for row in stale_queued_services:
+            cancelled = _scheduler_cancel_task(row.get("id"))
+            cancelled_services.append(
+                {
+                    "id": row.get("id"),
+                    "name": row.get("name"),
+                    "status": row.get("status"),
+                    "cancel_result": cancelled,
+                }
+            )
+        if stale_queued_services:
+            status_payload = vllm_service_status(cfg)
+            active_services = status_payload.get("active_services") if isinstance(status_payload.get("active_services"), list) else []
+    if active_services:
+        return {
+            "ok": True,
+            "action": "already_active",
+            "cancelled_services": cancelled_services,
+            "status": status_payload,
+        }
+    task = {
+        "id": f"vllm-service-{uuid.uuid4().hex}",
+        "type": VLLM_SERVICE_TASK_TYPE,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "payload": {
+            "duration_seconds": duration_seconds or _scheduler_vllm_service_duration_seconds(),
+            "model": os.getenv("FACTORIO_AI_VLLM_MODEL", "").strip(),
+            "port": os.getenv("FACTORIO_AI_VLLM_PORT", "8000").strip() or "8000",
+        },
+    }
+    row = _submit_scheduler_task(task, cfg)
+    return {
+        "ok": True,
+        "action": "replaced_stale_queue" if cancelled_services else "submitted",
+        "cancelled_services": cancelled_services,
+        "task": _scheduler_compact_task_row(row),
+        "status": vllm_service_status(cfg),
+    }
+
+
 def _scheduler_status_payload(
     task_type: str | None = None,
     *,
@@ -1208,10 +1637,10 @@ def _scheduler_status_payload(
     scheduler_url = _scheduler_url()
     account = _scheduler_account()
     try:
-        health = _scheduler_api_json("/api/health", timeout=10)
-        allocations = _scheduler_api_json("/api/allocations", timeout=10)
-        gpu_capacity = _scheduler_api_json("/api/gpu-capacity", timeout=10)
-        tasks = _scheduler_api_json("/api/tasks", timeout=10)
+        health = _scheduler_api_json_retry("/api/health", timeout=10, attempts=3)
+        allocations = _scheduler_api_json_retry("/api/allocations", timeout=10, attempts=3)
+        gpu_capacity = _scheduler_api_json_retry("/api/gpu-capacity", timeout=10, attempts=3)
+        tasks = _scheduler_api_json_retry("/api/tasks", timeout=10, attempts=3)
     except Exception as exc:  # noqa: BLE001
         return {
             "ok": True,
@@ -2104,7 +2533,7 @@ def _safe_int(value: Any) -> int | None:
 
 
 def _llm_env_presence(env: Any) -> dict[str, bool]:
-    return {name: bool(env.get(name)) for name in LLM_ENV_VARS + VLLM_ENV_VARS}
+    return {name: bool(env.get(name)) for name in LLM_ENV_VARS + VLLM_ENV_VARS + SCHEDULER_VLLM_SERVICE_ENV_VARS}
 
 
 def _attached_env_setup(remote_dir: str | None = None) -> str:
@@ -2116,13 +2545,13 @@ def _attached_env_setup(remote_dir: str | None = None) -> str:
             f"while IFS='=' read -r key value; do "
             f"value=\"$(printf '%s' \"$value\" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')\"; "
             f"if [[ \"$key\" == FACTORIO_AI_LLM_BASE_URL ]]; then value=\"$(printf '%s' \"$value\" | tr -d '[:space:]')\"; fi; "
-            f"case \"$key\" in FACTORIO_AI_LLM_*|FACTORIO_AI_VLLM_*|FACTORIO_AI_CONDA_ENV) "
+            f"case \"$key\" in FACTORIO_AI_LLM_*|FACTORIO_AI_VLLM_*|FACTORIO_AI_SCHEDULER_VLLM_SERVICE_*|FACTORIO_AI_CONDA_ENV) "
             f"export \"$key=$value\";; "
             f"esac; "
             f"done < {config_path}; "
             f"fi"
         )
-    for name in LLM_ENV_VARS + VLLM_ENV_VARS:
+    for name in LLM_ENV_VARS + VLLM_ENV_VARS + SCHEDULER_VLLM_SERVICE_ENV_VARS:
         value = os.getenv(name)
         if value:
             commands.append(f"export {name}={shlex.quote(_normalize_worker_env_value(name, value))}")

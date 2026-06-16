@@ -511,6 +511,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     subparsers.add_parser("slurm-status", help="Print Slurm worker status")
     subparsers.add_parser("slurm-llm-status", help="Print Slurm worker LLM readiness")
+    subparsers.add_parser("slurm-vllm-service-status", help="Print scheduler persistent vLLM service readiness")
+    vllm_service_parser = subparsers.add_parser(
+        "slurm-ensure-vllm-service",
+        help="Ensure a scheduler task keeps the configured vLLM model loaded",
+    )
+    vllm_service_parser.add_argument("--duration-seconds", type=int, default=None)
     subparsers.add_parser("slurm-cancel", help="Cancel the Slurm worker job")
     subparsers.add_parser("slurm-submit-test", help="Submit a planner test task to the Slurm worker")
     model_benchmark_parser = subparsers.add_parser(
@@ -1438,6 +1444,14 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "slurm-llm-status":
         print_json(remote_slurm.llm_status())
+        return
+
+    if args.command == "slurm-vllm-service-status":
+        print_json(remote_slurm.vllm_service_status())
+        return
+
+    if args.command == "slurm-ensure-vllm-service":
+        print_json(remote_slurm.ensure_vllm_service(duration_seconds=args.duration_seconds))
         return
 
     if args.command == "slurm-cancel":

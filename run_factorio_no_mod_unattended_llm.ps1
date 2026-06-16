@@ -22,7 +22,7 @@ $env:FACTORIO_AI_SLURM_REMOTE_DIR = "~/factorio-ai-worker"
 $env:FACTORIO_AI_SLURM_TASK_TIMEOUT_SECONDS = "900"
 $env:FACTORIO_AI_SLURM_SCHEDULER_CPUS = "3"
 $env:FACTORIO_AI_SLURM_SCHEDULER_GPUS = "1"
-$env:FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL = "a6000ada,a6000,rtx3090"
+$env:FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL = "a6000ada,a6000"
 $env:FACTORIO_AI_SLURM_SCHEDULER_PRIORITY = "100"
 $env:FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS = "a6000ada,a6000"
 $env:FACTORIO_AI_SLURM_LAYOUT_CPUS = "3"
@@ -32,6 +32,12 @@ $env:FACTORIO_AI_VLLM_ARGS = "--max-model-len 32768 --gpu-memory-utilization 0.9
 $env:FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER = "0"
 $env:FACTORIO_AI_VLLM_PORT = "8000"
 $env:FACTORIO_AI_VLLM_STARTUP_SECONDS = "420"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED = "1"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS = "10800"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_HEARTBEAT_SECONDS = "30"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_STALE_SECONDS = "120"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_QUEUE_STALE_SECONDS = "180"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_PRIORITY = "120"
 $env:FACTORIO_AI_REQUIRE_LLM_STRATEGY = "1"
 $env:FACTORIO_AI_LLM_GUIDED_JSON = "1"
 $env:FACTORIO_AI_LLM_TIMEOUT = "600"
@@ -51,6 +57,7 @@ $supervisorLog = Join-Path $logDir "unattended-llm-supervisor.log"
 $statusPath = Join-Path $runtimeDir "unattended-llm-supervisor.json"
 $lastSchedulerCheck = [DateTime]::MinValue
 $lastSchedulerStatus = $null
+$lastVllmServiceStatus = $null
 
 function Write-SupervisorLog {
     param([string]$Message)
@@ -212,6 +219,29 @@ function Compact-SchedulerStatus {
     }
 }
 
+function Compact-VllmServiceStatus {
+    param($Status)
+    if ($null -eq $Status) {
+        return $null
+    }
+    $serviceStatus = $Status
+    if ($Status.status) {
+        $serviceStatus = $Status.status
+    }
+    return [ordered]@{
+        ok = $Status.ok
+        action = $Status.action
+        service_ready = $serviceStatus.service_ready
+        missing = @($serviceStatus.missing)
+        vllm_model = $serviceStatus.vllm_model
+        duration_seconds = $serviceStatus.duration_seconds
+        heartbeat_age_seconds = $serviceStatus.heartbeat_age_seconds
+        heartbeat = $serviceStatus.heartbeat
+        active_services = @($serviceStatus.active_services)
+        checked_at = [DateTimeOffset]::UtcNow.ToString("o")
+    }
+}
+
 function Ensure-NoModServer {
     $observeExit = Invoke-Cli @("-m", "factorio_ai.cli", "no-mod-observe")
     if ($observeExit -eq 0) {
@@ -265,6 +295,21 @@ function Ensure-SchedulerLlm {
     $script:lastSchedulerCheck = $now
     Write-SupervisorLog "checking scheduler-managed local LLM"
     Invoke-Cli @("-m", "factorio_ai.cli", "slurm-ensure-worker", "--renew-before-minutes", $env:FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES) | Out-Null
+    if ($env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED -notin @("0", "false", "False", "FALSE", "no", "off")) {
+        $script:lastVllmServiceStatus = Compact-VllmServiceStatus (
+            Invoke-CliJson @(
+                "-m", "factorio_ai.cli", "slurm-ensure-vllm-service",
+                "--duration-seconds", $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS
+            )
+        )
+        if ($null -eq $script:lastVllmServiceStatus -or $script:lastVllmServiceStatus.service_ready -ne $true) {
+            $missingService = @($script:lastVllmServiceStatus.missing) -join ", "
+            if (-not $missingService) {
+                $missingService = "service starting"
+            }
+            Write-SupervisorLog "scheduler vLLM service is not ready yet ($missingService); supervisor will retry"
+        }
+    }
     $script:lastSchedulerStatus = Compact-SchedulerStatus (Invoke-CliJson @("-m", "factorio_ai.cli", "slurm-llm-status"))
     if ($null -eq $script:lastSchedulerStatus -or $script:lastSchedulerStatus.llm_ready -ne $true) {
         $missing = @($script:lastSchedulerStatus.missing) -join ", "
@@ -276,7 +321,13 @@ function Ensure-SchedulerLlm {
 }
 
 function Test-SchedulerLlmReady {
-    return $null -ne $script:lastSchedulerStatus -and $script:lastSchedulerStatus.llm_ready -eq $true
+    if ($null -eq $script:lastSchedulerStatus -or $script:lastSchedulerStatus.llm_ready -ne $true) {
+        return $false
+    }
+    if ($env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED -in @("0", "false", "False", "FALSE", "no", "off")) {
+        return $true
+    }
+    return $null -ne $script:lastVllmServiceStatus -and $script:lastVllmServiceStatus.service_ready -eq $true
 }
 
 function Test-AutopilotActiveCycle {
@@ -427,6 +478,7 @@ function Write-SupervisorStatus {
         autopilot_gate = $autopilotGate
         autopilot_processes = @((Get-ManagedProcesses "run-no-mod-autopilot" | ForEach-Object { $_.ProcessId }))
         idle_layout_processes = @((Get-ManagedProcesses "run-no-mod-idle-layout-loop" | ForEach-Object { $_.ProcessId }))
+        vllm_service_status = $lastVllmServiceStatus
         scheduler_llm_status = $lastSchedulerStatus
         autopilot_heartbeat = $autopilot
         live_skill_heartbeat = $live

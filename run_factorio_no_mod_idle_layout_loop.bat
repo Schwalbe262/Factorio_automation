@@ -11,7 +11,7 @@ set FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker
 set FACTORIO_AI_SLURM_TASK_TIMEOUT_SECONDS=900
 set FACTORIO_AI_SLURM_SCHEDULER_CPUS=3
 set FACTORIO_AI_SLURM_SCHEDULER_GPUS=1
-set FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=a6000ada,a6000,rtx3090
+set FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=a6000ada,a6000
 set FACTORIO_AI_SLURM_SCHEDULER_PRIORITY=100
 set FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS=a6000ada,a6000
 set FACTORIO_AI_SLURM_LAYOUT_CPUS=3
@@ -21,6 +21,12 @@ set FACTORIO_AI_VLLM_ARGS=--max-model-len 32768 --gpu-memory-utilization 0.90 --
 set FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER=0
 set FACTORIO_AI_VLLM_PORT=8000
 set FACTORIO_AI_VLLM_STARTUP_SECONDS=420
+set FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED=1
+set FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS=10800
+set FACTORIO_AI_SCHEDULER_VLLM_SERVICE_HEARTBEAT_SECONDS=30
+set FACTORIO_AI_SCHEDULER_VLLM_SERVICE_STALE_SECONDS=120
+set FACTORIO_AI_SCHEDULER_VLLM_SERVICE_QUEUE_STALE_SECONDS=180
+set FACTORIO_AI_SCHEDULER_VLLM_SERVICE_PRIORITY=120
 set FACTORIO_AI_LLM_GUIDED_JSON=1
 set FACTORIO_AI_LLM_TIMEOUT=600
 set FACTORIO_AI_REMOTE_STRATEGY_TIMEOUT_SECONDS=900
@@ -35,4 +41,5 @@ echo [factorio-ai] Running opportunistic no-mod layout loop.
 echo [factorio-ai] It submits simulation-only site layout work whenever autopilot is idle, stopped, or stale.
 echo [factorio-ai] Checking scheduler-managed Qwen local LLM path before idle layout work.
 python -m factorio_ai.cli slurm-ensure-worker --renew-before-minutes %FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES% || exit /b 1
+python -m factorio_ai.cli slurm-ensure-vllm-service --duration-seconds %FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS% || exit /b 1
 python -m factorio_ai.cli run-no-mod-idle-layout-loop --objective launch_rocket_program --cycles 0 --sleep-seconds 5 --stale-seconds 180 --min-submit-interval-seconds 0
