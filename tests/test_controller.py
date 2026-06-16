@@ -2399,6 +2399,16 @@ class StallWatchdogTests(unittest.TestCase):
             self.assertTrue(skill)
             self.assertNotEqual(skill, "produce_iron_plate")
 
+    def test_both_controllers_run_strategy_step_accept_override_skill(self):
+        # run_autopilot_loop (base) always calls run_strategy_step(override_skill=...). Every subclass
+        # override of run_strategy_step must accept it, or the no-mod autopilot raises TypeError every
+        # cycle. (This regressed ModlessFactorioController.)
+        import inspect
+
+        for cls in (FactorioController, ModlessFactorioController):
+            params = inspect.signature(cls.run_strategy_step).parameters
+            self.assertIn("override_skill", params, msg=f"{cls.__name__}.run_strategy_step missing override_skill")
+
     def test_override_skill_bypasses_llm_strategy(self):
         observation = {"tick": 1, "inventory": {}, "entities": [], "resources": [], "research": {"technologies": {}}}
 

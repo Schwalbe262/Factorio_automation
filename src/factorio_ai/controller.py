@@ -2994,6 +2994,7 @@ class ModlessFactorioController(FactorioController):
         require_llm: bool = False,
         target_count: int | None = None,
         max_steps: int | None = None,
+        override_skill: str | None = None,
     ) -> StrategyStepSummary:
         if _real_player_execution_required():
             observation = self.observe()
@@ -3053,6 +3054,7 @@ class ModlessFactorioController(FactorioController):
             require_llm=require_llm,
             target_count=target_count,
             max_steps=max_steps,
+            override_skill=override_skill,
         )
 
     def observe(self) -> dict[str, Any]:
