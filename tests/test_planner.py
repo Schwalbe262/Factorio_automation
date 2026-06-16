@@ -5035,6 +5035,245 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["underground_type"], "input")
         self.assertIn("crosses another belt line", decision.reason)
 
+    def test_site_input_logistics_detours_around_crossing_belt_before_logistics_research(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 3.5, "y": 0.5}}
+        obs["inventory"] = {"transport-belt": 10, "inserter": 2}
+        obs["research"]["technologies"]["logistics"] = {"researched": False}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 956,
+                    "position": {"x": 0.0, "y": 0.0},
+                    "distance": 4,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"iron-gear-wheel": 4}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 957,
+                    "position": {"x": 8.0, "y": 0.0},
+                    "distance": 8,
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "inventories": {"2": {}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 958,
+                    "position": {"x": 0.0, "y": 8.0},
+                    "distance": 8,
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"transport-belt": 8}},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 959,
+                    "position": {"x": 4.5, "y": 0.5},
+                    "direction": planner_module.SOUTH,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        layout = planner_module._find_site_input_logistic_line_layout(obs, item="iron-gear-wheel")
+        decision = SiteInputLogisticLineSkill(20, item="iron-gear-wheel").next_action(obs)
+
+        self.assertIsNotNone(layout)
+        self.assertFalse(
+            any(
+                segment["position"] == {"x": 4.5, "y": 0.5}
+                for segment in layout["segments"]
+            )
+        )
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertNotEqual(decision.action["position"], {"x": 4.5, "y": 0.5})
+        self.assertNotIn("underground-belt bridge after logistics research", decision.reason)
+
+    def test_site_input_logistics_detours_same_column_crossing_before_logistics_research(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 3.5, "y": 0.5}}
+        obs["inventory"] = {"transport-belt": 10, "inserter": 2}
+        obs["research"]["technologies"]["logistics"] = {"researched": False}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 960,
+                    "position": {"x": 0.0, "y": 0.0},
+                    "distance": 4,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"iron-gear-wheel": 4}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 961,
+                    "position": {"x": 6.0, "y": -4.0},
+                    "distance": 8,
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "inventories": {"2": {}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 962,
+                    "position": {"x": 0.0, "y": 8.0},
+                    "distance": 8,
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"transport-belt": 8}},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 963,
+                    "position": {"x": 3.5, "y": -2.5},
+                    "direction": planner_module.EAST,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        layout = planner_module._find_site_input_logistic_line_layout(obs, item="iron-gear-wheel")
+        decision = SiteInputLogisticLineSkill(20, item="iron-gear-wheel").next_action(obs)
+
+        self.assertIsNotNone(layout)
+        self.assertFalse(
+            any(
+                segment["position"] == {"x": 3.5, "y": -2.5}
+                for segment in layout["segments"]
+            )
+        )
+        self.assertTrue(any(segment["position"]["x"] != 3.5 for segment in layout["segments"]))
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertNotEqual(decision.action["position"], {"x": 3.5, "y": -2.5})
+
+    def test_site_input_logistics_detour_does_not_mine_existing_assembler_blocker(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 3.5, "y": 0.5}}
+        obs["inventory"] = {"transport-belt": 10, "inserter": 2}
+        obs["research"]["technologies"]["logistics"] = {"researched": False}
+        blocker = {
+            "name": "assembling-machine-1",
+            "unit_number": 964,
+            "position": {"x": 4.5, "y": -1.5},
+            "distance": 5,
+            "recipe": "small-electric-pole",
+            "electric_network_connected": True,
+            "inventories": {},
+        }
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 965,
+                    "position": {"x": 0.0, "y": 0.0},
+                    "distance": 4,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"iron-gear-wheel": 4}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 966,
+                    "position": {"x": 6.0, "y": -4.0},
+                    "distance": 8,
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "inventories": {"2": {}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 967,
+                    "position": {"x": 0.0, "y": 8.0},
+                    "distance": 8,
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"transport-belt": 8}},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 968,
+                    "position": {"x": 3.5, "y": -2.5},
+                    "direction": planner_module.EAST,
+                    "inventories": {},
+                },
+                blocker,
+            ]
+        )
+
+        layout = planner_module._find_site_input_logistic_line_layout(obs, item="iron-gear-wheel")
+        decision = SiteInputLogisticLineSkill(20, item="iron-gear-wheel").next_action(obs)
+
+        self.assertIsNotNone(layout)
+        self.assertFalse(
+            any(planner_module._point_inside_machine(segment["position"], blocker) for segment in layout["segments"])
+        )
+        self.assertNotEqual(decision.action and decision.action.get("unit_number"), 964)
+
+    def test_site_input_logistics_detour_avoids_opposite_direction_existing_belt(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 3.5, "y": 0.5}}
+        obs["inventory"] = {"transport-belt": 10, "inserter": 2}
+        obs["research"]["technologies"]["logistics"] = {"researched": False}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 969,
+                    "position": {"x": 0.0, "y": 0.0},
+                    "distance": 4,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"iron-gear-wheel": 4}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 970,
+                    "position": {"x": 6.0, "y": -4.0},
+                    "distance": 8,
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "inventories": {"2": {}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 971,
+                    "position": {"x": 0.0, "y": 8.0},
+                    "distance": 8,
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"transport-belt": 8}},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 972,
+                    "position": {"x": 3.5, "y": -2.5},
+                    "direction": planner_module.EAST,
+                    "inventories": {},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 973,
+                    "position": {"x": 4.5, "y": -2.5},
+                    "direction": planner_module.SOUTH,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        layout = planner_module._find_site_input_logistic_line_layout(obs, item="iron-gear-wheel")
+        decision = SiteInputLogisticLineSkill(20, item="iron-gear-wheel").next_action(obs)
+
+        self.assertIsNotNone(layout)
+        self.assertFalse(any(segment["position"] == {"x": 4.5, "y": -2.5} for segment in layout["segments"]))
+        self.assertNotEqual(decision.action and decision.action.get("unit_number"), 973)
+
     def test_site_input_logistics_finishes_underground_bridge_output(self):
         obs = powered_automation_observation()
         obs["player"] = {"position": {"x": 5.0, "y": 0.5}}

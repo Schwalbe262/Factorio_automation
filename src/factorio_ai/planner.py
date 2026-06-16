@@ -7017,45 +7017,82 @@ def _find_site_input_logistic_line_layout(
                 continue
             if _site_input_local_route_observed(observation, required_item, source, consumer):
                 continue
-            endpoints = _site_input_line_endpoints(source, consumer)
-            segments = _iron_plate_line_segments(
-                observation,
-                endpoints["source_belt"],
-                endpoints["target_belt"],
-                center_tiles=True,
-                start_direction=endpoints["source_belt_direction"],
-                end_direction=endpoints["target_belt_direction"],
-            )
-            source_inserter_position = _tile_center_position(endpoints["source_inserter"])
-            target_inserter_position = _tile_center_position(endpoints["target_inserter"])
             site_id = _consumer_site_id_for_entity(observation, consumer)
-            score = (
-                _site_input_item_priority(required_item)
-                + link_priority.get((required_item, site_id), 0)
-                + min(20.0, distance(source_position, consumer_position) / 8.0)
-            )
-            candidates.append(
-                {
-                    "item": required_item,
-                    "source": source,
-                    "consumer": consumer,
-                    "consumer_recipe": recipe,
-                    "consumer_site_id": site_id,
-                    "distance": round(distance(source_position, consumer_position), 1),
-                    "segments": segments,
-                    "source_inserter": {
-                        "position": source_inserter_position,
-                        "direction": endpoints["source_direction"],
-                        "entity": _inserter_near(observation, source_inserter_position),
+            protected_units = {
+                int(entity.get("unit_number"))
+                for entity in (source, consumer)
+                if isinstance(entity, dict) and entity.get("unit_number") is not None
+            }
+            endpoint_candidates = _site_input_line_endpoint_candidates(source, consumer)
+            if _logistics_researched_or_underground_unlocked(observation):
+                endpoint_candidates = endpoint_candidates[:1]
+            for endpoints in endpoint_candidates:
+                source_inserter_position = _tile_center_position(endpoints["source_inserter"])
+                target_inserter_position = _tile_center_position(endpoints["target_inserter"])
+                endpoint_hard_blockers = _site_input_endpoint_hard_blockers(
+                    observation,
+                    endpoints,
+                    source_inserter_position,
+                    target_inserter_position,
+                    protected_unit_numbers=protected_units,
+                )
+                if endpoint_hard_blockers:
+                    continue
+                segments = _site_input_line_segments(
+                    observation,
+                    endpoints,
+                    avoid_positions={
+                        _position_tuple(source_inserter_position),
+                        _position_tuple(target_inserter_position),
                     },
-                    "target_inserter": {
-                        "position": target_inserter_position,
-                        "direction": endpoints["target_direction"],
-                        "entity": _inserter_near(observation, target_inserter_position),
+                    protected_unit_numbers=protected_units,
+                )
+                if _site_input_hard_route_blockers(observation, segments, protected_unit_numbers=protected_units):
+                    continue
+                if (
+                    not _logistics_researched_or_underground_unlocked(observation)
+                    and _site_input_transport_belt_conflicts(segments)
+                    and not _site_input_route_repairable_with_conflicts(segments)
+                ):
+                    continue
+                route_penalty = _site_input_line_route_score(
+                    observation,
+                    segments,
+                    avoid_positions={
+                        _position_tuple(source_inserter_position),
+                        _position_tuple(target_inserter_position),
                     },
-                    "score": score,
-                }
-            )
+                    protected_unit_numbers=protected_units,
+                )
+                score = (
+                    _site_input_item_priority(required_item)
+                    + link_priority.get((required_item, site_id), 0)
+                    + min(20.0, distance(source_position, consumer_position) / 8.0)
+                    - float(endpoints.get("preference_penalty") or 0.0)
+                    - route_penalty
+                )
+                candidates.append(
+                    {
+                        "item": required_item,
+                        "source": source,
+                        "consumer": consumer,
+                        "consumer_recipe": recipe,
+                        "consumer_site_id": site_id,
+                        "distance": round(distance(source_position, consumer_position), 1),
+                        "segments": segments,
+                        "source_inserter": {
+                            "position": source_inserter_position,
+                            "direction": endpoints["source_direction"],
+                            "entity": _inserter_near(observation, source_inserter_position),
+                        },
+                        "target_inserter": {
+                            "position": target_inserter_position,
+                            "direction": endpoints["target_direction"],
+                            "entity": _inserter_near(observation, target_inserter_position),
+                        },
+                        "score": score,
+                    }
+                )
     if not candidates:
         return None
     candidates.sort(key=lambda row: (float(row.get("score") or 0.0), -float(row.get("distance") or 0.0)), reverse=True)
@@ -7271,24 +7308,272 @@ def _site_input_underground_bridge_decision(
     return None
 
 
-def _site_input_line_endpoints(source: dict[str, Any], consumer: dict[str, Any]) -> dict[str, Any]:
+def _site_input_line_segments(
+    observation: dict[str, Any],
+    endpoints: dict[str, Any],
+    *,
+    avoid_positions: set[tuple[float, float]] | None = None,
+    protected_unit_numbers: set[int] | None = None,
+) -> list[dict[str, Any]]:
+    start = endpoints["source_belt"]
+    end = endpoints["target_belt"]
+    start_direction = int(endpoints["source_belt_direction"])
+    end_direction = int(endpoints["target_belt_direction"])
+    direct_segments = _iron_plate_line_segments(
+        observation,
+        start,
+        end,
+        center_tiles=True,
+        start_direction=start_direction,
+        end_direction=end_direction,
+        avoid_positions=avoid_positions,
+    )
+    if _logistics_researched_or_underground_unlocked(observation):
+        return direct_segments
+    direct_conflicts = _site_input_transport_belt_conflicts(direct_segments)
+    direct_hard_blockers = _site_input_hard_route_blockers(
+        observation,
+        direct_segments,
+        protected_unit_numbers=protected_unit_numbers,
+    )
+    if not direct_conflicts and not direct_hard_blockers:
+        return direct_segments
+
+    candidates: list[tuple[float, list[dict[str, Any]]]] = []
+    for waypoints in _site_input_line_waypoint_candidates(start, end, start_direction, end_direction):
+        segments = _iron_plate_segments_from_waypoints(observation, waypoints, center_tiles=True)
+        conflicts = _site_input_transport_belt_conflicts(segments)
+        if conflicts and not _site_input_route_repairable_with_conflicts(segments):
+            continue
+        if _site_input_hard_route_blockers(observation, segments, protected_unit_numbers=protected_unit_numbers):
+            continue
+        candidates.append(
+            (
+                _site_input_line_route_score(
+                    observation,
+                    segments,
+                    avoid_positions=avoid_positions,
+                    protected_unit_numbers=protected_unit_numbers,
+                ),
+                segments,
+            )
+        )
+    if not candidates:
+        return direct_segments
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
+
+
+def _site_input_line_waypoint_candidates(
+    start: dict[str, float],
+    end: dict[str, float],
+    start_direction: int,
+    end_direction: int,
+) -> list[list[dict[str, float]]]:
+    start_point = {"x": float(start["x"]), "y": float(start["y"])}
+    end_point = {"x": float(end["x"]), "y": float(end["y"])}
+    candidates: list[list[dict[str, float]]] = []
+    seen: set[tuple[tuple[float, float], ...]] = set()
+
+    def add(waypoints: list[dict[str, float]]) -> None:
+        key = tuple(_position_tuple(point) for point in waypoints)
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(waypoints)
+
+    add(_role_aware_axis_line_waypoints(start_point, end_point, start_direction, end_direction))
+
+    offsets = (1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 5.0, -5.0, 7.0, -7.0)
+
+    def add_y_lanes() -> None:
+        for offset in offsets:
+            for base_y in (start_point["y"], end_point["y"]):
+                lane_y = round(base_y + offset, 3)
+                if abs(lane_y - start_point["y"]) <= 0.25 or abs(lane_y - end_point["y"]) <= 0.25:
+                    continue
+                add([start_point, {"x": start_point["x"], "y": lane_y}, {"x": end_point["x"], "y": lane_y}, end_point])
+
+    def add_x_lanes() -> None:
+        for offset in offsets:
+            for base_x in (start_point["x"], end_point["x"]):
+                lane_x = round(base_x + offset, 3)
+                if abs(lane_x - start_point["x"]) <= 0.25 or abs(lane_x - end_point["x"]) <= 0.25:
+                    continue
+                add([start_point, {"x": lane_x, "y": start_point["y"]}, {"x": lane_x, "y": end_point["y"]}, end_point])
+
+    if abs(start_point["x"] - end_point["x"]) <= 0.25:
+        add_x_lanes()
+    elif abs(start_point["y"] - end_point["y"]) <= 0.25:
+        add_y_lanes()
+    elif _direction_axis(start_direction) == _direction_axis(end_direction) == "x":
+        add_y_lanes()
+    elif _direction_axis(start_direction) == _direction_axis(end_direction) == "y":
+        add_x_lanes()
+    return candidates
+
+
+def _site_input_transport_belt_conflicts(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    conflicts: list[dict[str, Any]] = []
+    for segment in segments:
+        existing = segment.get("entity") if isinstance(segment, dict) else None
+        if not isinstance(existing, dict) or str(existing.get("name") or "") != "transport-belt":
+            continue
+        planned_direction = _direction_or_default(segment.get("direction"), EAST)
+        existing_direction = _direction_or_default(existing.get("direction"), planned_direction)
+        if existing_direction != planned_direction:
+            conflicts.append(segment)
+    return conflicts
+
+
+def _site_input_route_repairable_with_conflicts(segments: list[dict[str, Any]]) -> bool:
+    if len(segments) < 4:
+        return False
+    matching = 0
+    conflicts = 0
+    for segment in segments:
+        existing = segment.get("entity") if isinstance(segment, dict) else None
+        if not isinstance(existing, dict) or str(existing.get("name") or "") != "transport-belt":
+            continue
+        planned_direction = _direction_or_default(segment.get("direction"), EAST)
+        existing_direction = _direction_or_default(existing.get("direction"), planned_direction)
+        if existing_direction == planned_direction:
+            matching += 1
+        else:
+            conflicts += 1
+    return conflicts > 0 and matching >= max(3, len(segments) - 2)
+
+
+def _site_input_hard_route_blockers(
+    observation: dict[str, Any],
+    segments: list[dict[str, Any]],
+    *,
+    protected_unit_numbers: set[int] | None = None,
+) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    for segment in segments:
+        blocker = _belt_line_position_blocker(
+            observation,
+            segment["position"],
+            protected_unit_numbers=protected_unit_numbers,
+        )
+        if isinstance(blocker, dict) and _site_input_hard_route_blocker(blocker, segment["position"]):
+            blockers.append(blocker)
+    return blockers
+
+
+def _site_input_hard_route_blocker(entity: dict[str, Any], position: dict[str, float] | None = None) -> bool:
+    name = str(entity.get("name") or "")
+    large_names = ASSEMBLER_ENTITY_NAMES | {"lab", "stone-furnace", "burner-mining-drill", "boiler", "steam-engine"}
+    if name in large_names:
+        if isinstance(position, dict) and isinstance(entity.get("position"), dict):
+            entity_position = _position(entity)
+            return (
+                abs(float(position.get("x") or 0.0) - float(entity_position["x"])) < 1.45
+                and abs(float(position.get("y") or 0.0) - float(entity_position["y"])) < 1.45
+            )
+        return True
+    return name in {"wooden-chest", "iron-chest", "steel-chest"}
+
+
+def _site_input_line_route_score(
+    observation: dict[str, Any],
+    segments: list[dict[str, Any]],
+    *,
+    avoid_positions: set[tuple[float, float]] | None = None,
+    protected_unit_numbers: set[int] | None = None,
+) -> float:
+    score = _iron_plate_line_route_score(observation, segments, avoid_positions=avoid_positions)
+    score += 5000.0 * len(
+        _site_input_hard_route_blockers(observation, segments, protected_unit_numbers=protected_unit_numbers)
+    )
+    for segment in segments:
+        if _planned_machine_over_protected_resource(observation, segment["position"]):
+            score += 1500.0
+    return score
+
+
+def _site_input_line_endpoint_candidates(source: dict[str, Any], consumer: dict[str, Any]) -> list[dict[str, Any]]:
     source_position = _position(source)
     consumer_position = _position(consumer)
-    vector = _dominant_axis_vector(source_position, consumer_position)
-    pickup_vector = _opposite_axis_vector(vector)
+    preferred_source_side = _dominant_axis_vector(source_position, consumer_position)
+    preferred_target_side = _opposite_axis_vector(preferred_source_side)
     source_radius = _site_input_endpoint_radius(source)
     target_radius = _site_input_endpoint_radius(consumer)
-    target_side = {"x": -vector["x"], "y": -vector["y"]}
-    return {
-        "source_inserter": _offset_along_axis(source_position, vector, source_radius),
-        "source_belt": _offset_along_axis(source_position, vector, source_radius + 1.0),
-        "source_direction": _direction_from_axis_vector(pickup_vector),
-        "source_belt_direction": _direction_from_axis_vector(vector),
-        "target_inserter": _offset_along_axis(consumer_position, target_side, target_radius),
-        "target_belt": _offset_along_axis(consumer_position, target_side, target_radius + 1.0),
-        "target_direction": _direction_from_axis_vector(pickup_vector),
-        "target_belt_direction": _direction_from_axis_vector(vector),
-    }
+
+    source_sides = _ordered_endpoint_sides(preferred_source_side)
+    target_sides = _ordered_endpoint_sides(preferred_target_side)
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[tuple[float, float], tuple[float, float]]] = set()
+    for source_index, source_side in enumerate(source_sides):
+        for target_index, target_side in enumerate(target_sides):
+            source_belt = _offset_along_axis(source_position, source_side, source_radius + 1.0)
+            target_belt = _offset_along_axis(consumer_position, target_side, target_radius + 1.0)
+            key = (_position_tuple(source_belt), _position_tuple(target_belt))
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(
+                {
+                    "source_inserter": _offset_along_axis(source_position, source_side, source_radius),
+                    "source_belt": source_belt,
+                    "source_direction": _direction_from_axis_vector(_opposite_axis_vector(source_side)),
+                    "source_belt_direction": _direction_from_axis_vector(source_side),
+                    "target_inserter": _offset_along_axis(consumer_position, target_side, target_radius),
+                    "target_belt": target_belt,
+                    "target_direction": _direction_from_axis_vector(target_side),
+                    "target_belt_direction": _direction_from_axis_vector(_opposite_axis_vector(target_side)),
+                    "preference_penalty": (source_index + target_index) * 1000.0,
+                }
+            )
+    return candidates
+
+
+def _ordered_endpoint_sides(preferred_side: dict[str, float]) -> list[dict[str, float]]:
+    preferred_direction = _direction_from_axis_vector(preferred_side)
+    ordered_directions = [preferred_direction]
+    if _direction_axis(preferred_direction) == "x":
+        ordered_directions.extend([NORTH, SOUTH])
+    else:
+        ordered_directions.extend([WEST, EAST])
+    ordered_directions.append(_direction_from_axis_vector(_opposite_axis_vector(preferred_side)))
+    seen: set[int] = set()
+    sides: list[dict[str, float]] = []
+    for direction in ordered_directions:
+        if direction in seen:
+            continue
+        seen.add(direction)
+        sides.append(_direction_vector(direction))
+    return sides
+
+
+def _site_input_endpoint_hard_blockers(
+    observation: dict[str, Any],
+    endpoints: dict[str, Any],
+    source_inserter_position: dict[str, float],
+    target_inserter_position: dict[str, float],
+    *,
+    protected_unit_numbers: set[int] | None = None,
+) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    for position in (
+        source_inserter_position,
+        _tile_center_position(endpoints["source_belt"]),
+        target_inserter_position,
+        _tile_center_position(endpoints["target_belt"]),
+    ):
+        blocker = _belt_line_position_blocker(
+            observation,
+            position,
+            protected_unit_numbers=protected_unit_numbers,
+        )
+        if isinstance(blocker, dict) and _site_input_hard_route_blocker(blocker, position):
+            blockers.append(blocker)
+    return blockers
+
+
+def _site_input_line_endpoints(source: dict[str, Any], consumer: dict[str, Any]) -> dict[str, Any]:
+    return _site_input_line_endpoint_candidates(source, consumer)[0]
 
 
 def _dominant_axis_vector(source: dict[str, float], target: dict[str, float]) -> dict[str, float]:
@@ -10234,6 +10519,11 @@ class SiteInputLogisticLineSkill:
             )
             if blocker is not None:
                 blocker_position = _position(blocker)
+                if _site_input_hard_route_blocker(blocker, segment["position"]):
+                    return PlannerDecision(
+                        None,
+                        f"site input logistics route is blocked by existing {blocker.get('name')}; needs a reroute instead of mining production infrastructure",
+                    )
                 if distance(player, blocker_position) > 8:
                     return PlannerDecision(
                         {"type": "move_to", "position": blocker_position},
