@@ -80,6 +80,29 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
     except Exception:  # noqa: BLE001
         pass
 
+    scheduler: dict[str, Any] = {"checked": False}
+    if observe:
+        try:
+            from . import remote_slurm
+
+            tasks = remote_slurm._scheduler_api_json("/api/tasks", timeout=8)
+            active_states = {"queued", "pending", "attaching", "starting", "running"}
+            services = [
+                t
+                for t in (tasks if isinstance(tasks, list) else [])
+                if isinstance(t, dict)
+                and str(t.get("name") or "").startswith("factorio-vllm-service")
+                and str(t.get("status") or "") in active_states
+            ]
+            scheduler = {
+                "checked": True,
+                "vllm_services": len(services),
+                "vllm_service_ids": [t.get("id") for t in services],
+                "healthy": len(services) <= 1,  # exactly one warm service is expected; >1 means pileup
+            }
+        except Exception as exc:  # noqa: BLE001 - scheduler API is sometimes slow; never hang the digest
+            scheduler = {"checked": True, "error": f"{type(exc).__name__}", "vllm_services": None}
+
     game: dict[str, Any] = {"reachable": False}
     if observe:
         try:
@@ -133,6 +156,7 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
             "failed_total": foundry.get("failed_total"),
             "age_seconds": _age_seconds(foundry.get("updated_at")),
         },
+        "scheduler": scheduler,
         "generated_skills": {"registered": registered, "queue": queue, "failed": failed},
         "recent_decisions": recent,
     }
@@ -157,6 +181,16 @@ def format_run_health(summary: dict[str, Any]) -> str:
         lines.append(f"  inventory: {shown}")
     else:
         lines.append(f"server   : DOWN ({game.get('error') or 'no RCON / use --no-observe'})")
+
+    sch = summary.get("scheduler") or {}
+    if sch.get("checked"):
+        if sch.get("vllm_services") is None:
+            lines.append(f"scheduler: vLLM services=unavailable (api slow: {sch.get('error')})")
+        else:
+            warn = "" if sch.get("healthy") else "  ⚠ MULTIPLE (pileup)"
+            lines.append(
+                f"scheduler: vLLM services={sch.get('vllm_services')} ids={sch.get('vllm_service_ids')}{warn}"
+            )
 
     sup = summary.get("supervisor") or {}
     lines.append(
