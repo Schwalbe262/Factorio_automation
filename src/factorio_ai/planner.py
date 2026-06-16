@@ -7055,6 +7055,20 @@ def _find_site_input_logistic_line_layout(
                     and not _site_input_route_repairable_with_conflicts(segments)
                 ):
                     continue
+                fanout_consumer_count = _site_input_source_fanout_consumer_count(
+                    observation,
+                    required_item,
+                    source,
+                )
+                splitter = None
+                if _site_input_splitter_fanout_required(observation, fanout_consumer_count):
+                    splitter = _site_input_splitter_fanout_plan(
+                        observation,
+                        segments,
+                        direction=int(endpoints["source_belt_direction"]),
+                    )
+                    if splitter is None:
+                        continue
                 route_penalty = _site_input_line_route_score(
                     observation,
                     segments,
@@ -7090,6 +7104,8 @@ def _find_site_input_logistic_line_layout(
                             "direction": endpoints["target_direction"],
                             "entity": _inserter_near(observation, target_inserter_position),
                         },
+                        "fanout_consumer_count": fanout_consumer_count,
+                        "splitter": splitter,
                         "score": score,
                     }
                 )
@@ -7442,6 +7458,184 @@ def _site_input_route_repairable_with_conflicts(segments: list[dict[str, Any]]) 
         else:
             conflicts += 1
     return conflicts > 0 and matching >= max(3, len(segments) - 2)
+
+
+def _site_input_source_fanout_consumer_count(
+    observation: dict[str, Any],
+    item: str,
+    source: dict[str, Any],
+) -> int:
+    source_key = _site_input_entity_key(source)
+    consumers: set[str] = set()
+    for consumer in _site_input_consumer_entities(observation, {item}):
+        recipe_name = str(consumer.get("recipe") or consumer.get("recipe_name") or "")
+        recipe = RECIPES.get(recipe_name)
+        if recipe is None or item not in recipe.ingredients:
+            continue
+        if entity_item_count(consumer, item) > 0 and not _entity_status_name_in(
+            consumer,
+            {"item_ingredient_shortage", "missing_required_fluid"},
+        ):
+            continue
+        consumer_position = _position(consumer)
+        matched_source = _nearest_site_input_source(observation, item, consumer_position)
+        if not isinstance(matched_source, dict):
+            continue
+        if _site_input_entity_key(matched_source) != source_key:
+            continue
+        if distance(_position(source), consumer_position) < 6.0:
+            continue
+        if _site_input_local_route_observed(observation, item, source, consumer):
+            continue
+        consumers.add(_site_input_entity_key(consumer))
+    return len(consumers)
+
+
+def _site_input_entity_key(entity: dict[str, Any]) -> str:
+    unit_number = entity.get("unit_number")
+    if unit_number is not None:
+        return f"unit:{unit_number}"
+    return f"{entity.get('name')}:{_position_key(entity)}"
+
+
+def _site_input_splitter_fanout_required(observation: dict[str, Any], fanout_consumer_count: int) -> bool:
+    if fanout_consumer_count < 2:
+        return False
+    return _site_input_splitter_available_or_unlocked(observation)
+
+
+def _site_input_splitter_available_or_unlocked(observation: dict[str, Any]) -> bool:
+    return (
+        inventory_count(observation, "splitter") > 0
+        or craftable_count(observation, "splitter") > 0
+        or bool(_technology_state(observation, "logistics").get("researched"))
+        or _recipe_unlocked_for_layout(observation, "splitter")
+    )
+
+
+def _site_input_splitter_fanout_plan(
+    observation: dict[str, Any],
+    segments: list[dict[str, Any]],
+    *,
+    direction: int,
+) -> dict[str, Any] | None:
+    for segment in segments[1:3]:
+        if int(segment.get("direction", direction)) != int(direction):
+            continue
+        position = segment["position"]
+        if _planned_machine_over_protected_resource(observation, position):
+            continue
+        existing_splitter = _entity_at_build_position(observation, "splitter", position, radius=0.75)
+        existing_belt = _entity_at_build_position(observation, "transport-belt", position, radius=0.75)
+        blocker = _build_position_blocker(
+            observation,
+            position,
+            allowed_names={"splitter", "transport-belt"},
+        )
+        if blocker is not None and existing_splitter is None and existing_belt is None:
+            continue
+        return {
+            "position": position,
+            "direction": int(direction),
+            "entity": existing_splitter,
+            "existing_belt": existing_belt,
+        }
+    return None
+
+
+def _site_input_segment_is_splitter(layout: dict[str, Any], segment: dict[str, Any]) -> bool:
+    splitter = layout.get("splitter")
+    if not isinstance(splitter, dict):
+        return False
+    return _position_tuple(splitter["position"]) == _position_tuple(segment["position"])
+
+
+def _site_input_splitter_fanout_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    splitter: dict[str, Any],
+) -> PlannerDecision | None:
+    position = splitter["position"]
+    direction = int(splitter["direction"])
+    existing = _entity_at_build_position(observation, "splitter", position, radius=0.75)
+    if isinstance(existing, dict) and _direction_or_default(existing.get("direction"), direction) == direction:
+        return None
+
+    if isinstance(existing, dict):
+        existing_position = _position(existing)
+        if distance(player, existing_position) > 4.5:
+            return PlannerDecision(
+                {"type": "move_to", "position": _stand_position(existing_position, offset=1.5)},
+                "move within reach of wrong splitter before rebuilding site input fanout",
+            )
+        return PlannerDecision(
+            {
+                "type": "mine",
+                "unit_number": existing.get("unit_number"),
+                "name": "splitter",
+                "position": existing_position,
+            },
+            "remove misoriented splitter before rebuilding site input fanout",
+        )
+
+    if inventory_count(observation, "splitter") <= 0:
+        if craftable_count(observation, "splitter") > 0:
+            return PlannerDecision(
+                {"type": "craft", "recipe": "splitter", "count": 1},
+                "craft splitter before branching one site input source to multiple consumers",
+            )
+        decision = BuildItemMallSkill("splitter", 1).next_action(observation, reference_position=position)
+        if not decision.done:
+            return decision
+        return PlannerDecision(
+            None,
+            "site input fanout needs a splitter before branching one source to multiple consumers",
+        )
+
+    existing_belt = _entity_at_build_position(observation, "transport-belt", position, radius=0.75)
+    if isinstance(existing_belt, dict):
+        belt_position = _position(existing_belt)
+        if distance(player, belt_position) > 4.5:
+            return PlannerDecision(
+                {"type": "move_to", "position": _stand_position(belt_position, offset=1.5)},
+                "move within reach of source fanout belt before replacing it with splitter",
+            )
+        return PlannerDecision(
+            {
+                "type": "mine",
+                "unit_number": existing_belt.get("unit_number"),
+                "name": "transport-belt",
+                "position": belt_position,
+            },
+            "replace source fanout belt with splitter instead of pulling two belts from the assembler output",
+        )
+
+    blocker = _build_position_blocker(
+        observation,
+        position,
+        allowed_names={"splitter", "transport-belt"},
+    )
+    if blocker is not None:
+        return PlannerDecision(
+            None,
+            f"site input splitter fanout is blocked by existing {blocker.get('name')}; needs a reroute",
+        )
+
+    if distance(player, position) > 20:
+        return PlannerDecision(
+            {"type": "move_to", "position": _stand_position(position, offset=3.0)},
+            "move near site input splitter fanout position",
+        )
+    return PlannerDecision(
+        {
+            "type": "build",
+            "name": "splitter",
+            "position": position,
+            "direction": direction,
+            "allow_nearby": False,
+        },
+        "place splitter so one site input source can fan out to multiple consumers",
+    )
 
 
 def _site_input_hard_route_blockers(
@@ -10471,7 +10665,14 @@ class SiteInputLogisticLineSkill:
             bridge_decision = _site_input_underground_bridge_decision(observation, player, bridge)
             if bridge_decision is not None:
                 return bridge_decision
+        splitter = layout.get("splitter")
+        if isinstance(splitter, dict):
+            splitter_decision = _site_input_splitter_fanout_decision(observation, player, splitter)
+            if splitter_decision is not None:
+                return splitter_decision
         for segment in layout["segments"]:
+            if _site_input_segment_is_splitter(layout, segment):
+                continue
             existing = segment.get("entity")
             if not isinstance(existing, dict):
                 continue
@@ -10493,6 +10694,8 @@ class SiteInputLogisticLineSkill:
                 "remove misoriented transport belt from the site input logistics line before spending scarce belts",
             )
         for segment in layout["segments"]:
+            if _site_input_segment_is_splitter(layout, segment):
+                continue
             existing = segment.get("entity")
             if isinstance(existing, dict):
                 if _direction_or_default(existing.get("direction"), segment["direction"]) != int(segment["direction"]):

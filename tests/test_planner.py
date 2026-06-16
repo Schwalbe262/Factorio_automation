@@ -5057,6 +5057,121 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["underground_type"], "input")
         self.assertIn("crosses another belt line", decision.reason)
 
+    def test_site_input_logistics_places_splitter_for_one_source_two_consumers_after_logistics(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": -4.0, "y": 0.5}}
+        obs["inventory"] = {"transport-belt": 12, "inserter": 4, "splitter": 1}
+        obs["research"]["technologies"]["logistics"] = {"researched": True}
+        obs["recipe_unlocks"] = {"splitter": {"enabled": True}}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 960,
+                    "position": {"x": -8.0, "y": 0.0},
+                    "distance": 8,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"iron-gear-wheel": 8}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 961,
+                    "position": {"x": 8.0, "y": 0.0},
+                    "distance": 8,
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {"2": {}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 962,
+                    "position": {"x": 8.0, "y": 8.0},
+                    "distance": 12,
+                    "recipe": "inserter",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {"2": {}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 963,
+                    "position": {"x": -8.0, "y": 12.0},
+                    "distance": 12,
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"transport-belt": 8}},
+                },
+            ]
+        )
+
+        layout = planner_module._find_site_input_logistic_line_layout(obs, item="iron-gear-wheel")
+        decision = SiteInputLogisticLineSkill(20, item="iron-gear-wheel").next_action(obs)
+
+        self.assertIsNotNone(layout)
+        self.assertEqual(layout["fanout_consumer_count"], 2)
+        self.assertIsNotNone(layout["splitter"])
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "splitter")
+        self.assertIn("fan out", decision.reason)
+
+    def test_site_input_logistics_crafts_splitter_before_second_fanout_branch(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": -4.0, "y": 0.5}}
+        obs["inventory"] = {"transport-belt": 12, "inserter": 4}
+        obs["craftable"] = {"splitter": 1}
+        obs["research"]["technologies"]["logistics"] = {"researched": True}
+        obs["recipe_unlocks"] = {"splitter": {"enabled": True}}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 960,
+                    "position": {"x": -8.0, "y": 0.0},
+                    "distance": 8,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"iron-gear-wheel": 8}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 961,
+                    "position": {"x": 8.0, "y": 0.0},
+                    "distance": 8,
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {"2": {}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 962,
+                    "position": {"x": 8.0, "y": 8.0},
+                    "distance": 12,
+                    "recipe": "inserter",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {"2": {}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 963,
+                    "position": {"x": -8.0, "y": 12.0},
+                    "distance": 12,
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"transport-belt": 8}},
+                },
+            ]
+        )
+
+        decision = SiteInputLogisticLineSkill(20, item="iron-gear-wheel").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["recipe"], "splitter")
+        self.assertIn("branching one site input source", decision.reason)
+
     def test_site_input_logistics_detours_around_crossing_belt_before_logistics_research(self):
         obs = powered_automation_observation()
         obs["player"] = {"position": {"x": 3.5, "y": 0.5}}

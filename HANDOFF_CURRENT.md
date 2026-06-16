@@ -9,18 +9,19 @@
 \- Root current Markdown files now use the escaped `md/` marker format.
 \- Slurm scheduler mode defaults to `rtx3090`/`r1jae262`; layout improvement requests use `a6000ada,a6000` candidates and submit the ready single `gpu_model`.
 \- Scheduler Qwen layout tasks now fail visibly, map vLLM env, disable flashinfer sampler, use guided JSON/detail polling, clean up vLLM children, and have the idle loop running again.
+\- Site-input logistics now requires/places splitter fanout after logistics when one source feeds multiple consumers instead of pulling separate belts from the source assembler.
 \- Live map: coal feed is active; `logistics` remains incomplete, stone drill fuel false-stop is fixed, and red science is now blocked on gear-to-science automation/rebuild rather than stone fuel.
-\- Local layout LLM idle loop is running again with runtime max active layout jobs set to 2.
+\- Local layout LLM idle loop is running again with runtime max active layout jobs set to 2; Windows PID liveness now avoids stale-loop crashes.
 
 \## Current objective
 
-\- Part 129 coal-drill/site-hierarchy/Markdown-format changes are validated and ready to push from this branch.
-\- Next gameplay work: continue coal fuel feed and red-science logistics after the pushed part.
+\- Part 129 splitter fanout and idle-loop liveness changes are validated on this branch.
+\- Next gameplay work: rebuild or relocate the cramped red-science gear feed, then continue automation science/lab feeding until `logistics` completes.
 
 \## Active branch / part
 
 \- Branch: `chore/part129-red-science-logistics`
-\- Part: Part 129 - red science planning-site cache recovery and markdown format adoption.
+\- Part: Part 129 - red science logistics repair, splitter fanout, and idle layout loop continuity.
 
 \## Important files
 
@@ -34,8 +35,8 @@
 
 \## Last validation
 
-\- Full `pytest -q` passed: `688 passed`.
-\- Live validation: `research_logistics` progressed through stone supply, then repeated waits on iron-gear-wheel output logistics; local layout loop restarted with PID `71388`.
+\- Full `pytest -q` passed: `690 passed`.
+\- Live validation: `research_logistics` progressed through stone supply, then repeated waits on iron-gear-wheel output logistics; local layout loop restarted with PID `84396`.
 \- Token sample recorded: `281,339,156` Factorio Codex thread tokens; delta `0`; weekly quota unknown.
 
 \## Current blocker
@@ -44,9 +45,10 @@
 
 \## Next steps
 
-1\. Continue `connect_coal_fuel_feed` or `run-no-mod-strategy-step --objective launch_rocket_program` in short chunks.
-2\. Add a deterministic red-science gear feed rebuild: avoid player gear shuttles, prefer direct assembler transfer or a short clean belt lane.
-3\. Continue automation science/lab feeding until `logistics` research completes; after unlock, use underground belts for crossings and splitters for fan-out.
+1\. Start a new session by reading only `HANDOFF_CURRENT.md`, root `AGENTS.md`, `goal.md`, and then exact source ranges needed for the selected next step.
+2\. Confirm idle layout loop PID is live; restart `run_factorio_no_mod_idle_layout_loop.bat` only if stale.
+3\. Add/execute a deterministic red-science gear feed rebuild: avoid player gear shuttles, prefer direct assembler transfer or a short clean belt lane.
+4\. Continue automation science/lab feeding until `logistics` research completes; after unlock, use underground belts for crossings and splitters for fan-out.
 
 \## Token/context policy
 
@@ -73,7 +75,7 @@
 \- Added role-aware dogleg site-input routes and fixed `NORTH=0` direction comparisons so north-facing belts/inserters are not treated as missing direction.
 \- Fixed no-mod observe belt-limit drops, coal output belt recognition, matching-fuel sourcing, and invalid direct-smelting drill recovery.
 \- Fixed scheduler task payload size, A6000 layout routing, vLLM startup failure reporting, active layout task throttling, belt mall output direction, belt-chest consumption, local gear-output bootstrap, buffered belt-mall gears, stale take races, established-coal-output/surplus hand-mining fallback, invalid coal supply drill recovery, and coal chest-to-belt conversion.
-\- Added Web UI/runtime setting for max active local layout LLM jobs, multi-worker background layout filling, underground-belt crossing bridge planning, splitter fan-out detection, safe pre-logistics site-input route rejection/detours, and one-fuel starter stone drill waiting.
+\- Added Web UI/runtime setting for max active local layout LLM jobs, multi-worker background layout filling, underground-belt crossing bridge planning, splitter fan-out detection/execution, safe pre-logistics site-input route rejection/detours, one-fuel starter stone drill waiting, and Windows idle-loop PID liveness.
 
 \## Risks and gotchas
 
