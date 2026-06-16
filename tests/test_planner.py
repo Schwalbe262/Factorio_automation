@@ -546,6 +546,55 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("established coal supply output", decision.reason)
         self.assertIn("refusing repeated hand-mining", decision.reason)
 
+    def test_fuel_burner_takes_small_surplus_before_mining_with_established_coal_output(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 20, "y": 0}
+        obs["inventory"] = {}
+        obs["resources"] = [
+            {"name": "coal", "position": {"x": 0, "y": 0}, "distance": 20},
+            {"name": "coal", "position": {"x": 20, "y": 0}, "distance": 0},
+        ]
+        target = {"name": "stone-furnace", "unit_number": 11, "position": {"x": 20, "y": 0}, "inventories": {}}
+        obs["entities"] = [
+            target,
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 10,
+                "position": {"x": 0, "y": 0},
+                "direction": planner_module.EAST,
+                "mining_target": "coal",
+                "inventories": {"1": {"coal": 3}},
+            },
+            {
+                "name": "transport-belt",
+                "unit_number": 12,
+                "position": {"x": 1.5, "y": 0.5},
+                "direction": planner_module.EAST,
+                "inventories": {},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 13,
+                "position": {"x": 18, "y": 0},
+                "inventories": {"1": {"coal": 4}},
+            },
+        ]
+
+        decision = planner_module._fuel_burner_line_entity(
+            obs,
+            obs["player"]["position"],
+            target,
+            entity_name="stone-furnace",
+            threshold=3,
+            insert_count=5,
+            context="test burner",
+            support_skill=IronPlateSkill(),
+            far_fuel_reason="too far",
+        )
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["unit_number"], 13)
+
     def test_fuel_burner_with_existing_coal_takes_matching_surplus_before_waiting(self):
         obs = base_observation()
         obs["inventory"] = {"wood": 5}

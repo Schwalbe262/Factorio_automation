@@ -9,7 +9,7 @@
 \- Root current Markdown files now use the escaped `md/` marker format.
 \- Slurm scheduler mode defaults to `rtx3090`/`r1jae262`; layout improvement requests use `a6000ada,a6000` candidates and submit the ready single `gpu_model`.
 \- Scheduler Qwen layout tasks now fail visibly, map vLLM env, disable flashinfer sampler, use guided JSON/detail polling, clean up vLLM children, and have the idle loop running again.
-\- Live map: belt mall recovered after buffered gears; coal fuel feed extended west to `x=27.5`; `logistics` research is still incomplete.
+\- Live map: belt mall recovered after buffered gears; coal fuel feed extended west to `x=19.5`; `logistics` research is still incomplete.
 
 \## Current objective
 
@@ -33,8 +33,8 @@
 
 \## Last validation
 
-\- Full `pytest -q` passed: `660 passed`.
-\- Live validation: belt mall produced/recovered belts without further hand-mining, and coal fuel feed placed belts through `x=27.5`.
+\- Full `pytest -q` passed: `661 passed`.
+\- Live validation: belt mall produced/recovered belts; coal feed used existing/surplus fuel before mining and placed belts through `x=19.5`.
 \- Token sample recorded: `281,339,156` Factorio Codex thread tokens; delta `0`; weekly quota unknown.
 
 \## Current blocker
@@ -71,7 +71,7 @@
 \- Fixed site-input/iron-line inserter pickup/drop semantics, corrected integer-center coal drill output tiles, and stopped boiler feed from treating the next route belt as the coal source.
 \- Added role-aware dogleg site-input routes and fixed `NORTH=0` direction comparisons so north-facing belts/inserters are not treated as missing direction.
 \- Fixed no-mod observe belt-limit drops, coal output belt recognition, matching-fuel sourcing, and invalid direct-smelting drill recovery.
-\- Fixed scheduler task payload size, A6000 layout routing, vLLM startup failure reporting, active layout task throttling, belt mall output direction, belt-chest consumption, local gear-output bootstrap, buffered belt-mall gears, stale take races, and established-coal-output hand-mining fallback.
+\- Fixed scheduler task payload size, A6000 layout routing, vLLM startup failure reporting, active layout task throttling, belt mall output direction, belt-chest consumption, local gear-output bootstrap, buffered belt-mall gears, stale take races, and established-coal-output/surplus hand-mining fallback.
 
 \## Risks and gotchas
 

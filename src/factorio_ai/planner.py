@@ -5873,9 +5873,10 @@ def _fuel_burner_line_entity(
             return _take_surplus_fuel_source_decision(player, source, context)
         if (
             prefer_coal_supply
-            and source_surplus <= 0
             and _established_coal_supply_output_exists(observation)
         ):
+            if source is not None:
+                return _take_surplus_fuel_source_decision(player, source, context)
             return PlannerDecision(
                 {"type": "wait", "ticks": 240},
                 f"wait for established coal supply output before refueling {context}; refusing repeated hand-mining",
