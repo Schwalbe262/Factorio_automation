@@ -6,6 +6,6 @@
 - Strategy separates `missing_source` links from `route_needed`, and now preempts gear-output waits with `build_gear_belt_mall_logistics`.
 - New guardrail detects buffered iron-gear output with no belt assembler output, before coal/source expansion guardrails can send the loop back to smelting.
 - Live validation: `expand_copper_smelting`/site-input choices reconcile to `build_gear_belt_mall_logistics`; live skill completed with `transport-belt` target reached `27/20`.
-- Current runtime: supervisor PID `44012`, autopilot PID `76608`, vLLM service ready; latest strategy task may be queued/starting under scheduler.
+- Current runtime: supervisor PID `44012`, autopilot PID `76608`, vLLM service ready; next cycle is running `expand_copper_smelting` around step 5.
 - Validation: `py_compile src/factorio_ai/strategy.py src/factorio_ai/remote_slurm.py`; `PYTHONPATH=src pytest tests/test_strategy.py tests/test_controller.py tests/test_remote_slurm.py -q` -> 215 passed.
-- Next: watch the next Qwen strategy cycle after the gear/belt mall completion and continue only if it stalls on a new deterministic skill gap.
+- Next: watch `expand_copper_smelting`; continue only if it stalls on a new deterministic skill gap rather than the resolved gear-output wait.
