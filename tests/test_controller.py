@@ -15,6 +15,7 @@ from factorio_ai.controller import (
     StrategyStepSummary,
     _guard_post_automation_handcraft,
     _move_detour_action,
+    _stale_take_response,
 )
 from factorio_ai.llm_log import llm_decision_log_path
 from factorio_ai.models import PlannerDecision
@@ -38,6 +39,20 @@ def make_test_config(root: Path) -> AppConfig:
 
 
 class ControllerTests(unittest.TestCase):
+    def test_stale_take_response_detects_missing_item_race(self):
+        self.assertTrue(
+            _stale_take_response(
+                {"type": "take", "item": "iron-gear-wheel"},
+                {"ok": False, "reason": "target does not have item"},
+            )
+        )
+        self.assertFalse(
+            _stale_take_response(
+                {"type": "insert", "item": "iron-gear-wheel"},
+                {"ok": False, "reason": "target does not have item"},
+            )
+        )
+
     def test_guard_blocks_gear_handcraft_after_automation(self):
         observation = {
             "research": {

@@ -10015,6 +10015,34 @@ class BuildItemMallSkill:
             )
 
         batch_count = _build_item_mall_batch_count(recipe.products.get(self.target_item, 1.0), self.target_count)
+        if (
+            self.target_item == "transport-belt"
+            and entity_item_count(assembler, "iron-gear-wheel") > 0
+            and entity_item_count(assembler, "iron-plate") <= 0
+            and inventory_count(observation, "iron-plate") > 0
+        ):
+            logistics_blocker = _manual_site_input_logistics_blocker(
+                observation,
+                "iron-plate",
+                _position(assembler),
+                consumer_label=f"{self.target_item} mall assembler",
+            )
+            if logistics_blocker is not None:
+                return logistics_blocker
+            if distance(player, assembler_position) > 20:
+                return PlannerDecision({"type": "move_to", "position": assembler_position}, "move near mall assembler to insert iron-plate")
+            return PlannerDecision(
+                {
+                    "type": "insert",
+                    "item": "iron-plate",
+                    "count": min(entity_item_count(assembler, "iron-gear-wheel"), inventory_count(observation, "iron-plate")),
+                    "unit_number": assembler.get("unit_number"),
+                    "name": "assembling-machine-1",
+                    "position": assembler_position,
+                },
+                f"insert iron-plate into {self.target_item} mall assembler to consume buffered gears",
+            )
+
         for ingredient, amount in sorted(recipe.ingredients.items()):
             needed_in_assembler = max(1, int(amount * batch_count))
             if entity_item_count(assembler, ingredient) >= needed_in_assembler:

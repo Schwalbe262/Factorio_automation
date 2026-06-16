@@ -1422,6 +1422,38 @@ class PlannerTests(unittest.TestCase):
             )
         self.assertNotIn("set build item mall assembler recipe to iron-gear-wheel", decision.reason)
 
+    def test_transport_belt_mall_inserts_plate_when_gears_are_already_buffered(self):
+        obs = powered_automation_observation()
+        obs["player"]["position"] = {"x": 86.5, "y": -57.5}
+        obs["inventory"] = {"iron-plate": 1}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 146,
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 82.5, "y": -57.5},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 147,
+                    "recipe": "transport-belt",
+                    "position": {"x": 86.5, "y": -57.5},
+                    "electric_network_connected": True,
+                    "inventories": {"2": {"iron-gear-wheel": 3}},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 2).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertEqual(decision.action["unit_number"], 147)
+        self.assertIn("transport-belt mall assembler", decision.reason)
+
     def test_factory_layout_flags_production_on_resource_patch(self):
         obs = base_observation()
         obs["entities"] = [
@@ -4741,7 +4773,7 @@ class PlannerTests(unittest.TestCase):
 
     def test_build_item_mall_takes_assembler_gears_for_local_input_bootstrap(self):
         obs = powered_automation_observation()
-        obs["inventory"] = {"iron-plate": 4}
+        obs["inventory"] = {}
         obs["entities"].extend(
             [
                 mall_assembler(recipe="transport-belt", inventory={"iron-gear-wheel": 3}),

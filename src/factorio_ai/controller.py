@@ -1482,6 +1482,9 @@ class FactorioController:
                 response = self.act(action)
                 self._write_log(log_file, step, observation, decision, response)
                 if not response.get("ok"):
+                    if _stale_take_response(action, response):
+                        time.sleep(0.2)
+                        continue
                     return finish(False, f"action failed: {response.get('reason')}", step, observation)
                 if action.get("type") == "wait":
                     ticks = int(action.get("ticks") or 60)
@@ -2860,6 +2863,13 @@ def _max_steps(value: int | None, default: int) -> int:
     if value is None:
         return default
     return max(0, int(value))
+
+
+def _stale_take_response(action: dict[str, Any], response: dict[str, Any]) -> bool:
+    return (
+        action.get("type") == "take"
+        and str(response.get("reason") or "") == "target does not have item"
+    )
 
 
 def _pid_is_running(pid: int) -> bool:
