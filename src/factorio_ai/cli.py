@@ -629,8 +629,6 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.command == "slurm-cancel-vllm-services":
-        from . import remote_slurm
-
         print_json(remote_slurm.cancel_vllm_services())
         return
 

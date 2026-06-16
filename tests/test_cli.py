@@ -100,6 +100,18 @@ class CliTests(unittest.TestCase):
             max_steps=88,
         )
 
+    def test_main_does_not_shadow_module_imports_as_locals(self):
+        # A `from . import X` inside main() turns the module-level X into an unassigned local for the
+        # whole function, so any handler running before that import line raises UnboundLocalError.
+        # (This regressed remote_slurm and broke every scheduler command.) Guard the shared imports.
+        locals_in_main = cli_module.main.__code__.co_varnames
+        for shared in ("remote_slurm",):
+            self.assertNotIn(
+                shared,
+                locals_in_main,
+                msg=f"'{shared}' must stay the module-level import, not a local inside main()",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
