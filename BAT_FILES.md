@@ -31,6 +31,10 @@
   필요하면 `restart_factorio_no_mod_unattended_llm.bat reset-vllm` (느린 ~몇 분 재로드). 직접 취소만 하려면
   `python -m factorio_ai.cli slurm-cancel-vllm-services`.
 
+- **`restart_factorio_no_mod_unattended_llm_full_reset.bat`** — 🧨 **원클릭 풀 리셋.** 위 재시작 + **원격 vLLM
+  서비스까지 취소**한 뒤 새로 띄웁니다(9B 재로드 ~몇 분). vLLM이 멈췄거나 여러 개로 쌓였을 때만 쓰세요. 평소엔
+  일반 재시작(`restart_factorio_no_mod_unattended_llm.bat`)이 더 빠릅니다.
+
 - **`run_factorio_no_mod_unattended_llm.bat`** — ⭐ 메인 무인 supervisor(`*.ps1` 호출).
   서버 + 웹 대시보드(:18889) + 스케줄러 Qwen(vLLM 서비스) + autopilot + idle layout 루프 +
   **skill foundry 루프**를 살아있게 유지하고, 죽으면 재시작합니다. **5분마다 `/server-save`로
