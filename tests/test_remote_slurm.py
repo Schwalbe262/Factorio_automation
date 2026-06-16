@@ -2069,6 +2069,32 @@ class VllmServiceDetectionTests(unittest.TestCase):
         self.assertEqual(set(ids), {2, 3})       # any model, this account, service tasks only
         self.assertEqual(ids[0], 2)              # queued before running
 
+    def test_running_vllm_service_node_resolves_from_actual_node_name(self):
+        # The scheduler leaves task["node_name"] empty and reports the real node in actual_node_name.
+        # The resolver must read it so client tasks can be pinned to the service node (CPU-only attach).
+        from unittest.mock import patch
+
+        from factorio_ai import remote_slurm
+
+        task = {
+            "name": "factorio-vllm-service-qwen-x",
+            "account_name": "r1jae262",
+            "status": "running",
+            "gpu_model": "a6000ada,a6000",
+            "node_name": "",
+            "actual_node_name": "n104",
+            "allocation_id": 40,
+        }
+        with patch.dict(
+            "os.environ",
+            {"FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262", "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000ada,a6000"},
+            clear=False,
+        ), patch.object(remote_slurm, "_scheduler_task_rows", return_value=[task]), patch.object(
+            remote_slurm, "_scheduler_api_json_retry", return_value=[]
+        ):
+            node = remote_slurm._scheduler_running_vllm_service_node_name()
+        self.assertEqual(node, "n104")
+
     def test_active_layout_task_count_matches_comma_joined_gpu_model(self):
         from factorio_ai import remote_slurm
 

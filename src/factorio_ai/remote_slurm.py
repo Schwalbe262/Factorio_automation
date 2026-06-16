@@ -881,14 +881,19 @@ def _scheduler_running_vllm_service_node_name() -> str:
     for row in _scheduler_active_vllm_service_rows(task_rows, account, wanted_gpu_models):
         if str(row.get("status") or "").lower() != "running":
             continue
-        node_name = str(row.get("node_name") or "").strip()
-        if node_name:
-            return node_name
-        allocation = allocation_by_id.get(str(row.get("allocation_id") or ""))
-        if isinstance(allocation, dict):
-            node_name = str(allocation.get("node_name") or "").strip()
+        # The scheduler leaves task["node_name"] empty for running tasks and reports the real node in
+        # actual_node_name / allocation_node_name. Check those (then the allocation) so client tasks
+        # can be pinned to the vLLM service node.
+        for key in ("node_name", "actual_node_name", "allocation_node_name", "requested_node_name"):
+            node_name = str(row.get(key) or "").strip()
             if node_name:
                 return node_name
+        allocation = allocation_by_id.get(str(row.get("allocation_id") or ""))
+        if isinstance(allocation, dict):
+            for key in ("node_name", "actual_node_name", "node"):
+                node_name = str(allocation.get(key) or "").strip()
+                if node_name:
+                    return node_name
     return ""
 
 
