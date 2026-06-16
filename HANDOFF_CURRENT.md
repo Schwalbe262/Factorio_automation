@@ -6,5 +6,5 @@
 - Client tasks default to `FACTORIO_AI_SCHEDULER_VLLM_CLIENT_GPUS=1` so scheduler placement stays on the service node where `127.0.0.1` vLLM is reachable.
 - Strategy metadata such as `input_item` is filtered before `_run_skill`, while mapped skill arguments still reach the selected skill.
 - Live runtime: supervisor PID 76388; vLLM service task 8224 ready on allocation 40/n104; strategy task 8229 completed on allocation 40 and started `build_site_input_logistic_line`.
-- Current gameplay blocker: selected site-input route failed because no executable repeated logistics route was found; layout task 8226 is still running and 8232 queued.
+- Current gameplay blocker: selected site-input route failed because no executable repeated logistics route was found; layout tasks 8226 and 8233 are running on allocation 40, and 8232 completed.
 - Validation: py_compile ok; PowerShell parser ok; `PYTHONPATH=src pytest tests/test_controller.py tests/test_remote_slurm.py -q` -> 109 passed.
