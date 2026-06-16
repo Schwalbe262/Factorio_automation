@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from factorio_ai.slurm_worker import (
     _layout_improvement_prompt,
+    call_llm_json_with_diagnostics,
     compact_layout_improvement_payload,
     normalize_layout_response,
     run_strategy_request,
@@ -13,6 +14,20 @@ from factorio_ai.slurm_worker import (
     run_worker,
 )
 from factorio_ai.strategy import skill_catalog_payload
+
+
+class FakeResponse:
+    def __init__(self, body: dict[str, object]):
+        self.body = json.dumps(body).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self):
+        return self.body
 
 
 class SlurmWorkerTests(unittest.TestCase):
@@ -35,6 +50,74 @@ class SlurmWorkerTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertEqual(result["source"], "heuristic")
             self.assertEqual(result["action_hint"]["type"], "wait")
+
+    def test_llm_call_diagnostics_include_success_trace_metadata(self):
+        response = FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"selected_skill":"research_automation","priority":90,'
+                                '"reason":"feed labs","evidence":[],"blockers":[],"expected_effect":"research"}'
+                            )
+                        }
+                    }
+                ]
+            }
+        )
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "FACTORIO_AI_LLM_BASE_URL": "http://127.0.0.1:8000/v1",
+                    "FACTORIO_AI_LLM_MODEL": "Qwen/Qwen3.5-9B",
+                    "FACTORIO_AI_LLM_MAX_TOKENS": "384",
+                },
+            ),
+            patch("factorio_ai.slurm_worker.request.urlopen", return_value=response),
+        ):
+            parsed, diagnostics = call_llm_json_with_diagnostics(
+                "system prompt",
+                "input prompt",
+                kind="strategy",
+                task_id="strategy-test",
+            )
+
+        trace = diagnostics["llm_trace"]
+        self.assertEqual(parsed["selected_skill"], "research_automation")
+        self.assertTrue(trace["ok"])
+        self.assertEqual(trace["kind"], "strategy")
+        self.assertEqual(trace["model"], "Qwen/Qwen3.5-9B")
+        self.assertEqual(trace["base_url"], "http://127.0.0.1:8000/v1")
+        self.assertEqual(trace["task_id"], "strategy-test")
+        self.assertEqual(trace["system_prompt"], "system prompt")
+        self.assertEqual(trace["input_prompt"], "input prompt")
+        self.assertIn("research_automation", trace["raw_output"])
+        self.assertEqual(trace["parsed_json"]["selected_skill"], "research_automation")
+        self.assertEqual(trace["max_tokens"], 384)
+        self.assertEqual(trace["prompt_chars"], len("system prompt") + len("input prompt"))
+        self.assertGreater(trace["response_chars"], 0)
+
+    def test_llm_call_diagnostics_include_error_trace_metadata(self):
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "FACTORIO_AI_LLM_BASE_URL": "http://127.0.0.1:8000/v1",
+                    "FACTORIO_AI_LLM_MODEL": "Qwen/Qwen3.5-9B",
+                },
+            ),
+            patch("factorio_ai.slurm_worker.request.urlopen", side_effect=TimeoutError("slow")),
+        ):
+            parsed, diagnostics = call_llm_json_with_diagnostics("system", "prompt", kind="layout")
+
+        trace = diagnostics["llm_trace"]
+        self.assertIsNone(parsed)
+        self.assertFalse(trace["ok"])
+        self.assertEqual(trace["kind"], "layout")
+        self.assertIn("TimeoutError", trace["error"])
+        self.assertEqual(trace["raw_output"], "")
 
     def test_run_task_file_writes_result_for_auto_dispatch(self):
         with tempfile.TemporaryDirectory() as temp_dir:

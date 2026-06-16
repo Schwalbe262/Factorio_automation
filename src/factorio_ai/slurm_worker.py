@@ -17,6 +17,7 @@ from .planner import (
     factory_layout_structure,
 )
 from .layout_validation import merge_sandbox_validation_feedback
+from .llm_log import make_llm_io_trace
 from .site_selection import sanitize_selected_improvement_site
 from .skill_registry import IMPLEMENTED_SKILLS
 from .strategy import heuristic_strategy, make_strategy_payload, normalize_strategy_response, reconcile_strategy_decision
@@ -179,6 +180,9 @@ def run_task_file(task_path: Path, result_path: Path) -> dict[str, Any]:
 def execute_task(task: dict[str, Any]) -> dict[str, Any]:
     task_type = task.get("type")
     payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    if task.get("id"):
+        payload = dict(payload)
+        payload.setdefault("task_id", task.get("id"))
     if task_type == "planner_request":
         return run_planner_request(payload)
     if task_type == "strategy_request":
@@ -191,12 +195,13 @@ def execute_task(task: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_planner_request(payload: dict[str, Any]) -> dict[str, Any]:
-    llm_result = try_llm_planner(payload)
+    llm_result, llm_diagnostics = try_llm_planner_with_diagnostics(payload)
     if llm_result is not None:
         llm_result["source"] = "llm"
         return llm_result
     result = heuristic_planner(payload)
     result["source"] = "heuristic"
+    result.update({key: value for key, value in llm_diagnostics.items() if value not in (None, "")})
     return result
 
 
@@ -255,6 +260,8 @@ def run_layout_improvement_request(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         prompt=prompt,
         schema=LAYOUT_RESPONSE_SCHEMA,
+        kind="layout",
+        task_id=str(payload.get("task_id") or ""),
     )
     if parsed is None:
         result = heuristic_layout_improvement(compact)
@@ -544,49 +551,28 @@ def run_strategy_model_benchmark(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def try_llm_planner(payload: dict[str, Any]) -> dict[str, Any] | None:
-    base_url = "".join(os.getenv("FACTORIO_AI_LLM_BASE_URL", "").split()).rstrip("/")
-    model = os.getenv("FACTORIO_AI_LLM_MODEL", "").strip()
-    if not base_url or not model:
-        return None
+    result, _diagnostics = try_llm_planner_with_diagnostics(payload)
+    return result
+
+
+def try_llm_planner_with_diagnostics(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     prompt = (
         "You are a Factorio planning assistant. Choose one safe high-level goal or action hint. "
         "Return only JSON matching the schema.\n\n"
         f"Payload:\n{json.dumps(payload, ensure_ascii=False)}"
     )
-    request_payload: dict[str, Any] = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": "Return strict JSON only. Do not directly mutate game state."},
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0,
-        "max_tokens": _llm_max_tokens(),
-        "response_format": {"type": "json_object"},
-    }
-    if os.getenv("FACTORIO_AI_LLM_GUIDED_JSON", "").lower() in {"1", "true", "yes", "on"}:
-        request_payload["guided_json"] = PLANNER_RESPONSE_SCHEMA
-    req = request.Request(
-        f"{base_url}/chat/completions",
-        data=json.dumps(request_payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
+    parsed, diagnostics = call_llm_json_with_diagnostics(
+        system="Return strict JSON only. Do not directly mutate game state.",
+        prompt=prompt,
+        schema=PLANNER_RESPONSE_SCHEMA,
+        kind="planner",
+        task_id=str(payload.get("task_id") or ""),
     )
-    api_key = os.getenv("FACTORIO_AI_LLM_API_KEY", "").strip()
-    if api_key:
-        req.add_header("Authorization", f"Bearer {api_key}")
-    try:
-        with request.urlopen(req, timeout=float(os.getenv("FACTORIO_AI_LLM_TIMEOUT", "60"))) as response:
-            body = json.loads(response.read().decode("utf-8"))
-    except (OSError, error.URLError, json.JSONDecodeError, TimeoutError):
-        return None
-    try:
-        content = body["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError):
-        return None
-    parsed = parse_json_object_from_content(content)
-    if isinstance(parsed, dict):
-        return normalize_planner_response(parsed)
-    return None
+    if parsed is None:
+        return None, diagnostics
+    result = normalize_planner_response(parsed)
+    result.update(diagnostics)
+    return result, diagnostics
 
 
 def try_llm_strategy(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -625,6 +611,8 @@ def try_llm_strategy_with_diagnostics(payload: dict[str, Any]) -> tuple[dict[str
         system="Return strict JSON only. You choose strategy, not direct world actions.",
         prompt=prompt,
         schema=STRATEGY_RESPONSE_SCHEMA,
+        kind="strategy",
+        task_id=str(payload.get("task_id") or ""),
     )
     diagnostics.update(call_diagnostics)
     if parsed is None and _context_limit_error(str(diagnostics.get("llm_error") or "")):
@@ -638,8 +626,16 @@ def try_llm_strategy_with_diagnostics(payload: dict[str, Any]) -> tuple[dict[str
             system="Return strict JSON only. You choose strategy, not direct world actions.",
             prompt=retry_prompt,
             schema=STRATEGY_RESPONSE_SCHEMA,
+            kind="strategy",
+            task_id=str(payload.get("task_id") or ""),
         )
+        previous_traces = [trace for trace in diagnostics.get("llm_traces", []) if isinstance(trace, dict)]
+        retry_traces = retry_diagnostics.get("llm_traces")
         diagnostics.update(retry_diagnostics)
+        if isinstance(retry_traces, list):
+            diagnostics["llm_traces"] = previous_traces + [trace for trace in retry_traces if isinstance(trace, dict)]
+            if diagnostics["llm_traces"]:
+                diagnostics["llm_trace"] = diagnostics["llm_traces"][-1]
         if parsed is not None and not retry_diagnostics.get("llm_error"):
             diagnostics["llm_error"] = ""
     if parsed is None:
@@ -678,11 +674,53 @@ def call_llm_json_with_diagnostics(
     system: str,
     prompt: str,
     schema: dict[str, Any] | None = None,
+    *,
+    kind: str = "llm",
+    task_id: str = "",
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     base_url = "".join(os.getenv("FACTORIO_AI_LLM_BASE_URL", "").split()).rstrip("/")
     model = os.getenv("FACTORIO_AI_LLM_MODEL", "").strip()
     if not base_url or not model:
         return None, {"llm_error": "LLM base URL or model is not configured"}
+    started = time.monotonic()
+    max_tokens = _llm_max_tokens()
+
+    def diagnostics(
+        *,
+        parsed_json: dict[str, Any] | None,
+        raw_output: Any = "",
+        error_text: str = "",
+        response_snippet: Any = None,
+    ) -> dict[str, Any]:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        trace = make_llm_io_trace(
+            kind=kind,
+            provider=os.getenv("FACTORIO_AI_LLM_PROVIDER", "local_llm"),
+            model=model,
+            base_url=base_url,
+            task_id=task_id,
+            system_prompt=system,
+            input_prompt=prompt,
+            raw_output=raw_output,
+            parsed_json=parsed_json,
+            duration_ms=duration_ms,
+            max_tokens=max_tokens,
+            ok=bool(parsed_json is not None and not error_text),
+            error=error_text,
+        )
+        output: dict[str, Any] = {
+            "llm_duration_ms": duration_ms,
+            "llm_max_tokens": max_tokens,
+            "llm_trace": trace,
+            "llm_traces": [trace],
+        }
+        if error_text:
+            output["llm_error"] = error_text
+        snippet_source = raw_output if response_snippet is None else response_snippet
+        if snippet_source not in (None, ""):
+            output["llm_response_snippet"] = _snippet(snippet_source)
+        return output
+
     request_payload: dict[str, Any] = {
         "model": model,
         "messages": [
@@ -690,7 +728,7 @@ def call_llm_json_with_diagnostics(
             {"role": "user", "content": prompt},
         ],
         "temperature": 0,
-        "max_tokens": _llm_max_tokens(),
+        "max_tokens": max_tokens,
         "response_format": {"type": "json_object"},
     }
     if schema and os.getenv("FACTORIO_AI_LLM_GUIDED_JSON", "").lower() in {"1", "true", "yes", "on"}:
@@ -706,28 +744,40 @@ def call_llm_json_with_diagnostics(
         req.add_header("Authorization", f"Bearer {api_key}")
     try:
         with request.urlopen(req, timeout=float(os.getenv("FACTORIO_AI_LLM_TIMEOUT", "60"))) as response:
-            body = json.loads(response.read().decode("utf-8"))
+            response_text = response.read().decode("utf-8")
     except error.HTTPError as exc:
         try:
             details = exc.read().decode("utf-8", errors="replace")
         except OSError:
             details = ""
-        return None, {"llm_error": f"LLM HTTP {exc.code}: {_snippet(details)}"}
+        return None, diagnostics(
+            parsed_json=None,
+            error_text=f"LLM HTTP {exc.code}: {_snippet(details)}",
+            response_snippet=details,
+        )
     except (OSError, error.URLError, TimeoutError) as exc:
-        return None, {"llm_error": f"{type(exc).__name__}: {exc}"}
+        return None, diagnostics(parsed_json=None, error_text=f"{type(exc).__name__}: {exc}")
+
+    try:
+        body = json.loads(response_text)
     except json.JSONDecodeError as exc:
-        return None, {"llm_error": f"LLM returned non-JSON HTTP body: {exc}"}
+        return None, diagnostics(
+            parsed_json=None,
+            error_text=f"LLM returned non-JSON HTTP body: {exc}",
+            response_snippet=response_text,
+        )
     try:
         content = body["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):
-        return None, {"llm_error": "LLM response missing choices[0].message.content"}
+        return None, diagnostics(parsed_json=None, error_text="LLM response missing choices[0].message.content")
     parsed = parse_json_object_from_content(content)
     if not isinstance(parsed, dict):
-        return None, {
-            "llm_error": "LLM response content is not a JSON object",
-            "llm_response_snippet": _snippet(content),
-        }
-    return parsed, {"llm_response_snippet": _snippet(content), "llm_max_tokens": _llm_max_tokens()}
+        return None, diagnostics(
+            parsed_json=None,
+            raw_output=content,
+            error_text="LLM response content is not a JSON object",
+        )
+    return parsed, diagnostics(parsed_json=parsed, raw_output=content)
 
 
 def _llm_max_tokens() -> int:

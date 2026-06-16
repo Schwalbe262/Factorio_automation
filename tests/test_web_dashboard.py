@@ -7,8 +7,10 @@ from unittest.mock import patch
 
 from factorio_ai.networking import dashboard_urls
 from factorio_ai.web_dashboard import (
+    FACTORIO_LLM_ROUTE,
     FACTORIO_ROUTE,
     FACTORIO_BLUEPRINT_ROUTE,
+    LLM_API_ROUTE,
     _candidate_blueprint_response,
     _handle_dashboard_post_values,
     _site_blueprint_response,
@@ -21,24 +23,100 @@ from factorio_ai.web_dashboard import (
     dashboard_path,
     friendly_dashboard_error,
     is_factorio_route,
+    llm_trace_api_response,
+    llm_trace_path,
     observe_dashboard_state,
     render_dashboard,
+    render_llm_trace_page,
     request_language,
 )
+from factorio_ai.llm_log import make_llm_io_trace, record_llm_io_trace
 from factorio_ai.site_selection import load_selected_improvement_site, save_selected_improvement_site
 
 
 class WebDashboardTests(unittest.TestCase):
     def test_factorio_routes(self):
         self.assertEqual(FACTORIO_ROUTE, "/factorio")
+        self.assertEqual(FACTORIO_LLM_ROUTE, "/factorio/llm")
+        self.assertEqual(LLM_API_ROUTE, "/api/factorio/llm")
         self.assertTrue(is_factorio_route("/factorio"))
         self.assertTrue(is_factorio_route("/factorio/"))
+        self.assertTrue(is_factorio_route("/factorio/llm"))
         self.assertTrue(is_factorio_route("/팩토리오"))
         self.assertTrue(is_factorio_route("/%ED%8C%A9%ED%86%A0%EB%A6%AC%EC%98%A4"))
+        self.assertEqual(llm_trace_path("en", "launch_rocket_program"), "/factorio/llm?objective=launch_rocket_program")
 
     def test_legacy_route_defaults_to_korean(self):
         self.assertEqual(request_language("/팩토리오", {}), "ko")
         self.assertEqual(dashboard_path("ko"), "/factorio?lang=ko")
+
+    def test_llm_trace_page_renders_escaped_collapsible_blocks(self):
+        long_output = "<script>alert(1)</script>" + ("x" * 7000)
+        html = render_llm_trace_page(
+            {
+                "entries": [
+                    {
+                        "timestamp": "2026-06-13T00:00:00+00:00",
+                        "trace_id": "trace-a",
+                        "kind": "strategy",
+                        "provider": "local_llm",
+                        "model": "Qwen/Qwen3.5-9B",
+                        "base_url": "http://127.0.0.1:8000/v1",
+                        "task_id": "strategy-1",
+                        "system_prompt": "Return JSON",
+                        "input_prompt": "choose next skill",
+                        "raw_output": long_output,
+                        "parsed_json": {"selected_skill": "research_automation"},
+                        "duration_ms": 42,
+                        "prompt_chars": 24,
+                        "response_chars": len(long_output),
+                        "max_tokens": 512,
+                        "ok": True,
+                        "error": "",
+                    }
+                ],
+                "entry_count": 1,
+                "latest": {},
+                "log_path": "logs/llm_io_traces.jsonl",
+            },
+            "en",
+            "launch_rocket_program",
+        )
+
+        self.assertIn("LLM I/O Traces", html)
+        self.assertIn("trace-a", html)
+        self.assertIn("Qwen/Qwen3.5-9B", html)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+        self.assertIn("truncated", html)
+        self.assertIn("&quot;selected_skill&quot;: &quot;research_automation&quot;", html)
+        self.assertIn('href="/factorio?objective=launch_rocket_program"', html)
+        self.assertIn(LLM_API_ROUTE, html)
+
+    def test_llm_trace_api_response_loads_recent_entries_newest_first(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_dir = Path(temp_dir) / "logs"
+            for trace_id in ("old", "new"):
+                record_llm_io_trace(
+                    log_dir,
+                    make_llm_io_trace(
+                        trace_id=trace_id,
+                        kind="strategy",
+                        provider="local_llm",
+                        model="model",
+                        base_url="http://localhost",
+                        system_prompt="system",
+                        input_prompt=trace_id,
+                        raw_output='{"ok":true}',
+                        parsed_json={"ok": True},
+                        ok=True,
+                    ),
+                )
+
+            response = llm_trace_api_response(log_dir, limit=2)
+
+        self.assertEqual(response["entry_count"], 2)
+        self.assertEqual([row["trace_id"] for row in response["entries"]], ["new", "old"])
+        self.assertEqual(response["entries"][0]["input_prompt"], "new")
 
     def test_dashboard_html_has_monitor_sections_and_item_icons(self):
         html = render_dashboard(

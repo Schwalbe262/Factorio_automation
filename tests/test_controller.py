@@ -18,7 +18,7 @@ from factorio_ai.controller import (
     _move_detour_action,
     _stale_take_response,
 )
-from factorio_ai.llm_log import llm_decision_log_path
+from factorio_ai.llm_log import llm_decision_log_path, llm_io_trace_log_path, make_llm_io_trace
 from factorio_ai.models import PlannerDecision
 from factorio_ai.site_selection import save_selected_improvement_site
 
@@ -235,6 +235,52 @@ class ControllerTests(unittest.TestCase):
 
         self.assertFalse(response["ok"])
         self.assertIn("blocked direct iron-gear-wheel handcraft", response["reason"])
+
+    def test_strategy_decision_records_and_strips_llm_io_traces(self):
+        class FakeController(FactorioController):
+            def observe(self):
+                return {"ok": True, "tick": 1, "inventory": {}, "entities": [], "enemies": [], "research": {}}
+
+        trace = make_llm_io_trace(
+            trace_id="trace-strategy",
+            kind="strategy",
+            provider="local_llm",
+            model="Qwen/Qwen3.5-9B",
+            base_url="http://127.0.0.1:8000/v1",
+            system_prompt="system prompt",
+            input_prompt="full input prompt",
+            raw_output='{"selected_skill":"research_automation"}',
+            parsed_json={"selected_skill": "research_automation"},
+            ok=True,
+        )
+        llm_result = {
+            "selected_skill": "research_automation",
+            "priority": 90,
+            "reason": "LLM selected automation research",
+            "evidence": [],
+            "blockers": [],
+            "expected_effect": "unlock assemblers",
+            "source": "llm",
+            "ok": True,
+            "llm_traces": [trace],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = make_test_config(Path(temp_dir))
+            controller = FakeController(cfg)
+            with patch("factorio_ai.slurm_worker.run_strategy_request", return_value=llm_result):
+                result = controller.strategy_decision("launch_rocket_program")
+
+            rows = [
+                json.loads(line)
+                for line in llm_io_trace_log_path(cfg.log_dir).read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(result["source"], "llm")
+        self.assertNotIn("llm_traces", result)
+        self.assertNotIn("llm_trace", result)
+        self.assertEqual(result["llm_trace_ids"], ["trace-strategy"])
+        self.assertEqual(rows[0]["input_prompt"], "full input prompt")
+        self.assertEqual(rows[0]["raw_output"], '{"selected_skill":"research_automation"}')
 
     def test_required_remote_llm_pending_does_not_submit_strategy_task(self):
         class FakeController(FactorioController):

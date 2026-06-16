@@ -15,7 +15,7 @@ from .controller import FactorioController
 from .item_icons import read_item_icon_png
 from .layout_llm_settings import load_layout_llm_settings, save_layout_llm_settings
 from .layout_validation import layout_validation_feedback_summary, merge_sandbox_validation_feedback
-from .llm_log import llm_decision_summary
+from .llm_log import llm_decision_summary, llm_io_trace_summary
 from .monitor import summarize_factory
 from .networking import dashboard_urls
 from .modless_lua import ModlessLuaController
@@ -35,10 +35,12 @@ from .world_memory import load_world_map_memory, summarize_world_map_memory
 
 
 FACTORIO_ROUTE = "/factorio"
+FACTORIO_LLM_ROUTE = "/factorio/llm"
 LEGACY_FACTORIO_ROUTE = "/팩토리오"
 FACTORIO_ROUTES = {FACTORIO_ROUTE, LEGACY_FACTORIO_ROUTE}
 ICON_ROUTE_PREFIX = "/factorio/icon/"
 API_ROUTE = "/api/factorio"
+LLM_API_ROUTE = "/api/factorio/llm"
 BLUEPRINT_API_ROUTE = "/api/factorio/blueprint"
 FACTORIO_BLUEPRINT_ROUTE = "/factorio/blueprint"
 DEFAULT_LANG = "en"
@@ -135,6 +137,14 @@ TEXT: dict[str, dict[str, str]] = {
         "no_power_networks": "No electric power networks inferred yet.",
         "llm_decisions": "LLM Decision Log",
         "no_llm_decisions": "No LLM strategy attempts recorded yet.",
+        "llm_io_traces": "LLM I/O Traces",
+        "no_llm_io_traces": "No LLM input/output traces recorded yet.",
+        "dashboard": "Dashboard",
+        "prompt": "Prompt",
+        "system_prompt": "System Prompt",
+        "raw_output": "Raw Output",
+        "parsed_json": "Parsed JSON",
+        "trace_id": "Trace ID",
         "llm_worker_comparison": "LLM Worker Comparison",
         "no_llm_worker_comparison": "No Slurm LLM worker comparison recorded yet.",
         "worker": "Worker",
@@ -202,6 +212,14 @@ TEXT: dict[str, dict[str, str]] = {
         "no_power_networks": "아직 추정된 전력망이 없습니다.",
         "llm_decisions": "LLM 판단 로그",
         "no_llm_decisions": "아직 기록된 LLM 전략 시도가 없습니다.",
+        "llm_io_traces": "LLM I/O Traces",
+        "no_llm_io_traces": "No LLM input/output traces recorded yet.",
+        "dashboard": "Dashboard",
+        "prompt": "Prompt",
+        "system_prompt": "System Prompt",
+        "raw_output": "Raw Output",
+        "parsed_json": "Parsed JSON",
+        "trace_id": "Trace ID",
         "llm_worker_comparison": "LLM Worker Comparison",
         "no_llm_worker_comparison": "No Slurm LLM worker comparison recorded yet.",
         "worker": "Worker",
@@ -494,11 +512,27 @@ def make_dashboard_handler(cfg: AppConfig, default_objective: str) -> type[BaseH
                 self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
                 return
 
+            if path == FACTORIO_LLM_ROUTE:
+                lang = request_language(path, query)
+                summary = llm_trace_api_response(cfg.log_dir, limit=_llm_trace_limit(query))
+                body = render_llm_trace_page(summary, lang=lang, objective=objective)
+                self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
+                return
+
             if path == API_ROUTE:
                 state = build_dashboard_state_cached(cfg, objective)
                 self._send(
                     200,
                     json.dumps(state, ensure_ascii=False, indent=2).encode("utf-8"),
+                    "application/json; charset=utf-8",
+                )
+                return
+
+            if path == LLM_API_ROUTE:
+                response = llm_trace_api_response(cfg.log_dir, limit=_llm_trace_limit(query))
+                self._send(
+                    200,
+                    json.dumps(response, ensure_ascii=False, indent=2).encode("utf-8"),
                     "application/json; charset=utf-8",
                 )
                 return
@@ -585,7 +619,7 @@ def normalized_path(path: str) -> str:
 
 
 def is_factorio_route(path: str) -> bool:
-    return normalized_path(path) in FACTORIO_ROUTES
+    return normalized_path(path) in FACTORIO_ROUTES | {FACTORIO_LLM_ROUTE}
 
 
 def request_language(path: str, query: dict[str, list[str]], form: dict[str, list[str]] | None = None) -> str:
@@ -608,6 +642,16 @@ def dashboard_path(lang: str = DEFAULT_LANG, objective: str | None = None) -> st
     return f"{FACTORIO_ROUTE}{suffix}"
 
 
+def llm_trace_path(lang: str = DEFAULT_LANG, objective: str | None = None) -> str:
+    params: dict[str, str] = {}
+    if lang in SUPPORTED_LANGS and lang != DEFAULT_LANG:
+        params["lang"] = lang
+    if objective:
+        params["objective"] = objective
+    suffix = f"?{urlencode(params)}" if params else ""
+    return f"{FACTORIO_LLM_ROUTE}{suffix}"
+
+
 def public_dashboard_urls(host: str, port: int, lang: str = DEFAULT_LANG) -> list[str]:
     route = dashboard_path(lang)
     base_url = (
@@ -616,6 +660,18 @@ def public_dashboard_urls(host: str, port: int, lang: str = DEFAULT_LANG) -> lis
         or DEFAULT_PUBLIC_DASHBOARD_BASE_URL
     )
     return dashboard_urls(host, port, route, base_url=base_url)
+
+
+def llm_trace_api_response(log_dir: Any, *, limit: int = 50) -> dict[str, Any]:
+    return llm_io_trace_summary(log_dir, limit=limit)
+
+
+def _llm_trace_limit(query: dict[str, list[str]]) -> int:
+    try:
+        raw = int((query.get("limit") or ["50"])[0])
+    except (TypeError, ValueError):
+        raw = 50
+    return max(1, min(200, raw))
 
 
 def _blueprint_response(
@@ -929,6 +985,97 @@ def friendly_dashboard_error(exc: Exception) -> str:
     return text
 
 
+def render_llm_trace_page(summary: dict[str, Any], lang: str = DEFAULT_LANG, objective: Any = None) -> str:
+    lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
+    title = _t(lang, "llm_io_traces")
+    entries = summary.get("entries") if isinstance(summary.get("entries"), list) else []
+    api_query = {"limit": str(summary.get("entry_count") or 50)}
+    if lang in SUPPORTED_LANGS and lang != DEFAULT_LANG:
+        api_query["lang"] = lang
+    if objective:
+        api_query["objective"] = str(objective)
+    api_href = f"{LLM_API_ROUTE}?{urlencode(api_query)}"
+    if not entries:
+        body = (
+            "<section class=\"panel\">"
+            f"<h2>{escape(title)}</h2>"
+            f"<p class=\"muted\">{escape(str(summary.get('log_path') or ''))}</p>"
+            f"<p class=\"muted\">{_t(lang, 'no_llm_io_traces')}</p>"
+            "</section>"
+        )
+        return _page(title, body, lang, objective)
+    cards = "".join(_llm_trace_card(row, lang) for row in entries if isinstance(row, dict))
+    body = (
+        "<section class=\"panel\">"
+        f"<h2>{escape(title)}</h2>"
+        "<div class=\"actions\">"
+        f"<a class=\"nav-link\" href=\"{escape(dashboard_path(lang, str(objective or '')), quote=True)}\">"
+        f"{escape(_t(lang, 'dashboard'))}</a>"
+        f"<a class=\"nav-link\" href=\"{escape(api_href, quote=True)}\">{escape(LLM_API_ROUTE)}</a>"
+        "</div>"
+        f"<p class=\"muted\">{escape(str(summary.get('log_path') or ''))}</p>"
+        f"{cards}"
+        "</section>"
+    )
+    return _page(title, body, lang, objective)
+
+
+def _llm_trace_card(row: dict[str, Any], lang: str) -> str:
+    status_class = "trace-ok" if row.get("ok") else "trace-error"
+    status_text = "ok" if row.get("ok") else "error"
+    meta = [
+        (_t(lang, "updated"), _format_kst_timestamp(row.get("timestamp"))),
+        (_t(lang, "trace_id"), row.get("trace_id")),
+        (_t(lang, "kind"), row.get("kind")),
+        (_t(lang, "provider"), row.get("provider")),
+        (_t(lang, "model"), row.get("model")),
+        ("Task", row.get("task_id")),
+        (_t(lang, "latency_ms"), row.get("duration_ms")),
+        ("Prompt chars", row.get("prompt_chars")),
+        ("Response chars", row.get("response_chars")),
+        ("Max tokens", row.get("max_tokens")),
+    ]
+    meta_html = "".join(
+        f"<span><b>{escape(str(label))}</b> {escape(str(value or ''))}</span>"
+        for label, value in meta
+        if value not in (None, "")
+    )
+    parsed_json = row.get("parsed_json") if isinstance(row.get("parsed_json"), dict) else None
+    parsed_text = json.dumps(parsed_json, ensure_ascii=False, indent=2) if parsed_json is not None else ""
+    error = str(row.get("error") or "")
+    error_html = f'<p class="error">{escape(error)}</p>' if error else ""
+    return (
+        "<article class=\"trace-entry\">"
+        "<div class=\"trace-header\">"
+        f"<strong>{escape(str(row.get('kind') or 'llm'))}</strong>"
+        f"<span class=\"{status_class}\">{escape(status_text)}</span>"
+        "</div>"
+        f"<div class=\"trace-meta\">{meta_html}</div>"
+        f"{error_html}"
+        f"{_trace_text_block(_t(lang, 'system_prompt'), row.get('system_prompt'))}"
+        f"{_trace_text_block(_t(lang, 'prompt'), row.get('input_prompt'))}"
+        f"{_trace_text_block(_t(lang, 'raw_output'), row.get('raw_output'))}"
+        f"{_trace_text_block(_t(lang, 'parsed_json'), parsed_text)}"
+        "</article>"
+    )
+
+
+def _trace_text_block(label: str, value: Any, *, limit: int = 6000) -> str:
+    text = "" if value is None else str(value)
+    if not text:
+        return ""
+    omitted = max(0, len(text) - limit)
+    visible = text[:limit]
+    tail = f"<p class=\"muted\">truncated {omitted:,} chars; full text is preserved in JSONL</p>" if omitted else ""
+    return (
+        "<details class=\"trace-block\">"
+        f"<summary>{escape(label)} <span>{len(text):,} chars</span></summary>"
+        f"<pre>{escape(visible)}</pre>"
+        f"{tail}"
+        "</details>"
+    )
+
+
 def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
     title = _t(lang, "title")
@@ -1198,6 +1345,14 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
       background: #27451c;
       color: #fff;
     }}
+    .nav-link {{
+      border: 1px solid #35404b;
+      border-radius: 4px;
+      color: #d8e0e8;
+      padding: 6px 9px;
+      text-decoration: none;
+      font-size: 12px;
+    }}
     .summary, .grid {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -1239,6 +1394,56 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
       border-radius: 4px;
       font-size: 12px;
       line-height: 1.45;
+    }}
+    .trace-entry {{
+      border-top: 1px solid #2a3036;
+      padding-top: 14px;
+      margin-top: 14px;
+    }}
+    .trace-header, .trace-meta {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      align-items: center;
+    }}
+    .trace-header {{
+      margin-bottom: 8px;
+    }}
+    .trace-meta {{
+      color: #9aa4af;
+      font-size: 12px;
+      margin-bottom: 10px;
+    }}
+    .trace-meta b {{
+      color: #d8e0e8;
+      font-weight: 600;
+    }}
+    .trace-ok, .trace-error {{
+      border-radius: 4px;
+      padding: 3px 7px;
+      font-size: 12px;
+      line-height: 1;
+    }}
+    .trace-ok {{
+      background: #243f22;
+      color: #9bd17b;
+    }}
+    .trace-error {{
+      background: #4a2020;
+      color: #ff9c9c;
+    }}
+    .trace-block {{
+      margin-top: 8px;
+    }}
+    .trace-block summary {{
+      cursor: pointer;
+      color: #f0c46c;
+      font-size: 13px;
+      margin-bottom: 6px;
+    }}
+    .trace-block summary span {{
+      color: #9aa4af;
+      margin-left: 6px;
     }}
     .strategy {{
       display: flex;
@@ -1661,6 +1866,8 @@ def _language_switch(lang: str, objective: str) -> str:
     ko_class = "active" if lang == "ko" else ""
     return (
         f"<nav class=\"lang-switch\" aria-label=\"{escape(_t(lang, 'language'))}\">"
+        f"<a href=\"{escape(dashboard_path(lang, objective))}\">{escape(_t(lang, 'dashboard'))}</a>"
+        f"<a href=\"{escape(llm_trace_path(lang, objective))}\">{escape(_t(lang, 'llm_io_traces'))}</a>"
         f"<a class=\"{en_class}\" href=\"{escape(dashboard_path('en', objective))}\">EN</a>"
         f"<a class=\"{ko_class}\" href=\"{escape(dashboard_path('ko', objective))}\">KR</a>"
         "</nav>"

@@ -208,6 +208,8 @@ def classify_trace_file(path: Path) -> tuple[str, str, str]:
             "high",
             "LLM/heuristic prompt, decision, fallback, latency, and error trace.",
         )
+    if name == "llm_io_traces.jsonl":
+        return ("llm_io_traces", "high", "Full local LLM prompt/response traces for GEPA and Qwen LoRA examples.")
     if "operator-intervention" in name or "manual-layout" in name or "factory-events" in name:
         return (
             "operator_intervention",

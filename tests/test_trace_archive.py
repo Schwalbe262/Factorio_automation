@@ -74,6 +74,7 @@ class TraceArchiveTests(unittest.TestCase):
         self.assertEqual(classify_trace_file(Path("layout-validation-feedback.jsonl"))[0], "layout_validation")
         self.assertEqual(classify_trace_file(Path("strategy-layout-improvement-20260614-031028.jsonl"))[0], "layout_strategy")
         self.assertEqual(classify_trace_file(Path("llm_decisions.jsonl"))[0], "llm_decisions")
+        self.assertEqual(classify_trace_file(Path("llm_io_traces.jsonl"))[0], "llm_io_traces")
         self.assertEqual(classify_trace_file(Path("operator-intervention-20260615.jsonl"))[0], "operator_intervention")
         self.assertEqual(classify_trace_file(Path("manual-layout-comparison.jsonl"))[1], "high")
 

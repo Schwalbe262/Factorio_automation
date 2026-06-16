@@ -12,7 +12,7 @@ import threading
 import time
 from typing import Any
 
-from .llm_log import record_llm_decision, strategy_request_summary
+from .llm_log import record_llm_decision, record_llm_io_trace, strategy_request_summary
 from .config import AppConfig, REPO_ROOT
 from .layout_llm_settings import load_layout_llm_settings
 from .layout_validation import layout_validation_feedback_summary
@@ -67,6 +67,9 @@ from .world_memory import (
     planning_sites_from_memory,
     update_world_map_memory,
 )
+
+
+LLM_TRACE_RESULT_KEYS = {"llm_trace", "llm_traces"}
 
 
 @dataclass
@@ -337,6 +340,41 @@ def _guard_post_automation_handcraft(observation: dict[str, Any], decision: Plan
             _gear_handcraft_guard_reason(observation, action),
         )
     return decision
+
+
+def _record_and_strip_llm_io_traces(log_dir: Path, result: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(result, dict):
+        return result
+    traces: list[dict[str, Any]] = []
+    raw_traces = result.get("llm_traces")
+    if isinstance(raw_traces, list):
+        traces.extend(trace for trace in raw_traces if isinstance(trace, dict))
+    raw_trace = result.get("llm_trace")
+    existing_trace_ids = {str(trace.get("trace_id") or "") for trace in traces}
+    if (
+        isinstance(raw_trace, dict)
+        and raw_trace is not None
+        and str(raw_trace.get("trace_id") or "") not in existing_trace_ids
+    ):
+        traces.append(raw_trace)
+    if not traces and not any(key in result for key in LLM_TRACE_RESULT_KEYS):
+        return result
+
+    stripped = {key: value for key, value in result.items() if key not in LLM_TRACE_RESULT_KEYS}
+    trace_ids: list[str] = []
+    errors: list[str] = []
+    for trace in traces:
+        try:
+            entry = record_llm_io_trace(log_dir, trace)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{type(exc).__name__}: {exc}")
+            continue
+        trace_ids.append(entry.trace_id)
+    if trace_ids:
+        stripped["llm_trace_ids"] = trace_ids
+    if errors:
+        stripped["llm_trace_record_error"] = "; ".join(errors)
+    return stripped
 
 
 def _local_llm_env_configured() -> bool:
@@ -619,6 +657,7 @@ class FactorioController:
                         available_skills=skill_catalog_payload(),
                         timeout_seconds=_remote_strategy_timeout_seconds(),
                     )
+                    result = _record_and_strip_llm_io_traces(self.cfg.log_dir, result)
                     record_llm_decision(
                         self.cfg.log_dir,
                         objective=objective,
@@ -656,6 +695,7 @@ class FactorioController:
                         selected_improvement_site=selected_improvement_site,
                     )
                 )
+                result = _record_and_strip_llm_io_traces(self.cfg.log_dir, result)
                 record_llm_decision(
                     self.cfg.log_dir,
                     objective=objective,

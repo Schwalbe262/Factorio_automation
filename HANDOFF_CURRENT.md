@@ -1,12 +1,11 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; Part 130 - unattended no-mod Qwen 9B local LLM supervisor.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; Part 131 - local LLM I/O trace dashboard.
 - Startup context: read this file and targeted `goal.md`; never read `note.md`/`insight.md` in full.
-- No-mod helpers use `Qwen/Qwen3.5-9B`, vLLM service duration 10800s, and ordered scheduler GPU candidates `a6000ada,a6000`.
-- Service task `8224` is running/ready on allocation `40/n104`; scheduler service-mode readiness accepts the ready vLLM service even when free GPU slots are 0.
-- Layout status now counts running layout tasks even when the scheduler API omits `gpus`, preventing background layout from oversubmitting and blocking strategy clients.
-- Strategy now detects short `iron-plate` site-input `route_needed` layouts into the gear assembler and preempts smelting/coal/site choices with `build_iron_plate_logistic_line_to_gear_mall`.
-- Live validation: `expand_copper_smelting` reconciled to `build_iron_plate_logistic_line_to_gear_mall` for source `1458` -> gear assembler `146`, distance `7.9`.
-- Live skill completed: `iron-plate logistics line to the gear mall is built with belts and endpoint inserters`.
-- Runtime: supervisor PID `40908`, autopilot PID `72548`, idle layout PID `26688`, autopilot gate `ready`; cycle 2 strategy task `8339` is running on allocation `40`.
-- Validation: `py_compile src/factorio_ai/strategy.py src/factorio_ai/remote_slurm.py`; `PYTHONPATH=src pytest tests/test_remote_slurm.py tests/test_strategy.py tests/test_controller.py -q` -> 219 passed.
-- Next: watch several Qwen strategy cycles; only intervene on a new deterministic skill gap, not normal runtime progress.
+- Added append-only `logs/llm_io_traces.jsonl` support with full system prompt, input prompt, raw output, parsed JSON, latency, model/base URL, task id, and ok/error metadata.
+- Local/shared LLM calls now attach trace diagnostics for strategy/layout/planner; `controller.strategy_decision` records strategy traces locally and strips full prompt/output from returned strategy data.
+- Added `/factorio/llm` HTML trace page, `/api/factorio/llm` JSON endpoint, and dashboard nav link; rendered text is escaped and capped while JSONL keeps full content.
+- Trace archives classify `llm_io_traces.jsonl` as high-value training data.
+- Validation: `py_compile src/factorio_ai/llm_log.py src/factorio_ai/slurm_worker.py src/factorio_ai/controller.py src/factorio_ai/web_dashboard.py`; `PYTHONPATH=src pytest tests/test_llm_log.py tests/test_slurm_worker.py tests/test_controller.py tests/test_web_dashboard.py -q` -> 105 passed.
+- Extra validation: trace archive targeted tests passed; HTTP route/API smoke check passed; in-app Browser `iab` was unavailable.
+- Token usage: current sample not recorded because `C:\Users\NEC\.codex\state_5.sqlite` is malformed; weekly quota unavailable.
+- Next: use `/factorio/llm` during live Qwen strategy cycles to inspect raw decisions and watch log growth.
