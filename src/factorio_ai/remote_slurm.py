@@ -253,8 +253,8 @@ def _scheduler_gpu_model_candidates(task_type: str | None = None) -> list[str]:
         if not configured:
             configured = os.getenv("FACTORIO_AI_SLURM_LAYOUT_GPU_MODEL", "").strip()
         return _split_scheduler_gpu_models(configured) or list(DEFAULT_LAYOUT_SCHEDULER_GPU_MODELS)
-    model = _scheduler_gpu_model_name(os.getenv("FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL", "rtx3090"))
-    return [model] if model else []
+    configured = os.getenv("FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL", "rtx3090").strip()
+    return _split_scheduler_gpu_models(configured)
 
 
 def _select_scheduler_gpu_model(

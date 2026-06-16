@@ -1010,6 +1010,50 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertEqual(status["missing"], [])
         self.assertEqual(status["remote"]["scheduler_ready_free_gpus"], 1)
 
+    def test_scheduler_status_selects_ready_strategy_gpu_candidate(self):
+        from factorio_ai import remote_slurm
+
+        def fake_api(path, timeout=0):
+            if path == "/api/health":
+                return {"ok": True}
+            if path == "/api/allocations":
+                return [
+                    {
+                        "account_name": "r1jae262",
+                        "state": "warm",
+                        "total_gpus": 1,
+                        "free_gpus": 1,
+                        "gpu_model": "a6000",
+                    }
+                ]
+            if path == "/api/gpu-capacity":
+                return [
+                    {"gpu_model": "rtx3090", "scheduler_owned_gpus": 0, "scheduler_free_gpus": 0},
+                    {"gpu_model": "a6000", "scheduler_owned_gpus": 1, "scheduler_free_gpus": 1},
+                ]
+            if path == "/api/tasks":
+                return []
+            raise AssertionError(path)
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FACTORIO_AI_SLURM_MODE": "scheduler",
+                    "FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262",
+                    "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "rtx3090,a6000ada,a6000",
+                    "FACTORIO_AI_VLLM_MODEL": "Qwen/Qwen3.5-4B",
+                },
+            ),
+            patch("factorio_ai.remote_slurm._scheduler_api_json", side_effect=fake_api),
+        ):
+            status = remote_slurm.llm_status()
+
+        self.assertTrue(status["llm_ready"])
+        self.assertEqual(status["remote"]["gpu_model_candidates"], ["rtx3090", "a6000ada", "a6000"])
+        self.assertEqual(status["remote"]["selected_gpu_model"], "a6000")
+        self.assertEqual(status["remote"]["resources"]["gpu_model"], "a6000")
+
     def test_scheduler_status_reports_pending_gpu_not_ready(self):
         from factorio_ai import remote_slurm
 

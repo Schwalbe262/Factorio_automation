@@ -148,6 +148,7 @@ run_factorio_watch_gui.bat
 run_factorio_no_mod_server.bat
 run_factorio_no_mod_watch_gui.bat
 run_factorio_no_mod_iron_mvp.bat
+run_factorio_no_mod_unattended_llm.bat
 run_factorio_no_mod_llm_autopilot.bat
 run_factorio_no_mod_real_player_llm_autopilot.bat
 ```
@@ -161,9 +162,20 @@ that lock before continuing. Close the Factorio window when inspection is done.
 vanilla-compatible save, starts a LAN/RCON server, and opens a GUI client connected to it. Other
 players can join the LAN server without installing the Factorio AI mod, assuming their official
 Factorio/Space Age content matches.
-`run_factorio_no_mod_llm_autopilot.bat` starts the continuous no-custom-mod autopilot with
-Slurm LLM strategy required. It fails instead of silently falling back to heuristics when the
-active 4B worker is not ready.
+`run_factorio_no_mod_unattended_llm.bat` is the normal long-running local LLM mode when Codex is
+not supervising the run. It keeps the no-custom-mod server, dashboard, scheduler-managed Qwen path,
+continuous no-mod autopilot, and idle layout loop alive. If the autopilot process is missing or its
+heartbeat is stale with no fresh live skill heartbeat, the supervisor restarts it. The supervisor uses
+`FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=a6000ada,a6000,rtx3090` and
+`FACTORIO_AI_SLURM_SCHEDULER_CPUS=3` for strategy requests so a missing RTX 3090 allocation can fall
+back to ready scheduler A6000 capacity. It also sets strategy task priority above background layout
+and writes `runtime\layout-llm-settings.json` with one max active layout job so background layout does
+not occupy every ready GPU. Status, including compact LLM readiness, is written to
+`runtime\unattended-llm-supervisor.json`, and restart logs go to
+`logs\unattended-llm-supervisor.log`.
+`run_factorio_no_mod_llm_autopilot.bat` starts the foreground continuous no-custom-mod autopilot
+with Slurm LLM strategy required. It fails instead of silently falling back to heuristics when the
+active 9B worker is not ready.
 `run_factorio_no_mod_real_player_llm_autopilot.bat` opens a GUI client, sets
 `FACTORIO_AI_AGENT_PLAYER=auto`, `FACTORIO_AI_REQUIRE_REAL_PLAYER=1`, and
 `FACTORIO_AI_USE_GUI_INPUT_FOR_MOVEMENT=1`. In that mode the autopilot uses the first connected GUI
@@ -684,13 +696,15 @@ Common environment variables:
 - `FACTORIO_AI_SLURM_MODE=scheduler`
 - `FACTORIO_AI_SLURM_SCHEDULER_URL=http://100.112.168.31:8000`
 - `FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT=r1jae262`
+- `FACTORIO_AI_SLURM_SCHEDULER_CPUS=3`
 - `FACTORIO_AI_SLURM_SCHEDULER_GPUS=1`
-- `FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=rtx3090`
+- `FACTORIO_AI_SLURM_SCHEDULER_PRIORITY=100`
+- `FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=a6000ada,a6000,rtx3090`
 - `FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS=a6000ada,a6000`
 - `FACTORIO_AI_SLURM_LAYOUT_CPUS=3`
 - `FACTORIO_AI_SLURM_LAYOUT_PRIORITY=80`
 - `FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker`
-- `FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.5-4B`
+- `FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.5-9B`
 - `FACTORIO_AI_LLM_GUIDED_JSON=1`
 - `FACTORIO_AI_LLM_BASE_URL=http://127.0.0.1:8000/v1`
 - `FACTORIO_AI_LLM_MODEL=<model-name>`
@@ -716,14 +730,17 @@ $env:FACTORIO_AI_SLURM_MODE="scheduler"
 $env:FACTORIO_AI_SLURM_SCHEDULER_URL="http://100.112.168.31:8000"
 $env:FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT="r1jae262"
 $env:FACTORIO_AI_SLURM_REMOTE_DIR="~/factorio-ai-worker"
+$env:FACTORIO_AI_SLURM_SCHEDULER_CPUS="3"
 $env:FACTORIO_AI_SLURM_SCHEDULER_GPUS="1"
-$env:FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL="rtx3090"
+$env:FACTORIO_AI_SLURM_SCHEDULER_PRIORITY="100"
+$env:FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL="a6000ada,a6000,rtx3090"
 $env:FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS="a6000ada,a6000"
 $env:FACTORIO_AI_SLURM_LAYOUT_CPUS="3"
 $env:FACTORIO_AI_SLURM_LAYOUT_PRIORITY="80"
-$env:FACTORIO_AI_VLLM_MODEL="Qwen/Qwen3.5-4B"
-$env:FACTORIO_AI_VLLM_ARGS="--max-model-len 32768 --gpu-memory-utilization 0.85 --enforce-eager"
+$env:FACTORIO_AI_VLLM_MODEL="Qwen/Qwen3.5-9B"
+$env:FACTORIO_AI_VLLM_ARGS="--max-model-len 32768 --gpu-memory-utilization 0.90 --enforce-eager"
 $env:FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER="0"
+$env:FACTORIO_AI_VLLM_STARTUP_SECONDS="420"
 $env:FACTORIO_AI_LLM_GUIDED_JSON="1"
 python -m factorio_ai.cli slurm-llm-status
 ```
@@ -738,19 +755,22 @@ python -m factorio_ai.cli slurm-ensure-worker --renew-before-minutes 360
 In scheduler mode this command reports `scheduler_managed_no_direct_worker`; allocation ownership and
 queueing remain inside `slurm_scheduler`.
 
-The no-mod autopilot, real-player autopilot, idle layout loop, and 4B launcher use scheduler mode.
-Older 9B/27B direct-worker launchers are legacy queue experiments and should not be used for normal
-local LLM operation unless this project explicitly needs an isolated comparison run.
+The no-mod autopilot, real-player autopilot, unattended supervisor, and idle layout loop use
+scheduler mode. Older direct-worker 9B/27B launchers are legacy queue experiments and should not be
+used for normal local LLM operation unless this project explicitly needs an isolated comparison run.
 
-The normal 4B local LLM path defaults to `rtx3090` because it can use warm scheduler capacity. Layout
-improvement requests use `FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS`, defaulting to `a6000ada,a6000`; the client
-checks scheduler capacity and submits the task with the first ready candidate because `/tasks` accepts one
-`gpu_model` value. Layout requests default to `FACTORIO_AI_SLURM_LAYOUT_CPUS=3` so they can attach to the
-warm A6000 allocation that exposes three free CPUs, and `FACTORIO_AI_SLURM_LAYOUT_PRIORITY=80` so they are
-not starved behind lower-priority crawl work. If a specific model or experiment needs another GPU or
-CPU shape or queue weight, override `FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL`,
-`FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS`, `FACTORIO_AI_SLURM_LAYOUT_CPUS`, or
-`FACTORIO_AI_SLURM_LAYOUT_PRIORITY` for that run.
+The normal 9B local LLM path prefers A6000-class capacity, but
+`FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL` may contain a comma-separated strategy candidate list such as
+`a6000ada,a6000,rtx3090`; the client selects the first candidate with scheduler capacity and submits
+the task with one concrete
+`gpu_model` value. Layout improvement requests use `FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS`, defaulting
+to `a6000ada,a6000`, and follow the same ready-candidate selection. Layout requests default to
+`FACTORIO_AI_SLURM_LAYOUT_CPUS=3` so they can attach to the warm A6000 allocation that exposes three
+free CPUs, and `FACTORIO_AI_SLURM_LAYOUT_PRIORITY=80` so they are not starved behind lower-priority
+crawl work. If a specific model or experiment needs another GPU or CPU shape or queue weight,
+override `FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL`, `FACTORIO_AI_SLURM_SCHEDULER_CPUS`,
+`FACTORIO_AI_SLURM_SCHEDULER_PRIORITY`, `FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS`,
+`FACTORIO_AI_SLURM_LAYOUT_CPUS`, or `FACTORIO_AI_SLURM_LAYOUT_PRIORITY` for that run.
 
 If the scheduler GPU allocation is still pending or unavailable, `slurm-llm-status` reports
 `ready scheduler GPU allocation` in `missing` and lists pending allocations separately. Queued tasks do not

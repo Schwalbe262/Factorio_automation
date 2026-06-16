@@ -8,18 +8,21 @@ set FACTORIO_AI_SLURM_MODE=scheduler
 set FACTORIO_AI_SLURM_SCHEDULER_URL=http://100.112.168.31:8000
 set FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT=r1jae262
 set FACTORIO_AI_SLURM_REMOTE_DIR=~/factorio-ai-worker
+set FACTORIO_AI_SLURM_SCHEDULER_CPUS=3
 set FACTORIO_AI_SLURM_SCHEDULER_GPUS=1
-set FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=rtx3090
-set FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.5-4B
-set FACTORIO_AI_VLLM_ARGS=--max-model-len 32768 --gpu-memory-utilization 0.85 --enforce-eager
+set FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=a6000ada,a6000,rtx3090
+set FACTORIO_AI_SLURM_SCHEDULER_PRIORITY=100
+set FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.5-9B
+set FACTORIO_AI_VLLM_ARGS=--max-model-len 32768 --gpu-memory-utilization 0.90 --enforce-eager
 set FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER=0
 set FACTORIO_AI_VLLM_PORT=8000
-set FACTORIO_AI_VLLM_STARTUP_SECONDS=240
+set FACTORIO_AI_VLLM_STARTUP_SECONDS=420
 set FACTORIO_AI_REQUIRE_LLM_STRATEGY=1
+set FACTORIO_AI_BACKGROUND_LAYOUT_MAX_ACTIVE_TASKS=1
 set FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES=360
 set FACTORIO_AI_SLURM_RENEW_CHECK_INTERVAL_SECONDS=1800
 
-echo [factorio-ai] Checking scheduler-managed Qwen 4B local LLM path...
+echo [factorio-ai] Checking scheduler-managed Qwen 9B local LLM path...
 python -m factorio_ai.cli slurm-ensure-worker --renew-before-minutes %FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES% || exit /b 1
 echo [factorio-ai] Checking scheduler local LLM readiness...
 python -m factorio_ai.cli slurm-llm-status || exit /b 1
