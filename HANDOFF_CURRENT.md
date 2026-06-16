@@ -9,7 +9,7 @@
 \- Root current Markdown files now use the escaped `md/` marker format.
 \- Slurm scheduler mode defaults to `rtx3090`/`r1jae262`; layout improvement requests use `a6000ada,a6000` candidates and submit the ready single `gpu_model`.
 \- Scheduler Qwen layout tasks now fail visibly, map vLLM env, disable flashinfer sampler, use guided JSON/detail polling, clean up vLLM children, and have the idle loop running again.
-\- Live map: belt mall recovered after buffered gears; coal fuel feed extended west to `x=19.5`; `logistics` research is still incomplete.
+\- Live map: belt mall recovered after buffered gears; coal fuel feed extended west to `x=5.5`; `logistics` research is still incomplete.
 
 \## Current objective
 
@@ -34,12 +34,12 @@
 \## Last validation
 
 \- Full `pytest -q` passed: `661 passed`.
-\- Live validation: belt mall produced/recovered belts; coal feed used existing/surplus fuel before mining and placed belts through `x=19.5`.
+\- Live validation: belt mall produced/recovered belts; coal feed used existing/surplus fuel before mining and placed belts through `x=5.5`.
 \- Token sample recorded: `281,339,156` Factorio Codex thread tokens; delta `0`; weekly quota unknown.
 
 \## Current blocker
 
-\- `logistics` research is still incomplete; the long coal boiler fuel belt still needs repeated belt-mall/coal-feed chunks before red science/lab feeding resumes.
+\- `logistics` research is still incomplete; the coal boiler fuel belt still needs more belt-mall/coal-feed chunks before red science/lab feeding resumes.
 
 \## Next steps
 
