@@ -784,8 +784,18 @@ class FactorioController:
                 strategy=strategy,
             )
         self._clear_codex_wait_state(selected)
-        config["objective"] = objective
-        run = self._run_skill(**config)
+        run_config_keys = {
+            "skill",
+            "target_item",
+            "target",
+            "goal",
+            "max_steps",
+            "log_prefix",
+            "log_path",
+        }
+        run_config = {key: value for key, value in config.items() if key in run_config_keys}
+        run_config["objective"] = objective
+        run = self._run_skill(**run_config)
         return StrategyStepSummary(
             ok=run.ok,
             reason=run.reason,

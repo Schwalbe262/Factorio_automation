@@ -2232,6 +2232,39 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["run"]["itemName"], "electronic-circuit")
 
+    def test_strategy_step_filters_site_input_metadata_before_running_skill(self):
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.run_kwargs = {}
+
+            def strategy_decision(self, objective, require_llm=False):
+                return {
+                    "selected_skill": "build_site_input_logistic_line",
+                    "source": "llm",
+                    "input_item": "copper-plate",
+                }
+
+            def _run_skill(self, **kwargs):
+                self.run_kwargs = kwargs
+                return RunSummary(
+                    ok=True,
+                    reason="done",
+                    steps=1,
+                    item_count=0,
+                    log_path=self.cfg.log_dir / "site-input.jsonl",
+                    item_name=kwargs["target_item"],
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            summary = controller.run_strategy_step("launch_rocket_program", require_llm=True)
+
+        self.assertTrue(summary.ok)
+        self.assertNotIn("input_item", controller.run_kwargs)
+        self.assertEqual(controller.run_kwargs["skill"].item, "copper-plate")
+        self.assertEqual(controller.run_kwargs["target"], 40)
+
     def test_autopilot_loop_records_each_cycle(self):
         class FakeController(FactorioController):
             def __init__(self, cfg):

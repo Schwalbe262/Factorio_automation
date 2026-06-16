@@ -715,6 +715,9 @@ Common environment variables:
 - `FACTORIO_AI_SCHEDULER_VLLM_SERVICE_HEARTBEAT_SECONDS=30`
 - `FACTORIO_AI_SCHEDULER_VLLM_SERVICE_STALE_SECONDS=120`
 - `FACTORIO_AI_SCHEDULER_VLLM_SERVICE_QUEUE_STALE_SECONDS=180`
+- `FACTORIO_AI_SCHEDULER_VLLM_SERVICE_CPUS=1`
+- `FACTORIO_AI_SCHEDULER_VLLM_CLIENT_CPUS=1`
+- `FACTORIO_AI_SCHEDULER_VLLM_CLIENT_GPUS=1`
 - `FACTORIO_AI_SCHEDULER_VLLM_SERVICE_PRIORITY=120`
 - `FACTORIO_AI_VLLM_MODEL=Qwen/Qwen3.5-9B`
 - `FACTORIO_AI_LLM_GUIDED_JSON=1`
@@ -757,6 +760,9 @@ $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS="10800"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_HEARTBEAT_SECONDS="30"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_STALE_SECONDS="120"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_QUEUE_STALE_SECONDS="180"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_CPUS="1"
+$env:FACTORIO_AI_SCHEDULER_VLLM_CLIENT_CPUS="1"
+$env:FACTORIO_AI_SCHEDULER_VLLM_CLIENT_GPUS="1"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_PRIORITY="120"
 $env:FACTORIO_AI_VLLM_MODEL="Qwen/Qwen3.5-9B"
 $env:FACTORIO_AI_VLLM_ARGS="--max-model-len 32768 --gpu-memory-utilization 0.90 --enforce-eager"
@@ -787,9 +793,11 @@ used for normal local LLM operation unless this project explicitly needs an isol
 For Qwen 9B, repeatedly starting short Slurm tasks is inefficient because vLLM model load time can
 dominate the useful planning time. Normal no-mod helpers call `slurm-ensure-vllm-service` before
 submitting strategy or layout work. With
-`FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED=1`, only the persistent service task requests a GPU;
-strategy and layout tasks attach as CPU clients and fail fast if the local service endpoint is not
-ready.
+`FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED=1`, the persistent service task starts vLLM once and
+strategy/layout tasks attach to the same service node without starting another vLLM process. Client
+tasks default to `FACTORIO_AI_SCHEDULER_VLLM_CLIENT_GPUS=1` so scheduler placement stays on the
+service node where the `127.0.0.1` endpoint is reachable; set it to `0` only if the scheduler can
+co-locate CPU-only tasks on that same node.
 
 The normal 9B local LLM path prefers A6000-class capacity, but
 `FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL` may contain an ordered scheduler candidate list such as

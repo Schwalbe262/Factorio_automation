@@ -603,7 +603,7 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertIn('VLLM_PID="$!"', command)
         self.assertIn("exit 1", command)
 
-    def test_scheduler_task_command_uses_persistent_vllm_service_without_task_gpu(self):
+    def test_scheduler_task_command_uses_persistent_vllm_service_node(self):
         from factorio_ai import remote_slurm
 
         with patch.dict(
@@ -612,30 +612,71 @@ class RemoteSlurmTests(unittest.TestCase):
                 "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED": "1",
                 "FACTORIO_AI_SLURM_SCHEDULER_GPUS": "1",
                 "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000ada,a6000",
+                "FACTORIO_AI_SCHEDULER_VLLM_CLIENT_GPUS": "1",
                 "FACTORIO_AI_VLLM_MODEL": "Qwen/test",
                 "FACTORIO_AI_VLLM_STARTUP_SECONDS": "7",
             },
             clear=True,
         ):
-            command = remote_slurm._scheduler_task_command(
-                {"id": "strategy-test", "type": "strategy_request", "payload": {}}
-            )
-            client_resources = remote_slurm._scheduler_task_resources(
-                "strategy_request",
-                gpu_model="a6000",
-            )
-            service_resources = remote_slurm._scheduler_task_resources(
-                remote_slurm.VLLM_SERVICE_TASK_TYPE,
-                gpu_model="a6000",
-            )
+            with patch("factorio_ai.remote_slurm._scheduler_running_vllm_service_node_name", return_value="n104"):
+                command = remote_slurm._scheduler_task_command(
+                    {"id": "strategy-test", "type": "strategy_request", "payload": {}}
+                )
+                client_resources = remote_slurm._scheduler_task_resources(
+                    "strategy_request",
+                    gpu_model="a6000",
+                )
+                service_resources = remote_slurm._scheduler_task_resources(
+                    remote_slurm.VLLM_SERVICE_TASK_TYPE,
+                    gpu_model="a6000",
+                )
 
-        self.assertEqual(client_resources["gpus"], 0)
-        self.assertEqual(client_resources["gpu_model"], "")
+        self.assertEqual(client_resources["gpus"], 1)
+        self.assertEqual(client_resources["gpu_model"], "a6000ada,a6000")
+        self.assertEqual(client_resources["node_name"], "n104")
         self.assertEqual(service_resources["gpus"], 1)
         self.assertEqual(service_resources["gpu_model"], "a6000ada,a6000")
         self.assertIn("VLLM_SERVICE_ENABLED=1", command)
         self.assertIn('if [ "$VLLM_SERVICE_ENABLED" != "1" ]; then', command)
         self.assertIn("vllm service endpoint not ready before FACTORIO_AI_VLLM_STARTUP_SECONDS", command)
+
+    def test_scheduler_running_vllm_service_node_name_uses_service_allocation(self):
+        from factorio_ai import remote_slurm
+
+        tasks = [
+            {
+                "id": 82,
+                "name": "factorio-vllm-service-qwen-test-abcd1234",
+                "status": "running",
+                "account_name": "r1jae262",
+                "allocation_id": 40,
+                "gpu_model": "a6000",
+            }
+        ]
+        allocations = [
+            {
+                "id": 40,
+                "account_name": "r1jae262",
+                "state": "active",
+                "gpu_model": "a6000",
+                "node_name": "n104",
+            }
+        ]
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262",
+                    "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000ada,a6000",
+                },
+                clear=True,
+            ),
+            patch("factorio_ai.remote_slurm._scheduler_task_rows", return_value=tasks),
+            patch("factorio_ai.remote_slurm._scheduler_api_json_retry", return_value=allocations),
+        ):
+            node_name = remote_slurm._scheduler_running_vllm_service_node_name()
+
+        self.assertEqual(node_name, "n104")
 
     def test_ensure_vllm_service_does_not_submit_when_active_service_is_ready(self):
         from factorio_ai import remote_slurm

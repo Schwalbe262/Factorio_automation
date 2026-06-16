@@ -1,9 +1,10 @@
 # Current Handoff
 - Branch: `chore/part130-unattended-qwen9-supervisor`; Part 130 - unattended no-mod Qwen 9B local LLM supervisor.
-- Startup context: read `AGENTS.md`, this file, `goal.md`, then exact source ranges; never read `note.md`/`insight.md` in full.
-- Persistent scheduler vLLM service is implemented: `slurm-ensure-vllm-service` keeps Qwen 9B warm for 10800s and supervisor gates autopilot/layout on service heartbeat.
-- No-mod helpers use `Qwen/Qwen3.5-9B`, 900s strategy/task timeouts, 600s LLM timeout, and `FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL=a6000ada,a6000`.
-- `/tasks` GPU submissions now pass ordered `gpu_model` candidates such as `a6000ada,a6000`, per scheduler docs, instead of collapsing to one A6000 model.
-- Live runtime: supervisor PID 64396; service task 8211 ready; `autopilot_gate=ready`; autopilot PID 64416; idle layout PID 12984.
-- Validation: PowerShell parser ok; `PYTHONPATH=src pytest tests/test_remote_slurm.py -q` -> 47 passed.
-- Next: investigate latest autopilot failure `FactorioController._run_skill() got an unexpected keyword argument 'input_item'`.
+- Startup context: read this file and targeted `goal.md`; never read `note.md`/`insight.md` in full.
+- No-mod helpers use `Qwen/Qwen3.5-9B`, vLLM service duration 10800s, and ordered scheduler GPU candidates `a6000ada,a6000`.
+- `/tasks` GPU submissions preserve ordered `gpu_model` candidates; service-mode strategy/layout clients now attach to the running vLLM service node.
+- Client tasks default to `FACTORIO_AI_SCHEDULER_VLLM_CLIENT_GPUS=1` so scheduler placement stays on the service node where `127.0.0.1` vLLM is reachable.
+- Strategy metadata such as `input_item` is filtered before `_run_skill`, while mapped skill arguments still reach the selected skill.
+- Live runtime: supervisor PID 76388; vLLM service task 8224 ready on allocation 40/n104; strategy task 8229 completed on allocation 40 and started `build_site_input_logistic_line`.
+- Current gameplay blocker: selected site-input route failed because no executable repeated logistics route was found; layout task 8226 is still running and 8232 queued.
+- Validation: py_compile ok; PowerShell parser ok; `PYTHONPATH=src pytest tests/test_controller.py tests/test_remote_slurm.py -q` -> 109 passed.

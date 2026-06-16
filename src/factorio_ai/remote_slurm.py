@@ -60,6 +60,7 @@ SCHEDULER_VLLM_SERVICE_ENV_VARS = (
     "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_QUEUE_STALE_SECONDS",
     "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_CPUS",
     "FACTORIO_AI_SCHEDULER_VLLM_CLIENT_CPUS",
+    "FACTORIO_AI_SCHEDULER_VLLM_CLIENT_GPUS",
     "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_PRIORITY",
 )
 GPU_ENV_VARS = (
@@ -340,15 +341,18 @@ def _scheduler_task_resources(
         selected_gpu_model = candidates[0] if candidates else ""
     gpus = _int_env("FACTORIO_AI_SLURM_SCHEDULER_GPUS", 1, 0)
     if task_type != VLLM_SERVICE_TASK_TYPE and _scheduler_vllm_service_enabled():
-        gpus = 0
+        gpus = _int_env("FACTORIO_AI_SCHEDULER_VLLM_CLIENT_GPUS", 1, 0)
     requested_gpu_model = ",".join(candidates) if gpus > 0 and candidates else selected_gpu_model
+    node_name = os.getenv("FACTORIO_AI_SLURM_SCHEDULER_NODE", "").strip()
+    if task_type != VLLM_SERVICE_TASK_TYPE and _scheduler_vllm_service_enabled() and not node_name:
+        node_name = _scheduler_running_vllm_service_node_name()
     return {
         "cpus": _scheduler_task_cpus(task_type),
         "memory_mb": _int_env("FACTORIO_AI_SLURM_SCHEDULER_MEMORY_MB", 32768, 1024),
         "gpus": gpus,
         "gpu_model": requested_gpu_model if gpus > 0 else "",
         "partition": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_PARTITION", "auto").strip() or "auto",
-        "node_name": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_NODE", "").strip(),
+        "node_name": node_name,
         "exclusive_node": os.getenv("FACTORIO_AI_SLURM_SCHEDULER_EXCLUSIVE_NODE", "0").strip().lower()
         in {"1", "true", "yes", "on"},
     }
@@ -805,6 +809,35 @@ def _scheduler_active_vllm_service_rows(
             continue
         rows.append(row)
     return rows
+
+
+def _scheduler_running_vllm_service_node_name() -> str:
+    account = _scheduler_account()
+    candidates = _scheduler_gpu_model_candidates()
+    wanted_gpu_models = {_scheduler_gpu_model_name(model) for model in candidates if model}
+    try:
+        task_rows = _scheduler_task_rows()
+        allocation_rows = _scheduler_api_json_retry("/api/allocations", timeout=10, attempts=2)
+    except Exception:  # noqa: BLE001
+        return ""
+    allocations = allocation_rows if isinstance(allocation_rows, list) else []
+    allocation_by_id = {
+        str(row.get("id")): row
+        for row in allocations
+        if isinstance(row, dict) and row.get("id") is not None
+    }
+    for row in _scheduler_active_vllm_service_rows(task_rows, account, wanted_gpu_models):
+        if str(row.get("status") or "").lower() != "running":
+            continue
+        node_name = str(row.get("node_name") or "").strip()
+        if node_name:
+            return node_name
+        allocation = allocation_by_id.get(str(row.get("allocation_id") or ""))
+        if isinstance(allocation, dict):
+            node_name = str(allocation.get("node_name") or "").strip()
+            if node_name:
+                return node_name
+    return ""
 
 
 def _scheduler_vllm_service_heartbeat_path(cfg: RemoteSlurmConfig) -> str:
