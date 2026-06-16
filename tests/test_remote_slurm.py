@@ -2069,6 +2069,18 @@ class VllmServiceDetectionTests(unittest.TestCase):
         self.assertEqual(set(ids), {2, 3})       # any model, this account, service tasks only
         self.assertEqual(ids[0], 2)              # queued before running
 
+    def test_active_layout_task_count_matches_comma_joined_gpu_model(self):
+        from factorio_ai import remote_slurm
+
+        rows = [
+            {"name": "factorio-layout-improvement-request-a", "account_name": "r1jae262", "status": "running", "gpu_model": "a6000ada,a6000", "gpus": 1},
+            {"name": "factorio-layout-improvement-request-b", "account_name": "r1jae262", "status": "running", "gpu_model": "a6000", "gpus": 1},
+            {"name": "factorio-layout-improvement-request-c", "account_name": "r1jae262", "status": "running", "gpu_model": "rtx3090", "gpus": 1},
+            {"name": "other-job", "account_name": "r1jae262", "status": "running", "gpu_model": "a6000", "gpus": 1},
+        ]
+        count = remote_slurm._scheduler_active_layout_task_count(rows, {"a6000ada", "a6000"}, "r1jae262")
+        self.assertEqual(count, 2)  # comma-joined + single-match counted; rtx3090 + non-layout excluded
+
 
 if __name__ == "__main__":
     unittest.main()

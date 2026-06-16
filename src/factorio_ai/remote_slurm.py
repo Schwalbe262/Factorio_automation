@@ -1946,8 +1946,11 @@ def _scheduler_active_layout_task_count(
             continue
         if str(row.get("status") or "").lower() not in active_states:
             continue
-        model = _scheduler_gpu_model_name(row.get("gpu_model"))
-        if wanted_gpu_models and model and model not in wanted_gpu_models:
+        # gpu_model may be a comma-joined candidate list ("a6000ada,a6000"); match by intersection so
+        # the active-layout count is correct and max_active_layout_tasks is actually enforced (else
+        # layout tasks pile up).
+        row_models = set(_split_scheduler_gpu_models(str(row.get("gpu_model") or "")))
+        if wanted_gpu_models and row_models and not (row_models & wanted_gpu_models):
             continue
         if row.get("gpus") is not None and int(row.get("gpus") or 0) <= 0:
             continue
@@ -1971,8 +1974,10 @@ def _scheduler_resource_fit_pending_gpu_tasks_by_model(
             continue
         if str(row.get("status") or "") not in pending_states:
             continue
-        model = _scheduler_gpu_model_name(row.get("gpu_model"))
-        if wanted_gpu_models and model not in wanted_gpu_models:
+        # gpu_model may be a comma-joined candidate list; match by intersection and attribute the
+        # task once to the first matching wanted model so pending counts are not undercounted.
+        matching = [m for m in _split_scheduler_gpu_models(str(row.get("gpu_model") or "")) if not wanted_gpu_models or m in wanted_gpu_models]
+        if wanted_gpu_models and not matching:
             continue
         if int(row.get("gpus") or 0) <= 0:
             continue
@@ -1982,7 +1987,8 @@ def _scheduler_resource_fit_pending_gpu_tasks_by_model(
             continue
         if int(row.get("memory_mb") or 0) > needed_memory_mb:
             continue
-        pending_by_model[model] = pending_by_model.get(model, 0) + 1
+        key = matching[0] if matching else _scheduler_gpu_model_name(row.get("gpu_model"))
+        pending_by_model[key] = pending_by_model.get(key, 0) + 1
     return pending_by_model
 
 
