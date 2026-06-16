@@ -170,7 +170,9 @@ heartbeat is stale with no fresh live skill heartbeat, the supervisor restarts i
 `FACTORIO_AI_SLURM_SCHEDULER_CPUS=3` for strategy requests so a missing RTX 3090 allocation can fall
 back to ready scheduler A6000 capacity. It also sets strategy task priority above background layout
 and writes `runtime\layout-llm-settings.json` with one max active layout job so background layout does
-not occupy every ready GPU. Status, including compact LLM readiness, is written to
+not occupy every ready GPU. Until scheduler LLM readiness is true, the supervisor stops unattended
+autopilot and idle layout workers instead of letting them retry every few seconds and grow logs
+without progress. Status, including compact LLM readiness, is written to
 `runtime\unattended-llm-supervisor.json`, and restart logs go to
 `logs\unattended-llm-supervisor.log`.
 `run_factorio_no_mod_llm_autopilot.bat` starts the foreground continuous no-custom-mod autopilot

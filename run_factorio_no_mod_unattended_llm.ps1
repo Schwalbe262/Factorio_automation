@@ -1,7 +1,9 @@
 param(
     [string]$Objective = "launch_rocket_program",
     [int]$CheckSeconds = 30,
+    [int]$SchedulerCheckSeconds = 60,
     [int]$AutopilotStaleSeconds = 900,
+    [int]$AutopilotSleepSeconds = 60,
     [int]$IdleLoopStaleSeconds = 180,
     [int]$LayoutMaxActiveTasks = 1,
     [switch]$NoDashboard
@@ -101,6 +103,21 @@ function Get-ManagedProcesses {
             $_.CommandLine -like "*$Needle*" -and
             $_.ProcessId -ne $PID
         }
+}
+
+function Stop-ManagedProcesses {
+    param(
+        [string]$Name,
+        [string]$Needle
+    )
+    $processes = @(Get-ManagedProcesses $Needle)
+    if ($processes.Count -eq 0) {
+        return
+    }
+    Write-SupervisorLog "stopping $Name while waiting for scheduler local LLM readiness"
+    foreach ($process in $processes) {
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Start-ManagedPython {
@@ -236,7 +253,7 @@ function Ensure-Dashboard {
 
 function Ensure-SchedulerLlm {
     $now = Get-Date
-    if (($now - $lastSchedulerCheck).TotalSeconds -lt 600) {
+    if (($now - $lastSchedulerCheck).TotalSeconds -lt $SchedulerCheckSeconds) {
         return
     }
     $script:lastSchedulerCheck = $now
@@ -252,7 +269,60 @@ function Ensure-SchedulerLlm {
     }
 }
 
+function Test-SchedulerLlmReady {
+    return $null -ne $script:lastSchedulerStatus -and $script:lastSchedulerStatus.llm_ready -eq $true
+}
+
+function Test-AutopilotActiveCycle {
+    $heartbeat = Read-JsonFile (Join-Path $runtimeDir "autopilot-heartbeat.json")
+    if ($null -eq $heartbeat -or $heartbeat.state -ne "cycle_start") {
+        return $false
+    }
+    if ($heartbeat.pid -and -not (Test-PidAlive $heartbeat.pid)) {
+        return $false
+    }
+    return (Get-JsonAgeSeconds $heartbeat) -lt $AutopilotStaleSeconds
+}
+
+function Write-AutopilotWaitingHeartbeat {
+    $existing = Read-JsonFile (Join-Path $runtimeDir "autopilot-heartbeat.json")
+    $cycle = 0
+    if ($existing -and $existing.cycle) {
+        try {
+            $cycle = [int]$existing.cycle
+        } catch {
+            $cycle = 0
+        }
+    }
+    $payload = [ordered]@{
+        active = $true
+        state = "waiting_for_scheduler_llm"
+        updated_at = [DateTimeOffset]::UtcNow.ToString("o")
+        objective = $Objective
+        cycle = $cycle
+        reason = "waiting for scheduler local LLM readiness"
+        pid = $null
+    }
+    $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $runtimeDir "autopilot-heartbeat.json") -Encoding UTF8
+}
+
+function Write-IdleLayoutWaitingHeartbeat {
+    $payload = [ordered]@{
+        pid = $null
+        updated_at = [DateTimeOffset]::UtcNow.ToString("o")
+        objective = $Objective
+        state = "waiting_for_scheduler_llm"
+        reason = "waiting for scheduler local LLM readiness"
+    }
+    $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $runtimeDir "idle-layout-loop.json") -Encoding UTF8
+}
+
 function Ensure-IdleLayoutLoop {
+    if (-not (Test-SchedulerLlmReady)) {
+        Stop-ManagedProcesses "idle-layout-loop" "run-no-mod-idle-layout-loop"
+        Write-IdleLayoutWaitingHeartbeat
+        return
+    }
     $existing = Get-ManagedProcesses "run-no-mod-idle-layout-loop"
     if ($existing) {
         return
@@ -288,11 +358,19 @@ function Start-Autopilot {
         "--objective", $Objective,
         "--require-llm",
         "--cycles", "0",
-        "--sleep-seconds", "5"
+        "--sleep-seconds", [string]$AutopilotSleepSeconds
     ) | Out-Null
 }
 
 function Ensure-Autopilot {
+    if (-not (Test-SchedulerLlmReady)) {
+        if (Test-AutopilotActiveCycle) {
+            return
+        }
+        Stop-ManagedProcesses "autopilot" "run-no-mod-autopilot"
+        Write-AutopilotWaitingHeartbeat
+        return
+    }
     $processes = @(Get-ManagedProcesses "run-no-mod-autopilot")
     if ($processes.Count -eq 0) {
         Start-Autopilot
@@ -326,12 +404,21 @@ function Write-SupervisorStatus {
     $autopilot = Read-JsonFile (Join-Path $runtimeDir "autopilot-heartbeat.json")
     $idle = Read-JsonFile (Join-Path $runtimeDir "idle-layout-loop.json")
     $live = Read-JsonFile (Join-Path $runtimeDir "live-skill-heartbeat.json")
+    $autopilotGate = "waiting_for_scheduler_llm"
+    if (Test-SchedulerLlmReady) {
+        $autopilotGate = "ready"
+    } elseif (Test-AutopilotActiveCycle) {
+        $autopilotGate = "active_cycle_waiting_for_scheduler_capacity"
+    }
     $status = [ordered]@{
         state = "running"
         updated_at = [DateTimeOffset]::UtcNow.ToString("o")
         objective = $Objective
         supervisor_pid = $PID
         check_seconds = $CheckSeconds
+        scheduler_check_seconds = $SchedulerCheckSeconds
+        autopilot_sleep_seconds = $AutopilotSleepSeconds
+        autopilot_gate = $autopilotGate
         autopilot_processes = @((Get-ManagedProcesses "run-no-mod-autopilot" | ForEach-Object { $_.ProcessId }))
         idle_layout_processes = @((Get-ManagedProcesses "run-no-mod-idle-layout-loop" | ForEach-Object { $_.ProcessId }))
         scheduler_llm_status = $lastSchedulerStatus
@@ -349,8 +436,8 @@ while ($true) {
         Ensure-Dashboard
         Ensure-LayoutCapacityLimit
         Ensure-SchedulerLlm
-        Ensure-IdleLayoutLoop
         Ensure-Autopilot
+        Ensure-IdleLayoutLoop
         Write-SupervisorStatus
     } catch {
         Write-SupervisorLog "supervisor loop error: $($_.Exception.GetType().Name): $($_.Exception.Message)"
