@@ -1700,6 +1700,32 @@ def _scheduler_status_payload(
     )
     resources = _scheduler_task_resources(task_type, selected_gpu_model)
     wanted_gpu_models = {_scheduler_gpu_model_name(model) for model in gpu_model_candidates if model}
+    active_vllm_services: list[dict[str, Any]] = []
+    vllm_service_ready_for_clients = False
+    vllm_service_heartbeat: dict[str, Any] | None = None
+    vllm_service_heartbeat_age_seconds = float("inf")
+    if _scheduler_vllm_service_enabled() and task_type != VLLM_SERVICE_TASK_TYPE:
+        active_vllm_services = _scheduler_active_vllm_service_rows(task_rows, account, wanted_gpu_models)
+        running_vllm_services = [
+            row for row in active_vllm_services if str(row.get("status") or "").lower() == "running"
+        ]
+        vllm_service_heartbeat = _read_scheduler_vllm_service_heartbeat(config())
+        vllm_service_heartbeat_age_seconds = _iso_age_seconds(
+            vllm_service_heartbeat.get("updated_at") if vllm_service_heartbeat else None
+        )
+        expected_model = os.getenv("FACTORIO_AI_VLLM_MODEL", "").strip()
+        heartbeat_model = str((vllm_service_heartbeat or {}).get("model") or "").strip()
+        heartbeat_ready = bool(
+            vllm_service_heartbeat
+            and vllm_service_heartbeat.get("state") == "ready"
+            and vllm_service_heartbeat_age_seconds <= _int_env(
+                "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_STALE_SECONDS",
+                120,
+                10,
+            )
+            and (not expected_model or heartbeat_model == expected_model)
+        )
+        vllm_service_ready_for_clients = bool(running_vllm_services and heartbeat_ready)
     active_gpu_allocations = [
         row
         for row in allocation_rows
@@ -1779,7 +1805,7 @@ def _scheduler_status_payload(
         )
     else:
         has_gpu_queue_capacity = sum(ready_slots_by_model.values()) > resource_fit_pending_gpu_tasks
-    has_gpu_path = not needs_gpu or has_gpu_queue_capacity
+    has_gpu_path = not needs_gpu or has_gpu_queue_capacity or vllm_service_ready_for_clients
     missing = []
     if not has_llm_runtime:
         missing.append("FACTORIO_AI_VLLM_MODEL or FACTORIO_AI_LLM_BASE_URL")
@@ -1812,6 +1838,13 @@ def _scheduler_status_payload(
             "pending_gpu_allocations": [
                 _scheduler_compact_allocation_row(row) for row in pending_gpu_allocations
             ],
+            "active_vllm_services": [_scheduler_compact_task_row(row) for row in active_vllm_services],
+            "vllm_service_ready_for_clients": vllm_service_ready_for_clients,
+            "vllm_service_heartbeat_age_seconds": (
+                None
+                if vllm_service_heartbeat_age_seconds == float("inf")
+                else round(vllm_service_heartbeat_age_seconds, 3)
+            ),
             "scheduler_owned_gpus": scheduler_owned_gpus,
             "scheduler_free_gpus": scheduler_free_gpus,
             "scheduler_ready_free_gpus": scheduler_ready_free_gpus,

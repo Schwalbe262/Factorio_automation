@@ -2,10 +2,10 @@
 - Branch: `chore/part130-unattended-qwen9-supervisor`; Part 130 - unattended no-mod Qwen 9B local LLM supervisor.
 - Startup context: read this file and targeted `goal.md`; never read `note.md`/`insight.md` in full.
 - No-mod helpers use `Qwen/Qwen3.5-9B`, vLLM service duration 10800s, and ordered scheduler GPU candidates `a6000ada,a6000`.
-- Service task `8224` remains running/ready on allocation `40/n104`; scheduler clients request `a6000ada,a6000` and co-locate on the service node.
-- Strategy separates `missing_source` links from `route_needed`, and now preempts gear-output waits with `build_gear_belt_mall_logistics`.
-- New guardrail detects buffered iron-gear output with no belt assembler output, before coal/source expansion guardrails can send the loop back to smelting.
-- Live validation: `expand_copper_smelting`/site-input choices reconcile to `build_gear_belt_mall_logistics`; live skill completed with `transport-belt` target reached `27/20`.
-- Current runtime: supervisor PID `44012`, autopilot PID `76608`, vLLM service ready; next cycle is running `expand_copper_smelting` around step 5.
-- Validation: `py_compile src/factorio_ai/strategy.py src/factorio_ai/remote_slurm.py`; `PYTHONPATH=src pytest tests/test_strategy.py tests/test_controller.py tests/test_remote_slurm.py -q` -> 215 passed.
-- Next: watch `expand_copper_smelting`; continue only if it stalls on a new deterministic skill gap rather than the resolved gear-output wait.
+- Service task `8224` is running/ready on allocation `40/n104`; scheduler service-mode readiness accepts the ready vLLM service even when free GPU slots are 0.
+- Strategy now detects short `iron-plate` site-input `route_needed` layouts into the gear assembler and preempts smelting/coal/site choices with `build_iron_plate_logistic_line_to_gear_mall`.
+- Live validation: `expand_copper_smelting` reconciled to `build_iron_plate_logistic_line_to_gear_mall` for source `1458` -> gear assembler `146`, distance `7.9`.
+- Live skill completed: `iron-plate logistics line to the gear mall is built with belts and endpoint inserters`.
+- Runtime: supervisor PID `40908`, autopilot PID `72548`, idle layout PID `26688`, autopilot gate `ready`; restarted workers are on patched code and cycle 2 is waiting on Qwen strategy.
+- Validation: `py_compile src/factorio_ai/strategy.py src/factorio_ai/remote_slurm.py`; `PYTHONPATH=src pytest tests/test_remote_slurm.py tests/test_strategy.py tests/test_controller.py -q` -> 218 passed.
+- Next: watch several Qwen strategy cycles; only intervene on a new deterministic skill gap, not normal runtime progress.

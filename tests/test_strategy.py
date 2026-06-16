@@ -134,6 +134,46 @@ def gear_mall_output_logistics_blocked_observation() -> dict:
     }
 
 
+def gear_mall_short_site_input_route_observation() -> dict:
+    return {
+        "inventory": {"transport-belt": 20},
+        "entities": [
+            {
+                "name": "stone-furnace",
+                "unit_number": 1458,
+                "recipe": "iron-plate",
+                "position": {"x": -12, "y": 2},
+                "status_name": "no_fuel",
+                "inventories": {"2": {"iron-ore": 2}},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 146,
+                "recipe": "iron-gear-wheel",
+                "position": {"x": 8, "y": 8},
+                "electric_network_connected": True,
+                "status_name": "item_ingredient_shortage",
+                "inventories": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 1779,
+                "recipe": "transport-belt",
+                "position": {"x": 20, "y": 8},
+                "electric_network_connected": True,
+                "inventories": {"1": {"transport-belt": 8}},
+            },
+        ],
+        "resources": [{"name": "coal", "position": {"x": 2, "y": 0}, "distance": 2}],
+        "research": {
+            "technologies": {
+                "automation": {"researched": True},
+                "logistics": {"researched": True},
+            }
+        },
+    }
+
+
 def gear_mall_needs_plate_line_without_belts_observation() -> dict:
     observation = gear_mall_needs_plate_line_observation()
     observation["inventory"] = {}
@@ -653,6 +693,15 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("gear_handcraft_blocked=true", result["evidence"])
         self.assertIn("gear_assembler_unit=146", result["evidence"])
 
+    def test_rocket_goal_uses_short_site_input_route_for_gear_mall_plate_before_coal(self):
+        result = heuristic_strategy("launch_rocket_program", gear_mall_short_site_input_route_observation())
+
+        self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertIn("iron-plate logistic line to gear mall", result["blockers"])
+        self.assertIn("site_input_status=route_needed", result["evidence"])
+        self.assertIn("source_distance_tiles=20.9", result["evidence"])
+        self.assertIn("transport_belts_available_for_mall_logistics=true", result["evidence"])
+
     def test_rocket_goal_repairs_power_before_unpowered_gear_mall_logistics(self):
         observation = gear_mall_needs_plate_line_observation()
         for entity in observation["entities"]:
@@ -1141,6 +1190,28 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["source"], "llm")
         self.assertEqual(result["guardrail_adjusted"]["from"], "expand_copper_smelting")
         self.assertIn("gear mall output logistics", result["blockers"])
+        self.assertIn("gear_assembler_unit=146", result["evidence"])
+
+    def test_reconcile_routes_smelting_expansion_to_short_gear_mall_plate_route(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "expand_copper_smelting",
+                "priority": 50,
+                "reason": "Need more copper plates.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            gear_mall_short_site_input_route_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "expand_copper_smelting")
+        self.assertIn("iron-plate logistic line to gear mall", result["blockers"])
+        self.assertIn("site_input_status=route_needed", result["evidence"])
         self.assertIn("gear_assembler_unit=146", result["evidence"])
 
     def test_reconcile_promotes_coal_supply_to_gear_belt_bootstrap_when_belts_are_exhausted(self):

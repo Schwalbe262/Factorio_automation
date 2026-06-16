@@ -1284,6 +1284,64 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertEqual(status["missing"], [])
         self.assertEqual(status["remote"]["scheduler_ready_free_gpus"], 1)
 
+    def test_scheduler_status_reports_ready_with_persistent_vllm_service_without_free_gpu(self):
+        from factorio_ai import remote_slurm
+
+        def fake_api(path, timeout=0):
+            if path == "/api/health":
+                return {"ok": True}
+            if path == "/api/allocations":
+                return [
+                    {
+                        "id": 40,
+                        "account_name": "r1jae262",
+                        "state": "active",
+                        "total_gpus": 1,
+                        "free_gpus": 0,
+                        "gpu_model": "a6000",
+                        "node_name": "n104",
+                    }
+                ]
+            if path == "/api/gpu-capacity":
+                return [{"gpu_model": "a6000", "scheduler_owned_gpus": 1, "scheduler_free_gpus": 0}]
+            if path == "/api/tasks":
+                return [
+                    {
+                        "id": 8224,
+                        "name": "factorio-vllm-service-qwen-test-abcd1234",
+                        "status": "running",
+                        "account_name": "r1jae262",
+                        "allocation_id": 40,
+                        "gpu_model": "a6000",
+                    }
+                ]
+            raise AssertionError(path)
+
+        heartbeat = {"state": "ready", "updated_at": "2026-01-01T00:00:00+00:00", "model": "Qwen/test"}
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FACTORIO_AI_SLURM_MODE": "scheduler",
+                    "FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262",
+                    "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000ada,a6000",
+                    "FACTORIO_AI_VLLM_MODEL": "Qwen/test",
+                    "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED": "1",
+                    "FACTORIO_AI_SCHEDULER_VLLM_CLIENT_GPUS": "1",
+                },
+            ),
+            patch("factorio_ai.remote_slurm._scheduler_api_json", side_effect=fake_api),
+            patch("factorio_ai.remote_slurm._read_scheduler_vllm_service_heartbeat", return_value=heartbeat),
+            patch("factorio_ai.remote_slurm._iso_age_seconds", return_value=1.0),
+        ):
+            status = remote_slurm.llm_status()
+
+        self.assertTrue(status["llm_ready"])
+        self.assertEqual(status["missing"], [])
+        self.assertEqual(status["remote"]["scheduler_ready_free_gpus"], 0)
+        self.assertTrue(status["remote"]["vllm_service_ready_for_clients"])
+        self.assertEqual(status["remote"]["active_vllm_services"][0]["id"], 8224)
+
     def test_scheduler_status_selects_ready_strategy_gpu_candidate(self):
         from factorio_ai import remote_slurm
 
