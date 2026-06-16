@@ -2373,5 +2373,54 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(summary.failures, 1)
 
 
+class StallWatchdogTests(unittest.TestCase):
+    def test_progress_fingerprint_changes_with_research(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FactorioController(make_test_config(Path(tmp)))
+            before = controller._progress_fingerprint(
+                {"inventory": {}, "entities": [], "research": {"technologies": {"automation": {"researched": False}}}}
+            )
+            after = controller._progress_fingerprint(
+                {"inventory": {}, "entities": [], "research": {"technologies": {"automation": {"researched": True}}}}
+            )
+            self.assertNotEqual(before, after)
+
+    def test_stall_recovery_returns_skill_other_than_stalled_one(self):
+        observation = {
+            "player": {"position": {"x": 0, "y": 0}},
+            "inventory": {"iron-plate": 22, "coal": 1},
+            "entities": [{"name": "stone-furnace", "position": {"x": 4, "y": 0}, "inventories": {}}],
+            "resources": [{"name": "coal", "position": {"x": 8, "y": 0}, "distance": 8}],
+            "research": {"technologies": {"automation": {"researched": False}}},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FactorioController(make_test_config(Path(tmp)))
+            skill = controller._stall_recovery_skill("launch_rocket_program", observation, ["produce_iron_plate"])
+            self.assertTrue(skill)
+            self.assertNotEqual(skill, "produce_iron_plate")
+
+    def test_override_skill_bypasses_llm_strategy(self):
+        observation = {"tick": 1, "inventory": {}, "entities": [], "resources": [], "research": {"technologies": {}}}
+
+        class FakeController(FactorioController):
+            def observe(self):
+                return observation
+
+            def strategy_decision(self, objective, require_llm=False):
+                raise AssertionError("strategy_decision must not run when override_skill is set")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_test_config(Path(tmp))
+            controller = FakeController(cfg)
+            with patch.object(
+                controller,
+                "_run_skill",
+                return_value=RunSummary(True, "forced ok", 1, 5, cfg.log_dir / "x.log", "coal"),
+            ):
+                summary = controller.run_strategy_step("launch_rocket_program", override_skill="setup_coal_supply")
+            self.assertEqual(summary.selected_skill, "setup_coal_supply")
+            self.assertEqual(summary.strategy.get("source"), "autopilot_stall_recovery")
+
+
 if __name__ == "__main__":
     unittest.main()

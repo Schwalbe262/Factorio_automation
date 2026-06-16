@@ -72,6 +72,38 @@ from .world_memory import (
 LLM_TRACE_RESULT_KEYS = {"llm_trace", "llm_traces"}
 
 
+# Autopilot stall watchdog: a deterministic safety net. If the run keeps selecting the same skill
+# while no real progress signal changes for several cycles, force-rotate to a different deterministic
+# skill so it never gets permanently stuck on one already-satisfied skill. This is not learning; it
+# just guarantees forward motion using the skills that already exist.
+_STALL_PROGRESS_ITEMS = (
+    "iron-plate",
+    "copper-plate",
+    "electronic-circuit",
+    "automation-science-pack",
+    "transport-belt",
+    "iron-gear-wheel",
+    "coal",
+    "steam",
+)
+_STALL_ROTATION_SKILLS = (
+    "setup_coal_supply",
+    "produce_copper_plate",
+    "setup_power",
+    "research_automation",
+    "automate_electronic_circuit_line",
+    "research_logistics",
+    "plan_factory_site",
+)
+
+
+def _stall_threshold() -> int:
+    try:
+        return max(2, int(os.getenv("FACTORIO_AI_AUTOPILOT_STALL_CYCLES", "3")))
+    except (TypeError, ValueError):
+        return 3
+
+
 @dataclass
 class RunSummary:
     ok: bool
@@ -768,8 +800,25 @@ class FactorioController:
         require_llm: bool = False,
         target_count: int | None = None,
         max_steps: int | None = None,
+        override_skill: str | None = None,
     ) -> StrategyStepSummary:
-        strategy = self.strategy_decision(objective, require_llm=require_llm)
+        if override_skill:
+            # Stall watchdog override: skip the LLM and force a specific deterministic skill to break
+            # a no-progress loop. Still annotated so a missing executor routes through the foundry.
+            strategy = annotate_strategy_with_skill_status(
+                {
+                    "selected_skill": override_skill,
+                    "source": "autopilot_stall_recovery",
+                    "reason": f"stall recovery: forced {override_skill} after repeated no-progress cycles",
+                    "priority": 70,
+                    "blockers": [],
+                    "evidence": ["autopilot_stall_recovery"],
+                    "expected_effect": "Break a no-progress loop by running a different deterministic skill.",
+                },
+                runtime_dir=self.cfg.runtime_dir,
+            )
+        else:
+            strategy = self.strategy_decision(objective, require_llm=require_llm)
         selected = str(strategy.get("selected_skill") or strategy.get("selected_goal") or "")
         status = strategy.get("skill_status") if isinstance(strategy.get("skill_status"), dict) else {}
         if status.get("codex_required"):
@@ -1039,6 +1088,50 @@ class FactorioController:
         except Exception:  # noqa: BLE001
             pass
 
+    def _progress_fingerprint(self, observation: dict[str, Any]) -> tuple[Any, ...]:
+        """A compact signal of real progress. If this is unchanged across cycles while the same skill
+        keeps being selected, the run is stalled (e.g. re-smelting plates already sitting in a furnace)."""
+
+        research = observation.get("research") if isinstance(observation.get("research"), dict) else {}
+        techs = research.get("technologies") if isinstance(research.get("technologies"), dict) else {}
+        researched = sum(1 for tech in techs.values() if isinstance(tech, dict) and tech.get("researched"))
+        progress = research.get("research_progress")
+        if progress is None:
+            progress = research.get("progress")
+        try:
+            progress = round(float(progress or 0.0), 2)
+        except (TypeError, ValueError):
+            progress = 0.0
+        current = str(research.get("current_research") or research.get("current") or "")
+        items = tuple(total_item_count(observation, item) for item in _STALL_PROGRESS_ITEMS)
+        return (researched, current, progress, items)
+
+    def _stall_recovery_skill(
+        self, objective: str, observation: dict[str, Any], recent_skills: list[str]
+    ) -> str | None:
+        """Pick a runnable deterministic skill different from the stalled one: prefer the heuristic
+        planner's next step, else rotate through a progression list, else None."""
+
+        from . import strategy as strategy_mod
+
+        recent = set(recent_skills)
+        try:
+            planner = strategy_mod.heuristic_strategy(objective, observation, {})
+            candidate = str(planner.get("selected_skill") or planner.get("selected_goal") or "")
+            if candidate and candidate not in recent and self._skill_run_config(candidate) is not None:
+                return candidate
+        except Exception:  # noqa: BLE001
+            pass
+        for candidate in _STALL_ROTATION_SKILLS:
+            if candidate in recent:
+                continue
+            try:
+                if self._skill_run_config(candidate) is not None:
+                    return candidate
+            except Exception:  # noqa: BLE001
+                continue
+        return None
+
     def run_autopilot_loop(
         self,
         objective: str = "launch_rocket_program",
@@ -1060,6 +1153,12 @@ class FactorioController:
         reason = "cycle limit reached" if cycles > 0 else "autopilot loop stopped"
         self._maybe_ensure_slurm_worker(reason="autopilot_start", force=True)
         self._write_autopilot_heartbeat(objective, "starting", cycle=0, reason=reason)
+        # Stall watchdog state.
+        last_fingerprint: tuple[Any, ...] | None = None
+        last_selected = ""
+        stall_count = 0
+        recent_skills: list[str] = []
+        stall_threshold = _stall_threshold()
 
         try:
             with log_path.open("a", encoding="utf-8") as log_file:
@@ -1067,6 +1166,24 @@ class FactorioController:
                     self._maybe_ensure_slurm_worker(reason="autopilot_cycle")
                     self._write_autopilot_heartbeat(objective, "cycle_start", cycle=completed + 1)
                     self._maybe_progress_codex_wait_layout(objective)
+                    override_skill: str | None = None
+                    if stall_count >= stall_threshold:
+                        try:
+                            stall_obs = self.observe()
+                        except Exception:  # noqa: BLE001
+                            stall_obs = None
+                        if stall_obs is not None:
+                            override_skill = self._stall_recovery_skill(
+                                objective, stall_obs, recent_skills[-_stall_threshold():] or [last_selected]
+                            )
+                        if override_skill:
+                            self._write_autopilot_heartbeat(
+                                objective,
+                                "stall_recovery",
+                                cycle=completed + 1,
+                                reason=f"no progress for {stall_count} cycles on '{last_selected}'; forcing {override_skill}",
+                            )
+                            stall_count = 0
                     started = time.monotonic()
                     try:
                         last_step = self.run_strategy_step(
@@ -1074,6 +1191,7 @@ class FactorioController:
                             require_llm=require_llm,
                             target_count=target_count,
                             max_steps=max_steps,
+                            override_skill=override_skill,
                         )
                     except Exception as exc:
                         last_step = StrategyStepSummary(
@@ -1090,6 +1208,29 @@ class FactorioController:
                             cycle=completed + 1,
                             reason=last_step.reason,
                         )
+                    # Stall watchdog bookkeeping: count consecutive cycles that re-ran the same skill
+                    # without changing the progress fingerprint.
+                    try:
+                        fingerprint = self._progress_fingerprint(self.observe())
+                    except Exception:  # noqa: BLE001
+                        fingerprint = None
+                    selected_now = last_step.selected_skill or ""
+                    if (
+                        fingerprint is not None
+                        and last_fingerprint is not None
+                        and fingerprint == last_fingerprint
+                        and selected_now
+                        and selected_now == last_selected
+                    ):
+                        stall_count += 1
+                    else:
+                        stall_count = 0
+                    if fingerprint is not None:
+                        last_fingerprint = fingerprint
+                    last_selected = selected_now
+                    recent_skills.append(selected_now)
+                    if len(recent_skills) > 12:
+                        recent_skills = recent_skills[-12:]
                     completed += 1
                     if not last_step.ok:
                         failures += 1
