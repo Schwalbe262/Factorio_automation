@@ -749,6 +749,15 @@ def _submit_scheduler_task(task: dict[str, Any], cfg: RemoteSlurmConfig) -> dict
         "priority": _scheduler_task_priority(task_type),
         **resources,
     }
+    # Co-locate a client task (strategy/foundry/layout) on the running vLLM service node via the
+    # scheduler's first-class same_node_as_task_id, so a CPU-only client reaches the service's
+    # 127.0.0.1 endpoint. The scheduler queues (never misplaces) the client if the service has no
+    # node yet. Falls back to the resolved node_name pin when no running service id is available.
+    if task_type != VLLM_SERVICE_TASK_TYPE and _scheduler_vllm_service_enabled():
+        service_task_id = _scheduler_running_vllm_service_task_id()
+        if service_task_id is not None:
+            data["same_node_as_task_id"] = service_task_id
+            data["node_name"] = ""
     _scheduler_post_form("/tasks", data, timeout=30)
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
@@ -895,6 +904,22 @@ def _scheduler_running_vllm_service_node_name() -> str:
                 if node_name:
                     return node_name
     return ""
+
+
+def _scheduler_running_vllm_service_task_id() -> Any | None:
+    """Task id of the running vLLM service, for `same_node_as_task_id` co-location of client tasks."""
+
+    account = _scheduler_account()
+    candidates = _scheduler_gpu_model_candidates()
+    wanted_gpu_models = {_scheduler_gpu_model_name(model) for model in candidates if model}
+    try:
+        task_rows = _scheduler_task_rows()
+    except Exception:  # noqa: BLE001
+        return None
+    for row in _scheduler_active_vllm_service_rows(task_rows, account, wanted_gpu_models):
+        if str(row.get("status") or "").lower() == "running" and row.get("id") is not None:
+            return row.get("id")
+    return None
 
 
 def _scheduler_vllm_service_heartbeat_path(cfg: RemoteSlurmConfig) -> str:

@@ -2095,6 +2095,23 @@ class VllmServiceDetectionTests(unittest.TestCase):
             node = remote_slurm._scheduler_running_vllm_service_node_name()
         self.assertEqual(node, "n104")
 
+    def test_running_vllm_service_task_id_returns_running_service(self):
+        from unittest.mock import patch
+
+        from factorio_ai import remote_slurm
+
+        tasks = [
+            {"name": "factorio-vllm-service-x", "account_name": "r1jae262", "status": "queued", "gpu_model": "a6000", "id": 8744},
+            {"name": "factorio-vllm-service-y", "account_name": "r1jae262", "status": "running", "gpu_model": "a6000ada,a6000", "id": 8743},
+        ]
+        with patch.dict(
+            "os.environ",
+            {"FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262", "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000ada,a6000"},
+            clear=False,
+        ), patch.object(remote_slurm, "_scheduler_task_rows", return_value=tasks):
+            task_id = remote_slurm._scheduler_running_vllm_service_task_id()
+        self.assertEqual(task_id, 8743)  # the running one, not the queued one
+
     def test_active_layout_task_count_matches_comma_joined_gpu_model(self):
         from factorio_ai import remote_slurm
 
