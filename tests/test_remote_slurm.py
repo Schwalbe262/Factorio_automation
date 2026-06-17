@@ -1888,9 +1888,17 @@ class RemoteSlurmTests(unittest.TestCase):
         encoded = json.dumps(compact, ensure_ascii=False)
         self.assertLess(len(encoded), 16000)
         self.assertLessEqual(len(compact["bottlenecks"]), 10)
-        self.assertLessEqual(len(compact["dependency_targets"]), 40)
+        # Legacy payloads (no dependency_map) fall back to the bounded name list.
+        self.assertLessEqual(len(compact["recipe_map"]), 40)
         self.assertLessEqual(len(compact["factory_sites"]), 18)
         self.assertLessEqual(len(compact["logistics_links"]), 24)
+
+    def test_compact_strategy_payload_uses_flat_dependency_map_when_present(self):
+        flat = {"rocket-silo": ["steel-plate", "processing-unit"], "steel-plate": ["iron-plate"]}
+        compact = compact_strategy_payload(
+            {"objective": "launch_rocket_program", "observation": {}, "dependency_map": flat}
+        )
+        self.assertEqual(compact["recipe_map"], flat)
 
     def test_compact_strategy_payload_only_allows_executable_skills(self):
         payload = make_strategy_payload("launch_rocket_program", {"inventory": {}, "entities": []}, {})

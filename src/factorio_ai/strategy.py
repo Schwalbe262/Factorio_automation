@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from math import ceil
 from typing import Any
 
-from .knowledge import dependency_tree_for_objective
+from .knowledge import flat_dependency_map
 from .monitor import recent_damage_events, summarize_factory
 from .models import distance, entities_named, entity_item_count, inventory_count, player_position, total_item_count
 from .planner import (
@@ -545,7 +545,9 @@ def make_strategy_payload(
         "research_planning": make_research_planning_context(observation, monitor),
         "threats": make_threat_context(observation),
         "power_networks": monitor.get("power_networks", []),
-        "goal_dependency_tree": dependency_tree_for_objective(objective, max_depth=5),
+        # Flat {item: [direct ingredients]} for ALL items -- one hop, not a deep tree.
+        # Compact + complete + non-redundant; the LLM looks up any item's recipe and chains.
+        "dependency_map": flat_dependency_map(),
         "available_skills": skill_catalog_payload(),
         "decision_rule": (
             "Select exactly one high-level skill. Diagnose bottlenecks first. "

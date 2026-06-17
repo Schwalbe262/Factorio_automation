@@ -77,6 +77,27 @@ class InfrastructureRootTests(unittest.TestCase):
         self.assertGreater(len(roots), 80)
 
 
+class FlatDependencyMapTests(unittest.TestCase):
+    def test_flat_map_is_one_hop_complete_and_non_redundant(self):
+        m = k.flat_dependency_map()
+        self.assertGreater(len(m), 200)
+        # Direct ingredients only (names), not nested dicts -> one hop.
+        self.assertIn("rocket-silo", m)
+        self.assertIn("processing-unit", m["rocket-silo"])
+        self.assertTrue(all(isinstance(x, str) for x in m["rocket-silo"]))
+        # Each item appears once as its own key (so the LLM chains via lookups).
+        self.assertIn("processing-unit", m)
+        self.assertIn("turbo-transport-belt", m)  # completeness incl. tiers
+        # Raw resources are omitted (no ingredients).
+        self.assertNotIn("iron-ore", m)
+
+    def test_scoped_map_only_includes_reachable(self):
+        m = k.flat_dependency_map(roots=["electronic-circuit"])
+        self.assertIn("electronic-circuit", m)
+        self.assertIn("copper-cable", m)
+        self.assertNotIn("rocket-silo", m)
+
+
 class TechnologyMappingTests(unittest.TestCase):
     def test_recipe_technology_resolves_to_chain(self):
         recipe = k.ALL_RECIPES.get("advanced-circuit")

@@ -420,6 +420,38 @@ def required_items_for_objective(objective: str, max_depth: int = 4) -> set[str]
     return required
 
 
+def flat_dependency_map(roots: list[str] | None = None) -> dict[str, list[str]]:
+    """Flat ``{item: [direct ingredient names]}`` -- one hop, not a recursed tree.
+
+    Each item appears ONCE with its canonical recipe's direct ingredients, so a consumer
+    (the strategy LLM) gets the whole recipe graph compactly -- A->[B1,B2,B3], B1->[C1,C2]
+    -- without the deep tree's duplicated sub-trees or truncation. Raw resources are
+    omitted (no ingredients). With ``roots``, restrict to items reachable from them;
+    otherwise include every craftable item.
+    """
+    out: dict[str, list[str]] = {}
+    if roots:
+        frontier = [r for r in roots]
+        while frontier:
+            item = frontier.pop()
+            if item in out or item in RAW_RESOURCES:
+                continue
+            recipe = recipe_for_product(item)
+            if recipe is None:
+                continue
+            ingredients = sorted(recipe.ingredients.keys())
+            out[item] = ingredients
+            frontier.extend(ingredients)
+        return out
+    for item in sorted(_canonical_product_map().keys()):
+        if item in RAW_RESOURCES:
+            continue
+        recipe = recipe_for_product(item)
+        if recipe is not None:
+            out[item] = sorted(recipe.ingredients.keys())
+    return out
+
+
 def technology_chain_for_recipe(recipe_name: str) -> list[dict[str, Any]]:
     recipe = ALL_RECIPES.get(recipe_name)
     if recipe is None or recipe.technology is None:
