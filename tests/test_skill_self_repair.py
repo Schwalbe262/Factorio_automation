@@ -231,6 +231,42 @@ class SandboxIsolationTests(_Base):
         self.assertEqual(captured["save_path"], captured["runtime_dir"] / live_save.name)
 
 
+class FewShotLearningTests(_Base):
+    def _register(self, name: str, gates: list[str]):
+        path = self.gen / f"{name}.py"
+        path.write_text(f"class {name.title()}Skill:\n    def next_action(self, o):\n        return None\n", encoding="utf-8")
+        skill_foundry.update_skill(name, status="registered", file_path=str(path), gates_passed=gates)
+
+    def test_select_proven_examples_returns_registered_skill_code(self):
+        self._register("good", ["static_safety", "offline_replay", "sandbox_dryrun"])
+        examples = skill_foundry.select_proven_examples("other")
+        self.assertTrue(examples)
+        self.assertEqual(examples[0]["name"], "good")
+        self.assertIn("GoodSkill", examples[0]["code"])
+
+    def test_excludes_the_skill_being_generated(self):
+        self._register("target", ["static_safety"])
+        self.assertNotIn("target", [e["name"] for e in skill_foundry.select_proven_examples("target")])
+
+    def test_sandbox_proven_skill_is_preferred(self):
+        self._register("plain", ["static_safety"])
+        self._register("sandboxed", ["static_safety", "offline_replay", "sandbox_dryrun"])
+        examples = skill_foundry.select_proven_examples("other", limit=1)
+        self.assertEqual(examples[0]["name"], "sandboxed")
+
+    def test_codegen_prompt_includes_proven_examples(self):
+        from factorio_ai.skill_foundry import _build_codegen_prompt
+
+        spec = {
+            "skill_name": "setup_power",
+            "mode": "override",
+            "few_shot_examples": [{"name": "good", "code": "class GoodSkill:\n    pass\n"}],
+        }
+        prompt = _build_codegen_prompt(spec, [{"entities": []}], "")
+        self.assertIn("PROVEN WORKING SKILLS", prompt)
+        self.assertIn("GoodSkill", prompt)
+
+
 class SandboxProgressTests(unittest.TestCase):
     def test_progress_counts_placed_entities_and_target_items(self):
         from factorio_ai.skill_foundry import _sandbox_progress

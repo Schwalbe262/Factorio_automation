@@ -958,6 +958,49 @@ def _example_skill_source() -> str:
     return "\n\n# ---- example ----\n\n".join(_HAND_EXAMPLES)
 
 
+def _read_skill_source(file_path: str) -> str:
+    for candidate in (Path(file_path), REPO_ROOT / file_path):
+        try:
+            if candidate.exists():
+                return candidate.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return ""
+
+
+def select_proven_examples(skill_name: str, limit: int = 2) -> list[dict[str, str]]:
+    """Gate-passed, registered generated skills to use as few-shot examples for codegen.
+
+    Learning loop: imitating a KNOWN-GOOD module (one that already passed static+replay+sandbox)
+    lifts a small model's success rate and contract compliance, and the example pool grows as more
+    skills succeed -> the system compounds without retraining. Prefers sandbox-proven + recent
+    skills; excludes the skill being generated (don't echo its possibly-broken code).
+    """
+    try:
+        skills = load_registry().get("skills") or {}
+    except Exception:  # noqa: BLE001
+        return []
+    scored: list[tuple[int, str, str, str]] = []
+    for name, entry in skills.items():
+        if name == skill_name or not isinstance(entry, dict):
+            continue
+        if entry.get("status") not in {"registered", "override_registered"}:
+            continue
+        file_path = entry.get("file_path")
+        if not file_path:
+            continue
+        gates = entry.get("gates_passed") or []
+        score = 2 if "sandbox_dryrun" in gates else 0
+        scored.append((score, str(entry.get("updated_at") or ""), str(name), str(file_path)))
+    scored.sort(reverse=True)
+    examples: list[dict[str, str]] = []
+    for _score, _updated, name, file_path in scored[:limit]:
+        code = _read_skill_source(file_path)
+        if code.strip():
+            examples.append({"name": name, "code": code[:1800]})
+    return examples
+
+
 _HAND_EXAMPLES = (
     # Pattern 1: gather a raw resource until a target (move_to + mine + done + wait fallback).
     '''from __future__ import annotations
@@ -1118,6 +1161,18 @@ def _build_codegen_prompt(
         "",
         _codegen_vocabulary(),
         "",
+    ]
+    proven = spec.get("few_shot_examples")
+    if isinstance(proven, list) and proven:
+        parts.append(
+            "PROVEN WORKING SKILLS from this run (they already passed static + replay + sandbox; "
+            "imitate their structure, API usage, and obstacle/retry handling):"
+        )
+        for example in proven[:2]:
+            if isinstance(example, dict) and example.get("code"):
+                parts += [f"# proven skill: {example.get('name')}", "```python", str(example["code"])[:1800], "```"]
+        parts.append("")
+    parts += [
         "Reference example skill(s) showing the exact contract (imitate this style):",
         "```python",
         _example_skill_source(),
@@ -1316,6 +1371,9 @@ def develop_skill(
     )
     log_foundry_event(log_dir, "develop_start", {"skill_name": name, "version": version})
 
+    # Learning loop: attach proven (gate-passed) skills as few-shot examples so the model
+    # imitates known-good code. Travels in the spec to the node-side prompt builder.
+    spec = {**spec, "few_shot_examples": select_proven_examples(name)}
     last_reason = previous_failure
     for attempt in range(1, attempts_budget + 1):
         lifetime_attempts += 1
