@@ -9,6 +9,7 @@ from factorio_ai.slurm_worker import (
     call_llm_json_with_diagnostics,
     compact_layout_improvement_payload,
     normalize_layout_response,
+    run_skill_foundry_request,
     run_strategy_request,
     run_task_file,
     run_worker,
@@ -99,6 +100,29 @@ class SlurmWorkerTests(unittest.TestCase):
         self.assertEqual(trace["prompt_chars"], len("system prompt") + len("input prompt"))
         self.assertGreater(trace["response_chars"], 0)
 
+    def test_call_llm_base_url_param_overrides_env(self):
+        # TASK 1 routing: an explicit base_url (the co-located service's per-GPU port) must win over
+        # the node env so each client reaches its assigned vLLM endpoint.
+        captured: dict[str, str] = {}
+
+        def fake_urlopen(req, timeout=0):
+            captured["url"] = req.full_url
+            return FakeResponse({"choices": [{"message": {"content": "{}"}}]})
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"FACTORIO_AI_LLM_BASE_URL": "http://127.0.0.1:8000/v1", "FACTORIO_AI_LLM_MODEL": "Qwen"},
+            ),
+            patch("factorio_ai.slurm_worker.request.urlopen", side_effect=fake_urlopen),
+        ):
+            parsed, diagnostics = call_llm_json_with_diagnostics(
+                "s", "p", kind="strategy", base_url="http://127.0.0.1:8002/v1"
+            )
+
+        self.assertEqual(captured["url"], "http://127.0.0.1:8002/v1/chat/completions")
+        self.assertEqual(diagnostics["llm_trace"]["base_url"], "http://127.0.0.1:8002/v1")
+
     def test_llm_call_diagnostics_include_error_trace_metadata(self):
         with (
             patch.dict(
@@ -118,6 +142,34 @@ class SlurmWorkerTests(unittest.TestCase):
         self.assertEqual(trace["kind"], "layout")
         self.assertIn("TimeoutError", trace["error"])
         self.assertEqual(trace["raw_output"], "")
+
+    def test_skill_foundry_request_ships_io_trace_back(self):
+        # The foundry worker must return the codegen LLM I/O trace (not drop it) so the client can
+        # persist it and the dashboard shows skill_foundry calls alongside strategy.
+        content = json.dumps(
+            {"code": "class X:\n    pass\n", "class_name": "X", "notes": "ok"}
+        )
+        response = FakeResponse({"choices": [{"message": {"content": content}}]})
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "FACTORIO_AI_LLM_BASE_URL": "http://127.0.0.1:8000/v1",
+                    "FACTORIO_AI_LLM_MODEL": "Qwen",
+                    "FACTORIO_AI_LLM_GUIDED_JSON": "0",
+                },
+            ),
+            patch("factorio_ai.slurm_worker.request.urlopen", return_value=response),
+        ):
+            result = run_skill_foundry_request(
+                {"spec": {"skill_name": "demo"}, "observation_samples": [], "task_id": "foundry-x"}
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertIn("llm_trace", result)
+        self.assertEqual(result["llm_trace"]["kind"], "skill_foundry")
+        self.assertEqual(result["llm_trace"]["task_id"], "foundry-x")
+        self.assertEqual(result["class_name"], "X")
 
     def test_run_task_file_writes_result_for_auto_dispatch(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -3,14 +3,57 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from factorio_ai.llm_log import (
+    extract_io_traces_from_result,
     llm_io_trace_log_path,
     llm_io_trace_summary,
     llm_decision_summary,
     make_llm_io_trace,
+    record_io_traces,
     record_llm_decision,
     record_llm_io_trace,
     strategy_request_summary,
 )
+
+
+class LlmIoTraceExtractionTests(unittest.TestCase):
+    def _trace(self, trace_id: str, kind: str = "skill_foundry"):
+        return make_llm_io_trace(
+            trace_id=trace_id,
+            kind=kind,
+            provider="local_llm",
+            model="Qwen",
+            base_url="http://127.0.0.1:8001/v1",
+            system_prompt="sys",
+            input_prompt="in",
+            raw_output="{}",
+            parsed_json={},
+            ok=True,
+        )
+
+    def test_extract_dedupes_llm_trace_and_llm_traces(self):
+        trace = self._trace("dup")
+        result = {"ok": True, "llm_trace": trace, "llm_traces": [trace]}
+        extracted = extract_io_traces_from_result(result)
+        self.assertEqual([t["trace_id"] for t in extracted], ["dup"])
+
+    def test_extract_combines_distinct_traces(self):
+        result = {"llm_traces": [self._trace("a")], "llm_trace": self._trace("b")}
+        extracted = extract_io_traces_from_result(result)
+        self.assertEqual(sorted(t["trace_id"] for t in extracted), ["a", "b"])
+
+    def test_extract_handles_non_dict(self):
+        self.assertEqual(extract_io_traces_from_result(None), [])
+        self.assertEqual(extract_io_traces_from_result("nope"), [])
+
+    def test_record_io_traces_writes_and_returns_ids(self):
+        with TemporaryDirectory() as root:
+            log_dir = Path(root)
+            ids, errors = record_io_traces(log_dir, [self._trace("f1", "skill_foundry"), self._trace("l1", "layout")])
+            self.assertEqual(ids, ["f1", "l1"])
+            self.assertEqual(errors, [])
+            summary = llm_io_trace_summary(log_dir)
+            kinds = sorted(row["kind"] for row in summary["entries"])
+            self.assertEqual(kinds, ["layout", "skill_foundry"])
 
 
 class LlmLogTests(unittest.TestCase):

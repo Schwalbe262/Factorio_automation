@@ -41,6 +41,7 @@ LLM_ENV_VARS = (
     "FACTORIO_AI_LLM_MODEL",
     "FACTORIO_AI_LLM_API_KEY",
     "FACTORIO_AI_LLM_GUIDED_JSON",
+    "FACTORIO_AI_LLM_MAX_TOKENS",
     "FACTORIO_AI_LLM_TIMEOUT",
 )
 VLLM_ENV_VARS = (
@@ -404,10 +405,66 @@ def _scheduler_vllm_service_count() -> int:
     return min(8, _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT", 1, 1))
 
 
-def _scheduler_vllm_service_heartbeat_filename() -> str:
-    port = os.getenv("FACTORIO_AI_VLLM_PORT", "8000").strip() or "8000"
+def _scheduler_vllm_service_base_port() -> int:
+    """Base localhost port for vLLM services. Service i=0 always binds this (the readiness proxy
+    reads its heartbeat); services i>0 bind base+1, base+2, ... for true multi-GPU on one node."""
+
+    try:
+        return max(1, int((os.getenv("FACTORIO_AI_VLLM_PORT") or "8000").strip() or "8000"))
+    except (TypeError, ValueError):
+        return 8000
+
+
+def _scheduler_vllm_service_heartbeat_filename(port: str | int | None = None) -> str:
+    if port is None:
+        port = os.getenv("FACTORIO_AI_VLLM_PORT", "8000")
+    port = str(port).strip() or "8000"
     safe_port = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in port)[:32] or "8000"
     return f"vllm-service-{safe_port}.heartbeat.json"
+
+
+def _parse_service_port_from_name(name: Any) -> int | None:
+    """Recover a vLLM service's localhost port from its scheduler task name.
+
+    Service tasks are named ``factorio-vllm-service-<model_slug>-p<port>-<hex8>``; the port lives in
+    the second-to-last hyphen segment as ``p<digits>``. Returns None for legacy names without the
+    marker (treated as the base port by callers)."""
+
+    parts = str(name or "").split("-")
+    if len(parts) >= 2:
+        token = parts[-2]
+        if token.startswith("p") and token[1:].isdigit():
+            return int(token[1:])
+    return None
+
+
+def _assign_vllm_service_ports(
+    active_services: list[dict[str, Any]],
+    base_port: int,
+    count: int,
+    n_needed: int,
+) -> list[int]:
+    """Pick ``n_needed`` distinct localhost ports for new services, preferring the lowest free port
+    in ``[base_port, base_port+count-1]`` and skipping ports already used by active services. So if
+    the base-port service died, the next new service reclaims it (keeping the 8000 readiness proxy)."""
+
+    used: set[int] = set()
+    for row in active_services:
+        if not isinstance(row, dict):
+            continue
+        parsed = _parse_service_port_from_name(row.get("name"))
+        if parsed is not None:
+            used.add(parsed)
+    ports: list[int] = []
+    candidate = base_port
+    ceiling = base_port + max(count, n_needed) + 64
+    while len(ports) < n_needed and candidate <= ceiling:
+        if candidate not in used and candidate not in ports:
+            ports.append(candidate)
+        candidate += 1
+    while len(ports) < n_needed:  # safety pad (should not happen)
+        ports.append(base_port + len(ports))
+    return ports
 
 
 def _scheduler_vllm_service_model_slug() -> str:
@@ -420,10 +477,14 @@ def _scheduler_vllm_service_command(task: dict[str, Any]) -> str:
     duration_seconds = _scheduler_vllm_service_duration_seconds(payload.get("duration_seconds"))
     heartbeat_seconds = _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_HEARTBEAT_SECONDS", 30, 5)
     startup_seconds = _int_env("FACTORIO_AI_VLLM_STARTUP_SECONDS", 240, 1)
+    # Per-service localhost port so multiple services co-exist on one node (true multi-GPU). The port
+    # is assigned at submission (ensure_vllm_service) and carried in the payload; the heartbeat file
+    # name is derived from THIS port so services do not clobber each other's readiness file.
+    service_port = str(payload.get("port") or os.getenv("FACTORIO_AI_VLLM_PORT", "8000")).strip() or "8000"
     task_id = str(task["id"])
     task_json = shlex.quote(f".factorio-ai-scheduler-tasks/{task_id}.json")
     result_json = shlex.quote(f".factorio-ai-scheduler-tasks/{task_id}.result.json")
-    heartbeat_json = shlex.quote(f".factorio-ai-scheduler-tasks/{_scheduler_vllm_service_heartbeat_filename()}")
+    heartbeat_json = shlex.quote(f".factorio-ai-scheduler-tasks/{_scheduler_vllm_service_heartbeat_filename(service_port)}")
     safe_task_id = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in task_id)[:96] or "vllm-service"
     vllm_log_base = shlex.quote(f"logs/vllm-service-{safe_task_id}")
     return f"""set -euo pipefail
@@ -443,11 +504,12 @@ elif [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
   conda activate "${{FACTORIO_AI_SLURM_CONDA_ENV:-factorio-ai}}" || true
 fi
 export PYTHONPATH="${{PWD}}/src:${{PYTHONPATH:-}}"
+# Bind this service to its assigned port and force the matching endpoint URL (override any inherited
+# config.env FACTORIO_AI_LLM_BASE_URL) so the health checks below probe the port we actually serve.
+export FACTORIO_AI_VLLM_PORT={shlex.quote(service_port)}
+export FACTORIO_AI_LLM_BASE_URL="http://127.0.0.1:{service_port}/v1"
 if [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ] && [ -z "${{FACTORIO_AI_LLM_MODEL:-}}" ]; then
   export FACTORIO_AI_LLM_MODEL="$FACTORIO_AI_VLLM_MODEL"
-fi
-if [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ] && [ -z "${{FACTORIO_AI_LLM_BASE_URL:-}}" ]; then
-  export FACTORIO_AI_LLM_BASE_URL="http://127.0.0.1:${{FACTORIO_AI_VLLM_PORT:-8000}}/v1"
 fi
 if [ -n "${{FACTORIO_AI_HF_HOME:-}}" ]; then
   export HF_HOME="$FACTORIO_AI_HF_HOME"
@@ -458,6 +520,11 @@ fi
 if [ -n "${{FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER:-}}" ]; then
   export VLLM_USE_FLASHINFER_SAMPLER="$FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER"
 fi
+# Tensor-parallel (multi-GPU) on this cluster hung at startup with empty logs -- the classic
+# fork-after-CUDA deadlock in vLLM's worker spawn. spawn avoids it; harmless for single-GPU.
+# Unbuffered so startup/NCCL errors flush to the log immediately instead of being lost on hang.
+export VLLM_WORKER_MULTIPROC_METHOD="${{VLLM_WORKER_MULTIPROC_METHOD:-spawn}}"
+export PYTHONUNBUFFERED=1
 VLLM_PID=""
 write_heartbeat() {{
   HEARTBEAT_JSON="$HEARTBEAT_JSON" SERVICE_DURATION_SECONDS="$SERVICE_DURATION_SECONDS" SERVICE_STATE="$1" SERVICE_REASON="${{2:-}}" VLLM_PID_VALUE="${{VLLM_PID:-}}" python - <<'PY'
@@ -605,6 +672,11 @@ fi
 if [ -n "${{FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER:-}}" ]; then
   export VLLM_USE_FLASHINFER_SAMPLER="$FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER"
 fi
+# Tensor-parallel (multi-GPU) on this cluster hung at startup with empty logs -- the classic
+# fork-after-CUDA deadlock in vLLM's worker spawn. spawn avoids it; harmless for single-GPU.
+# Unbuffered so startup/NCCL errors flush to the log immediately instead of being lost on hang.
+export VLLM_WORKER_MULTIPROC_METHOD="${{VLLM_WORKER_MULTIPROC_METHOD:-spawn}}"
+export PYTHONUNBUFFERED=1
 VLLM_PID=""
 cleanup_vllm() {{
   if [ -n "$VLLM_PID" ]; then
@@ -745,10 +817,27 @@ def _submit_scheduler_task(task: dict[str, Any], cfg: RemoteSlurmConfig) -> dict
     selected_gpu_model = _scheduler_selected_gpu_model(task_type)
     resources = _scheduler_task_resources(task_type, gpu_model=selected_gpu_model)
     if task_type == VLLM_SERVICE_TASK_TYPE:
-        name = f"{VLLM_SERVICE_TASK_NAME_PREFIX}-{_scheduler_vllm_service_model_slug()}-{uuid.uuid4().hex[:8]}"
+        payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        service_port = str(payload.get("port") or _scheduler_vllm_service_base_port()).strip() or "8000"
+        # Encode the bound port in the name so co-locating clients can recover it from the task list
+        # (task payloads are uploaded files, not visible in /api/tasks).
+        name = f"{VLLM_SERVICE_TASK_NAME_PREFIX}-{_scheduler_vllm_service_model_slug()}-p{service_port}-{uuid.uuid4().hex[:8]}"
     else:
         name = f"factorio-{str(task.get('type') or 'task').replace('_', '-')}-{uuid.uuid4().hex[:8]}"
     remote_cwd = _resolve_scheduler_remote_cwd(cfg)
+    # Co-locate a client task (strategy/foundry/layout) on the running vLLM service node via the
+    # scheduler's first-class same_node_as_task_id, so a CPU-only client reaches the service's
+    # 127.0.0.1 endpoint, AND route it to that service's specific localhost port. The route rides in
+    # the uploaded payload (FACTORIO_AI_LLM_BASE_URL in config.env is a single fixed port and cannot
+    # be set per-task), so it must be stamped BEFORE the payload upload below. The scheduler queues
+    # (never misplaces) the client if the service has no node yet.
+    co_located_service_id: Any | None = None
+    if task_type != VLLM_SERVICE_TASK_TYPE and _scheduler_vllm_service_enabled():
+        service = _scheduler_running_vllm_service_task_id()
+        if service is not None:
+            co_located_service_id, service_port = service
+            if isinstance(task.get("payload"), dict):
+                task["payload"]["llm_base_url"] = f"http://127.0.0.1:{service_port}/v1"
     _upload_scheduler_task_payload(task, cfg, remote_cwd)
     data = {
         "name": name,
@@ -761,15 +850,9 @@ def _submit_scheduler_task(task: dict[str, Any], cfg: RemoteSlurmConfig) -> dict
         "priority": _scheduler_task_priority(task_type),
         **resources,
     }
-    # Co-locate a client task (strategy/foundry/layout) on the running vLLM service node via the
-    # scheduler's first-class same_node_as_task_id, so a CPU-only client reaches the service's
-    # 127.0.0.1 endpoint. The scheduler queues (never misplaces) the client if the service has no
-    # node yet. Falls back to the resolved node_name pin when no running service id is available.
-    if task_type != VLLM_SERVICE_TASK_TYPE and _scheduler_vllm_service_enabled():
-        service_task_id = _scheduler_running_vllm_service_task_id()
-        if service_task_id is not None:
-            data["same_node_as_task_id"] = service_task_id
-            data["node_name"] = ""
+    if co_located_service_id is not None:
+        data["same_node_as_task_id"] = co_located_service_id
+        data["node_name"] = ""
     _scheduler_post_form("/tasks", data, timeout=30)
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
@@ -924,12 +1007,14 @@ def _scheduler_running_vllm_service_node_name() -> str:
 _VLLM_SERVICE_RR = {"i": os.getpid()}
 
 
-def _scheduler_running_vllm_service_task_id() -> Any | None:
-    """Task id of a running vLLM service, for `same_node_as_task_id` co-location.
+def _scheduler_running_vllm_service_task_id() -> tuple[Any, int] | None:
+    """``(task_id, port)`` of a running vLLM service, for `same_node_as_task_id` co-location and
+    per-service port routing.
 
-    With multiple warm services (FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT > 1) this
-    round-robins so client tasks spread across the service nodes instead of all
-    piling onto one.
+    With multiple warm services (FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT > 1) this round-robins so
+    client tasks spread across the service nodes/GPUs instead of all piling onto one. The port is
+    recovered from the chosen service's task name so the client can be routed to that exact endpoint
+    (all services share node n106 but bind different localhost ports). Returns None if none running.
     """
 
     account = _scheduler_account()
@@ -949,7 +1034,11 @@ def _scheduler_running_vllm_service_task_id() -> Any | None:
     running.sort(key=lambda row: str(row.get("id")))
     index = _VLLM_SERVICE_RR["i"] % len(running)
     _VLLM_SERVICE_RR["i"] = (_VLLM_SERVICE_RR["i"] + 1) % 1_000_000
-    return running[index].get("id")
+    chosen = running[index]
+    port = _parse_service_port_from_name(chosen.get("name"))
+    if port is None:
+        port = _scheduler_vllm_service_base_port()
+    return chosen.get("id"), port
 
 
 def _scheduler_vllm_service_heartbeat_path(cfg: RemoteSlurmConfig) -> str:
@@ -1770,7 +1859,13 @@ def ensure_vllm_service(
             "status": status_payload,
         }
     submitted: list[dict[str, Any]] = []
-    for _ in range(target - active_count):
+    # Assign each new service a distinct localhost port (base, base+1, ...), skipping ports already
+    # used by active services, so N services co-exist on the one GPU node instead of colliding on
+    # 8000. Service i=0 keeps the base port (the readiness heartbeat proxy reads it).
+    deficit = target - active_count
+    base_port = _scheduler_vllm_service_base_port()
+    new_ports = _assign_vllm_service_ports(active_services, base_port, target, deficit)
+    for index in range(deficit):
         task = {
             "id": f"vllm-service-{uuid.uuid4().hex}",
             "type": VLLM_SERVICE_TASK_TYPE,
@@ -1778,7 +1873,7 @@ def ensure_vllm_service(
             "payload": {
                 "duration_seconds": duration_seconds or _scheduler_vllm_service_duration_seconds(),
                 "model": os.getenv("FACTORIO_AI_VLLM_MODEL", "").strip(),
-                "port": os.getenv("FACTORIO_AI_VLLM_PORT", "8000").strip() or "8000",
+                "port": str(new_ports[index]),
             },
         }
         row = _submit_scheduler_task(task, cfg)

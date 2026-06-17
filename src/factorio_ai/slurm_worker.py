@@ -223,13 +223,14 @@ def run_skill_foundry_request(payload: dict[str, Any]) -> dict[str, Any]:
         kind="skill_foundry",
         task_id=task_id,
         max_tokens=max_tokens,
+        base_url=payload.get("llm_base_url"),
     )
-    # Keep the returned stdout small: drop the full I/O trace, keep compact diagnostics.
+    # Ship the full I/O trace back (like strategy/layout) so the client can persist it to
+    # llm_io_traces.jsonl and the dashboard shows codegen calls, not just strategy. The client
+    # records then strips it, so it does not linger in downstream foundry logs.
     result: dict[str, Any] = {"ok": True, "type": "skill_foundry_request"}
     for key, value in diagnostics.items():
-        if key in {"llm_trace", "llm_traces"}:
-            continue
-        if value not in (None, ""):
+        if key in {"llm_trace", "llm_traces"} or value not in (None, ""):
             result[key] = value
     if isinstance(parsed, dict):
         result["code"] = parsed.get("code")
@@ -308,6 +309,7 @@ def run_layout_improvement_request(payload: dict[str, Any]) -> dict[str, Any]:
         schema=LAYOUT_RESPONSE_SCHEMA,
         kind="layout",
         task_id=str(payload.get("task_id") or ""),
+        base_url=payload.get("llm_base_url"),
     )
     if parsed is None:
         result = heuristic_layout_improvement(compact)
@@ -613,6 +615,7 @@ def try_llm_planner_with_diagnostics(payload: dict[str, Any]) -> tuple[dict[str,
         schema=PLANNER_RESPONSE_SCHEMA,
         kind="planner",
         task_id=str(payload.get("task_id") or ""),
+        base_url=payload.get("llm_base_url"),
     )
     if parsed is None:
         return None, diagnostics
@@ -650,6 +653,7 @@ def try_llm_strategy_with_diagnostics(payload: dict[str, Any]) -> tuple[dict[str
         "Do not answer a per-minute production deficit with repeated hand crafting when an automation skill exists."
     )
     prompt = _strategy_prompt(base_payload)
+    llm_base_url = payload.get("llm_base_url")
     diagnostics: dict[str, Any] = {
         "llm_prompt_chars": len(prompt),
     }
@@ -659,6 +663,7 @@ def try_llm_strategy_with_diagnostics(payload: dict[str, Any]) -> tuple[dict[str
         schema=STRATEGY_RESPONSE_SCHEMA,
         kind="strategy",
         task_id=str(payload.get("task_id") or ""),
+        base_url=llm_base_url,
     )
     diagnostics.update(call_diagnostics)
     if parsed is None and _context_limit_error(str(diagnostics.get("llm_error") or "")):
@@ -674,6 +679,7 @@ def try_llm_strategy_with_diagnostics(payload: dict[str, Any]) -> tuple[dict[str
             schema=STRATEGY_RESPONSE_SCHEMA,
             kind="strategy",
             task_id=str(payload.get("task_id") or ""),
+            base_url=llm_base_url,
         )
         previous_traces = [trace for trace in diagnostics.get("llm_traces", []) if isinstance(trace, dict)]
         retry_traces = retry_diagnostics.get("llm_traces")
@@ -701,7 +707,13 @@ def _strategy_prompt(payload: dict[str, Any]) -> str:
         "You are the strategic layer for a Factorio autoplayer. "
         "Pick the next high-level skill and justify it from the observation. "
         "Only choose selected_skill from allowed_skill_names. "
-        "Return strict JSON only matching the schema.\n\n"
+        "Return strict JSON only matching the schema. "
+        # Qwen3.6 otherwise prepends a long chain-of-thought / extra 'thought' key that blows past the
+        # token budget (the JSON never closes) and makes each decision take minutes on one GPU. Force
+        # a terse schema-only object so generation stops early.
+        "Output ONLY the schema keys. Do NOT add a 'thought', 'reasoning', or any other key, and write "
+        "NO text before or after the JSON. Keep 'reason' and 'expected_effect' to one short sentence "
+        "each and 'evidence'/'blockers' to a few words. The entire JSON must stay under ~150 tokens.\n\n"
         f"Payload:\n{json.dumps(payload, ensure_ascii=False)}"
     )
 
@@ -724,8 +736,14 @@ def call_llm_json_with_diagnostics(
     kind: str = "llm",
     task_id: str = "",
     max_tokens: int | None = None,
+    base_url: str | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-    base_url = "".join(os.getenv("FACTORIO_AI_LLM_BASE_URL", "").split()).rstrip("/")
+    # An explicit base_url (e.g. the co-located vLLM service's per-GPU port, routed in via the task
+    # payload) wins; otherwise fall back to the node's FACTORIO_AI_LLM_BASE_URL env.
+    if base_url and str(base_url).strip():
+        base_url = "".join(str(base_url).split()).rstrip("/")
+    else:
+        base_url = "".join(os.getenv("FACTORIO_AI_LLM_BASE_URL", "").split()).rstrip("/")
     model = os.getenv("FACTORIO_AI_LLM_MODEL", "").strip()
     if not base_url or not model:
         return None, {"llm_error": "LLM base URL or model is not configured"}
@@ -828,7 +846,9 @@ def call_llm_json_with_diagnostics(
 
 
 def _llm_max_tokens() -> int:
-    return max(64, min(4096, _int_value(os.getenv("FACTORIO_AI_LLM_MAX_TOKENS"), 512)))
+    # Default raised 512 -> 1536: Qwen3.6 writes a long chain-of-thought before the JSON
+    # decision; 512 truncated it mid-string ("LLM response content is not a JSON object").
+    return max(64, min(4096, _int_value(os.getenv("FACTORIO_AI_LLM_MAX_TOKENS"), 1536)))
 
 
 def compact_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:

@@ -533,7 +533,8 @@ def make_dashboard_handler(cfg: AppConfig, default_objective: str) -> type[BaseH
             if path == FACTORIO_LLM_ROUTE:
                 lang = request_language(path, query)
                 summary = llm_trace_api_response(cfg.log_dir, limit=_llm_trace_limit(query))
-                body = render_llm_trace_page(summary, lang=lang, objective=objective)
+                kind_filter = (query.get("kind") or [""])[0]
+                body = render_llm_trace_page(summary, lang=lang, objective=objective, kind=kind_filter)
                 self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
                 return
 
@@ -1063,10 +1064,16 @@ def friendly_dashboard_error(exc: Exception) -> str:
     return text
 
 
-def render_llm_trace_page(summary: dict[str, Any], lang: str = DEFAULT_LANG, objective: Any = None) -> str:
+def render_llm_trace_page(
+    summary: dict[str, Any],
+    lang: str = DEFAULT_LANG,
+    objective: Any = None,
+    kind: str = "",
+) -> str:
     lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
     title = _t(lang, "llm_io_traces")
     entries = summary.get("entries") if isinstance(summary.get("entries"), list) else []
+    entries = [row for row in entries if isinstance(row, dict)]
     api_query = {"limit": str(summary.get("entry_count") or 50)}
     if lang in SUPPORTED_LANGS and lang != DEFAULT_LANG:
         api_query["lang"] = lang
@@ -1082,7 +1089,14 @@ def render_llm_trace_page(summary: dict[str, Any], lang: str = DEFAULT_LANG, obj
             "</section>"
         )
         return _page(title, body, lang, objective)
-    cards = "".join(_llm_trace_card(row, lang) for row in entries if isinstance(row, dict))
+    # Per-kind filter so strategy / skill_foundry / layout / planner traces can be viewed
+    # individually. Counts come from the full (unfiltered) entry set.
+    selected_kind = str(kind or "").strip()
+    filter_html = _llm_trace_kind_filter_html(entries, selected_kind, lang, objective, summary)
+    shown = [row for row in entries if str(row.get("kind") or "llm") == selected_kind] if selected_kind else entries
+    cards = "".join(_llm_trace_card(row, lang) for row in shown)
+    if not cards:
+        cards = f"<p class=\"muted\">{_t(lang, 'no_llm_io_traces')}</p>"
     body = (
         "<section class=\"panel\">"
         f"<h2>{escape(title)}</h2>"
@@ -1092,10 +1106,57 @@ def render_llm_trace_page(summary: dict[str, Any], lang: str = DEFAULT_LANG, obj
         f"<a class=\"nav-link\" href=\"{escape(api_href, quote=True)}\">{escape(LLM_API_ROUTE)}</a>"
         "</div>"
         f"<p class=\"muted\">{escape(str(summary.get('log_path') or ''))}</p>"
+        f"{filter_html}"
         f"{cards}"
         "</section>"
     )
     return _page(title, body, lang, objective)
+
+
+def _llm_trace_kind_filter_html(
+    entries: list[dict[str, Any]],
+    selected_kind: str,
+    lang: str,
+    objective: Any,
+    summary: dict[str, Any],
+) -> str:
+    counts: dict[str, int] = {}
+    for row in entries:
+        key = str(row.get("kind") or "llm")
+        counts[key] = counts.get(key, 0) + 1
+    if not counts:
+        return ""
+
+    def _href(kind_value: str) -> str:
+        params: dict[str, str] = {}
+        if lang in SUPPORTED_LANGS and lang != DEFAULT_LANG:
+            params["lang"] = lang
+        if objective:
+            params["objective"] = str(objective)
+        limit_value = summary.get("entry_count")
+        if limit_value:
+            params["limit"] = str(limit_value)
+        if kind_value:
+            params["kind"] = kind_value
+        suffix = f"?{urlencode(params)}" if params else ""
+        return f"{FACTORIO_LLM_ROUTE}{suffix}"
+
+    chips = [
+        "<a class=\"nav-link{active}\" href=\"{href}\">{label}</a>".format(
+            active="" if selected_kind else " trace-filter-active",
+            href=escape(_href(""), quote=True),
+            label=escape(f"all ({len(entries)})"),
+        )
+    ]
+    for key in sorted(counts):
+        chips.append(
+            "<a class=\"nav-link{active}\" href=\"{href}\">{label}</a>".format(
+                active=" trace-filter-active" if selected_kind == key else "",
+                href=escape(_href(key), quote=True),
+                label=escape(f"{key} ({counts[key]})"),
+            )
+        )
+    return f"<div class=\"actions trace-filter\">{''.join(chips)}</div>"
 
 
 def _llm_trace_card(row: dict[str, Any], lang: str) -> str:
@@ -1440,6 +1501,16 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
       padding: 6px 9px;
       text-decoration: none;
       font-size: 12px;
+    }}
+    .trace-filter {{
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }}
+    .nav-link.trace-filter-active {{
+      background: #2f6f4f;
+      border-color: #3c9a6b;
+      color: #f2fff8;
+      font-weight: 600;
     }}
     .summary, .grid {{
       display: grid;

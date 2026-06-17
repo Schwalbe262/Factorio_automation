@@ -2117,8 +2117,9 @@ class VllmServiceDetectionTests(unittest.TestCase):
             {"FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262", "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000ada,a6000"},
             clear=False,
         ), patch.object(remote_slurm, "_scheduler_task_rows", return_value=tasks):
-            task_id = remote_slurm._scheduler_running_vllm_service_task_id()
-        self.assertEqual(task_id, 8743)  # the running one, not the queued one
+            service = remote_slurm._scheduler_running_vllm_service_task_id()
+        self.assertEqual(service[0], 8743)  # the running one, not the queued one
+        self.assertEqual(service[1], 8000)  # legacy name without -p marker -> base port
 
     def test_active_layout_task_count_matches_comma_joined_gpu_model(self):
         from factorio_ai import remote_slurm
@@ -2169,8 +2170,85 @@ class MultiVllmServiceTests(unittest.TestCase):
             clear=False,
         ), patch.object(remote_slurm, "_scheduler_task_rows", return_value=tasks):
             remote_slurm._VLLM_SERVICE_RR["i"] = 0
-            picks = [remote_slurm._scheduler_running_vllm_service_task_id() for _ in range(4)]
+            picks = [remote_slurm._scheduler_running_vllm_service_task_id()[0] for _ in range(4)]
         self.assertEqual(picks, [100, 200, 100, 200])  # round-robin, queued excluded
+
+    def test_parse_and_assign_service_ports(self):
+        from factorio_ai import remote_slurm
+
+        self.assertEqual(
+            remote_slurm._parse_service_port_from_name("factorio-vllm-service-qwen-p8002-abcd1234"), 8002
+        )
+        self.assertIsNone(remote_slurm._parse_service_port_from_name("factorio-vllm-service-qwen"))
+        # lowest free ports in [base, base+count-1], skipping the in-use 8000.
+        active = [{"name": "factorio-vllm-service-q-p8000-aaaa1111"}]
+        self.assertEqual(remote_slurm._assign_vllm_service_ports(active, 8000, 4, 3), [8001, 8002, 8003])
+        self.assertEqual(remote_slurm._assign_vllm_service_ports([], 8000, 4, 4), [8000, 8001, 8002, 8003])
+        # base-port service died -> its port is reclaimed first (keeps the 8000 readiness proxy).
+        active2 = [{"name": "factorio-vllm-service-q-p8001-bbbb2222"}]
+        self.assertEqual(remote_slurm._assign_vllm_service_ports(active2, 8000, 4, 1), [8000])
+
+    def test_running_service_task_id_recovers_port_from_name(self):
+        from factorio_ai import remote_slurm
+
+        tasks = [
+            {"name": "factorio-vllm-service-q-p8001-aaaa1111", "account_name": "r1jae262", "status": "running", "gpu_model": "a6000", "id": 11},
+        ]
+        with patch.dict(
+            os.environ,
+            {"FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262", "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000"},
+            clear=False,
+        ), patch.object(remote_slurm, "_scheduler_task_rows", return_value=tasks):
+            remote_slurm._VLLM_SERVICE_RR["i"] = 0
+            service = remote_slurm._scheduler_running_vllm_service_task_id()
+        self.assertEqual(service, (11, 8001))
+
+    def test_service_command_binds_payload_port_and_heartbeat(self):
+        from factorio_ai import remote_slurm
+
+        task = {"id": "svc-1", "type": remote_slurm.VLLM_SERVICE_TASK_TYPE, "payload": {"port": "8003", "duration_seconds": 100}}
+        with patch.dict(os.environ, {"FACTORIO_AI_VLLM_MODEL": "Qwen/test"}, clear=False):
+            cmd = remote_slurm._scheduler_vllm_service_command(task)
+        self.assertIn("export FACTORIO_AI_VLLM_PORT=8003", cmd)
+        self.assertIn("http://127.0.0.1:8003/v1", cmd)
+        self.assertIn("vllm-service-8003.heartbeat.json", cmd)
+        self.assertNotIn("vllm-service-8000.heartbeat.json", cmd)
+
+    def test_ensure_assigns_distinct_ports_when_scaling_from_zero(self):
+        from factorio_ai import remote_slurm
+
+        captured: list[str] = []
+
+        def fake_submit(task, cfg):
+            port = task["payload"]["port"]
+            captured.append(port)
+            return {
+                "id": len(captured),
+                "name": f"factorio-vllm-service-q-p{port}-x{len(captured)}",
+                "status": "queued",
+                "account_name": "r1jae262",
+                "gpu_model": "a6000",
+            }
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FACTORIO_AI_SLURM_MODE": "scheduler",
+                    "FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262",
+                    "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000",
+                    "FACTORIO_AI_VLLM_MODEL": "Qwen/test",
+                    "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT": "4",
+                },
+                clear=True,
+            ),
+            patch("factorio_ai.remote_slurm._scheduler_task_rows", return_value=[]),
+            patch("factorio_ai.remote_slurm._read_scheduler_vllm_service_heartbeat", return_value=None),
+            patch("factorio_ai.remote_slurm._submit_scheduler_task", side_effect=fake_submit),
+        ):
+            result = remote_slurm.ensure_vllm_service(self._cfg(), duration_seconds=10800)
+        self.assertEqual(result["submitted_count"], 4)
+        self.assertEqual(captured, ["8000", "8001", "8002", "8003"])
 
     def test_ensure_submits_deficit_to_reach_target_count(self):
         from factorio_ai import remote_slurm

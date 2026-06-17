@@ -153,6 +153,42 @@ def record_llm_io_trace(log_dir: Path, trace: dict[str, Any]) -> LlmIoTraceEntry
     return entry
 
 
+def extract_io_traces_from_result(result: Any) -> list[dict[str, Any]]:
+    """Pull every embedded LLM I/O trace out of a worker result/diagnostics dict.
+
+    Workers attach the trace(s) produced by :func:`make_llm_io_trace` under ``llm_trace``
+    (single) and/or ``llm_traces`` (list). De-duplicates by ``trace_id`` so a result that
+    carries both keys for the same call is not recorded twice.
+    """
+
+    traces: list[dict[str, Any]] = []
+    if not isinstance(result, dict):
+        return traces
+    raw_traces = result.get("llm_traces")
+    if isinstance(raw_traces, list):
+        traces.extend(trace for trace in raw_traces if isinstance(trace, dict))
+    raw_trace = result.get("llm_trace")
+    seen = {str(trace.get("trace_id") or "") for trace in traces}
+    if isinstance(raw_trace, dict) and str(raw_trace.get("trace_id") or "") not in seen:
+        traces.append(raw_trace)
+    return traces
+
+
+def record_io_traces(log_dir: Path, traces: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+    """Record each trace dict to the io-trace log. Returns ``(trace_ids, errors)``."""
+
+    trace_ids: list[str] = []
+    errors: list[str] = []
+    for trace in traces:
+        try:
+            entry = record_llm_io_trace(log_dir, trace)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{type(exc).__name__}: {exc}")
+            continue
+        trace_ids.append(entry.trace_id)
+    return trace_ids, errors
+
+
 def load_llm_io_traces(log_dir: Path, *, limit: int = 50) -> list[LlmIoTraceEntry]:
     path = llm_io_trace_log_path(log_dir)
     if not path.exists():

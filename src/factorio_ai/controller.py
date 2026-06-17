@@ -12,7 +12,12 @@ import threading
 import time
 from typing import Any
 
-from .llm_log import record_llm_decision, record_llm_io_trace, strategy_request_summary
+from .llm_log import (
+    extract_io_traces_from_result,
+    record_io_traces,
+    record_llm_decision,
+    strategy_request_summary,
+)
 from .config import AppConfig, REPO_ROOT
 from .layout_llm_settings import load_layout_llm_settings
 from .layout_validation import layout_validation_feedback_summary
@@ -502,31 +507,12 @@ def _guard_post_automation_handcraft(observation: dict[str, Any], decision: Plan
 def _record_and_strip_llm_io_traces(log_dir: Path, result: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(result, dict):
         return result
-    traces: list[dict[str, Any]] = []
-    raw_traces = result.get("llm_traces")
-    if isinstance(raw_traces, list):
-        traces.extend(trace for trace in raw_traces if isinstance(trace, dict))
-    raw_trace = result.get("llm_trace")
-    existing_trace_ids = {str(trace.get("trace_id") or "") for trace in traces}
-    if (
-        isinstance(raw_trace, dict)
-        and raw_trace is not None
-        and str(raw_trace.get("trace_id") or "") not in existing_trace_ids
-    ):
-        traces.append(raw_trace)
+    traces = extract_io_traces_from_result(result)
     if not traces and not any(key in result for key in LLM_TRACE_RESULT_KEYS):
         return result
 
     stripped = {key: value for key, value in result.items() if key not in LLM_TRACE_RESULT_KEYS}
-    trace_ids: list[str] = []
-    errors: list[str] = []
-    for trace in traces:
-        try:
-            entry = record_llm_io_trace(log_dir, trace)
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"{type(exc).__name__}: {exc}")
-            continue
-        trace_ids.append(entry.trace_id)
+    trace_ids, errors = record_io_traces(log_dir, traces)
     if trace_ids:
         stripped["llm_trace_ids"] = trace_ids
     if errors:
@@ -2365,8 +2351,34 @@ class FactorioController:
                     "priority": 40,
                 }
             )
+        # Proactive self-development (#3): when there is no reactive work, pre-generate catalog
+        # skills that have no executor yet so the otherwise-idle GPUs keep advancing the system.
+        # Lowest priority, so failing-skill repairs and strategy-requested skills always go first.
+        # eligible_for_generation() skips anything already registered / in cooldown / quarantined.
+        if self._foundry_proactive_enabled():
+            from .strategy import SKILL_CATALOG
+
+            for cat_name in SKILL_CATALOG:
+                if cat_name in seen or cat_name in IMPLEMENTED_SKILLS:
+                    continue
+                seen.add(cat_name)
+                candidates.append(
+                    {
+                        "skill_name": cat_name,
+                        "reason": "proactive pre-generation (idle-GPU self-development)",
+                        "blockers": [],
+                        "expected_effect": "",
+                        "target_item": None,
+                        "goal": cat_name,
+                        "priority": 20,
+                    }
+                )
         candidates.sort(key=lambda spec: spec.get("priority", 0), reverse=True)
         return candidates
+
+    @staticmethod
+    def _foundry_proactive_enabled() -> bool:
+        return os.getenv("FACTORIO_AI_FOUNDRY_PROACTIVE", "").strip().lower() in {"1", "true", "yes", "on"}
 
     def run_skill_foundry_loop(
         self,
@@ -3003,6 +3015,9 @@ class FactorioController:
                 force_attached=True,
                 max_active_layout_tasks=self._background_layout_max_active_tasks(),
             )
+            # Persist the layout LLM I/O trace (and strip it from the result) so the dashboard
+            # shows layout_improvement calls alongside strategy/foundry, not just strategy.
+            result = _record_and_strip_llm_io_traces(self.cfg.log_dir, result)
             self._record_background_layout_thread_result(
                 {
                     "event": "layout_result",

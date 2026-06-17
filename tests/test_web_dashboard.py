@@ -94,6 +94,51 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn('href="/factorio?objective=launch_rocket_program"', html)
         self.assertIn(LLM_API_ROUTE, html)
 
+    def test_llm_trace_page_shows_all_kinds_and_filters_by_kind(self):
+        def _entry(trace_id: str, kind: str) -> dict:
+            return {
+                "timestamp": f"2026-06-13T00:00:0{trace_id[-1]}+00:00",
+                "trace_id": trace_id,
+                "kind": kind,
+                "provider": "local_llm",
+                "model": "Qwen",
+                "base_url": "http://127.0.0.1:8000/v1",
+                "task_id": trace_id,
+                "system_prompt": "sys",
+                "input_prompt": f"prompt-{trace_id}",
+                "raw_output": "{}",
+                "parsed_json": {},
+                "duration_ms": 1,
+                "prompt_chars": 3,
+                "response_chars": 2,
+                "max_tokens": 64,
+                "ok": True,
+                "error": "",
+            }
+
+        summary = {
+            "entries": [_entry("t-strat", "strategy"), _entry("t-found", "skill_foundry"), _entry("t-lay", "layout")],
+            "entry_count": 3,
+            "latest": {},
+            "log_path": "logs/llm_io_traces.jsonl",
+        }
+
+        # Unfiltered: all kinds present plus filter chips with counts.
+        html_all = render_llm_trace_page(summary, "en", "launch_rocket_program")
+        self.assertIn("t-strat", html_all)
+        self.assertIn("t-found", html_all)
+        self.assertIn("t-lay", html_all)
+        self.assertIn("skill_foundry (1)", html_all)
+        self.assertIn("layout (1)", html_all)
+        self.assertIn("all (3)", html_all)
+        self.assertIn("kind=skill_foundry", html_all)
+
+        # Filtered to skill_foundry: only that entry's card renders.
+        html_foundry = render_llm_trace_page(summary, "en", "launch_rocket_program", kind="skill_foundry")
+        self.assertIn("t-found", html_foundry)
+        self.assertNotIn("prompt-t-strat", html_foundry)
+        self.assertNotIn("prompt-t-lay", html_foundry)
+
     def test_llm_trace_api_response_loads_recent_entries_newest_first(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             log_dir = Path(temp_dir) / "logs"

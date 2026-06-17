@@ -36,6 +36,7 @@ from typing import Any
 
 from . import models
 from .config import REPO_ROOT
+from .llm_log import extract_io_traces_from_result, record_io_traces
 
 # --------------------------------------------------------------------------- #
 # Paths / constants
@@ -1406,6 +1407,75 @@ def _cooldown_until(total_attempts: int) -> str:
     return (_now() + timedelta(seconds=seconds)).isoformat()
 
 
+def _foundry_candidates() -> int:
+    """How many code candidates to generate per attempt. >1 fans them out concurrently so the
+    spare warm vLLM services (round-robined across GPUs) all work on the same skill at once
+    (best-of-N). Default 1 = original single-shot behaviour."""
+    try:
+        return max(1, min(8, int(os.getenv("FACTORIO_AI_FOUNDRY_CANDIDATES", "1"))))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _generate_candidates(
+    spec: dict[str, Any],
+    samples: list[dict[str, Any]],
+    previous_failure: str,
+    *,
+    cfg: Any,
+    name: str,
+    n: int,
+) -> list[tuple[str | None, str, dict[str, Any], str]]:
+    """Generate up to ``n`` candidates. For n>1 the codegen calls run concurrently (each
+    ``prefer_remote`` call blocks on its own scheduler task that round-robins to a different
+    warm vLLM service), so N GPUs work in parallel instead of one. Returns
+    [(code, class_name, diagnostics, task_id), ...]."""
+    prefer_remote = bool(getattr(cfg, "slurm_enabled", False))
+
+    def _one(_i: int) -> tuple[str | None, str, dict[str, Any], str]:
+        task_id = f"foundry-{name}-{uuid.uuid4().hex[:8]}"
+        code, class_name, diagnostics = generate_skill_code(
+            spec,
+            observation_samples=samples,
+            previous_failure=previous_failure,
+            task_id=task_id,
+            prefer_remote=prefer_remote,
+        )
+        return code, class_name, diagnostics, task_id
+
+    if n <= 1:
+        return [_one(0)]
+    import concurrent.futures
+
+    results: list[tuple[str | None, str, dict[str, Any], str]] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n) as executor:
+        futures = [executor.submit(_one, i) for i in range(n)]
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                results.append(future.result())
+            except Exception as exc:  # noqa: BLE001 - one bad candidate must not sink the batch
+                results.append((None, "", {"foundry_error": f"candidate failed: {type(exc).__name__}: {exc}"}, ""))
+    return results
+
+
+def _pick_best_candidate(
+    candidates: list[tuple[str | None, str, dict[str, Any], str]],
+) -> tuple[str | None, str, dict[str, Any], str]:
+    """Prefer a candidate whose code clears the cheap static-safety gate (best-of-N filter on the
+    most common early failure); fall back to the first non-empty, else the first entry so its
+    diagnostics surface downstream."""
+    non_empty = [c for c in candidates if isinstance(c[0], str) and c[0].strip()]
+    for cand in non_empty:
+        try:
+            if static_safety_gate(cand[0]).passed:
+                return cand
+        except Exception:  # noqa: BLE001
+            continue
+    if non_empty:
+        return non_empty[0]
+    return candidates[0] if candidates else (None, "", {"foundry_error": "no candidates produced"}, "")
+
+
 def develop_skill(
     cfg: Any,
     spec: dict[str, Any],
@@ -1457,14 +1527,24 @@ def develop_skill(
     last_reason = previous_failure
     for attempt in range(1, attempts_budget + 1):
         lifetime_attempts += 1
-        task_id = f"foundry-{name}-{uuid.uuid4().hex[:8]}"
-        code, class_name, diagnostics = generate_skill_code(
-            spec,
-            observation_samples=samples,
-            previous_failure=last_reason,
-            task_id=task_id,
-            prefer_remote=bool(getattr(cfg, "slurm_enabled", False)),
+        # Best-of-N: fan out N candidates concurrently (each round-robins to a different warm vLLM
+        # service => N GPUs work the same skill at once), then take the one that clears static safety.
+        candidates = _generate_candidates(
+            spec, samples, last_reason, cfg=cfg, name=name, n=_foundry_candidates()
         )
+        # Persist every candidate's codegen LLM I/O trace so the dashboard shows skill_foundry
+        # calls (not only strategy), then strip the bulky trace out of diagnostics so it does not
+        # bloat the foundry event log downstream.
+        for _cand in candidates:
+            cand_diag = _cand[2] if len(_cand) > 2 and isinstance(_cand[2], dict) else None
+            if cand_diag is None:
+                continue
+            traces = extract_io_traces_from_result(cand_diag)
+            if traces:
+                record_io_traces(log_dir, traces)
+            cand_diag.pop("llm_trace", None)
+            cand_diag.pop("llm_traces", None)
+        code, class_name, diagnostics, task_id = _pick_best_candidate(candidates)
         if code is None:
             last_reason = str(diagnostics.get("foundry_error") or diagnostics.get("llm_error") or "no code produced")
             log_foundry_event(log_dir, "generate_failed", {"skill_name": name, "attempt": attempt, "reason": last_reason})
