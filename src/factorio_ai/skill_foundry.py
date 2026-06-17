@@ -1078,10 +1078,13 @@ def _build_codegen_prompt(
 
 
 def _codegen_max_tokens() -> int:
+    # A full skill module embedded in a JSON string can exceed a small cap and get
+    # truncated -> "LLM response content is not a JSON object". Give it room (the
+    # obstacle/root-cause prompts ask for more code), capped to stay within model limits.
     try:
-        return max(512, min(4096, int(os.getenv("FACTORIO_AI_FOUNDRY_MAX_TOKENS", "3072"))))
+        return max(512, min(8192, int(os.getenv("FACTORIO_AI_FOUNDRY_MAX_TOKENS", "6144"))))
     except (TypeError, ValueError):
-        return 3072
+        return 6144
 
 
 def _strip_code_fences(code: str) -> str:
