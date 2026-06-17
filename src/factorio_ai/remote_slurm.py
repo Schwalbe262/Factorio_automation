@@ -1100,6 +1100,8 @@ def _request_task_via_scheduler(task: dict[str, Any], cfg: RemoteSlurmConfig, ti
         current = _scheduler_task_detail(task_id) or row
         account = str(current.get("account_name") or "")
         if account and expected_account and account != expected_account:
+            # Abandon AND cancel: a task we won't read must not keep occupying a node/queue slot.
+            _scheduler_cancel_task(task_id)
             raise RemoteSlurmError(f"scheduler task attached to unexpected account {account}; expected {expected_account}")
         status = str(current.get("status") or "")
         if status == "completed":
@@ -1116,6 +1118,9 @@ def _request_task_via_scheduler(task: dict[str, Any], cfg: RemoteSlurmConfig, ti
             stdout = _read_scheduler_task_stdout(current, cfg)
             raise RemoteSlurmError(f"scheduler task {status}: {current.get('failure_message') or stdout[:500]}")
         time.sleep(2)
+    # Client gave up waiting: cancel the task so it can't linger as a zombie "running"
+    # job (which previously piled up dozens of orphans when the service was slow).
+    _scheduler_cancel_task(task_id)
     raise TimeoutError(f"scheduler task timed out: {task_id}")
 
 

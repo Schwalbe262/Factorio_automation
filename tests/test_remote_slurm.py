@@ -2223,5 +2223,30 @@ class MultiVllmServiceTests(unittest.TestCase):
         submit_task.assert_not_called()
 
 
+class SchedulerTaskCancelTests(unittest.TestCase):
+    def _cfg(self) -> RemoteSlurmConfig:
+        return RemoteSlurmConfig(
+            enabled=True, ssh_path="ssh", scp_path="scp", host="example", user="user", port=22,
+            key_path="key", remote_dir="~/factorio-ai-worker", job_name="factorio-ai-worker",
+            conda_env="factorio-ai", partition="gpu4", cpus_per_task=8, gpus_per_node=1, gres="gpu:1",
+            time_limit="24:00:00", setup_timeout_seconds=60, task_timeout_seconds=30,
+        )
+
+    def test_client_cancels_scheduler_task_on_timeout(self):
+        # Orphan prevention: a client that gives up waiting must cancel the task so it
+        # cannot linger as a zombie "running" job (the dozens-of-orphans churn).
+        from factorio_ai import remote_slurm
+
+        with (
+            patch.object(remote_slurm, "_submit_scheduler_task", return_value={"id": 555, "name": "factorio-strategy-request-x"}),
+            patch.object(remote_slurm, "_scheduler_task_detail", return_value={"status": "running", "account_name": ""}),
+            patch.object(remote_slurm, "_scheduler_cancel_task") as cancel,
+            patch("time.sleep", lambda *a, **k: None),
+        ):
+            with self.assertRaises(TimeoutError):
+                remote_slurm._request_task_via_scheduler({"id": "t", "type": "strategy_request"}, self._cfg(), timeout_seconds=0.05)
+        cancel.assert_called_once_with(555)
+
+
 if __name__ == "__main__":
     unittest.main()
