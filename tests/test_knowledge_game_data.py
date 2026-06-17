@@ -62,6 +62,20 @@ class InfrastructureRootTests(unittest.TestCase):
         )
         self.assertFalse(any(t.get("infrastructure") for t in trees))
 
+    def test_roots_are_data_driven_and_cover_all_tiers(self):
+        roots = set(k.INFRASTRUCTURE_ROOTS)
+        # Every belt / underground / splitter / inserter / chest tier must be present
+        # (the gap the hand list had), and recycling recipes must not leak in.
+        for item in [
+            "transport-belt", "fast-transport-belt", "express-transport-belt", "turbo-transport-belt",
+            "underground-belt", "fast-underground-belt", "express-underground-belt", "turbo-underground-belt",
+            "splitter", "fast-splitter", "express-splitter", "turbo-splitter",
+            "burner-inserter", "stack-inserter", "iron-chest", "steel-chest",
+        ]:
+            self.assertIn(item, roots, item)
+        self.assertFalse([r for r in roots if r.endswith("-recycling")])
+        self.assertGreater(len(roots), 80)
+
 
 class TechnologyMappingTests(unittest.TestCase):
     def test_recipe_technology_resolves_to_chain(self):

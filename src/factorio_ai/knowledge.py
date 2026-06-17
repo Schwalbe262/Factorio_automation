@@ -260,7 +260,7 @@ def _load_game_data() -> tuple[dict[str, Recipe], dict[str, Technology]]:
     try:
         raw = json.loads(_DATA_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, ValueError):
-        return dict(RECIPES), dict(TECHNOLOGIES)
+        return dict(RECIPES), dict(TECHNOLOGIES), []
 
     techs_raw = raw.get("technologies") if isinstance(raw.get("technologies"), dict) else {}
     recipes_raw = raw.get("recipes") if isinstance(raw.get("recipes"), dict) else {}
@@ -298,39 +298,45 @@ def _load_game_data() -> tuple[dict[str, Recipe], dict[str, Technology]]:
             unlocks=[str(u) for u in (tdata.get("unlocks") or [])],
         )
 
+    # Data-driven infrastructure roots: every buildable item in the logistics/production
+    # groups (so ALL belt/underground/splitter/inserter/chest/machine TIERS + any future
+    # items are auto-included -- a hand list always gaps). "name in products" keeps only the
+    # canonical build recipe for that item; recycling/editor items are dropped.
+    infra_groups = {"logistics", "production"}
+    infra_roots = sorted(
+        name
+        for name, rdata in recipes_raw.items()
+        if isinstance(rdata, dict)
+        and rdata.get("group") in infra_groups
+        and not name.endswith("-recycling")
+        and name in (rdata.get("products") or {})
+        and "infinity" not in name
+    )
+
     # Hand-curated entries win where both define the same name: the planner is
     # tuned against those exact shapes, so keep the two views consistent there.
     recipes.update(RECIPES)
     technologies.update(TECHNOLOGIES)
-    return recipes, technologies
+    return recipes, technologies, infra_roots
 
 
-ALL_RECIPES, ALL_TECHNOLOGIES = _load_game_data()
+ALL_RECIPES, ALL_TECHNOLOGIES, _DERIVED_INFRA_ROOTS = _load_game_data()
 
 
-# Production buildings / infrastructure surfaced as their own dependency trees so
-# the planner LLM can reason about producing them (not just the objective's
-# critical path). Filtered to whatever the loaded data actually defines.
-INFRASTRUCTURE_ROOTS: list[str] = [
-    # smelting
+# Fallback used only if the game-data dump is missing (loader returns no roots).
+_FALLBACK_INFRA_ROOTS: list[str] = [
     "stone-furnace", "steel-furnace", "electric-furnace",
-    # assembling
     "assembling-machine-1", "assembling-machine-2", "assembling-machine-3",
-    # mining / pumping
-    "burner-mining-drill", "electric-mining-drill", "big-mining-drill", "pumpjack",
-    # power
-    "offshore-pump", "boiler", "steam-engine", "solar-panel", "accumulator",
-    "nuclear-reactor", "heat-exchanger", "steam-turbine",
-    # belts / inserters / pipes
-    "transport-belt", "fast-transport-belt", "express-transport-belt",
-    "underground-belt", "splitter", "inserter", "fast-inserter", "bulk-inserter",
-    "long-handed-inserter", "pipe", "pipe-to-ground", "pump",
-    # electric distribution
-    "small-electric-pole", "medium-electric-pole", "big-electric-pole", "substation",
-    # production / processing
-    "oil-refinery", "chemical-plant", "lab", "biolab", "storage-tank", "radar",
-    "electromagnetic-plant", "foundry", "biochamber", "cryogenic-plant", "recycler",
+    "burner-mining-drill", "electric-mining-drill", "pumpjack",
+    "offshore-pump", "boiler", "steam-engine", "solar-panel",
+    "transport-belt", "underground-belt", "splitter", "inserter",
+    "small-electric-pole", "lab", "oil-refinery", "chemical-plant",
 ]
+
+# Production buildings / logistics infrastructure surfaced as their own dependency
+# trees so the planner LLM can reason about producing them, not just the objective's
+# critical path.
+INFRASTRUCTURE_ROOTS: list[str] = _DERIVED_INFRA_ROOTS or _FALLBACK_INFRA_ROOTS
 
 
 OBJECTIVE_ROOTS = {
