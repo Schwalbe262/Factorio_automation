@@ -276,6 +276,48 @@ class FailureDiagnosticsTests(unittest.TestCase):
             controller._OBSERVATION_AUGMENTERS.remove(fake)
 
 
+class PowerRootCauseTests(unittest.TestCase):
+    def test_power_dependent_skill_with_dead_power_flags_root_cause(self):
+        from factorio_ai.controller import _failure_diagnostics
+
+        obs = {
+            "entities": [
+                {"name": "steam-engine", "type": "generator", "electric_network_connected": False},
+                {"name": "boiler", "type": "boiler", "electric_network_connected": False},
+            ]
+        }
+        diag = _failure_diagnostics("research_automation", ["cannot place entity"], obs)
+        self.assertIn("power_health", diag)
+        self.assertTrue(diag["power_health"]["broken"])
+        self.assertEqual(diag["power_health"]["root_cause_skill"], "setup_power")
+
+    def test_connected_generator_is_not_flagged(self):
+        from factorio_ai.controller import _failure_diagnostics
+
+        obs = {"entities": [{"name": "steam-engine", "electric_network_connected": True}]}
+        self.assertNotIn("power_health", _failure_diagnostics("research_automation", ["x"], obs))
+
+    def test_non_power_dependent_skill_not_flagged(self):
+        from factorio_ai.controller import _failure_diagnostics
+
+        obs = {"entities": [{"name": "steam-engine", "electric_network_connected": False}]}
+        self.assertNotIn("power_health", _failure_diagnostics("stockpile_coal", ["x"], obs))
+
+
+class StaleInProgressRecoveryTests(_Base):
+    def test_stale_in_progress_becomes_eligible_again(self):
+        from datetime import timedelta
+
+        skill_foundry.update_skill("stuck_skill", status="in_progress")
+        # Fresh in_progress is not eligible (a develop is presumably running).
+        self.assertEqual(skill_foundry.eligible_for_generation("stuck_skill"), (False, "in_progress"))
+        # Once stale (the develop was interrupted), it must become eligible again.
+        future = skill_foundry._now() + timedelta(seconds=2000)
+        with patch.object(skill_foundry, "_now", return_value=future):
+            ok, _why = skill_foundry.eligible_for_generation("stuck_skill")
+        self.assertTrue(ok)
+
+
 class CodegenPromptObstacleTests(unittest.TestCase):
     def test_override_prompt_has_obstacle_pattern_and_injected_diagnostics(self):
         from factorio_ai.skill_foundry import _build_codegen_prompt

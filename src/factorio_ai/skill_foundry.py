@@ -279,8 +279,25 @@ def eligible_for_generation(name: str) -> tuple[bool, str]:
     if not isinstance(entry, dict):
         return True, ""
     status = entry.get("status")
-    if status in {"registered", "override_registered", "in_progress"}:
+    if status in {"registered", "override_registered"}:
         return False, str(status)
+    if status == "in_progress":
+        # A develop interrupted mid-run (e.g. the foundry was restarted) leaves status
+        # stuck at in_progress forever, freezing all future retries. Recover once stale.
+        try:
+            stale_seconds = max(120, int(os.getenv("FACTORIO_AI_FOUNDRY_IN_PROGRESS_STALE_SECONDS", "900")))
+        except (TypeError, ValueError):
+            stale_seconds = 900
+        updated = entry.get("updated_at")
+        age: float | None = None
+        if updated:
+            try:
+                age = (_now() - datetime.fromisoformat(str(updated))).total_seconds()
+            except ValueError:
+                age = None
+        if age is None or age < stale_seconds:
+            return False, "in_progress"
+        # else: stale -> treat as eligible again (the prior develop is dead)
     if status in {"quarantined", "disabled"}:
         return False, str(status)
     cooldown = entry.get("cooldown_until")

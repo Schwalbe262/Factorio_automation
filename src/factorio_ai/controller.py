@@ -170,7 +170,48 @@ def _placement_obstacle_augmenter(
     }
 
 
-_OBSERVATION_AUGMENTERS = [_placement_obstacle_augmenter]
+_POWER_GENERATORS = {"steam-engine", "solar-panel", "steam-turbine"}
+
+
+def _power_dependent_skills() -> set[str]:
+    raw = os.getenv("FACTORIO_AI_POWER_DEPENDENT_SKILLS", "research_automation").strip()
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def _power_health_augmenter(
+    skill_name: str, reasons: list[str], observation: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Root-cause signal: a power-dependent skill failing while electricity is dead.
+
+    'broken' = no generator placed, OR generators exist but none is connected to an
+    electric network (the misaligned offshore-pump/boiler/steam-engine case). Emits a
+    root_cause_skill so the controller also repairs setup_power, not just the symptom.
+    """
+    if skill_name not in _power_dependent_skills():
+        return None
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    generators = [e for e in entities if isinstance(e, dict) and str(e.get("name") or "") in _POWER_GENERATORS]
+    connected = [e for e in generators if e.get("electric_network_connected")]
+    if connected:
+        return None  # at least one generator is feeding the grid -> power is fine
+    if not generators:
+        hint = "no power generator (steam-engine/solar-panel) is placed; setup_power must build one."
+    else:
+        hint = (
+            "power generators exist but NONE is connected to an electric network (misaligned "
+            "offshore-pump/boiler/steam-engine or unwired poles); setup_power must fix the alignment/wiring."
+        )
+    return {
+        "missing_observation": "power_health",
+        "broken": True,
+        "generator_count": len(generators),
+        "connected_generator_count": len(connected),
+        "root_cause_skill": "setup_power",
+        "hint": hint,
+    }
+
+
+_OBSERVATION_AUGMENTERS = [_placement_obstacle_augmenter, _power_health_augmenter]
 
 
 def _failure_diagnostics(skill_name: str, reasons: list[str], observation: dict[str, Any]) -> dict[str, Any]:
@@ -1036,6 +1077,35 @@ class FactorioController:
             )
         except Exception:  # noqa: BLE001 - enqueue must never break the loop
             pass
+        # Root-cause targeting: if diagnostics flagged an unhealthy prerequisite (e.g. dead
+        # power behind a 'cannot place'/'no progress' symptom), also repair that root-cause
+        # skill -- not just the symptom skill the LLM kept selecting.
+        for diag in diagnostics.values():
+            root = diag.get("root_cause_skill") if isinstance(diag, dict) else None
+            if not root or root == skill_name or root in _repair_core_denylist() or root not in IMPLEMENTED_SKILLS:
+                continue
+            try:
+                root_ok, _root_why = skill_foundry.eligible_for_generation(root)
+                if not root_ok:
+                    continue
+                skill_foundry.enqueue_foundry_request(
+                    self.cfg.runtime_dir,
+                    root,
+                    reason=f"root cause of {skill_name} failures: {diag.get('hint', '')}"[:500],
+                    blockers=[r for r in reasons if r][-4:],
+                    expected_effect=f"Repair {root} (root cause) so {skill_name} can proceed.",
+                    source="autopilot_root_cause",
+                    priority=max(0, min(100, (_int_or_none(strategy.get("priority")) or 75) + 5)),
+                    mode="override",
+                    diagnostics={str(diag.get("missing_observation") or "root_cause"): diag},
+                )
+                skill_foundry.log_foundry_event(
+                    self.cfg.log_dir,
+                    "root_cause_enqueued",
+                    {"symptom": skill_name, "root_cause": root, "hint": diag.get("hint")},
+                )
+            except Exception:  # noqa: BLE001 - root-cause enqueue is best-effort
+                pass
 
     # ------------------------------------------------------------------ #
     # Self-development: never-stuck missing-executor handling
