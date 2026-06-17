@@ -1206,6 +1206,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     inventory = monitor.get("inventory") if isinstance(monitor.get("inventory"), dict) else {}
     technologies = monitor.get("technology_chain") if isinstance(monitor.get("technology_chain"), list) else []
     dependency = monitor.get("dependency_tree") if isinstance(monitor.get("dependency_tree"), list) else []
+    dependency_map = monitor.get("dependency_map") if isinstance(monitor.get("dependency_map"), dict) else {}
     target_status = monitor.get("target_status") if isinstance(monitor.get("target_status"), dict) else {}
     targets = state.get("targets") if isinstance(state.get("targets"), dict) else {}
     targets_per_minute = targets.get("per_minute") if isinstance(targets.get("per_minute"), dict) else {}
@@ -1361,7 +1362,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
 
     <section class="panel">
       <h2>{_t(lang, "dependency_tree")}</h2>
-      {_dependency_tree_html(dependency)}
+      {_dependency_map_html(dependency_map) if dependency_map else _dependency_tree_html(dependency)}
     </section>
     """
     return _page(title, body, lang, state.get("objective"))
@@ -3727,6 +3728,36 @@ def _dependency_tree_html(forest: Any) -> str:
         for node in infra:
             parts.append(_dep_node_html(node, path="infra"))
         parts.append("</details>")
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _dependency_map_html(flat_map: Any) -> str:
+    """Flat recipe map view: EVERY item -> its direct ingredients (one hop).
+
+    Matches what the strategy LLM receives. Each item is a collapsed <details> (so the
+    page is a searchable list of all item names; expand to see direct ingredients), with
+    a stable id so open/closed state survives the auto-refresh.
+    """
+    if not isinstance(flat_map, dict) or not flat_map:
+        return '<p class="muted">(none)</p>'
+    parts = [
+        f'<p class="muted">{len(flat_map)} items (flat: each item shows its direct ingredients)</p>',
+        '<div class="deptree">',
+    ]
+    for item in sorted(flat_map):
+        ingredients = flat_map[item]
+        item_e = escape(str(item))
+        det_id = escape(f"depmap:{item}")
+        if isinstance(ingredients, list) and ingredients:
+            ing_html = ", ".join(escape(str(i)) for i in ingredients)
+            parts.append(
+                f'<details class="dep-node" id="{det_id}"><summary>{item_e} '
+                f'<span class="muted">({len(ingredients)})</span></summary>'
+                f'<div class="dep-leaf">{ing_html}</div></details>'
+            )
+        else:
+            parts.append(f'<div class="dep-leaf">{item_e} <span class="dep-raw">raw</span></div>')
     parts.append("</div>")
     return "".join(parts)
 
