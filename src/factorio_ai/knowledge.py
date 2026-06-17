@@ -654,3 +654,202 @@ def _collect_required(item: str, output: set[str], max_depth: int) -> None:
         return
     for ingredient in recipe.ingredients:
         _collect_required(ingredient, output, max_depth=max_depth - 1)
+
+
+# --------------------------------------------------------------------------- #
+# Machine / module / belt PROFILES — the physical specs (crafting speed, power
+# draw, footprint, module slots, module effects, belt throughput) the deterministic
+# factory-cell compiler needs. Read from the live dump (game_data.json "machines" /
+# "modules" / "belts") when present, else from the curated fallbacks below so the
+# compiler works before a re-dump. (knowledge.py cannot import monitor.py — circular —
+# so the canonical static tables live here; monitor.py keeps its own production-estimate
+# copies.) Values are Factorio 2.0 / Space Age vanilla.
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class MachineProfile:
+    name: str
+    crafting_speed: float
+    energy_kw: float  # active electric draw (0 for burner machines)
+    drain_kw: float
+    module_slots: int
+    tile_width: float
+    tile_height: float
+    categories: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ModuleProfile:
+    name: str
+    speed: float  # additive fraction, e.g. 0.2 == +20%
+    productivity: float
+    consumption: float  # additive fraction; negative reduces power
+    pollution: float
+    tier: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class BeltProfile:
+    name: str
+    items_per_second: float
+    tier_rank: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+_FALLBACK_MACHINE_PROFILES: dict[str, MachineProfile] = {
+    "assembling-machine-1": MachineProfile("assembling-machine-1", 0.5, 75.0, 2.5, 0, 3, 3),
+    "assembling-machine-2": MachineProfile("assembling-machine-2", 0.75, 150.0, 5.0, 2, 3, 3),
+    "assembling-machine-3": MachineProfile("assembling-machine-3", 1.25, 375.0, 12.5, 4, 3, 3),
+    "stone-furnace": MachineProfile("stone-furnace", 1.0, 0.0, 0.0, 0, 2, 2),
+    "steel-furnace": MachineProfile("steel-furnace", 2.0, 0.0, 0.0, 0, 2, 2),
+    "electric-furnace": MachineProfile("electric-furnace", 2.0, 180.0, 6.0, 2, 3, 3),
+    "electric-mining-drill": MachineProfile("electric-mining-drill", 0.5, 90.0, 0.0, 3, 3, 3),
+    "chemical-plant": MachineProfile("chemical-plant", 1.0, 210.0, 7.0, 3, 3, 3),
+    "oil-refinery": MachineProfile("oil-refinery", 1.0, 420.0, 14.0, 3, 5, 5),
+    "foundry": MachineProfile("foundry", 4.0, 2500.0, 80.0, 4, 5, 5),
+    "electromagnetic-plant": MachineProfile("electromagnetic-plant", 2.0, 2000.0, 60.0, 5, 4, 4),
+    "centrifuge": MachineProfile("centrifuge", 1.0, 350.0, 12.0, 2, 3, 3),
+    "lab": MachineProfile("lab", 1.0, 60.0, 2.0, 2, 3, 3),
+}
+
+# Non-crafting entity footprints (tiles) used by the placer for spacing/reserve.
+_FALLBACK_FOOTPRINTS: dict[str, tuple[float, float]] = {
+    "transport-belt": (1, 1), "fast-transport-belt": (1, 1), "express-transport-belt": (1, 1),
+    "underground-belt": (1, 1), "splitter": (2, 1), "inserter": (1, 1),
+    "fast-inserter": (1, 1), "long-handed-inserter": (1, 1), "stack-inserter": (1, 1),
+    "small-electric-pole": (1, 1), "medium-electric-pole": (1, 1), "big-electric-pole": (2, 2),
+    "substation": (2, 2), "pipe": (1, 1), "pipe-to-ground": (1, 1), "beacon": (3, 3),
+    "solar-panel": (3, 3), "steam-engine": (3, 5), "boiler": (3, 2),
+}
+
+_FALLBACK_MODULE_PROFILES: dict[str, ModuleProfile] = {
+    "speed-module": ModuleProfile("speed-module", 0.2, 0.0, 0.5, 0.0, 1),
+    "speed-module-2": ModuleProfile("speed-module-2", 0.3, 0.0, 0.6, 0.0, 2),
+    "speed-module-3": ModuleProfile("speed-module-3", 0.5, 0.0, 0.7, 0.0, 3),
+    "productivity-module": ModuleProfile("productivity-module", -0.05, 0.04, 0.4, 0.05, 1),
+    "productivity-module-2": ModuleProfile("productivity-module-2", -0.1, 0.06, 0.6, 0.07, 2),
+    "productivity-module-3": ModuleProfile("productivity-module-3", -0.15, 0.10, 0.8, 0.10, 3),
+    "efficiency-module": ModuleProfile("efficiency-module", 0.0, 0.0, -0.3, 0.0, 1),
+    "efficiency-module-2": ModuleProfile("efficiency-module-2", 0.0, 0.0, -0.4, 0.0, 2),
+    "efficiency-module-3": ModuleProfile("efficiency-module-3", 0.0, 0.0, -0.5, 0.0, 3),
+}
+
+_FALLBACK_BELT_PROFILES: dict[str, BeltProfile] = {
+    "transport-belt": BeltProfile("transport-belt", 15.0, 1),
+    "fast-transport-belt": BeltProfile("fast-transport-belt", 30.0, 2),
+    "express-transport-belt": BeltProfile("express-transport-belt", 45.0, 3),
+    "turbo-transport-belt": BeltProfile("turbo-transport-belt", 60.0, 4),
+}
+
+
+def _w_to_kw(value: Any) -> float | None:
+    try:
+        return round(float(value) / 1000.0, 4)
+    except (TypeError, ValueError):
+        return None
+
+
+@lru_cache(maxsize=1)
+def _load_profiles() -> tuple[dict[str, MachineProfile], dict[str, ModuleProfile], dict[str, BeltProfile], dict[str, tuple[float, float]]]:
+    """Merge dumped profiles (authoritative for our version) over the curated fallbacks."""
+    machines = dict(_FALLBACK_MACHINE_PROFILES)
+    modules = dict(_FALLBACK_MODULE_PROFILES)
+    belts = dict(_FALLBACK_BELT_PROFILES)
+    footprints = dict(_FALLBACK_FOOTPRINTS)
+    try:
+        raw = json.loads(_DATA_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return machines, modules, belts, footprints
+
+    for name, md in (raw.get("machines") or {}).items():
+        if not isinstance(md, dict):
+            continue
+        speed = md.get("crafting_speed")
+        if speed is None:
+            continue  # category-only entry (older dump) — keep the fallback profile
+        energy_kw = _w_to_kw(md.get("energy_usage"))
+        drain_kw = _w_to_kw(md.get("drain"))
+        machines[name] = MachineProfile(
+            name=name,
+            crafting_speed=float(speed),
+            energy_kw=energy_kw if energy_kw is not None else machines.get(name, _FALLBACK_MACHINE_PROFILES.get(name, MachineProfile(name, float(speed), 0.0, 0.0, 0, 3, 3))).energy_kw,
+            drain_kw=drain_kw if drain_kw is not None else 0.0,
+            module_slots=int(md.get("module_inventory_size") or 0),
+            tile_width=float(md.get("tile_width") or 3),
+            tile_height=float(md.get("tile_height") or 3),
+            categories=tuple(str(c) for c in (md.get("crafting_categories") or ())),
+        )
+        footprints[name] = (machines[name].tile_width, machines[name].tile_height)
+
+    for name, dd in (raw.get("modules") or {}).items():
+        if not isinstance(dd, dict):
+            continue
+        eff = dd.get("effect") if isinstance(dd.get("effect"), dict) else dd
+        modules[name] = ModuleProfile(
+            name=name,
+            speed=float(eff.get("speed") or 0.0),
+            productivity=float(eff.get("productivity") or 0.0),
+            consumption=float(eff.get("consumption") or 0.0),
+            pollution=float(eff.get("pollution") or 0.0),
+            tier=int(dd.get("tier") or 0),
+        )
+
+    for name, bd in (raw.get("belts") or {}).items():
+        if not isinstance(bd, dict):
+            continue
+        speed = bd.get("belt_speed")
+        ips = float(speed) * 480.0 if speed is not None else bd.get("items_per_second")
+        if ips is None:
+            continue
+        belts[name] = BeltProfile(name=name, items_per_second=float(ips), tier_rank=int(bd.get("tier") or 0))
+
+    for name, fp in (raw.get("footprints") or {}).items():
+        if isinstance(fp, dict) and fp.get("tile_width"):
+            footprints[name] = (float(fp["tile_width"]), float(fp.get("tile_height") or fp["tile_width"]))
+    return machines, modules, belts, footprints
+
+
+def machine_profile(name: str) -> MachineProfile | None:
+    return _load_profiles()[0].get(name)
+
+
+def module_profile(name: str) -> ModuleProfile | None:
+    return _load_profiles()[1].get(name)
+
+
+def belt_profile(name: str) -> BeltProfile | None:
+    return _load_profiles()[2].get(name)
+
+
+def all_belt_profiles() -> list[BeltProfile]:
+    return sorted(_load_profiles()[2].values(), key=lambda b: b.tier_rank)
+
+
+def entity_footprint(name: str) -> tuple[float, float]:
+    """(tile_width, tile_height); machines use their MachineProfile, else the footprint table,
+    else a 1x1 default."""
+    machines, _modules, _belts, footprints = _load_profiles()
+    if name in machines:
+        return (machines[name].tile_width, machines[name].tile_height)
+    return footprints.get(name, (1.0, 1.0))
+
+
+def machines_for_category(category: str | None) -> list[str]:
+    """Machines that can craft a category, ordered slowest→fastest (so callers can pick the
+    fastest available tier). Uses the dumped machine categories when present, else
+    CRAFTING_FACILITIES."""
+    if not category:
+        return []
+    machines, _m, _b, _f = _load_profiles()
+    dumped = [name for name, p in machines.items() if category in p.categories]
+    names = dumped or list(CRAFTING_FACILITIES.get(category, []))
+    return sorted(names, key=lambda n: (machines[n].crafting_speed if n in machines else 0.0, n))
