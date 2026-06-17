@@ -39,8 +39,11 @@ def validate_layout_candidate(
     variant: str = "after",
     ticks: int = 3600,
     cleanup: bool = True,
+    candidates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    candidate = find_layout_candidate(observation, candidate_id)
+    # ``candidates`` lets the deterministic compiler/placer inject its own candidate (the new
+    # layout pipeline) for sandbox validation without it being in the hardcoded generator list.
+    candidate = find_layout_candidate(observation, candidate_id, candidates=candidates)
     static_validation = candidate.get("validation") if isinstance(candidate.get("validation"), dict) else {}
     entities = candidate_blueprint_entities(candidate, variant=variant)
     payload = sandbox_payload_for_entities(
@@ -82,7 +85,17 @@ def validate_layout_candidate(
     return feedback
 
 
-def find_layout_candidate(observation: dict[str, Any], candidate_id: str) -> dict[str, Any]:
+def find_layout_candidate(
+    observation: dict[str, Any],
+    candidate_id: str,
+    *,
+    candidates: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    # Injected candidates (from the compiler/placer pipeline) take precedence; only fall back to
+    # the hardcoded simulation candidates (which scan the observation) if not found there.
+    for candidate in candidates or []:
+        if isinstance(candidate, dict) and str(candidate.get("candidate_id") or "") == candidate_id:
+            return candidate
     for candidate in factory_layout_simulation_candidates(observation):
         if isinstance(candidate, dict) and str(candidate.get("candidate_id") or "") == candidate_id:
             return candidate
