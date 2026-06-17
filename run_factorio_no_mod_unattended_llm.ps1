@@ -31,13 +31,15 @@ $env:FACTORIO_AI_SLURM_SCHEDULER_PRIORITY = "100"
 $env:FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS = "a6000ada,a6000"
 $env:FACTORIO_AI_SLURM_LAYOUT_CPUS = "3"
 $env:FACTORIO_AI_SLURM_LAYOUT_PRIORITY = "80"
-$env:FACTORIO_AI_VLLM_MODEL = "Qwen/Qwen3.5-9B"
-$env:FACTORIO_AI_VLLM_ARGS = "--max-model-len 32768 --gpu-memory-utilization 0.90 --enforce-eager"
+# Code-specialized 32B at 4-bit AWQ (~18GB) fits one A6000; far better at writing skill code
+# than the 9B (which could not produce passing skills). Two instances (one per GPU) below.
+$env:FACTORIO_AI_VLLM_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
+$env:FACTORIO_AI_VLLM_ARGS = "--max-model-len 32768 --gpu-memory-utilization 0.90 --quantization awq --enforce-eager"
 $env:FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER = "0"
 $env:FACTORIO_AI_VLLM_PORT = "8000"
 $env:FACTORIO_AI_VLLM_STARTUP_SECONDS = "420"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED = "1"
-# Run 2 warm 9B instances (each on its own GPU/node) for parallel throughput +
+# Run 2 warm 32B-AWQ instances (each on its own GPU/node) for parallel throughput +
 # redundancy: client tasks round-robin across them and one can serve while the
 # other cold-loads or restarts. All share port 8000 (each on its own node).
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT = "2"
