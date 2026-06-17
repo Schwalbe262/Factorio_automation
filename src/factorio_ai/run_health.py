@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -98,11 +99,17 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
                 and str(t.get("name") or "").startswith("factorio-vllm-service")
                 and str(t.get("status") or "") in active_states
             ]
+            try:
+                expected_services = max(1, int(os.getenv("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT", "1")))
+            except (TypeError, ValueError):
+                expected_services = 1
             scheduler = {
                 "checked": True,
                 "vllm_services": len(services),
                 "vllm_service_ids": [t.get("id") for t in services],
-                "healthy": len(services) <= 1,  # exactly one warm service is expected; >1 means pileup
+                "expected_services": expected_services,
+                # The configured count of warm services is expected; more than that means a pileup.
+                "healthy": len(services) <= expected_services,
             }
         except Exception as exc:  # noqa: BLE001 - scheduler API is sometimes slow; never hang the digest
             scheduler = {"checked": True, "error": f"{type(exc).__name__}", "vllm_services": None}
