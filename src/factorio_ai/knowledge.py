@@ -705,6 +705,36 @@ class BeltProfile:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class PoleProfile:
+    """Electric pole coverage spec used by the placer's power-coverage solver.
+
+    ``supply_radius`` is the half-width of the (square) supply area measured from the pole's
+    centre: a machine is powered if its footprint overlaps that square (partial overlap counts).
+    ``wire_reach`` is the max centre-to-centre distance to wire-connect two poles into one network.
+    """
+
+    name: str
+    supply_radius: float  # half supply-area side (tiles)
+    wire_reach: float     # max pole-to-pole wire distance (tiles)
+    tile_width: float
+    tile_height: float
+    tier_rank: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+# Factorio 2.0 vanilla pole coverage. supply_radius = supply_area_distance (half-side of the
+# square supply area); wire_reach = maximum_wire_distance.
+_FALLBACK_POLE_PROFILES: dict[str, PoleProfile] = {
+    "small-electric-pole": PoleProfile("small-electric-pole", 2.5, 7.5, 1, 1, 1),
+    "medium-electric-pole": PoleProfile("medium-electric-pole", 3.5, 9.0, 1, 1, 2),
+    "big-electric-pole": PoleProfile("big-electric-pole", 2.0, 30.0, 2, 2, 3),
+    "substation": PoleProfile("substation", 9.0, 18.0, 2, 2, 4),
+}
+
+
 _FALLBACK_MACHINE_PROFILES: dict[str, MachineProfile] = {
     "assembling-machine-1": MachineProfile("assembling-machine-1", 0.5, 75.0, 2.5, 0, 3, 3),
     "assembling-machine-2": MachineProfile("assembling-machine-2", 0.75, 150.0, 5.0, 2, 3, 3),
@@ -759,16 +789,17 @@ def _w_to_kw(value: Any) -> float | None:
 
 
 @lru_cache(maxsize=1)
-def _load_profiles() -> tuple[dict[str, MachineProfile], dict[str, ModuleProfile], dict[str, BeltProfile], dict[str, tuple[float, float]]]:
+def _load_profiles() -> tuple[dict[str, MachineProfile], dict[str, ModuleProfile], dict[str, BeltProfile], dict[str, tuple[float, float]], dict[str, PoleProfile]]:
     """Merge dumped profiles (authoritative for our version) over the curated fallbacks."""
     machines = dict(_FALLBACK_MACHINE_PROFILES)
     modules = dict(_FALLBACK_MODULE_PROFILES)
     belts = dict(_FALLBACK_BELT_PROFILES)
     footprints = dict(_FALLBACK_FOOTPRINTS)
+    poles = dict(_FALLBACK_POLE_PROFILES)
     try:
         raw = json.loads(_DATA_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, ValueError):
-        return machines, modules, belts, footprints
+        return machines, modules, belts, footprints, poles
 
     for name, md in (raw.get("machines") or {}).items():
         if not isinstance(md, dict):
@@ -815,7 +846,22 @@ def _load_profiles() -> tuple[dict[str, MachineProfile], dict[str, ModuleProfile
     for name, fp in (raw.get("footprints") or {}).items():
         if isinstance(fp, dict) and fp.get("tile_width"):
             footprints[name] = (float(fp["tile_width"]), float(fp.get("tile_height") or fp["tile_width"]))
-    return machines, modules, belts, footprints
+
+    for name, pd in (raw.get("poles") or {}).items():
+        if not isinstance(pd, dict):
+            continue
+        supply = pd.get("supply_area_distance")
+        if supply is None:
+            continue
+        poles[name] = PoleProfile(
+            name=name,
+            supply_radius=float(supply),
+            wire_reach=float(pd.get("maximum_wire_distance") or pd.get("wire_reach") or 7.5),
+            tile_width=float(pd.get("tile_width") or 1),
+            tile_height=float(pd.get("tile_height") or 1),
+            tier_rank=int(pd.get("tier") or 0),
+        )
+    return machines, modules, belts, footprints, poles
 
 
 def machine_profile(name: str) -> MachineProfile | None:
@@ -834,10 +880,18 @@ def all_belt_profiles() -> list[BeltProfile]:
     return sorted(_load_profiles()[2].values(), key=lambda b: b.tier_rank)
 
 
+def pole_profile(name: str) -> PoleProfile | None:
+    return _load_profiles()[4].get(name)
+
+
+def all_pole_profiles() -> list[PoleProfile]:
+    return sorted(_load_profiles()[4].values(), key=lambda p: p.tier_rank)
+
+
 def entity_footprint(name: str) -> tuple[float, float]:
     """(tile_width, tile_height); machines use their MachineProfile, else the footprint table,
     else a 1x1 default."""
-    machines, _modules, _belts, footprints = _load_profiles()
+    machines, _modules, _belts, footprints, _poles = _load_profiles()
     if name in machines:
         return (machines[name].tile_width, machines[name].tile_height)
     return footprints.get(name, (1.0, 1.0))
@@ -849,7 +903,7 @@ def machines_for_category(category: str | None) -> list[str]:
     CRAFTING_FACILITIES."""
     if not category:
         return []
-    machines, _m, _b, _f = _load_profiles()
+    machines, _m, _b, _f, _p = _load_profiles()
     dumped = [name for name, p in machines.items() if category in p.categories]
     names = dumped or list(CRAFTING_FACILITIES.get(category, []))
     return sorted(names, key=lambda n: (machines[n].crafting_speed if n in machines else 0.0, n))
