@@ -57,18 +57,66 @@ for name, tech in pairs(prototypes.technology) do
 end
 -- fluids (authoritative): used to flag whether an item/ingredient is a fluid
 for name, _ in pairs(prototypes.fluid) do out.fluids[#out.fluids+1] = name end
--- crafting machines -> the crafting categories they support (to build a category->facilities table).
--- Filter to machine entity types only (cheap) instead of scanning every prototype (that timed out RCON).
+-- crafting machines -> full physical profile (crafting_speed, power, module slots, footprint,
+-- categories) for the deterministic cell compiler/placer. Filter to machine entity types only
+-- (cheap) instead of scanning every prototype (that timed out RCON). Fields are nil-safe: any
+-- prototype attribute that doesn't exist on this version just comes back nil and is dropped.
 out.machines = {}
 local machine_types = { ["assembling-machine"] = true, ["furnace"] = true, ["rocket-silo"] = true }
 for name, proto in pairs(prototypes.entity) do
   if machine_types[proto.type] then
-    local cats = proto.crafting_categories
-    if cats then
-      local list = {}
-      for c, _ in pairs(cats) do list[#list+1] = c end
-      if #list > 0 then out.machines[name] = list end
+    local cats = {}
+    if proto.crafting_categories then
+      for c, _ in pairs(proto.crafting_categories) do cats[#cats+1] = c end
     end
+    out.machines[name] = {
+      crafting_speed = proto.crafting_speed,
+      energy_usage = proto.energy_usage,            -- W, active draw
+      module_inventory_size = proto.module_inventory_size,
+      tile_width = proto.tile_width,
+      tile_height = proto.tile_height,
+      crafting_categories = cats,
+    }
+  end
+end
+-- modules: speed/productivity/consumption/pollution effects (effect values are numbers in 2.0;
+-- guard for the older {bonus=x} table shape too).
+local function eff_val(e)
+  if type(e) == "number" then return e end
+  if type(e) == "table" then return e.bonus or 0 end
+  return 0
+end
+out.modules = {}
+for name, proto in pairs(prototypes.item) do
+  if proto.type == "module" then
+    local m = proto.module_effects or {}
+    out.modules[name] = {
+      effect = {
+        speed = eff_val(m.speed), productivity = eff_val(m.productivity),
+        consumption = eff_val(m.consumption), pollution = eff_val(m.pollution),
+      },
+      tier = proto.tier,
+      category = proto.category,
+    }
+  end
+end
+-- transport belts: belt_speed is tiles/tick; items/s = belt_speed * 480 (computed in knowledge.py).
+out.belts = {}
+for name, proto in pairs(prototypes.entity) do
+  if proto.type == "transport-belt" then
+    out.belts[name] = { belt_speed = proto.belt_speed }
+  end
+end
+-- electric poles: supply area + wire reach for the placer's power-coverage solver.
+out.poles = {}
+for name, proto in pairs(prototypes.entity) do
+  if proto.type == "electric-pole" then
+    out.poles[name] = {
+      supply_area_distance = proto.supply_area_distance,
+      maximum_wire_distance = proto.max_wire_distance,
+      tile_width = proto.tile_width,
+      tile_height = proto.tile_height,
+    }
   end
 end
 helpers.write_file("game_data_dump.json", helpers.table_to_json(out), false)
