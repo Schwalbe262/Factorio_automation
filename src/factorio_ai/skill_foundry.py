@@ -1162,6 +1162,25 @@ def _build_codegen_prompt(
             ]
     except Exception:  # noqa: BLE001 - recipe context is best-effort
         pass
+    # Technology reference for research-type skills: distinguishes researchable TECHNOLOGIES from
+    # science-pack ITEMS (the bug that produced a no-op research override targeting a pack name).
+    skill_name_l = str(spec.get("skill_name") or "").lower()
+    if any(word in skill_name_l for word in ("research", "tech", "science")):
+        try:
+            from . import knowledge
+
+            objective = str(spec.get("goal") or spec.get("objective") or "launch_rocket_program")
+            reference = knowledge.objective_research_reference(objective)
+            if reference:
+                parts += [
+                    "RESEARCHABLE TECHNOLOGIES (research THESE by NAME via a research action; they are NOT items.",
+                    "Each is researched by consuming the listed science-pack ITEMS in labs. NEVER pass a science-pack",
+                    "name (e.g. 'automation-science-pack') as the technology to research -- the technology is e.g. 'automation'.):",
+                    json.dumps(reference, ensure_ascii=False)[:2200],
+                    "",
+                ]
+        except Exception:  # noqa: BLE001 - tech reference is best-effort
+            pass
     parts += [
         f"Skill name to implement: {spec.get('skill_name')}",
         f"Why the strategy layer wants it: {spec.get('reason') or '(unspecified)'}",

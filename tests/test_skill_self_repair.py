@@ -404,6 +404,29 @@ class StaleInProgressRecoveryTests(_Base):
         self.assertTrue(ok)
 
 
+class TechReferenceTests(unittest.TestCase):
+    def test_research_reference_distinguishes_tech_from_science_pack(self):
+        from factorio_ai import knowledge as k
+
+        ref = k.objective_research_reference()
+        self.assertIn("automation", ref)  # the researchable technology
+        self.assertNotIn("automation-science-pack", ref)  # that's a pack ITEM, not a tech
+        self.assertEqual(ref["automation"]["science_packs"].get("automation-science-pack"), 10)
+
+    def test_codegen_prompt_includes_tech_reference_for_research_skill(self):
+        from factorio_ai.skill_foundry import _build_codegen_prompt
+
+        prompt = _build_codegen_prompt({"skill_name": "research_automation", "mode": "override"}, [{"entities": []}], "")
+        self.assertIn("RESEARCHABLE TECHNOLOGIES", prompt)
+        self.assertIn("automation", prompt)
+
+    def test_codegen_prompt_omits_tech_reference_for_non_research_skill(self):
+        from factorio_ai.skill_foundry import _build_codegen_prompt
+
+        prompt = _build_codegen_prompt({"skill_name": "build_belt_line", "mode": "override"}, [{"entities": []}], "")
+        self.assertNotIn("RESEARCHABLE TECHNOLOGIES", prompt)
+
+
 class CodegenPromptObstacleTests(unittest.TestCase):
     def test_override_prompt_has_obstacle_pattern_and_injected_diagnostics(self):
         from factorio_ai.skill_foundry import _build_codegen_prompt

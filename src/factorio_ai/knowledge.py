@@ -569,6 +569,29 @@ def technology_chain_for_recipe(recipe_name: str) -> list[dict[str, Any]]:
     return technology_chain(recipe.technology)
 
 
+def objective_research_reference(objective: str = "launch_rocket_program", limit: int = 40) -> dict[str, dict[str, Any]]:
+    """{technology: {science_packs, prerequisites, unlocks}} for the objective's tech chain.
+
+    Tells the LLM which RESEARCHABLE TECHNOLOGIES exist (distinct from science-pack ITEMS),
+    what each consumes, and its prerequisites -- so a research skill targets a real technology
+    (e.g. 'automation'), not a science pack name ('automation-science-pack').
+    """
+    reference: dict[str, dict[str, Any]] = {}
+    for root in objective_roots(objective):
+        for tech in technology_chain_for_recipe(root):
+            name = tech.get("name")
+            if not name or name in reference:
+                continue
+            reference[name] = {
+                "science_packs": tech.get("science_packs") or {},
+                "prerequisites": tech.get("prerequisites") or [],
+                "unlocks": (tech.get("unlocks") or [])[:6],
+            }
+            if len(reference) >= limit:
+                return reference
+    return reference
+
+
 def technology_chain(technology_name: str, _seen: set[str] | None = None) -> list[dict[str, Any]]:
     seen = set(_seen or set())
     if technology_name in seen:
