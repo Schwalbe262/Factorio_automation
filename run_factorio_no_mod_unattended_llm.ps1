@@ -31,15 +31,17 @@ $env:FACTORIO_AI_SLURM_SCHEDULER_PRIORITY = "100"
 $env:FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS = "a6000ada,a6000"
 $env:FACTORIO_AI_SLURM_LAYOUT_CPUS = "3"
 $env:FACTORIO_AI_SLURM_LAYOUT_PRIORITY = "80"
-# Code-specialized 32B at 4-bit AWQ (~18GB) fits one A6000; far better at writing skill code
-# than the 9B (which could not produce passing skills). Two instances (one per GPU) below.
-$env:FACTORIO_AI_VLLM_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
-$env:FACTORIO_AI_VLLM_ARGS = "--max-model-len 32768 --gpu-memory-utilization 0.90 --quantization awq --enforce-eager"
+# Qwen3.6-27B at FP8 (~27GB) fits one A6000; far stronger at strategy + skill codegen than the
+# 9B (which could not produce passing skills). FP8 is vLLM-autodetected from the model config.
+# Two instances (one per GPU) below. If FP8 fails on a plain (Ampere) a6000, fall back to an AWQ
+# 4-bit repo (e.g. QuantTrio/Qwen3.6-27B-AWQ).
+$env:FACTORIO_AI_VLLM_MODEL = "Qwen/Qwen3.6-27B-FP8"
+$env:FACTORIO_AI_VLLM_ARGS = "--max-model-len 32768 --gpu-memory-utilization 0.90 --enforce-eager"
 $env:FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER = "0"
 $env:FACTORIO_AI_VLLM_PORT = "8000"
 $env:FACTORIO_AI_VLLM_STARTUP_SECONDS = "420"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED = "1"
-# Run 2 warm 32B-AWQ instances (each on its own GPU/node) for parallel throughput +
+# Run 2 warm 27B-FP8 instances (each on its own GPU/node) for parallel throughput +
 # redundancy: client tasks round-robin across them and one can serve while the
 # other cold-loads or restarts. All share port 8000 (each on its own node).
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT = "2"
