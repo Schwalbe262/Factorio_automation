@@ -359,6 +359,14 @@ def main(argv: list[str] | None = None) -> None:
     validate_layout_parser.add_argument("--player", help="Preferred no-mod player name for observation")
     validate_layout_parser.add_argument("--no-cleanup", action="store_true", help="Leave the sandbox surface in the save")
 
+    design_cells_parser = subparsers.add_parser(
+        "design-cells",
+        help="Observe the live game and deterministically design + store optimal cell layouts for the top production deficits",
+    )
+    design_cells_parser.add_argument("--objective", default="launch_rocket_program")
+    design_cells_parser.add_argument("--top", type=int, default=3, help="How many top-deficit items to design")
+    design_cells_parser.add_argument("--player", help="Preferred no-mod player name for observation")
+
     token_parser = subparsers.add_parser("record-token-usage", help="Append a Codex token usage sample")
     token_parser.add_argument("--tokens-used", type=int, required=True)
     token_parser.add_argument("--label", default="")
@@ -866,6 +874,16 @@ def main(argv: list[str] | None = None) -> None:
                 include_planning_sites=args.full_planning_sites,
             )
         )
+        return
+
+    if args.command == "design-cells":
+        from . import cell_autodesign
+
+        observation = ModlessLuaController(cfg).observe(
+            player_name=getattr(args, "player", None),
+            include_planning_sites=False,
+        )
+        print_json(cell_autodesign.design_cells(cfg, observation, objective=args.objective, top_n=args.top))
         return
 
     if args.command == "no-mod-action":

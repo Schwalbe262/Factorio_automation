@@ -262,16 +262,47 @@ def run_strategy_request(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(payload.get("selected_improvement_site"), dict)
         else {},
     )
+    # C6: annotate the recommendation with a concrete production target (item + the measured
+    # per-minute deficit), so it reads "build/expand <item> @ <rate>/min" and feeds the cell
+    # pipeline. Purely additive — does not change skill selection.
+    production_target = _top_production_deficit(payload)
     if llm_result is not None:
         llm_result = _augment_llm_strategy_with_heuristic_support(llm_result, heuristic_result)
         llm_result["source"] = "llm"
         llm_result.update(llm_diagnostics)
+        if production_target:
+            llm_result.setdefault("production_target", production_target)
         return llm_result
     result = heuristic_result
     result["source"] = "heuristic"
     result["ok"] = True
     result.update({key: value for key, value in llm_diagnostics.items() if value not in (None, "")})
+    if production_target:
+        result.setdefault("production_target", production_target)
     return result
+
+
+def _top_production_deficit(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """The item with the largest current per-minute production deficit + that deficit, derived
+    deterministically from the observation and the production targets. None if nothing is short."""
+    observation = payload.get("observation") if isinstance(payload.get("observation"), dict) else {}
+    targets = payload.get("production_targets") if isinstance(payload.get("production_targets"), dict) else {}
+    if not observation or not targets:
+        return None
+    try:
+        from .monitor import estimate_production, production_target_status
+
+        status = production_target_status(targets, estimate_production(observation))
+    except Exception:  # noqa: BLE001 - annotation only; never break strategy on a derivation error
+        return None
+    best: dict[str, Any] | None = None
+    for row in status.get("items", []) if isinstance(status, dict) else []:
+        if not isinstance(row, dict):
+            continue
+        deficit = float(row.get("deficit_per_minute") or 0.0)
+        if deficit > 0 and (best is None or deficit > best["target_rate_per_minute"]):
+            best = {"item": row.get("item"), "target_rate_per_minute": round(deficit, 3), "action": "build_or_expand"}
+    return best
 
 
 def _augment_llm_strategy_with_heuristic_support(llm_result: dict[str, Any], heuristic_result: dict[str, Any]) -> dict[str, Any]:
