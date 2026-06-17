@@ -1357,7 +1357,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
 
     <section class="panel">
       <h2>{_t(lang, "dependency_tree")}</h2>
-      <pre>{escape(json.dumps(dependency, ensure_ascii=False, indent=2))}</pre>
+      {_dependency_tree_html(dependency)}
     </section>
     """
     return _page(title, body, lang, state.get("objective"))
@@ -1477,6 +1477,16 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
       font-size: 12px;
       line-height: 1.45;
     }}
+    .deptree {{ font-size: 13px; line-height: 1.6; }}
+    .deptree details {{ margin-left: 14px; }}
+    .deptree > details {{ margin-left: 0; }}
+    .deptree summary {{ cursor: pointer; user-select: none; }}
+    .deptree summary:hover {{ color: #8ab4f8; }}
+    .dep-leaf {{ margin-left: 28px; }}
+    .dep-amt {{ color: #c9a227; }}
+    .dep-tech {{ color: #7aa2f7; font-size: 11px; }}
+    .dep-raw {{ color: #6b7280; font-size: 11px; }}
+    .dep-infra {{ margin-top: 10px; border-top: 1px solid #23262b; padding-top: 8px; }}
     .trace-entry {{
       border-top: 1px solid #2a3036;
       padding-top: 14px;
@@ -3617,6 +3627,67 @@ def _tech_table(rows: list[Any], lang: str) -> str:
         f"<table><thead><tr><th>{_t(lang, 'technology')}</th><th>{_t(lang, 'prerequisites')}</th>"
         f"<th>{_t(lang, 'unlocks')}</th></tr></thead><tbody>{body}</tbody></table>"
     )
+
+
+def _dep_amount(amount: Any) -> str:
+    try:
+        value = float(amount)
+    except (TypeError, ValueError):
+        return escape(str(amount))
+    return str(int(value)) if value == int(value) else f"{value:g}"
+
+
+def _dep_node_html(node: Any, amount: Any = None) -> str:
+    if not isinstance(node, dict):
+        return ""
+    item = escape(str(node.get("item") or "?"))
+    amt = "" if amount is None else f' <span class="dep-amt">x{_dep_amount(amount)}</span>'
+    if node.get("cycle_or_depth_limit"):
+        return f'<div class="dep-leaf">{item}{amt} <span class="muted">...</span></div>'
+    tag = ""
+    if node.get("raw_resource"):
+        tag = ' <span class="dep-raw">raw</span>'
+    elif node.get("technology"):
+        tag = f' <span class="dep-tech">[{escape(str(node.get("technology")))}]</span>'
+    children = node.get("ingredients") if isinstance(node.get("ingredients"), list) else []
+    if not children:
+        return f'<div class="dep-leaf">{item}{amt}{tag}</div>'
+    inner = "".join(
+        _dep_node_html(
+            child.get("dependency") if isinstance(child, dict) else None,
+            child.get("amount") if isinstance(child, dict) else None,
+        )
+        for child in children
+    )
+    return f'<details class="dep-node"><summary>{item}{amt}{tag}</summary>{inner}</details>'
+
+
+def _dependency_tree_html(forest: Any) -> str:
+    if not isinstance(forest, list) or not forest:
+        return '<p class="muted">(none)</p>'
+    roots = [n for n in forest if isinstance(n, dict) and not n.get("infrastructure")]
+    infra = [n for n in forest if isinstance(n, dict) and n.get("infrastructure")]
+    parts = ['<div class="deptree">']
+    for node in roots:
+        item = escape(str(node.get("item") or "?"))
+        tech = node.get("technology")
+        tag = f' <span class="dep-tech">[{escape(str(tech))}]</span>' if tech else ""
+        children = node.get("ingredients") if isinstance(node.get("ingredients"), list) else []
+        inner = "".join(
+            _dep_node_html(
+                child.get("dependency") if isinstance(child, dict) else None,
+                child.get("amount") if isinstance(child, dict) else None,
+            )
+            for child in children
+        ) or '<div class="dep-leaf muted">(raw / no recipe)</div>'
+        parts.append(f'<details class="dep-node" open><summary>{item}{tag}</summary>{inner}</details>')
+    if infra:
+        parts.append('<details class="dep-infra"><summary><strong>production buildings</strong></summary>')
+        for node in infra:
+            parts.append(_dep_node_html(node))
+        parts.append("</details>")
+    parts.append("</div>")
+    return "".join(parts)
 
 
 def _list(title: str, values: Any) -> str:

@@ -978,10 +978,10 @@ def _codegen_vocabulary() -> str:
         from . import knowledge
         from .models import ALLOWED_ACTION_TYPES
 
-        recipes = sorted(knowledge.RECIPES.keys())
+        recipes = sorted(knowledge.ALL_RECIPES.keys())
         raws = sorted(knowledge.RAW_RESOURCES)
         items: set[str] = set()
-        for recipe in knowledge.RECIPES.values():
+        for recipe in knowledge.ALL_RECIPES.values():
             items.update(recipe.products.keys())
             items.update(recipe.ingredients.keys())
         actions = sorted(ALLOWED_ACTION_TYPES)

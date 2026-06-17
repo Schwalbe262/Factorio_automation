@@ -6,6 +6,7 @@ from typing import Any
 
 from .blueprints import encode_blueprint_entities
 from .knowledge import (
+    ALL_RECIPES,
     RAW_RESOURCES,
     RECIPES,
     dependency_tree_for_objective,
@@ -1921,7 +1922,7 @@ def _technology_researched(observation: dict[str, Any], technology: str) -> bool
 
 def _dependents(required: set[str]) -> dict[str, list[str]]:
     output: dict[str, list[str]] = {}
-    for recipe in RECIPES.values():
+    for recipe in ALL_RECIPES.values():
         for ingredient in recipe.ingredients:
             if ingredient in required:
                 output.setdefault(ingredient, []).extend(recipe.products.keys())

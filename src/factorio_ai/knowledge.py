@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 
@@ -243,6 +246,93 @@ TECHNOLOGIES: dict[str, Technology] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Authoritative full game data (Factorio 2.0 / Space Age) dumped from the live
+# server via tools/dump_game_data.py. The curated RECIPES/TECHNOLOGIES above stay
+# the planner's stable, hand-tuned source of truth; the full set below powers the
+# dependency tree, bottleneck analysis, and the skill-foundry codegen vocabulary.
+# ---------------------------------------------------------------------------
+
+_DATA_PATH = Path(__file__).resolve().parent / "data" / "game_data.json"
+
+
+def _load_game_data() -> tuple[dict[str, Recipe], dict[str, Technology]]:
+    try:
+        raw = json.loads(_DATA_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return dict(RECIPES), dict(TECHNOLOGIES)
+
+    techs_raw = raw.get("technologies") if isinstance(raw.get("technologies"), dict) else {}
+    recipes_raw = raw.get("recipes") if isinstance(raw.get("recipes"), dict) else {}
+
+    recipe_tech: dict[str, str] = {}
+    for tname, tdata in techs_raw.items():
+        if isinstance(tdata, dict):
+            for rname in tdata.get("unlocks") or []:
+                recipe_tech.setdefault(str(rname), str(tname))
+
+    recipes: dict[str, Recipe] = {}
+    for name, rdata in recipes_raw.items():
+        if not isinstance(rdata, dict):
+            continue
+        enabled = bool(rdata.get("enabled"))
+        recipes[name] = Recipe(
+            name=name,
+            time_seconds=float(rdata.get("energy") or 0.5),
+            ingredients={str(k): float(v) for k, v in (rdata.get("ingredients") or {}).items()},
+            products={str(k): float(v) for k, v in (rdata.get("products") or {}).items()},
+            technology=None if enabled else recipe_tech.get(name),
+        )
+
+    technologies: dict[str, Technology] = {}
+    for name, tdata in techs_raw.items():
+        if not isinstance(tdata, dict):
+            continue
+        count = int(tdata.get("unit_count") or 0)
+        packs_raw = tdata.get("science_packs") if isinstance(tdata.get("science_packs"), dict) else {}
+        packs = {str(k): (int(v) * count if count else int(v)) for k, v in packs_raw.items()}
+        technologies[name] = Technology(
+            name=name,
+            prerequisites=[str(p) for p in (tdata.get("prerequisites") or [])],
+            science_packs=packs,
+            unlocks=[str(u) for u in (tdata.get("unlocks") or [])],
+        )
+
+    # Hand-curated entries win where both define the same name: the planner is
+    # tuned against those exact shapes, so keep the two views consistent there.
+    recipes.update(RECIPES)
+    technologies.update(TECHNOLOGIES)
+    return recipes, technologies
+
+
+ALL_RECIPES, ALL_TECHNOLOGIES = _load_game_data()
+
+
+# Production buildings / infrastructure surfaced as their own dependency trees so
+# the planner LLM can reason about producing them (not just the objective's
+# critical path). Filtered to whatever the loaded data actually defines.
+INFRASTRUCTURE_ROOTS: list[str] = [
+    # smelting
+    "stone-furnace", "steel-furnace", "electric-furnace",
+    # assembling
+    "assembling-machine-1", "assembling-machine-2", "assembling-machine-3",
+    # mining / pumping
+    "burner-mining-drill", "electric-mining-drill", "big-mining-drill", "pumpjack",
+    # power
+    "offshore-pump", "boiler", "steam-engine", "solar-panel", "accumulator",
+    "nuclear-reactor", "heat-exchanger", "steam-turbine",
+    # belts / inserters / pipes
+    "transport-belt", "fast-transport-belt", "express-transport-belt",
+    "underground-belt", "splitter", "inserter", "fast-inserter", "bulk-inserter",
+    "long-handed-inserter", "pipe", "pipe-to-ground", "pump",
+    # electric distribution
+    "small-electric-pole", "medium-electric-pole", "big-electric-pole", "substation",
+    # production / processing
+    "oil-refinery", "chemical-plant", "lab", "biolab", "storage-tank", "radar",
+    "electromagnetic-plant", "foundry", "biochamber", "cryogenic-plant", "recycler",
+]
+
+
 OBJECTIVE_ROOTS = {
     "launch_rocket_program": ["rocket-silo", "rocket-part"],
     "rocket": ["rocket-silo", "rocket-part"],
@@ -252,7 +342,13 @@ OBJECTIVE_ROOTS = {
 }
 
 
-RAW_RESOURCES = {"iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water", "wood"}
+RAW_RESOURCES = {
+    # mined / pumped primaries — terminal leaves of the dependency tree
+    "iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water", "wood",
+    "uranium-ore", "calcite", "tungsten-ore", "holmium-ore",
+    # Space Age planet primaries with no standard crafting recipe (truly dangling)
+    "scrap", "lava", "lithium-brine", "fluorine", "ammoniacal-solution",
+}
 
 
 def objective_roots(objective: str) -> list[str]:
@@ -266,8 +362,24 @@ def objective_roots(objective: str) -> list[str]:
     return OBJECTIVE_ROOTS.get(normalized, [normalized])
 
 
-def dependency_tree_for_objective(objective: str, max_depth: int = 4) -> list[dict[str, Any]]:
-    return [dependency_tree(item, max_depth=max_depth) for item in objective_roots(objective)]
+def dependency_tree_for_objective(
+    objective: str,
+    max_depth: int = 4,
+    *,
+    include_infrastructure: bool = True,
+    infrastructure_depth: int = 2,
+) -> list[dict[str, Any]]:
+    trees = [dependency_tree(item, max_depth=max_depth) for item in objective_roots(objective)]
+    if include_infrastructure:
+        seen = {tree.get("item") for tree in trees}
+        for item in INFRASTRUCTURE_ROOTS:
+            if item in seen or item not in ALL_RECIPES:
+                continue
+            tree = dependency_tree(item, max_depth=infrastructure_depth)
+            tree["infrastructure"] = True
+            trees.append(tree)
+            seen.add(item)
+    return trees
 
 
 def dependency_tree(item: str, max_depth: int = 4, _seen: set[str] | None = None) -> dict[str, Any]:
@@ -303,7 +415,7 @@ def required_items_for_objective(objective: str, max_depth: int = 4) -> set[str]
 
 
 def technology_chain_for_recipe(recipe_name: str) -> list[dict[str, Any]]:
-    recipe = RECIPES.get(recipe_name)
+    recipe = ALL_RECIPES.get(recipe_name)
     if recipe is None or recipe.technology is None:
         return []
     return technology_chain(recipe.technology)
@@ -314,7 +426,7 @@ def technology_chain(technology_name: str, _seen: set[str] | None = None) -> lis
     if technology_name in seen:
         return []
     seen.add(technology_name)
-    tech = TECHNOLOGIES.get(technology_name)
+    tech = ALL_TECHNOLOGIES.get(technology_name)
     if tech is None:
         return [{"name": technology_name, "missing_static_data": True}]
     chain: list[dict[str, Any]] = []
@@ -324,11 +436,42 @@ def technology_chain(technology_name: str, _seen: set[str] | None = None) -> lis
     return chain
 
 
+def _is_alt_recipe(name: str) -> bool:
+    # recycling (and similar) recipes also "produce" base items; never canonical.
+    return name.endswith("-recycling")
+
+
+@lru_cache(maxsize=1)
+def _canonical_product_map() -> dict[str, str]:
+    """item -> canonical recipe name.
+
+    With the full Space Age data many items are produced by several recipes
+    (e.g. iron-plate via smelting *and* Fulgora recycling). Pick the standard one
+    so the dependency tree follows the intended chain: prefer the recipe named
+    after the item, then non-recycling, then base-enabled, then the simplest.
+    """
+    by_product: dict[str, list[Recipe]] = {}
+    for recipe in ALL_RECIPES.values():
+        for product in recipe.products:
+            by_product.setdefault(product, []).append(recipe)
+    chosen: dict[str, str] = {}
+    for item, candidates in by_product.items():
+        named = next((r for r in candidates if r.name == item), None)
+        if named is not None:
+            chosen[item] = named.name
+            continue
+        pool = [r for r in candidates if not _is_alt_recipe(r.name)] or candidates
+        base = [r for r in pool if r.technology is None]
+        pool = base or pool
+        chosen[item] = min(pool, key=lambda r: (len(r.ingredients), r.name)).name
+    return chosen
+
+
 def recipe_for_product(item: str) -> Recipe | None:
-    for recipe in RECIPES.values():
-        if item in recipe.products:
-            return recipe
-    return None
+    if item in RAW_RESOURCES:
+        return None
+    name = _canonical_product_map().get(item)
+    return ALL_RECIPES.get(name) if name else None
 
 
 def _collect_required(item: str, output: set[str], max_depth: int) -> None:
