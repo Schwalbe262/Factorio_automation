@@ -1207,6 +1207,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     technologies = monitor.get("technology_chain") if isinstance(monitor.get("technology_chain"), list) else []
     dependency = monitor.get("dependency_tree") if isinstance(monitor.get("dependency_tree"), list) else []
     dependency_map = monitor.get("dependency_map") if isinstance(monitor.get("dependency_map"), dict) else {}
+    crafting_facilities = monitor.get("crafting_facilities") if isinstance(monitor.get("crafting_facilities"), dict) else {}
     target_status = monitor.get("target_status") if isinstance(monitor.get("target_status"), dict) else {}
     targets = state.get("targets") if isinstance(state.get("targets"), dict) else {}
     targets_per_minute = targets.get("per_minute") if isinstance(targets.get("per_minute"), dict) else {}
@@ -1362,7 +1363,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
 
     <section class="panel">
       <h2>{_t(lang, "dependency_tree")}</h2>
-      {_dependency_map_html(dependency_map) if dependency_map else _dependency_tree_html(dependency)}
+      {_dependency_map_html(dependency_map, crafting_facilities) if dependency_map else _dependency_tree_html(dependency)}
     </section>
     """
     return _page(title, body, lang, state.get("objective"))
@@ -3732,32 +3733,53 @@ def _dependency_tree_html(forest: Any) -> str:
     return "".join(parts)
 
 
-def _dependency_map_html(flat_map: Any) -> str:
-    """Flat recipe map view: EVERY item -> its direct ingredients (one hop).
-
-    Matches what the strategy LLM receives. Each item is a collapsed <details> (so the
-    page is a searchable list of all item names; expand to see direct ingredients), with
-    a stable id so open/closed state survives the auto-refresh.
+def _dependency_map_html(flat_map: Any, facilities: Any = None) -> str:
+    """Full recipe map view: EVERY item -> direct ingredients + amounts, output count,
+    crafting category, and fluid flag. A compact category->facility legend is shown once
+    on top (not repeated per item). Each item is a collapsed <details> with a stable id so
+    open/closed state survives the auto-refresh.
     """
     if not isinstance(flat_map, dict) or not flat_map:
         return '<p class="muted">(none)</p>'
     parts = [
-        f'<p class="muted">{len(flat_map)} items (flat: each item shows its direct ingredients)</p>',
-        '<div class="deptree">',
+        f'<p class="muted">{len(flat_map)} items '
+        f'(item: ingredient&times;amount; [category] -&gt; facility legend; out&times;N if &gt;1; fluid marked)</p>'
     ]
+    if isinstance(facilities, dict) and facilities:
+        rows = "".join(
+            f"<tr><td>{escape(str(cat))}</td><td>{escape(', '.join(str(m) for m in machines))}</td></tr>"
+            for cat, machines in sorted(facilities.items())
+        )
+        parts.append(
+            '<details class="dep-infra" id="depmap:__facilities__"><summary><strong>crafting facilities '
+            f'(category &rarr; machines)</strong></summary><table><thead><tr><th>category</th><th>facilities'
+            f'</th></tr></thead><tbody>{rows}</tbody></table></details>'
+        )
+    parts.append('<div class="deptree">')
     for item in sorted(flat_map):
-        ingredients = flat_map[item]
+        entry = flat_map[item]
         item_e = escape(str(item))
         det_id = escape(f"depmap:{item}")
-        if isinstance(ingredients, list) and ingredients:
-            ing_html = ", ".join(escape(str(i)) for i in ingredients)
+        if isinstance(entry, dict):
+            ings = entry.get("in") if isinstance(entry.get("in"), dict) else {}
+            ing_html = ", ".join(f"{escape(str(k))}&times;{escape(str(v))}" for k, v in ings.items()) or "(raw inputs)"
+            tags = ""
+            if entry.get("out") not in (None, 1):
+                tags += f' <span class="dep-amt">out&times;{escape(str(entry.get("out")))}</span>'
+            if entry.get("cat"):
+                tags += f' <span class="dep-tech">[{escape(str(entry.get("cat")))}]</span>'
+            if entry.get("fluid"):
+                tags += ' <span class="dep-raw">fluid</span>'
             parts.append(
-                f'<details class="dep-node" id="{det_id}"><summary>{item_e} '
-                f'<span class="muted">({len(ingredients)})</span></summary>'
+                f'<details class="dep-node" id="{det_id}"><summary>{item_e}{tags}</summary>'
                 f'<div class="dep-leaf">{ing_html}</div></details>'
             )
-        else:
-            parts.append(f'<div class="dep-leaf">{item_e} <span class="dep-raw">raw</span></div>')
+        elif isinstance(entry, list):  # legacy flat name list
+            ing_html = ", ".join(escape(str(i)) for i in entry) or "(raw)"
+            parts.append(
+                f'<details class="dep-node" id="{det_id}"><summary>{item_e}</summary>'
+                f'<div class="dep-leaf">{ing_html}</div></details>'
+            )
     parts.append("</div>")
     return "".join(parts)
 

@@ -260,7 +260,7 @@ def _load_game_data() -> tuple[dict[str, Recipe], dict[str, Technology]]:
     try:
         raw = json.loads(_DATA_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, ValueError):
-        return dict(RECIPES), dict(TECHNOLOGIES), []
+        return dict(RECIPES), dict(TECHNOLOGIES), [], {}
 
     techs_raw = raw.get("technologies") if isinstance(raw.get("technologies"), dict) else {}
     recipes_raw = raw.get("recipes") if isinstance(raw.get("recipes"), dict) else {}
@@ -313,14 +313,69 @@ def _load_game_data() -> tuple[dict[str, Recipe], dict[str, Technology]]:
         and "infinity" not in name
     )
 
+    # recipe name -> crafting category (kept in a side map so the curated merge below,
+    # which lacks categories, doesn't clobber it). Drives the category->facility lookup.
+    recipe_category = {
+        name: str(rdata.get("category"))
+        for name, rdata in recipes_raw.items()
+        if isinstance(rdata, dict) and rdata.get("category")
+    }
+
     # Hand-curated entries win where both define the same name: the planner is
     # tuned against those exact shapes, so keep the two views consistent there.
     recipes.update(RECIPES)
     technologies.update(TECHNOLOGIES)
-    return recipes, technologies, infra_roots
+    return recipes, technologies, infra_roots, recipe_category
 
 
-ALL_RECIPES, ALL_TECHNOLOGIES, _DERIVED_INFRA_ROOTS = _load_game_data()
+ALL_RECIPES, ALL_TECHNOLOGIES, _DERIVED_INFRA_ROOTS, _RECIPE_CATEGORY = _load_game_data()
+
+
+# --------------------------------------------------------------------------- #
+# Crafting facilities + fluids (stable game knowledge; the live dump of these is
+# RCON-contended, so encoded here -- category is authoritative from the data above).
+# A compact category -> facilities legend so each item only carries a short category
+# code instead of repeating the machine list.
+# --------------------------------------------------------------------------- #
+CRAFTING_FACILITIES: dict[str, list[str]] = {
+    "crafting": ["assembling-machine-1", "assembling-machine-2", "assembling-machine-3"],
+    "advanced-crafting": ["assembling-machine-2", "assembling-machine-3"],
+    "crafting-with-fluid": ["assembling-machine-2", "assembling-machine-3"],
+    "crafting-with-fluid-or-metallurgy": ["assembling-machine-2", "assembling-machine-3", "foundry"],
+    "smelting": ["stone-furnace", "steel-furnace", "electric-furnace"],
+    "metallurgy": ["foundry"],
+    "metallurgy-or-assembling": ["foundry", "assembling-machine-2", "assembling-machine-3"],
+    "electronics": ["electromagnetic-plant", "assembling-machine-1", "assembling-machine-2", "assembling-machine-3"],
+    "electronics-or-assembling": ["electromagnetic-plant", "assembling-machine-2", "assembling-machine-3"],
+    "electronics-with-fluid": ["electromagnetic-plant"],
+    "electromagnetics": ["electromagnetic-plant"],
+    "chemistry": ["chemical-plant"],
+    "chemistry-or-cryogenics": ["chemical-plant", "cryogenic-plant"],
+    "cryogenics": ["cryogenic-plant"],
+    "cryogenics-or-assembling": ["cryogenic-plant", "assembling-machine-2", "assembling-machine-3"],
+    "oil-processing": ["oil-refinery"],
+    "organic": ["biochamber"],
+    "organic-or-assembling": ["biochamber", "assembling-machine-2", "assembling-machine-3"],
+    "organic-or-chemistry": ["biochamber", "chemical-plant"],
+    "organic-or-hand-crafting": ["biochamber"],
+    "centrifuging": ["centrifuge"],
+    "rocket-building": ["rocket-silo"],
+    "recycling": ["recycler"],
+    "recycling-or-hand-crafting": ["recycler"],
+    "crushing": ["crusher"],
+    "pressing": ["assembling-machine-2", "assembling-machine-3"],
+    "captive-spawner-process": ["biochamber"],
+}
+
+# Fluids (item names that are fluids, not solid items). High-confidence set; an item
+# not listed is treated as a solid. Refine from prototypes.fluid via tools/dump_game_data.py.
+FLUIDS: set[str] = {
+    "water", "steam", "crude-oil", "heavy-oil", "light-oil", "petroleum-gas",
+    "sulfuric-acid", "lubricant", "lava", "molten-iron", "molten-copper",
+    "holmium-solution", "electrolyte", "fluorine", "fluoroketone-hot",
+    "fluoroketone-cold", "lithium-brine", "ammonia", "ammoniacal-solution",
+    "thruster-fuel", "thruster-oxidizer", "fusion-plasma",
+}
 
 
 # Fallback used only if the game-data dump is missing (loader returns no roots).
@@ -450,6 +505,61 @@ def flat_dependency_map(roots: list[str] | None = None) -> dict[str, list[str]]:
         if recipe is not None:
             out[item] = sorted(recipe.ingredients.keys())
     return out
+
+
+def _num(value: Any) -> Any:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return value
+    return int(number) if number == int(number) else round(number, 3)
+
+
+def is_fluid(item: str) -> bool:
+    return item in FLUIDS
+
+
+def recipe_category_for(item: str) -> str | None:
+    recipe = recipe_for_product(item)
+    return _RECIPE_CATEGORY.get(recipe.name) if recipe is not None else None
+
+
+def recipe_details(items: Any) -> dict[str, dict[str, Any]]:
+    """Rich, compact recipe info for the given items:
+
+        {item: {"in": {ingredient: amount}, "out": n (omitted if 1),
+                "cat": crafting-category (-> CRAFTING_FACILITIES), "fluid": true (omitted if false)}}
+
+    "cat" is a short code into the facility legend (facility_legend) so the machine list
+    isn't repeated per item; "out"/"fluid" are omitted at their defaults to stay compact.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for item in items:
+        recipe = recipe_for_product(item)
+        if recipe is None:
+            continue
+        product_amount = recipe.products.get(item)
+        if product_amount is None and recipe.products:
+            product_amount = next(iter(recipe.products.values()))
+        entry: dict[str, Any] = {"in": {k: _num(v) for k, v in recipe.ingredients.items()}}
+        if product_amount not in (None, 1, 1.0):
+            entry["out"] = _num(product_amount)
+        category = _RECIPE_CATEGORY.get(recipe.name)
+        if category:
+            entry["cat"] = category
+        if item in FLUIDS:
+            entry["fluid"] = True
+        out[item] = entry
+    return out
+
+
+def facility_legend(categories: Any = None) -> dict[str, list[str]]:
+    """category -> [facilities] table. With ``categories`` given, only those (so a scoped
+    payload ships just the legend rows it actually references)."""
+    if categories is None:
+        return {cat: list(machines) for cat, machines in CRAFTING_FACILITIES.items()}
+    wanted = {str(c) for c in categories}
+    return {cat: list(CRAFTING_FACILITIES[cat]) for cat in wanted if cat in CRAFTING_FACILITIES}
 
 
 def technology_chain_for_recipe(recipe_name: str) -> list[dict[str, Any]]:

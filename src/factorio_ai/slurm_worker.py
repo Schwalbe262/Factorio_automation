@@ -882,10 +882,12 @@ def compact_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
             ("lab_count", "powered_lab_count", "layout_patterns", "recommended_next"),
         ),
         "build_item_supply": _compact_build_item_supply(payload.get("build_item_supply")),
-        # Flat recipe graph {item: [direct ingredients]} for every item (one hop) so the
-        # LLM has complete, non-redundant recipe knowledge instead of ~40 truncated names.
-        "recipe_map": payload.get("dependency_map") if isinstance(payload.get("dependency_map"), dict)
-        else _dependency_items(payload.get("goal_dependency_tree"), limit=40),
+        # Decision-relevant recipes {item: {in,out,cat,fluid}} (scoped to objective+bottlenecks)
+        # plus the category->facility legend. Falls back to the legacy shapes for old payloads.
+        "recipe_map": payload.get("recipe_map") if isinstance(payload.get("recipe_map"), dict)
+        else (payload.get("dependency_map") if isinstance(payload.get("dependency_map"), dict)
+              else _dependency_items(payload.get("goal_dependency_tree"), limit=40)),
+        "crafting_facilities": payload.get("crafting_facilities") if isinstance(payload.get("crafting_facilities"), dict) else {},
         "allowed_skill_names": [str(item.get("name")) for item in executable_skills if item.get("name")],
         "available_skills": _compact_skill_catalog(executable_skills),
         "skill_selection_guidance": [

@@ -1050,6 +1050,26 @@ def _build_codegen_prompt(
             json.dumps(diagnostics, ensure_ascii=False)[:1500],
             "",
         ]
+    # Target item's recipe chain with amounts / crafting facility / fluid flag, scoped to
+    # what THIS skill builds (not the whole game) so generated code uses exact items+amounts
+    # and the right machine.
+    try:
+        from . import knowledge
+
+        roots = [r for r in [str(spec.get("target_item") or ""), str(spec.get("skill_name") or "")] if r]
+        chain = knowledge.flat_dependency_map(roots=roots) if roots else {}
+        details = knowledge.recipe_details(chain.keys()) if chain else {}
+        if details:
+            cats = {entry.get("cat") for entry in details.values() if entry.get("cat")}
+            parts += [
+                "RELEVANT RECIPES (item -> {in: ingredients+amounts, out, cat, fluid}). Use these exact",
+                "items/amounts; craft each at a facility for its category:",
+                json.dumps(details, ensure_ascii=False)[:2200],
+                f"Facilities by category: {json.dumps(knowledge.facility_legend(cats), ensure_ascii=False)}",
+                "",
+            ]
+    except Exception:  # noqa: BLE001 - recipe context is best-effort
+        pass
     parts += [
         f"Skill name to implement: {spec.get('skill_name')}",
         f"Why the strategy layer wants it: {spec.get('reason') or '(unspecified)'}",

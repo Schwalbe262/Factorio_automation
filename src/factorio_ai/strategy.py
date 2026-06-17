@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from math import ceil
 from typing import Any
 
-from .knowledge import flat_dependency_map
+from .knowledge import facility_legend, objective_roots, recipe_details
 from .monitor import recent_damage_events, summarize_factory
 from .models import distance, entities_named, entity_item_count, inventory_count, player_position, total_item_count
 from .planner import (
@@ -529,6 +529,14 @@ def make_strategy_payload(
     selected_improvement_site: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     monitor = summarize_factory(observation, objective, production_targets=production_targets)
+    # Scoped recipe info: only the objective roots + current bottlenecks + targets, not the
+    # whole 300+ recipe encyclopedia. A small local model decides better with decision-relevant
+    # recipes than with the full graph (signal dilution), and the planner already did the math.
+    scope_items = set(objective_roots(objective)) | set((production_targets or {}).keys())
+    for bottleneck in monitor.get("bottlenecks") or []:
+        if isinstance(bottleneck, dict) and bottleneck.get("item"):
+            scope_items.add(str(bottleneck["item"]))
+    recipe_map = recipe_details(scope_items)
     return {
         "objective": objective,
         "observation": observation,
@@ -545,9 +553,10 @@ def make_strategy_payload(
         "research_planning": make_research_planning_context(observation, monitor),
         "threats": make_threat_context(observation),
         "power_networks": monitor.get("power_networks", []),
-        # Flat {item: [direct ingredients]} for ALL items -- one hop, not a deep tree.
-        # Compact + complete + non-redundant; the LLM looks up any item's recipe and chains.
-        "dependency_map": flat_dependency_map(),
+        # Decision-relevant recipes {item: {in:{ing:amt}, out, cat, fluid}} + the
+        # category->facility legend for the categories actually referenced.
+        "recipe_map": recipe_map,
+        "crafting_facilities": facility_legend({e.get("cat") for e in recipe_map.values() if e.get("cat")}),
         "available_skills": skill_catalog_payload(),
         "decision_rule": (
             "Select exactly one high-level skill. Diagnose bottlenecks first. "

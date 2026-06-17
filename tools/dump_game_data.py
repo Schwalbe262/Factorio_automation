@@ -55,8 +55,24 @@ for name, tech in pairs(prototypes.technology) do
     unlocks = unlocks,
   }
 end
+-- fluids (authoritative): used to flag whether an item/ingredient is a fluid
+for name, _ in pairs(prototypes.fluid) do out.fluids[#out.fluids+1] = name end
+-- crafting machines -> the crafting categories they support (to build a category->facilities table).
+-- Filter to machine entity types only (cheap) instead of scanning every prototype (that timed out RCON).
+out.machines = {}
+local machine_types = { ["assembling-machine"] = true, ["furnace"] = true, ["rocket-silo"] = true }
+for name, proto in pairs(prototypes.entity) do
+  if machine_types[proto.type] then
+    local cats = proto.crafting_categories
+    if cats then
+      local list = {}
+      for c, _ in pairs(cats) do list[#list+1] = c end
+      if #list > 0 then out.machines[name] = list end
+    end
+  end
+end
 helpers.write_file("game_data_dump.json", helpers.table_to_json(out), false)
-rcon.print(helpers.table_to_json({ ok = true, recipes = 0, written = "script-output/game_data_dump.json" }))
+rcon.print(helpers.table_to_json({ ok = true, fluids = #out.fluids, written = "script-output/game_data_dump.json" }))
 """
 
 
@@ -64,7 +80,7 @@ def main() -> int:
     cfg = load_config()
     command = _silent_command(_DUMP_LUA)
     client = __import__("factorio_ai.rcon", fromlist=["FactorioRconClient"]).FactorioRconClient(
-        cfg.rcon_host, cfg.rcon_port, cfg.rcon_password
+        cfg.rcon_host, cfg.rcon_port, cfg.rcon_password, timeout=60.0
     )
     with client:
         result = execute_json_lua_command(client, command)

@@ -98,6 +98,34 @@ class FlatDependencyMapTests(unittest.TestCase):
         self.assertNotIn("rocket-silo", m)
 
 
+class RecipeDetailsTests(unittest.TestCase):
+    def test_details_carry_amounts_category_and_fluid(self):
+        d = k.recipe_details(["sulfuric-acid", "electronic-circuit", "iron-plate"])
+        # amounts (how many ingredients needed)
+        self.assertEqual(d["electronic-circuit"]["in"], {"iron-plate": 1, "copper-cable": 3})
+        # crafting category (-> facility legend)
+        self.assertEqual(d["electronic-circuit"].get("cat"), "electronics")
+        self.assertEqual(d["iron-plate"].get("cat"), "smelting")
+        # fluid flag + output count (>1) present only when non-default
+        self.assertTrue(d["sulfuric-acid"].get("fluid"))
+        self.assertEqual(d["sulfuric-acid"].get("out"), 50)
+        self.assertNotIn("fluid", d["electronic-circuit"])
+        self.assertNotIn("out", d["electronic-circuit"])
+
+    def test_facility_legend_is_a_scoped_table(self):
+        legend = k.facility_legend({"smelting", "chemistry"})
+        self.assertEqual(set(legend), {"smelting", "chemistry"})
+        self.assertIn("electric-furnace", legend["smelting"])
+        self.assertIn("chemical-plant", legend["chemistry"])
+        # full legend covers crafting too
+        self.assertIn("crafting", k.facility_legend())
+
+    def test_is_fluid(self):
+        self.assertTrue(k.is_fluid("water"))
+        self.assertTrue(k.is_fluid("sulfuric-acid"))
+        self.assertFalse(k.is_fluid("iron-plate"))
+
+
 class TechnologyMappingTests(unittest.TestCase):
     def test_recipe_technology_resolves_to_chain(self):
         recipe = k.ALL_RECIPES.get("advanced-circuit")
