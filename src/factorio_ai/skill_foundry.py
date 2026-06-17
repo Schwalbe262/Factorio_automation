@@ -109,6 +109,7 @@ BANNED_DUNDERS = {
 
 VALID_STATUSES = {
     "registered",
+    "override_registered",  # a gated generated module that REPLACES a failing hand-written skill
     "candidate",
     "in_progress",
     "failed",
@@ -230,6 +231,24 @@ def registered_generated_skills() -> dict[str, dict[str, Any]]:
     return out
 
 
+def registered_override(name: str) -> dict[str, Any] | None:
+    """An active (gated, non-quarantined) self-repair override for a hand-written skill, or None.
+
+    When this returns None (no override, or it was quarantined after live regression) the controller
+    falls back to the original hand-written skill, which is never deleted.
+    """
+
+    entry = registry_status(name)
+    if not isinstance(entry, dict) or entry.get("status") != "override_registered":
+        return None
+    try:
+        if _entry_file(entry).exists():
+            return entry
+    except OSError:
+        return None
+    return None
+
+
 def update_skill(name: str, **fields: Any) -> dict[str, Any]:
     registry = load_registry()
     entry = registry["skills"].get(name)
@@ -260,7 +279,7 @@ def eligible_for_generation(name: str) -> tuple[bool, str]:
     if not isinstance(entry, dict):
         return True, ""
     status = entry.get("status")
-    if status in {"registered", "in_progress"}:
+    if status in {"registered", "override_registered", "in_progress"}:
         return False, str(status)
     if status in {"quarantined", "disabled"}:
         return False, str(status)
@@ -320,6 +339,7 @@ def enqueue_foundry_request(
     target_item: str | None = None,
     source: str = "autopilot_gap",
     priority: int = 50,
+    mode: str = "new",
 ) -> dict[str, Any]:
     queue = load_foundry_queue(runtime_dir)
     entry = {
@@ -330,6 +350,7 @@ def enqueue_foundry_request(
         "blockers": list(blockers or []),
         "expected_effect": expected_effect,
         "target_item": target_item,
+        "mode": mode,  # "new" (generate a missing skill) or "override" (replace a failing implemented skill)
         "enqueued_at": _now_iso(),
     }
     for index, existing in enumerate(queue):
@@ -983,10 +1004,19 @@ def _build_codegen_prompt(
     blockers = spec.get("blockers")
     blockers_text = ", ".join(blockers) if isinstance(blockers, list) else str(blockers or "")
     sample_text = json.dumps(observation_samples[:2], ensure_ascii=False)[:3000]
-    parts = [
+    parts: list[str] = []
+    if str(spec.get("mode") or "new").strip().lower() == "override":
+        parts += [
+            f"You are REPAIRING an existing skill '{spec.get('skill_name')}' that keeps FAILING in the live game.",
+            "Write a corrected, robust replacement that handles the failure below — e.g. if a build fails, try a",
+            "different position/direction or a different site, skip blocked tiles, and never loop forever on the same",
+            "failing action. Make incremental progress each call and return done=True once the goal is reached.",
+            "",
+        ]
+    parts += [
         f"Skill name to implement: {spec.get('skill_name')}",
         f"Why the strategy layer wants it: {spec.get('reason') or '(unspecified)'}",
-        f"Reported blockers: {blockers_text or '(none)'}",
+        f"Reported blockers (recent live failures): {blockers_text or '(none)'}",
         f"Expected effect: {spec.get('expected_effect') or '(unspecified)'}",
         f"Suggested primary item/target: {spec.get('target_item') or '(infer from name)'}",
         "",
@@ -1162,6 +1192,11 @@ def develop_skill(
     if not name or not name.replace("_", "").isalnum():
         return {"ok": False, "status": "failed", "skill_name": name, "failure_reason": "invalid skill_name"}
 
+    # "override" mode = self-repair of a failing hand-written skill. It must be sandbox-proven before
+    # it can auto-replace a core skill, and it registers under a distinct status.
+    mode = str(spec.get("mode") or "new").strip().lower()
+    is_override = mode == "override"
+
     attempts_budget = max_attempts or _default_max_attempts()
     existing = registry_status(name) or {}
     version = int(existing.get("version") or 0)
@@ -1222,7 +1257,9 @@ def develop_skill(
             continue
 
         gates_passed = ["static_safety", "offline_replay"]
-        want_sandbox = _sandbox_enabled() if run_sandbox is None else run_sandbox
+        # Overrides REPLACE a working-by-default hand-written skill on the live game, so the sandbox
+        # dry-run is mandatory and must actually run (a "skipped" sandbox is not acceptable for them).
+        want_sandbox = True if is_override else (_sandbox_enabled() if run_sandbox is None else run_sandbox)
         if want_sandbox:
             g3 = sandbox_dryrun_gate(cfg, tmp_file, steps=25, target_item=spec.get("target_item"))
             if not g3.passed:
@@ -1231,7 +1268,14 @@ def develop_skill(
                 log_foundry_event(log_dir, "gate_failed", {"skill_name": name, "attempt": attempt, "gate": "sandbox_dryrun", "reasons": g3.reasons})
                 shutil.rmtree(tmp_dir, ignore_errors=True)
                 continue
-            if not g3.details.get("skipped"):
+            if g3.details.get("skipped"):
+                if is_override:
+                    last_reason = "override requires a sandbox dry-run but the sandbox is unavailable"
+                    _archive_attempt(runtime_dir, name, version, attempt, code, {"gate": g3.to_dict(), "sha256": code_sha})
+                    log_foundry_event(log_dir, "gate_failed", {"skill_name": name, "attempt": attempt, "gate": "sandbox_unavailable", "reasons": [last_reason]})
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                    continue
+            else:
                 gates_passed.append("sandbox_dryrun")
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -1243,9 +1287,12 @@ def develop_skill(
         file_path = _relpath_for_registry(module_path)
         history = list(existing.get("history") or [])
         history.append({"version": version, "registered_at": _now_iso(), "gates_passed": gates_passed, "code_sha256": code_sha})
+        registered_status = "override_registered" if is_override else "registered"
         entry = update_skill(
             name,
-            status="registered",
+            status=registered_status,
+            is_override=is_override,
+            base_skill=name if is_override else None,
             class_name=class_name or _guess_class_name(code),
             module=f"factorio_ai.generated_skills.{name}",
             file_path=file_path,
@@ -1253,6 +1300,7 @@ def develop_skill(
             attempts=lifetime_attempts,
             version=version,
             code_sha256=code_sha,
+            live_failures=0,
             last_failure_reason="",
             cooldown_until="",
             target_item=spec.get("target_item"),
@@ -1263,16 +1311,21 @@ def develop_skill(
             history=history[-10:],
         )
         write_runtime_mirror(runtime_dir)
-        log_foundry_event(log_dir, "registered", {"skill_name": name, "version": version, "gates_passed": gates_passed, "file_path": file_path})
+        log_foundry_event(
+            log_dir,
+            "registered",
+            {"skill_name": name, "version": version, "gates_passed": gates_passed, "file_path": file_path, "mode": mode},
+        )
         return {
             "ok": True,
-            "status": "registered",
+            "status": registered_status,
             "skill_name": name,
             "file_path": file_path,
             "class_name": entry.get("class_name"),
             "gates_passed": gates_passed,
             "attempts": lifetime_attempts,
             "version": version,
+            "is_override": is_override,
         }
 
     # Exhausted attempts.

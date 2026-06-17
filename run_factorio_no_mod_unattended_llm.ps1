@@ -63,6 +63,11 @@ $env:FACTORIO_AI_FOUNDRY_SANDBOX_RCON_PORT = "27115"
 $env:FACTORIO_AI_FOUNDRY_SANDBOX_RCON_TIMEOUT = "180"
 $env:FACTORIO_AI_FOUNDRY_MAX_ATTEMPTS = "3"
 $env:FACTORIO_AI_FOUNDRY_MAX_TOKENS = "3072"
+# Self-repair: let the local LLM generate sandbox-gated overrides for hand-written skills that keep
+# failing live (e.g. setup_power on a new map). Auto-applied after gates; auto-rolls back to the
+# original on regression. Requires the sandbox gate above.
+$env:FACTORIO_AI_SKILL_REPAIR_ENABLED = "1"
+$env:FACTORIO_AI_IMPL_REPAIR_FAIL_LIMIT = "3"
 
 $runtimeDir = Join-Path $repoRoot "runtime"
 $logDir = Join-Path $repoRoot "logs"

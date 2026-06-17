@@ -47,6 +47,7 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
 
     registered: list[str] = []
     failed: list[str] = []
+    overrides: list[str] = []
     queue: list[Any] = []
     try:
         from . import skill_foundry
@@ -54,6 +55,9 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
         skills = skill_foundry.load_registry().get("skills") or {}
         if isinstance(skills, dict):
             registered = sorted(n for n, e in skills.items() if isinstance(e, dict) and e.get("status") == "registered")
+            overrides = sorted(
+                n for n, e in skills.items() if isinstance(e, dict) and e.get("status") == "override_registered"
+            )
             failed = sorted(
                 n for n, e in skills.items()
                 if isinstance(e, dict) and e.get("status") in {"failed", "quarantined", "disabled"}
@@ -157,7 +161,7 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
             "age_seconds": _age_seconds(foundry.get("updated_at")),
         },
         "scheduler": scheduler,
-        "generated_skills": {"registered": registered, "queue": queue, "failed": failed},
+        "generated_skills": {"registered": registered, "overrides": overrides, "queue": queue, "failed": failed},
         "recent_decisions": recent,
     }
 
@@ -217,6 +221,7 @@ def format_run_health(summary: dict[str, Any]) -> str:
     )
     gs = summary.get("generated_skills") or {}
     lines.append(f"  generated: registered={gs.get('registered')} queue={gs.get('queue')} failed={gs.get('failed')}")
+    lines.append(f"  self-repair overrides (active): {gs.get('overrides')}")
 
     lines.append("recent decisions (oldest->newest):")
     decisions = summary.get("recent_decisions") or []

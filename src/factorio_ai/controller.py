@@ -104,6 +104,24 @@ def _stall_threshold() -> int:
         return 3
 
 
+# Self-repair: when a hand-written skill fails this many times in a row, enqueue the local LLM to
+# generate a sandbox-gated OVERRIDE that replaces it (auto-rollback to the hand-written one on regress).
+def _skill_repair_enabled() -> bool:
+    return os.getenv("FACTORIO_AI_SKILL_REPAIR_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _impl_repair_fail_limit() -> int:
+    try:
+        return max(2, int(os.getenv("FACTORIO_AI_IMPL_REPAIR_FAIL_LIMIT", "3")))
+    except (TypeError, ValueError):
+        return 3
+
+
+def _repair_core_denylist() -> set[str]:
+    raw = os.getenv("FACTORIO_AI_SKILL_REPAIR_CORE_DENYLIST", "").strip()
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
 @dataclass
 class RunSummary:
     ok: bool
@@ -866,6 +884,7 @@ class FactorioController:
             run = self._run_generated_skill(selected, run_config)
         else:
             run = self._run_skill(**run_config)
+            self._track_implemented_skill_result(objective, selected, run, strategy)
         return StrategyStepSummary(
             ok=run.ok,
             reason=run.reason,
@@ -876,6 +895,71 @@ class FactorioController:
         )
 
     # ------------------------------------------------------------------ #
+    # Self-repair: detect a chronically-failing hand-written skill and ask the
+    # foundry to generate a sandbox-gated override (auto-rollback on regression).
+    # ------------------------------------------------------------------ #
+
+    def _impl_failure_path(self) -> Path:
+        return self.cfg.runtime_dir / "impl-skill-failures.json"
+
+    def _track_implemented_skill_result(
+        self, objective: str, skill_name: str, run: "RunSummary", strategy: dict[str, Any]
+    ) -> None:
+        if skill_name not in IMPLEMENTED_SKILLS:
+            return
+        counts = _read_json_file(self._impl_failure_path())
+        if not isinstance(counts, dict):
+            counts = {}
+        if run.ok:
+            if counts.pop(skill_name, None) is not None:
+                self._write_impl_failures(counts)
+            return
+        entry = counts.get(skill_name) if isinstance(counts.get(skill_name), dict) else {}
+        fails = int(entry.get("fails") or 0) + 1
+        reasons = [str(r) for r in (entry.get("reasons") or []) if r][-3:] + [str(run.reason or "")]
+        counts[skill_name] = {"fails": fails, "reasons": reasons[-4:], "updated_at": datetime.now(timezone.utc).isoformat()}
+        self._write_impl_failures(counts)
+        if (
+            _skill_repair_enabled()
+            and fails >= _impl_repair_fail_limit()
+            and skill_name not in _repair_core_denylist()
+        ):
+            self._enqueue_skill_improvement(skill_name, reasons[-4:], strategy)
+
+    def _write_impl_failures(self, counts: dict[str, Any]) -> None:
+        try:
+            self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+            self._impl_failure_path().write_text(json.dumps(counts, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _enqueue_skill_improvement(self, skill_name: str, reasons: list[str], strategy: dict[str, Any]) -> None:
+        from . import skill_foundry
+
+        ok, _why = skill_foundry.eligible_for_generation(skill_name)
+        if not ok:
+            return
+        try:
+            skill_foundry.enqueue_foundry_request(
+                self.cfg.runtime_dir,
+                skill_name,
+                reason="; ".join(r for r in reasons if r)[:500] or f"{skill_name} keeps failing",
+                blockers=[r for r in reasons if r][-4:],
+                expected_effect=f"Repair {skill_name}: handle the live failures and make progress.",
+                target_item=_strategy_target_item(strategy) or strategy.get("target_item"),
+                source="autopilot_repair",
+                priority=max(0, min(100, _int_or_none(strategy.get("priority")) or 75)),
+                mode="override",
+            )
+            skill_foundry.log_foundry_event(
+                self.cfg.log_dir,
+                "repair_enqueued",
+                {"skill_name": skill_name, "reasons": [r for r in reasons if r][-4:]},
+            )
+        except Exception:  # noqa: BLE001 - enqueue must never break the loop
+            pass
+
+    # ------------------------------------------------------------------ #
     # Self-development: never-stuck missing-executor handling
     # ------------------------------------------------------------------ #
 
@@ -883,10 +967,16 @@ class FactorioController:
         return os.getenv("FACTORIO_AI_FOUNDRY_INLINE", "").strip().lower() in {"1", "true", "yes", "on"}
 
     def _is_generated_skill(self, skill_name: str) -> bool:
-        if skill_name in IMPLEMENTED_SKILLS:
-            return False
         from . import skill_foundry
 
+        # An active self-repair override runs the generated module even for an implemented skill name.
+        try:
+            if skill_foundry.registered_override(skill_name) is not None:
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        if skill_name in IMPLEMENTED_SKILLS:
+            return False
         try:
             entry = skill_foundry.registry_status(skill_name)
         except Exception:  # noqa: BLE001
@@ -1584,6 +1674,12 @@ class FactorioController:
         target_item: str | None = None,
         input_item: str | None = None,
     ) -> dict[str, Any] | None:
+        # An active self-repair override (or a registered generated skill) takes precedence over the
+        # hand-written executor below. _is_generated_skill() is true for both cases.
+        if self._is_generated_skill(skill_name):
+            generated = self._generated_skill_run_config(skill_name, target_count, max_steps)
+            if generated is not None:
+                return generated
         if skill_name == "produce_iron_plate":
             target = target_count or 10
             return {
@@ -1844,7 +1940,7 @@ class FactorioController:
 
         try:
             entry = skill_foundry.registry_status(skill_name)
-            if not isinstance(entry, dict) or entry.get("status") != "registered":
+            if not isinstance(entry, dict) or entry.get("status") not in {"registered", "override_registered"}:
                 return None
             skill_class = skill_foundry.load_generated_skill_class(entry)
             instance = skill_class()
@@ -2036,9 +2132,10 @@ class FactorioController:
             if not name or name in seen:
                 continue
             seen.add(name)
-            if name in IMPLEMENTED_SKILLS:
-                # Already has a hand-written executor; never spend codegen on it. Stale
-                # missing-skills backlog entries can name skills that were implemented later.
+            mode = str(item.get("mode") or "new").strip().lower()
+            # An implemented skill is only eligible in "override" (self-repair) mode; a plain "new"
+            # request for an implemented name is a stale backlog entry and is dropped.
+            if name in IMPLEMENTED_SKILLS and mode != "override":
                 skill_foundry.remove_from_queue(self.cfg.runtime_dir, name)
                 continue
             candidates.append(
@@ -2050,6 +2147,7 @@ class FactorioController:
                     "target_item": item.get("target_item"),
                     "goal": name,
                     "priority": int(item.get("priority") or 50),
+                    "mode": mode,
                 }
             )
         for record in skill_foundry.distinct_missing_skills(self.cfg.runtime_dir):

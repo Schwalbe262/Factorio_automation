@@ -310,6 +310,7 @@ TEXT["en"].update(
         "registered_skills": "Registered Skills",
         "foundry_gates": "Gates Passed",
         "foundry_failures": "Recent Failures / Quarantine",
+        "self_repair_overrides": "Self-Repair Overrides (active)",
         "version": "Version",
         "event": "Event",
         "active_skill": "Active Skill",
@@ -373,6 +374,7 @@ TEXT["ko"].update(
         "registered_skills": "\ub4f1\ub85d\ub41c \uc2a4\ud0ac",
         "foundry_gates": "\ud1b5\uacfc\ud55c \uac8c\uc774\ud2b8",
         "foundry_failures": "\ucd5c\uadfc \uc2e4\ud328 / \uaca9\ub9ac",
+        "self_repair_overrides": "\uc790\uac00 \uc218\uc815 \uc624\ubc84\ub77c\uc774\ub4dc (\ud65c\uc131)",
         "version": "\ubc84\uc804",
         "event": "\uc774\ubca4\ud2b8",
         "active_skill": "\uc9c4\ud589 \uc2a4\ud0ac",
@@ -963,6 +965,7 @@ def generated_skills_summary(cfg: AppConfig) -> dict[str, Any]:
     registry = skill_foundry.load_registry()
     skills = registry.get("skills") if isinstance(registry.get("skills"), dict) else {}
     registered: list[dict[str, Any]] = []
+    overrides: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     for name, entry in sorted(skills.items()):
         if not isinstance(entry, dict):
@@ -979,7 +982,9 @@ def generated_skills_summary(cfg: AppConfig) -> dict[str, Any]:
             "attempts": entry.get("attempts"),
             "last_failure_reason": entry.get("last_failure_reason") or "",
         }
-        if status == "registered":
+        if status == "override_registered":
+            overrides.append(row)
+        elif status == "registered":
             registered.append(row)
         elif status in {"failed", "quarantined", "disabled"}:
             failures.append(row)
@@ -998,10 +1003,12 @@ def generated_skills_summary(cfg: AppConfig) -> dict[str, Any]:
             heartbeat = {}
     return {
         "registered": registered,
+        "overrides": overrides,
         "failures": failures,
         "queue": queue,
         "heartbeat": heartbeat,
         "registered_count": len(registered),
+        "override_count": len(overrides),
         "queue_count": len(queue),
     }
 
@@ -2674,6 +2681,7 @@ def _generated_skills_panel(value: Any, lang: str) -> str:
     registered = summary.get("registered") if isinstance(summary.get("registered"), list) else []
     failures = summary.get("failures") if isinstance(summary.get("failures"), list) else []
     queue = summary.get("queue") if isinstance(summary.get("queue"), list) else []
+    overrides = summary.get("overrides") if isinstance(summary.get("overrides"), list) else []
     heartbeat = summary.get("heartbeat") if isinstance(summary.get("heartbeat"), dict) else {}
 
     parts: list[str] = [f"<h2>{_t(lang, 'generated_skills')}</h2>"]
@@ -2696,9 +2704,28 @@ def _generated_skills_panel(value: Any, lang: str) -> str:
             state_bits.append(escape(_format_kst_timestamp(heartbeat.get("updated_at"))))
         parts.append(f"<p class=\"muted\">{' &middot; '.join(state_bits)}</p>")
 
-    if not registered and not queue and not failures:
+    if not registered and not queue and not failures and not overrides:
         parts.append(f"<p class=\"muted\">{_t(lang, 'no_generated_skills')}</p>")
         return "<section class=\"panel\">" + "".join(parts) + "</section>"
+
+    if overrides:
+        body = "".join(
+            "<tr>"
+            f"<td>{escape(str(row.get('skill_name') or ''))}</td>"
+            f"<td>{escape(str(row.get('class_name') or ''))}</td>"
+            f"<td>v{escape(str(row.get('version') or 0))}</td>"
+            f"<td>{escape(', '.join(str(g) for g in row.get('gates_passed') or []))}</td>"
+            f"<td>{escape(_format_kst_timestamp(row.get('updated_at')))}</td>"
+            "</tr>"
+            for row in overrides
+            if isinstance(row, dict)
+        )
+        parts.append(
+            f"<h3 class=\"subhead\">{_t(lang, 'self_repair_overrides')}</h3>"
+            f"<table><thead><tr><th>{_t(lang, 'generated_skills')}</th><th>Class</th>"
+            f"<th>{_t(lang, 'version')}</th><th>{_t(lang, 'foundry_gates')}</th>"
+            f"<th>{_t(lang, 'updated')}</th></tr></thead><tbody>{body}</tbody></table>"
+        )
 
     if registered:
         body = "".join(

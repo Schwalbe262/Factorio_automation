@@ -64,8 +64,25 @@ def _generated_executor(skill_name: str) -> str | None:
     return None
 
 
+def _override_executor(skill_name: str) -> str | None:
+    """Class name of an active self-repair override (replaces a hand-written skill), or None."""
+
+    try:
+        from . import skill_foundry
+
+        entry = skill_foundry.registered_override(skill_name)
+    except Exception:  # noqa: BLE001 - registry problems must never block strategy status
+        return None
+    if isinstance(entry, dict):
+        return str(entry.get("class_name") or "GeneratedOverride")
+    return None
+
+
 def skill_status(skill_name: str, runtime_dir: Path | None = None) -> SkillImplementationStatus:
-    executor = IMPLEMENTED_SKILLS.get(skill_name)
+    # Precedence: active self-repair override -> hand-written -> plain generated.
+    executor = _override_executor(skill_name)
+    if executor is None:
+        executor = IMPLEMENTED_SKILLS.get(skill_name)
     if executor is None:
         executor = _generated_executor(skill_name)
     return SkillImplementationStatus(
