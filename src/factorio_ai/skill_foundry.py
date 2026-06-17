@@ -340,6 +340,7 @@ def enqueue_foundry_request(
     source: str = "autopilot_gap",
     priority: int = 50,
     mode: str = "new",
+    diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     queue = load_foundry_queue(runtime_dir)
     entry = {
@@ -351,6 +352,9 @@ def enqueue_foundry_request(
         "expected_effect": expected_effect,
         "target_item": target_item,
         "mode": mode,  # "new" (generate a missing skill) or "override" (replace a failing implemented skill)
+        # Auto-collected failure context (e.g. obstacles near a blocked placement) so the codegen
+        # LLM sees the missing observation that explains the failure. See controller._failure_diagnostics.
+        "diagnostics": dict(diagnostics or {}),
         "enqueued_at": _now_iso(),
     }
     for index, existing in enumerate(queue):
@@ -1016,6 +1020,17 @@ def _build_codegen_prompt(
             "Write a corrected, robust replacement that handles the failure below — e.g. if a build fails, try a",
             "different position/direction or a different site, skip blocked tiles, and never loop forever on the same",
             "failing action. Make incremental progress each call and return done=True once the goal is reached.",
+            "OBSTACLES: 'cannot place entity' usually means a tree, rock (simple-entity), cliff, or water tile is on the",
+            "target. The observation 'entities' list includes these (type 'tree'/'simple-entity'/'cliff', names ending",
+            "'-rock'); water tiles block too. On a blocked build, emit a {'type':'mine', ...} action to clear the tree/",
+            "rock first, OR scan outward for the nearest position with no blocker, then build there.",
+            "",
+        ]
+    diagnostics = spec.get("diagnostics") if isinstance(spec.get("diagnostics"), dict) else {}
+    if diagnostics:
+        parts += [
+            "AUTO-COLLECTED FAILURE DIAGNOSTICS (the observation context that explains the failure):",
+            json.dumps(diagnostics, ensure_ascii=False)[:1500],
             "",
         ]
     parts += [

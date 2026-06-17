@@ -122,6 +122,72 @@ def _repair_core_denylist() -> set[str]:
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 
+# --------------------------------------------------------------------------- #
+# Self-augmenting failure diagnostics
+# When a skill fails, these augmenters inspect the live observation and pull out
+# the context that explains the failure (the "missing observation"), which is fed
+# to the self-repair codegen so the generated fix can act on it. New gaps are
+# supported by registering another augmenter here -- no other wiring changes.
+# --------------------------------------------------------------------------- #
+
+
+def _placement_obstacle_augmenter(
+    skill_name: str, reasons: list[str], observation: dict[str, Any]
+) -> dict[str, Any] | None:
+    """'cannot place entity' -> summarize the trees/rocks/cliffs blocking placement."""
+    text = " ".join(str(r) for r in reasons).lower()
+    if not any(k in text for k in ("cannot place", "place entity", "no valid position", "no position", "blocked tile")):
+        return None
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    counts = {"tree": 0, "rock": 0, "cliff": 0}
+    samples: list[dict[str, Any]] = []
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        etype = str(entity.get("type") or "")
+        name = str(entity.get("name") or "")
+        if etype == "tree":
+            kind = "tree"
+        elif etype == "cliff":
+            kind = "cliff"
+        elif etype == "simple-entity" or name.endswith("rock"):
+            kind = "rock"
+        else:
+            continue
+        counts[kind] += 1
+        if len(samples) < 8:
+            samples.append({"name": name or etype, "position": entity.get("position")})
+    if not any(counts.values()):
+        return None
+    return {
+        "missing_observation": "placement_obstacles",
+        "obstacle_counts": counts,
+        "nearby_obstacles": samples,
+        "hint": (
+            "'cannot place entity' is caused by these obstacles. Clear a tree/rock with a {'type':'mine',...} action, "
+            "or scan outward for the nearest unobstructed tile, before building. Never retry the same blocked tile."
+        ),
+    }
+
+
+_OBSERVATION_AUGMENTERS = [_placement_obstacle_augmenter]
+
+
+def _failure_diagnostics(skill_name: str, reasons: list[str], observation: dict[str, Any]) -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {}
+    if not isinstance(observation, dict):
+        return diagnostics
+    for augmenter in _OBSERVATION_AUGMENTERS:
+        try:
+            result = augmenter(skill_name, reasons, observation)
+        except Exception:  # noqa: BLE001 - diagnostics are best-effort, never break repair
+            result = None
+        if isinstance(result, dict) and result:
+            key = str(result.get("missing_observation") or getattr(augmenter, "__name__", "augmenter"))
+            diagnostics[key] = result
+    return diagnostics
+
+
 @dataclass
 class RunSummary:
     ok: bool
@@ -939,6 +1005,13 @@ class FactorioController:
         ok, _why = skill_foundry.eligible_for_generation(skill_name)
         if not ok:
             return
+        # Auto-augment the repair with the missing observation that explains the failure
+        # (e.g. the trees/rocks blocking a placement) so the codegen LLM can act on it.
+        diagnostics: dict[str, Any] = {}
+        try:
+            diagnostics = _failure_diagnostics(skill_name, reasons, self.observe())
+        except Exception:  # noqa: BLE001 - observation is best-effort
+            diagnostics = {}
         try:
             skill_foundry.enqueue_foundry_request(
                 self.cfg.runtime_dir,
@@ -950,11 +1023,16 @@ class FactorioController:
                 source="autopilot_repair",
                 priority=max(0, min(100, _int_or_none(strategy.get("priority")) or 75)),
                 mode="override",
+                diagnostics=diagnostics,
             )
             skill_foundry.log_foundry_event(
                 self.cfg.log_dir,
                 "repair_enqueued",
-                {"skill_name": skill_name, "reasons": [r for r in reasons if r][-4:]},
+                {
+                    "skill_name": skill_name,
+                    "reasons": [r for r in reasons if r][-4:],
+                    "diagnostics": sorted(diagnostics.keys()),
+                },
             )
         except Exception:  # noqa: BLE001 - enqueue must never break the loop
             pass

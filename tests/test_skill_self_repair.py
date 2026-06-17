@@ -231,5 +231,66 @@ class SandboxIsolationTests(_Base):
         self.assertEqual(captured["save_path"], captured["runtime_dir"] / live_save.name)
 
 
+class FailureDiagnosticsTests(unittest.TestCase):
+    def _obs(self):
+        return {
+            "entities": [
+                {"type": "tree", "name": "tree-01", "position": {"x": 5, "y": 3}},
+                {"type": "simple-entity", "name": "big-rock", "position": {"x": 6, "y": 3}},
+                {"type": "cliff", "name": "cliff", "position": {"x": 7, "y": 3}},
+                {"type": "assembling-machine", "name": "assembling-machine-1", "position": {"x": 0, "y": 0}},
+            ]
+        }
+
+    def test_placement_failure_augments_with_obstacles(self):
+        from factorio_ai.controller import _failure_diagnostics
+
+        diag = _failure_diagnostics("setup_power", ["action failed: cannot place entity"], self._obs())
+        self.assertIn("placement_obstacles", diag)
+        po = diag["placement_obstacles"]
+        self.assertEqual(po["obstacle_counts"], {"tree": 1, "rock": 1, "cliff": 1})
+        self.assertTrue(po["nearby_obstacles"])
+        self.assertIn("mine", po["hint"])
+
+    def test_non_placement_failure_yields_no_diagnostics(self):
+        from factorio_ai.controller import _failure_diagnostics
+
+        self.assertEqual(_failure_diagnostics("setup_power", ["out of iron"], self._obs()), {})
+
+    def test_placement_failure_without_obstacles_yields_nothing(self):
+        from factorio_ai.controller import _failure_diagnostics
+
+        self.assertEqual(_failure_diagnostics("setup_power", ["cannot place entity"], {"entities": []}), {})
+
+    def test_augmenter_registry_is_extensible(self):
+        from factorio_ai import controller
+
+        def fake(skill, reasons, obs):
+            return {"missing_observation": "fake_signal", "ok": True}
+
+        controller._OBSERVATION_AUGMENTERS.append(fake)
+        try:
+            diag = controller._failure_diagnostics("x", ["anything"], {"entities": []})
+            self.assertIn("fake_signal", diag)
+        finally:
+            controller._OBSERVATION_AUGMENTERS.remove(fake)
+
+
+class CodegenPromptObstacleTests(unittest.TestCase):
+    def test_override_prompt_has_obstacle_pattern_and_injected_diagnostics(self):
+        from factorio_ai.skill_foundry import _build_codegen_prompt
+
+        spec = {
+            "skill_name": "setup_power",
+            "mode": "override",
+            "reason": "cannot place entity",
+            "diagnostics": {"placement_obstacles": {"obstacle_counts": {"tree": 3}, "hint": "clear it"}},
+        }
+        prompt = _build_codegen_prompt(spec, [{"entities": []}], "")
+        self.assertIn("OBSTACLES", prompt)
+        self.assertIn("mine", prompt)
+        self.assertIn("placement_obstacles", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()
