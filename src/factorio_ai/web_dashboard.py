@@ -10,6 +10,7 @@ import time
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
+from .cell_library import library_summary
 from .config import AppConfig
 from .controller import FactorioController
 from .item_icons import read_item_icon_png
@@ -36,6 +37,7 @@ from .world_memory import load_world_map_memory, summarize_world_map_memory
 
 FACTORIO_ROUTE = "/factorio"
 FACTORIO_LLM_ROUTE = "/factorio/llm"
+FACTORIO_LAYOUTS_ROUTE = "/factorio/layouts"
 LEGACY_FACTORIO_ROUTE = "/팩토리오"
 FACTORIO_ROUTES = {FACTORIO_ROUTE, LEGACY_FACTORIO_ROUTE}
 ICON_ROUTE_PREFIX = "/factorio/icon/"
@@ -445,10 +447,14 @@ TEXT["en"].update(
         "max_active_layout_tasks": "Max active jobs",
         "layout_llm_hint": "Each job requests one GPU. The idle layout loop keeps submitting until this limit is full.",
         "save_layout_llm_settings": "Save LLM Setting",
+        "layout_library": "Layout Library",
+        "no_layouts": "No optimized cell layouts have been saved yet.",
     }
 )
 TEXT["ko"].update(
     {
+        "layout_library": "레이아웃 라이브러리",
+        "no_layouts": "아직 저장된 최적 셀 레이아웃이 없습니다.",
         "goal_plan": "Goal Plan",
         "recent_run_notes": "Recent Loop Notes",
         "recent_run_insights": "Recent Insights",
@@ -535,6 +541,13 @@ def make_dashboard_handler(cfg: AppConfig, default_objective: str) -> type[BaseH
                 summary = llm_trace_api_response(cfg.log_dir, limit=_llm_trace_limit(query))
                 kind_filter = (query.get("kind") or [""])[0]
                 body = render_llm_trace_page(summary, lang=lang, objective=objective, kind=kind_filter)
+                self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
+                return
+
+            if path == FACTORIO_LAYOUTS_ROUTE:
+                lang = request_language(path, query)
+                summary = library_summary(cfg.runtime_dir)
+                body = render_layouts_page(summary, lang=lang, objective=objective)
                 self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
                 return
 
@@ -669,6 +682,16 @@ def llm_trace_path(lang: str = DEFAULT_LANG, objective: str | None = None) -> st
         params["objective"] = objective
     suffix = f"?{urlencode(params)}" if params else ""
     return f"{FACTORIO_LLM_ROUTE}{suffix}"
+
+
+def layouts_path(lang: str = DEFAULT_LANG, objective: str | None = None) -> str:
+    params: dict[str, str] = {}
+    if lang in SUPPORTED_LANGS and lang != DEFAULT_LANG:
+        params["lang"] = lang
+    if objective:
+        params["objective"] = objective
+    suffix = f"?{urlencode(params)}" if params else ""
+    return f"{FACTORIO_LAYOUTS_ROUTE}{suffix}"
 
 
 def public_dashboard_urls(host: str, port: int, lang: str = DEFAULT_LANG) -> list[str]:
@@ -1219,6 +1242,83 @@ def _trace_text_block(label: str, value: Any, *, limit: int = 6000, block_id: st
     )
 
 
+def render_layouts_page(summary: dict[str, Any], lang: str = DEFAULT_LANG, objective: Any = None) -> str:
+    """The cell-library page (C8): every saved optimal layout with its description, spec table,
+    and a copy-blueprint button."""
+    lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
+    title = _t(lang, "layout_library")
+    designs = summary.get("designs") if isinstance(summary.get("designs"), list) else []
+    if not designs:
+        body = (
+            "<section class=\"panel\">"
+            f"<h2>{escape(title)}</h2>"
+            f"<p class=\"muted\">{escape(str(summary.get('library_path') or ''))}</p>"
+            f"<p class=\"muted\">{_t(lang, 'no_layouts')}</p>"
+            "</section>"
+        )
+        return _page(title, body, lang, objective)
+    cards = "".join(_layout_card(d, lang) for d in designs if isinstance(d, dict))
+    body = (
+        "<section class=\"panel\">"
+        f"<h2>{escape(title)} <span class=\"muted\">({len(designs)})</span></h2>"
+        "<div class=\"actions\">"
+        f"<a class=\"nav-link\" href=\"{escape(dashboard_path(lang, str(objective or '')), quote=True)}\">"
+        f"{escape(_t(lang, 'dashboard'))}</a>"
+        "</div>"
+        f"<p class=\"muted\">{escape(str(summary.get('library_path') or ''))}</p>"
+        f"{cards}"
+        "</section>"
+    )
+    return _page(title, body, lang, objective)
+
+
+def _layout_card(design: dict[str, Any], lang: str) -> str:
+    item = str(design.get("item") or "")
+    blueprint = design.get("blueprint") if isinstance(design.get("blueprint"), dict) else {}
+    exchange = str(blueprint.get("exchange_string") or "")
+    status = str(design.get("sandbox_status") or "")
+    status_class = "trace-ok" if ("pass" in status) else ("trace-error" if "fail" in status else "")
+    fp = design.get("footprint") if isinstance(design.get("footprint"), dict) else {}
+    belts_in = ", ".join(
+        f"{i.get('item')} {i.get('per_minute')}/min ({i.get('belt_tier') or 'pipe'})"
+        for i in (design.get("inputs") or []) if isinstance(i, dict)
+    )
+    belts_out = ", ".join(
+        f"{o.get('item')} {o.get('per_minute')}/min ({o.get('belt_tier') or 'pipe'})"
+        for o in (design.get("outputs") or []) if isinstance(o, dict)
+    )
+    rows = [
+        ("Item", item),
+        ("Rate / min", f"{design.get('target_rate')} → {design.get('achieved_rate')}"),
+        (_t(lang, "machines"), f"{design.get('machine_count')} x {design.get('machine')}"),
+        ("Modules", ", ".join(design.get("modules") or []) or "—"),
+        ("On-site", ", ".join(f"{s.get('machine_count')}x {s.get('item')}" for s in (design.get('substages') or []) if isinstance(s, dict)) or "—"),
+        ("Inputs", belts_in),
+        ("Outputs", belts_out),
+        (_t(lang, "demand_kw"), f"{design.get('total_power_kw')} kW"),
+        ("Footprint", f"~{fp.get('area', 0)} tiles ({fp.get('machine_tiles', 0)} machine)"),
+    ]
+    meta_html = "".join(
+        f"<tr><td class=\"muted\">{escape(str(k))}</td><td>{escape(str(v))}</td></tr>"
+        for k, v in rows if v not in (None, "")
+    )
+    copy_button = (
+        f"<button type=\"button\" class=\"copy-blueprint\" data-blueprint=\"{escape(exchange, quote=True)}\">"
+        f"{escape(_t(lang, 'copy_blueprint'))}</button>"
+        if exchange else ""
+    )
+    return (
+        "<article class=\"trace-entry\">"
+        "<div class=\"trace-header\">"
+        f"<strong>{escape(str(design.get('description') or item))}</strong>"
+        f"<span class=\"{status_class}\">{escape(status)}</span>"
+        "</div>"
+        f"<table class=\"kv\"><tbody>{meta_html}</tbody></table>"
+        f"<div class=\"actions\">{copy_button}</div>"
+        "</article>"
+    )
+
+
 def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
     lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
     title = _t(lang, "title")
@@ -1505,6 +1605,24 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
     .trace-filter {{
       flex-wrap: wrap;
       margin-bottom: 10px;
+    }}
+    table.kv {{
+      border-collapse: collapse;
+      margin: 8px 0;
+      font-size: 12px;
+    }}
+    table.kv td {{
+      padding: 3px 10px 3px 0;
+      vertical-align: top;
+    }}
+    .copy-blueprint {{
+      border: 1px solid #3c9a6b;
+      background: #1c3a2b;
+      color: #d8f5e4;
+      border-radius: 4px;
+      padding: 6px 12px;
+      cursor: pointer;
+      font-size: 12px;
     }}
     .nav-link.trace-filter-active {{
       background: #2f6f4f;
@@ -2038,6 +2156,7 @@ def _language_switch(lang: str, objective: str) -> str:
         f"<nav class=\"lang-switch\" aria-label=\"{escape(_t(lang, 'language'))}\">"
         f"<a href=\"{escape(dashboard_path(lang, objective))}\">{escape(_t(lang, 'dashboard'))}</a>"
         f"<a href=\"{escape(llm_trace_path(lang, objective))}\">{escape(_t(lang, 'llm_io_traces'))}</a>"
+        f"<a href=\"{escape(layouts_path(lang, objective))}\">{escape(_t(lang, 'layout_library'))}</a>"
         f"<a class=\"{en_class}\" href=\"{escape(dashboard_path('en', objective))}\">EN</a>"
         f"<a class=\"{ko_class}\" href=\"{escape(dashboard_path('ko', objective))}\">KR</a>"
         "</nav>"
@@ -2148,6 +2267,16 @@ def _copy_blueprint_script(lang: str) -> str:
       return;
     }}
     event.preventDefault();
+    // Library page embeds the blueprint inline (data-blueprint) -> copy directly, no fetch.
+    const inlineBlueprint = button.getAttribute("data-blueprint") || "";
+    if (inlineBlueprint) {{
+      const originalInline = button.textContent;
+      const inlineTitle = button.getAttribute("title") || "";
+      const mode = await copyText(inlineBlueprint);
+      button.textContent = mode === "manual" ? {manual} : {copied};
+      window.setTimeout(() => {{ button.textContent = originalInline; button.setAttribute("title", inlineTitle); }}, 1500);
+      return;
+    }}
     const candidateId = button.getAttribute("data-candidate-id") || "";
     const siteId = button.getAttribute("data-site-id") || "";
     const variant = button.getAttribute("data-variant") || "";
