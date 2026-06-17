@@ -1122,6 +1122,9 @@ def _llm_trace_card(row: dict[str, Any], lang: str) -> str:
     parsed_text = json.dumps(parsed_json, ensure_ascii=False, indent=2) if parsed_json is not None else ""
     error = str(row.get("error") or "")
     error_html = f'<p class="error">{escape(error)}</p>' if error else ""
+    # Stable per-entry key so the client can persist each block's open state across
+    # the dashboard's auto-refresh (timestamp is fixed per entry).
+    _ek = "trace:" + str(row.get("timestamp") or row.get("time") or row.get("task_id") or "")
     return (
         "<article class=\"trace-entry\">"
         "<div class=\"trace-header\">"
@@ -1130,23 +1133,24 @@ def _llm_trace_card(row: dict[str, Any], lang: str) -> str:
         "</div>"
         f"<div class=\"trace-meta\">{meta_html}</div>"
         f"{error_html}"
-        f"{_trace_text_block(_t(lang, 'system_prompt'), row.get('system_prompt'))}"
-        f"{_trace_text_block(_t(lang, 'prompt'), row.get('input_prompt'))}"
-        f"{_trace_text_block(_t(lang, 'raw_output'), row.get('raw_output'))}"
-        f"{_trace_text_block(_t(lang, 'parsed_json'), parsed_text)}"
+        f"{_trace_text_block(_t(lang, 'system_prompt'), row.get('system_prompt'), block_id=f'{_ek}:sys')}"
+        f"{_trace_text_block(_t(lang, 'prompt'), row.get('input_prompt'), block_id=f'{_ek}:prompt')}"
+        f"{_trace_text_block(_t(lang, 'raw_output'), row.get('raw_output'), block_id=f'{_ek}:raw')}"
+        f"{_trace_text_block(_t(lang, 'parsed_json'), parsed_text, block_id=f'{_ek}:parsed')}"
         "</article>"
     )
 
 
-def _trace_text_block(label: str, value: Any, *, limit: int = 6000) -> str:
+def _trace_text_block(label: str, value: Any, *, limit: int = 6000, block_id: str = "") -> str:
     text = "" if value is None else str(value)
     if not text:
         return ""
     omitted = max(0, len(text) - limit)
     visible = text[:limit]
     tail = f"<p class=\"muted\">truncated {omitted:,} chars; full text is preserved in JSONL</p>" if omitted else ""
+    id_attr = f' id="{escape(block_id)}"' if block_id else ""
     return (
-        "<details class=\"trace-block\">"
+        f"<details class=\"trace-block\"{id_attr}>"
         f"<summary>{escape(label)} <span>{len(text):,} chars</span></summary>"
         f"<pre>{escape(visible)}</pre>"
         f"{tail}"
@@ -1949,6 +1953,7 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
     {body}
   </main>
   {_copy_blueprint_script(lang)}
+  {_details_persist_script()}
 </body>
 </html>"""
 
@@ -1964,6 +1969,33 @@ def _language_switch(lang: str, objective: str) -> str:
         f"<a class=\"{ko_class}\" href=\"{escape(dashboard_path('ko', objective))}\">KR</a>"
         "</nav>"
     )
+
+
+def _details_persist_script() -> str:
+    # Persist every <details id=...> open/closed state in localStorage so the
+    # dashboard's full-page auto-refresh (meta refresh) doesn't snap subtrees shut
+    # while the operator is reading them. Plain (non-f) string: no brace escaping.
+    return """<script>
+(function () {
+  var KEY = 'factorioDetailsOpen';
+  function load() { try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { return {}; } }
+  function save(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) {} }
+  function init() {
+    var state = load();
+    document.querySelectorAll('details[id]').forEach(function (d) {
+      if (Object.prototype.hasOwnProperty.call(state, d.id)) { d.open = !!state[d.id]; }
+      d.addEventListener('toggle', function () {
+        var s = load(); s[d.id] = d.open; save(s);
+      });
+    });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>"""
 
 
 def _copy_blueprint_script(lang: str) -> str:
@@ -3637,10 +3669,12 @@ def _dep_amount(amount: Any) -> str:
     return str(int(value)) if value == int(value) else f"{value:g}"
 
 
-def _dep_node_html(node: Any, amount: Any = None) -> str:
+def _dep_node_html(node: Any, amount: Any = None, path: str = "") -> str:
     if not isinstance(node, dict):
         return ""
-    item = escape(str(node.get("item") or "?"))
+    name = str(node.get("item") or "?")
+    item = escape(name)
+    node_path = f"{path}/{name}" if path else name
     amt = "" if amount is None else f' <span class="dep-amt">x{_dep_amount(amount)}</span>'
     if node.get("cycle_or_depth_limit"):
         return f'<div class="dep-leaf">{item}{amt} <span class="muted">...</span></div>'
@@ -3656,10 +3690,14 @@ def _dep_node_html(node: Any, amount: Any = None) -> str:
         _dep_node_html(
             child.get("dependency") if isinstance(child, dict) else None,
             child.get("amount") if isinstance(child, dict) else None,
+            node_path,
         )
         for child in children
     )
-    return f'<details class="dep-node"><summary>{item}{amt}{tag}</summary>{inner}</details>'
+    # Stable id (recipe tree is structural, so the path is stable across refreshes)
+    # lets the client persist open/closed state -- see the persistence script in _page.
+    det_id = escape(f"dep:{node_path}")
+    return f'<details class="dep-node" id="{det_id}"><summary>{item}{amt}{tag}</summary>{inner}</details>'
 
 
 def _dependency_tree_html(forest: Any) -> str:
@@ -3669,7 +3707,8 @@ def _dependency_tree_html(forest: Any) -> str:
     infra = [n for n in forest if isinstance(n, dict) and n.get("infrastructure")]
     parts = ['<div class="deptree">']
     for node in roots:
-        item = escape(str(node.get("item") or "?"))
+        name = str(node.get("item") or "?")
+        item = escape(name)
         tech = node.get("technology")
         tag = f' <span class="dep-tech">[{escape(str(tech))}]</span>' if tech else ""
         children = node.get("ingredients") if isinstance(node.get("ingredients"), list) else []
@@ -3677,14 +3716,16 @@ def _dependency_tree_html(forest: Any) -> str:
             _dep_node_html(
                 child.get("dependency") if isinstance(child, dict) else None,
                 child.get("amount") if isinstance(child, dict) else None,
+                name,
             )
             for child in children
         ) or '<div class="dep-leaf muted">(raw / no recipe)</div>'
-        parts.append(f'<details class="dep-node" open><summary>{item}{tag}</summary>{inner}</details>')
+        det_id = escape(f"dep:{name}")
+        parts.append(f'<details class="dep-node" id="{det_id}" open><summary>{item}{tag}</summary>{inner}</details>')
     if infra:
-        parts.append('<details class="dep-infra"><summary><strong>production buildings</strong></summary>')
+        parts.append('<details class="dep-infra" id="dep:__infra__"><summary><strong>production buildings</strong></summary>')
         for node in infra:
-            parts.append(_dep_node_html(node))
+            parts.append(_dep_node_html(node, path="infra"))
         parts.append("</details>")
     parts.append("</div>")
     return "".join(parts)

@@ -1156,5 +1156,38 @@ class GeneratedSkillsPanelTests(unittest.TestCase):
         self.assertEqual(summary["heartbeat"]["state"], "sleeping")
 
 
+class DependencyTreePersistenceTests(unittest.TestCase):
+    def test_tree_nodes_have_stable_ids_and_persist_script_present(self):
+        from factorio_ai.web_dashboard import _dependency_tree_html, _details_persist_script
+
+        forest = [
+            {
+                "item": "rocket-silo",
+                "technology": "rocket-silo",
+                "ingredients": [
+                    {
+                        "item": "steel-plate",
+                        "amount": 1000,
+                        "dependency": {
+                            "item": "steel-plate",
+                            "ingredients": [
+                                {"item": "iron-plate", "amount": 5, "dependency": {"item": "iron-plate", "ingredients": []}}
+                            ],
+                        },
+                    }
+                ],
+            },
+            {"item": "assembling-machine-2", "infrastructure": True, "ingredients": []},
+        ]
+        html = _dependency_tree_html(forest)
+        self.assertIn('id="dep:rocket-silo"', html)
+        self.assertIn('id="dep:rocket-silo/steel-plate"', html)
+        self.assertIn('id="dep:__infra__"', html)
+        script = _details_persist_script()
+        self.assertIn("localStorage", script)
+        self.assertIn("details[id]", script)
+        self.assertIn("toggle", script)
+
+
 if __name__ == "__main__":
     unittest.main()
