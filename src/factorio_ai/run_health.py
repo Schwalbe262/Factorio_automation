@@ -45,6 +45,7 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
     live = _read_json(runtime / "live-skill-heartbeat.json")
     foundry = _read_json(runtime / "skill-foundry-loop.json")
     supervisor = _read_json(runtime / "unattended-llm-supervisor.json")
+    progress_kpi = _read_json(runtime / "progress-kpi.json")
 
     registered: list[str] = []
     failed: list[str] = []
@@ -168,6 +169,15 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
             "age_seconds": _age_seconds(foundry.get("updated_at")),
         },
         "scheduler": scheduler,
+        "progress": {
+            "researched": progress_kpi.get("researched"),
+            "current_research": progress_kpi.get("current_research"),
+            "research_progress": progress_kpi.get("research_progress"),
+            "stall_count": progress_kpi.get("stall_count"),
+            "stuck": progress_kpi.get("stuck"),
+            "key_items": progress_kpi.get("key_items"),
+            "age_seconds": _age_seconds(progress_kpi.get("updated_at")),
+        },
         "generated_skills": {"registered": registered, "overrides": overrides, "queue": queue, "failed": failed},
         "recent_decisions": recent,
     }
@@ -215,6 +225,16 @@ def format_run_health(summary: dict[str, Any]) -> str:
 
     ap = summary.get("autopilot") or {}
     lines.append(f"autopilot: state={ap.get('state')} cycle={ap.get('cycle')} age={_fmt_age(ap.get('age_seconds'))}")
+    pr = summary.get("progress") or {}
+    if pr.get("updated_at") is not None or pr.get("researched") is not None:
+        stuck = " STUCK" if pr.get("stuck") else ""
+        lines.append(
+            f"progress : researched={pr.get('researched')} research={pr.get('current_research')}"
+            f"({pr.get('research_progress')}) stall={pr.get('stall_count')}{stuck} age={_fmt_age(pr.get('age_seconds'))}"
+        )
+        if isinstance(pr.get("key_items"), dict) and pr.get("key_items"):
+            shown = ", ".join(f"{k}={v}" for k, v in pr["key_items"].items())
+            lines.append(f"  key items: {shown}")
     ls = summary.get("live_skill") or {}
     lines.append(
         f"live skill: {ls.get('skill')} step={ls.get('step')} state={ls.get('state')} "

@@ -770,6 +770,30 @@ def sandbox_dryrun_gate(cfg: Any, file_path: str | Path, *, steps: int = 25, tar
         return GateResult("sandbox_dryrun", True, [], {"skipped": f"sandbox infra unavailable: {type(exc).__name__}: {exc}"})
 
 
+def _sandbox_progress(before: dict[str, Any], after: dict[str, Any], target_item: str | None) -> int:
+    """How much the dry-run advanced state: entities placed + target item produced.
+
+    The sandbox gate uses this to confirm a generated/repaired skill is EFFECTIVE, not just
+    non-crashing. 0 means it changed nothing in the throwaway world -> reject the override.
+    """
+
+    def entity_count(obs: Any) -> int:
+        entities = obs.get("entities") if isinstance(obs, dict) else None
+        return len(entities) if isinstance(entities, list) else 0
+
+    def item_count(obs: Any, item: str) -> int:
+        inventory = obs.get("inventory") if isinstance(obs, dict) else None
+        if not isinstance(inventory, dict) or not item:
+            return 0
+        value = inventory.get(item)
+        return int(value) if isinstance(value, (int, float)) else 0
+
+    score = max(0, entity_count(after) - entity_count(before))
+    if target_item:
+        score += max(0, item_count(after, target_item) - item_count(before, target_item)) * 5
+    return score
+
+
 def _run_sandbox_dryrun(cfg: Any, file_path: str | Path, *, steps: int, target_item: str | None) -> GateResult:
     import dataclasses
     import subprocess
@@ -821,6 +845,13 @@ def _run_sandbox_dryrun(cfg: Any, file_path: str | Path, *, steps: int, target_i
         factorio.wait_for_rcon(sandbox_cfg, timeout_seconds=int(os.getenv("FACTORIO_AI_FOUNDRY_SANDBOX_RCON_TIMEOUT", "120")))
         controller = ModlessFactorioController(sandbox_cfg)
         skill_class = load_generated_skill_class(file_path, enforce_package_dir=False)
+        # Effectiveness check: snapshot before/after so we verify the skill actually MADE
+        # PROGRESS (placed an entity / produced the target), not merely that it ran without
+        # crashing. A plausible-but-useless override must NOT pass the gate.
+        try:
+            before = controller.observe(include_planning_sites=False)
+        except Exception:  # noqa: BLE001 - baseline is best-effort
+            before = {}
         run = controller._run_skill(
             skill=skill_class(),
             target_item=target_item or "iron-plate",
@@ -829,12 +860,20 @@ def _run_sandbox_dryrun(cfg: Any, file_path: str | Path, *, steps: int, target_i
             max_steps=max(1, steps),
             log_prefix="sandbox-dryrun",
         )
-        ok = bool(getattr(run, "ok", False)) or getattr(run, "steps", 0) >= 1
+        try:
+            after = controller.observe(include_planning_sites=False)
+        except Exception:  # noqa: BLE001
+            after = {}
+        progress = _sandbox_progress(before, after, target_item)
+        done = bool(getattr(run, "ok", False))
+        require_progress = os.getenv("FACTORIO_AI_FOUNDRY_REQUIRE_PROGRESS", "1").strip().lower() in {"1", "true", "yes", "on"}
+        ok = done or progress > 0 or (not require_progress and getattr(run, "steps", 0) >= 1)
+        reason = getattr(run, "reason", "")
         return GateResult(
             "sandbox_dryrun",
-            True if ok else False,
-            [] if ok else [f"sandbox run did not progress: {getattr(run, 'reason', '')}"],
-            {"steps": getattr(run, "steps", 0), "reason": getattr(run, "reason", "")},
+            bool(ok),
+            [] if ok else [f"sandbox run made no measurable progress (steps={getattr(run, 'steps', 0)}, reason={reason})"],
+            {"steps": getattr(run, "steps", 0), "reason": reason, "progress": progress, "done": done},
         )
     finally:
         if process is not None:

@@ -1344,6 +1344,29 @@ class FactorioController:
         items = tuple(total_item_count(observation, item) for item in _STALL_PROGRESS_ITEMS)
         return (researched, current, progress, items)
 
+    def _progress_kpi_path(self) -> Path:
+        return self.cfg.runtime_dir / "progress-kpi.json"
+
+    def _write_progress_kpi(self, fingerprint: tuple[Any, ...] | None, stall_count: int, selected: str) -> None:
+        """Persist a readable progress KPI each cycle so an operator (and run-health) can SEE
+        whether the run is actually advancing or stuck -- the watchdog already acts on it."""
+        try:
+            researched, current, progress, items = fingerprint or (0, "", 0.0, ())
+            payload = {
+                "researched": researched,
+                "current_research": current,
+                "research_progress": progress,
+                "key_items": dict(zip(_STALL_PROGRESS_ITEMS, items)),
+                "selected_skill": selected,
+                "stall_count": stall_count,
+                "stuck": stall_count >= _stall_threshold(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+            self._progress_kpi_path().write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:  # noqa: BLE001 - KPI is best-effort, never break the loop
+            pass
+
     def _stall_recovery_skill(
         self, objective: str, observation: dict[str, Any], recent_skills: list[str]
     ) -> str | None:
@@ -1466,6 +1489,7 @@ class FactorioController:
                     if fingerprint is not None:
                         last_fingerprint = fingerprint
                     last_selected = selected_now
+                    self._write_progress_kpi(fingerprint, stall_count, selected_now)
                     recent_skills.append(selected_now)
                     if len(recent_skills) > 12:
                         recent_skills = recent_skills[-12:]

@@ -231,6 +231,27 @@ class SandboxIsolationTests(_Base):
         self.assertEqual(captured["save_path"], captured["runtime_dir"] / live_save.name)
 
 
+class SandboxProgressTests(unittest.TestCase):
+    def test_progress_counts_placed_entities_and_target_items(self):
+        from factorio_ai.skill_foundry import _sandbox_progress
+
+        before = {"entities": [{"name": "a"}], "inventory": {"iron-plate": 5}}
+        after = {"entities": [{"name": "a"}, {"name": "b"}], "inventory": {"iron-plate": 10}}
+        # 1 entity placed + (10-5) target items * 5 weight
+        self.assertEqual(_sandbox_progress(before, after, "iron-plate"), 1 + 5 * 5)
+
+    def test_no_change_is_zero_progress(self):
+        from factorio_ai.skill_foundry import _sandbox_progress
+
+        obs = {"entities": [{"name": "a"}], "inventory": {"iron-plate": 5}}
+        self.assertEqual(_sandbox_progress(obs, obs, "iron-plate"), 0)
+
+    def test_handles_missing_keys(self):
+        from factorio_ai.skill_foundry import _sandbox_progress
+
+        self.assertEqual(_sandbox_progress({}, {}, None), 0)
+
+
 class FailureDiagnosticsTests(unittest.TestCase):
     def _obs(self):
         return {
