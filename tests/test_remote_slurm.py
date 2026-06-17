@@ -2125,5 +2125,103 @@ class VllmServiceDetectionTests(unittest.TestCase):
         self.assertEqual(count, 2)  # comma-joined + single-match counted; rtx3090 + non-layout excluded
 
 
+class MultiVllmServiceTests(unittest.TestCase):
+    def _cfg(self) -> RemoteSlurmConfig:
+        return RemoteSlurmConfig(
+            enabled=True, ssh_path="ssh", scp_path="scp", host="example", user="user", port=22,
+            key_path="key", remote_dir="~/factorio-ai-worker", job_name="factorio-ai-worker",
+            conda_env="factorio-ai", partition="gpu4", cpus_per_task=8, gpus_per_node=1, gres="gpu:1",
+            time_limit="24:00:00", setup_timeout_seconds=60, task_timeout_seconds=30,
+        )
+
+    def test_service_count_env_parses_and_clamps(self):
+        from factorio_ai import remote_slurm
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT", None)
+            self.assertEqual(remote_slurm._scheduler_vllm_service_count(), 1)
+        with patch.dict(os.environ, {"FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT": "2"}, clear=False):
+            self.assertEqual(remote_slurm._scheduler_vllm_service_count(), 2)
+        with patch.dict(os.environ, {"FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT": "0"}, clear=False):
+            self.assertEqual(remote_slurm._scheduler_vllm_service_count(), 1)  # min 1
+        with patch.dict(os.environ, {"FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT": "99"}, clear=False):
+            self.assertEqual(remote_slurm._scheduler_vllm_service_count(), 8)  # max 8
+
+    def test_running_service_task_id_round_robins_across_services(self):
+        from factorio_ai import remote_slurm
+
+        tasks = [
+            {"name": "factorio-vllm-service-a", "account_name": "r1jae262", "status": "running", "gpu_model": "a6000", "id": 100},
+            {"name": "factorio-vllm-service-b", "account_name": "r1jae262", "status": "running", "gpu_model": "a6000", "id": 200},
+            {"name": "factorio-vllm-service-c", "account_name": "r1jae262", "status": "queued", "gpu_model": "a6000", "id": 300},
+        ]
+        with patch.dict(
+            os.environ,
+            {"FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262", "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000"},
+            clear=False,
+        ), patch.object(remote_slurm, "_scheduler_task_rows", return_value=tasks):
+            remote_slurm._VLLM_SERVICE_RR["i"] = 0
+            picks = [remote_slurm._scheduler_running_vllm_service_task_id() for _ in range(4)]
+        self.assertEqual(picks, [100, 200, 100, 200])  # round-robin, queued excluded
+
+    def test_ensure_submits_deficit_to_reach_target_count(self):
+        from factorio_ai import remote_slurm
+
+        running = {"name": "factorio-vllm-service-a", "account_name": "r1jae262", "status": "running", "gpu_model": "a6000", "id": 100}
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FACTORIO_AI_SLURM_MODE": "scheduler",
+                    "FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262",
+                    "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000",
+                    "FACTORIO_AI_VLLM_MODEL": "Qwen/test",
+                    "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT": "2",
+                },
+                clear=True,
+            ),
+            patch("factorio_ai.remote_slurm._scheduler_task_rows", return_value=[running]),
+            patch("factorio_ai.remote_slurm._read_scheduler_vllm_service_heartbeat", return_value=None),
+            patch(
+                "factorio_ai.remote_slurm._submit_scheduler_task",
+                return_value={"id": 101, "name": "factorio-vllm-service-b", "status": "queued", "account_name": "r1jae262", "gpu_model": "a6000"},
+            ) as submit_task,
+        ):
+            result = remote_slurm.ensure_vllm_service(self._cfg(), duration_seconds=10800)
+        self.assertEqual(result["action"], "submitted")
+        self.assertEqual(result["target"], 2)
+        self.assertEqual(result["active"], 1)
+        self.assertEqual(result["submitted_count"], 1)
+        self.assertEqual(submit_task.call_count, 1)  # only the deficit, not a full 2
+
+    def test_ensure_is_noop_when_target_count_already_active(self):
+        from factorio_ai import remote_slurm
+
+        rows = [
+            {"name": "factorio-vllm-service-a", "account_name": "r1jae262", "status": "running", "gpu_model": "a6000", "id": 100},
+            {"name": "factorio-vllm-service-b", "account_name": "r1jae262", "status": "running", "gpu_model": "a6000", "id": 200},
+        ]
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FACTORIO_AI_SLURM_MODE": "scheduler",
+                    "FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262",
+                    "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000",
+                    "FACTORIO_AI_VLLM_MODEL": "Qwen/test",
+                    "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT": "2",
+                },
+                clear=True,
+            ),
+            patch("factorio_ai.remote_slurm._scheduler_task_rows", return_value=rows),
+            patch("factorio_ai.remote_slurm._read_scheduler_vllm_service_heartbeat", return_value=None),
+            patch("factorio_ai.remote_slurm._submit_scheduler_task") as submit_task,
+        ):
+            result = remote_slurm.ensure_vllm_service(self._cfg(), duration_seconds=10800)
+        self.assertEqual(result["action"], "already_active")
+        self.assertEqual(result["active"], 2)
+        submit_task.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

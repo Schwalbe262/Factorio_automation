@@ -392,6 +392,18 @@ def _scheduler_vllm_service_duration_seconds(value: Any = None) -> int:
     return _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS", 43200, 300)
 
 
+def _scheduler_vllm_service_count() -> int:
+    """How many warm vLLM service instances to keep (each on its own GPU/node).
+
+    >1 gives parallel throughput + redundancy: client tasks round-robin across the
+    running services, and if one dies/cold-loads the others keep serving. All share
+    port 8000 (each on its own node), so a co-located client always reaches its node's
+    service with no per-client base-URL wiring.
+    """
+
+    return min(8, _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT", 1, 1))
+
+
 def _scheduler_vllm_service_heartbeat_filename() -> str:
     port = os.getenv("FACTORIO_AI_VLLM_PORT", "8000").strip() or "8000"
     safe_port = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in port)[:32] or "8000"
@@ -906,8 +918,19 @@ def _scheduler_running_vllm_service_node_name() -> str:
     return ""
 
 
+# Round-robin cursor for spreading client tasks across multiple running vLLM
+# services. Seeded by PID so independent client processes (autopilot / idle-layout
+# / foundry) don't all pin to the same service on their first request.
+_VLLM_SERVICE_RR = {"i": os.getpid()}
+
+
 def _scheduler_running_vllm_service_task_id() -> Any | None:
-    """Task id of the running vLLM service, for `same_node_as_task_id` co-location of client tasks."""
+    """Task id of a running vLLM service, for `same_node_as_task_id` co-location.
+
+    With multiple warm services (FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT > 1) this
+    round-robins so client tasks spread across the service nodes instead of all
+    piling onto one.
+    """
 
     account = _scheduler_account()
     candidates = _scheduler_gpu_model_candidates()
@@ -916,10 +939,17 @@ def _scheduler_running_vllm_service_task_id() -> Any | None:
         task_rows = _scheduler_task_rows()
     except Exception:  # noqa: BLE001
         return None
-    for row in _scheduler_active_vllm_service_rows(task_rows, account, wanted_gpu_models):
-        if str(row.get("status") or "").lower() == "running" and row.get("id") is not None:
-            return row.get("id")
-    return None
+    running = [
+        row
+        for row in _scheduler_active_vllm_service_rows(task_rows, account, wanted_gpu_models)
+        if str(row.get("status") or "").lower() == "running" and row.get("id") is not None
+    ]
+    if not running:
+        return None
+    running.sort(key=lambda row: str(row.get("id")))
+    index = _VLLM_SERVICE_RR["i"] % len(running)
+    _VLLM_SERVICE_RR["i"] = (_VLLM_SERVICE_RR["i"] + 1) % 1_000_000
+    return running[index].get("id")
 
 
 def _scheduler_vllm_service_heartbeat_path(cfg: RemoteSlurmConfig) -> str:
@@ -1723,29 +1753,40 @@ def ensure_vllm_service(
         if stale_queued_services:
             status_payload = vllm_service_status(cfg)
             active_services = status_payload.get("active_services") if isinstance(status_payload.get("active_services"), list) else []
-    if active_services:
+    target = _scheduler_vllm_service_count()
+    active_count = len(active_services)
+    if active_count >= target:
         return {
             "ok": True,
             "action": "already_active",
+            "target": target,
+            "active": active_count,
             "cancelled_services": cancelled_services,
             "status": status_payload,
         }
-    task = {
-        "id": f"vllm-service-{uuid.uuid4().hex}",
-        "type": VLLM_SERVICE_TASK_TYPE,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "payload": {
-            "duration_seconds": duration_seconds or _scheduler_vllm_service_duration_seconds(),
-            "model": os.getenv("FACTORIO_AI_VLLM_MODEL", "").strip(),
-            "port": os.getenv("FACTORIO_AI_VLLM_PORT", "8000").strip() or "8000",
-        },
-    }
-    row = _submit_scheduler_task(task, cfg)
+    submitted: list[dict[str, Any]] = []
+    for _ in range(target - active_count):
+        task = {
+            "id": f"vllm-service-{uuid.uuid4().hex}",
+            "type": VLLM_SERVICE_TASK_TYPE,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "payload": {
+                "duration_seconds": duration_seconds or _scheduler_vllm_service_duration_seconds(),
+                "model": os.getenv("FACTORIO_AI_VLLM_MODEL", "").strip(),
+                "port": os.getenv("FACTORIO_AI_VLLM_PORT", "8000").strip() or "8000",
+            },
+        }
+        row = _submit_scheduler_task(task, cfg)
+        submitted.append(_scheduler_compact_task_row(row))
     return {
         "ok": True,
         "action": "replaced_stale_queue" if cancelled_services else "submitted",
+        "target": target,
+        "active": active_count,
+        "submitted_count": len(submitted),
         "cancelled_services": cancelled_services,
-        "task": _scheduler_compact_task_row(row),
+        "tasks": submitted,
+        "task": submitted[0] if submitted else None,
         "status": vllm_service_status(cfg),
     }
 

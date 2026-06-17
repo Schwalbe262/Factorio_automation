@@ -37,6 +37,10 @@ $env:FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER = "0"
 $env:FACTORIO_AI_VLLM_PORT = "8000"
 $env:FACTORIO_AI_VLLM_STARTUP_SECONDS = "420"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED = "1"
+# Run 2 warm 9B instances (each on its own GPU/node) for parallel throughput +
+# redundancy: client tasks round-robin across them and one can serve while the
+# other cold-loads or restarts. All share port 8000 (each on its own node).
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT = "2"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS = "43200"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_HEARTBEAT_SECONDS = "30"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_STALE_SECONDS = "120"
