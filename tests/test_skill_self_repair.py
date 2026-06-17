@@ -404,6 +404,35 @@ class StaleInProgressRecoveryTests(_Base):
         self.assertTrue(ok)
 
 
+class CodegenApiAndGateTests(unittest.TestCase):
+    def test_api_reference_lists_exact_helper_signatures(self):
+        from factorio_ai.skill_foundry import _codegen_api_reference
+
+        ref = _codegen_api_reference()
+        self.assertIn("nearest_resource(observation", ref)  # 2 args, not 3
+        self.assertIn("PlannerDecision(", ref)
+
+    def test_static_gate_allows_a_helper_class(self):
+        from factorio_ai.skill_foundry import static_safety_gate
+
+        code = (
+            "from factorio_ai.models import PlannerDecision\n\n"
+            "class _Helper:\n    def util(self):\n        return 1\n\n"
+            "class BuildThingSkill:\n    def next_action(self, observation):\n        return PlannerDecision(None, 'ok', done=True)\n"
+        )
+        self.assertTrue(static_safety_gate(code).passed)
+
+    def test_static_gate_still_rejects_two_skill_classes(self):
+        from factorio_ai.skill_foundry import static_safety_gate
+
+        code = (
+            "from factorio_ai.models import PlannerDecision\n\n"
+            "class ASkill:\n    def next_action(self, o):\n        return None\n\n"
+            "class BSkill:\n    def next_action(self, o):\n        return None\n"
+        )
+        self.assertFalse(static_safety_gate(code).passed)
+
+
 class TechReferenceTests(unittest.TestCase):
     def test_research_reference_distinguishes_tech_from_science_pack(self):
         from factorio_ai import knowledge as k

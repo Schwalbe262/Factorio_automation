@@ -646,20 +646,31 @@ def static_safety_gate(code: str) -> GateResult:
             reasons.append("async constructs are not allowed")
 
     class_defs = [node for node in tree.body if isinstance(node, ast.ClassDef)]
-    if len(class_defs) != 1:
-        reasons.append(f"expected exactly one top-level class, found {len(class_defs)}")
+
+    def _defines_next_action(cls_node: ast.ClassDef) -> bool:
+        return any(
+            isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) and member.name == "next_action"
+            for member in cls_node.body
+        )
+
+    # Helper classes are allowed; require exactly one *skill* class (the one defining next_action),
+    # matching the loader which only counts next_action classes. This stops a valid module that
+    # factors logic into a small helper class from being rejected as "found 2 classes".
+    skill_classes = [cls for cls in class_defs if _defines_next_action(cls)]
+    if len(skill_classes) != 1:
+        reasons.append(
+            f"expected exactly one class defining next_action (extra helper classes are allowed), "
+            f"found {len(skill_classes)} among {len(class_defs)} classes"
+        )
     else:
-        cls = class_defs[0]
+        cls = skill_classes[0]
         methods = {n.name: n for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-        next_action = methods.get("next_action")
-        if next_action is None:
-            reasons.append("class must define next_action(self, observation)")
-        else:
-            arg_names = [a.arg for a in next_action.args.args]
-            if arg_names[:2] != ["self", "observation"]:
-                reasons.append("next_action must start with (self, observation)")
-            if len(next_action.args.args) - len(next_action.args.defaults) > 2:
-                reasons.append("extra next_action params must have defaults")
+        next_action = methods["next_action"]
+        arg_names = [a.arg for a in next_action.args.args]
+        if arg_names[:2] != ["self", "observation"]:
+            reasons.append("next_action must start with (self, observation)")
+        if len(next_action.args.args) - len(next_action.args.defaults) > 2:
+            reasons.append("extra next_action params must have defaults")
         init = methods.get("__init__")
         if init is not None and (len(init.args.args) - len(init.args.defaults)) > 1:
             reasons.append("__init__ params besides self must have defaults")
@@ -1089,6 +1100,44 @@ class FuelNearbyFurnaceSkill:
 )
 
 
+_CODEGEN_HELPER_NAMES = (
+    "PlannerDecision",
+    "nearest_resource",
+    "nearest_entity",
+    "entities_named",
+    "player_position",
+    "distance",
+    "total_item_count",
+    "entity_item_count",
+)
+
+
+def _codegen_api_reference() -> str:
+    """Exact signatures of the allowed factorio_ai.models helpers, introspected live, so the model
+    calls them correctly (wrong arg counts like nearest_resource(obs, name, x) were a top failure)."""
+    import inspect
+
+    try:
+        from . import models
+    except Exception:  # noqa: BLE001
+        return ""
+    lines: list[str] = []
+    for name in _CODEGEN_HELPER_NAMES:
+        obj = getattr(models, name, None)
+        if obj is None:
+            continue
+        try:
+            lines.append(f"  {name}{inspect.signature(obj)}")
+        except (TypeError, ValueError):
+            continue
+    if not lines:
+        return ""
+    return (
+        "HELPER SIGNATURES from factorio_ai.models (call with EXACTLY these parameters; do not invent "
+        "extra positional args):\n" + "\n".join(lines)
+    )
+
+
 def _codegen_vocabulary() -> str:
     """Real recipe/resource/item names so generated code uses valid strings (a top failure cause)."""
 
@@ -1189,6 +1238,8 @@ def _build_codegen_prompt(
         f"Suggested primary item/target: {spec.get('target_item') or '(infer from name)'}",
         "",
         _codegen_vocabulary(),
+        "",
+        _codegen_api_reference(),
         "",
     ]
     proven = spec.get("few_shot_examples")
