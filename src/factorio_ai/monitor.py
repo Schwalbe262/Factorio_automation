@@ -70,6 +70,13 @@ class FactorySiteEstimate:
     notes: list[str]
     blueprint: dict[str, Any] | None = None
     subitems: list[str] = field(default_factory=list)
+    # Territory model (C3/C4/C7): the site's actual footprint bounds, its owned/reserved rectangle
+    # (incl. I/O corridors + growth headroom), reserved I/O corridors, and the target it produces.
+    bounds: dict[str, float] | None = None
+    reserved_box: dict[str, float] | None = None
+    io_corridors: list[dict[str, Any]] = field(default_factory=list)
+    target_item: str | None = None
+    target_rate: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
