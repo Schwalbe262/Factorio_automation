@@ -174,5 +174,62 @@ class ControllerSelfRepairTests(_Base):
         self.assertEqual(type(config["skill"]).__name__, "SetupPowerOverrideSkill")
 
 
+class SandboxIsolationTests(_Base):
+    def test_sandbox_server_uses_isolated_runtime_dir(self):
+        # Regression: the override sandbox shares nothing with the live server. Sharing
+        # runtime_dir made Factorio's write-data lock collide -> 2nd server never started
+        # -> RCON refused -> gate skipped -> overrides could never apply.
+        from types import SimpleNamespace
+
+        from factorio_ai import factorio, skill_foundry
+
+        (self.dir / "factorio.exe").write_text("x", encoding="utf-8")
+        live_save = factorio.no_mod_save_path(self.cfg)
+        live_save.parent.mkdir(parents=True, exist_ok=True)
+        live_save.write_bytes(b"savezip")
+        skill_file = self.gen / "sb.py"
+        skill_file.write_text("class SbSkill:\n    def next_action(self, o):\n        return None\n", encoding="utf-8")
+
+        captured: dict = {}
+
+        def fake_build(cfg, *, save_path=None, console_log=None):
+            captured["runtime_dir"] = cfg.runtime_dir
+            captured["server_port"] = cfg.server_port
+            captured["save_path"] = save_path
+            return ["noop"]
+
+        class FakeProc:
+            def terminate(self):
+                pass
+
+            def wait(self, timeout=None):
+                return 0
+
+            def kill(self):
+                pass
+
+        class FakeController:
+            def __init__(self, cfg):
+                pass
+
+            def _run_skill(self, **kwargs):
+                return SimpleNamespace(ok=True, steps=3, reason="ok")
+
+        with patch.dict("os.environ", {"FACTORIO_AI_FOUNDRY_SANDBOX_ENABLED": "1"}), \
+                patch.object(factorio, "build_start_no_mod_server_command", fake_build), \
+                patch.object(factorio, "wait_for_rcon", lambda *a, **k: None), \
+                patch("subprocess.Popen", return_value=FakeProc()), \
+                patch("factorio_ai.controller.ModlessFactorioController", FakeController), \
+                patch.object(skill_foundry, "load_generated_skill_class", return_value=type("D", (), {})):
+            result = skill_foundry.sandbox_dryrun_gate(self.cfg, skill_file, steps=2)
+
+        self.assertTrue(result.passed, result.details)
+        self.assertNotIn("skipped", result.details)
+        # isolated: a fresh dir nested under the live runtime, not the live runtime itself
+        self.assertNotEqual(captured["runtime_dir"], self.cfg.runtime_dir)
+        self.assertIn("sandbox", str(captured["runtime_dir"]))
+        self.assertEqual(captured["save_path"], captured["runtime_dir"] / live_save.name)
+
+
 if __name__ == "__main__":
     unittest.main()

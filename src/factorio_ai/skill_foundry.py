@@ -778,8 +778,13 @@ def _run_sandbox_dryrun(cfg: Any, file_path: str | Path, *, steps: int, target_i
         base_server = live_server + 100
     if base_rcon == live_rcon:
         base_rcon = live_rcon + 100
+    # Isolate runtime_dir too: the server config + write-data + mod dir all derive
+    # from runtime_dir, and Factorio takes an exclusive lock on its write-data. Sharing
+    # the live server's runtime_dir made the sandbox server fail to start (lock
+    # conflict -> RCON connection refused), so the override sandbox gate always skipped.
     sandbox_cfg = dataclasses.replace(
         cfg,
+        runtime_dir=sandbox_dir,
         server_port=base_server,
         rcon_port=base_rcon,
         log_dir=sandbox_dir,
