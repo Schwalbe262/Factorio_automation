@@ -1279,12 +1279,30 @@ class FactorioController:
         from . import skill_foundry
 
         try:
+            before_key = self._live_progress_key(self.observe())
+        except Exception:  # noqa: BLE001 - baseline is best-effort
+            before_key = None
+        try:
             run = self._run_skill(**run_config)
         except Exception as exc:  # noqa: BLE001 - a generated skill must never crash the loop
             failure = f"generated skill raised: {type(exc).__name__}: {exc}"
             self._quarantine_generated_skill(skill_name, failure, signal="exception")
             return RunSummary(False, failure, 0, 0, self.cfg.log_dir / "generated-error.log", run_config.get("target_item", "generated"))
         if run.ok:
+            # Catch a no-op "success": the skill returned done but the world did not change (no
+            # entity placed, item produced, or research). A generated skill that silently gives up
+            # (e.g. wrong research target -> done immediately) must count as a failure so it
+            # auto-quarantines instead of permanently blocking the slot as fake success.
+            no_progress = False
+            if before_key is not None and (getattr(run, "item_count", 0) or 0) <= 0:
+                try:
+                    after_key = self._live_progress_key(self.observe())
+                    no_progress = after_key is not None and after_key == before_key
+                except Exception:  # noqa: BLE001
+                    no_progress = False
+            if no_progress:
+                self._record_generated_skill_failure(skill_name, f"no-op: returned done with no measurable progress ({run.reason})")
+                return run
             try:
                 entry = skill_foundry.registry_status(skill_name) or {}
                 skill_foundry.update_skill(skill_name, live_runs=int(entry.get("live_runs") or 0) + 1, live_failures=0)
@@ -1293,6 +1311,13 @@ class FactorioController:
         else:
             self._record_generated_skill_failure(skill_name, run.reason)
         return run
+
+    def _live_progress_key(self, observation: dict[str, Any]) -> tuple[Any, ...]:
+        """Entity count + research/item fingerprint -- if unchanged across a 'done' run, the skill
+        made no measurable progress (a no-op)."""
+        entities = observation.get("entities") if isinstance(observation, dict) else None
+        entity_count = len(entities) if isinstance(entities, list) else 0
+        return (entity_count, self._progress_fingerprint(observation))
 
     def _quarantine_generated_skill(self, skill_name: str, reason: str, *, signal: str) -> None:
         from . import skill_foundry

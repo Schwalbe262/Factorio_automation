@@ -231,6 +231,35 @@ class SandboxIsolationTests(_Base):
         self.assertEqual(captured["save_path"], captured["runtime_dir"] / live_save.name)
 
 
+class NoOpQuarantineTests(_Base):
+    def test_done_with_no_progress_is_recorded_as_failure(self):
+        from types import SimpleNamespace
+
+        controller = FactorioController(self.cfg)
+        obs = {"entities": [{"n": 1}], "research": {}}
+        recorded: list = []
+        with patch.object(controller, "observe", return_value=obs), \
+                patch.object(controller, "_run_skill", return_value=SimpleNamespace(ok=True, steps=1, reason="done no-op", item_count=0)), \
+                patch.object(controller, "_record_generated_skill_failure", side_effect=lambda n, r: recorded.append((n, r))):
+            controller._run_generated_skill("x", {})
+        # done=True but world unchanged -> counted as a failure (heads toward quarantine)
+        self.assertTrue(recorded)
+        self.assertEqual(recorded[0][0], "x")
+
+    def test_done_with_progress_is_a_success(self):
+        from types import SimpleNamespace
+
+        controller = FactorioController(self.cfg)
+        before = {"entities": [{"n": 1}], "research": {}}
+        after = {"entities": [{"n": 1}, {"n": 2}], "research": {}}  # an entity got placed
+        recorded: list = []
+        with patch.object(controller, "observe", side_effect=[before, after]), \
+                patch.object(controller, "_run_skill", return_value=SimpleNamespace(ok=True, steps=3, reason="placed", item_count=0)), \
+                patch.object(controller, "_record_generated_skill_failure", side_effect=lambda n, r: recorded.append((n, r))):
+            controller._run_generated_skill("x", {})
+        self.assertFalse(recorded)  # real progress -> not a failure
+
+
 class FewShotLearningTests(_Base):
     def _register(self, name: str, gates: list[str]):
         path = self.gen / f"{name}.py"

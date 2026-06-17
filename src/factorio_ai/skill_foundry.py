@@ -752,7 +752,9 @@ def _sandbox_enabled() -> bool:
     return os.getenv("FACTORIO_AI_FOUNDRY_SANDBOX_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def sandbox_dryrun_gate(cfg: Any, file_path: str | Path, *, steps: int = 25, target_item: str | None = None) -> GateResult:
+def sandbox_dryrun_gate(
+    cfg: Any, file_path: str | Path, *, steps: int = 25, target_item: str | None = None, is_override: bool = False
+) -> GateResult:
     """Run a generated skill against a COPY of the live save in a headless server.
 
     The live save is never mutated (a file-copy of the zip is the snapshot). When
@@ -765,7 +767,7 @@ def sandbox_dryrun_gate(cfg: Any, file_path: str | Path, *, steps: int = 25, tar
     if not _sandbox_enabled():
         return GateResult("sandbox_dryrun", True, [], {"skipped": "FACTORIO_AI_FOUNDRY_SANDBOX_ENABLED is off"})
     try:
-        return _run_sandbox_dryrun(cfg, file_path, steps=steps, target_item=target_item)
+        return _run_sandbox_dryrun(cfg, file_path, steps=steps, target_item=target_item, is_override=is_override)
     except Exception as exc:  # noqa: BLE001 - infra issues degrade to skipped, not fail
         return GateResult("sandbox_dryrun", True, [], {"skipped": f"sandbox infra unavailable: {type(exc).__name__}: {exc}"})
 
@@ -794,7 +796,9 @@ def _sandbox_progress(before: dict[str, Any], after: dict[str, Any], target_item
     return score
 
 
-def _run_sandbox_dryrun(cfg: Any, file_path: str | Path, *, steps: int, target_item: str | None) -> GateResult:
+def _run_sandbox_dryrun(
+    cfg: Any, file_path: str | Path, *, steps: int, target_item: str | None, is_override: bool = False
+) -> GateResult:
     import dataclasses
     import subprocess
 
@@ -867,12 +871,18 @@ def _run_sandbox_dryrun(cfg: Any, file_path: str | Path, *, steps: int, target_i
         progress = _sandbox_progress(before, after, target_item)
         done = bool(getattr(run, "ok", False))
         require_progress = os.getenv("FACTORIO_AI_FOUNDRY_REQUIRE_PROGRESS", "1").strip().lower() in {"1", "true", "yes", "on"}
-        ok = done or progress > 0 or (not require_progress and getattr(run, "steps", 0) >= 1)
+        # An OVERRIDE repairs a FAILING skill, so the dry-run starts in the broken state: it MUST
+        # show measurable progress. A skill that returns done immediately with no change is a giveup
+        # no-op (e.g. wrong target) and must NOT pass -- that bug slipped through "done = pass" before.
+        if is_override:
+            ok = progress > 0
+        else:
+            ok = done or progress > 0 or (not require_progress and getattr(run, "steps", 0) >= 1)
         reason = getattr(run, "reason", "")
         return GateResult(
             "sandbox_dryrun",
             bool(ok),
-            [] if ok else [f"sandbox run made no measurable progress (steps={getattr(run, 'steps', 0)}, reason={reason})"],
+            [] if ok else [f"sandbox run made no measurable progress (steps={getattr(run, 'steps', 0)}, done={done}, reason={reason})"],
             {"steps": getattr(run, "steps", 0), "reason": reason, "progress": progress, "done": done},
         )
     finally:
@@ -1418,7 +1428,7 @@ def develop_skill(
         # dry-run is mandatory and must actually run (a "skipped" sandbox is not acceptable for them).
         want_sandbox = True if is_override else (_sandbox_enabled() if run_sandbox is None else run_sandbox)
         if want_sandbox:
-            g3 = sandbox_dryrun_gate(cfg, tmp_file, steps=25, target_item=spec.get("target_item"))
+            g3 = sandbox_dryrun_gate(cfg, tmp_file, steps=25, target_item=spec.get("target_item"), is_override=is_override)
             if not g3.passed:
                 last_reason = "sandbox dry-run: " + "; ".join(g3.reasons[:4])
                 _archive_attempt(runtime_dir, name, version, attempt, code, {"gate": g3.to_dict(), "sha256": code_sha})
