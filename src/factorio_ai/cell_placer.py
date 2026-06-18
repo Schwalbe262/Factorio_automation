@@ -302,17 +302,17 @@ def _place_direct_insertion(
     the intermediate straight in (no belt -> no flow-direction bug). The raw input enters on a north
     belt and the product leaves on a south belt (all boundary I/O is belts, no chests).
 
-    Applies only to the clean small case (1 consumer machine, 1 intermediate from <=2 producers, <=1
-    extra raw input, all 3x3 assemblers); returns None otherwise so a more general archetype runs."""
-    if len(spec.substages) != 1 or spec.machine_count != 1:
+    Generalised to N consumer machines: each consumer is its own unit (consumer + flanking producers
+    + north raw belt + south product belt), stacked vertically. Applies when there is one
+    intermediate from <=2 flanking producers per consumer and <=1 extra raw input, all 3x3
+    assemblers; returns None otherwise so a more general archetype runs."""
+    if len(spec.substages) != 1:
         return None
     main = _stages(spec)[-1]
     sub = spec.substages[0]
     if main.is_furnace or "furnace" in str(sub.machine or ""):
         return None
     if _machine_w(main.machine) != 3 or _machine_w(sub.machine) != 3:
-        return None
-    if sub.machine_count not in (1, 2):
         return None
     main_recipe = knowledge.recipe_for_product(spec.target_item)
     if main_recipe is None:
@@ -330,60 +330,71 @@ def _place_direct_insertion(
         return None
     sub_in = sub_inputs[0]
 
-    entities: list[dict[str, Any]] = []
-    machine_centers: list[tuple[float, float, float, float]] = []
-    sources: list[dict[str, Any]] = []
-    io_corridors: list[dict[str, Any]] = []
-    warnings: list[str] = []
-
-    # Per-link flow rates -> pick an inserter tier fast enough (fast/bulk for high-rate cable, so a
-    # single high-ratio machine still hits its rate instead of being base-inserter bottlenecked).
+    n_ec = max(1, main.count)
+    # Flanking only makes sense when producers >= consumers (each consumer gets >=1 dedicated
+    # producer). With far fewer producers than consumers (e.g. 1 gear for 8 science) flanking would
+    # massively over-produce, so defer to belt_row's shared intermediate lane.
+    if sub.machine_count < n_ec:
+        return None
+    flank = min(2, max(1, ceil(sub.machine_count / n_ec)))  # producers flanking each consumer (<=2)
+    # Per-link flow rates -> pick an inserter tier fast enough for each link.
     cable_per_inserter = sub.rate_per_minute / max(1, sub.machine_count)
-    iron_rate = main.input_rates.get(raw_item, 0.0) if raw_item else 0.0
+    iron_rate = (main.input_rates.get(raw_item, 0.0) / n_ec) if raw_item else 0.0
     sub_prod_amt = float(sub_recipe.products.get(sub.item) or 1.0) if sub_recipe else 1.0
     copper_per_amt = float(sub_recipe.ingredients.get(sub_in) or 1.0) if sub_recipe else 1.0
     copper_per_inserter = (sub.rate_per_minute / sub_prod_amt * copper_per_amt) / max(1, sub.machine_count)
-    out_rate = spec.achieved_rate
+    out_rate = spec.achieved_rate / n_ec
     cable_ins = _inserter_for_rate(cable_per_inserter, available_inserters)
     copper_ins = _inserter_for_rate(copper_per_inserter, available_inserters)
     iron_ins = _inserter_for_rate(iron_rate, available_inserters)
     out_ins = _inserter_for_rate(out_rate, available_inserters)
 
+    entities: list[dict[str, Any]] = []
+    machine_centers: list[tuple[float, float, float, float]] = []
+    sources: list[dict[str, Any]] = []
+    io_corridors: list[dict[str, Any]] = []
+    warnings: list[str] = []
     ecx = 4
     west_x = -6
     east_x = ecx + 10  # 14
+    pitch_y = 8  # one unit spans ry-3..ry+3 (7 tall) + a 1-tile gap
     modules_items = _modules_to_items(main.modules) or None
-    _add(entities, main.machine, ecx, 0, recipe=main.recipe, items=modules_items)
-    machine_centers.append((float(ecx), 0.0, 3, 3))
+    destination: dict[str, Any] | None = None
 
-    cable_xs = [0] + ([8] if sub.machine_count == 2 else [])
-    for cx in cable_xs:
-        _add(entities, sub.machine, cx, 0, recipe=sub.recipe_name)
-        machine_centers.append((float(cx), 0.0, 3, 3))
-        if cx < ecx:  # west producer -> direct insert east into EC; copper from west boundary belt
-            _add(entities, cable_ins, 2, 0, direction=_WEST_DIR)        # pickup (1) cable, drop (3) EC
-            _lay_lane(entities, 0, west_x, cx - 3, item=sub_in)         # copper belt -> (cx-3)
-            _add(entities, copper_ins, cx - 2, 0, direction=_WEST_DIR)  # pickup (cx-3) belt, drop (cx-1)
-            sources.append({"item": sub_in, "x": west_x, "y": 0})
-            io_corridors.append({"role": "input", "item": sub_in, "x": west_x, "y": 0, "side": "west"})
-        else:  # east producer -> direct insert west into EC; copper from east boundary belt
-            _add(entities, cable_ins, 6, 0, direction=_EAST_DIR)        # pickup (7) cable, drop (5) EC
-            _lay_lane(entities, 0, cx + 3, east_x, item=sub_in, flow_west=True)  # copper flows toward cable
-            _add(entities, copper_ins, cx + 2, 0, direction=_EAST_DIR)  # pickup (cx+3) belt, drop (cx+1)
-            sources.append({"item": sub_in, "x": east_x, "y": 0})
-            io_corridors.append({"role": "input", "item": sub_in, "x": east_x, "y": 0, "side": "east"})
+    for k in range(n_ec):
+        ry = k * pitch_y
+        _add(entities, main.machine, ecx, ry, recipe=main.recipe, items=modules_items)
+        machine_centers.append((float(ecx), float(ry), 3, 3))
+        cable_xs = [0] + ([8] if flank == 2 else [])
+        for cx in cable_xs:
+            _add(entities, sub.machine, cx, ry, recipe=sub.recipe_name)
+            machine_centers.append((float(cx), float(ry), 3, 3))
+            if cx < ecx:  # west producer -> direct insert east into the consumer; copper from west belt
+                _add(entities, cable_ins, 2, ry, direction=_WEST_DIR)
+                _lay_lane(entities, ry, west_x, cx - 3, item=sub_in)
+                _add(entities, copper_ins, cx - 2, ry, direction=_WEST_DIR)
+                sources.append({"item": sub_in, "x": west_x, "y": ry})
+                io_corridors.append({"role": "input", "item": sub_in, "x": west_x, "y": ry, "side": "west"})
+            else:  # east producer -> direct insert west; copper from east belt
+                _add(entities, cable_ins, 6, ry, direction=_EAST_DIR)
+                _lay_lane(entities, ry, cx + 3, east_x, item=sub_in, flow_west=True)
+                _add(entities, copper_ins, cx + 2, ry, direction=_EAST_DIR)
+                sources.append({"item": sub_in, "x": east_x, "y": ry})
+                io_corridors.append({"role": "input", "item": sub_in, "x": east_x, "y": ry, "side": "east"})
+        if raw_item is not None:
+            _lay_lane(entities, ry - 3, west_x, ecx, item=raw_item)
+            _add(entities, iron_ins, ecx, ry - 2, direction=NORTH)
+            sources.append({"item": raw_item, "x": west_x, "y": ry - 3})
+            io_corridors.append({"role": "input", "item": raw_item, "x": west_x, "y": ry - 3, "side": "north"})
+        out_y = ry + 3
+        _lay_lane(entities, out_y, ecx, east_x, item=main.product)
+        _add(entities, out_ins, ecx, ry + 2, direction=NORTH)
+        io_corridors.append({"role": "output", "item": main.product, "x": east_x, "y": out_y, "side": "east"})
+        if destination is None:
+            destination = {"item": main.product, "x": east_x, "y": out_y, "rate": spec.achieved_rate}
 
-    if raw_item is not None:
-        _lay_lane(entities, -3, west_x, ecx, item=raw_item)             # raw belt north of EC
-        _add(entities, iron_ins, ecx, -2, direction=NORTH)             # pickup (ecx,-3), drop (ecx,-1)
-        sources.append({"item": raw_item, "x": west_x, "y": -3})
-        io_corridors.append({"role": "input", "item": raw_item, "x": west_x, "y": -3, "side": "north"})
-
-    out_y = 3
-    _lay_lane(entities, out_y, ecx, east_x, item=main.product)          # product belt south -> east boundary
-    _add(entities, out_ins, ecx, 2, direction=NORTH)                   # pickup (ecx,1) EC, drop (ecx,3)
-    destination = {"item": main.product, "x": east_x, "y": out_y, "rate": spec.achieved_rate}
-    io_corridors.append({"role": "output", "item": main.product, "x": east_x, "y": out_y, "side": "east"})
+    if flank * n_ec < sub.machine_count:
+        warnings.append(f"{spec.target_item}: {flank} producer(s)/consumer may underfeed; sandbox confirms rate")
 
     return _finalize(entities, machine_centers, sources, destination, io_corridors,
                      warnings, True, box, pole, archetype="direct_insertion")

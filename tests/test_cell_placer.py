@@ -92,6 +92,22 @@ class CellPlacerTests(unittest.TestCase):
         self.assertIsNotNone(placed.destination)
         self.assertEqual(placed.destination["item"], "electronic-circuit")
 
+    def test_multi_machine_direct_insertion(self):
+        # multi-machine intermediate cells (e.g. EC@90 -> 2 EC machines) stack direct_insertion units
+        # vertically; each consumer is flanked by producers -> collision-free + flow-reachable.
+        for rate in (60, 90, 180):
+            spec = compile_cell("electronic-circuit", rate, available_machines=["assembling-machine-1"],
+                                belt_tiers_available=["transport-belt"])
+            di = [c for c in cp.place_cell_candidates(spec, cp.BoundingBox(140, 140),
+                                                      available_inserters={"inserter", "fast-inserter"})
+                  if c.archetype == "direct_insertion"]
+            self.assertTrue(di, f"EC@{rate} should have a direct_insertion candidate")
+            from factorio_ai import cell_flow_check as cf
+            r = cf.precheck_cell(spec, di[0])
+            self.assertEqual(self._collisions(di[0]), {}, f"EC@{rate} has collisions")
+            self.assertEqual(r["checks"]["flow_reachability"], "pass", f"EC@{rate} flow")
+            self.assertEqual(r["checks"]["inserter_reach"], "pass", f"EC@{rate} reach")
+
     def test_smelting_column_furnace_geometry(self):
         # P2: 2x2 burner furnace cell uses the smelting_column archetype with correct inserter
         # geometry (input drops into furnace, output picks from it) + coal fuel source — collision-
