@@ -892,6 +892,64 @@ def _scheduler_cancel_task(task_id: Any) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _scheduler_close_allocation(alloc_id: Any, *, timeout: int = 10) -> bool:
+    """Release a scheduler allocation by id (POST /api/allocations/<id>/close). Returns True on ok."""
+    if alloc_id is None:
+        return False
+    try:
+        response = _scheduler_post_form(f"/api/allocations/{alloc_id}/close", {}, timeout=timeout)
+    except Exception:  # noqa: BLE001
+        return False
+    try:
+        parsed = json.loads(response)
+        return bool(parsed.get("ok", True)) if isinstance(parsed, dict) else True
+    except json.JSONDecodeError:
+        return True
+
+
+def _close_orphan_vllm_allocations(account: str, *, timeout: int = 10, min_age_seconds: float = 90.0) -> list[dict[str, Any]]:
+    """Close OUR account's PENDING allocations that have no active backing task.
+
+    Cancelling a service TASK does not release its GPU ALLOCATION, so churn (queue-stale
+    cancel/resubmit or a clean reset) leaks pending allocations that pile up and head-of-line-block
+    every later GPU request — the failure mode behind the serving outages. This sweeps those
+    leaked zombies. It NEVER touches active/running allocations, only our own account's *pending*
+    ones with no active task, and skips very fresh allocations (``min_age_seconds``) so it can't race
+    a just-submitted task whose task->allocation link hasn't appeared yet.
+    """
+    try:
+        allocs = _scheduler_api_json_retry("/api/allocations", timeout=timeout, attempts=2)
+        tasks = _scheduler_api_json_retry("/api/tasks", timeout=timeout, attempts=2)
+    except Exception:  # noqa: BLE001
+        return []
+    alloc_rows = allocs if isinstance(allocs, list) else []
+    task_rows = tasks if isinstance(tasks, list) else []
+    active_states = {"queued", "pending", "attaching", "starting", "running"}
+    backed_alloc_ids = {
+        str(t.get("allocation_id"))
+        for t in task_rows
+        if isinstance(t, dict)
+        and t.get("allocation_id") is not None
+        and str(t.get("status") or "").lower() in active_states
+    }
+    closed: list[dict[str, Any]] = []
+    for a in alloc_rows:
+        if not isinstance(a, dict):
+            continue
+        if str(a.get("account_name") or "") != account:
+            continue
+        if str(a.get("state") or "").lower() != "pending":
+            continue
+        if str(a.get("id")) in backed_alloc_ids:
+            continue  # a live task is waiting on this allocation — not a leak
+        age = _iso_age_seconds(a.get("created_at"))
+        if age != float("inf") and age < min_age_seconds:
+            continue  # too fresh; could be an in-flight submission
+        if _scheduler_close_allocation(a.get("id"), timeout=timeout):
+            closed.append({"id": a.get("id"), "gpus": a.get("total_gpus") or a.get("gpus")})
+    return closed
+
+
 def _scheduler_active_vllm_service_rows(
     task_rows: list[dict[str, Any]],
     account: str,
@@ -959,12 +1017,19 @@ def cancel_vllm_services(cfg: RemoteSlurmConfig | None = None, *, timeout: int =
     cancelled: list[dict[str, Any]] = []
     for row in targets:
         task_id = row.get("id")
+        # close the task's own allocation first (cancelling the task alone leaks the allocation).
+        alloc_id = row.get("allocation_id")
+        if alloc_id is not None:
+            _scheduler_close_allocation(alloc_id, timeout=timeout)
         try:
             _scheduler_cancel_task(task_id)
             cancelled.append({"id": task_id, "status": row.get("status"), "ok": True})
         except Exception as exc:  # noqa: BLE001 - a running-service cancel can time out client-side but still registers
             cancelled.append({"id": task_id, "status": row.get("status"), "ok": False, "error": f"{type(exc).__name__}"})
-    return {"ok": True, "account": account, "found": len(targets), "cancelled": cancelled}
+    # sweep any leaked orphan pending allocations so they don't head-of-line-block future requests.
+    closed_allocations = _close_orphan_vllm_allocations(account, timeout=timeout, min_age_seconds=0.0)
+    return {"ok": True, "account": account, "found": len(targets), "cancelled": cancelled,
+            "closed_allocations": closed_allocations}
 
 
 def _scheduler_running_vllm_service_node_name() -> str:
@@ -1835,6 +1900,9 @@ def ensure_vllm_service(
                 if status in {"queued", "pending", "attaching", "starting"} and age_seconds != float("inf") and age_seconds >= queue_stale_seconds:
                     stale_queued_services.append(row)
         for row in stale_queued_services:
+            # close the stale task's allocation before/with cancelling so churn does not leak it.
+            if row.get("allocation_id") is not None:
+                _scheduler_close_allocation(row.get("allocation_id"))
             cancelled = _scheduler_cancel_task(row.get("id"))
             cancelled_services.append(
                 {
@@ -1845,6 +1913,9 @@ def ensure_vllm_service(
                 }
             )
         if stale_queued_services:
+            # sweep orphan pending allocations left by this (and any prior) churn so they cannot
+            # head-of-line-block the fresh services we are about to submit.
+            _close_orphan_vllm_allocations(_scheduler_account())
             status_payload = vllm_service_status(cfg)
             active_services = status_payload.get("active_services") if isinstance(status_payload.get("active_services"), list) else []
     target = _scheduler_vllm_service_count()
