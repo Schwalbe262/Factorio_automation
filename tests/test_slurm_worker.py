@@ -9,6 +9,7 @@ from factorio_ai.slurm_worker import (
     call_llm_json_with_diagnostics,
     compact_layout_improvement_payload,
     normalize_layout_response,
+    parse_json_object_from_content,
     run_skill_foundry_request,
     run_strategy_request,
     run_task_file,
@@ -29,6 +30,26 @@ class FakeResponse:
 
     def read(self):
         return self.body
+
+
+class ParseJsonFromContentTests(unittest.TestCase):
+    """The 27B is a reasoning model: it wraps chain-of-thought in <think>...</think> and can append
+    prose, so the JSON extractor must recover the JSON object rather than failing ('LLM response
+    content is not a JSON object'). Genuine mid-JSON truncation still can't be recovered."""
+
+    def test_recovers_json_after_reasoning_block(self):
+        content = "<think>weigh options {a vs b}</think>\n{\"action\": \"build\", \"count\": 2}"
+        self.assertEqual(parse_json_object_from_content(content), {"action": "build", "count": 2})
+
+    def test_recovers_json_embedded_in_prose_ignoring_trailing_truncation(self):
+        content = "Plan: {\"ok\": true, \"k\": 1} then I would also {incomplete"
+        self.assertEqual(parse_json_object_from_content(content), {"ok": True, "k": 1})
+
+    def test_plain_json_object(self):
+        self.assertEqual(parse_json_object_from_content("{\"a\": 1}"), {"a": 1})
+
+    def test_genuinely_truncated_json_returns_none(self):
+        self.assertIsNone(parse_json_object_from_content("<think>x</think> {\"code\": \"def f():"))
 
 
 class SlurmWorkerTests(unittest.TestCase):

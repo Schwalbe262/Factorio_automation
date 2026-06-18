@@ -1776,13 +1776,75 @@ def _dependency_items(value: Any, limit: int = 40) -> list[str]:
     return seen
 
 
+def _strip_reasoning_blocks(text: str) -> str:
+    """Reasoning models (Qwen3) wrap chain-of-thought in <think>...</think> before the answer. Drop
+    complete blocks; if only a closing </think> remains (the opening was cut), keep what follows it.
+    This both removes brace-noise that corrupts naive {..} extraction and focuses on the answer."""
+    lower = text.lower()
+    out: list[str] = []
+    i = 0
+    while True:
+        s = lower.find("<think>", i)
+        if s < 0:
+            out.append(text[i:])
+            break
+        e = lower.find("</think>", s)
+        if e < 0:
+            out.append(text[i:s])  # unclosed think -> the rest is reasoning, drop it
+            break
+        out.append(text[i:s])
+        i = e + len("</think>")
+    result = "".join(out)
+    close = result.lower().rfind("</think>")
+    if close >= 0:
+        result = result[close + len("</think>"):]
+    return result.strip()
+
+
+def _largest_json_object(text: str) -> dict[str, Any] | None:
+    """Return the largest balanced {..} object that parses as a JSON dict (string/escape aware), so a
+    JSON object embedded in prose is recovered and trailing truncated text is ignored."""
+    best: dict[str, Any] | None = None
+    best_len = -1
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    obj = _try_parse_json_object(text[start : i + 1])
+                    if obj is not None and (i + 1 - start) > best_len:
+                        best, best_len = obj, i + 1 - start
+    return best
+
+
 def parse_json_object_from_content(content: Any) -> dict[str, Any] | None:
     if not isinstance(content, str):
         return None
-    text = content.strip()
+    text = _strip_reasoning_blocks(content.strip())
     if not text:
         return None
     parsed = _try_parse_json_object(text)
+    if parsed is not None:
+        return parsed
+    parsed = _largest_json_object(text)
     if parsed is not None:
         return parsed
     start = text.find("{")
