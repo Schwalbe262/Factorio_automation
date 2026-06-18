@@ -95,6 +95,7 @@ BLUEPRINT_INSERTER_NAMES = {
     "long-handed-inserter",
     "fast-inserter",
     "stack-inserter",
+    "bulk-inserter",  # Factorio 2.0 successor to stack-inserter (reach 1); high-rate cell links use it
 }
 
 

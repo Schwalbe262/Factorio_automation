@@ -108,6 +108,36 @@ class CellPlacerTests(unittest.TestCase):
             self.assertEqual(r["checks"]["flow_reachability"], "pass", f"EC@{rate} flow")
             self.assertEqual(r["checks"]["inserter_reach"], "pass", f"EC@{rate} reach")
 
+    def test_compact_row_shares_producer_and_consumer_row(self):
+        # P3: a cell whose lone sub-stage producer (1 iron-gear-wheel machine) feeds a row of many
+        # consumers (science) must NOT waste a whole row on the gear. The compact_row archetype puts
+        # the gear inline at the west end of the single science row and drops its output onto an
+        # east-flowing intermediate lane the science machines read — all machines share one row.
+        from factorio_ai import cell_flow_check as cf, cell_pipeline as cpl
+        for rate in (30, 60, 90):
+            spec = compile_cell("automation-science-pack", rate,
+                                available_machines=["assembling-machine-1", "assembling-machine-2"],
+                                belt_tiers_available=["transport-belt"])
+            cands = cp.place_cell_candidates(spec, cp.BoundingBox(160, 160),
+                                             available_inserters={"inserter", "fast-inserter", "bulk-inserter"})
+            co = next((c for c in cands if c.archetype == "compact_row"), None)
+            self.assertIsNotNone(co, f"asp@{rate} should have a compact_row candidate")
+            r = cf.precheck_cell(spec, co)
+            self.assertEqual(r["status"], "pass", f"asp@{rate} compact_row: {r['reasons']}")
+            self.assertEqual(self._collisions(co), {}, f"asp@{rate} compact_row has collisions")
+            self.assertEqual(r["checks"]["flow_reachability"], "pass")
+            self.assertEqual(r["checks"]["inserter_reach"], "pass")
+            # every machine (gear + all science) sits on the same row (one y) -> no orphan sub row.
+            machine_ys = {e["position"]["y"] for e in co.entities
+                          if e["name"] in ("assembling-machine-1", "assembling-machine-2")}
+            self.assertEqual(machine_ys, {0.0}, f"asp@{rate} machines not on one row: {machine_ys}")
+            # and the ranker actually prefers it over belt_row (more compact -> higher rect_fill).
+            d = cpl.design_cell("automation-science-pack", rate,
+                                available_machines=["assembling-machine-1", "assembling-machine-2"],
+                                belt_tiers_available=["transport-belt"],
+                                available_inserters={"inserter", "fast-inserter", "bulk-inserter"})
+            self.assertEqual(d["chosen_archetype"], "compact_row", f"asp@{rate} should pick compact_row")
+
     def test_smelting_column_furnace_geometry(self):
         # P2: 2x2 burner furnace cell uses the smelting_column archetype with correct inserter
         # geometry (input drops into furnace, output picks from it) + coal fuel source — collision-

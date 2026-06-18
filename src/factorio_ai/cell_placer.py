@@ -36,7 +36,7 @@ from typing import Any
 
 from . import knowledge
 from .cell_compiler import CellSpec
-from .monitor import EAST as _EAST_DIR, NORTH, WEST as _WEST_DIR
+from .monitor import EAST as _EAST_DIR, NORTH, SOUTH as _SOUTH_DIR, WEST as _WEST_DIR
 
 # Validator direction whose inserter picks up to the NORTH and drops to the SOUTH (see module
 # docstring): a north input lane feeds the machine below it, and a machine drops to the south lane,
@@ -214,7 +214,12 @@ def place_cell_candidates(
                                  available_inserters=available_inserters)
     if di is not None:
         out.append(di)
-    # belt_row is the general fallback and always applicable.
+    # compact single-row (one producer -> many consumers, e.g. automation-science-pack); the case
+    # direct_insertion defers. belt_row remains the general fallback.
+    co = _place_compact_row(spec, box, pole=pole, long_inserter_available=long_inserter_available,
+                            available_inserters=available_inserters)
+    if co is not None:
+        out.append(co)
     sm = _place_smelting_column(spec, box, pole=pole, available_inserters=available_inserters)
     if sm is not None:
         out.append(sm)
@@ -398,6 +403,133 @@ def _place_direct_insertion(
 
     return _finalize(entities, machine_centers, sources, destination, io_corridors,
                      warnings, True, box, pole, archetype="direct_insertion")
+
+
+def _place_compact_row(
+    spec: CellSpec,
+    box: BoundingBox | None = None,
+    *,
+    pole: str = "small-electric-pole",
+    long_inserter_available: bool = True,
+    available_inserters: set[str] | None = None,
+) -> PlacedCell | None:
+    """Compact single-row archetype for a cell whose lone sub-stage producer feeds a row of many
+    consumers (the automation-science-pack shape: 1 iron-gear-wheel machine -> N science machines).
+    belt_row wastes a whole row on that single producer; here the producer sits INLINE at the west
+    end of the consumer row and drops its product onto an east-flowing intermediate lane the consumers
+    read — no orphan sub-stage row (the user's P3 'gear factory sitting alone in its own row' fix).
+
+    Layout (one machine row at y=0): producer at x=0, consumers at x=4,8,...; the intermediate rides
+    a north lane at y=-3 (produced internally at the gear, flows EAST so the consumers to its east can
+    read it), the consumers' raw rides y=-4 (long-handed reach), the producer's own raw rides y=-3
+    WEST of the gap (separate segment), and the product exits south on y=+3 to the east boundary.
+
+    Returns None unless the shape matches (exactly one single-machine sub-stage feeding more
+    consumers, all 3x3 assemblers, one extra raw input, long inserters available) so a more general
+    archetype runs instead."""
+    if len(spec.substages) != 1 or not long_inserter_available:
+        return None
+    main = _stages(spec)[-1]
+    sub = spec.substages[0]
+    if main.is_furnace or "furnace" in str(sub.machine or ""):
+        return None
+    if _machine_w(main.machine) != 3 or _machine_w(sub.machine) != 3:
+        return None
+    # Targets exactly the orphan-row case: a single producer feeding strictly more consumers (this is
+    # the case _place_direct_insertion explicitly defers via `sub.machine_count < n_ec`).
+    if sub.machine_count != 1 or main.count < 2:
+        return None
+    main_recipe = knowledge.recipe_for_product(spec.target_item)
+    if main_recipe is None:
+        return None
+    solid_ing = [i for i in main_recipe.ingredients if not knowledge.is_fluid(i)]
+    if sub.item not in solid_ing:
+        return None
+    raws = [i for i in solid_ing if i != sub.item]
+    if len(raws) != 1:
+        return None
+    raw_item = raws[0]
+    sub_recipe = knowledge.recipe_for_product(sub.item)
+    sub_inputs = [i for i in (sub_recipe.ingredients if sub_recipe else {}) if not knowledge.is_fluid(i)]
+    if len(sub_inputs) != 1:
+        return None
+    sub_in = sub_inputs[0]
+
+    n = max(2, main.count)
+    # Per-link flow rates -> pick an inserter tier fast enough for each link (sandbox confirms actuals).
+    gear_out_rate = sub.rate_per_minute  # total intermediate/min the lone producer makes
+    sub_prod_amt = float(sub_recipe.products.get(sub.item) or 1.0) if sub_recipe else 1.0
+    sub_in_amt = float(sub_recipe.ingredients.get(sub_in) or 1.0) if sub_recipe else 1.0
+    sub_in_rate = gear_out_rate / sub_prod_amt * sub_in_amt
+    inter_per_consumer = gear_out_rate / n
+    raw_per_consumer = main.input_rates.get(raw_item, 0.0) / n
+    out_per_consumer = spec.achieved_rate / n
+    gear_out_ins = _inserter_for_rate(gear_out_rate, available_inserters)
+    sub_in_ins = _inserter_for_rate(sub_in_rate, available_inserters)
+    inter_ins = _inserter_for_rate(inter_per_consumer, available_inserters)
+    out_ins = _inserter_for_rate(out_per_consumer, available_inserters)
+
+    entities: list[dict[str, Any]] = []
+    machine_centers: list[tuple[float, float, float, float]] = []
+    sources: list[dict[str, Any]] = []
+    io_corridors: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    inter_y = _PRIMARY_IN_DY      # -3: intermediate lane (normal-inserter reach from y-2)
+    raw_y = _SECONDARY_IN_DY      # -4: consumers' raw lane (long-handed reach from y-2)
+    out_y = _OUT_DY              # +3: product lane south
+    gx = 0
+    pitch = _machine_w(main.machine) + 1  # 4
+    last_sx = pitch * n
+    inner_x1 = last_sx + 1
+    west_x = -6
+    east_x = inner_x1 + 3
+
+    # --- producer (gear) inline at the west end -------------------------------------------------
+    _add(entities, sub.machine, gx, 0, recipe=sub.recipe_name)
+    machine_centers.append((float(gx), 0.0, 3, 3))
+    # producer's own raw rides inter_y WEST of the gap (west_x..gx-1), flows east into the gear.
+    _lay_lane(entities, inter_y, west_x, gx - 1, item=sub_in)
+    sources.append({"item": sub_in, "x": west_x, "y": inter_y, "rate": sub_in_rate})
+    io_corridors.append({"role": "input", "item": sub_in, "x": west_x, "y": inter_y, "side": "west"})
+    # Only the gx-1 north slot can BOTH pick the producer's raw belt (laid west of the gap) AND drop
+    # into the gear; gx+1 is the output inserter and gx-3.. would miss the gear footprint. So feed
+    # the producer with one tier-selected inserter and warn if even that is rate-short.
+    _add(entities, sub_in_ins, gx - 1, _INSERTER_IN_DY, direction=NORTH)
+    # producer output -> intermediate lane: SOUTH-facing inserter picks the gear's north tile and
+    # drops onto the lane at (gx+1, inter_y); the lane flows east to the consumers.
+    _add(entities, gear_out_ins, gx + 1, _INSERTER_IN_DY, direction=_SOUTH_DIR)
+    _lay_lane(entities, inter_y, gx + 1, inner_x1, item=sub.item)
+
+    # --- consumers' shared lanes: raw to the north, product to the south ------------------------
+    _lay_lane(entities, raw_y, west_x, inner_x1, item=raw_item)
+    sources.append({"item": raw_item, "x": west_x, "y": raw_y, "rate": main.input_rates.get(raw_item)})
+    io_corridors.append({"role": "input", "item": raw_item, "x": west_x, "y": raw_y, "side": "west"})
+    _lay_lane(entities, out_y, gx, east_x, item=main.product)
+    destination = {"item": main.product, "x": east_x, "y": out_y, "rate": spec.achieved_rate}
+    io_corridors.append({"role": "output", "item": main.product, "x": east_x, "y": out_y, "side": "east"})
+
+    modules_items = _modules_to_items(main.modules) or None
+    for j in range(n):
+        sx = pitch * (j + 1)
+        _add(entities, main.machine, sx, 0, recipe=main.recipe, items=modules_items)
+        machine_centers.append((float(sx), 0.0, 3, 3))
+        _add(entities, inter_ins, sx - 1, _INSERTER_IN_DY, direction=NORTH)          # intermediate in (reach 1)
+        _add(entities, _LONG_INSERTER, sx + 1, _INSERTER_IN_DY, direction=NORTH)     # raw in (long reach 2)
+        _add(entities, out_ins, sx, _INSERTER_OUT_DY, direction=NORTH)               # product out -> south lane
+
+    def _tput(name: str) -> float:
+        return next((t for nme, t in _INSERTER_TIERS if nme == name), 57.0)
+
+    if _tput(sub_in_ins) + 1e-6 < sub_in_rate:
+        warnings.append(f"{spec.target_item}: producer raw '{sub_in}' at {sub_in_rate:.0f}/min exceeds a "
+                        f"single {sub_in_ins} ({_tput(sub_in_ins):.0f}/min); throughput-limited, sandbox confirms")
+    if _tput(gear_out_ins) + 1e-6 < gear_out_rate:
+        warnings.append(f"{spec.target_item}: producer output '{sub.item}' at {gear_out_rate:.0f}/min exceeds a "
+                        f"single {gear_out_ins} ({_tput(gear_out_ins):.0f}/min); throughput-limited, sandbox confirms")
+
+    return _finalize(entities, machine_centers, sources, destination, io_corridors,
+                     warnings, True, box, pole, archetype="compact_row")
 
 
 def _place_belt_row(
