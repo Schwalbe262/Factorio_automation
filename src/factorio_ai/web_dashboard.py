@@ -1272,6 +1272,17 @@ def render_layouts_page(summary: dict[str, Any], lang: str = DEFAULT_LANG, objec
     return _page(title, body, lang, objective)
 
 
+def _footprint_text(design: dict[str, Any], fp: dict[str, Any]) -> str:
+    """Footprint = the bounding rectangle the cell occupies (width x height incl. empty space),
+    not the sum of machine/belt tiles. Prefer the placed required_box; fall back to footprint dims."""
+    rb = design.get("required_box") if isinstance(design.get("required_box"), dict) else {}
+    w = rb.get("width") if isinstance(rb.get("width"), (int, float)) else fp.get("width")
+    h = rb.get("height") if isinstance(rb.get("height"), (int, float)) else fp.get("height")
+    if isinstance(w, (int, float)) and isinstance(h, (int, float)):
+        return f"{w:g} x {h:g} = {round(w * h):g} tiles"
+    return f"~{fp.get('area', 0)} tiles"
+
+
 def _layout_card(design: dict[str, Any], lang: str) -> str:
     item = str(design.get("item") or "")
     blueprint = design.get("blueprint") if isinstance(design.get("blueprint"), dict) else {}
@@ -1296,7 +1307,8 @@ def _layout_card(design: dict[str, Any], lang: str) -> str:
         ("Inputs", belts_in),
         ("Outputs", belts_out),
         (_t(lang, "demand_kw"), f"{design.get('total_power_kw')} kW"),
-        ("Footprint", f"~{fp.get('area', 0)} tiles ({fp.get('machine_tiles', 0)} machine)"),
+        ("Footprint", _footprint_text(design, fp)),
+        ("Added", str(design.get("added_at") or "—")),
     ]
     meta_html = "".join(
         f"<tr><td class=\"muted\">{escape(str(k))}</td><td>{escape(str(v))}</td></tr>"

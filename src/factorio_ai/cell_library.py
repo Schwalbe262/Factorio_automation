@@ -24,6 +24,17 @@ def _library_dir(runtime_dir: Path) -> Path:
     return Path(runtime_dir) / LIBRARY_DIRNAME
 
 
+def _format_added_at(created_iso: str) -> str:
+    """Human 'added to the library' timestamp, local time, down to the minute (YYYY/MM/DD HH:MM)."""
+    try:
+        dt = datetime.fromisoformat(created_iso)
+    except ValueError:
+        dt = datetime.now(timezone.utc)
+    if dt.tzinfo is not None:
+        dt = dt.astimezone()  # show in the operator's local time
+    return dt.strftime("%Y/%m/%d %H:%M")
+
+
 def design_key(spec: CellSpec) -> str:
     """Stable id for a design: item + rate + machine + module loadout."""
     raw = "|".join([
@@ -69,6 +80,7 @@ def save_design(
     Returns the record. Idempotent on the design key (overwrites the same key)."""
 
     key = design_key(spec)
+    created_iso = created_at or datetime.now(timezone.utc).isoformat()
     record: dict[str, Any] = {
         "key": key,
         "item": spec.target_item,
@@ -81,16 +93,24 @@ def save_design(
         "inputs": [i.to_dict() for i in spec.inputs],
         "outputs": [o.to_dict() for o in spec.outputs],
         "total_power_kw": spec.total_power_kw,
-        "footprint": spec.footprint,
+        "footprint": dict(spec.footprint),
         "archetype": spec.archetype,
         "description": describe(spec),
         "blueprint": {"format": "factorio-blueprint-string", "exchange_string": blueprint_string},
         "sandbox_status": sandbox_status,
-        "created_at": created_at or datetime.now(timezone.utc).isoformat(),
+        "created_at": created_iso,
+        "added_at": _format_added_at(created_iso),
     }
     if placed is not None and hasattr(placed, "required_box"):
         record["required_box"] = placed.required_box
         record["power_coverage_ok"] = getattr(placed, "power_coverage_ok", None)
+        # The footprint SIZE is the bounding rectangle (width x height) the cell actually occupies,
+        # INCLUDING empty space between machines/belts -- not the sum of entity tiles. Use the placed
+        # bounds so the dashboard shows a true area.
+        rb = placed.required_box or {}
+        w, h = rb.get("width"), rb.get("height")
+        if isinstance(w, (int, float)) and isinstance(h, (int, float)):
+            record["footprint"] = {**record["footprint"], "width": w, "height": h, "area": round(w * h, 1)}
 
     lib = _library_dir(runtime_dir)
     lib.mkdir(parents=True, exist_ok=True)
