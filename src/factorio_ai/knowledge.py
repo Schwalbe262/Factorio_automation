@@ -677,6 +677,7 @@ class MachineProfile:
     tile_width: float
     tile_height: float
     categories: tuple[str, ...] = ()
+    is_burner: bool = False  # consumes fuel (coal) instead of electricity (stone/steel furnace, etc.)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -739,8 +740,8 @@ _FALLBACK_MACHINE_PROFILES: dict[str, MachineProfile] = {
     "assembling-machine-1": MachineProfile("assembling-machine-1", 0.5, 75.0, 2.5, 0, 3, 3),
     "assembling-machine-2": MachineProfile("assembling-machine-2", 0.75, 150.0, 5.0, 2, 3, 3),
     "assembling-machine-3": MachineProfile("assembling-machine-3", 1.25, 375.0, 12.5, 4, 3, 3),
-    "stone-furnace": MachineProfile("stone-furnace", 1.0, 0.0, 0.0, 0, 2, 2),
-    "steel-furnace": MachineProfile("steel-furnace", 2.0, 0.0, 0.0, 0, 2, 2),
+    "stone-furnace": MachineProfile("stone-furnace", 1.0, 0.0, 0.0, 0, 2, 2, is_burner=True),
+    "steel-furnace": MachineProfile("steel-furnace", 2.0, 0.0, 0.0, 0, 2, 2, is_burner=True),
     "electric-furnace": MachineProfile("electric-furnace", 2.0, 180.0, 6.0, 2, 3, 3),
     "electric-mining-drill": MachineProfile("electric-mining-drill", 0.5, 90.0, 0.0, 3, 3, 3),
     "chemical-plant": MachineProfile("chemical-plant", 1.0, 210.0, 7.0, 3, 3, 3),
@@ -750,6 +751,12 @@ _FALLBACK_MACHINE_PROFILES: dict[str, MachineProfile] = {
     "centrifuge": MachineProfile("centrifuge", 1.0, 350.0, 12.0, 2, 3, 3),
     "lab": MachineProfile("lab", 1.0, 60.0, 2.0, 2, 3, 3),
 }
+
+# Machines that burn fuel (coal) instead of drawing electricity — they need a fuel input fed to
+# them. Used when the game dump doesn't carry an energy-source type.
+_BURNER_MACHINES: frozenset[str] = frozenset(
+    {"stone-furnace", "steel-furnace", "burner-mining-drill", "burner-inserter", "boiler"}
+)
 
 # Non-crafting entity footprints (tiles) used by the placer for spacing/reserve.
 _FALLBACK_FOOTPRINTS: dict[str, tuple[float, float]] = {
@@ -818,6 +825,7 @@ def _load_profiles() -> tuple[dict[str, MachineProfile], dict[str, ModuleProfile
             tile_width=float(md.get("tile_width") or 3),
             tile_height=float(md.get("tile_height") or 3),
             categories=tuple(str(c) for c in (md.get("crafting_categories") or ())),
+            is_burner=bool(md.get("energy_source") == "burner") or name in _BURNER_MACHINES,
         )
         footprints[name] = (machines[name].tile_width, machines[name].tile_height)
 

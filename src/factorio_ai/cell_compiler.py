@@ -117,6 +117,24 @@ _PACKING_FACTOR = 1.8   # footprint inflation for inserters/belts/poles around t
 _NORTH_INPUT_SLOTS = 3
 _INSERTER_ITEMS_PER_MIN = 57.0
 
+# Coal fuel for burner machines. Coal fuel value ~8 MJ; burner machines report 0 electric draw, so
+# we size fuel from their real energy consumption (a small per-tier table; the sandbox confirms).
+_FUEL_ITEM = "coal"
+_COAL_ENERGY_KJ = 8000.0
+_BURNER_POWER_KW = {
+    "stone-furnace": 90.0,
+    "steel-furnace": 90.0,
+    "burner-mining-drill": 150.0,
+}
+
+
+def _coal_per_minute(machine: knowledge.MachineProfile, machine_count: int) -> float:
+    """Coal/min a burner machine type consumes at full utilisation (0 for electric machines)."""
+    if machine is None or not getattr(machine, "is_burner", False) or machine_count <= 0:
+        return 0.0
+    power_kw = _BURNER_POWER_KW.get(machine.name) or (machine.energy_kw if machine.energy_kw > 0 else 90.0)
+    return machine_count * power_kw * 60.0 / _COAL_ENERGY_KJ
+
 # Intermediates conventionally crafted on-site (poor transport ratio), so a cell making a
 # downstream product co-locates them and takes THEIR inputs from belts instead. Keeps one final
 # product per site (C1) while matching real factory practice (e.g. green-circuit cells).
@@ -280,6 +298,18 @@ def compile_cell(
         if not is_fluid and lanes > 1:
             warnings.append(f"{item} needs {lanes} belt lanes ({belt_tier}); consider underground-belt mixing")
         inputs.append(CellIORate(item, rate, is_fluid, belt_tier, lanes))
+
+    # Burner machines (stone/steel furnace) consume COAL fuel, not electricity — the cell must feed
+    # coal as a material input. Size it from the machines' fuel-energy throughput at full utilisation.
+    fuel_rate = _coal_per_minute(machine, machine_count)
+    for sub in substages:
+        sub_prof = knowledge.machine_profile(sub.machine)
+        if sub_prof is not None and sub_prof.is_burner:
+            fuel_rate += _coal_per_minute(sub_prof, sub.machine_count)
+    if fuel_rate > 0:
+        fuel_rate = round(fuel_rate, 3)
+        belt_tier, lanes = _belt_for_rate(fuel_rate, belts)
+        inputs.append(CellIORate(_FUEL_ITEM, fuel_rate, False, belt_tier, lanes))
 
     outputs: list[CellIORate] = []
     for item, amount in recipe.products.items():

@@ -92,6 +92,25 @@ class CellCompilerTests(unittest.TestCase):
         spec = cc.compile_cell("iron-plate", 120, available_machines=["stone-furnace", "steel-furnace"])
         self.assertIn(spec.machine, {"stone-furnace", "steel-furnace"})
 
+    def test_burner_furnace_gets_coal_fuel_input(self):
+        # a stone furnace burns coal -> the cell must feed coal as a material input.
+        spec = cc.compile_cell("iron-plate", 120, available_machines=["stone-furnace"],
+                               belt_tiers_available=["transport-belt"])
+        coal = [i for i in spec.inputs if i.item == "coal"]
+        self.assertEqual(len(coal), 1, "burner furnace cell must have a coal fuel input")
+        self.assertGreater(coal[0].per_minute, 0)
+        self.assertFalse(coal[0].is_fluid)
+
+    def test_electric_furnace_has_no_coal(self):
+        spec = cc.compile_cell("iron-plate", 120, available_machines=["electric-furnace"],
+                               belt_tiers_available=["transport-belt"])
+        self.assertEqual([i for i in spec.inputs if i.item == "coal"], [])
+
+    def test_assembler_cell_has_no_coal(self):
+        spec = cc.compile_cell("electronic-circuit", 60, available_machines=["assembling-machine-1"],
+                               belt_tiers_available=["transport-belt"])
+        self.assertEqual([i for i in spec.inputs if i.item == "coal"], [])
+
     def test_raw_resource_returns_not_ok(self):
         spec = cc.compile_cell("iron-ore", 60)
         self.assertFalse(spec.ok)
