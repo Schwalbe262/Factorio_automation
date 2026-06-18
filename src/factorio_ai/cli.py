@@ -209,6 +209,19 @@ def main(argv: list[str] | None = None) -> None:
     no_mod_action_parser.add_argument("json_action")
     no_mod_action_parser.add_argument("--player", help="Preferred player name for player-scoped actions")
 
+    apply_design_parser = subparsers.add_parser(
+        "apply-cell-design",
+        help="Build a stored cell-library design in the live game at an anchor (dry-run unless --execute)",
+    )
+    apply_design_parser.add_argument("--key", required=True, help="Library design key (see /factorio/layouts)")
+    apply_design_parser.add_argument("--x", type=float, default=0.0, help="Anchor x (cell origin) on nauvis")
+    apply_design_parser.add_argument("--y", type=float, default=0.0, help="Anchor y (cell origin) on nauvis")
+    apply_design_parser.add_argument(
+        "--execute", action="store_true",
+        help="Actually place the entities (default: dry-run, print the plan only)",
+    )
+    apply_design_parser.add_argument("--player", help="Preferred player name for the build actions")
+
     strategy_parser = subparsers.add_parser("strategy", help="Ask the strategic LLM layer for the next high-level skill")
     strategy_parser.add_argument("--objective", default="launch_rocket_program")
     strategy_parser.add_argument("--require-llm", action="store_true")
@@ -892,6 +905,22 @@ def main(argv: list[str] | None = None) -> None:
         except json.JSONDecodeError as exc:
             raise SystemExit(f"invalid action JSON: {exc}") from exc
         print_json(ModlessLuaController(cfg).act(action, player_name=args.player))
+        return
+
+    if args.command == "apply-cell-design":
+        from . import cell_apply
+
+        class _ActAdapter:
+            def __init__(self, controller, player):
+                self._c, self._player = controller, player
+
+            def act(self, action):
+                return self._c.act(action, player_name=self._player)
+
+        controller = _ActAdapter(ModlessLuaController(cfg), args.player) if args.execute else None
+        print_json(cell_apply.apply_design(
+            controller, cfg.runtime_dir, args.key, args.x, args.y, execute=args.execute,
+        ))
         return
 
     if args.command == "strategy":
