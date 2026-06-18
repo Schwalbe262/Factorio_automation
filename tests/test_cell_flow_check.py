@@ -24,7 +24,7 @@ class CellFlowCheckTests(unittest.TestCase):
         # corrected flow-reachability check must catch this (the direct_insertion archetype fixes it).
         spec = cc.compile_cell("electronic-circuit", 60, available_machines=["assembling-machine-1"],
                                belt_tiers_available=["transport-belt"])
-        placed = cp.place_cell(spec, cp.BoundingBox(80, 80))
+        placed = cp._place_belt_row(spec, cp.BoundingBox(80, 80))  # the legacy archetype with the bug
         result = cf.precheck_cell(spec, placed)
         self.assertEqual(result["checks"]["flow_reachability"], "fail")
 

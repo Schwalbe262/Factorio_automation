@@ -85,6 +85,7 @@ class PlacedCell:
     sources: list[dict[str, Any]] = field(default_factory=list)       # boundary inputs (per item)
     destination: dict[str, Any] | None = None                         # boundary output (product)
     connectivity_ok: bool = True                                      # every machine wired in+out
+    archetype: str = "belt_row"                                       # which layout template produced this
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -165,7 +166,127 @@ def place_cell(
     input_sides: list[int] | None = None,
     output_sides: list[int] | None = None,
 ) -> PlacedCell:
-    """Place ``spec`` into ``box`` (or an auto-sized box) as a connected, boundary-wired cell."""
+    """Place ``spec`` as a connected cell. Returns the first applicable archetype (most specific
+    first); use :func:`place_cell_candidates` to get all of them for sandbox-judged selection."""
+    candidates = place_cell_candidates(spec, box, pole=pole, long_inserter_available=long_inserter_available)
+    return candidates[0] if candidates else _place_belt_row(
+        spec, box, pole=pole, long_inserter_available=long_inserter_available)
+
+
+def place_cell_candidates(
+    spec: CellSpec,
+    box: BoundingBox | None = None,
+    *,
+    pole: str = "small-electric-pole",
+    long_inserter_available: bool = True,
+) -> list[PlacedCell]:
+    """Generate the applicable layout archetypes for ``spec`` (most-specific first), each tagged with
+    its ``archetype``. The pipeline prechecks + ranks these and lets the sandbox pick the winner."""
+    if not spec.ok or not spec.machine:
+        return [PlacedCell([], False, {}, {"width": 0, "height": 0}, [], pole, False, ["cell spec is not ok"])]
+    out: list[PlacedCell] = []
+    di = _place_direct_insertion(spec, box, pole=pole, long_inserter_available=long_inserter_available)
+    if di is not None:
+        out.append(di)
+    # belt_row is the general fallback and always applicable.
+    out.append(_place_belt_row(spec, box, pole=pole, long_inserter_available=long_inserter_available))
+    return out
+
+
+def _place_direct_insertion(
+    spec: CellSpec,
+    box: BoundingBox | None = None,
+    *,
+    pole: str = "small-electric-pole",
+    long_inserter_available: bool = True,
+) -> PlacedCell | None:
+    """Direct-insertion archetype for a single consumer fed by a co-located intermediate (the
+    electronic-circuit shape): the intermediate's producers FLANK the consumer and an inserter moves
+    the intermediate straight in (no belt -> no flow-direction bug). The raw input enters on a north
+    belt and the product leaves on a south belt (all boundary I/O is belts, no chests).
+
+    Applies only to the clean small case (1 consumer machine, 1 intermediate from <=2 producers, <=1
+    extra raw input, all 3x3 assemblers); returns None otherwise so a more general archetype runs."""
+    if len(spec.substages) != 1 or spec.machine_count != 1:
+        return None
+    main = _stages(spec)[-1]
+    sub = spec.substages[0]
+    if main.is_furnace or "furnace" in str(sub.machine or ""):
+        return None
+    if _machine_w(main.machine) != 3 or _machine_w(sub.machine) != 3:
+        return None
+    if sub.machine_count not in (1, 2):
+        return None
+    main_recipe = knowledge.recipe_for_product(spec.target_item)
+    if main_recipe is None:
+        return None
+    solid_ing = [i for i in main_recipe.ingredients if not knowledge.is_fluid(i)]
+    if sub.item not in solid_ing:
+        return None
+    raws = [i for i in solid_ing if i != sub.item]
+    if len(raws) > 1:
+        return None
+    raw_item = raws[0] if raws else None
+    sub_recipe = knowledge.recipe_for_product(sub.item)
+    sub_inputs = [i for i in (sub_recipe.ingredients if sub_recipe else {}) if not knowledge.is_fluid(i)]
+    if len(sub_inputs) != 1:
+        return None
+    sub_in = sub_inputs[0]
+
+    entities: list[dict[str, Any]] = []
+    machine_centers: list[tuple[float, float, float, float]] = []
+    sources: list[dict[str, Any]] = []
+    io_corridors: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    ecx = 4
+    west_x = -6
+    east_x = ecx + 10  # 14
+    modules_items = _modules_to_items(main.modules) or None
+    _add(entities, main.machine, ecx, 0, recipe=main.recipe, items=modules_items)
+    machine_centers.append((float(ecx), 0.0, 3, 3))
+
+    cable_xs = [0] + ([8] if sub.machine_count == 2 else [])
+    for cx in cable_xs:
+        _add(entities, sub.machine, cx, 0, recipe=sub.recipe_name)
+        machine_centers.append((float(cx), 0.0, 3, 3))
+        if cx < ecx:  # west producer -> direct insert east into EC; copper from west boundary belt
+            _add(entities, _INSERTER, 2, 0, direction=_WEST_DIR)        # pickup (1) cable, drop (3) EC
+            _lay_lane(entities, 0, west_x, cx - 3, item=sub_in)         # copper belt -> (cx-3)
+            _add(entities, _INSERTER, cx - 2, 0, direction=_WEST_DIR)   # pickup (cx-3) belt, drop (cx-1)
+            sources.append({"item": sub_in, "x": west_x, "y": 0})
+            io_corridors.append({"role": "input", "item": sub_in, "x": west_x, "y": 0, "side": "west"})
+        else:  # east producer -> direct insert west into EC; copper from east boundary belt
+            _add(entities, _INSERTER, 6, 0, direction=_EAST_DIR)        # pickup (7) cable, drop (5) EC
+            _lay_lane(entities, 0, cx + 3, east_x, item=sub_in, flow_west=True)  # copper flows toward cable
+            _add(entities, _INSERTER, cx + 2, 0, direction=_EAST_DIR)   # pickup (cx+3) belt, drop (cx+1)
+            sources.append({"item": sub_in, "x": east_x, "y": 0})
+            io_corridors.append({"role": "input", "item": sub_in, "x": east_x, "y": 0, "side": "east"})
+
+    if raw_item is not None:
+        _lay_lane(entities, -3, west_x, ecx, item=raw_item)             # raw belt north of EC
+        _add(entities, _INSERTER, ecx, -2, direction=NORTH)             # pickup (ecx,-3), drop (ecx,-1)
+        sources.append({"item": raw_item, "x": west_x, "y": -3})
+        io_corridors.append({"role": "input", "item": raw_item, "x": west_x, "y": -3, "side": "north"})
+
+    out_y = 3
+    _lay_lane(entities, out_y, ecx, east_x, item=main.product)          # product belt south -> east boundary
+    _add(entities, _INSERTER, ecx, 2, direction=NORTH)                  # pickup (ecx,1) EC, drop (ecx,3)
+    destination = {"item": main.product, "x": east_x, "y": out_y, "rate": spec.achieved_rate}
+    io_corridors.append({"role": "output", "item": main.product, "x": east_x, "y": out_y, "side": "east"})
+
+    return _finalize(entities, machine_centers, sources, destination, io_corridors,
+                     warnings, True, box, pole, archetype="direct_insertion")
+
+
+def _place_belt_row(
+    spec: CellSpec,
+    box: BoundingBox | None = None,
+    *,
+    pole: str = "small-electric-pole",
+    long_inserter_available: bool = True,
+) -> PlacedCell:
+    """Stacked-row archetype: each stage a row, continuous single-item belt lanes, boundary I/O."""
 
     if not spec.ok or not spec.machine:
         return PlacedCell([], False, {}, {"width": 0, "height": 0}, [], pole, False, ["cell spec is not ok"])
@@ -279,12 +400,28 @@ def place_cell(
                           long_ok=long_inserter_available, warnings=warnings)
     connectivity_ok = connectivity_ok and ok
 
-    # --- power poles (placed on FREE tiles only; never on belts/inserters/machines) -------------
+    return _finalize(entities, machine_centers, sources, destination, io_corridors,
+                     warnings, connectivity_ok, box, pole, archetype="belt_row")
+
+
+def _finalize(
+    entities: list[dict[str, Any]],
+    machine_centers: list[tuple[float, float, float, float]],
+    sources: list[dict[str, Any]],
+    destination: dict[str, Any] | None,
+    io_corridors: list[dict[str, Any]],
+    warnings: list[str],
+    connectivity_ok: bool,
+    box: BoundingBox | None,
+    pole: str,
+    *,
+    archetype: str,
+) -> PlacedCell:
+    """Shared tail for every archetype: place power poles on free tiles, compute bounds + box fit."""
     occupied = _occupied_tiles(entities)
     pole_entities, coverage_ok, pole_warn = _place_poles(machine_centers, pole, occupied)
     entities.extend(pole_entities)
-    warnings.extend(pole_warn)
-
+    warnings = list(warnings) + list(pole_warn)
     used = _bounds(entities)
     req_w = round(used["max_x"] - used["min_x"] + 1, 1)
     req_h = round(used["max_y"] - used["min_y"] + 1, 1)
@@ -294,12 +431,11 @@ def place_cell(
         fits = req_w <= box.width and req_h <= box.height
         if not fits:
             warnings.append(f"cell needs {req_w}x{req_h} but box is {box.width}x{box.height}")
-
     if not connectivity_ok:
         warnings.append("a machine could not be fully wired (input/output inserter shortfall)")
-
     return PlacedCell(entities, fits, used, required_box, io_corridors, pole, coverage_ok,
-                      warnings, sources=sources, destination=destination, connectivity_ok=connectivity_ok)
+                      warnings, sources=sources, destination=destination,
+                      connectivity_ok=connectivity_ok, archetype=archetype)
 
 
 def _machine_w(machine: str) -> int:

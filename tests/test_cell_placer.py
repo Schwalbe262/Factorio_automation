@@ -81,8 +81,9 @@ class CellPlacerTests(unittest.TestCase):
             self.assertEqual(self._collisions(placed), {}, f"{item}@{rate} has overlapping entities")
 
     def test_boundary_sources_and_destination(self):
-        # every ingredient enters at a west-boundary source belt; the product exits at the single
-        # east-boundary destination (the paper's source/destination model + user's I/O requirement).
+        # every raw ingredient enters at a boundary source belt; the product exits at a boundary
+        # destination (the paper's source/destination model + user's I/O requirement). Holds for
+        # whichever archetype place_cell selects (EC -> direct_insertion).
         spec = compile_cell("electronic-circuit", 60, available_machines=["assembling-machine-1"],
                             belt_tiers_available=["transport-belt"])
         placed = cp.place_cell(spec, cp.BoundingBox(80, 80))
@@ -90,8 +91,6 @@ class CellPlacerTests(unittest.TestCase):
         self.assertEqual(src_items, {"copper-plate", "iron-plate"})  # raw inputs, not copper-cable
         self.assertIsNotNone(placed.destination)
         self.assertEqual(placed.destination["item"], "electronic-circuit")
-        # destination is east of all sources.
-        self.assertGreater(placed.destination["x"], max(s["x"] for s in placed.sources))
 
     def test_every_machine_is_wired(self):
         spec = compile_cell("electronic-circuit", 60, available_machines=["assembling-machine-1"],
@@ -100,11 +99,11 @@ class CellPlacerTests(unittest.TestCase):
         self.assertTrue(placed.connectivity_ok)
 
     def test_continuous_input_lane_reaches_boundary(self):
-        # the copper-plate lane must be a continuous run of belts from the boundary into the cell
+        # the belt_row archetype must lay a continuous run of belts from the boundary into the cell
         # (no isolated single-tile stubs).
         spec = compile_cell("electronic-circuit", 60, available_machines=["assembling-machine-1"],
                             belt_tiers_available=["transport-belt"])
-        placed = cp.place_cell(spec, cp.BoundingBox(80, 80))
+        placed = cp._place_belt_row(spec, cp.BoundingBox(80, 80))
         src = next(s for s in placed.sources if s["item"] == "copper-plate")
         lane_xs = sorted(e["position"]["x"] for e in placed.entities
                          if e["name"] == "transport-belt" and e["position"]["y"] == src["y"])
