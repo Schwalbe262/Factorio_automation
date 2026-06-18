@@ -547,7 +547,8 @@ def make_dashboard_handler(cfg: AppConfig, default_objective: str) -> type[BaseH
             if path == FACTORIO_LAYOUTS_ROUTE:
                 lang = request_language(path, query)
                 summary = library_summary(cfg.runtime_dir)
-                body = render_layouts_page(summary, lang=lang, objective=objective)
+                avail = _current_available_machines(cfg.runtime_dir)
+                body = render_layouts_page(summary, lang=lang, objective=objective, available_machines=avail)
                 self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
                 return
 
@@ -1242,9 +1243,25 @@ def _trace_text_block(label: str, value: Any, *, limit: int = 6000, block_id: st
     )
 
 
-def render_layouts_page(summary: dict[str, Any], lang: str = DEFAULT_LANG, objective: Any = None) -> str:
+def _current_available_machines(runtime_dir: Any) -> set[str] | None:
+    """Machines the current save can build with, from the cached observation snapshot
+    (runtime/latest-observe.json). Returns None when it can't be read, so the layout page simply
+    omits the Active/Locked badge instead of guessing."""
+    try:
+        from pathlib import Path as _Path
+        from .cell_autodesign import _available_machines
+        # PowerShell writes this snapshot with a UTF-8 BOM, so decode with utf-8-sig.
+        obs = json.loads((_Path(runtime_dir) / "latest-observe.json").read_text(encoding="utf-8-sig"))
+        return set(_available_machines(obs))
+    except Exception:  # noqa: BLE001 - missing/stale snapshot just means no badge
+        return None
+
+
+def render_layouts_page(summary: dict[str, Any], lang: str = DEFAULT_LANG, objective: Any = None,
+                        available_machines: set[str] | None = None) -> str:
     """The cell-library page (C8): every saved optimal layout with its description, spec table,
-    and a copy-blueprint button."""
+    and a copy-blueprint button. Designs buildable with the current save's machines are flagged
+    'Active' (green); ones needing not-yet-researched machines are 'Locked'."""
     lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
     title = _t(lang, "layout_library")
     designs = summary.get("designs") if isinstance(summary.get("designs"), list) else []
@@ -1257,7 +1274,7 @@ def render_layouts_page(summary: dict[str, Any], lang: str = DEFAULT_LANG, objec
             "</section>"
         )
         return _page(title, body, lang, objective)
-    cards = "".join(_layout_card(d, lang) for d in designs if isinstance(d, dict))
+    cards = "".join(_layout_card(d, lang, available_machines) for d in designs if isinstance(d, dict))
     body = (
         "<section class=\"panel\">"
         f"<h2>{escape(title)} <span class=\"muted\">({len(designs)})</span></h2>"
@@ -1283,7 +1300,21 @@ def _footprint_text(design: dict[str, Any], fp: dict[str, Any]) -> str:
     return f"~{fp.get('area', 0)} tiles"
 
 
-def _layout_card(design: dict[str, Any], lang: str) -> str:
+def _active_badge(design: dict[str, Any], available_machines: set[str] | None) -> str:
+    """Green 'Active' badge when every machine the design needs is available in the current save;
+    a muted 'Locked' badge when some required machine is not yet researched."""
+    if available_machines is None:
+        return ""
+    req = set(design.get("required_machines") or [])
+    if not req:
+        return ""
+    if req.issubset(available_machines):
+        return "<span class=\"badge-active\">Active</span>"
+    missing = ", ".join(sorted(req - available_machines))
+    return f"<span class=\"badge-locked\" title=\"needs: {escape(missing, quote=True)}\">Locked</span>"
+
+
+def _layout_card(design: dict[str, Any], lang: str, available_machines: set[str] | None = None) -> str:
     item = str(design.get("item") or "")
     blueprint = design.get("blueprint") if isinstance(design.get("blueprint"), dict) else {}
     exchange = str(blueprint.get("exchange_string") or "")
@@ -1323,6 +1354,7 @@ def _layout_card(design: dict[str, Any], lang: str) -> str:
         "<article class=\"trace-entry\">"
         "<div class=\"trace-header\">"
         f"<strong>{escape(str(design.get('description') or item))}</strong>"
+        f"{_active_badge(design, available_machines)}"
         f"<span class=\"{status_class}\">{escape(status)}</span>"
         "</div>"
         f"<table class=\"kv\"><tbody>{meta_html}</tbody></table>"
@@ -1730,6 +1762,22 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
     .trace-error {{
       background: #4a2020;
       color: #ff9c9c;
+    }}
+    .badge-active, .badge-locked {{
+      border-radius: 4px;
+      padding: 3px 7px;
+      font-size: 12px;
+      line-height: 1;
+      font-weight: 600;
+      margin-left: 6px;
+    }}
+    .badge-active {{
+      background: #1b7e3c;
+      color: #ffffff;
+    }}
+    .badge-locked {{
+      background: #4a4a4a;
+      color: #c9c9c9;
     }}
     .trace-block {{
       margin-top: 8px;

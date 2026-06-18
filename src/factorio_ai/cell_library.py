@@ -94,6 +94,9 @@ def save_design(
         "outputs": [o.to_dict() for o in spec.outputs],
         "total_power_kw": spec.total_power_kw,
         "footprint": dict(spec.footprint),
+        # Machines this design needs to be buildable — used to mark it "Active" when they are all
+        # available in the current save (vs. a design that needs not-yet-researched machines).
+        "required_machines": sorted({spec.machine} | {s.machine for s in spec.substages if s.machine}),
         "archetype": spec.archetype,
         "description": describe(spec),
         "blueprint": {"format": "factorio-blueprint-string", "exchange_string": blueprint_string},
