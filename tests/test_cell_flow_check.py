@@ -18,15 +18,21 @@ class CellFlowCheckTests(unittest.TestCase):
         self.assertIn("rect_fill", result["metrics"])
         self.assertEqual(result["checks"]["power_coverage"], "pass")
 
-    def test_belt_row_ec_flow_bug_is_caught(self):
-        # REGRESSION: the legacy belt_row electronic-circuit layout routes the co-located copper-cable
-        # on an east-flowing shared lane, so the far cable assembler can't feed the EC machine. The
-        # corrected flow-reachability check must catch this (the direct_insertion archetype fixes it).
+    def test_flow_check_catches_intermediate_lane_flowing_away(self):
+        # belt_row now flows the intermediate lane TOWARD the consumers (the fix), so EC belt_row is
+        # flow-correct. The flow-reachability check must still CATCH a lane that flows the wrong way
+        # (the user's 'rightmost producer can't feed the consumer' bug): we reverse the now-correct
+        # lane and confirm it's detected.
         spec = cc.compile_cell("electronic-circuit", 60, available_machines=["assembling-machine-1"],
                                belt_tiers_available=["transport-belt"])
-        placed = cp._place_belt_row(spec, cp.BoundingBox(80, 80))  # the legacy archetype with the bug
-        result = cf.precheck_cell(spec, placed)
-        self.assertEqual(result["checks"]["flow_reachability"], "fail")
+        placed = cp._place_belt_row(spec, cp.BoundingBox(80, 80))
+        self.assertEqual(cf.precheck_cell(spec, placed)["checks"]["flow_reachability"], "pass")  # fixed
+        from factorio_ai.monitor import EAST, WEST
+        broken = [dict(e) for e in placed.entities]
+        for e in broken:
+            if e["name"] == "transport-belt":
+                e["direction"] = EAST if e.get("direction") == WEST else WEST
+        self.assertTrue(cf._flow_reachability_errors(spec, broken))  # away-flowing lane is caught
 
     def test_furnace_inserter_miss_is_caught(self):
         # REGRESSION: the legacy belt_row places a 2x2 furnace's output inserter where it doesn't

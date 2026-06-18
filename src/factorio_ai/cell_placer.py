@@ -628,7 +628,12 @@ def _place_belt_row(
             _lay_lane(entities, in_lane_y, west_x, inner_x1, item=sub_in)
             sources.append({"item": sub_in, "x": west_x, "y": in_lane_y, "rate": sub.input_rates.get(sub_in)})
             io_corridors.append({"role": "input", "item": sub_in, "x": west_x, "y": in_lane_y, "side": "west"})
-        _lay_lane(entities, out_lane_y, inner_x0 - 1, inner_x1 + 1, item=sub.product)
+        # The intermediate lane must flow TOWARD the consumers. When there are more producers than
+        # consumers, the consumers sit at the west columns while producers extend east, so an east-
+        # flowing lane carries the eastern producers' output AWAY from every consumer (the user's
+        # 'belt flows away' bug). Flow west in that case so each producer reaches a consumer.
+        _lay_lane(entities, out_lane_y, inner_x0 - 1, inner_x1 + 1, item=sub.product,
+                  flow_west=(sub.count > main.count))
         ok = _lay_machine_row(entities, machine_centers, sub, syi, pitch_x,
                               in_lanes=[(sub_in, in_lane_y, False)] if sub_in else [],
                               out_lane_y=out_lane_y, long_ok=long_inserter_available, warnings=warnings)
