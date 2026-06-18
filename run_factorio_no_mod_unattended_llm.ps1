@@ -7,7 +7,11 @@ param(
     [int]$IdleLoopStaleSeconds = 180,
     [int]$LayoutMaxActiveTasks = 1,
     [int]$FoundryStaleSeconds = 900,
-    [int]$FoundrySleepSeconds = 20,
+    # Raised 20 -> 1800: the skill-foundry makes 4-6 min LLM calls; at a 20s sleep it hammered the
+    # 27B almost continuously and STARVED the autopilot's strategy decisions (autopilot froze at
+    # cycle_start retrying timed-out calls). 30 min between foundry cycles keeps it occasional so the
+    # primary autopilot loop gets reliable LLM access (matters for the long rocket grind).
+    [int]$FoundrySleepSeconds = 1800,
     [int]$ServerSaveIntervalSeconds = 300,
     [int]$LlmReadyGraceSeconds = 300,
     [switch]$NoDashboard
