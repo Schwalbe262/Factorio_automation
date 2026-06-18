@@ -92,6 +92,23 @@ class CellPlacerTests(unittest.TestCase):
         self.assertIsNotNone(placed.destination)
         self.assertEqual(placed.destination["item"], "electronic-circuit")
 
+    def test_smelting_column_furnace_geometry(self):
+        # P2: 2x2 burner furnace cell uses the smelting_column archetype with correct inserter
+        # geometry (input drops into furnace, output picks from it) + coal fuel source — collision-
+        # free and passes the footprint-aware reach/fuel checks the old 3x3 row template failed.
+        spec = compile_cell("iron-plate", 120, available_machines=["stone-furnace"],
+                            belt_tiers_available=["transport-belt"])
+        cands = cp.place_cell_candidates(spec, cp.BoundingBox(80, 80))
+        sm = next(c for c in cands if c.archetype == "smelting_column")
+        from factorio_ai import cell_flow_check as cf
+        r = cf.precheck_cell(spec, sm)
+        self.assertEqual(r["checks"]["inserter_reach"], "pass")
+        self.assertEqual(r["checks"]["fuel_supply"], "pass")
+        self.assertEqual(r["checks"]["collision"], "pass")
+        self.assertEqual(self._collisions(sm), {})
+        src_items = {s["item"] for s in sm.sources}
+        self.assertEqual(src_items, {"iron-ore", "coal"})  # ore + coal (half-lane) at the boundary
+
     def test_fast_inserter_used_for_high_rate_links(self):
         # high-rate intermediate links should use fast/bulk inserters when available so a single
         # high-ratio machine isn't base-inserter bottlenecked (vanilla-reference technique).

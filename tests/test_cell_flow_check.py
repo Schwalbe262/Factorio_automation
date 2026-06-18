@@ -33,7 +33,7 @@ class CellFlowCheckTests(unittest.TestCase):
         # reach the furnace (the ±1.5 operability box missed this); inserter_reach must catch it.
         spec = cc.compile_cell("iron-plate", 120, available_machines=["stone-furnace"],
                                belt_tiers_available=["transport-belt"])
-        placed = cp.place_cell(spec, cp.BoundingBox(80, 80))
+        placed = cp._place_belt_row(spec, cp.BoundingBox(80, 80))  # legacy 3x3-offset archetype
         result = cf.precheck_cell(spec, placed)
         self.assertEqual(result["checks"]["inserter_reach"], "fail")
         self.assertEqual(result["checks"]["fuel_supply"], "fail")  # no coal source in the legacy layout

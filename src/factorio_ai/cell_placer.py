@@ -215,8 +215,78 @@ def place_cell_candidates(
     if di is not None:
         out.append(di)
     # belt_row is the general fallback and always applicable.
+    sm = _place_smelting_column(spec, box, pole=pole, available_inserters=available_inserters)
+    if sm is not None:
+        out.append(sm)
     out.append(_place_belt_row(spec, box, pole=pole, long_inserter_available=long_inserter_available))
     return out
+
+
+def _place_smelting_column(
+    spec: CellSpec,
+    box: BoundingBox | None = None,
+    *,
+    pole: str = "small-electric-pole",
+    available_inserters: set[str] | None = None,
+) -> PlacedCell | None:
+    """Smelting archetype for 2x2 burner furnaces (stone/steel). A row of furnaces shares an ore+coal
+    input belt to the NORTH and emits plates on a SOUTH output belt. Geometry confirmed by live RCON:
+    a 2x2 furnace at integer centre (cx,cy) occupies tiles {cx-1,cx}x{cy-1,cy}; the input inserter at
+    (cx-1, cy-2) NORTH drops into it from a belt at cy-3, and the output inserter at (cx-1, cy+1)
+    NORTH picks from it onto a belt at cy+2. Burner fuel (coal) rides the input belt's second lane
+    (the half-lane technique) — the boundary source supplies ore on one lane + coal on the other.
+
+    Electric furnaces (3x3) fall through to belt_row. Returns None when not a 2x2 furnace cell."""
+    main = _stages(spec)[-1]
+    if not main.is_furnace:
+        return None
+    prof = knowledge.machine_profile(main.machine)
+    if prof is None or int(prof.tile_width) != 2:
+        return None  # 2x2 burner furnaces only; electric-furnace (3x3) uses belt_row
+    recipe = knowledge.recipe_for_product(spec.target_item)
+    ore = next((i for i in (recipe.ingredients if recipe else {})
+                if not knowledge.is_fluid(i) and i != "coal"), None)
+    if ore is None:
+        return None
+    has_coal = any(getattr(i, "item", None) == "coal" for i in spec.inputs)
+    n = max(1, main.count)
+    per_furnace_out = spec.achieved_rate / n
+    per_furnace_ore = (main.input_rates.get(ore, spec.achieved_rate)) / n
+    ore_ins = _inserter_for_rate(per_furnace_ore, available_inserters)
+    out_ins = _inserter_for_rate(per_furnace_out, available_inserters)
+
+    entities: list[dict[str, Any]] = []
+    machine_centers: list[tuple[float, float, float, float]] = []
+    sources: list[dict[str, Any]] = []
+    io_corridors: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    inner_x1 = 2 * (n - 1) + 1
+    west_x = -4
+    east_x = inner_x1 + 4
+    for k in range(n):
+        cx = 2 * k + 1  # furnace tiles {2k, 2k+1} (packed adjacent, pitch 2)
+        _add(entities, main.machine, cx, 0)  # furnace: no recipe (auto-smelts the belt's ore)
+        machine_centers.append((float(cx), 0.0, 2, 2))
+        _add(entities, ore_ins, cx - 1, -2, direction=NORTH)   # input belt (cx-1,-3) -> furnace
+        _add(entities, out_ins, cx - 1, 1, direction=NORTH)    # furnace -> output belt (cx-1,+2)
+
+    # input belt (ore + coal on its two lanes) along the north, extended to the west boundary source.
+    _lay_lane(entities, -3, west_x, inner_x1, item=ore)
+    sources.append({"item": ore, "x": west_x, "y": -3})
+    io_corridors.append({"role": "input", "item": ore, "x": west_x, "y": -3, "side": "west"})
+    if has_coal:
+        # coal shares the input belt's second lane (half-lane); the boundary supplies it.
+        sources.append({"item": "coal", "x": west_x, "y": -3, "lane": "half"})
+        io_corridors.append({"role": "input", "item": "coal", "x": west_x, "y": -3, "side": "west", "note": "half-lane"})
+
+    out_y = 2
+    _lay_lane(entities, out_y, -1, east_x, item=spec.target_item)
+    destination = {"item": spec.target_item, "x": east_x, "y": out_y, "rate": spec.achieved_rate}
+    io_corridors.append({"role": "output", "item": spec.target_item, "x": east_x, "y": out_y, "side": "east"})
+
+    return _finalize(entities, machine_centers, sources, destination, io_corridors,
+                     warnings, True, box, pole, archetype="smelting_column")
 
 
 def _place_direct_insertion(
