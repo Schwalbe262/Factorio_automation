@@ -92,6 +92,21 @@ class CellPlacerTests(unittest.TestCase):
         self.assertIsNotNone(placed.destination)
         self.assertEqual(placed.destination["item"], "electronic-circuit")
 
+    def test_fast_inserter_used_for_high_rate_links(self):
+        # high-rate intermediate links should use fast/bulk inserters when available so a single
+        # high-ratio machine isn't base-inserter bottlenecked (vanilla-reference technique).
+        spec = compile_cell("electronic-circuit", 60, available_machines=["assembling-machine-1"],
+                            belt_tiers_available=["transport-belt"])
+        avail = {"inserter", "fast-inserter", "bulk-inserter"}
+        di = [c for c in cp.place_cell_candidates(spec, cp.BoundingBox(80, 80), available_inserters=avail)
+              if c.archetype == "direct_insertion"][0]
+        names = {e["name"] for e in di.entities if "inserter" in e["name"]}
+        self.assertIn("fast-inserter", names)  # cable link (120/min) needs > base inserter
+        # with only base inserters available, it falls back to base (still valid, just rate-limited).
+        di_basic = [c for c in cp.place_cell_candidates(spec, cp.BoundingBox(80, 80), available_inserters={"inserter"})
+                    if c.archetype == "direct_insertion"][0]
+        self.assertEqual({e["name"] for e in di_basic.entities if "inserter" in e["name"]}, {"inserter"})
+
     def test_every_machine_is_wired(self):
         spec = compile_cell("electronic-circuit", 60, available_machines=["assembling-machine-1"],
                             belt_tiers_available=["transport-belt"])

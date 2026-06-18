@@ -45,6 +45,28 @@ _BELT = "transport-belt"
 _INSERTER = "inserter"
 _LONG_INSERTER = "long-handed-inserter"
 
+# Inserter tiers by belt<->machine throughput (items/min, approximate). Used to pick a single
+# inserter fast enough for a link instead of a base inserter that bottlenecks high-rate flows (the
+# vanilla-reference technique: high-rate intermediate links use fast/bulk inserters).
+_INSERTER_TIERS: list[tuple[str, float]] = [
+    ("inserter", 57.0),
+    ("fast-inserter", 138.0),
+    ("bulk-inserter", 280.0),
+]
+
+
+def _inserter_for_rate(rate_per_min: float, available: set[str] | None) -> str:
+    """Cheapest available inserter whose throughput covers ``rate_per_min``; else the fastest
+    available (the placer may add a 2nd inserter if even that is short)."""
+    avail = available if available else {"inserter"}
+    usable = [(n, t) for n, t in _INSERTER_TIERS if n in avail]
+    if not usable:
+        usable = [("inserter", 57.0)]
+    for name, tput in usable:
+        if tput >= rate_per_min:
+            return name
+    return usable[-1][0]
+
 # Lane offsets from a machine-row centre line (validator-safe for 3x3 and 2x2 machines):
 #   primary input lane   : row_y - 3   (normal inserter at row_y - 2)
 #   secondary input lane : row_y - 4   (long-handed inserter at row_y - 2, reach 2)
@@ -162,13 +184,15 @@ def place_cell(
     *,
     pole: str = "small-electric-pole",
     long_inserter_available: bool = True,
+    available_inserters: set[str] | None = None,
     # kept for backwards compatibility (ignored: the structured router fixes I/O sides):
     input_sides: list[int] | None = None,
     output_sides: list[int] | None = None,
 ) -> PlacedCell:
     """Place ``spec`` as a connected cell. Returns the first applicable archetype (most specific
     first); use :func:`place_cell_candidates` to get all of them for sandbox-judged selection."""
-    candidates = place_cell_candidates(spec, box, pole=pole, long_inserter_available=long_inserter_available)
+    candidates = place_cell_candidates(spec, box, pole=pole, long_inserter_available=long_inserter_available,
+                                       available_inserters=available_inserters)
     return candidates[0] if candidates else _place_belt_row(
         spec, box, pole=pole, long_inserter_available=long_inserter_available)
 
@@ -179,13 +203,15 @@ def place_cell_candidates(
     *,
     pole: str = "small-electric-pole",
     long_inserter_available: bool = True,
+    available_inserters: set[str] | None = None,
 ) -> list[PlacedCell]:
     """Generate the applicable layout archetypes for ``spec`` (most-specific first), each tagged with
     its ``archetype``. The pipeline prechecks + ranks these and lets the sandbox pick the winner."""
     if not spec.ok or not spec.machine:
         return [PlacedCell([], False, {}, {"width": 0, "height": 0}, [], pole, False, ["cell spec is not ok"])]
     out: list[PlacedCell] = []
-    di = _place_direct_insertion(spec, box, pole=pole, long_inserter_available=long_inserter_available)
+    di = _place_direct_insertion(spec, box, pole=pole, long_inserter_available=long_inserter_available,
+                                 available_inserters=available_inserters)
     if di is not None:
         out.append(di)
     # belt_row is the general fallback and always applicable.
@@ -199,6 +225,7 @@ def _place_direct_insertion(
     *,
     pole: str = "small-electric-pole",
     long_inserter_available: bool = True,
+    available_inserters: set[str] | None = None,
 ) -> PlacedCell | None:
     """Direct-insertion archetype for a single consumer fed by a co-located intermediate (the
     electronic-circuit shape): the intermediate's producers FLANK the consumer and an inserter moves
@@ -239,6 +266,19 @@ def _place_direct_insertion(
     io_corridors: list[dict[str, Any]] = []
     warnings: list[str] = []
 
+    # Per-link flow rates -> pick an inserter tier fast enough (fast/bulk for high-rate cable, so a
+    # single high-ratio machine still hits its rate instead of being base-inserter bottlenecked).
+    cable_per_inserter = sub.rate_per_minute / max(1, sub.machine_count)
+    iron_rate = main.input_rates.get(raw_item, 0.0) if raw_item else 0.0
+    sub_prod_amt = float(sub_recipe.products.get(sub.item) or 1.0) if sub_recipe else 1.0
+    copper_per_amt = float(sub_recipe.ingredients.get(sub_in) or 1.0) if sub_recipe else 1.0
+    copper_per_inserter = (sub.rate_per_minute / sub_prod_amt * copper_per_amt) / max(1, sub.machine_count)
+    out_rate = spec.achieved_rate
+    cable_ins = _inserter_for_rate(cable_per_inserter, available_inserters)
+    copper_ins = _inserter_for_rate(copper_per_inserter, available_inserters)
+    iron_ins = _inserter_for_rate(iron_rate, available_inserters)
+    out_ins = _inserter_for_rate(out_rate, available_inserters)
+
     ecx = 4
     west_x = -6
     east_x = ecx + 10  # 14
@@ -251,27 +291,27 @@ def _place_direct_insertion(
         _add(entities, sub.machine, cx, 0, recipe=sub.recipe_name)
         machine_centers.append((float(cx), 0.0, 3, 3))
         if cx < ecx:  # west producer -> direct insert east into EC; copper from west boundary belt
-            _add(entities, _INSERTER, 2, 0, direction=_WEST_DIR)        # pickup (1) cable, drop (3) EC
+            _add(entities, cable_ins, 2, 0, direction=_WEST_DIR)        # pickup (1) cable, drop (3) EC
             _lay_lane(entities, 0, west_x, cx - 3, item=sub_in)         # copper belt -> (cx-3)
-            _add(entities, _INSERTER, cx - 2, 0, direction=_WEST_DIR)   # pickup (cx-3) belt, drop (cx-1)
+            _add(entities, copper_ins, cx - 2, 0, direction=_WEST_DIR)  # pickup (cx-3) belt, drop (cx-1)
             sources.append({"item": sub_in, "x": west_x, "y": 0})
             io_corridors.append({"role": "input", "item": sub_in, "x": west_x, "y": 0, "side": "west"})
         else:  # east producer -> direct insert west into EC; copper from east boundary belt
-            _add(entities, _INSERTER, 6, 0, direction=_EAST_DIR)        # pickup (7) cable, drop (5) EC
+            _add(entities, cable_ins, 6, 0, direction=_EAST_DIR)        # pickup (7) cable, drop (5) EC
             _lay_lane(entities, 0, cx + 3, east_x, item=sub_in, flow_west=True)  # copper flows toward cable
-            _add(entities, _INSERTER, cx + 2, 0, direction=_EAST_DIR)   # pickup (cx+3) belt, drop (cx+1)
+            _add(entities, copper_ins, cx + 2, 0, direction=_EAST_DIR)  # pickup (cx+3) belt, drop (cx+1)
             sources.append({"item": sub_in, "x": east_x, "y": 0})
             io_corridors.append({"role": "input", "item": sub_in, "x": east_x, "y": 0, "side": "east"})
 
     if raw_item is not None:
         _lay_lane(entities, -3, west_x, ecx, item=raw_item)             # raw belt north of EC
-        _add(entities, _INSERTER, ecx, -2, direction=NORTH)             # pickup (ecx,-3), drop (ecx,-1)
+        _add(entities, iron_ins, ecx, -2, direction=NORTH)             # pickup (ecx,-3), drop (ecx,-1)
         sources.append({"item": raw_item, "x": west_x, "y": -3})
         io_corridors.append({"role": "input", "item": raw_item, "x": west_x, "y": -3, "side": "north"})
 
     out_y = 3
     _lay_lane(entities, out_y, ecx, east_x, item=main.product)          # product belt south -> east boundary
-    _add(entities, _INSERTER, ecx, 2, direction=NORTH)                  # pickup (ecx,1) EC, drop (ecx,3)
+    _add(entities, out_ins, ecx, 2, direction=NORTH)                   # pickup (ecx,1) EC, drop (ecx,3)
     destination = {"item": main.product, "x": east_x, "y": out_y, "rate": spec.achieved_rate}
     io_corridors.append({"role": "output", "item": main.product, "x": east_x, "y": out_y, "side": "east"})
 

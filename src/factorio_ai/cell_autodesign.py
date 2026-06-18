@@ -63,6 +63,19 @@ def _long_inserter_available(observation: dict[str, Any]) -> bool:
     return any(isinstance(e, dict) and str(e.get("name") or "") == "long-handed-inserter" for e in entities)
 
 
+def _available_inserters(observation: dict[str, Any]) -> set[str]:
+    """Inserter tiers usable now: base inserter is always available; fast/bulk if their craft recipe
+    is enabled (researched). Lets high-rate links use faster inserters so single high-ratio machines
+    aren't base-inserter bottlenecked (the vanilla-reference technique)."""
+    names: set[str] = {"inserter"}
+    unlocks = observation.get("recipe_unlocks") if isinstance(observation.get("recipe_unlocks"), dict) else {}
+    for tier in ("fast-inserter", "bulk-inserter", "stack-inserter"):
+        state = unlocks.get(tier)
+        if isinstance(state, dict) and state.get("enabled"):
+            names.add(tier)
+    return names
+
+
 def _power_situation(observation: dict[str, Any]) -> cell_compiler.PowerSituation:
     try:
         from .monitor import estimate_power_networks
@@ -105,6 +118,7 @@ def design_cells(
 
     machines = _available_machines(observation)
     long_inserter = _long_inserter_available(observation)
+    inserters = _available_inserters(observation)
     power = _power_situation(observation)
     try:
         sites = [s.to_dict() for s in estimate_factory_sites(observation)]
@@ -121,7 +135,7 @@ def design_cells(
         out = cell_pipeline.build_and_store(
             runtime_dir, item, rate,
             available_machines=machines, power_situation=power,
-            long_inserter_available=long_inserter,
+            long_inserter_available=long_inserter, available_inserters=inserters,
             sandbox_status=f"autodesign:{plan['mode']}",
         )
         record = out.get("record") or {}
