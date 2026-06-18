@@ -41,10 +41,12 @@ $env:FACTORIO_AI_SLURM_LAYOUT_PRIORITY = "80"
 # Qwen3.6-27B at 4-bit AWQ (~14GB) fits one A6000 and runs on Ampere+Ada (Marlin), unlike FP8
 # which crashed on this node's GPUs (exit 1). Two instances (one per GPU) below.
 $env:FACTORIO_AI_VLLM_MODEL = "QuantTrio/Qwen3.6-27B-AWQ"
-# max-model-len 12288 (was 8192): the strategy prompt is ~6145 input tokens and the worker asks
-# for 2048 output -> 8193 > 8192 caused HTTP 400 "maximum context length is 8192". 12288 gives
-# headroom (fits ~10k-token prompts + 2048 output) and stays well under the 32768 that crashed.
-$env:FACTORIO_AI_VLLM_ARGS = "--max-model-len 12288 --gpu-memory-utilization 0.90 --quantization awq --enforce-eager"
+# max-model-len 16384 (was 12288): the skill_foundry codegen prompt is ~9.4k input tokens and the
+# 27B reasoning model writes chain-of-thought + a full module, so 12288 left only ~2.9k output budget
+# -> the JSON got truncated mid-string ("LLM response content is not a JSON object"). 16384 gives
+# ~7k output budget so foundry codegen + reasoning fit; safe on the a6000 (48GB) at 0.90 util
+# (27B AWQ ~15GB weights + paged KV-cache). Still well under the 32768 that crashed.
+$env:FACTORIO_AI_VLLM_ARGS = "--max-model-len 16384 --gpu-memory-utilization 0.90 --quantization awq --enforce-eager"
 # Persistent model cache OUTSIDE ~/.cache (which the cluster may purge): the ~15GB AWQ
 # download survives reboots/purges and is never re-fetched. Use an ABSOLUTE path -- a
 # leading ~ does NOT expand inside the quoted `export HF_HOME=...` on the node.
@@ -97,7 +99,9 @@ $env:FACTORIO_AI_FOUNDRY_SANDBOX_SERVER_PORT = "34297"
 $env:FACTORIO_AI_FOUNDRY_SANDBOX_RCON_PORT = "27115"
 $env:FACTORIO_AI_FOUNDRY_SANDBOX_RCON_TIMEOUT = "180"
 $env:FACTORIO_AI_FOUNDRY_MAX_ATTEMPTS = "3"
-$env:FACTORIO_AI_FOUNDRY_MAX_TOKENS = "3072"
+# Raised 3072 -> 5120 alongside max-model-len 16384: the reasoning model needs room for
+# chain-of-thought + the full module so the JSON isn't truncated. 9.4k prompt + 5120 < 16384.
+$env:FACTORIO_AI_FOUNDRY_MAX_TOKENS = "5120"
 # Self-repair: let the local LLM generate sandbox-gated overrides for hand-written skills that keep
 # failing live (e.g. setup_power on a new map). Auto-applied after gates; auto-rolls back to the
 # original on regression. Requires the sandbox gate above.
