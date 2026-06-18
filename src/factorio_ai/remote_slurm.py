@@ -405,6 +405,45 @@ def _scheduler_vllm_service_count() -> int:
     return min(8, _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT", 1, 1))
 
 
+def _scheduler_vllm_service_max_count() -> int:
+    """Upper bound on warm services. Defaults to SERVICE_COUNT so existing setups are unchanged."""
+    fallback = _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT", 1, 1)
+    return min(8, _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_MAX_COUNT", fallback, 1))
+
+
+def _scheduler_vllm_service_dynamic_enabled() -> bool:
+    value = os.getenv("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DYNAMIC", "1").strip().lower()
+    return value not in {"0", "false", "no", "off", "disabled"}
+
+
+def _dynamic_vllm_service_target(active_services: list[dict[str, Any]]) -> int:
+    """Pick how many warm services to run RIGHT NOW: scale 1..MAX_COUNT to the GPUs actually
+    grantable for our gpu_model, so we never request more than can place (which previously left a
+    service stuck queued). target = clamp(running_services + free_grantable_gpus, 1, MAX_COUNT),
+    where free_grantable = our pool's free + cluster-free (the scheduler grows our pool on demand).
+
+    When dynamic is disabled (FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DYNAMIC=0) the static MAX_COUNT is
+    used (legacy behaviour)."""
+    max_count = _scheduler_vllm_service_max_count()
+    if not _scheduler_vllm_service_dynamic_enabled() or max_count <= 1:
+        return max_count
+    running = sum(1 for r in active_services if str(r.get("status") or "").lower() == "running")
+    wanted = {_scheduler_gpu_model_name(m) for m in _scheduler_gpu_model_candidates(VLLM_SERVICE_TASK_TYPE) if m}
+    free = 0
+    try:
+        capacity = _scheduler_api_json_retry("/api/gpu-capacity", timeout=10, attempts=2)
+    except Exception:  # noqa: BLE001
+        capacity = []
+    for row in capacity if isinstance(capacity, list) else []:
+        if not isinstance(row, dict):
+            continue
+        model = _scheduler_gpu_model_name(row.get("gpu_model"))
+        if wanted and model not in wanted:
+            continue
+        free += int(row.get("scheduler_free_gpus") or 0) + int(row.get("cluster_free_gpus") or 0)
+    return max(1, min(max_count, running + free))
+
+
 def _scheduler_vllm_service_base_port() -> int:
     """Base localhost port for vLLM services. Service i=0 always binds this (the readiness proxy
     reads its heartbeat); services i>0 bind base+1, base+2, ... for true multi-GPU on one node."""
@@ -1918,8 +1957,30 @@ def ensure_vllm_service(
             _close_orphan_vllm_allocations(_scheduler_account())
             status_payload = vllm_service_status(cfg)
             active_services = status_payload.get("active_services") if isinstance(status_payload.get("active_services"), list) else []
-    target = _scheduler_vllm_service_count()
+    target = _dynamic_vllm_service_target(active_services)
     active_count = len(active_services)
+    # Downscale: if grantable GPUs dropped below what we currently have queued, cancel the excess
+    # QUEUED services (never running ones) and close their allocations, so an un-placeable extra
+    # service does not sit wedged forever (the user's dynamic 1..N requirement).
+    if active_count > target:
+        excess = active_count - target
+        queued = [
+            r for r in active_services
+            if str(r.get("status") or "").lower() in {"queued", "pending", "attaching", "starting"}
+        ]
+        queued.sort(key=lambda r: (_parse_service_port_from_name(r.get("name")) or 0), reverse=True)
+        downscaled: list[dict[str, Any]] = []
+        for row in queued[:excess]:
+            if row.get("allocation_id") is not None:
+                _scheduler_close_allocation(row.get("allocation_id"))
+            _scheduler_cancel_task(row.get("id"))
+            downscaled.append({"id": row.get("id"), "port": _parse_service_port_from_name(row.get("name"))})
+        if downscaled:
+            _close_orphan_vllm_allocations(_scheduler_account())
+            cancelled_services.extend(downscaled)
+            status_payload = vllm_service_status(cfg)
+            active_services = status_payload.get("active_services") if isinstance(status_payload.get("active_services"), list) else []
+            active_count = len(active_services)
     if active_count >= target:
         return {
             "ok": True,

@@ -22,11 +22,18 @@ $env:FACTORIO_AI_SLURM_ENABLED = "1"
 $env:FACTORIO_AI_SLURM_MODE = "scheduler"
 $env:FACTORIO_AI_SLURM_SCHEDULER_URL = "http://100.112.168.31:8000"
 $env:FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT = "r1jae262"
+# The default ~/.ssh/r1jae262.pem has CRLF line endings (Windows-mangled) which makes
+# OpenSSH fail to parse it ("error in libcrypto") -> all SSH ops (strategy/foundry
+# payload upload, deploy) silently fail. r1jae262_lf.pem is the LF-normalized copy.
+$env:SUPERCOMPUTER_WORKER_SSH_KEY = "C:\Users\NEC\.ssh\r1jae262_lf.pem"
 $env:FACTORIO_AI_SLURM_REMOTE_DIR = "~/factorio-ai-worker"
 $env:FACTORIO_AI_SLURM_TASK_TIMEOUT_SECONDS = "900"
 $env:FACTORIO_AI_SLURM_SCHEDULER_CPUS = "3"
 $env:FACTORIO_AI_SLURM_SCHEDULER_GPUS = "1"
-$env:FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL = "a6000ada,a6000"
+# Our account OWNS 8 a6000 GPUs (sched_owned=8) and a10 shows sched_owned=0 (we can't actually get
+# a10 even though the cluster has 54 free), so target a6000 directly. This is where COUNT=4 lives.
+# Revert to "a6000ada,a6000" only if a6000ada capacity is later granted to the account.
+$env:FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL = "a6000"
 $env:FACTORIO_AI_SLURM_SCHEDULER_PRIORITY = "100"
 $env:FACTORIO_AI_SLURM_LAYOUT_GPU_MODELS = "a6000ada,a6000"
 $env:FACTORIO_AI_SLURM_LAYOUT_CPUS = "3"
@@ -34,25 +41,47 @@ $env:FACTORIO_AI_SLURM_LAYOUT_PRIORITY = "80"
 # Qwen3.6-27B at 4-bit AWQ (~14GB) fits one A6000 and runs on Ampere+Ada (Marlin), unlike FP8
 # which crashed on this node's GPUs (exit 1). Two instances (one per GPU) below.
 $env:FACTORIO_AI_VLLM_MODEL = "QuantTrio/Qwen3.6-27B-AWQ"
-$env:FACTORIO_AI_VLLM_ARGS = "--max-model-len 32768 --gpu-memory-utilization 0.90 --quantization awq --enforce-eager"
+# max-model-len 12288 (was 8192): the strategy prompt is ~6145 input tokens and the worker asks
+# for 2048 output -> 8193 > 8192 caused HTTP 400 "maximum context length is 8192". 12288 gives
+# headroom (fits ~10k-token prompts + 2048 output) and stays well under the 32768 that crashed.
+$env:FACTORIO_AI_VLLM_ARGS = "--max-model-len 12288 --gpu-memory-utilization 0.90 --quantization awq --enforce-eager"
+# Persistent model cache OUTSIDE ~/.cache (which the cluster may purge): the ~15GB AWQ
+# download survives reboots/purges and is never re-fetched. Use an ABSOLUTE path -- a
+# leading ~ does NOT expand inside the quoted `export HF_HOME=...` on the node.
+$env:FACTORIO_AI_HF_HOME = "/home1/r1jae262/factorio-ai-models"
 $env:FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER = "0"
 $env:FACTORIO_AI_VLLM_PORT = "8000"
-$env:FACTORIO_AI_VLLM_STARTUP_SECONDS = "420"
+$env:FACTORIO_AI_VLLM_STARTUP_SECONDS = "1800"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED = "1"
-# Run 2 warm 27B-FP8 instances (each on its own GPU/node) for parallel throughput +
-# redundancy: client tasks round-robin across them and one can serve while the
-# other cold-loads or restarts. All share port 8000 (each on its own node).
-$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT = "2"
+# DYNAMIC 1..MAX warm 27B-AWQ instances, each on a DISTINCT localhost port (8000,8001,8002,8003);
+# clients round-robin + co-locate per-service to that service's node. The supervisor scales the
+# live service count to the GPUs actually grantable each cycle (target = clamp(running + free a6000,
+# 1, MAX_COUNT)), so it uses 4 GPUs when free and gracefully drops to 1-3 under contention instead
+# of leaving a service wedged in the queue. Allocation-leak fix (commit 38d6b8e) makes churn
+# self-cleaning, so this can never wedge the account; worst case is a smaller live count.
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT = "4"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_MAX_COUNT = "4"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DYNAMIC = "1"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS = "43200"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_HEARTBEAT_SECONDS = "30"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_STALE_SECONDS = "120"
-$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_QUEUE_STALE_SECONDS = "180"
+# Raised 180 -> 1800: under cluster GPU contention the scheduler can take several minutes to place
+# a queued service; the old 180s window cancelled+resubmitted it before it could land (churn ->
+# zero serving). 1800s lets a single service wait in queue for a free GPU.
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_QUEUE_STALE_SECONDS = "1800"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_CPUS = "1"
 $env:FACTORIO_AI_SCHEDULER_VLLM_CLIENT_CPUS = "1"
 $env:FACTORIO_AI_SCHEDULER_VLLM_CLIENT_GPUS = "0"
-$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_PRIORITY = "120"
+# Raised 120 -> 300 to overcome the "(Priority)" pending state: the a6000 pool is contended and our
+# single service was queued behind higher-priority work, unable to claim a free node. Higher priority
+# lets it grab a free a6000 node (e.g. n106). Lower back toward 120 once contention eases.
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_PRIORITY = "300"
 $env:FACTORIO_AI_REQUIRE_LLM_STRATEGY = "1"
 $env:FACTORIO_AI_LLM_GUIDED_JSON = "1"
+# Qwen3.6 emits a verbose chain-of-thought when unconstrained, overflowing the old 512-token
+# cap so the JSON never closes ("LLM response content is not a JSON object"). guided_json above
+# forces the strict schema (no rambling); this gives the schema fields room to complete.
+$env:FACTORIO_AI_LLM_MAX_TOKENS = "2048"
 $env:FACTORIO_AI_LLM_TIMEOUT = "600"
 $env:FACTORIO_AI_REMOTE_STRATEGY_TIMEOUT_SECONDS = "900"
 $env:FACTORIO_AI_BACKGROUND_LAYOUT_ENABLED = "1"

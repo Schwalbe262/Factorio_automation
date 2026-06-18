@@ -2336,3 +2336,55 @@ class SchedulerTaskCancelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DynamicVllmServiceTargetTests(unittest.TestCase):
+    """Dynamic 1..MAX vLLM service scaling based on grantable GPUs (user requirement)."""
+
+    def _cap(self, sched_free, cluster_free, model="a6000"):
+        return [{"gpu_model": model, "scheduler_free_gpus": sched_free, "cluster_free_gpus": cluster_free}]
+
+    def _env(self, **over):
+        base = {
+            "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_MAX_COUNT": "4",
+            "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DYNAMIC": "1",
+            "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000",
+        }
+        base.update(over)
+        return base
+
+    def test_targets_max_when_gpus_free(self):
+        from factorio_ai import remote_slurm as rs
+        with patch.object(rs, "_scheduler_api_json_retry", return_value=self._cap(2, 15)), \
+                patch.dict(os.environ, self._env(), clear=False):
+            self.assertEqual(rs._dynamic_vllm_service_target([]), 4)
+
+    def test_scales_down_under_contention(self):
+        from factorio_ai import remote_slurm as rs
+        running3 = [{"status": "running"}] * 3
+        with patch.object(rs, "_scheduler_api_json_retry", return_value=self._cap(0, 0)), \
+                patch.dict(os.environ, self._env(), clear=False):
+            # 3 running, no free GPUs -> keep 3 (don't request an un-placeable 4th)
+            self.assertEqual(rs._dynamic_vllm_service_target(running3), 3)
+
+    def test_floor_is_one(self):
+        from factorio_ai import remote_slurm as rs
+        with patch.object(rs, "_scheduler_api_json_retry", return_value=self._cap(0, 0)), \
+                patch.dict(os.environ, self._env(), clear=False):
+            self.assertEqual(rs._dynamic_vllm_service_target([]), 1)
+
+    def test_capped_at_max(self):
+        from factorio_ai import remote_slurm as rs
+        with patch.object(rs, "_scheduler_api_json_retry", return_value=self._cap(20, 20)), \
+                patch.dict(os.environ, self._env(FACTORIO_AI_SCHEDULER_VLLM_SERVICE_MAX_COUNT="3"), clear=False):
+            self.assertEqual(rs._dynamic_vllm_service_target([]), 3)
+
+    def test_dynamic_disabled_uses_static_max(self):
+        from factorio_ai import remote_slurm as rs
+        with patch.object(rs, "_scheduler_api_json_retry", return_value=self._cap(0, 0)), \
+                patch.dict(os.environ, self._env(FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DYNAMIC="0"), clear=False):
+            self.assertEqual(rs._dynamic_vllm_service_target([]), 4)
+
+
+if __name__ == "__main__":
+    unittest.main()
