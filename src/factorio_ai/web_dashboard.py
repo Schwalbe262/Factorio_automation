@@ -1350,15 +1350,20 @@ def _layout_card(design: dict[str, Any], lang: str, available_machines: set[str]
         f"{escape(_t(lang, 'copy_blueprint'))}</button>"
         if exchange else ""
     )
+    # Show only the short layout type (e.g. "belt_row"), not the full internal source string
+    # ("regen-curtech:belt_row").
+    arch_label = str(status).split(":")[-1].strip() or str(status)
     return (
         "<article class=\"trace-entry\">"
-        "<div class=\"trace-header\">"
+        "<div class=\"layout-card-head\">"
         f"<strong>{escape(str(design.get('description') or item))}</strong>"
+        "<span class=\"layout-card-actions\">"
         f"{_active_badge(design, available_machines)}"
-        f"<span class=\"{status_class}\">{escape(status)}</span>"
+        f"<span class=\"{status_class}\">{escape(arch_label)}</span>"
+        f"{copy_button}"
+        "</span>"
         "</div>"
         f"<table class=\"kv\"><tbody>{meta_html}</tbody></table>"
-        f"<div class=\"actions\">{copy_button}</div>"
         "</article>"
     )
 
@@ -1739,6 +1744,19 @@ def _page(title: str, body: str, lang: str, objective: Any = None) -> str:
     }}
     .trace-header {{
       margin-bottom: 8px;
+    }}
+    .layout-card-head {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 8px;
+    }}
+    .layout-card-actions {{
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
     }}
     .trace-meta {{
       color: #9aa4af;
