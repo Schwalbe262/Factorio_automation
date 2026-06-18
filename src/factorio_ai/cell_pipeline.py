@@ -156,6 +156,12 @@ def build_and_store(
     result = design_cell(item, rate, **kwargs)
     if not result["blueprint"]:
         return {"ok": False, "record": None, "precheck": result.get("precheck"), "reason": result.get("reason")}
+    # Don't persist designs that fail the precheck (e.g. a cell with no valid archetype yet) — the
+    # library should only show buildable designs. Report the reason so the caller knows it was skipped.
+    if not result["ok"]:
+        return {"ok": False, "record": None, "precheck": result.get("precheck"),
+                "chosen_archetype": result.get("chosen_archetype"),
+                "reason": result.get("reason") or "no valid archetype (precheck failed)"}
     archetype = result.get("chosen_archetype") or ""
     status = sandbox_status or f"precheck:{result['precheck']['status']}"
     if archetype:
