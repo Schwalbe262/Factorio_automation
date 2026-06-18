@@ -11462,6 +11462,17 @@ class BuildItemMallSkill:
                     if not decision.done:
                         return decision
                     return None
+                # Genuine bootstrap: the post-Automation policy wants gears from an assembler, but if
+                # NO assembler exists yet there is nothing to produce them and refusing forever wedges
+                # the whole autopilot (the observed 'rebuild gear mall every cycle, action=null' loop).
+                # Break the chicken-and-egg: bootstrap enough gears to build the FIRST assembler.
+                if not _assembler_automation_available(observation):
+                    bootstrap = self._bootstrap_first_assembler_gears(
+                        observation, player, quantity,
+                        allow_existing_remote=allow_existing_remote, reference_position=reference_position,
+                    )
+                    if bootstrap is not None:
+                        return bootstrap
                 return PlannerDecision(
                     None,
                     "iron gear wheels must be produced by an assembler; refusing hand-crafted gear for build item mall bootstrap",
@@ -11636,6 +11647,50 @@ class BuildItemMallSkill:
             )
 
         return PlannerDecision(None, f"missing {item} and no build item mall prerequisite path is implemented")
+
+    def _bootstrap_first_assembler_gears(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        quantity: int,
+        *,
+        allow_existing_remote: bool = False,
+        reference_position: dict[str, float] | None = None,
+    ) -> PlannerDecision | None:
+        """No assembler exists yet, so the post-Automation 'gears must come from an assembler' rule
+        cannot be satisfied — nothing can produce them. Break the chicken-and-egg deadlock by
+        bootstrapping just enough gears to build the FIRST assembler (5 for assembling-machine-1):
+        smelt more iron-plate if the reserve is short, then one-time craft the gears. This is the only
+        way to get the first assembler (true in both virtual/RCON mode, where 'craft' is instant, and
+        character mode); once any assembler exists this path is disabled and gears come from it."""
+        if _assembler_automation_available(observation):
+            return None
+        target = 5  # one assembling-machine-1 worth of gears
+        need = target - inventory_count(observation, "iron-gear-wheel")
+        if need <= 0:
+            return None  # enough gears to build the first assembler — let the mall build it
+        iron_reserve = 2 * need + 9  # 2 iron-plate per gear + the assembler's own 9 iron-plate
+        if inventory_count(observation, "iron-plate") < iron_reserve:
+            return self._ensure_item_quantity(
+                observation, player, "iron-plate", iron_reserve,
+                allow_existing_remote=allow_existing_remote, reference_position=reference_position,
+            )
+        craftable = craftable_count(observation, "iron-gear-wheel")
+        if craftable <= 0:
+            # iron-plate present but not craftable yet (e.g. still in furnaces) — keep smelting.
+            return self._ensure_item_quantity(
+                observation, player, "iron-plate", iron_reserve,
+                allow_existing_remote=allow_existing_remote, reference_position=reference_position,
+            )
+        return PlannerDecision(
+            {
+                "type": "craft",
+                "recipe": "iron-gear-wheel",
+                "count": min(need, craftable),
+                "allow_first_assembler_bootstrap": True,
+            },
+            "bootstrap-craft gears for the first assembler (no assembler exists yet to produce them)",
+        )
 
     def _ensure_assembler_bootstrap_gears(
         self,
