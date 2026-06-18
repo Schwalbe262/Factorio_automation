@@ -20,12 +20,19 @@ from . import capacity_planner, cell_compiler, cell_pipeline, knowledge
 
 
 def _available_machines(observation: dict[str, Any]) -> list[str]:
-    """Machines the factory can use now: any crafting machine built or in inventory, plus a
-    baseline of the always-available starter machines."""
+    """Machines the factory can actually use right now.
+
+    A machine qualifies if it is (a) an always-available starter, (b) built in the world, (c) in
+    inventory, or (d) its CRAFT RECIPE is enabled (i.e. the unlocking tech is researched), read
+    from the live recipe-unlock snapshot ``observation['recipe_unlocks']``.
+
+    The previous heuristic added ``assembling-machine-2`` whenever *any* technology was researched,
+    which is essentially always true on a running base, so unresearched upgrade machines leaked into
+    designs (the user saw AM2 used before it was unlocked). Gating on the real per-recipe enabled
+    flag fixes that generally for AM2/AM3/steel-furnace/electric-furnace without hardcoding tech."""
     names: set[str] = {"assembling-machine-1", "stone-furnace"}
-    known = set()
     machines_tbl = knowledge._load_profiles()[0]  # name -> MachineProfile
-    known.update(machines_tbl.keys())
+    known = set(machines_tbl.keys())
     entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
     for e in entities:
         if isinstance(e, dict) and str(e.get("name") or "") in known:
@@ -34,12 +41,26 @@ def _available_machines(observation: dict[str, Any]) -> list[str]:
     for name in inv:
         if str(name) in known:
             names.add(str(name))
-    # research-gated common upgrades: include AM2 once automation-ish tech is present (best-effort).
-    research = observation.get("research") if isinstance(observation.get("research"), dict) else {}
-    techs = research.get("technologies") if isinstance(research.get("technologies"), dict) else {}
-    if any(isinstance(v, dict) and v.get("researched") for v in techs.values()):
-        names.add("assembling-machine-2")
+    # Upgrade machines: include ONLY when their craft recipe is actually enabled (researched).
+    unlocks = observation.get("recipe_unlocks") if isinstance(observation.get("recipe_unlocks"), dict) else {}
+    for name, state in unlocks.items():
+        if str(name) in known and isinstance(state, dict) and state.get("enabled"):
+            names.add(str(name))
     return sorted(names)
+
+
+def _long_inserter_available(observation: dict[str, Any]) -> bool:
+    """True when the long-handed inserter is craftable (needed for clean multi-input belt routing)."""
+    unlocks = observation.get("recipe_unlocks") if isinstance(observation.get("recipe_unlocks"), dict) else {}
+    state = unlocks.get("long-handed-inserter")
+    if isinstance(state, dict) and state.get("enabled"):
+        return True
+    # built/in inventory also counts
+    inv = observation.get("inventory") if isinstance(observation.get("inventory"), dict) else {}
+    if "long-handed-inserter" in inv:
+        return True
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    return any(isinstance(e, dict) and str(e.get("name") or "") == "long-handed-inserter" for e in entities)
 
 
 def _power_situation(observation: dict[str, Any]) -> cell_compiler.PowerSituation:
@@ -83,6 +104,7 @@ def design_cells(
         return {"ok": True, "reason": "all targets satisfied", "designed": []}
 
     machines = _available_machines(observation)
+    long_inserter = _long_inserter_available(observation)
     power = _power_situation(observation)
     try:
         sites = [s.to_dict() for s in estimate_factory_sites(observation)]
@@ -99,6 +121,7 @@ def design_cells(
         out = cell_pipeline.build_and_store(
             runtime_dir, item, rate,
             available_machines=machines, power_situation=power,
+            long_inserter_available=long_inserter,
             sandbox_status=f"autodesign:{plan['mode']}",
         )
         record = out.get("record") or {}

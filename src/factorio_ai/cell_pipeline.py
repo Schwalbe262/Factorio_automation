@@ -24,6 +24,7 @@ def design_cell(
     power_situation: cell_compiler.PowerSituation | None = None,
     box: cell_placer.BoundingBox | None = None,
     pole: str = "small-electric-pole",
+    long_inserter_available: bool = True,
 ) -> dict[str, Any]:
     """Compile + place + pre-check a cell. Returns objects + a blueprint string + the pre-check."""
     spec = cell_compiler.compile_cell(
@@ -37,7 +38,7 @@ def design_cell(
         return {"ok": False, "spec": spec, "placed": None, "precheck": None,
                 "blueprint": None, "reason": "; ".join(spec.warnings) or "compile failed"}
 
-    placed = cell_placer.place_cell(spec, box, pole=pole)
+    placed = cell_placer.place_cell(spec, box, pole=pole, long_inserter_available=long_inserter_available)
     precheck = cell_flow_check.precheck_cell(spec, placed, power_situation=power_situation)
     blueprint = (
         blueprints.encode_blueprint_entities(f"{item}@{rate:g}", placed.entities)

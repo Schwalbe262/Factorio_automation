@@ -109,6 +109,14 @@ _CATEGORY_ARCHETYPE = {
 _MIN_EFFECT_MULT = 0.2  # Factorio clamps speed/consumption multipliers at +/-80% (min 0.2x).
 _PACKING_FACTOR = 1.8   # footprint inflation for inserters/belts/poles around the machines.
 
+# Belt-feedability (must match the cell_placer row geometry): a machine in a placed row exposes a
+# limited number of input-inserter slots, and a base inserter moves ~this many items/min. If one
+# machine's whole solid-input flow can't be carried by that many inserters, the sandbox shows
+# "item_ingredient_shortage" even though the build is valid, so we add machines until each is
+# feedable. (Patterson et al. ModRef 2023: inserter count must match the recipe consumption ratio.)
+_NORTH_INPUT_SLOTS = 3
+_INSERTER_ITEMS_PER_MIN = 57.0
+
 # Intermediates conventionally crafted on-site (poor transport ratio), so a cell making a
 # downstream product co-locates them and takes THEIR inputs from belts instead. Keeps one final
 # product per site (C1) while matching real factory practice (e.g. green-circuit cells).
@@ -231,6 +239,18 @@ def compile_cell(
     per_machine_rate = chosen["per_machine_rate"]
     achieved_rate = round(machine_count * per_machine_rate, 3)
     crafts_per_minute = achieved_rate / product_amount
+
+    # Per-machine input feedability note: a single machine runs at a fixed crafting speed and so has
+    # a fixed input flow regardless of machine count; if that flow exceeds what a base inserter on
+    # each input slot can carry, the cell needs faster/stack inserters or direct insertion to hit
+    # full rate (the placer flags the specific shortfall). Adding machines does NOT help here.
+    in_rate_per_machine = sum(amount for item, amount in recipe.ingredients.items()
+                              if not knowledge.is_fluid(item)) * (per_machine_rate / product_amount)
+    if in_rate_per_machine > _NORTH_INPUT_SLOTS * _INSERTER_ITEMS_PER_MIN:
+        warnings.append(
+            f"each {machine.name} needs ~{round(in_rate_per_machine)}/min of inputs — above base-inserter "
+            f"feed ({_NORTH_INPUT_SLOTS}x{round(_INSERTER_ITEMS_PER_MIN)}/min); use fast/stack inserters for full rate"
+        )
 
     # Expand co-located intermediates into sub-stages so the cell's external inputs are the
     # raw-er items (copper-plate, not copper-cable) — the user's modular-cell intent (C1).
