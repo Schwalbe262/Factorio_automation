@@ -3524,7 +3524,7 @@ class PlannerTests(unittest.TestCase):
 
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "boiler")
-        self.assertEqual(decision.action["position"], {"x": 12.5, "y": 9.5})
+        self.assertEqual(decision.action["position"], {"x": 12.5, "y": 11})
 
     def test_setup_power_skill_mines_tree_when_pole_needs_wood(self):
         obs = base_observation()
@@ -3565,8 +3565,8 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "boiler",
                 "unit_number": 602,
-                "position": {"x": 12.5, "y": 10.0},
-                "direction": 0,
+                "position": {"x": 12.5, "y": 11},
+                "direction": 8,
                 "distance": 0,
                 "inventories": {},
                 "fluids": {"1": {"name": "water", "amount": 200}},
@@ -3574,8 +3574,8 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "steam-engine",
                 "unit_number": 603,
-                "position": {"x": 12.5, "y": 6.5},
-                "direction": 0,
+                "position": {"x": 12.5, "y": 14.5},
+                "direction": 8,
                 "status": 5,
                 "distance": 4,
                 "inventories": {},
@@ -3584,7 +3584,7 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "small-electric-pole",
                 "unit_number": 604,
-                "position": {"x": 10.5, "y": 6.5},
+                "position": {"x": 10.5, "y": 14.5},
                 "direction": 0,
                 "distance": 4,
                 "inventories": {},
@@ -3616,8 +3616,8 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "boiler",
                 "unit_number": 602,
-                "position": {"x": 12.5, "y": 10.0},
-                "direction": 0,
+                "position": {"x": 12.5, "y": 11},
+                "direction": 8,
                 "distance": 0,
                 "inventories": {},
                 "fluids": {"1": {"name": "water", "amount": 200}},
@@ -3625,8 +3625,8 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "steam-engine",
                 "unit_number": 603,
-                "position": {"x": 12.5, "y": 6.5},
-                "direction": 0,
+                "position": {"x": 12.5, "y": 14.5},
+                "direction": 8,
                 "status": 5,
                 "distance": 4,
                 "inventories": {},
@@ -3635,7 +3635,7 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "small-electric-pole",
                 "unit_number": 604,
-                "position": {"x": 10.5, "y": 6.5},
+                "position": {"x": 10.5, "y": 14.5},
                 "direction": 0,
                 "distance": 4,
                 "inventories": {},
@@ -3670,8 +3670,8 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "boiler",
                 "unit_number": 602,
-                "position": {"x": 12.5, "y": 9.5},
-                "direction": 0,
+                "position": {"x": 12.5, "y": 11},
+                "direction": 8,
                 "status_name": "no_fuel",
                 "distance": 0,
                 "inventories": {},
@@ -3680,8 +3680,8 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "steam-engine",
                 "unit_number": 603,
-                "position": {"x": 12.5, "y": 6.5},
-                "direction": 0,
+                "position": {"x": 12.5, "y": 14.5},
+                "direction": 8,
                 "status": 5,
                 "distance": 4,
                 "inventories": {},
@@ -3690,7 +3690,7 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "small-electric-pole",
                 "unit_number": 604,
-                "position": {"x": 10.5, "y": 6.5},
+                "position": {"x": 10.5, "y": 14.5},
                 "direction": 0,
                 "distance": 4,
                 "inventories": {},
@@ -3735,8 +3735,8 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "boiler",
                 "unit_number": 602,
-                "position": {"x": 12.5, "y": 9.5},
-                "direction": 0,
+                "position": {"x": 12.5, "y": 11},
+                "direction": 8,
                 "status_name": "no_fuel",
                 "distance": 0,
                 "inventories": {},
@@ -3745,8 +3745,8 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "steam-engine",
                 "unit_number": 603,
-                "position": {"x": 12.5, "y": 6.5},
-                "direction": 0,
+                "position": {"x": 12.5, "y": 14.5},
+                "direction": 8,
                 "status": 5,
                 "distance": 4,
                 "inventories": {},
@@ -3755,7 +3755,7 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "small-electric-pole",
                 "unit_number": 604,
-                "position": {"x": 10.5, "y": 6.5},
+                "position": {"x": 10.5, "y": 14.5},
                 "direction": 0,
                 "distance": 4,
                 "inventories": {},
@@ -3795,8 +3795,8 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "boiler",
                 "unit_number": 602,
-                "position": {"x": 12.5, "y": 10},
-                "direction": 0,
+                "position": {"x": 12.5, "y": 11},
+                "direction": 8,
                 "distance": 12,
                 "inventories": {"1": {"coal": 10}},
                 "fluids": {
@@ -3807,8 +3807,8 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "steam-engine",
                 "unit_number": 603,
-                "position": {"x": 12.5, "y": 6.5},
-                "direction": 0,
+                "position": {"x": 12.5, "y": 14.5},
+                "direction": 8,
                 "status": 1,
                 "distance": 13,
                 "inventories": {},
@@ -3817,7 +3817,7 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "small-electric-pole",
                 "unit_number": 604,
-                "position": {"x": 10.5, "y": 6.5},
+                "position": {"x": 10.5, "y": 14.5},
                 "direction": 0,
                 "distance": 12,
                 "inventories": {},
@@ -3843,8 +3843,8 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "boiler",
                 "unit_number": 612,
-                "position": {"x": 8.5, "y": 11.5},
-                "direction": 8,
+                "position": {"x": 8.5, "y": 10},
+                "direction": 0,
                 "distance": 12,
                 "inventories": {"1": {"coal": 10}},
                 "fluids": {
@@ -3855,8 +3855,8 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "steam-engine",
                 "unit_number": 613,
-                "position": {"x": 8.5, "y": 14.5},
-                "direction": 8,
+                "position": {"x": 8.5, "y": 6.5},
+                "direction": 0,
                 "status": 1,
                 "distance": 13,
                 "inventories": {},
@@ -3865,7 +3865,7 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "small-electric-pole",
                 "unit_number": 614,
-                "position": {"x": 10.5, "y": 14.5},
+                "position": {"x": 10.5, "y": 6.5},
                 "direction": 0,
                 "distance": 12,
                 "inventories": {},
@@ -7483,10 +7483,11 @@ def powered_research_observation():
             "fluids": {"1": {"name": "water", "amount": 100}},
         },
         {
+            # verified power-block geometry (WEST pump turns=0): boiler at pump+{2,0.5} dir SOUTH
             "name": "boiler",
             "unit_number": 602,
-            "position": {"x": 12.5, "y": 10},
-            "direction": 0,
+            "position": {"x": 12.5, "y": 11},
+            "direction": 8,
             "distance": 12,
             "inventories": {"1": {"coal": 5}},
             "fluids": {
@@ -7497,8 +7498,8 @@ def powered_research_observation():
         {
             "name": "steam-engine",
             "unit_number": 603,
-            "position": {"x": 12.5, "y": 6.5},
-            "direction": 0,
+            "position": {"x": 12.5, "y": 14.5},  # pump+{2,4}
+            "direction": 8,
             "status": 1,
             "distance": 13,
             "inventories": {},
@@ -7506,8 +7507,18 @@ def powered_research_observation():
         },
         {
             "name": "small-electric-pole",
+            "unit_number": 605,
+            "position": {"x": 10.5, "y": 14.5},  # power-block pole, pump+{0,4}
+            "direction": 0,
+            "distance": 12,
+            "electric_network_connected": True,
+            "inventories": {},
+            "fluids": {},
+        },
+        {
+            "name": "small-electric-pole",
             "unit_number": 604,
-            "position": {"x": 10.5, "y": 6.5},
+            "position": {"x": 10.5, "y": 6.5},  # separate pole for lab-site tests (lab_sites refs 604)
             "direction": 0,
             "distance": 12,
             "electric_network_connected": True,

@@ -8602,19 +8602,24 @@ def _power_layout_from_pump_position(position: dict[str, float], direction: int 
             "position": position,
             "direction": direction,
         },
+        # Offsets verified in-game (RCON fluidbox-connection test, see memory
+        # power-block-placement-geometry): for a WEST-base pump these connect pump->boiler->engine;
+        # the old {2,-1}/NORTH boiler + {2,-4}/NORTH engine produced a non-connecting, half-tile-
+        # snapped layout (the user's 'water not connected' bug). The boiler base is SOUTH-facing so
+        # rotation yields the correct per-direction water alignment.
         "boiler": {
             "name": "boiler",
-            "position": _offset_position(position, _rotate_offset({"x": 2, "y": -1}, turns)),
-            "direction": _rotate_direction(NORTH, turns),
+            "position": _offset_position(position, _rotate_offset({"x": 2, "y": 0.5}, turns)),
+            "direction": _rotate_direction(SOUTH, turns),
         },
         "steam_engine": {
             "name": "steam-engine",
-            "position": _offset_position(position, _rotate_offset({"x": 2, "y": -4}, turns)),
-            "direction": _rotate_direction(NORTH, turns),
+            "position": _offset_position(position, _rotate_offset({"x": 2, "y": 4}, turns)),
+            "direction": _rotate_direction(SOUTH, turns),
         },
         "small_electric_pole": {
             "name": "small-electric-pole",
-            "position": _offset_position(position, _rotate_offset({"x": 0, "y": -4}, turns)),
+            "position": _offset_position(position, _rotate_offset({"x": 0, "y": 4}, turns)),
             "direction": NORTH,
         },
     }
