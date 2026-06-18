@@ -11463,10 +11463,11 @@ class BuildItemMallSkill:
                         return decision
                     return None
                 # Genuine bootstrap: the post-Automation policy wants gears from an assembler, but if
-                # NO assembler exists yet there is nothing to produce them and refusing forever wedges
-                # the whole autopilot (the observed 'rebuild gear mall every cycle, action=null' loop).
-                # Break the chicken-and-egg: bootstrap enough gears to build the FIRST assembler.
-                if not _assembler_automation_available(observation):
+                # NO assembler is producing gears there is nothing to supply them and refusing forever
+                # wedges the autopilot (the observed 'rebuild gear mall every cycle, action=null' loop
+                # -- which recurs once a lone belt assembler exists). Break the chicken-and-egg:
+                # bootstrap enough gears to build the first GEAR assembler.
+                if not _gear_producing_assembler_available(observation):
                     bootstrap = self._bootstrap_first_assembler_gears(
                         observation, player, quantity,
                         allow_existing_remote=allow_existing_remote, reference_position=reference_position,
@@ -11661,11 +11662,13 @@ class BuildItemMallSkill:
         cannot be satisfied — nothing can produce them. Break the chicken-and-egg deadlock by
         bootstrapping just enough gears to build the FIRST assembler (5 for assembling-machine-1):
         smelt more iron-plate if the reserve is short, then one-time craft the gears. This is the only
-        way to get the first assembler (true in both virtual/RCON mode, where 'craft' is instant, and
-        character mode); once any assembler exists this path is disabled and gears come from it."""
-        if _assembler_automation_available(observation):
+        way to get the first GEAR-producing assembler (true in both virtual/RCON mode, where 'craft'
+        is instant, and character mode); once an assembler is set to make gears this path is disabled
+        and gears come from it. Note: a lone assembler set to a different recipe (e.g. transport-belt)
+        does NOT count -- it can't supply gears, so we still bootstrap to build the gear assembler."""
+        if _gear_producing_assembler_available(observation):
             return None
-        target = 5  # one assembling-machine-1 worth of gears
+        target = 5  # one assembling-machine-1 worth of gears (enough to build the first gear assembler)
         need = target - inventory_count(observation, "iron-gear-wheel")
         if need <= 0:
             return None  # enough gears to build the first assembler — let the mall build it
@@ -11883,6 +11886,21 @@ def _assembler_automation_available(observation: dict[str, Any]) -> bool:
         return True
     for entity in observation.get("entities") or []:
         if isinstance(entity, dict) and str(entity.get("name") or "") in ASSEMBLER_ENTITY_NAMES:
+            return True
+    return False
+
+
+def _gear_producing_assembler_available(observation: dict[str, Any]) -> bool:
+    """True if some built assembler is already set to make iron-gear-wheel, so gears can come from
+    automation. An assembler set to a DIFFERENT recipe does NOT count -- that is the second-deadlock
+    case: a lone belt/other assembler exists but nothing produces gears, so the post-Automation
+    'gears must come from an assembler' rule still cannot be satisfied."""
+    for entity in observation.get("entities") or []:
+        if (
+            isinstance(entity, dict)
+            and str(entity.get("name") or "") in ASSEMBLER_ENTITY_NAMES
+            and str(entity.get("recipe") or "") == "iron-gear-wheel"
+        ):
             return True
     return False
 
