@@ -3,7 +3,7 @@ param(
     [int]$CheckSeconds = 30,
     [int]$SchedulerCheckSeconds = 60,
     [int]$AutopilotStaleSeconds = 900,
-    [int]$AutopilotSleepSeconds = 60,
+    [int]$AutopilotSleepSeconds = 12,
     [int]$IdleLoopStaleSeconds = 180,
     [int]$LayoutMaxActiveTasks = 1,
     [int]$FoundryStaleSeconds = 900,
