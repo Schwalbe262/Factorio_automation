@@ -74,5 +74,32 @@ class CandidateInjectionTests(unittest.TestCase):
             layout_validation.find_layout_candidate({}, "nope", candidates=[])
 
 
+class CandidateRankingTests(unittest.TestCase):
+    """design_cell generates all candidate archetypes, prechecks + ranks them, picks the best."""
+
+    def test_ec_picks_direct_insertion_over_belt_row(self):
+        from factorio_ai import cell_pipeline as cpl
+        r = cpl.design_cell("electronic-circuit", 60, available_machines=["assembling-machine-1"],
+                            belt_tiers_available=["transport-belt"], available_inserters={"inserter", "fast-inserter"})
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["chosen_archetype"], "direct_insertion")
+        archs = {c["archetype"] for c in r["candidates"]}
+        self.assertEqual(archs, {"direct_insertion", "belt_row"})
+
+    def test_iron_plate_picks_smelting_column(self):
+        from factorio_ai import cell_pipeline as cpl
+        r = cpl.design_cell("iron-plate", 120, available_machines=["stone-furnace"],
+                            belt_tiers_available=["transport-belt"])
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["chosen_archetype"], "smelting_column")
+
+    def test_ranker_prefers_valid_candidate(self):
+        # the chosen candidate must not be a precheck-fail when a passing one exists.
+        from factorio_ai import cell_pipeline as cpl
+        r = cpl.design_cell("electronic-circuit", 60, available_machines=["assembling-machine-1"],
+                            belt_tiers_available=["transport-belt"])
+        self.assertEqual(r["precheck"]["status"] != "fail", True)
+
+
 if __name__ == "__main__":
     unittest.main()
