@@ -2239,6 +2239,7 @@ class MultiVllmServiceTests(unittest.TestCase):
                     "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000",
                     "FACTORIO_AI_VLLM_MODEL": "Qwen/test",
                     "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT": "4",
+                    "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DYNAMIC": "0",  # static: submit all 4 at once
                 },
                 clear=True,
             ),
@@ -2353,18 +2354,21 @@ class DynamicVllmServiceTargetTests(unittest.TestCase):
         base.update(over)
         return base
 
-    def test_targets_max_when_gpus_free(self):
+    def test_ramps_one_at_a_time_when_free(self):
         from factorio_ai import remote_slurm as rs
         with patch.object(rs, "_scheduler_api_json_retry", return_value=self._cap(2, 15)), \
                 patch.dict(os.environ, self._env(), clear=False):
-            self.assertEqual(rs._dynamic_vllm_service_target([]), 4)
+            # RAMP: request running+1 (not the full max at once), so each service places before the
+            # next is requested -> avoids an un-placeable N-GPU bundle that orphans under contention.
+            self.assertEqual(rs._dynamic_vllm_service_target([]), 1)
+            self.assertEqual(rs._dynamic_vllm_service_target([{"status": "running"}] * 2), 3)
 
     def test_scales_down_under_contention(self):
         from factorio_ai import remote_slurm as rs
         running3 = [{"status": "running"}] * 3
         with patch.object(rs, "_scheduler_api_json_retry", return_value=self._cap(0, 0)), \
                 patch.dict(os.environ, self._env(), clear=False):
-            # 3 running, no free GPUs -> keep 3 (don't request an un-placeable 4th)
+            # 3 running, no free GPUs -> hold at 3 (don't request an un-placeable 4th)
             self.assertEqual(rs._dynamic_vllm_service_target(running3), 3)
 
     def test_floor_is_one(self):
@@ -2377,7 +2381,8 @@ class DynamicVllmServiceTargetTests(unittest.TestCase):
         from factorio_ai import remote_slurm as rs
         with patch.object(rs, "_scheduler_api_json_retry", return_value=self._cap(20, 20)), \
                 patch.dict(os.environ, self._env(FACTORIO_AI_SCHEDULER_VLLM_SERVICE_MAX_COUNT="3"), clear=False):
-            self.assertEqual(rs._dynamic_vllm_service_target([]), 3)
+            # ramp never exceeds MAX even with many already running.
+            self.assertEqual(rs._dynamic_vllm_service_target([{"status": "running"}] * 3), 3)
 
     def test_dynamic_disabled_uses_static_max(self):
         from factorio_ai import remote_slurm as rs

@@ -441,7 +441,13 @@ def _dynamic_vllm_service_target(active_services: list[dict[str, Any]]) -> int:
         if wanted and model not in wanted:
             continue
         free += int(row.get("scheduler_free_gpus") or 0) + int(row.get("cluster_free_gpus") or 0)
-    return max(1, min(max_count, running + free))
+    # RAMP one service at a time (running + 1), not the full max at once. Requesting all N up front
+    # makes the scheduler reserve N GPUs in one allocation that can't place when no single node has N
+    # free for us -> it orphans and re-forms every cycle, wedging serving. Adding one service per
+    # cycle places each on whatever node is free and self-limits when the next one can't place.
+    if free <= 0:
+        return max(1, min(max_count, running))
+    return max(1, min(max_count, running + 1))
 
 
 def _scheduler_vllm_service_base_port() -> int:
@@ -1922,6 +1928,11 @@ def ensure_vllm_service(
             "action": "scheduler_api_unavailable",
             "status": status_payload,
         }
+    # Proactively close OUR leaked orphan pending allocations EVERY cycle (not just during the 30-min
+    # queue-stale sweep): a recurring head-of-line GPU zombie (pending allocation with no backing
+    # task) otherwise blocks the scheduler from granting our queued services any GPU. Age-guarded so
+    # it never races a just-submitted task's allocation.
+    _close_orphan_vllm_allocations(_scheduler_account(), min_age_seconds=60.0)
     active_services = status_payload.get("active_services") if isinstance(status_payload.get("active_services"), list) else []
     cancelled_services: list[dict[str, Any]] = []
     if active_services and not status_payload.get("service_ready"):
