@@ -311,6 +311,98 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(run.seed_count, 1)
         self.assertIn("bootstrap seed already attempted", run.reason)
 
+    def test_run_skill_allows_repeated_bootstrap_seed_after_followup_item_increases(self):
+        observations = [
+            {
+                "tick": 1,
+                "inventory": {"iron-plate": 5},
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "unit_number": 10,
+                        "recipe": "iron-gear-wheel",
+                        "position": {"x": 0, "y": 0},
+                        "electric_network_connected": True,
+                    }
+                ],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
+            {
+                "tick": 2,
+                "inventory": {"iron-plate": 4, "iron-gear-wheel": 1},
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "unit_number": 10,
+                        "recipe": "iron-gear-wheel",
+                        "position": {"x": 0, "y": 0},
+                        "electric_network_connected": True,
+                    }
+                ],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
+            {
+                "tick": 3,
+                "inventory": {"iron-gear-wheel": 2},
+                "entities": [],
+                "research": {"technologies": {"automation": {"researched": True}}},
+                "done": True,
+            },
+        ]
+
+        class RepeatingSeedSkill:
+            def next_action(self, observation):
+                if observation.get("done"):
+                    return PlannerDecision(None, "follow-up observed", done=True)
+                return PlannerDecision(
+                    {
+                        "type": "insert",
+                        "item": "iron-plate",
+                        "count": 1,
+                        "unit_number": 10,
+                        "name": "assembling-machine-1",
+                        "position": {"x": 0, "y": 0},
+                        "bootstrap_seed": True,
+                        "seed_reason": "assembler_produced_bootstrap_gear_iron_seed",
+                        "expected_followup": "gear assembler produces iron-gear-wheel for bootstrap",
+                    },
+                    "seed once",
+                    metadata={
+                        "bootstrap_seed": True,
+                        "seed_reason": "assembler_produced_bootstrap_gear_iron_seed",
+                        "expected_followup": "gear assembler produces iron-gear-wheel for bootstrap",
+                    },
+                )
+
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.observe_calls = 0
+
+            def observe(self):
+                item = observations[min(self.observe_calls, len(observations) - 1)]
+                self.observe_calls += 1
+                return item
+
+            def act(self, _action):
+                return {"ok": True}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_test_config(Path(tmp))
+            controller = FakeController(cfg)
+            run = controller._run_skill(
+                RepeatingSeedSkill(),
+                target_item="transport-belt",
+                target=1,
+                goal="test_seed",
+                max_steps=3,
+                log_prefix="test-seed",
+            )
+
+        self.assertTrue(run.ok)
+        self.assertEqual(run.seed_count, 2)
+        self.assertEqual(run.reason, "follow-up observed")
+
     def test_strategy_decision_records_and_strips_llm_io_traces(self):
         class FakeController(FactorioController):
             def observe(self):

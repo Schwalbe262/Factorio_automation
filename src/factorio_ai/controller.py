@@ -596,6 +596,24 @@ def _bootstrap_seed_action_key(action: dict[str, Any] | None) -> tuple[Any, ...]
     )
 
 
+def _bootstrap_seed_followup_item(action: dict[str, Any] | None) -> str | None:
+    if not isinstance(action, dict) or action.get("bootstrap_seed") is not True:
+        return None
+    text = " ".join(
+        str(action.get(key) or "")
+        for key in ("seed_reason", "expected_followup", "recipe", "item")
+    )
+    if "transport-belt" in text or "belt output" in text:
+        return "transport-belt"
+    if "assembling-machine-1" in text:
+        return "assembling-machine-1"
+    if "inserter" in text:
+        return "inserter"
+    if "iron-gear-wheel" in text or "gear" in text:
+        return "iron-gear-wheel"
+    return None
+
+
 def _record_and_strip_llm_io_traces(log_dir: Path, result: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(result, dict):
         return result
@@ -2474,7 +2492,7 @@ class FactorioController:
         initial_item_count: int | None = None
         last_step = 0
         bootstrap_seed_count = 0
-        attempted_bootstrap_seeds: set[tuple[Any, ...]] = set()
+        attempted_bootstrap_seeds: dict[tuple[Any, ...], tuple[str | None, int | None]] = {}
 
         def finish(ok: bool, reason: str, step: int, observation: dict[str, Any]) -> RunSummary:
             nonlocal initial_item_count
@@ -2540,15 +2558,22 @@ class FactorioController:
                     action = self._maybe_apply_remote_hint(observation, decision, goal)
                     seed_key = _bootstrap_seed_action_key(action)
                     if seed_key is not None and seed_key in attempted_bootstrap_seeds:
-                        return finish(
-                            False,
-                            (
-                                "bootstrap seed already attempted without expected follow-up: "
-                                f"{action.get('seed_reason') or decision.reason}"
-                            ),
-                            step,
-                            observation,
+                        followup_item, previous_count = attempted_bootstrap_seeds[seed_key]
+                        current_count = (
+                            total_item_count(observation, followup_item)
+                            if followup_item and previous_count is not None
+                            else None
                         )
+                        if current_count is None or current_count <= previous_count:
+                            return finish(
+                                False,
+                                (
+                                    "bootstrap seed already attempted without expected follow-up: "
+                                    f"{action.get('seed_reason') or decision.reason}"
+                                ),
+                                step,
+                                observation,
+                            )
                     response = self.act(action)
                     self._write_log(log_file, step, observation, decision, response)
                     if not response.get("ok"):
@@ -2557,7 +2582,9 @@ class FactorioController:
                             continue
                         return finish(False, f"action failed: {response.get('reason')}", step, observation)
                     if seed_key is not None:
-                        attempted_bootstrap_seeds.add(seed_key)
+                        followup_item = _bootstrap_seed_followup_item(action)
+                        followup_count = total_item_count(observation, followup_item) if followup_item else None
+                        attempted_bootstrap_seeds[seed_key] = (followup_item, followup_count)
                         bootstrap_seed_count += 1
                     if action.get("type") == "wait":
                         ticks = int(action.get("ticks") or 60)
