@@ -521,7 +521,11 @@ def _scheduler_vllm_service_command(task: dict[str, Any]) -> str:
     payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
     duration_seconds = _scheduler_vllm_service_duration_seconds(payload.get("duration_seconds"))
     heartbeat_seconds = _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_HEARTBEAT_SECONDS", 30, 5)
-    startup_seconds = _int_env("FACTORIO_AI_VLLM_STARTUP_SECONDS", 240, 1)
+    # 900s (was 240): a 27B-AWQ takes minutes to load, and on a CONTENDED node (disk/CPU shared with
+    # other jobs) plus --enforce-eager graph build it routinely blew past 240s -> "vLLM endpoint not
+    # ready before startup timeout" -> the service died and serving stayed down. The ps1 sets 1800 but
+    # that env does not always reach the service builder, so the floor must be safe on its own.
+    startup_seconds = _int_env("FACTORIO_AI_VLLM_STARTUP_SECONDS", 900, 1)
     # Per-service localhost port so multiple services co-exist on one node (true multi-GPU). The port
     # is assigned at submission (ensure_vllm_service) and carried in the payload; the heartbeat file
     # name is derived from THIS port so services do not clobber each other's readiness file.
@@ -677,7 +681,7 @@ def _scheduler_task_command(task: dict[str, Any]) -> str:
     result_json = shlex.quote(f".factorio-ai-scheduler-tasks/{task_id}.result.json")
     safe_task_id = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in task_id)[:96] or "task"
     vllm_log_base = shlex.quote(f"logs/vllm-scheduler-{safe_task_id}")
-    startup_seconds = _int_env("FACTORIO_AI_VLLM_STARTUP_SECONDS", 240, 1)
+    startup_seconds = _int_env("FACTORIO_AI_VLLM_STARTUP_SECONDS", 900, 1)  # see service path: 240 too short for 27B
     vllm_service_enabled = "1" if _scheduler_vllm_service_enabled() else "0"
     return f"""set -euo pipefail
 mkdir -p .factorio-ai-scheduler-tasks logs
