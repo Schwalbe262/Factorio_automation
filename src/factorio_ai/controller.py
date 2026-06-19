@@ -552,8 +552,23 @@ def _gear_handcraft_guard_reason(observation: dict[str, Any], action: dict[str, 
             return ""
         if _allow_gear_belt_direct_transfer_bootstrap_gears(observation, action):
             return ""
+        if _gear_handcraft_virtual_agent_allowed(observation):
+            return ""
         return "blocked direct iron-gear-wheel handcraft after assembler automation exists; use gear mall or a logistic line instead"
     return ""
+
+
+def _gear_handcraft_virtual_agent_allowed(observation: dict[str, Any]) -> bool:
+    """The virtual RCON server agent teleports and hand-craft is instant/free, so the anti-handcraft
+    guard (which exists to push a WALKING player toward automation) only DEADLOCKS it -- observed live
+    as a 487-step ``wait`` loop. Allow gear hand-craft for it; real (walking) players keep the guard."""
+    player = observation.get("player") if isinstance(observation.get("player"), dict) else {}
+    execution = observation.get("execution") if isinstance(observation.get("execution"), dict) else {}
+    return (
+        player.get("character_valid") is False
+        or execution.get("virtual") is True
+        or str(player.get("kind") or "") == "server"
+    )
 
 
 def _guard_post_automation_handcraft(observation: dict[str, Any], decision: PlannerDecision) -> PlannerDecision:

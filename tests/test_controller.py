@@ -72,6 +72,20 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(guarded.action, {"type": "wait", "ticks": 120})
         self.assertIn("blocked direct iron-gear-wheel handcraft", guarded.reason)
 
+    def test_guard_allows_gear_handcraft_for_virtual_server_agent(self):
+        # The virtual RCON server agent (character_valid=False / kind server) teleports and hand-craft
+        # is instant/free, so the anti-handcraft guard must NOT block it -- blocking deadlocked the
+        # autopilot in a 487-step wait-loop (2026-06-19). Real walking players keep the guard.
+        observation = {
+            "research": {"technologies": {"automation": {"researched": True}}},
+            "player": {"character_valid": False, "kind": "server"},
+        }
+        decision = PlannerDecision(
+            action={"type": "craft", "recipe": "iron-gear-wheel", "count": 1},
+            reason="test",
+        )
+        self.assertIs(_guard_post_automation_handcraft(observation, decision), decision)
+
     def test_guard_allows_bootstrap_gear_handcraft_before_automation(self):
         observation = {
             "research": {

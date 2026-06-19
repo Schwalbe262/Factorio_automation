@@ -343,6 +343,7 @@ local function allow_gear_belt_direct_transfer_bootstrap_gears(agent, action)
 end
 local function direct_gear_handcraft_guard(agent, inventory, recipe_name, action)
   if not agent or recipe_name ~= "iron-gear-wheel" then return nil end
+  if agent.kind == "server" then return nil end
   if allow_first_assembler_bootstrap_gears(agent, inventory, action) then return nil end
   if allow_gear_belt_direct_transfer_bootstrap_gears(agent, action) then return nil end
   if force_has_automation_researched(agent.force) then
