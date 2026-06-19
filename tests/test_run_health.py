@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -122,6 +123,95 @@ class RunHealthTests(unittest.TestCase):
         self.assertIn("source=supervisor_heartbeat", text)
         self.assertIn("scheduler api slow: TimeoutError", text)
         self.assertNotIn("vLLM services=unavailable", text)
+
+    def test_active_live_skill_keeps_autopilot_health_fresh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            logs = runtime / "logs"
+            logs.mkdir(parents=True, exist_ok=True)
+            stale = (datetime.now(timezone.utc) - timedelta(seconds=1200)).isoformat()
+            fresh = datetime.now(timezone.utc).isoformat()
+            (runtime / "autopilot-heartbeat.json").write_text(
+                json.dumps({"state": "cycle_start", "cycle": 1, "pid": 4321, "updated_at": stale}),
+                encoding="utf-8",
+            )
+            (runtime / "live-skill-heartbeat.json").write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "skill": "relocate_gear_belt_mall_to_iron_source",
+                        "step": 146,
+                        "state": "step",
+                        "pid": 4321,
+                        "updated_at": fresh,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (runtime / "unattended-llm-supervisor.json").write_text(
+                json.dumps(
+                    {
+                        "state": "running",
+                        "autopilot_gate": "ready",
+                        "autopilot_processes": [4321],
+                        "updated_at": fresh,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            cfg = SimpleNamespace(runtime_dir=runtime, log_dir=logs)
+
+            summary = gather_run_health(cfg, observe=False)
+
+        self.assertEqual(summary["autopilot"]["age_source"], "live_skill")
+        self.assertLess(summary["autopilot"]["age_seconds"], 30)
+        self.assertGreater(summary["autopilot"]["heartbeat_age_seconds"], 900)
+        text = format_run_health(summary)
+        self.assertIn("source=live_skill", text)
+        self.assertIn("heartbeat_age=", text)
+
+    def test_live_skill_from_old_autopilot_pid_is_marked_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            logs = runtime / "logs"
+            logs.mkdir(parents=True, exist_ok=True)
+            fresh = datetime.now(timezone.utc).isoformat()
+            (runtime / "autopilot-heartbeat.json").write_text(
+                json.dumps({"state": "cycle_start", "cycle": 1, "pid": 2222, "updated_at": fresh}),
+                encoding="utf-8",
+            )
+            (runtime / "live-skill-heartbeat.json").write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "skill": "relocate_gear_belt_mall_to_iron_source",
+                        "step": 282,
+                        "state": "step",
+                        "pid": 1111,
+                        "updated_at": fresh,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (runtime / "unattended-llm-supervisor.json").write_text(
+                json.dumps(
+                    {
+                        "state": "running",
+                        "autopilot_gate": "ready",
+                        "autopilot_processes": [2222],
+                        "updated_at": fresh,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            cfg = SimpleNamespace(runtime_dir=runtime, log_dir=logs)
+
+            summary = gather_run_health(cfg, observe=False)
+
+        self.assertEqual(summary["autopilot"]["age_source"], "autopilot")
+        self.assertIn("not a current autopilot process", summary["live_skill"]["stale_reason"])
+        self.assertTrue(any(item["kind"] == "stale_live_skill_pid" for item in summary["warnings"]))
+        self.assertIn("stale=live skill pid", format_run_health(summary))
 
 
 if __name__ == "__main__":

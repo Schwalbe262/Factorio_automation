@@ -1369,7 +1369,7 @@ class PlannerTests(unittest.TestCase):
         decision = GearBeltMallRelocationSkill(20).next_action(obs)
 
         self.assertIsNone(decision.action)
-        self.assertIn("needs 22 small-electric-pole", decision.reason)
+        self.assertIn("needs 23 small-electric-pole", decision.reason)
         self.assertIn("before mining the existing mall", decision.reason)
 
     def test_gear_belt_mall_relocation_takes_buffered_power_poles_before_teardown(self):
@@ -1496,6 +1496,51 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 100)
         self.assertIn("costed relocation", decision.reason)
 
+    def test_gear_belt_mall_relocation_bridges_snapped_power_corridor_gap(self):
+        obs = long_gear_mall_relocation_observation()
+        obs["inventory"] = {"small-electric-pole": 1}
+        layout = planner_module._find_gear_belt_mall_relocation_layout(obs)
+        positions = planner_module._gear_belt_mall_relocation_power_corridor_positions(obs, layout)
+        split_index = len(positions) - 2
+        previous_actual = None
+        shifted_actual = None
+        for index, position in enumerate(positions):
+            actual = dict(position)
+            network_id = 1
+            if index == split_index:
+                actual = {"x": position["x"] + 0.5, "y": position["y"] + 1.5}
+                shifted_actual = actual
+                network_id = 2
+            elif index > split_index:
+                network_id = 2
+            elif index == split_index - 1:
+                previous_actual = actual
+            obs["entities"].append(
+                {
+                    "name": "small-electric-pole",
+                    "unit_number": 7000 + index,
+                    "position": actual,
+                    "electric_network_connected": False,
+                    "electric_network_id": network_id,
+                    "inventories": {},
+                }
+            )
+        obs["player"]["position"] = previous_actual
+
+        decision = GearBeltMallRelocationSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "small-electric-pole")
+        self.assertLessEqual(
+            planner_module.distance(decision.action["position"], previous_actual),
+            planner_module._power_wire_reach("small-electric-pole"),
+        )
+        self.assertLessEqual(
+            planner_module.distance(decision.action["position"], shifted_actual),
+            planner_module._power_wire_reach("small-electric-pole"),
+        )
+        self.assertIn("power corridor before mining existing mall", decision.reason)
+
     def test_gear_belt_mall_relocation_rebuilds_from_inventory_after_reaching_source(self):
         obs = long_gear_mall_relocation_observation()
         _add_existing_relocation_power_corridor(obs)
@@ -1574,6 +1619,86 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 800)
         self.assertEqual(decision.action["recipe"], "iron-gear-wheel")
         self.assertIn("set relocated gear assembler recipe", decision.reason)
+
+    def test_gear_belt_mall_relocation_does_not_recover_already_placed_target_assembler(self):
+        obs = long_gear_mall_relocation_observation()
+        for entity in obs["entities"]:
+            if entity.get("unit_number") == 200:
+                entity["position"] = {"x": 47.0, "y": 63.0}
+        layout = planner_module._find_gear_belt_mall_relocation_layout(obs)
+        _add_existing_relocation_power_corridor(obs)
+        obs["entities"] = [
+            entity for entity in obs["entities"] if entity.get("unit_number") not in {100, 101}
+        ]
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 800,
+                    "recipe": "iron-gear-wheel",
+                    "position": layout["target_gear_position"],
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 801,
+                    "recipe": "transport-belt",
+                    "position": {"x": 52.5, "y": 62.5},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+            ]
+        )
+        obs["inventory"] = {}
+        obs["player"]["position"] = {"x": 52.5, "y": 62.5}
+
+        decision = GearBeltMallRelocationSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 801)
+        self.assertNotEqual(decision.action["unit_number"], 800)
+        self.assertIn("existing belt assembler", decision.reason)
+
+    def test_gear_belt_mall_relocation_clears_tree_blocking_target_assembler(self):
+        obs = long_gear_mall_relocation_observation()
+        for entity in obs["entities"]:
+            if entity.get("unit_number") == 200:
+                entity["position"] = {"x": 47.0, "y": 63.0}
+        layout = planner_module._find_gear_belt_mall_relocation_layout(obs)
+        _add_existing_relocation_power_corridor(obs)
+        obs["entities"] = [
+            entity for entity in obs["entities"] if entity.get("unit_number") not in {100, 101}
+        ]
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 800,
+                    "recipe": "iron-gear-wheel",
+                    "position": layout["target_gear_position"],
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "tree-02-red",
+                    "type": "tree",
+                    "position": {
+                        "x": layout["target_belt_position"]["x"] + 1.5,
+                        "y": layout["target_belt_position"]["y"] + 0.4,
+                    },
+                    "inventories": {},
+                },
+            ]
+        )
+        obs["inventory"] = {"assembling-machine-1": 1}
+        obs["player"]["position"] = layout["target_belt_position"]
+
+        decision = GearBeltMallRelocationSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "tree-02-red")
+        self.assertIn("clear blocking tree-02-red", decision.reason)
 
     def test_gear_belt_mall_relocation_accepts_wire_reachable_corridor_before_done(self):
         obs = long_gear_mall_relocation_observation()
@@ -1655,6 +1780,19 @@ class PlannerTests(unittest.TestCase):
                 layout["target_gear_position"],
             )
         )
+
+    def test_gear_belt_mall_relocation_targets_use_entity_centers_for_integer_source_y(self):
+        obs = long_gear_mall_relocation_observation()
+        for entity in obs["entities"]:
+            if entity.get("unit_number") == 200:
+                entity["position"] = {"x": 47.0, "y": 63.0}
+
+        layout = planner_module._find_gear_belt_mall_relocation_layout(obs)
+
+        self.assertEqual(layout["target_gear_position"]["y"], 58.5)
+        self.assertEqual(layout["target_belt_position"]["y"], 58.5)
+        self.assertEqual(layout["target_gear_position"]["x"], 52.5)
+        self.assertEqual(layout["target_belt_position"]["x"], 56.5)
 
     def test_gear_belt_mall_relocation_ignores_unconnected_power_anchor(self):
         obs = long_gear_mall_relocation_observation()
@@ -6694,6 +6832,35 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 912)
         self.assertIn("output chest", decision.reason)
 
+    def test_iron_plate_logistic_line_takes_buffered_chest_belts(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].append(
+            {
+                "name": "wooden-chest",
+                "unit_number": 913,
+                "position": {"x": -13, "y": -12},
+                "inventories": {"1": {"transport-belt": 8}},
+            }
+        )
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 2},
+                "recipe": "iron-plate",
+                "inventories": {"3": {"iron-plate": 20}},
+            }
+        )
+
+        decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "transport-belt")
+        self.assertEqual(decision.action["unit_number"], 913)
+        self.assertIn("buffered transport belts", decision.reason)
+
     def test_iron_plate_logistic_line_places_belt_without_plate_or_gear_handcarry(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"transport-belt": 4}
@@ -6714,6 +6881,185 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["name"], "transport-belt")
         self.assertNotIn(decision.action.get("item"), {"iron-plate", "iron-gear-wheel"})
         self.assertNotEqual(decision.action.get("recipe"), "iron-gear-wheel")
+
+    def test_iron_plate_logistic_line_takes_source_plate_for_endpoint_inserter(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 20, "electronic-circuit": 1}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 2},
+                "recipe": "iron-plate",
+                "inventories": {"3": {"iron-plate": 20}},
+            }
+        )
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+        for index, segment in enumerate(layout["segments"]):
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": 3000 + index,
+                    "position": segment["position"],
+                    "direction": segment["direction"],
+                    "inventories": {},
+                }
+            )
+
+        decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertEqual(decision.action["unit_number"], 950)
+        self.assertIn("iron source iron-plate", decision.reason)
+
+    def test_iron_plate_logistic_line_clears_wrong_source_furnace_output(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 20, "electronic-circuit": 1}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 2},
+                "recipe": "iron-plate",
+                "inventories": {
+                    "1": {"coal": 4},
+                    "2": {"iron-ore": 10},
+                    "3": {"copper-plate": 20},
+                },
+            }
+        )
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+        for index, segment in enumerate(layout["segments"]):
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": 3300 + index,
+                    "position": segment["position"],
+                    "direction": segment["direction"],
+                    "inventories": {},
+                }
+            )
+
+        decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "copper-plate")
+        self.assertEqual(decision.action["unit_number"], 950)
+        self.assertIn("iron source furnace output", decision.reason)
+
+    def test_iron_plate_logistic_line_waits_for_source_plate_after_output_clear(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 20, "electronic-circuit": 1}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 2},
+                "recipe": "iron-plate",
+                "inventories": {
+                    "1": {"coal": 4},
+                    "2": {"iron-ore": 10},
+                    "3": {},
+                },
+            }
+        )
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+        for index, segment in enumerate(layout["segments"]):
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": 3400 + index,
+                    "position": segment["position"],
+                    "direction": segment["direction"],
+                    "inventories": {},
+                }
+            )
+
+        decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "wait")
+        self.assertIn("wait for iron source furnace", decision.reason)
+
+    def test_iron_plate_logistic_line_takes_buffered_gears_for_endpoint_inserter(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 20, "electronic-circuit": 1, "iron-plate": 1}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 2},
+                "recipe": "iron-plate",
+                "inventories": {"3": {"iron-plate": 20}},
+            }
+        )
+        obs["entities"].append(
+            {
+                "name": "wooden-chest",
+                "unit_number": 951,
+                "position": {"x": -3, "y": -2},
+                "inventories": {"1": {"iron-gear-wheel": 4}},
+            }
+        )
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+        for index, segment in enumerate(layout["segments"]):
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": 3100 + index,
+                    "position": segment["position"],
+                    "direction": segment["direction"],
+                    "inventories": {},
+                }
+            )
+
+        decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 951)
+        self.assertIn("buffered iron-gear-wheel", decision.reason)
+
+    def test_iron_plate_logistic_line_crafts_endpoint_inserter_from_buffered_materials(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {
+            "transport-belt": 20,
+            "electronic-circuit": 1,
+            "iron-plate": 1,
+            "iron-gear-wheel": 1,
+        }
+        obs["craftable"] = {"inserter": 1}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 2},
+                "recipe": "iron-plate",
+                "inventories": {"3": {"iron-plate": 20}},
+            }
+        )
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+        for index, segment in enumerate(layout["segments"]):
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": 3200 + index,
+                    "position": segment["position"],
+                    "direction": segment["direction"],
+                    "inventories": {},
+                }
+            )
+
+        decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["recipe"], "inserter")
+        self.assertIn("buffered construction materials", decision.reason)
 
     def test_iron_plate_logistic_line_uses_tile_centered_belt_positions(self):
         obs = powered_automation_observation()

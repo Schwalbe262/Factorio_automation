@@ -156,9 +156,11 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("local radius = action.radius or 128", command)
 
     def test_connect_power_action_is_allowlisted_and_uses_pole_wire_connector(self):
-        command = build_modless_action_command({"type": "connect_power", "unit_number": 10})
+        command = build_modless_action_command({"type": "connect_power", "unit_number": 10, "source_network_id": 1})
         self.assertIn("action_connect_power", command)
         self.assertIn("defines.wire_connector_id.pole_copper", command)
+        self.assertIn("preferred_source_network_id", command)
+        self.assertIn("entity_electric_network_id", command)
         self.assertIn("connect_to", command)
 
     def test_action_updates_agent_marker(self):

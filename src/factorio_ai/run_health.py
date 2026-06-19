@@ -48,6 +48,24 @@ def _age_seconds(value: Any) -> float | None:
     return round(max(0.0, (datetime.now(timezone.utc) - ts.astimezone(timezone.utc)).total_seconds()), 1)
 
 
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_pid_set(values: Any) -> set[int]:
+    if not isinstance(values, list):
+        return set()
+    result: set[int] = set()
+    for value in values:
+        pid = _int_or_none(value)
+        if pid is not None:
+            result.add(pid)
+    return result
+
+
 def _scheduler_from_supervisor(supervisor: dict[str, Any], *, api_error: str | None = None) -> dict[str, Any] | None:
     service = supervisor.get("vllm_service_status") if isinstance(supervisor.get("vllm_service_status"), dict) else {}
     scheduler_llm = supervisor.get("scheduler_llm_status") if isinstance(supervisor.get("scheduler_llm_status"), dict) else {}
@@ -87,7 +105,31 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
     progress_kpi = _read_json(runtime / "progress-kpi.json")
     supervisor_age = _age_seconds(supervisor.get("updated_at"))
     progress_age = _age_seconds(progress_kpi.get("updated_at"))
+    autopilot_heartbeat_age = _age_seconds(autopilot.get("updated_at"))
+    live_age = _age_seconds(live.get("updated_at"))
+    autopilot_age = autopilot_heartbeat_age
+    autopilot_age_source = "autopilot"
+    autopilot_pid = _int_or_none(autopilot.get("pid"))
+    live_pid = _int_or_none(live.get("pid"))
+    supervisor_autopilot_pids = _coerce_pid_set(supervisor.get("autopilot_processes"))
+    live_matches_autopilot = (
+        live_pid is not None
+        and (live_pid == autopilot_pid or live_pid in supervisor_autopilot_pids)
+    )
+    if live.get("active") and live_matches_autopilot and live_age is not None:
+        if autopilot_age is None or live_age < autopilot_age:
+            autopilot_age = live_age
+            autopilot_age_source = "live_skill"
     warnings: list[dict[str, Any]] = []
+    live_stale_reason = None
+    if live.get("active") and live_pid is not None and supervisor_autopilot_pids and live_pid not in supervisor_autopilot_pids:
+        live_stale_reason = f"live skill pid {live_pid} is not a current autopilot process"
+        warnings.append(
+            {
+                "kind": "stale_live_skill_pid",
+                "detail": live_stale_reason,
+            }
+        )
 
     registered: list[str] = []
     failed: list[str] = []
@@ -233,14 +275,19 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
             "state": autopilot.get("state"),
             "cycle": autopilot.get("cycle"),
             "reason": autopilot.get("reason"),
-            "age_seconds": _age_seconds(autopilot.get("updated_at")),
+            "age_seconds": autopilot_age,
+            "heartbeat_age_seconds": autopilot_heartbeat_age,
+            "age_source": autopilot_age_source,
         },
         "live_skill": {
+            "active": live.get("active"),
             "skill": live.get("skill"),
             "step": live.get("step"),
             "state": live.get("state"),
             "reason": live.get("reason"),
-            "age_seconds": _age_seconds(live.get("updated_at")),
+            "pid": live_pid,
+            "stale_reason": live_stale_reason,
+            "age_seconds": live_age,
         },
         "foundry": {
             "state": foundry.get("state"),
@@ -317,7 +364,15 @@ def format_run_health(summary: dict[str, Any]) -> str:
     )
 
     ap = summary.get("autopilot") or {}
-    lines.append(f"autopilot: state={ap.get('state')} cycle={ap.get('cycle')} age={_fmt_age(ap.get('age_seconds'))}")
+    age_source = ap.get("age_source")
+    source_text = f" source={age_source}" if age_source and age_source != "autopilot" else ""
+    heartbeat_text = ""
+    if age_source == "live_skill":
+        heartbeat_text = f" heartbeat_age={_fmt_age(ap.get('heartbeat_age_seconds'))}"
+    lines.append(
+        f"autopilot: state={ap.get('state')} cycle={ap.get('cycle')} "
+        f"age={_fmt_age(ap.get('age_seconds'))}{source_text}{heartbeat_text}"
+    )
     pr = summary.get("progress") or {}
     if pr.get("updated_at") is not None or pr.get("researched") is not None:
         stuck = " STUCK" if pr.get("stuck") else ""
@@ -335,9 +390,10 @@ def format_run_health(summary: dict[str, Any]) -> str:
             shown = ", ".join(f"{k}={v}" for k, v in pr["key_items"].items())
             lines.append(f"  key items: {shown}")
     ls = summary.get("live_skill") or {}
+    stale_text = f" stale={ls.get('stale_reason')}" if ls.get("stale_reason") else ""
     lines.append(
         f"live skill: {ls.get('skill')} step={ls.get('step')} state={ls.get('state')} "
-        f"age={_fmt_age(ls.get('age_seconds'))} reason={ls.get('reason')}"
+        f"age={_fmt_age(ls.get('age_seconds'))}{stale_text} reason={ls.get('reason')}"
     )
 
     fo = summary.get("foundry") or {}

@@ -1644,7 +1644,13 @@ local function action_connect_power()
     type = "electric-pole",
     force = agent.force,
   })
+  local preferred_source_network_id = tonumber(action.source_network_id)
   table.sort(candidates, function(a, b)
+    if preferred_source_network_id then
+      local a_preferred = entity_electric_network_id(a) == preferred_source_network_id
+      local b_preferred = entity_electric_network_id(b) == preferred_source_network_id
+      if a_preferred ~= b_preferred then return a_preferred end
+    end
     local a_count = connector_connection_count(entity_wire_connector(a))
     local b_count = connector_connection_count(entity_wire_connector(b))
     if a_count ~= b_count then return a_count > b_count end

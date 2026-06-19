@@ -15,6 +15,7 @@ from .planner import (
     _find_site_input_logistic_line_layout,
     _gear_belt_mall_relocation_power_corridor_positions,
     _missing_power_corridor_positions,
+    _transport_belt_output_chest,
     factory_layout_issues,
     factory_layout_opportunities,
     factory_layout_simulation_candidates,
@@ -78,6 +79,9 @@ GEAR_MALL_OUTPUT_LOGISTICS_PREEMPT_SKILLS = {
     "bootstrap_electric_mining_drill_mall",
     "produce_automation_science_pack",
 }
+GEAR_BELT_MALL_TRANSFER_LOGISTICS_PREEMPT_SKILLS = GEAR_MALL_OUTPUT_LOGISTICS_PREEMPT_SKILLS | {
+    "research_logistics",
+}
 GEAR_MALL_IRON_PLATE_PREEMPT_SKILLS = {
     "build_belt_smelting_line",
     "expand_iron_smelting",
@@ -94,6 +98,20 @@ GEAR_MALL_IRON_PLATE_PREEMPT_SKILLS = {
     "research_electric_mining_drill",
     "bootstrap_electric_mining_drill_mall",
     "produce_automation_science_pack",
+}
+GEAR_BELT_MALL_PARTIAL_RELOCATION_PREEMPT_SKILLS = {
+    "setup_power",
+    "plan_factory_site",
+    "produce_iron_plate",
+    "expand_iron_smelting",
+    "bootstrap_build_item_mall",
+    "bootstrap_power_pole_mall",
+    "build_gear_belt_mall_logistics",
+    "build_iron_plate_logistic_line_to_gear_mall",
+    "build_site_input_logistic_line",
+    "research_logistics",
+    "produce_automation_science_pack",
+    "setup_coal_supply",
 }
 
 
@@ -1088,7 +1106,19 @@ def reconcile_strategy_decision(
     gear_mall_output_logistics_issue = _gear_mall_output_logistics_issue(observation)
     if gear_mall_output_logistics_issue is not None and selected in GEAR_MALL_OUTPUT_LOGISTICS_PREEMPT_SKILLS:
         return _gear_mall_output_logistics_guardrail_adjustment(decision, selected, gear_mall_output_logistics_issue)
+    gear_belt_mall_transfer_logistics_issue = _gear_belt_mall_transfer_logistics_issue(observation)
+    if (
+        gear_belt_mall_transfer_logistics_issue is not None
+        and selected in GEAR_BELT_MALL_TRANSFER_LOGISTICS_PREEMPT_SKILLS
+    ):
+        return _gear_belt_mall_transfer_logistics_guardrail_adjustment(
+            decision,
+            selected,
+            gear_belt_mall_transfer_logistics_issue,
+        )
     gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
+    if _gear_belt_mall_relocation_in_progress(observation) and selected in GEAR_BELT_MALL_PARTIAL_RELOCATION_PREEMPT_SKILLS:
+        return _partial_gear_belt_relocation_guardrail_adjustment(decision, selected)
     if (
         _gear_mall_iron_plate_preempts_expansion(gear_mall_iron_plate_issue)
         and selected in GEAR_MALL_IRON_PLATE_PREEMPT_SKILLS
@@ -1336,7 +1366,10 @@ def reconcile_strategy_decision(
         if gear_mall_route_needs_compaction
         else False
     )
+    gear_belt_relocation_in_progress = _gear_belt_mall_relocation_in_progress(observation)
     power_recovery_waits_on_belt_mall = _power_recovery_waits_on_belt_mall(observation)
+    if gear_belt_relocation_in_progress and selected in GEAR_BELT_MALL_PARTIAL_RELOCATION_PREEMPT_SKILLS:
+        return _partial_gear_belt_relocation_guardrail_adjustment(decision, selected)
     if (
         gear_mall_route_needs_compaction
         and not gear_mall_relocation_layout_ready
@@ -2303,6 +2336,9 @@ def _heuristic_strategy_impl(
 
     if gear_mall_output_logistics_issue is not None:
         return _gear_mall_output_logistics_strategy_decision(gear_mall_output_logistics_issue)
+    gear_belt_mall_transfer_logistics_issue = _gear_belt_mall_transfer_logistics_issue(observation)
+    if gear_belt_mall_transfer_logistics_issue is not None:
+        return _gear_belt_mall_transfer_logistics_strategy_decision(gear_belt_mall_transfer_logistics_issue)
 
     if _gear_mall_iron_plate_preempts_expansion(gear_mall_iron_plate_issue):
         return _gear_mall_iron_plate_strategy_decision(gear_mall_iron_plate_issue)
@@ -3867,6 +3903,190 @@ def _gear_mall_output_logistics_strategy_decision(issue: dict[str, Any]) -> dict
     ).to_dict()
 
 
+def _gear_belt_mall_transfer_logistics_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
+    if not _technology_researched(observation, "automation"):
+        return None
+    layout = _find_gear_belt_mall_logistics_layout(observation)
+    if not isinstance(layout, dict):
+        return None
+    gear_assembler = layout.get("gear_assembler")
+    belt_assembler = layout.get("belt_assembler")
+    if not isinstance(gear_assembler, dict) or not isinstance(belt_assembler, dict):
+        return None
+    if entity_item_count(belt_assembler, "transport-belt") > 0:
+        return None
+    if inventory_count(observation, "transport-belt") > 0:
+        return None
+    if _transport_belt_output_chest(observation) is not None:
+        return None
+    if _nearby_transport_belt_output_chest(observation, belt_assembler):
+        return None
+    if not _transport_belts_available_for_mall_logistics(observation):
+        return None
+    if _gear_belt_mall_transfer_logistics_ready(layout):
+        return None
+    gear_belts = layout.get("gear_belts") if isinstance(layout.get("gear_belts"), list) else []
+    direct_transfer = layout.get("direct_gear_transfer_inserter")
+    gear_output = layout.get("gear_output_inserter")
+    belt_input = layout.get("belt_input_inserter")
+    return {
+        "gear_unit": gear_assembler.get("unit_number"),
+        "belt_unit": belt_assembler.get("unit_number"),
+        "gear_assembler_status": gear_assembler.get("status_name") or gear_assembler.get("status"),
+        "belt_assembler_status": belt_assembler.get("status_name") or belt_assembler.get("status"),
+        "gear_assembler_iron_plate": entity_item_count(gear_assembler, "iron-plate"),
+        "gear_assembler_iron_gear": entity_item_count(gear_assembler, "iron-gear-wheel"),
+        "belt_assembler_iron_gear": entity_item_count(belt_assembler, "iron-gear-wheel"),
+        "belt_assembler_iron_plate": entity_item_count(belt_assembler, "iron-plate"),
+        "belt_assembler_transport_belt": entity_item_count(belt_assembler, "transport-belt"),
+        "missing_transfer_belts": sum(1 for belt in gear_belts if not isinstance(belt.get("entity"), dict)),
+        "direct_transfer_ready": _mall_inserter_spec_ready(direct_transfer),
+        "direct_transfer_blocked": _direct_gear_transfer_blocked(layout),
+        "gear_output_inserter_ready": _mall_inserter_spec_ready(gear_output),
+        "belt_input_inserter_ready": _mall_inserter_spec_ready(belt_input),
+    }
+
+
+def _gear_belt_mall_transfer_logistics_ready(layout: dict[str, Any]) -> bool:
+    belt_assembler = layout.get("belt_assembler")
+    if not isinstance(belt_assembler, dict):
+        return False
+    if str(belt_assembler.get("recipe") or belt_assembler.get("recipe_name") or "") != "transport-belt":
+        return False
+    if entity_item_count(belt_assembler, "transport-belt") > 0:
+        return True
+    gear_belts = layout.get("gear_belts") if isinstance(layout.get("gear_belts"), list) else []
+    direct_transfer = layout.get("direct_gear_transfer_inserter")
+    belt_lane_empty = all(not isinstance(belt.get("entity"), dict) for belt in gear_belts)
+    if isinstance(direct_transfer, dict) and not _direct_gear_transfer_blocked(layout) and belt_lane_empty:
+        return _mall_inserter_spec_ready(direct_transfer)
+    return (
+        all(_mall_belt_spec_ready(belt) for belt in gear_belts)
+        and _mall_inserter_spec_ready(layout.get("gear_output_inserter"))
+        and _mall_inserter_spec_ready(layout.get("belt_input_inserter"))
+    )
+
+
+def _nearby_transport_belt_output_chest(observation: dict[str, Any], belt_assembler: dict[str, Any]) -> bool:
+    belt_position = _position(belt_assembler)
+    if belt_position is None:
+        return False
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict):
+            continue
+        if str(entity.get("name") or "") not in {"wooden-chest", "iron-chest", "steel-chest"}:
+            continue
+        if entity_item_count(entity, "transport-belt") <= 0:
+            continue
+        chest_position = _position(entity)
+        if chest_position is not None and distance(chest_position, belt_position) <= 4.0:
+            return True
+    return False
+
+
+def _mall_belt_spec_ready(spec: Any) -> bool:
+    if not isinstance(spec, dict):
+        return False
+    entity = spec.get("entity")
+    if not isinstance(entity, dict):
+        return False
+    if str(entity.get("name") or "") != "transport-belt":
+        return False
+    return _direction_or_default(entity.get("direction"), spec.get("direction")) == int(spec.get("direction") or 0)
+
+
+def _mall_inserter_spec_ready(spec: Any) -> bool:
+    if not isinstance(spec, dict):
+        return False
+    entity = spec.get("entity")
+    if not isinstance(entity, dict):
+        return False
+    if str(entity.get("name") or "") not in {"inserter", "burner-inserter", "fast-inserter"}:
+        return False
+    if _direction_or_default(entity.get("direction"), spec.get("direction")) != int(spec.get("direction") or 0):
+        return False
+    if str(entity.get("status_name") or "") in {"no_power", "no_fuel"}:
+        return False
+    return True
+
+
+def _direction_or_default(value: Any, fallback: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return int(fallback)
+        except (TypeError, ValueError):
+            return 0
+
+
+def _gear_belt_mall_transfer_logistics_guardrail_adjustment(
+    decision: dict[str, Any],
+    selected: str,
+    issue: dict[str, Any],
+) -> dict[str, Any]:
+    adjusted = dict(decision)
+    adjusted["selected_skill"] = "build_gear_belt_mall_logistics"
+    adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 93)
+    original_reason = str(decision.get("reason") or "").strip()
+    guardrail_reason = (
+        f"LLM selected {selected}, but the powered gear/belt mall has no completed gear-to-belt transfer "
+        "connection and the belt assembler has no transport-belt output yet."
+    )
+    adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+    adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["gear/belt mall transfer logistics"]))
+    adjusted["evidence"] = _string_list(decision.get("evidence")) + _gear_belt_transfer_logistics_evidence(
+        selected,
+        issue,
+    )
+    adjusted["expected_effect"] = (
+        "Build the direct transfer inserter or short transfer lane so the belt assembler can receive gears before "
+        "the iron-plate route consumes scarce construction belts."
+    )
+    adjusted["guardrail_adjusted"] = {
+        "from": selected,
+        "to": "build_gear_belt_mall_logistics",
+        "reason": guardrail_reason,
+    }
+    return adjusted
+
+
+def _gear_belt_mall_transfer_logistics_strategy_decision(issue: dict[str, Any]) -> dict[str, Any]:
+    return StrategicDecision(
+        selected_skill="build_gear_belt_mall_logistics",
+        priority=93,
+        reason=(
+            "The powered gear/belt mall exists, but the transfer inserter or short gear lane is not complete and "
+            "the belt assembler has no transport-belt output. Finish that deterministic connection first."
+        ),
+        evidence=_gear_belt_transfer_logistics_evidence("heuristic", issue)[1:],
+        blockers=["gear/belt mall transfer logistics"],
+        expected_effect=(
+            "Run the gear/belt mall logistics executor so gear output can feed transport-belt production before "
+            "iron-line or site-route expansion."
+        ),
+    ).to_dict()
+
+
+def _gear_belt_transfer_logistics_evidence(selected: str, issue: dict[str, Any]) -> list[str]:
+    return [
+        f"guardrail_adjusted_from={selected}",
+        f"gear_assembler_unit={issue.get('gear_unit')}",
+        f"belt_assembler_unit={issue.get('belt_unit')}",
+        f"gear_assembler_iron_plate={issue.get('gear_assembler_iron_plate')}",
+        f"gear_assembler_iron_gear={issue.get('gear_assembler_iron_gear')}",
+        f"belt_assembler_iron_gear={issue.get('belt_assembler_iron_gear')}",
+        f"belt_assembler_iron_plate={issue.get('belt_assembler_iron_plate')}",
+        f"belt_assembler_transport_belt={issue.get('belt_assembler_transport_belt')}",
+        f"missing_transfer_belts={issue.get('missing_transfer_belts')}",
+        f"direct_transfer_ready={str(issue.get('direct_transfer_ready')).lower()}",
+        f"direct_transfer_blocked={str(issue.get('direct_transfer_blocked')).lower()}",
+        f"gear_output_inserter_ready={str(issue.get('gear_output_inserter_ready')).lower()}",
+        f"belt_input_inserter_ready={str(issue.get('belt_input_inserter_ready')).lower()}",
+        "gear_belt_logistics_connection_ready=false",
+    ]
+
+
 def _gear_mall_iron_plate_guardrail_adjustment(
     decision: dict[str, Any],
     selected: str,
@@ -4257,6 +4477,42 @@ def _gear_mall_plate_route_needs_compaction(issue: dict[str, Any] | None) -> boo
         source_distance > PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT
         and not bool(issue.get("transport_belts_available"))
     )
+
+
+def _gear_belt_mall_relocation_in_progress(observation: dict[str, Any]) -> bool:
+    layout = _find_gear_belt_mall_relocation_layout(observation)
+    if not isinstance(layout, dict):
+        return False
+    target_gear = layout.get("target_gear_assembler")
+    target_belt = layout.get("target_belt_assembler")
+    return isinstance(target_gear, dict) != isinstance(target_belt, dict)
+
+
+def _partial_gear_belt_relocation_guardrail_adjustment(decision: dict[str, Any], selected: str) -> dict[str, Any]:
+    adjusted = dict(decision)
+    adjusted["selected_skill"] = "relocate_gear_belt_mall_to_iron_source"
+    adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 94)
+    original_reason = str(decision.get("reason") or "").strip()
+    guardrail_reason = (
+        f"LLM selected {selected}, but the gear/belt mall relocation is already partially applied; "
+        "finish placing the matching relocated assembler before starting another mall or route."
+    )
+    adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+    adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["partial gear/belt mall relocation"]))
+    adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+        f"guardrail_adjusted_from={selected}",
+        "gear_belt_mall_relocation_in_progress=true",
+    ]
+    adjusted["expected_effect"] = (
+        "Finish the partially relocated gear/belt mall so the target assembler pair is coherent before "
+        "building iron routes or bootstrap mall cells."
+    )
+    adjusted["guardrail_adjusted"] = {
+        "from": selected,
+        "to": "relocate_gear_belt_mall_to_iron_source",
+        "reason": guardrail_reason,
+    }
+    return adjusted
 
 
 def _gear_mall_relocation_power_pole_deficit(issue: dict[str, Any] | None, observation: dict[str, Any]) -> int:

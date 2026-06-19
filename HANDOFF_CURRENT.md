@@ -1,10 +1,10 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; unattended no-mod run is active under supervisor PID 70180 with autopilot PID 71920.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running with autopilot PID `29124`.
 - Startup context: read this file and targeted `goal.md`; never read `note.md`/`insight.md` in full.
-- Live status 2026-06-20 04:06 KST: PID 71920 is executing `relocate_gear_belt_mall_to_iron_source` step 89; stall=0.
-- Research status remains `logistics(0.05)`; relocation is clearing the distant/non-logistics gear-belt mall prerequisite before more red science.
-- Parts 138-139 made non-logistics relocation executable and let infrastructure recovery take chest-buffered gears/poles before empty-inventory failure.
-- Validation: `PYTHONPATH=src python -m unittest tests.test_controller tests.test_strategy tests.test_factory_readiness tests.test_run_health tests.test_planner` -> 512 passed.
-- Runtime foundry queue entries for implemented skills are override-mode self-repair, not new missing-skill backlog.
-- Token usage checkpoint: 1,224,590 goal-tracker tokens; weekly quota unavailable because project Codex state DB token sampler remains malformed.
-- Next: monitor relocation completion, then Logistics research/science replenishment.
+- Live 2026-06-20 05:35 KST: iron-plate logistics line to relocated gear mall completed; research still `logistics(0.05)`.
+- Fixed loop: incomplete gear/belt transfer now routes to `build_gear_belt_mall_logistics`; iron-line can use buffered belt chests and repair blocked source furnace output.
+- Current health: `setup_power` recently yielded waiting for boiler wood; stall=2, next monitor power/research/science recovery.
+- Validation: targeted 550 tests OK; full `PYTHONPATH=src python -m unittest discover -s tests` -> 1003 OK, one pre-existing socket ResourceWarning.
+- Foundry queue still lists implemented skills as override-mode backlog, not missing-skill work.
+- Token checkpoint: 1,799,460 goal-tracker tokens; weekly quota unavailable because token sampler state remains unusable.
+- Next: watch `setup_power`/boiler fuel recovery, then resume Logistics research and automation-science replenishment.

@@ -66,6 +66,49 @@ class FactoryReadinessTests(unittest.TestCase):
         self.assertFalse(readiness.bootstrap_seed_allowed)
         self.assertEqual(readiness.repair_skill, "build_gear_belt_mall_logistics")
 
+    def test_buffered_belts_do_not_hide_incomplete_gear_belt_connection(self):
+        obs = _powered_mall_observation()
+        obs["entities"].append(
+            {
+                "name": "wooden-chest",
+                "unit_number": 31,
+                "position": {"x": 20, "y": 20},
+                "inventories": {"1": {"transport-belt": 12}},
+            }
+        )
+
+        readiness = build_factory_readiness(obs)
+
+        self.assertTrue(readiness.belt_line_buildable)
+        self.assertFalse(readiness.gear_belt_logistics_connection_ready)
+        self.assertEqual(readiness.failure_root, "gear_belt_logistics_incomplete")
+        self.assertEqual(readiness.repair_skill, "build_gear_belt_mall_logistics")
+
+    def test_direct_transfer_inserter_satisfies_gear_belt_connection(self):
+        obs = _powered_mall_observation()
+        obs["entities"].append(
+            {
+                "name": "wooden-chest",
+                "unit_number": 31,
+                "position": {"x": 20, "y": 20},
+                "inventories": {"1": {"transport-belt": 12}},
+            }
+        )
+        obs["entities"].append(
+            {
+                "name": "inserter",
+                "unit_number": 30,
+                "position": {"x": 2, "y": 0},
+                "direction": 4,
+                "electric_network_connected": True,
+            }
+        )
+
+        readiness = build_factory_readiness(obs)
+
+        self.assertTrue(readiness.gear_belt_logistics_connection_ready)
+        self.assertIsNone(readiness.failure_root)
+
     def test_missing_mall_maps_to_bootstrap_repair(self):
         obs = _powered_mall_observation()
         obs["entities"] = [entity for entity in obs["entities"] if entity.get("recipe") != "iron-gear-wheel"]

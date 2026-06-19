@@ -105,6 +105,52 @@ def gear_belt_mall_has_local_plate_seed_observation() -> dict:
     return observation
 
 
+def gear_belt_mall_transfer_connection_missing_observation() -> dict:
+    return {
+        "player": {"position": {"x": 52.5, "y": 54.5}, "character_valid": False},
+        "inventory": {"iron-plate": 1},
+        "entities": [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 214,
+                "recipe": "iron-gear-wheel",
+                "position": {"x": 52.5, "y": 58.5},
+                "electric_network_connected": True,
+                "status_name": "item_ingredient_shortage",
+                "inventories": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 217,
+                "recipe": "transport-belt",
+                "position": {"x": 56.5, "y": 58.5},
+                "electric_network_connected": True,
+                "status_name": "item_ingredient_shortage",
+                "inventories": {},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 15,
+                "recipe": "iron-plate",
+                "position": {"x": 47.5, "y": 58.5},
+                "inventories": {"2": {"iron-plate": 8}},
+            },
+            {
+                "name": "wooden-chest",
+                "unit_number": 300,
+                "position": {"x": 90.5, "y": 90.5},
+                "inventories": {"1": {"transport-belt": 10}},
+            },
+        ],
+        "research": {
+            "technologies": {
+                "automation": {"researched": True},
+                "logistics": {"researched": False, "progress": 0.05},
+            }
+        },
+    }
+
+
 def gear_mall_output_logistics_blocked_observation() -> dict:
     return {
         "player": {"position": {"x": 0, "y": 0}},
@@ -259,6 +305,54 @@ def partial_gear_mall_relocation_observation() -> dict:
     observation["entities"][0]["recipe"] = "small-electric-pole"
     observation["entities"][0]["inventories"] = {}
     return observation
+
+
+def partial_gear_belt_mall_relocation_observation() -> dict:
+    return {
+        "inventory": {"transport-belt": 10, "iron-plate": 1},
+        "entities": [
+            {
+                "name": "small-electric-pole",
+                "unit_number": 90,
+                "position": {"x": 48.5, "y": 52.5},
+                "electric_network_connected": True,
+                "electric_network_id": 1,
+                "inventories": {},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 200,
+                "recipe": "iron-plate",
+                "position": {"x": 47.0, "y": 63.0},
+                "inventories": {"2": {"iron-plate": 24}},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 800,
+                "recipe": "iron-gear-wheel",
+                "position": {"x": 52.5, "y": 58.5},
+                "electric_network_connected": True,
+                "electric_network_id": 1,
+                "inventories": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 801,
+                "recipe": "transport-belt",
+                "position": {"x": 52.5, "y": 62.5},
+                "electric_network_connected": True,
+                "electric_network_id": 1,
+                "inventories": {},
+            },
+        ],
+        "research": {
+            "technologies": {
+                "automation": {"researched": True},
+                "steam-power": {"researched": True},
+            }
+        },
+        "player": {"kind": "server", "character_valid": False, "position": {"x": 52.5, "y": 62.5}},
+    }
 
 
 def burner_drill_replacement_observation(*, electric_researched: bool = False) -> dict:
@@ -1299,6 +1393,37 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("gear mall output logistics", result["blockers"])
         self.assertIn("gear_assembler_unit=146", result["evidence"])
 
+    def test_reconcile_finishes_gear_belt_transfer_before_iron_line(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "build_iron_plate_logistic_line_to_gear_mall",
+                "priority": 80,
+                "reason": "Build the iron route.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            gear_belt_mall_transfer_connection_missing_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertEqual(result["factory_readiness"]["failure_root"], "gear_belt_logistics_incomplete")
+        self.assertIn("gear/belt mall transfer logistics", result["blockers"])
+        self.assertIn("gear_belt_logistics_connection_ready=false", result["evidence"])
+
+    def test_heuristic_finishes_gear_belt_transfer_before_iron_line(self):
+        result = heuristic_strategy(
+            "launch_rocket_program",
+            gear_belt_mall_transfer_connection_missing_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
+        self.assertEqual(result["factory_readiness"]["failure_root"], "gear_belt_logistics_incomplete")
+        self.assertIn("gear_belt_logistics_connection_ready=false", result["evidence"])
+
     def test_reconcile_routes_smelting_expansion_to_short_gear_mall_plate_route(self):
         result = reconcile_strategy_decision(
             {
@@ -1705,6 +1830,26 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["guardrail_adjusted"]["from"], "research_electric_mining_drill")
         self.assertIn("gear_assembler_unit=inventory", result["evidence"])
         self.assertIn("costed gear/belt mall relocation", result["blockers"])
+
+    def test_reconcile_finishes_partial_gear_belt_relocation_before_bootstrap_mall(self):
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "bootstrap_build_item_mall",
+                "priority": 93,
+                "reason": "Belt mall is missing.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            partial_gear_belt_mall_relocation_observation(),
+        )
+
+        self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "bootstrap_build_item_mall")
+        self.assertIn("partial gear/belt mall relocation", result["blockers"])
+        self.assertIn("gear_belt_mall_relocation_in_progress=true", result["evidence"])
 
     def test_reconcile_repairs_factory_power_before_electric_drill_research(self):
         result = reconcile_strategy_decision(
