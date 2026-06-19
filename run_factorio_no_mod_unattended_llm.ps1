@@ -96,7 +96,12 @@ $env:FACTORIO_AI_LLM_GUIDED_JSON = "1"
 $env:FACTORIO_AI_LLM_MAX_TOKENS = "2048"
 $env:FACTORIO_AI_LLM_TIMEOUT = "600"
 $env:FACTORIO_AI_REMOTE_STRATEGY_TIMEOUT_SECONDS = "900"
-$env:FACTORIO_AI_BACKGROUND_LAYOUT_ENABLED = "1"
+# 2026-06-19: DISABLED temporarily. With COUNT=1 serving, the background layout loop (INTERVAL=0 =
+# continuous) saturated the single GPU -> the autopilot's per-cycle strategy LLM call queued ~105s
+# behind layout jobs -> the game crawled at ~100s/cycle, far too slow to reach a rocket. Layout is
+# background optimization, not rocket-critical, so pause it to give the autopilot fast exclusive
+# serving. Re-enable (="1") once serving has the throughput (e.g. staggered COUNT>1) to run both.
+$env:FACTORIO_AI_BACKGROUND_LAYOUT_ENABLED = "0"
 $env:FACTORIO_AI_BACKGROUND_LAYOUT_MODE = "scheduler"
 $env:FACTORIO_AI_BACKGROUND_LAYOUT_MAX_ACTIVE_TASKS = [string]$LayoutMaxActiveTasks
 $env:FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS = "0"
