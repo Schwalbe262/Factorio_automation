@@ -109,6 +109,10 @@ $env:FACTORIO_AI_SLURM_RENEW_BEFORE_MINUTES = "360"
 $env:FACTORIO_AI_SLURM_RENEW_CHECK_INTERVAL_SECONDS = "1800"
 # Self-development (skill foundry): the local Qwen authors missing executors and each
 # candidate is exercised on a throwaway COPY of the live save before it can run live.
+# 2026-06-19: DISABLED temporarily alongside the layout loop so the single GPU serves the autopilot's
+# strategy calls exclusively (foundry requests were ~300s and stalled the autopilot's per-cycle LLM
+# call). Re-enable (="1") once serving has the throughput (staggered COUNT>1) to run background loops.
+$env:FACTORIO_AI_SKILL_FOUNDRY_ENABLED = "0"
 $env:FACTORIO_AI_FOUNDRY_SANDBOX_ENABLED = "1"
 $env:FACTORIO_AI_FOUNDRY_SANDBOX_SERVER_PORT = "34297"
 $env:FACTORIO_AI_FOUNDRY_SANDBOX_RCON_PORT = "27115"
@@ -501,6 +505,11 @@ function Write-IdleLayoutWaitingHeartbeat {
 }
 
 function Ensure-IdleLayoutLoop {
+    if ($env:FACTORIO_AI_BACKGROUND_LAYOUT_ENABLED -in @("0", "false", "False", "FALSE", "no", "off")) {
+        Stop-ManagedProcesses "idle-layout-loop" "run-no-mod-idle-layout-loop"
+        Write-IdleLayoutWaitingHeartbeat
+        return
+    }
     if (-not (Test-SchedulerLlmReady)) {
         Stop-ManagedProcesses "idle-layout-loop" "run-no-mod-idle-layout-loop"
         Write-IdleLayoutWaitingHeartbeat
@@ -536,6 +545,11 @@ function Write-FoundryWaitingHeartbeat {
 }
 
 function Ensure-SkillFoundryLoop {
+    if ($env:FACTORIO_AI_SKILL_FOUNDRY_ENABLED -in @("0", "false", "False", "FALSE", "no", "off")) {
+        Stop-ManagedProcesses "skill-foundry-loop" "run-no-mod-skill-foundry-loop"
+        Write-FoundryWaitingHeartbeat
+        return
+    }
     if (-not (Test-SchedulerLlmReady)) {
         Stop-ManagedProcesses "skill-foundry-loop" "run-no-mod-skill-foundry-loop"
         Write-FoundryWaitingHeartbeat
