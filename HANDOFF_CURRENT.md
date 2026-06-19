@@ -1,11 +1,11 @@
 # Current Handoff
 - Branch: `chore/part130-unattended-qwen9-supervisor`; unattended no-mod run is active under supervisor PID 70180 with autopilot PID 71688.
 - Startup context: read this file and targeted `goal.md`; never read `note.md`/`insight.md` in full.
-- Live status 2026-06-20 02:12 KST: server UP at tick 185356 with 4 researches; vLLM health probe still slow/unavailable; autopilot cycle 29 is alive in `llm_degraded`.
-- Current recovery: `failure_root=belt_mall_missing`, `repair_skill=bootstrap_build_item_mall`, `seed_count=1`; live skill `connect_coal_fuel_feed` was running at step 4.
+- Live status 2026-06-20 02:17 KST: server UP at tick 202303 with 4 researches; vLLM health probe still slow/unavailable; autopilot cycle 31 is sleeping.
+- Current recovery: `failure_root=None`, `repair_skill=None`, `seed_count=4`; `bootstrap_build_item_mall` stopped cleanly and transport-belt stock reached 10.
 - Part 134a pushed `ad85b09`: health reads PowerShell heartbeat JSON reliably and coal output builds move within 6.5 tiles before placement.
 - Part 134b fixes live bootstrap seed false-failure: repeated seed is blocked only if its expected follow-up item did not increase after the prior seed.
 - Validation: `PYTHONPATH=src python -m unittest tests.test_controller tests.test_run_health tests.test_planner.PlannerTests` -> 384 passed.
 - Existing runtime foundry queue entries for implemented skills are override-mode self-repair, not new missing-skill backlog.
-- Token usage checkpoint: 342,428 goal-tracker tokens; weekly quota unavailable because project Codex state DB token sampler remains malformed.
-- Next: push part134b, then monitor whether `connect_coal_fuel_feed` completes and whether a restarted/new autopilot process applies the seed guard fix.
+- Token usage checkpoint: 372,694 goal-tracker tokens; weekly quota unavailable because project Codex state DB token sampler remains malformed.
+- Next: monitor whether the next cycle uses the new belt stock to complete `connect_coal_fuel_feed`; investigate vLLM slow/unavailable if it persists.
