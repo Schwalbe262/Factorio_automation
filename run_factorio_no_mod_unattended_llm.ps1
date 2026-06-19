@@ -65,9 +65,15 @@ $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED = "1"
 # 1, MAX_COUNT)), so it uses 4 GPUs when free and gracefully drops to 1-3 under contention instead
 # of leaving a service wedged in the queue. Allocation-leak fix (commit 38d6b8e) makes churn
 # self-cleaning, so this can never wedge the account; worst case is a smaller live count.
-$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT = "4"
-$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_MAX_COUNT = "4"
-$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DYNAMIC = "1"
+# 2026-06-19: dropped 4 -> 1. COUNT=4 put 4 vLLM services on the SAME contended allocation (n101),
+# all loading the 27B (~16GB each) simultaneously -> disk/CPU/RAM I/O starvation -> each load blew
+# past the startup timeout -> every service died ("vLLM endpoint not ready before startup timeout") ->
+# serving stayed down. A single service loads one model on one GPU, comes up within the timeout, and
+# stays up. FLE/strategy LLM calls are serial anyway, so COUNT=1 costs little. Scale back up to 4 only
+# once services reliably SPREAD across idle nodes (n103/n106), not pile on one.
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT = "1"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_MAX_COUNT = "1"
+$env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DYNAMIC = "0"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DURATION_SECONDS = "43200"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_HEARTBEAT_SECONDS = "30"
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_STALE_SECONDS = "120"
