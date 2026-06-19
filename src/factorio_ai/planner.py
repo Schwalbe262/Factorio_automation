@@ -3434,6 +3434,8 @@ class BeltSmeltingLineSkill:
 class CoalSupplySkill:
     """Build a minimal burner coal supply site for early fuel logistics."""
 
+    BUILD_STANDOFF_DISTANCE = 6.5
+
     def __init__(self, target_count: int = 16) -> None:
         self.target_count = target_count
         self.support_skill = BeltSmeltingLineSkill(target_count=20)
@@ -3606,7 +3608,7 @@ class CoalSupplySkill:
                         },
                         f"clear blocking {blocker.get('name')} before placing coal output chest",
                     )
-                if distance(player, position) > 20 or distance(player, position) < 2.0:
+                if distance(player, position) > self.BUILD_STANDOFF_DISTANCE or distance(player, position) < 2.0:
                     return PlannerDecision(
                         {"type": "move_to", "position": _stand_position(position, offset=3.0)},
                         "move near planned coal output chest",
@@ -3658,7 +3660,7 @@ class CoalSupplySkill:
                     },
                     f"clear blocking {blocker.get('name')} before placing coal output belt",
                 )
-            if distance(player, position) > 20 or distance(player, position) < 2.0:
+            if distance(player, position) > self.BUILD_STANDOFF_DISTANCE or distance(player, position) < 2.0:
                 return PlannerDecision(
                     {"type": "move_to", "position": _stand_position(position, offset=3.0)},
                     "move near planned coal output belt",

@@ -17,6 +17,17 @@ class RunHealthTests(unittest.TestCase):
                 json.dumps({"state": "cycle_start", "cycle": 3, "updated_at": "2026-06-16T20:00:00+00:00"}),
                 encoding="utf-8",
             )
+            (runtime / "unattended-llm-supervisor.json").write_text(
+                json.dumps(
+                    {
+                        "state": "running",
+                        "autopilot_gate": "ready",
+                        "autopilot_processes": [1234],
+                        "updated_at": "2026-06-16T20:00:00.1234567+00:00",
+                    }
+                ),
+                encoding="utf-8-sig",
+            )
             (runtime / "progress-kpi.json").write_text(
                 json.dumps(
                     {
@@ -50,6 +61,10 @@ class RunHealthTests(unittest.TestCase):
             summary = gather_run_health(cfg, observe=False)
 
         self.assertFalse(summary["server_reachable"])
+        self.assertEqual(summary["supervisor"]["state"], "running")
+        self.assertEqual(summary["supervisor"]["autopilot_gate"], "ready")
+        self.assertEqual(summary["supervisor"]["autopilot_processes"], [1234])
+        self.assertIsInstance(summary["supervisor"]["age_seconds"], float)
         self.assertEqual(summary["autopilot"]["cycle"], 3)
         self.assertEqual(summary["live_skill"]["skill"], "research_logistics")
         self.assertIn("registered", summary["generated_skills"])
@@ -59,6 +74,7 @@ class RunHealthTests(unittest.TestCase):
         self.assertTrue(any(item["kind"] == "implemented_skill_stuck_in_foundry_queue" for item in summary["warnings"]))
         text = format_run_health(summary)
         self.assertIn("run health", text)
+        self.assertIn("supervisor: state=running gate=ready", text)
         self.assertIn("research_logistics", text)
         self.assertIn("foundry", text)
         self.assertIn("failure_root=belt_line_unbuildable", text)

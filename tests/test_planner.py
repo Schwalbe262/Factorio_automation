@@ -360,6 +360,27 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["item"], "coal")
         self.assertEqual(decision.action["unit_number"], 11)
 
+    def test_coal_supply_moves_within_reach_before_output_chest_build(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 0, "y": 8}
+        obs["inventory"] = {"wooden-chest": 1, "coal": 8}
+        obs["resources"] = [{"name": "coal", "position": {"x": 6, "y": 0}, "distance": 6}]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 11,
+                "position": {"x": 6, "y": 0},
+                "direction": planner_module.EAST,
+                "mining_target": "coal",
+                "inventories": {"1": {"coal": 12}},
+            },
+        ]
+
+        decision = CoalSupplySkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "move_to")
+        self.assertIn("planned coal output chest", decision.reason)
+
     def test_coal_supply_stocks_drill_with_longer_fuel_reserve(self):
         obs = base_observation()
         obs["inventory"] = {"coal": 16}

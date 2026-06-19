@@ -12,31 +12,40 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
 from typing import Any
 
 from .config import AppConfig
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        if path.exists():
-            data = json.loads(path.read_text(encoding="utf-8"))
+    if not path.exists():
+        return {}
+    for encoding in ("utf-8-sig", "utf-16"):
+        try:
+            data = json.loads(path.read_text(encoding=encoding))
             return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        pass
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            pass
     return {}
 
 
 def _age_seconds(value: Any) -> float | None:
     if not value:
         return None
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    match = re.match(r"^(.*T\d{2}:\d{2}:\d{2})\.(\d+)(.*)$", text)
+    if match and len(match.group(2)) > 6:
+        text = f"{match.group(1)}.{match.group(2)[:6]}{match.group(3)}"
     try:
-        ts = datetime.fromisoformat(str(value))
+        ts = datetime.fromisoformat(text)
     except (TypeError, ValueError):
         return None
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
-    return round((datetime.now(timezone.utc) - ts.astimezone(timezone.utc)).total_seconds(), 1)
+    return round(max(0.0, (datetime.now(timezone.utc) - ts.astimezone(timezone.utc)).total_seconds()), 1)
 
 
 def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]:
