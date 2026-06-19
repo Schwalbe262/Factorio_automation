@@ -2264,6 +2264,7 @@ class MultiVllmServiceTests(unittest.TestCase):
                     "FACTORIO_AI_SLURM_SCHEDULER_GPU_MODEL": "a6000",
                     "FACTORIO_AI_VLLM_MODEL": "Qwen/test",
                     "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT": "2",
+                    "FACTORIO_AI_SCHEDULER_VLLM_SERVICE_DYNAMIC": "0",
                 },
                 clear=True,
             ),

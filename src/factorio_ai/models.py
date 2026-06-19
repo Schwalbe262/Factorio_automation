@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -31,6 +31,7 @@ class PlannerDecision:
     action: dict[str, Any] | None
     reason: str
     done: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def validate_action(action: dict[str, Any]) -> dict[str, Any]:

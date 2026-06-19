@@ -9862,7 +9862,7 @@ class GearBeltMallLogisticsSkill:
                 position = _position(gear_assembler)
                 if distance(player, position) > 20:
                     return PlannerDecision({"type": "move_to", "position": position}, "move near gear assembler for one-time iron seed")
-                return PlannerDecision(
+                return _bootstrap_seed_decision(
                     {
                         "type": "insert",
                         "item": "iron-plate",
@@ -9872,6 +9872,8 @@ class GearBeltMallLogisticsSkill:
                         "position": position,
                     },
                     "one-time bootstrap iron seed for gear mall; sustained iron input line is still required",
+                    seed_reason="gear_mall_iron_plate_seed",
+                    expected_followup="gear assembler produces iron-gear-wheel output for belt mall",
                 )
             local_source = _nearest_local_item_seed_source(
                 observation,
@@ -9886,7 +9888,7 @@ class GearBeltMallLogisticsSkill:
                         {"type": "move_to", "position": source_position},
                         "move near local iron-plate seed source for gear mall bootstrap",
                     )
-                return PlannerDecision(
+                return _bootstrap_seed_decision(
                     {
                         "type": "take",
                         "item": "iron-plate",
@@ -9896,6 +9898,8 @@ class GearBeltMallLogisticsSkill:
                         "position": source_position,
                     },
                     "recover local iron plates for one-time gear mall seed; sustained iron input line is still required",
+                    seed_reason="local_iron_plate_recovery_for_gear_mall_seed",
+                    expected_followup="recovered plates are inserted into the gear assembler and belt output starts",
                 )
             return PlannerDecision(None, "gear mall logistics needs iron plates before gears can enter the belt mall")
 
@@ -9904,7 +9908,7 @@ class GearBeltMallLogisticsSkill:
                 position = _position(belt_assembler)
                 if distance(player, position) > 20:
                     return PlannerDecision({"type": "move_to", "position": position}, "move near belt assembler for one-time iron seed")
-                return PlannerDecision(
+                return _bootstrap_seed_decision(
                     {
                         "type": "insert",
                         "item": "iron-plate",
@@ -9914,6 +9918,8 @@ class GearBeltMallLogisticsSkill:
                         "position": position,
                     },
                     "one-time bootstrap iron seed for belt mall; sustained iron input line is still required",
+                    seed_reason="belt_mall_iron_plate_seed",
+                    expected_followup="transport-belt assembler consumes buffered gears and produces belts",
                 )
             local_source = _nearest_local_item_seed_source(
                 observation,
@@ -9928,7 +9934,7 @@ class GearBeltMallLogisticsSkill:
                         {"type": "move_to", "position": source_position},
                         "move near local iron-plate seed source for belt mall bootstrap",
                     )
-                return PlannerDecision(
+                return _bootstrap_seed_decision(
                     {
                         "type": "take",
                         "item": "iron-plate",
@@ -9938,6 +9944,8 @@ class GearBeltMallLogisticsSkill:
                         "position": source_position,
                     },
                     "recover local iron plates for one-time belt mall seed; sustained iron input line is still required",
+                    seed_reason="local_iron_plate_recovery_for_belt_mall_seed",
+                    expected_followup="recovered plates are inserted into the belt assembler and belt output starts",
                 )
             return PlannerDecision(None, "belt mall logistics needs an automated iron-plate input line")
 
@@ -9971,9 +9979,11 @@ class GearBeltMallLogisticsSkill:
         layout: dict[str, Any],
     ) -> PlannerDecision | None:
         if craftable_count(observation, "transport-belt") > 0:
-            return PlannerDecision(
+            return _bootstrap_seed_decision(
                 {"type": "craft", "recipe": "transport-belt", "count": 1},
                 "craft one-time bootstrap transfer belts for gear/belt mall logistics",
+                seed_reason="gear_belt_transfer_belt_seed",
+                expected_followup="short transfer lane is built and gear output feeds the belt assembler",
             )
         if inventory_count(observation, "iron-gear-wheel") <= 0:
             gear_assembler = layout["gear_assembler"]
@@ -9981,7 +9991,7 @@ class GearBeltMallLogisticsSkill:
                 position = _position(gear_assembler)
                 if distance(player, position) > 20:
                     return PlannerDecision({"type": "move_to", "position": position}, "move near gear assembler for bootstrap transfer belts")
-                return PlannerDecision(
+                return _bootstrap_seed_decision(
                     {
                         "type": "take",
                         "item": "iron-gear-wheel",
@@ -9991,6 +10001,8 @@ class GearBeltMallLogisticsSkill:
                         "position": position,
                     },
                     "recover one-time bootstrap gears for first gear/belt transfer belts; sustained transfer remains inserter-fed",
+                    seed_reason="gear_output_recovery_for_transfer_belt_seed",
+                    expected_followup="bootstrap transfer belts are crafted and replaced by inserter-fed logistics",
                 )
         return None
 
@@ -10116,12 +10128,14 @@ class GearBeltMallLogisticsSkill:
         if _regular_inserter_can_be_used(observation):
             for item in ("inserter", "fast-inserter"):
                 if craftable_count(observation, item) > 0:
-                    return PlannerDecision(
+                    return _bootstrap_seed_decision(
                         {"type": "craft", "recipe": item, "count": 1},
                         f"craft one-time bootstrap {item} for {label}",
+                        seed_reason=f"{label}_inserter_seed",
+                        expected_followup=f"{label} is placed and moves gear or belt ingredients automatically",
                     )
             if inventory_count(observation, "iron-gear-wheel") <= 0 and craftable_count(observation, "iron-gear-wheel") > 0:
-                return PlannerDecision(
+                return _bootstrap_seed_decision(
                     {
                         "type": "craft",
                         "recipe": "iron-gear-wheel",
@@ -10129,6 +10143,8 @@ class GearBeltMallLogisticsSkill:
                         "allow_gear_belt_direct_transfer_bootstrap": True,
                     },
                     f"craft one-time bootstrap gear for regular {label}",
+                    seed_reason=f"{label}_gear_seed",
+                    expected_followup=f"crafted gear becomes one {label} inserter and automated transfer starts",
                 )
             return None
 
@@ -10136,12 +10152,14 @@ class GearBeltMallLogisticsSkill:
         second = "inserter" if prefer_burner else "burner-inserter"
         for item in (first, second):
             if craftable_count(observation, item) > 0:
-                return PlannerDecision(
+                return _bootstrap_seed_decision(
                     {"type": "craft", "recipe": item, "count": 1},
                     f"craft one-time bootstrap {item} for {label}",
+                    seed_reason=f"{label}_inserter_seed",
+                    expected_followup=f"{label} is placed and moves gear or belt ingredients automatically",
                 )
         if inventory_count(observation, "iron-gear-wheel") <= 0 and craftable_count(observation, "iron-gear-wheel") > 0:
-            return PlannerDecision(
+            return _bootstrap_seed_decision(
                 {
                     "type": "craft",
                     "recipe": "iron-gear-wheel",
@@ -10149,6 +10167,8 @@ class GearBeltMallLogisticsSkill:
                     "allow_gear_belt_direct_transfer_bootstrap": True,
                 },
                 f"craft one-time bootstrap gear for {label}",
+                seed_reason=f"{label}_gear_seed",
+                expected_followup=f"crafted gear becomes one {label} inserter and automated transfer starts",
             )
         return None
 
@@ -11311,7 +11331,7 @@ class BuildItemMallSkill:
                 return logistics_blocker
             if distance(player, assembler_position) > 20:
                 return PlannerDecision({"type": "move_to", "position": assembler_position}, "move near mall assembler to insert iron-plate")
-            return PlannerDecision(
+            return _bootstrap_seed_decision(
                 {
                     "type": "insert",
                     "item": "iron-plate",
@@ -11321,6 +11341,8 @@ class BuildItemMallSkill:
                     "position": assembler_position,
                 },
                 f"insert iron-plate into {self.target_item} mall assembler to consume buffered gears",
+                seed_reason=f"{self.target_item}_mall_buffered_gear_plate_seed",
+                expected_followup=f"{self.target_item} assembler produces output or exposes an output-buffer task",
             )
 
         for ingredient, amount in sorted(recipe.ingredients.items()):
@@ -11716,13 +11738,15 @@ class BuildItemMallSkill:
                     # mall; real gear logistics resume once a gear assembler produces.
                     if _is_virtual_agent(observation) and craftable_count(observation, "iron-gear-wheel") > 0:
                         current_gears = inventory_count(observation, "iron-gear-wheel")
-                        return PlannerDecision(
+                        return _bootstrap_seed_decision(
                             {
                                 "type": "craft",
                                 "recipe": "iron-gear-wheel",
                                 "count": min(quantity - current_gears, craftable_count(observation, "iron-gear-wheel")),
                             },
                             f"virtual agent hand-craft gears to seed {self.target_item} mall (gear mall cannot produce yet)",
+                            seed_reason=f"virtual_agent_{self.target_item}_mall_gear_seed",
+                            expected_followup=f"{self.target_item} assembler receives gears and produces automated output",
                         )
                     return None
                 # Genuine bootstrap: the post-Automation policy wants gears from an assembler, but if
@@ -11948,7 +11972,7 @@ class BuildItemMallSkill:
                 observation, player, "iron-plate", iron_reserve,
                 allow_existing_remote=allow_existing_remote, reference_position=reference_position,
             )
-        return PlannerDecision(
+        return _bootstrap_seed_decision(
             {
                 "type": "craft",
                 "recipe": "iron-gear-wheel",
@@ -11956,6 +11980,8 @@ class BuildItemMallSkill:
                 "allow_first_assembler_bootstrap": True,
             },
             "bootstrap-craft gears for the first assembler (no assembler exists yet to produce them)",
+            seed_reason="first_assembler_gear_seed",
+            expected_followup="first gear-producing assembler is built or set to iron-gear-wheel",
         )
 
     def _ensure_assembler_bootstrap_gears(
@@ -12040,7 +12066,7 @@ class BuildItemMallSkill:
                 )
             if distance(player, assembler_position) > 20:
                 return PlannerDecision({"type": "move_to", "position": assembler_position}, "move near gear assembler to seed iron")
-            return PlannerDecision(
+            return _bootstrap_seed_decision(
                 {
                     "type": "insert",
                     "item": "iron-plate",
@@ -12050,6 +12076,8 @@ class BuildItemMallSkill:
                     "position": assembler_position,
                 },
                 "insert iron plates for assembler-produced bootstrap gears",
+                seed_reason="assembler_produced_bootstrap_gear_iron_seed",
+                expected_followup="gear assembler produces iron-gear-wheel for the next assembler bootstrap",
             )
         return PlannerDecision({"type": "wait", "ticks": 300}, "wait for assembler-produced bootstrap gears")
 
@@ -13597,6 +13625,28 @@ def _is_virtual_agent(observation: dict[str, Any]) -> bool:
     if isinstance(execution, dict) and execution.get("virtual") is True:
         return True
     return False
+
+
+def _bootstrap_seed_decision(
+    action: dict[str, Any],
+    reason: str,
+    *,
+    seed_reason: str,
+    expected_followup: str,
+) -> PlannerDecision:
+    seeded_action = dict(action)
+    seeded_action["bootstrap_seed"] = True
+    seeded_action["seed_reason"] = seed_reason
+    seeded_action["expected_followup"] = expected_followup
+    return PlannerDecision(
+        seeded_action,
+        reason,
+        metadata={
+            "bootstrap_seed": True,
+            "seed_reason": seed_reason,
+            "expected_followup": expected_followup,
+        },
+    )
 
 
 def _manual_site_input_logistics_blocker(

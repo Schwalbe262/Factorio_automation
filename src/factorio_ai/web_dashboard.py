@@ -1487,6 +1487,7 @@ def render_dashboard(state: dict[str, Any], lang: str = DEFAULT_LANG) -> str:
       </div>
       <p>{escape(str(strategy.get("reason") or ""))}</p>
       {_list(_t(lang, "blockers"), strategy.get("blockers"))}
+      {_factory_readiness_panel(strategy.get("factory_readiness"))}
       {_skill_status(strategy.get("skill_status"), lang)}
       <p class="muted">{_target_satisfied_text(target_status, lang)}</p>
     </section>
@@ -3925,6 +3926,49 @@ def _skill_status(value: Any, lang: str) -> str:
     if value.get("implemented"):
         return f"<p class=\"muted\">{_t(lang, 'executor')}: {escape(str(value.get('executor') or ''))}</p>"
     return f"<p class=\"error\">{_t(lang, 'executor_missing')}</p>"
+
+
+def _factory_readiness_panel(value: Any) -> str:
+    if not isinstance(value, dict) or not value:
+        return ""
+    fields = [
+        ("gear_mall_exists", "gear mall"),
+        ("belt_mall_can_output", "belt output"),
+        ("iron_plate_source_ready", "iron source"),
+        ("belt_line_buildable", "belt line"),
+        ("boiler_feed_buildable", "boiler feed"),
+        ("bootstrap_seed_allowed", "seed allowed"),
+    ]
+    body = "".join(
+        "<tr>"
+        f"<td>{escape(label)}</td>"
+        f"<td>{'yes' if value.get(key) else 'no'}</td>"
+        "</tr>"
+        for key, label in fields
+    )
+    blocked = value.get("blocked_by") if isinstance(value.get("blocked_by"), list) else []
+    blocked_html = "".join(f"<li>{escape(str(item))}</li>" for item in blocked) or "<li>(none)</li>"
+    root = value.get("failure_root") or "(none)"
+    repair = value.get("repair_skill") or "(none)"
+    seed = value.get("seed_reason") or ""
+    followup = value.get("expected_followup") or ""
+    seed_line = ""
+    if seed or followup:
+        seed_line = (
+            "<p class=\"muted\">"
+            f"seed: {escape(str(seed))}"
+            f"{' -> ' + escape(str(followup)) if followup else ''}"
+            "</p>"
+        )
+    return (
+        "<div class=\"readiness\">"
+        "<span class=\"label\">Factory readiness</span>"
+        f"<table><tbody>{body}</tbody></table>"
+        f"<p class=\"muted\">failure_root={escape(str(root))} repair_skill={escape(str(repair))}</p>"
+        f"<div><span class=\"label\">Blocked prerequisites</span><ul>{blocked_html}</ul></div>"
+        f"{seed_line}"
+        "</div>"
+    )
 
 
 def _key_value_table(values: dict[str, Any], lang: str) -> str:

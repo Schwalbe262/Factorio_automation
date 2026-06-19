@@ -46,13 +46,18 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
     foundry = _read_json(runtime / "skill-foundry-loop.json")
     supervisor = _read_json(runtime / "unattended-llm-supervisor.json")
     progress_kpi = _read_json(runtime / "progress-kpi.json")
+    supervisor_age = _age_seconds(supervisor.get("updated_at"))
+    progress_age = _age_seconds(progress_kpi.get("updated_at"))
+    warnings: list[dict[str, Any]] = []
 
     registered: list[str] = []
     failed: list[str] = []
     overrides: list[str] = []
     queue: list[Any] = []
+    stale_implemented_queue: list[str] = []
     try:
         from . import skill_foundry
+        from .skill_registry import IMPLEMENTED_SKILLS
 
         skills = skill_foundry.load_registry().get("skills") or {}
         if isinstance(skills, dict):
@@ -64,9 +69,42 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
                 n for n, e in skills.items()
                 if isinstance(e, dict) and e.get("status") in {"failed", "quarantined", "disabled"}
             )
-        queue = [i.get("skill_name") for i in skill_foundry.load_foundry_queue(runtime) if isinstance(i, dict)]
+        queue_items = [i for i in skill_foundry.load_foundry_queue(runtime) if isinstance(i, dict)]
+        queue = [i.get("skill_name") for i in queue_items]
+        stale_implemented_queue = sorted(
+            str(i.get("skill_name"))
+            for i in queue_items
+            if i.get("skill_name") in IMPLEMENTED_SKILLS and str(i.get("mode") or "new").lower() != "override"
+        )
     except Exception:  # noqa: BLE001
         pass
+
+    if isinstance(supervisor_age, (int, float)) and supervisor_age > 900:
+        warnings.append(
+            {
+                "kind": "stale_supervisor",
+                "detail": f"unattended supervisor heartbeat is stale ({supervisor_age}s)",
+            }
+        )
+    if stale_implemented_queue:
+        warnings.append(
+            {
+                "kind": "implemented_skill_stuck_in_foundry_queue",
+                "skills": stale_implemented_queue,
+                "detail": "implemented skills are still queued as new foundry work; only override-mode self-repair should generate them",
+            }
+        )
+    failure_root = progress_kpi.get("failure_root")
+    repair_skill = progress_kpi.get("repair_skill")
+    if failure_root and (progress_kpi.get("stuck") or int(progress_kpi.get("stall_count") or 0) >= 2):
+        warnings.append(
+            {
+                "kind": "failure_root_loop",
+                "failure_root": failure_root,
+                "repair_skill": repair_skill,
+                "detail": f"progress loop is stuck on {failure_root}; recovery should run {repair_skill}",
+            }
+        )
 
     recent: list[dict[str, Any]] = []
     try:
@@ -143,7 +181,7 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
         "supervisor": {
             "state": supervisor.get("state"),
             "autopilot_gate": supervisor.get("autopilot_gate"),
-            "age_seconds": _age_seconds(supervisor.get("updated_at")),
+            "age_seconds": supervisor_age,
             "autopilot_processes": supervisor.get("autopilot_processes"),
             "idle_layout_processes": supervisor.get("idle_layout_processes"),
             "skill_foundry_processes": supervisor.get("skill_foundry_processes"),
@@ -175,11 +213,21 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
             "research_progress": progress_kpi.get("research_progress"),
             "stall_count": progress_kpi.get("stall_count"),
             "stuck": progress_kpi.get("stuck"),
+            "failure_root": progress_kpi.get("failure_root"),
+            "repair_skill": progress_kpi.get("repair_skill"),
+            "seed_count": progress_kpi.get("seed_count"),
             "key_items": progress_kpi.get("key_items"),
-            "age_seconds": _age_seconds(progress_kpi.get("updated_at")),
+            "age_seconds": progress_age,
         },
-        "generated_skills": {"registered": registered, "overrides": overrides, "queue": queue, "failed": failed},
+        "generated_skills": {
+            "registered": registered,
+            "overrides": overrides,
+            "queue": queue,
+            "failed": failed,
+            "stale_implemented_queue": stale_implemented_queue,
+        },
         "recent_decisions": recent,
+        "warnings": warnings,
     }
 
 
@@ -232,6 +280,12 @@ def format_run_health(summary: dict[str, Any]) -> str:
             f"progress : researched={pr.get('researched')} research={pr.get('current_research')}"
             f"({pr.get('research_progress')}) stall={pr.get('stall_count')}{stuck} age={_fmt_age(pr.get('age_seconds'))}"
         )
+        if pr.get("failure_root") or pr.get("repair_skill") or pr.get("seed_count"):
+            lines.append(
+                "  recovery: failure_root={r} repair_skill={s} seed_count={c}".format(
+                    r=pr.get("failure_root"), s=pr.get("repair_skill"), c=pr.get("seed_count")
+                )
+            )
         if isinstance(pr.get("key_items"), dict) and pr.get("key_items"):
             shown = ", ".join(f"{k}={v}" for k, v in pr["key_items"].items())
             lines.append(f"  key items: {shown}")
@@ -249,6 +303,15 @@ def format_run_health(summary: dict[str, Any]) -> str:
     gs = summary.get("generated_skills") or {}
     lines.append(f"  generated: registered={gs.get('registered')} queue={gs.get('queue')} failed={gs.get('failed')}")
     lines.append(f"  self-repair overrides (active): {gs.get('overrides')}")
+    if gs.get("stale_implemented_queue"):
+        lines.append(f"  stale implemented queue: {gs.get('stale_implemented_queue')}")
+
+    warnings = summary.get("warnings") or []
+    if warnings:
+        lines.append("warnings:")
+        for warning in warnings:
+            if isinstance(warning, dict):
+                lines.append(f"  {warning.get('kind')}: {warning.get('detail')}")
 
     lines.append("recent decisions (oldest->newest):")
     decisions = summary.get("recent_decisions") or []

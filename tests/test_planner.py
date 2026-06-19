@@ -5918,6 +5918,8 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "craft")
         self.assertEqual(decision.action["recipe"], "iron-gear-wheel")
         self.assertIn("direct gear-to-belt transfer inserter", decision.reason)
+        self.assertTrue(decision.action["bootstrap_seed"])
+        self.assertEqual(decision.metadata["seed_reason"], "direct gear-to-belt transfer inserter_gear_seed")
 
     def test_gear_belt_mall_places_direct_transfer_inserter_when_no_belts(self):
         obs = powered_automation_observation()
@@ -5950,6 +5952,8 @@ class PlannerTests(unittest.TestCase):
 
         self.assertEqual(decision.action["type"], "insert")
         self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertTrue(decision.action["bootstrap_seed"])
+        self.assertEqual(decision.metadata["seed_reason"], "gear_mall_iron_plate_seed")
 
     def test_gear_belt_mall_recovers_bootstrap_gears_when_direct_transfer_is_blocked(self):
         obs = powered_automation_observation()

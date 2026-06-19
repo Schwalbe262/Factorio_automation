@@ -978,7 +978,48 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("Goal Plan", html)
         self.assertIn("Recent Loop Notes", html)
         self.assertIn("Recent Insights", html)
-        self.assertIn("research_logistics", html)
+
+    def test_dashboard_renders_strategy_factory_readiness(self):
+        html = render_dashboard(
+            {
+                "ok": True,
+                "objective": "launch_rocket_program",
+                "updated_at": "2026-06-13T00:00:00+00:00",
+                "monitor": {},
+                "targets": {},
+                "layout_background": {"entries": []},
+                "layout_llm_settings": {},
+                "llm_decisions": {"entries": []},
+                "strategy_worker_comparison": {"latest": {}},
+                "run_journal": {},
+                "trace_archives": {},
+                "token_usage": {"samples": []},
+                "strategy": {
+                    "selected_skill": "build_gear_belt_mall_logistics",
+                    "priority": 92,
+                    "reason": "repair belt output",
+                    "blockers": ["transport-belt mall bootstrap"],
+                    "factory_readiness": {
+                        "gear_mall_exists": True,
+                        "belt_mall_can_output": False,
+                        "iron_plate_source_ready": True,
+                        "belt_line_buildable": False,
+                        "boiler_feed_buildable": False,
+                        "bootstrap_seed_allowed": True,
+                        "failure_root": "belt_line_unbuildable",
+                        "repair_skill": "build_gear_belt_mall_logistics",
+                        "blocked_by": ["construction transport belts"],
+                        "seed_reason": "virtual seed",
+                        "expected_followup": "belt output increases",
+                    },
+                },
+            },
+            "en",
+        )
+
+        self.assertIn("Factory readiness", html)
+        self.assertIn("failure_root=belt_line_unbuildable", html)
+        self.assertIn("construction transport belts", html)
 
     def test_connection_refused_error_is_rendered_as_operator_guidance(self):
         message = friendly_dashboard_error(ConnectionRefusedError(10061, "actively refused"))

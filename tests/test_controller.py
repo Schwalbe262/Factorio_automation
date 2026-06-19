@@ -250,6 +250,67 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(response["ok"])
         self.assertIn("blocked direct iron-gear-wheel handcraft", response["reason"])
 
+    def test_run_skill_stops_repeated_bootstrap_seed_without_followup(self):
+        observation = {
+            "tick": 1,
+            "inventory": {"iron-plate": 4},
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 10,
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 0, "y": 0},
+                    "electric_network_connected": True,
+                }
+            ],
+            "research": {"technologies": {"automation": {"researched": True}}},
+        }
+
+        class RepeatingSeedSkill:
+            def next_action(self, _observation):
+                return PlannerDecision(
+                    {
+                        "type": "insert",
+                        "item": "iron-plate",
+                        "count": 1,
+                        "unit_number": 10,
+                        "name": "assembling-machine-1",
+                        "position": {"x": 0, "y": 0},
+                        "bootstrap_seed": True,
+                        "seed_reason": "test_seed",
+                        "expected_followup": "test output increases",
+                    },
+                    "seed once",
+                    metadata={
+                        "bootstrap_seed": True,
+                        "seed_reason": "test_seed",
+                        "expected_followup": "test output increases",
+                    },
+                )
+
+        class FakeController(FactorioController):
+            def observe(self):
+                return observation
+
+            def act(self, _action):
+                return {"ok": True}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_test_config(Path(tmp))
+            controller = FakeController(cfg)
+            run = controller._run_skill(
+                RepeatingSeedSkill(),
+                target_item="transport-belt",
+                target=1,
+                goal="test_seed",
+                max_steps=3,
+                log_prefix="test-seed",
+            )
+
+        self.assertFalse(run.ok)
+        self.assertEqual(run.seed_count, 1)
+        self.assertIn("bootstrap seed already attempted", run.reason)
+
     def test_strategy_decision_records_and_strips_llm_io_traces(self):
         class FakeController(FactorioController):
             def observe(self):
@@ -2449,6 +2510,23 @@ class StallWatchdogTests(unittest.TestCase):
             controller = FactorioController(make_test_config(Path(tmp)))
             skill = controller._stall_recovery_skill(
                 "launch_rocket_program", observation, ["build_gear_belt_mall_logistics"]
+            )
+            self.assertEqual(skill, "bootstrap_build_item_mall")
+
+    def test_stall_recovery_keeps_root_repair_even_if_recently_tried(self):
+        observation = {
+            "player": {"position": {"x": 0, "y": 0}},
+            "inventory": {"iron-plate": 50, "coal": 10},
+            "entities": [{"name": "stone-furnace", "recipe": "iron-plate", "position": {"x": 4, "y": 0}}],
+            "resources": [{"name": "coal", "position": {"x": 8, "y": 0}, "distance": 8}],
+            "research": {"technologies": {"automation": {"researched": True}}},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FactorioController(make_test_config(Path(tmp)))
+            skill = controller._stall_recovery_skill(
+                "launch_rocket_program",
+                observation,
+                ["build_gear_belt_mall_logistics", "bootstrap_build_item_mall"],
             )
             self.assertEqual(skill, "bootstrap_build_item_mall")
 

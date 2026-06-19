@@ -19,6 +19,7 @@ from .llm_log import (
     strategy_request_summary,
 )
 from .config import AppConfig, REPO_ROOT
+from .factory_readiness import build_factory_readiness
 from .layout_llm_settings import load_layout_llm_settings
 from .layout_validation import layout_validation_feedback_summary
 from .models import (
@@ -304,6 +305,7 @@ class RunSummary:
     item_count: int
     log_path: Path
     item_name: str
+    seed_count: int = 0
 
     @property
     def iron_plate_count(self) -> int:
@@ -325,6 +327,7 @@ class RunSummary:
             "itemCount": self.item_count,
             "itemName": self.item_name,
             "logPath": str(self.log_path),
+            "seedCount": self.seed_count,
         }
 
 
@@ -579,6 +582,18 @@ def _guard_post_automation_handcraft(observation: dict[str, Any], decision: Plan
             _gear_handcraft_guard_reason(observation, action),
         )
     return decision
+
+
+def _bootstrap_seed_action_key(action: dict[str, Any] | None) -> tuple[Any, ...] | None:
+    if not isinstance(action, dict) or action.get("bootstrap_seed") is not True:
+        return None
+    return (
+        action.get("type"),
+        action.get("recipe") or action.get("item"),
+        action.get("unit_number"),
+        action.get("name"),
+        action.get("seed_reason"),
+    )
 
 
 def _record_and_strip_llm_io_traces(log_dir: Path, result: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -1465,7 +1480,16 @@ class FactorioController:
     def _progress_kpi_path(self) -> Path:
         return self.cfg.runtime_dir / "progress-kpi.json"
 
-    def _write_progress_kpi(self, fingerprint: tuple[Any, ...] | None, stall_count: int, selected: str) -> None:
+    def _write_progress_kpi(
+        self,
+        fingerprint: tuple[Any, ...] | None,
+        stall_count: int,
+        selected: str,
+        *,
+        failure_root: str | None = None,
+        repair_skill: str | None = None,
+        seed_count: int = 0,
+    ) -> None:
         """Persist a readable progress KPI each cycle so an operator (and run-health) can SEE
         whether the run is actually advancing or stuck -- the watchdog already acts on it."""
         try:
@@ -1478,6 +1502,9 @@ class FactorioController:
                 "selected_skill": selected,
                 "stall_count": stall_count,
                 "stuck": stall_count >= _stall_threshold(),
+                "failure_root": failure_root,
+                "repair_skill": repair_skill,
+                "seed_count": seed_count,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
             self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -1498,6 +1525,13 @@ class FactorioController:
         # Prerequisite-aware recovery for the two most common bootstrap deadlocks: the strategy keeps
         # re-selecting a skill that can never progress because an upstream prerequisite was never built.
         # Checked before the generic heuristic/rotation so recovery is deterministic, not order-luck.
+        try:
+            readiness = build_factory_readiness(observation)
+            repair_skill = readiness.repair_skill
+            if repair_skill and self._skill_run_config(repair_skill) is not None:
+                return repair_skill
+        except Exception:  # noqa: BLE001
+            pass
         try:
             from .planner import _find_gear_belt_mall_logistics_layout
 
@@ -1584,6 +1618,7 @@ class FactorioController:
         stall_count = 0
         recent_skills: list[str] = []
         stall_threshold = _stall_threshold()
+        seed_count_total = 0
         # Failure watchdog: the same-skill stall counter never trips when the strategy OSCILLATES
         # between several different infeasible skills (iron-line -> coal-feed -> ...), each failing
         # once. Count consecutive failed cycles regardless of which skill, and force prerequisite
@@ -1713,10 +1748,17 @@ class FactorioController:
                         progress_obs = self.observe()
                         fingerprint = self._progress_fingerprint(progress_obs)
                         progress_key = self._live_progress_key(progress_obs)
+                        readiness = build_factory_readiness(progress_obs)
+                        failure_root = readiness.failure_root
+                        repair_skill = readiness.repair_skill
                     except Exception:  # noqa: BLE001
                         fingerprint = None
                         progress_key = None
+                        failure_root = None
+                        repair_skill = None
                     selected_now = last_step.selected_skill or ""
+                    if last_step.run is not None:
+                        seed_count_total += int(getattr(last_step.run, "seed_count", 0) or 0)
                     # "Progress" for commit purposes = entity count OR production/research changed
                     # (so building a smelting line counts, not just producing items).
                     made_progress = (
@@ -1762,7 +1804,14 @@ class FactorioController:
                         # the next several cycles stay on the fast heuristic instead of re-paying it.
                         if consecutive_strategy_failures >= llm_degrade_threshold:
                             degrade_cooldown = llm_degrade_cooldown_cycles
-                    self._write_progress_kpi(fingerprint, stall_count, selected_now)
+                    self._write_progress_kpi(
+                        fingerprint,
+                        stall_count,
+                        selected_now,
+                        failure_root=failure_root,
+                        repair_skill=repair_skill,
+                        seed_count=seed_count_total,
+                    )
                     recent_skills.append(selected_now)
                     if len(recent_skills) > 12:
                         recent_skills = recent_skills[-12:]
@@ -2424,13 +2473,15 @@ class FactorioController:
         started_at = time.monotonic()
         initial_item_count: int | None = None
         last_step = 0
+        bootstrap_seed_count = 0
+        attempted_bootstrap_seeds: set[tuple[Any, ...]] = set()
 
         def finish(ok: bool, reason: str, step: int, observation: dict[str, Any]) -> RunSummary:
             nonlocal initial_item_count
             final_item_count = total_item_count(observation, target_item)
             if initial_item_count is None:
                 initial_item_count = final_item_count
-            summary = RunSummary(ok, reason, step, final_item_count, log_path, target_item)
+            summary = RunSummary(ok, reason, step, final_item_count, log_path, target_item, bootstrap_seed_count)
             self._write_live_skill_heartbeat(
                 objective,
                 goal,
@@ -2487,6 +2538,17 @@ class FactorioController:
                         return finish(False, decision.reason, step, observation)
 
                     action = self._maybe_apply_remote_hint(observation, decision, goal)
+                    seed_key = _bootstrap_seed_action_key(action)
+                    if seed_key is not None and seed_key in attempted_bootstrap_seeds:
+                        return finish(
+                            False,
+                            (
+                                "bootstrap seed already attempted without expected follow-up: "
+                                f"{action.get('seed_reason') or decision.reason}"
+                            ),
+                            step,
+                            observation,
+                        )
                     response = self.act(action)
                     self._write_log(log_file, step, observation, decision, response)
                     if not response.get("ok"):
@@ -2494,6 +2556,9 @@ class FactorioController:
                             time.sleep(0.2)
                             continue
                         return finish(False, f"action failed: {response.get('reason')}", step, observation)
+                    if seed_key is not None:
+                        attempted_bootstrap_seeds.add(seed_key)
+                        bootstrap_seed_count += 1
                     if action.get("type") == "wait":
                         ticks = int(action.get("ticks") or 60)
                         # Factorio runs in real-time on the server: a long "wait for research /
@@ -3553,6 +3618,7 @@ class FactorioController:
                 "action": decision.action,
                 "reason": decision.reason,
                 "done": decision.done,
+                "metadata": decision.metadata,
             },
             "response": response,
             "inventory": observation.get("inventory"),

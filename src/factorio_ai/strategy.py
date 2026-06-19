@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from math import ceil
 from typing import Any
 
+from .factory_readiness import FactoryReadiness, build_factory_readiness
 from .knowledge import facility_legend, objective_roots, recipe_details
 from .monitor import recent_damage_events, summarize_factory
 from .models import distance, entities_named, entity_item_count, inventory_count, player_position, total_item_count
@@ -104,9 +105,17 @@ class SkillContract:
     preconditions: list[str]
     completion: list[str]
     llm_scope: str
+    blocked_by: list[str] | None = None
+    can_seed: bool = False
+    completion_signal: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        if data["blocked_by"] is None:
+            data["blocked_by"] = []
+        if data["completion_signal"] is None:
+            data["completion_signal"] = list(self.completion)
+        return data
 
 
 @dataclass(frozen=True)
@@ -219,6 +228,17 @@ SKILL_CATALOG: dict[str, SkillContract] = {
             "Choose this after coal mining exists but site-level coal links are still route_needed. "
             "Executor places exact belt extension, burner inserter, and fuel consumer connection."
         ),
+        blocked_by=[
+            "missing coal supply output belt",
+            "missing transport-belt stock or automated belt output",
+            "missing burner inserter for boiler/furnace feed",
+            "starter boiler feed route blocked by existing entities",
+        ],
+        can_seed=True,
+        completion_signal=[
+            "coal belt and inserter feed a fuel consumer",
+            "boiler or furnace fuel inventory increases from belt-fed inserter movement",
+        ],
     ),
     "produce_copper_plate": SkillContract(
         name="produce_copper_plate",
@@ -301,6 +321,17 @@ SKILL_CATALOG: dict[str, SkillContract] = {
             "Choose which build items need mall automation and where the mall belongs. "
             "Executor handles exact assembler recipes, inserter/chest placement, belts, power, and resource validation."
         ),
+        blocked_by=[
+            "automation not researched",
+            "electric power unavailable",
+            "missing powered or wireable mall site",
+            "missing recipe ingredients that cannot be produced locally",
+        ],
+        can_seed=True,
+        completion_signal=[
+            "target item exists in assembler output, output chest, or inventory",
+            "target assembler is powered and recipe matches the requested mall item",
+        ],
     ),
     "bootstrap_power_pole_mall": SkillContract(
         name="bootstrap_power_pole_mall",
@@ -374,6 +405,17 @@ SKILL_CATALOG: dict[str, SkillContract] = {
             "Choose this when belt automation is blocked by gear mall output logistics or when the belt mall needs a one-time iron seed before it can replenish construction belts. "
             "Executor handles exact direct-transfer inserter placement, belt-lane fallback, inserter direction, burner fuel, and recipe changes."
         ),
+        blocked_by=[
+            "missing powered iron-gear assembler",
+            "missing reusable powered transport-belt assembler",
+            "missing short transfer inserter or bootstrap construction belts",
+            "missing one-time iron seed when both assemblers are empty",
+        ],
+        can_seed=True,
+        completion_signal=[
+            "transport-belt output appears in belt assembler",
+            "gear output is transferred into the transport-belt assembler by inserter or short belt lane",
+        ],
     ),
     "relocate_gear_belt_mall_to_iron_source": SkillContract(
         name="relocate_gear_belt_mall_to_iron_source",
@@ -413,6 +455,17 @@ SKILL_CATALOG: dict[str, SkillContract] = {
             "Choose this when a gear or belt mall is blocked by missing iron-plate input logistics. "
             "Executor extends the belt route and endpoint inserters without crafting gears or carrying iron plates."
         ),
+        blocked_by=[
+            "missing powered gear mall",
+            "missing iron-plate source furnace",
+            "missing construction transport belts from automated belt output",
+            "blocked or misoriented belt endpoint",
+        ],
+        can_seed=False,
+        completion_signal=[
+            "iron-plate belt route and endpoint inserters are built",
+            "gear assembler receives iron plates without player plate shuttling",
+        ],
     ),
     "build_site_input_logistic_line": SkillContract(
         name="build_site_input_logistic_line",
@@ -529,6 +582,7 @@ def make_strategy_payload(
     selected_improvement_site: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     monitor = summarize_factory(observation, objective, production_targets=production_targets)
+    readiness = build_factory_readiness(observation)
     # Scoped recipe info: only the objective roots + current bottlenecks + targets, not the
     # whole 300+ recipe encyclopedia. A small local model decides better with decision-relevant
     # recipes than with the full graph (signal dilution), and the planner already did the math.
@@ -549,6 +603,7 @@ def make_strategy_payload(
             selected_improvement_site=selected_improvement_site,
         ),
         "automation_policy": make_automation_policy_context(monitor),
+        "factory_readiness": readiness.to_dict(),
         "build_item_supply": make_build_item_supply_context(observation, monitor),
         "research_planning": make_research_planning_context(observation, monitor),
         "threats": make_threat_context(observation),
@@ -1004,6 +1059,8 @@ def reconcile_strategy_decision(
     """Apply deterministic safety/feasibility guardrails to an LLM strategy choice."""
 
     selected = str(decision.get("selected_skill") or decision.get("selected_goal") or "")
+    readiness = build_factory_readiness(observation)
+    decision = _with_factory_readiness(decision, readiness)
     rocket_objective = _is_rocket_objective(objective)
     remote_guardrail = decision.get("guardrail_adjusted") if isinstance(decision.get("guardrail_adjusted"), dict) else {}
     if remote_guardrail.get("from") == "plan_factory_site" and selected == remote_guardrail.get("to"):
@@ -2085,7 +2142,7 @@ def reconcile_strategy_decision(
     return decision
 
 
-def heuristic_strategy(
+def _heuristic_strategy_impl(
     objective: str,
     observation: dict[str, Any],
     production_targets: dict[str, float] | None = None,
@@ -2713,6 +2770,32 @@ def heuristic_strategy(
         expected_effect=f"Run {selected} skill.",
         source="heuristic",
     ).to_dict()
+
+
+def heuristic_strategy(
+    objective: str,
+    observation: dict[str, Any],
+    production_targets: dict[str, float] | None = None,
+    selected_improvement_site: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    readiness = build_factory_readiness(observation)
+    result = _heuristic_strategy_impl(
+        objective,
+        observation,
+        production_targets,
+        selected_improvement_site=selected_improvement_site,
+    )
+    return _with_factory_readiness(result, readiness)
+
+
+def _with_factory_readiness(decision: dict[str, Any], readiness: FactoryReadiness) -> dict[str, Any]:
+    adjusted = dict(decision)
+    adjusted["factory_readiness"] = readiness.to_dict()
+    if readiness.failure_root and "failure_root" not in adjusted:
+        adjusted["failure_root"] = readiness.failure_root
+    if readiness.repair_skill and "repair_skill" not in adjusted:
+        adjusted["repair_skill"] = readiness.repair_skill
+    return adjusted
 
 
 def _top_layout_item(
