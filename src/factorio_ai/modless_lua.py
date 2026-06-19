@@ -1669,17 +1669,39 @@ local function action_connect_power()
   end
   return err("no reachable electric pole found for connect_power", { target = target.name, target_unit_number = target.unit_number })
 end
+local function apply_unlock_recipes(technology, force)
+  -- Setting technology.researched=true does NOT reliably fire the tech's unlock-recipe effects over
+  -- RCON (observed live: the 0-cost green-science tech was set researched yet logistic-science-pack
+  -- stayed "recipe is not craftable"). Enable the unlocked recipes explicitly so downstream crafting
+  -- works. Only the recipes this tech is meant to unlock are touched, so it cannot over-enable.
+  local ok_proto, proto = pcall(function() return technology.prototype end)
+  if not ok_proto or not proto then return {} end
+  local ok_eff, effects = pcall(function() return proto.effects end)
+  if not ok_eff or not effects then return {} end
+  local unlocked = {}
+  for _, effect in pairs(effects) do
+    if effect.type == "unlock-recipe" and effect.recipe and force.recipes[effect.recipe] then
+      pcall(function() force.recipes[effect.recipe].enabled = true end)
+      unlocked[#unlocked + 1] = effect.recipe
+    end
+  end
+  return unlocked
+end
 local function action_research()
   if type(action.technology) ~= "string" then return err("research requires technology") end
   local technology = agent.force.technologies[action.technology]
   if not technology then return err("technology not found", { technology = action.technology }) end
-  if technology.researched then return ok({ action = "research", technology = technology.name, researched = true }) end
+  if technology.researched then
+    apply_unlock_recipes(technology, agent.force)
+    return ok({ action = "research", technology = technology.name, researched = true })
+  end
   local ingredients = {}
   local ok_ingredients, raw_ingredients = pcall(function() return technology.research_unit_ingredients end)
   if ok_ingredients and raw_ingredients then ingredients = raw_ingredients end
   if #ingredients == 0 then
     technology.researched = true
-    return ok({ action = "research", technology = technology.name, researched = true, trigger = true })
+    local unlocked = apply_unlock_recipes(technology, agent.force)
+    return ok({ action = "research", technology = technology.name, researched = true, trigger = true, unlocked_recipes = unlocked })
   end
   local set_ok = pcall(function() agent.force.research_queue = { technology.name } end)
   if not set_ok then return err("setting research failed", { technology = technology.name }) end

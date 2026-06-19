@@ -140,6 +140,16 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("player.set_controller", command)
         self.assertIn("defines.controllers.character", command)
 
+    def test_research_action_explicitly_unlocks_recipes(self):
+        # Setting technology.researched=true does not reliably fire unlock-recipe effects over RCON,
+        # so the handler must enable the unlocked recipes explicitly (else green science stays locked).
+        command = build_modless_action_command({"type": "research", "technology": "logistic-science-pack"})
+
+        self.assertIn("action_research", command)
+        self.assertIn("apply_unlock_recipes", command)
+        self.assertIn("unlock-recipe", command)
+        self.assertIn(".enabled = true", command)
+
     def test_chart_action_is_allowlisted(self):
         command = build_modless_action_command({"type": "chart", "radius": 64})
         self.assertIn("agent.force.chart", command)
