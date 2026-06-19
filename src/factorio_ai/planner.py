@@ -2820,6 +2820,40 @@ def _add_entity(
     entities.append(entity)
 
 
+def _direct_iron_drill_stranded(observation: dict[str, Any]) -> bool:
+    """True if a burner mining drill sits stranded (status ``no_minable_resources``) next to an
+    iron-ore patch. Iron stock can read as 'done' while production is actually DEAD and the plates are
+    stuck in a far furnace (observed live 2026-06-19: drill 2 tiles off the ore at 95 tiles, furnaces
+    idle, assemblers starved while total iron looked >= target). Recover the drill before reporting
+    done so the factory does not silently starve once the buffer drains. Scans entities/resources
+    directly (deterministic) -- the cell-finder is cache/order-dependent and missed it intermittently."""
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    stranded = [
+        e for e in entities
+        if isinstance(e, dict) and str(e.get("name") or "") == "burner-mining-drill"
+        and isinstance(e.get("position"), dict)
+        and _entity_status_is(e, "no_minable_resources", 21)
+    ]
+    if not stranded:
+        return False
+    resources = observation.get("resources") if isinstance(observation.get("resources"), list) else []
+    iron_tiles = [
+        r for r in resources
+        if isinstance(r, dict) and r.get("name") == "iron-ore" and isinstance(r.get("position"), dict)
+    ]
+    if not iron_tiles:
+        return False
+    for drill in stranded:
+        dp = drill["position"]
+        if any(
+            abs(float(dp.get("x", 0)) - float(r["position"].get("x", 0))) <= 3.0
+            and abs(float(dp.get("y", 0)) - float(r["position"].get("y", 0))) <= 3.0
+            for r in iron_tiles
+        ):
+            return True
+    return False
+
+
 class IronPlateSkill:
     """Rule-based early-game skill that bootstraps iron plate production."""
 
@@ -2834,7 +2868,7 @@ class IronPlateSkill:
     ) -> PlannerDecision:
         target = target_count or self.target_count
         iron_total = inventory_count(observation, "iron-plate") if inventory_only else total_item_count(observation, "iron-plate")
-        if iron_total >= target:
+        if iron_total >= target and not _direct_iron_drill_stranded(observation):
             return PlannerDecision(None, f"iron plate target reached: {iron_total}/{target}", done=True)
         return _direct_plate_smelting_decision(
             observation,
@@ -5019,7 +5053,11 @@ def _direct_plate_smelting_decision(
     allow_support_plate: bool = True,
 ) -> PlannerDecision:
     total_product = inventory_count(observation, product_name) if inventory_only else total_item_count(observation, product_name)
-    if total_product >= target_count:
+    # Iron stock can read as 'done' while a burner drill sits stranded off the ore -- production is
+    # actually dead and the stock is stuck in a far furnace, so the assemblers silently starve once it
+    # drains. When the iron drill is stranded, do NOT report done; fall through to recover it.
+    iron_drill_stranded = resource_name == "iron-ore" and _direct_iron_drill_stranded(observation)
+    if total_product >= target_count and not iron_drill_stranded:
         return PlannerDecision(None, f"{product_name} target reached: {total_product}/{target_count}", done=True)
 
     player = player_position(observation)
