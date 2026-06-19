@@ -1670,10 +1670,6 @@ local function action_connect_power()
   return err("no reachable electric pole found for connect_power", { target = target.name, target_unit_number = target.unit_number })
 end
 local function apply_unlock_recipes(technology, force)
-  -- Setting technology.researched=true does NOT reliably fire the tech's unlock-recipe effects over
-  -- RCON (observed live: the 0-cost green-science tech was set researched yet logistic-science-pack
-  -- stayed "recipe is not craftable"). Enable the unlocked recipes explicitly so downstream crafting
-  -- works. Only the recipes this tech is meant to unlock are touched, so it cannot over-enable.
   local ok_proto, proto = pcall(function() return technology.prototype end)
   if not ok_proto or not proto then return {} end
   local ok_eff, effects = pcall(function() return proto.effects end)
