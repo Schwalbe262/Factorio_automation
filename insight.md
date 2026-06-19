@@ -6314,3 +6314,219 @@ Promote to insight.md only if:
 - Evidence: `{"item":"iron-plate","item_count":80,"source_loop":4783,"steps":1,"target":10}`
 - Remaining risk: Needs continued validation in later loops.
 
+## 2026-06-19 18:03:59 +09:00 - Insight 775
+- Source loop: Loop 4798
+- Improvement: produce_iron_plate completed after 1 step(s): iron plate target reached: 68/10
+- Before: not recorded
+- After: iron-plate = 68
+- Evidence: `{"item":"iron-plate","item_count":68,"source_loop":4798,"steps":1,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-19 18:07:35 +09:00 - Insight 776
+- Source loop: Loop 4813
+- Improvement: produce_iron_plate completed after 1 step(s): iron plate target reached: 68/10
+- Before: not recorded
+- After: iron-plate = 68
+- Evidence: `{"item":"iron-plate","item_count":68,"source_loop":4813,"steps":1,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-19 18:12:04 +09:00 - Insight 777
+- Source loop: Loop 4827
+- Improvement: produce_iron_plate completed after 1 step(s): iron plate target reached: 68/10
+- Before: not recorded
+- After: iron-plate = 68
+- Evidence: `{"item":"iron-plate","item_count":68,"source_loop":4827,"steps":1,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-19 18:15:42 +09:00 - Insight 778
+- Source loop: Loop 4842
+- Improvement: produce_iron_plate completed after 1 step(s): iron plate target reached: 68/10
+- Before: not recorded
+- After: iron-plate = 68
+- Evidence: `{"item":"iron-plate","item_count":68,"source_loop":4842,"steps":1,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-19 18:21:20 +09:00 - Insight 779
+- Source loop: Loop 4856
+- Improvement: produce_iron_plate completed after 1 step(s): iron plate target reached: 68/10
+- Before: not recorded
+- After: iron-plate = 68
+- Evidence: `{"item":"iron-plate","item_count":68,"source_loop":4856,"steps":1,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-19 19:28:15 +09:00 - Insight 780
+- Source loop: Loop 4886
+- Improvement: transport-belt increased by 7 during bootstrap_build_item_mall.
+- Before: transport-belt = 2
+- After: transport-belt = 9
+- Evidence: `{"delta":7,"final":9,"initial":2,"item":"transport-belt","source_loop":4886,"target":20}`
+- Remaining risk: Target is not complete yet: 9/20.
+
+## 2026-06-19 19:28:15 +09:00 - Insight 781
+- Source loop: Loop 4886
+- Improvement: bootstrap_build_item_mall completed after 9 step(s): yielded for other work instead of idling: wait for transport-belt mall output inserter to buffer items into chest
+- Before: not recorded
+- After: transport-belt = 9
+- Evidence: `{"item":"transport-belt","item_count":9,"source_loop":4886,"steps":9,"target":20}`
+- Remaining risk: Target is not complete yet: 9/20.
+
+## 2026-06-19 19:28:35 +09:00 - Insight 782
+- Source loop: Loop 4888
+- Improvement: transport-belt increased by 4 during bootstrap_build_item_mall.
+- Before: transport-belt = 9
+- After: transport-belt = 13
+- Evidence: `{"delta":4,"final":13,"initial":9,"item":"transport-belt","source_loop":4888,"target":20}`
+- Remaining risk: Target is not complete yet: 13/20.
+
+## 2026-06-19 19:28:35 +09:00 - Insight 783
+- Source loop: Loop 4888
+- Improvement: bootstrap_build_item_mall completed after 4 step(s): yielded for other work instead of idling: wait for transport-belt mall output inserter to buffer items into chest
+- Before: not recorded
+- After: transport-belt = 13
+- Evidence: `{"item":"transport-belt","item_count":13,"source_loop":4888,"steps":4,"target":20}`
+- Remaining risk: Target is not complete yet: 13/20.
+
+## 2026-06-19 19:28:50 +09:00 - Insight 784
+- Source loop: Loop 4890
+- Improvement: bootstrap_build_item_mall completed after 1 step(s): yielded for other work instead of idling: wait for transport-belt mall output inserter to buffer items into chest
+- Before: not recorded
+- After: transport-belt = 15
+- Evidence: `{"item":"transport-belt","item_count":15,"source_loop":4890,"steps":1,"target":20}`
+- Remaining risk: Target is not complete yet: 15/20.
+
+## 2026-06-19 19:31:12 +09:00 - Insight 785
+- Source loop: Loop 4898
+- Improvement: transport-belt increased by 8 during bootstrap_build_item_mall.
+- Before: transport-belt = 2
+- After: transport-belt = 10
+- Evidence: `{"delta":8,"final":10,"initial":2,"item":"transport-belt","source_loop":4898,"target":20}`
+- Remaining risk: Target is not complete yet: 10/20.
+
+## 2026-06-19 19:31:12 +09:00 - Insight 786
+- Source loop: Loop 4898
+- Improvement: bootstrap_build_item_mall completed after 4 step(s): yielded for other work instead of idling: wait for transport-belt mall output inserter to buffer items into chest
+- Before: not recorded
+- After: transport-belt = 10
+- Evidence: `{"item":"transport-belt","item_count":10,"source_loop":4898,"steps":4,"target":20}`
+- Remaining risk: Target is not complete yet: 10/20.
+
+## 2026-06-19 19:31:33 +09:00 - Insight 787
+- Source loop: Loop 4900
+- Improvement: bootstrap_build_item_mall completed after 1 step(s): yielded for other work instead of idling: wait for transport-belt mall output inserter to buffer items into chest
+- Before: not recorded
+- After: transport-belt = 10
+- Evidence: `{"item":"transport-belt","item_count":10,"source_loop":4900,"steps":1,"target":20}`
+- Remaining risk: Target is not complete yet: 10/20.
+
+## 2026-06-19 19:31:54 +09:00 - Insight 788
+- Source loop: Loop 4902
+- Improvement: bootstrap_build_item_mall completed after 1 step(s): yielded for other work instead of idling: wait for transport-belt mall output inserter to buffer items into chest
+- Before: not recorded
+- After: transport-belt = 10
+- Evidence: `{"item":"transport-belt","item_count":10,"source_loop":4902,"steps":1,"target":20}`
+- Remaining risk: Target is not complete yet: 10/20.
+
+## 2026-06-19 19:32:15 +09:00 - Insight 789
+- Source loop: Loop 4904
+- Improvement: bootstrap_build_item_mall completed after 1 step(s): yielded for other work instead of idling: wait for transport-belt mall output inserter to buffer items into chest
+- Before: not recorded
+- After: transport-belt = 10
+- Evidence: `{"item":"transport-belt","item_count":10,"source_loop":4904,"steps":1,"target":20}`
+- Remaining risk: Target is not complete yet: 10/20.
+
+## 2026-06-19 19:32:36 +09:00 - Insight 790
+- Source loop: Loop 4906
+- Improvement: bootstrap_build_item_mall completed after 1 step(s): yielded for other work instead of idling: wait for transport-belt mall output inserter to buffer items into chest
+- Before: not recorded
+- After: transport-belt = 10
+- Evidence: `{"item":"transport-belt","item_count":10,"source_loop":4906,"steps":1,"target":20}`
+- Remaining risk: Target is not complete yet: 10/20.
+
+## 2026-06-19 19:38:31 +09:00 - Insight 791
+- Source loop: Loop 4920
+- Improvement: produce_iron_plate completed after 1 step(s): iron plate target reached: 32/10
+- Before: not recorded
+- After: iron-plate = 32
+- Evidence: `{"item":"iron-plate","item_count":32,"source_loop":4920,"steps":1,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-19 19:42:34 +09:00 - Insight 792
+- Source loop: Loop 4934
+- Improvement: produce_iron_plate completed after 1 step(s): iron plate target reached: 32/10
+- Before: not recorded
+- After: iron-plate = 32
+- Evidence: `{"item":"iron-plate","item_count":32,"source_loop":4934,"steps":1,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-19 19:42:50 +09:00 - Insight 793
+- Source loop: Loop 4936
+- Improvement: produce_iron_plate completed after 1 step(s): iron plate target reached: 32/10
+- Before: not recorded
+- After: iron-plate = 32
+- Evidence: `{"item":"iron-plate","item_count":32,"source_loop":4936,"steps":1,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-19 19:46:53 +09:00 - Insight 794
+- Source loop: Loop 4950
+- Improvement: produce_iron_plate completed after 1 step(s): iron plate target reached: 32/10
+- Before: not recorded
+- After: iron-plate = 32
+- Evidence: `{"item":"iron-plate","item_count":32,"source_loop":4950,"steps":1,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-19 19:52:13 +09:00 - Insight 795
+- Source loop: Loop 4964
+- Improvement: produce_iron_plate completed after 1 step(s): iron plate target reached: 32/10
+- Before: not recorded
+- After: iron-plate = 32
+- Evidence: `{"item":"iron-plate","item_count":32,"source_loop":4964,"steps":1,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-19 20:17:48 +09:00 - Insight 796
+- Source loop: Loop 4982
+- Improvement: produce_iron_plate completed after 1 step(s): iron plate target reached: 32/10
+- Before: not recorded
+- After: iron-plate = 32
+- Evidence: `{"item":"iron-plate","item_count":32,"source_loop":4982,"steps":1,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-19 20:18:03 +09:00 - Insight 797
+- Source loop: Loop 4984
+- Improvement: produce_iron_plate completed after 1 step(s): iron plate target reached: 32/10
+- Before: not recorded
+- After: iron-plate = 32
+- Evidence: `{"item":"iron-plate","item_count":32,"source_loop":4984,"steps":1,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-19 20:22:20 +09:00 - Insight 798
+- Source loop: Loop 4998
+- Improvement: produce_iron_plate completed after 1 step(s): iron plate target reached: 32/10
+- Before: not recorded
+- After: iron-plate = 32
+- Evidence: `{"item":"iron-plate","item_count":32,"source_loop":4998,"steps":1,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-19 20:26:31 +09:00 - Insight 799
+- Source loop: Loop 5012
+- Improvement: produce_iron_plate completed after 1 step(s): iron plate target reached: 32/10
+- Before: not recorded
+- After: iron-plate = 32
+- Evidence: `{"item":"iron-plate","item_count":32,"source_loop":5012,"steps":1,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-19 20:29:50 +09:00 - Insight 800
+- Source loop: Loop 5026
+- Improvement: produce_iron_plate completed after 1 step(s): iron plate target reached: 32/10
+- Before: not recorded
+- After: iron-plate = 32
+- Evidence: `{"item":"iron-plate","item_count":32,"source_loop":5026,"steps":1,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+
+## 2026-06-19 20:45:36 +09:00 - Insight 801
+- Source loop: Loop 5030
+- Improvement: produce_iron_plate completed after 1 step(s): iron plate target reached: 32/10
+- Before: not recorded
+- After: iron-plate = 32
+- Evidence: `{"item":"iron-plate","item_count":32,"source_loop":5030,"steps":1,"target":10}`
+- Remaining risk: Needs continued validation in later loops.
+

@@ -13,3 +13,4 @@ factorio_mods/
 saves/
 *.zip
 *.log
+.claude/
