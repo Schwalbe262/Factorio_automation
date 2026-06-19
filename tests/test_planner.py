@@ -1372,6 +1372,26 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("needs 22 small-electric-pole", decision.reason)
         self.assertIn("before mining the existing mall", decision.reason)
 
+    def test_gear_belt_mall_relocation_takes_buffered_power_poles_before_teardown(self):
+        obs = long_gear_mall_relocation_observation()
+        obs["inventory"] = {"small-electric-pole": 1}
+        obs["player"]["position"] = {"x": 7.0, "y": 0.5}
+        obs["entities"].append(
+            {
+                "name": "wooden-chest",
+                "unit_number": 901,
+                "position": {"x": 7.0, "y": 0.5},
+                "inventories": {"1": {"small-electric-pole": 22}},
+            }
+        )
+
+        decision = GearBeltMallRelocationSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "small-electric-pole")
+        self.assertEqual(decision.action["unit_number"], 901)
+        self.assertIn("buffered small electric poles", decision.reason)
+
     def test_gear_belt_mall_relocation_builds_power_corridor_before_teardown(self):
         obs = long_gear_mall_relocation_observation()
         obs["inventory"] = {"small-electric-pole": 23}
@@ -5814,6 +5834,45 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "take")
         self.assertEqual(decision.action["item"], "iron-gear-wheel")
         self.assertIn("transport-belt mall input bootstrap", decision.reason)
+
+    def test_build_item_mall_takes_chest_buffered_gears_for_transport_belt_input_bootstrap(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt"),
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 981,
+                    "position": {"x": 0.5, "y": 6.5},
+                    "distance": 2,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"iron-plate": 1}},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 982,
+                    "position": {"x": 2.5, "y": 6.5},
+                    "direction": 4,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 983,
+                    "position": {"x": 3.5, "y": 6.5},
+                    "inventories": {"1": {"iron-gear-wheel": 4}},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 983)
+        self.assertIn("chest-buffered assembler gears", decision.reason)
 
     def test_build_item_mall_replaces_output_burner_inserter_when_regular_is_usable(self):
         obs = powered_automation_observation()

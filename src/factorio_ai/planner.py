@@ -10272,6 +10272,31 @@ class GearBeltMallRelocationSkill:
             )
         required_for_corridor = len(missing_corridor_positions)
         if available_poles < required_for_corridor:
+            buffered_poles = _nearest_local_item_seed_source(
+                observation,
+                "small-electric-pole",
+                _gear_belt_mall_relocation_power_target(layout),
+                max_distance=256.0,
+            )
+            buffered_count = entity_item_count(buffered_poles, "small-electric-pole") if isinstance(buffered_poles, dict) else 0
+            if buffered_count > 0:
+                buffered_position = _position(buffered_poles)
+                if distance(player, buffered_position) > 20:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": buffered_position},
+                        "move near buffered small electric poles for gear/belt mall relocation corridor",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "take",
+                        "item": "small-electric-pole",
+                        "count": min(buffered_count, required_for_corridor - available_poles),
+                        "unit_number": buffered_poles.get("unit_number"),
+                        "name": buffered_poles.get("name") or "wooden-chest",
+                        "position": buffered_position,
+                    },
+                    "take buffered small electric poles for gear/belt mall relocation power corridor",
+                )
             return PlannerDecision(
                 None,
                 (
@@ -12128,7 +12153,40 @@ def _take_assembler_output_gears_for_infrastructure(
         return None
     output_count = entity_item_count(assembler, "iron-gear-wheel")
     if output_count <= 0:
-        return None
+        chest = cell.get("output_chest") if isinstance(cell, dict) else None
+        chest_count = entity_item_count(chest, "iron-gear-wheel") if isinstance(chest, dict) else 0
+        if chest_count <= 0 and reference_position is not None:
+            exclude_units = {
+                assembler.get("unit_number"),
+            }
+            exclude_units.discard(None)
+            chest = _nearest_local_item_seed_source(
+                observation,
+                "iron-gear-wheel",
+                reference_position,
+                max_distance=8.0,
+                exclude_units=exclude_units,
+            )
+            chest_count = entity_item_count(chest, "iron-gear-wheel") if isinstance(chest, dict) else 0
+        if not isinstance(chest, dict) or chest_count <= 0:
+            return None
+        chest_position = _position(chest)
+        if distance(player, chest_position) > 20:
+            return PlannerDecision(
+                {"type": "move_to", "position": chest_position},
+                f"move near gear output chest for {infrastructure_reason}",
+            )
+        return PlannerDecision(
+            {
+                "type": "take",
+                "item": "iron-gear-wheel",
+                "count": min(chest_count, target_gears),
+                "unit_number": chest.get("unit_number"),
+                "name": chest.get("name") or "wooden-chest",
+                "position": chest_position,
+            },
+            f"take chest-buffered assembler gears for {infrastructure_reason}",
+        )
     assembler_position = _position(assembler)
     if distance(player, assembler_position) > 20:
         return PlannerDecision(
