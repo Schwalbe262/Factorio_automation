@@ -1,11 +1,11 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; unattended no-mod run is active under supervisor PID 70180 with autopilot PID 71688.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; unattended no-mod run is active under supervisor PID 70180 with autopilot PID 57108.
 - Startup context: read this file and targeted `goal.md`; never read `note.md`/`insight.md` in full.
-- Live status 2026-06-20 02:36 KST: autopilot restarted from PID 71688 to PID 57108; new source routed recovery to `bootstrap_build_item_mall`.
+- Live status 2026-06-20 02:44 KST: autopilot PID 57108 has recovered belt stock to 20 but old code is now looping `build_iron_plate_logistic_line_to_gear_mall` on a non-logistics gear/belt pair.
 - Part 135 fixes health visibility: `run-health` falls back to supervisor vLLM heartbeat when the direct scheduler API is slow, instead of showing vLLM unavailable.
 - Part 135 fixes readiness/strategy recovery: non-logistics gear/belt assembler pairs now repair via `bootstrap_build_item_mall`, not `build_gear_belt_mall_logistics`.
-- Validation: `PYTHONPATH=src python -m unittest tests.test_controller tests.test_strategy tests.test_factory_readiness tests.test_run_health` -> 191 passed.
+- Part 136 extends the same contract to iron-line strategy: no planner-compatible gear/belt pair means bootstrap, not `build_iron_plate_logistic_line_to_gear_mall`.
+- Validation: `PYTHONPATH=src python -m unittest tests.test_controller tests.test_strategy tests.test_factory_readiness tests.test_run_health` -> 192 passed.
 - Existing runtime foundry queue entries for implemented skills are override-mode self-repair, not new missing-skill backlog.
-- Post-restart validation: `failure_root=None`, `repair_skill=None`, `seed_count=1`, transport-belt stock recovered to 4 after bootstrap output buffering.
-- Token usage checkpoint: 604,228 goal-tracker tokens; weekly quota unavailable because project Codex state DB token sampler remains malformed.
-- Next: monitor whether the new cycle rebuilds enough belt stock for `connect_coal_fuel_feed` to finish the boiler coal feed.
+- Token usage checkpoint: 660,412 goal-tracker tokens; weekly quota unavailable because project Codex state DB token sampler remains malformed.
+- Next: commit/push part136, restart autopilot PID 57108, and verify iron-line loop routes back to `bootstrap_build_item_mall`.

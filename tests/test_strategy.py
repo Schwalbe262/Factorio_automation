@@ -26,7 +26,7 @@ def gear_mall_needs_plate_line_observation() -> dict:
                 "name": "assembling-machine-1",
                 "unit_number": 101,
                 "recipe": "transport-belt",
-                "position": {"x": 3.5, "y": 0.5},
+                "position": {"x": 4.5, "y": 0.5},
                 "electric_network_connected": True,
                 "inventories": {"1": {"transport-belt": 8}},
             },
@@ -159,7 +159,7 @@ def gear_mall_short_site_input_route_observation() -> dict:
                 "name": "assembling-machine-1",
                 "unit_number": 1779,
                 "recipe": "transport-belt",
-                "position": {"x": 20, "y": 8},
+                "position": {"x": 12, "y": 8},
                 "electric_network_connected": True,
                 "inventories": {"1": {"transport-belt": 8}},
             },
@@ -666,6 +666,7 @@ class StrategyTests(unittest.TestCase):
 
     def test_rocket_goal_uses_belt_output_chest_as_available_mall_stock(self):
         observation = gear_belt_mall_needs_bootstrap_observation()
+        observation["entities"][1]["position"] = {"x": 4.5, "y": 0.5}
         observation["entities"].append(
             {
                 "name": "wooden-chest",
@@ -678,6 +679,22 @@ class StrategyTests(unittest.TestCase):
         result = heuristic_strategy("launch_rocket_program", observation)
 
         self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertIn("transport_belts_available_for_mall_logistics=true", result["evidence"])
+
+    def test_rocket_goal_bootstraps_when_belt_output_exists_but_pair_is_not_logistics_compatible(self):
+        observation = gear_belt_mall_needs_bootstrap_observation()
+        observation["entities"].append(
+            {
+                "name": "wooden-chest",
+                "unit_number": 300,
+                "position": {"x": 6.5, "y": 0.5},
+                "inventories": {"1": {"transport-belt": 48}},
+            }
+        )
+
+        result = heuristic_strategy("launch_rocket_program", observation)
+
+        self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
         self.assertIn("transport_belts_available_for_mall_logistics=true", result["evidence"])
 
     def test_rocket_goal_bootstraps_belt_mall_from_local_plate_seed_before_circuit(self):

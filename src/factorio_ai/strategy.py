@@ -2554,8 +2554,13 @@ def _heuristic_strategy_impl(
             for key in ("item", "site_id", "detail", "recommendation")
         ).lower()
         if "iron-plate" in issue_text and ("gear" in issue_text or "iron-gear-wheel" in issue_text):
+            target_skill = (
+                "build_iron_plate_logistic_line_to_gear_mall"
+                if readiness.details.get("gear_belt_logistics_pair_exists")
+                else "bootstrap_build_item_mall"
+            )
             return StrategicDecision(
-                selected_skill="build_iron_plate_logistic_line_to_gear_mall",
+                selected_skill=target_skill,
                 priority=91,
                 reason=(
                     "The gear/belt mall needs iron-plate input logistics; build a belt route instead of "
@@ -3726,7 +3731,12 @@ def _gear_mall_iron_plate_guardrail_adjustment(
     issue: dict[str, Any],
 ) -> dict[str, Any]:
     adjusted = dict(decision)
-    adjusted["selected_skill"] = "build_iron_plate_logistic_line_to_gear_mall"
+    target_skill = (
+        "build_iron_plate_logistic_line_to_gear_mall"
+        if issue.get("gear_belt_logistics_pair_exists") is not False
+        else "bootstrap_build_item_mall"
+    )
+    adjusted["selected_skill"] = target_skill
     adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 92)
     original_reason = str(decision.get("reason") or "").strip()
     guardrail_reason = (
@@ -3752,15 +3762,20 @@ def _gear_mall_iron_plate_guardrail_adjustment(
     )
     adjusted["guardrail_adjusted"] = {
         "from": selected,
-        "to": "build_iron_plate_logistic_line_to_gear_mall",
+        "to": target_skill,
         "reason": guardrail_reason,
     }
     return adjusted
 
 
 def _gear_mall_iron_plate_strategy_decision(issue: dict[str, Any]) -> dict[str, Any]:
+    target_skill = (
+        "build_iron_plate_logistic_line_to_gear_mall"
+        if issue.get("gear_belt_logistics_pair_exists") is not False
+        else "bootstrap_build_item_mall"
+    )
     return StrategicDecision(
-        selected_skill="build_iron_plate_logistic_line_to_gear_mall",
+        selected_skill=target_skill,
         priority=92,
         reason=(
             "The gear/belt mall needs sustained iron-plate input. Build the gear-mall iron-plate logistics line "
@@ -3802,6 +3817,8 @@ def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[s
     if not _technology_researched(observation, "automation"):
         return None
     belts_available = _transport_belts_available_for_mall_logistics(observation)
+    readiness = build_factory_readiness(observation)
+    gear_belt_logistics_pair_exists = bool(readiness.details.get("gear_belt_logistics_pair_exists"))
     assemblers = (
         entities_named(observation, "assembling-machine-1")
         + entities_named(observation, "assembling-machine-2")
@@ -3817,7 +3834,7 @@ def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[s
     source_furnaces = _iron_plate_source_furnaces(observation)
     site_input_issue = _gear_mall_iron_plate_site_input_issue(observation, belts_available)
     if site_input_issue is not None:
-        return site_input_issue
+        return {**site_input_issue, "gear_belt_logistics_pair_exists": gear_belt_logistics_pair_exists}
     if not gear_assemblers or not source_furnaces:
         return _relocated_gear_belt_mall_target_issue(
             observation,
@@ -3850,6 +3867,7 @@ def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[s
                 "gear_assembler_iron_plate": entity_item_count(gear, "iron-plate"),
                 "gear_assembler_status": gear.get("status_name") or gear.get("status"),
                 "transport_belts_available": belts_available,
+                "gear_belt_logistics_pair_exists": gear_belt_logistics_pair_exists,
                 "site_input_status": "route_needed",
                 **route_cost,
             }
