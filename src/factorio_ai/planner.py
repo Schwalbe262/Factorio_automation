@@ -11670,6 +11670,22 @@ class BuildItemMallSkill:
                     )
                     if not decision.done:
                         return decision
+                    # The gear mall cannot produce gears right now (done) and no gear logistic line
+                    # exists. A walking player would wait for the mall, but that DEADLOCKS the whole
+                    # factory for the VIRTUAL agent (observed live 2026-06-19: belt mall "cannot obtain
+                    # iron-gear-wheel" -> no belts -> coal feed refuses -> power dies). The virtual agent
+                    # teleports and hand-craft is free, so seed gears by hand to unblock the downstream
+                    # mall; real gear logistics resume once a gear assembler produces.
+                    if _is_virtual_agent(observation) and craftable_count(observation, "iron-gear-wheel") > 0:
+                        current_gears = inventory_count(observation, "iron-gear-wheel")
+                        return PlannerDecision(
+                            {
+                                "type": "craft",
+                                "recipe": "iron-gear-wheel",
+                                "count": min(quantity - current_gears, craftable_count(observation, "iron-gear-wheel")),
+                            },
+                            f"virtual agent hand-craft gears to seed {self.target_item} mall (gear mall cannot produce yet)",
+                        )
                     return None
                 # Genuine bootstrap: the post-Automation policy wants gears from an assembler, but if
                 # NO assembler is producing gears there is nothing to supply them and refusing forever
