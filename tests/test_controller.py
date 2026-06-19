@@ -2443,6 +2443,43 @@ class ControllerTests(unittest.TestCase):
             self.assertIsNotNone(dry_run_config)
             self.assertEqual(dry_run_config["max_steps"], 0)
 
+    def test_run_strategy_step_passes_strategy_target_count_to_power_pole_mall(self):
+        captured: dict[str, object] = {}
+
+        class FakeController(FactorioController):
+            def strategy_decision(self, objective, require_llm=False, skip_remote=False):
+                return {
+                    "selected_skill": "bootstrap_power_pole_mall",
+                    "priority": 94,
+                    "reason": "need relocation power poles",
+                    "evidence": [],
+                    "blockers": [],
+                    "expected_effect": "",
+                    "target_item": "small-electric-pole",
+                    "target_count": 25,
+                    "skill_status": {
+                        "name": "bootstrap_power_pole_mall",
+                        "implemented": True,
+                        "executor": "BuildItemMallSkill",
+                        "codex_required": False,
+                    },
+                }
+
+            def _run_skill(self, **kwargs):
+                captured.update(kwargs)
+                return RunSummary(True, "stubbed", 1, 0, self.cfg.log_dir / "stub.log", kwargs.get("target_item", ""))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = make_test_config(Path(temp_dir))
+            controller = FakeController(cfg)
+
+            summary = controller.run_strategy_step("launch_rocket_program")
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(captured["goal"], "bootstrap_power_pole_mall")
+        self.assertEqual(captured["target_item"], "small-electric-pole")
+        self.assertEqual(captured["target"], 25)
+
     def test_strategy_step_summary_serializes_run(self):
         run = RunSummary(
             ok=True,

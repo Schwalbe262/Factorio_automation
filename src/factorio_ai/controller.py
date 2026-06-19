@@ -1084,7 +1084,7 @@ class FactorioController:
         strategy_target_item = _strategy_target_item(strategy) if selected == "bootstrap_build_item_mall" else None
         strategy_input_item = _strategy_site_input_item(strategy) if selected == "build_site_input_logistic_line" else None
         strategy_target_count = target_count
-        if strategy_target_count is None and selected == "bootstrap_build_item_mall":
+        if strategy_target_count is None:
             strategy_target_count = _int_or_none(strategy.get("target_count"))
         config = self._skill_run_config(
             selected,

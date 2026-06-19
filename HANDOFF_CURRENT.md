@@ -1,11 +1,11 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; unattended no-mod run is active under supervisor PID 70180 with autopilot PID 76120.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; unattended no-mod run is active under supervisor PID 70180 with autopilot PID 2640.
 - Startup context: read this file and targeted `goal.md`; never read `note.md`/`insight.md` in full.
-- Live status 2026-06-20 03:03 KST: Part137 restart broke the `build_iron_plate_logistic_line_to_gear_mall` -> `bootstrap_build_item_mall` no-op loop; stall=0.
-- Last live skill: `bootstrap_power_pole_mall` yielded while waiting for pole output buffering; a fresh `no-mod-strategy` probe selects `connect_coal_fuel_feed`.
+- Live status 2026-06-20 03:35 KST: new PID 2640 is running `research_logistics`; research=`logistics(0.05)`, stall=0.
 - Part 136 prevents direct iron-line recovery when the gear/belt pair is not logistics-compatible.
 - Part 137 sends non-logistics long iron routes to relocation/power-pole prerequisites even when transport-belt stock exists.
-- Validation: `PYTHONPATH=src python -m unittest tests.test_controller tests.test_strategy tests.test_factory_readiness tests.test_run_health` -> 193 passed.
+- Part 138 fixes executable recovery: vertical/non-logistics gear+belt pairs now produce relocation layouts, missing relocation layouts repair the belt mall first, and strategy `target_count` reaches controller for pole deficits.
+- Validation: `PYTHONPATH=src python -m unittest tests.test_controller tests.test_strategy tests.test_factory_readiness tests.test_run_health tests.test_planner` -> 510 passed.
 - Existing runtime foundry queue entries for implemented skills are override-mode self-repair, not new missing-skill backlog.
-- Token usage checkpoint: 767,815 goal-tracker tokens; weekly quota unavailable because project Codex state DB token sampler remains malformed.
-- Next: monitor PID 76120 for `connect_coal_fuel_feed` completion and belt-mall recovery after pole mall buffering.
+- Token usage checkpoint: 1,023,109 goal-tracker tokens; weekly quota unavailable because project Codex state DB token sampler remains malformed.
+- Next: monitor logistics research completion; current bottlenecks are low iron/science stock while research continues.

@@ -1605,6 +1605,21 @@ class PlannerTests(unittest.TestCase):
             4.0,
         )
 
+    def test_gear_belt_mall_relocation_accepts_vertical_existing_pair(self):
+        obs = long_gear_mall_relocation_observation()
+        obs["entities"][2]["position"] = {"x": 0.5, "y": -2.5}
+
+        layout = planner_module._find_gear_belt_mall_relocation_layout(obs)
+
+        self.assertIsNotNone(layout)
+        self.assertEqual(layout["gear_assembler"]["unit_number"], 100)
+        self.assertEqual(layout["belt_assembler"]["unit_number"], 101)
+        self.assertEqual(layout["route_cost_preference"], "relocate_mall_to_iron_source")
+        self.assertEqual(
+            layout["target_belt_position"]["x"] - layout["target_gear_position"]["x"],
+            4.0,
+        )
+
     def test_gear_belt_mall_relocation_avoids_resource_under_target_machine(self):
         obs = long_gear_mall_relocation_observation()
         obs["resources"] = [

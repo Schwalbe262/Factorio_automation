@@ -1330,7 +1330,34 @@ def reconcile_strategy_decision(
     transport_belt_mall_gear_retool_issue = _transport_belt_mall_gear_retool_issue(observation)
     transport_belt_mall_retool_issue = _transport_belt_mall_retool_issue(observation)
     relocation_power_pole_deficit = _gear_mall_relocation_power_pole_deficit(gear_mall_iron_plate_issue, observation)
+    gear_mall_route_needs_compaction = _gear_mall_plate_route_needs_compaction(gear_mall_iron_plate_issue)
+    gear_mall_relocation_layout_ready = (
+        _find_gear_belt_mall_relocation_layout(observation) is not None
+        if gear_mall_route_needs_compaction
+        else False
+    )
     power_recovery_waits_on_belt_mall = _power_recovery_waits_on_belt_mall(observation)
+    if (
+        gear_mall_route_needs_compaction
+        and not gear_mall_relocation_layout_ready
+        and readiness.failure_root == "belt_mall_missing"
+        and selected in {
+            "setup_coal_supply",
+            "plan_factory_site",
+            "bootstrap_build_item_mall",
+            "bootstrap_power_pole_mall",
+            "build_gear_belt_mall_logistics",
+            "build_iron_plate_logistic_line_to_gear_mall",
+            "relocate_gear_belt_mall_to_iron_source",
+            "build_site_input_logistic_line",
+            "research_logistics",
+        }
+    ):
+        return _belt_mall_missing_before_relocation_adjustment(
+            decision,
+            selected,
+            gear_mall_iron_plate_issue,
+        )
     if transport_belt_mall_gear_retool_issue is not None and selected in {
         "setup_power",
         "plan_factory_site",
@@ -1416,7 +1443,8 @@ def reconcile_strategy_decision(
         }
         return adjusted
     if (
-        _gear_mall_plate_route_needs_compaction(gear_mall_iron_plate_issue)
+        gear_mall_route_needs_compaction
+        and gear_mall_relocation_layout_ready
         and relocation_power_pole_deficit <= 0
         and (
             _power_issue_allows_pre_power_relocation(critical_factory_power_issue)
@@ -1614,7 +1642,7 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
-    if relocation_power_pole_deficit > 0 and selected in {
+    if gear_mall_relocation_layout_ready and relocation_power_pole_deficit > 0 and selected in {
         "plan_factory_site",
         "relocate_gear_belt_mall_to_iron_source",
         "produce_electronic_circuit",
@@ -1634,6 +1662,9 @@ def reconcile_strategy_decision(
         original_reason = str(decision.get("reason") or "").strip()
         required_poles = gear_mall_iron_plate_issue.get("relocation_power_poles_estimate") if isinstance(gear_mall_iron_plate_issue, dict) else None
         available_poles = total_item_count(observation, "small-electric-pole")
+        pole_target_count = max(20, int(available_poles) + int(relocation_power_pole_deficit))
+        adjusted["target_item"] = "small-electric-pole"
+        adjusted["target_count"] = max(_positive_int_or_none(decision.get("target_count")) or 0, pole_target_count)
         guardrail_reason = (
             "The gear/belt mall relocation is cost-preferred, but the power corridor lacks enough small electric poles; "
             "automate pole supply before mining the existing mall."
@@ -1673,6 +1704,7 @@ def reconcile_strategy_decision(
         gear_mall_iron_plate_issue is not None
         and not bool(gear_mall_iron_plate_issue.get("transport_belts_available"))
         and gear_belt_mall_bootstrap_issue is None
+        and gear_mall_relocation_layout_ready
         and selected
         in {
             "plan_factory_site",
@@ -1716,7 +1748,7 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
-    if _gear_mall_plate_route_needs_compaction(gear_mall_iron_plate_issue) and selected in {
+    if gear_mall_route_needs_compaction and gear_mall_relocation_layout_ready and selected in {
         "plan_factory_site",
         "relocate_gear_belt_mall_to_iron_source",
         "produce_electronic_circuit",
@@ -1777,6 +1809,65 @@ def reconcile_strategy_decision(
             }
         else:
             adjusted.pop("guardrail_adjusted", None)
+        return adjusted
+    if (
+        gear_mall_iron_plate_issue is not None
+        and readiness.failure_root in {"belt_mall_missing", "belt_line_unbuildable"}
+        and readiness.repair_skill in {"bootstrap_build_item_mall", "build_gear_belt_mall_logistics"}
+        and (
+            not bool(gear_mall_iron_plate_issue.get("transport_belts_available"))
+            or (readiness.failure_root == "belt_mall_missing" and not gear_mall_relocation_layout_ready)
+        )
+        and selected in {
+            "plan_factory_site",
+            "produce_electronic_circuit",
+            "automate_electronic_circuit_line",
+            "bootstrap_build_item_mall",
+            "bootstrap_power_pole_mall",
+            "setup_coal_supply",
+            "build_gear_belt_mall_logistics",
+            "build_iron_plate_logistic_line_to_gear_mall",
+            "relocate_gear_belt_mall_to_iron_source",
+            "build_site_input_logistic_line",
+            "research_logistics",
+        }
+    ):
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = readiness.repair_skill
+        if readiness.repair_skill == "bootstrap_build_item_mall":
+            adjusted["target_item"] = "transport-belt"
+            adjusted["target_count"] = max(_positive_int_or_none(decision.get("target_count")) or 0, 20)
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 92)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            f"LLM selected {selected}, but the gear-mall iron-plate route is blocked by "
+            f"{readiness.failure_root}; run {readiness.repair_skill} before selecting the route executor."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(
+            set(_string_list(decision.get("blockers")) + list(readiness.blocked_by) + ["gear-mall route prerequisite"])
+        )
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            f"factory_readiness_failure_root={readiness.failure_root}",
+            f"factory_readiness_repair_skill={readiness.repair_skill}",
+            (
+                "transport_belts_available_for_mall_logistics="
+                f"{str(gear_mall_iron_plate_issue.get('transport_belts_available')).lower()}"
+            ),
+            f"gear_assembler_unit={gear_mall_iron_plate_issue.get('gear_unit')}",
+            f"iron_source_unit={gear_mall_iron_plate_issue.get('source_unit')}",
+            "gear_handcraft_blocked=true",
+        ]
+        adjusted["expected_effect"] = (
+            "Repair the belt mall or construction-belt prerequisite first so the later iron-plate route "
+            "or relocation skill has executable materials and layout state."
+        )
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": readiness.repair_skill,
+            "reason": guardrail_reason,
+        }
         return adjusted
     if gear_mall_iron_plate_issue is not None and selected in {
         "plan_factory_site",
@@ -2275,9 +2366,43 @@ def _heuristic_strategy_impl(
             ).to_dict()
 
     relocation_power_pole_deficit = _gear_mall_relocation_power_pole_deficit(gear_mall_iron_plate_issue, observation)
+    gear_mall_route_needs_compaction = _gear_mall_plate_route_needs_compaction(gear_mall_iron_plate_issue)
+    gear_mall_relocation_layout_ready = (
+        _find_gear_belt_mall_relocation_layout(observation) is not None
+        if gear_mall_route_needs_compaction
+        else False
+    )
     power_recovery_waits_on_belt_mall = _power_recovery_waits_on_belt_mall(observation)
     if (
-        _gear_mall_plate_route_needs_compaction(gear_mall_iron_plate_issue)
+        gear_mall_route_needs_compaction
+        and not gear_mall_relocation_layout_ready
+        and readiness.failure_root == "belt_mall_missing"
+    ):
+        return StrategicDecision(
+            selected_skill="bootstrap_build_item_mall",
+            priority=93,
+            reason=(
+                "The gear/belt mall should eventually be relocated, but the relocation executor has no "
+                "buildable layout while the transport-belt mall assembler is missing or retooled."
+            ),
+            evidence=[
+                f"gear_assembler_unit={gear_mall_iron_plate_issue.get('gear_unit')}",
+                f"iron_source_unit={gear_mall_iron_plate_issue.get('source_unit')}",
+                f"source_distance_tiles={gear_mall_iron_plate_issue.get('source_distance_tiles')}",
+                f"route_cost_preference={gear_mall_iron_plate_issue.get('route_cost_preference')}",
+                "relocation_layout_ready=false",
+                "belt_mall_exists=false",
+                "gear_handcraft_blocked=true",
+            ],
+            blockers=["transport-belt mall before gear/belt relocation"],
+            expected_effect=(
+                "Rebuild the transport-belt mall first so relocation can later recover or rebuild a complete "
+                "gear/belt pair near iron plates."
+            ),
+        ).to_dict()
+    if (
+        gear_mall_route_needs_compaction
+        and gear_mall_relocation_layout_ready
         and relocation_power_pole_deficit <= 0
         and (
             _power_issue_allows_pre_power_relocation(critical_factory_power_issue)
@@ -2404,10 +2529,10 @@ def _heuristic_strategy_impl(
         ).to_dict()
 
     relocation_power_pole_deficit = _gear_mall_relocation_power_pole_deficit(gear_mall_iron_plate_issue, observation)
-    if relocation_power_pole_deficit > 0:
+    if gear_mall_relocation_layout_ready and relocation_power_pole_deficit > 0:
         required_poles = gear_mall_iron_plate_issue.get("relocation_power_poles_estimate") if isinstance(gear_mall_iron_plate_issue, dict) else None
         available_poles = total_item_count(observation, "small-electric-pole")
-        return StrategicDecision(
+        decision = StrategicDecision(
             selected_skill="bootstrap_power_pole_mall",
             priority=94,
             reason=(
@@ -2430,8 +2555,11 @@ def _heuristic_strategy_impl(
                 "without hand-crafting poles."
             ),
         ).to_dict()
+        decision["target_item"] = "small-electric-pole"
+        decision["target_count"] = max(20, int(available_poles) + int(relocation_power_pole_deficit))
+        return decision
 
-    if _gear_mall_plate_route_needs_compaction(gear_mall_iron_plate_issue):
+    if gear_mall_route_needs_compaction and gear_mall_relocation_layout_ready:
         return StrategicDecision(
             selected_skill="relocate_gear_belt_mall_to_iron_source",
             priority=93,
@@ -2448,7 +2576,10 @@ def _heuristic_strategy_impl(
                 f"relocation_power_poles_estimate={gear_mall_iron_plate_issue.get('relocation_power_poles_estimate')}",
                 f"relocation_cost={gear_mall_iron_plate_issue.get('relocation_cost')}",
                 f"route_cost_preference={gear_mall_iron_plate_issue.get('route_cost_preference')}",
-                "transport_belts_available_for_mall_logistics=false",
+                (
+                    "transport_belts_available_for_mall_logistics="
+                    f"{str(gear_mall_iron_plate_issue.get('transport_belts_available')).lower()}"
+                ),
                 "gear_handcraft_blocked=true",
             ],
             blockers=["costed gear/belt mall relocation"],
@@ -3810,6 +3941,48 @@ def _gear_mall_iron_plate_strategy_decision(issue: dict[str, Any]) -> dict[str, 
     ).to_dict()
 
 
+def _belt_mall_missing_before_relocation_adjustment(
+    decision: dict[str, Any],
+    selected: str,
+    issue: dict[str, Any] | None,
+) -> dict[str, Any]:
+    issue = issue or {}
+    adjusted = dict(decision)
+    adjusted["selected_skill"] = "bootstrap_build_item_mall"
+    adjusted["target_item"] = "transport-belt"
+    adjusted["target_count"] = max(_positive_int_or_none(decision.get("target_count")) or 0, 20)
+    adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 93)
+    original_reason = str(decision.get("reason") or "").strip()
+    guardrail_reason = (
+        f"LLM selected {selected}, but the costed gear/belt relocation executor has no buildable layout "
+        "while the transport-belt mall assembler is missing or retooled."
+    )
+    adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+    adjusted["blockers"] = sorted(
+        set(_string_list(decision.get("blockers")) + ["transport-belt mall before gear/belt relocation"])
+    )
+    adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+        f"guardrail_adjusted_from={selected}",
+        f"gear_assembler_unit={issue.get('gear_unit')}",
+        f"iron_source_unit={issue.get('source_unit')}",
+        f"source_distance_tiles={issue.get('source_distance_tiles')}",
+        f"route_cost_preference={issue.get('route_cost_preference')}",
+        "relocation_layout_ready=false",
+        "belt_mall_exists=false",
+        "gear_handcraft_blocked=true",
+    ]
+    adjusted["expected_effect"] = (
+        "Rebuild the transport-belt mall first so the later relocation precheck has two mall assemblers or "
+        "recoverable assembler materials instead of failing before any action."
+    )
+    adjusted["guardrail_adjusted"] = {
+        "from": selected,
+        "to": "bootstrap_build_item_mall",
+        "reason": guardrail_reason,
+    }
+    return adjusted
+
+
 def _gear_mall_iron_plate_preempts_expansion(issue: dict[str, Any] | None) -> bool:
     if not isinstance(issue, dict):
         return False
@@ -4093,10 +4266,11 @@ def _gear_mall_relocation_power_pole_deficit(issue: dict[str, Any] | None, obser
     if not isinstance(required, (int, float)):
         return 0
     layout = _find_gear_belt_mall_relocation_layout(observation)
-    if layout is not None:
-        corridor = _gear_belt_mall_relocation_power_corridor_positions(observation, layout)
-        if corridor:
-            required = float(len(_missing_power_corridor_positions(observation, corridor)))
+    if layout is None:
+        return 0
+    corridor = _gear_belt_mall_relocation_power_corridor_positions(observation, layout)
+    if corridor:
+        required = float(len(_missing_power_corridor_positions(observation, corridor)))
     available = total_item_count(observation, "small-electric-pole")
     return max(0, int(ceil(float(required))) - int(available))
 

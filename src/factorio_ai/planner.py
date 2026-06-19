@@ -8135,9 +8135,12 @@ def _find_compact_gear_belt_mall_relocation_layout(observation: dict[str, Any]) 
             if belt_assembler is gear_assembler or belt_assembler.get("recipe") != "transport-belt":
                 continue
             belt_position = _position(belt_assembler)
-            if abs(belt_position["y"] - gear_position["y"]) > 0.1:
-                continue
-            if abs(abs(belt_position["x"] - gear_position["x"]) - 3.0) > 0.1:
+            same_row_legacy_pair = (
+                abs(belt_position["y"] - gear_position["y"]) <= 0.1
+                and abs(abs(belt_position["x"] - gear_position["x"]) - 3.0) <= 0.1
+            )
+            nearby_non_logistics_pair = distance(belt_position, gear_position) <= 8.0
+            if not same_row_legacy_pair and not nearby_non_logistics_pair:
                 continue
             source = min(sources, key=lambda item: distance(_position(item), gear_position))
             source_position = _position(source)
