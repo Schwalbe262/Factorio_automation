@@ -736,7 +736,7 @@ class ControllerTests(unittest.TestCase):
             def observe(self):
                 return observation
 
-            def strategy_decision(self, objective, require_llm=False):
+            def strategy_decision(self, objective, require_llm=False, skip_remote=False):
                 return {
                     "selected_skill": "future_build_item_skill",
                     "reason": "needs missing build item executor",
@@ -815,7 +815,7 @@ class ControllerTests(unittest.TestCase):
             def observe(self):
                 return observation
 
-            def strategy_decision(self, objective, require_llm=False):
+            def strategy_decision(self, objective, require_llm=False, skip_remote=False):
                 return {
                     "selected_skill": "future_build_item_skill",
                     "reason": "needs missing build item executor",
@@ -2303,7 +2303,7 @@ class ControllerTests(unittest.TestCase):
                 super().__init__(cfg)
                 self.run_kwargs = {}
 
-            def strategy_decision(self, objective, require_llm=False):
+            def strategy_decision(self, objective, require_llm=False, skip_remote=False):
                 return {
                     "selected_skill": "build_site_input_logistic_line",
                     "source": "llm",
@@ -2399,6 +2399,45 @@ class StallWatchdogTests(unittest.TestCase):
             self.assertTrue(skill)
             self.assertNotEqual(skill, "produce_iron_plate")
 
+    def test_stall_recovery_bootstraps_iron_when_production_dead(self):
+        # No furnace producing iron-plate and no drill mining iron-ore while an iron patch is reachable
+        # (the classic stranded-drill iron death). Recovery must force the direct iron cell to break the
+        # iron<-belts<-mall<-iron deadlock, even when the strategy keeps looping a downstream skill.
+        observation = {
+            "player": {"position": {"x": 0, "y": 0}},
+            "inventory": {"burner-mining-drill": 1, "stone-furnace": 1, "coal": 5},
+            "entities": [
+                {"name": "burner-mining-drill", "position": {"x": 70, "y": 67}, "status_name": "no_minable_resources"},
+            ],
+            "resources": [{"name": "iron-ore", "position": {"x": 56, "y": 68}, "distance": 75}],
+            "research": {"technologies": {"automation": {"researched": True}}},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FactorioController(make_test_config(Path(tmp)))
+            skill = controller._stall_recovery_skill(
+                "launch_rocket_program", observation, ["build_gear_belt_mall_logistics"]
+            )
+            self.assertEqual(skill, "produce_iron_plate")
+
+    def test_stall_recovery_builds_item_mall_when_gear_belt_layout_missing(self):
+        # build_gear_belt_mall_logistics only WIRES existing gear+belt assemblers; with none present it
+        # loops forever. Recovery must pick bootstrap_build_item_mall (which builds them). Iron is not
+        # "dead" here (no iron-ore patch in view) so rule (1) does not pre-empt.
+        observation = {
+            "player": {"position": {"x": 0, "y": 0}},
+            "inventory": {"iron-plate": 50, "coal": 10},
+            # An iron-plate furnace is present so iron production is NOT dead -> rule (1) does not pre-empt.
+            "entities": [{"name": "stone-furnace", "recipe": "iron-plate", "position": {"x": 4, "y": 0}}],
+            "resources": [{"name": "coal", "position": {"x": 8, "y": 0}, "distance": 8}],
+            "research": {"technologies": {"automation": {"researched": True}}},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FactorioController(make_test_config(Path(tmp)))
+            skill = controller._stall_recovery_skill(
+                "launch_rocket_program", observation, ["build_gear_belt_mall_logistics"]
+            )
+            self.assertEqual(skill, "bootstrap_build_item_mall")
+
     def test_both_controllers_run_strategy_step_accept_override_skill(self):
         # run_autopilot_loop (base) always calls run_strategy_step(override_skill=...). Every subclass
         # override of run_strategy_step must accept it, or the no-mod autopilot raises TypeError every
@@ -2416,7 +2455,7 @@ class StallWatchdogTests(unittest.TestCase):
             def observe(self):
                 return observation
 
-            def strategy_decision(self, objective, require_llm=False):
+            def strategy_decision(self, objective, require_llm=False, skip_remote=False):
                 raise AssertionError("strategy_decision must not run when override_skill is set")
 
         with tempfile.TemporaryDirectory() as tmp:

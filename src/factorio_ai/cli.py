@@ -275,6 +275,16 @@ def main(argv: list[str] | None = None) -> None:
     no_mod_autopilot_parser.add_argument("--sleep-seconds", type=float, default=5.0)
     no_mod_autopilot_parser.add_argument("--stop-on-error", action="store_true")
 
+    code_agent_parser = subparsers.add_parser(
+        "run-no-mod-code-agent",
+        help="FLE-style code-gen loop: the LLM writes a Python program each step (driven via a high-level API) to control the factory",
+    )
+    code_agent_parser.add_argument("--objective", default="launch_rocket_program")
+    code_agent_parser.add_argument("--cycles", type=int, default=0, help="Number of program steps; 0 means run until interrupted")
+    code_agent_parser.add_argument("--sleep-seconds", type=float, default=3.0)
+    code_agent_parser.add_argument("--program-timeout", type=float, default=60.0, help="Per-program sandbox wall-clock limit (seconds)")
+    code_agent_parser.add_argument("--max-tokens", type=int, default=2048, help="LLM max tokens for each generated program")
+
     codex_wait_layout_parser = subparsers.add_parser(
         "run-codex-wait-layout-loop",
         help="Keep submitting simulation-only layout improvement work while Codex is implementing a missing skill",
@@ -1027,6 +1037,81 @@ def main(argv: list[str] | None = None) -> None:
         print_json(payload)
         if not summary.ok:
             raise SystemExit(1)
+        return
+
+    if args.command == "run-no-mod-code-agent":
+        _guard_observer_player_control(cfg, args.command)
+        import time as _time
+        from datetime import datetime, timezone
+        from . import code_agent
+
+        controller = ModlessFactorioController(cfg)
+        player_name = controller._configured_agent_player_name()
+        cfg.log_dir.mkdir(parents=True, exist_ok=True)
+        cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+        log_path = cfg.log_dir / f"code-agent-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.jsonl"
+        hb_path = cfg.runtime_dir / "code-agent-heartbeat.json"
+
+        def _act(action):
+            return controller._modless.act(action, player_name=player_name)
+
+        # HYBRID: expose the proven deterministic skills as a tool the generated program can call.
+        _skill_tools = [
+            "produce_iron_plate", "produce_copper_plate", "setup_coal_supply", "setup_power",
+            "research_automation", "bootstrap_build_item_mall", "build_gear_belt_mall_logistics",
+            "build_iron_plate_logistic_line_to_gear_mall", "expand_iron_smelting",
+            "produce_electronic_circuit", "research_logistics",
+        ]
+        _skill_tools = [s for s in _skill_tools if controller._skill_run_config(s) is not None]
+
+        def _run_skill(name, max_steps):
+            if name not in _skill_tools:
+                return {"ok": False, "reason": f"unknown skill '{name}'; available: {_skill_tools}", "skill": name}
+            try:
+                summary = controller.run_strategy_step(override_skill=name, max_steps=int(max_steps))
+                return {"ok": bool(summary.ok), "reason": str(summary.reason)[:200], "skill": name}
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "reason": f"{type(exc).__name__}: {exc}", "skill": name}
+
+        def _heartbeat(cycle, state, reason=""):
+            try:
+                hb_path.write_text(json.dumps({
+                    "cycle": cycle, "state": state, "reason": reason,
+                    "objective": args.objective, "pid": os.getpid(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }), encoding="utf-8")
+            except OSError:
+                pass
+
+        def _on_step(cycle, program, result):
+            rec = {
+                "time": datetime.now(timezone.utc).isoformat(), "cycle": cycle,
+                "ok": result.ok, "actions_run": result.actions_run,
+                "program": program, "output": result.output[:2000], "error": result.error[:1000],
+            }
+            with log_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            print_json({"cycle": cycle, "ok": result.ok, "actions_run": result.actions_run,
+                        "output": result.output[:200], "error": result.error[:200]})
+            _heartbeat(cycle + 1, "ok" if result.ok else "program_error",
+                       reason=(result.error[:120] if result.error else f"{result.actions_run} actions"))
+            _time.sleep(max(0.0, args.sleep_seconds))
+
+        def _complete(prompt):
+            return code_agent.remote_program_complete(prompt, max_tokens=args.max_tokens)
+
+        _heartbeat(0, "starting")
+        completed = code_agent.run_code_agent_loop(
+            _act, controller.observe, _complete,
+            objective=args.objective,
+            cycles=args.cycles,
+            timeout_seconds=args.program_timeout,
+            on_step=_on_step,
+            log=lambda m: None,
+            run_skill=_run_skill,
+            skill_names=_skill_tools,
+        )
+        print_json({"adapter": "no-mod-code-agent", "completed_steps": completed, "log": str(log_path)})
         return
 
     if args.command == "run-codex-wait-layout-loop":

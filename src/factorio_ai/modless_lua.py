@@ -12,11 +12,13 @@ OBSERVE_RADIUS = 768
 ALLOWED_ACTION_TYPES = {
     "build",
     "chart",
+    "connect_entities",
     "connect_power",
     "craft",
     "insert",
     "mine",
     "move_to",
+    "place_fluid_connected",
     "print",
     "research",
     "restore_character_controller",
@@ -46,9 +48,17 @@ class ModlessLuaController:
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
 
-    def observe(self, *, player_name: str | None = None, include_planning_sites: bool = True) -> dict[str, Any]:
+    def observe(
+        self,
+        *,
+        player_name: str | None = None,
+        include_planning_sites: bool = True,
+        lightweight: bool = False,
+    ) -> dict[str, Any]:
         effective_player = self.cfg.agent_player_name if player_name is None else player_name
-        command = build_modless_observe_command(effective_player, include_planning_sites=include_planning_sites)
+        command = build_modless_observe_command(
+            effective_player, include_planning_sites=include_planning_sites, lightweight=lightweight
+        )
         with self._client() as client:
             return execute_json_lua_command(client, command)
 
@@ -78,13 +88,20 @@ def confirm_lua_console(client: FactorioRconClient) -> None:
     client.execute(_CONFIRM_LUA_COMMAND, drain_seconds=0.05)
 
 
-def build_modless_observe_command(player_name: str = "", *, include_planning_sites: bool = True) -> str:
+def build_modless_observe_command(
+    player_name: str = "", *, include_planning_sites: bool = True, lightweight: bool = False
+) -> str:
     lua = (
         _COMMON_LUA
         + "\n"
-        + _OBSERVE_LUA.replace("__PLAYER_NAME__", _lua_string(player_name)).replace(
+        + _OBSERVE_LUA.replace("__PLAYER_NAME__", _lua_string(player_name))
+        .replace(
             "__INCLUDE_PLANNING_SITES__",
             "true" if include_planning_sites else "false",
+        )
+        .replace(
+            "__LIGHTWEIGHT__",
+            "true" if lightweight else "false",
         )
     )
     return _silent_command(lua)
@@ -113,6 +130,15 @@ def _validate_action(action: dict[str, Any]) -> None:
         direction = str(action.get("direction") or "north")
         if direction not in ALLOWED_DIRECTIONS:
             raise ValueError(f"unsupported walking direction: {direction}")
+    elif action_type == "connect_entities":
+        if not isinstance(action.get("name"), str) or not action.get("name"):
+            raise ValueError("connect_entities requires a non-empty name")
+        tiles = action.get("tiles")
+        if not isinstance(tiles, list) or not tiles:
+            raise ValueError("connect_entities requires a non-empty tiles list")
+    elif action_type == "place_fluid_connected":
+        if not isinstance(action.get("name"), str) or not action.get("name"):
+            raise ValueError("place_fluid_connected requires a non-empty name")
 
 
 def _lua_string(value: str) -> str:
@@ -570,6 +596,9 @@ _OBSERVE_LUA = """
 local agent = find_agent(__PLAYER_NAME__)
 local surface = agent.surface
 local origin = agent.position
+local lightweight = __LIGHTWEIGHT__
+local LIGHTWEIGHT_RESOURCE_PER_TYPE = 8
+local LIGHTWEIGHT_ENEMY_RADIUS = 96
 local function collect_craftable()
   local craftable = {}
   if not agent.player then
@@ -624,6 +653,18 @@ local function collect_resources(anchor_position)
     end
   end
   table.sort(resources, function(a, b) return a.distance < b.distance end)
+  if lightweight then
+    local trimmed = {}
+    local per_type = {}
+    for _, resource in pairs(resources) do
+      local count = (per_type[resource.name] or 0)
+      if count < LIGHTWEIGHT_RESOURCE_PER_TYPE then
+        per_type[resource.name] = count + 1
+        table.insert(trimmed, resource)
+      end
+    end
+    return trimmed
+  end
   return resources
 end
 local function collect_entities()
@@ -657,9 +698,11 @@ local function collect_entities()
       for _, entity in pairs(found) do add_unique_entity_snapshot(rows, seen, entity, origin) end
     end
   end
-  for _, name in pairs(names) do
-    local found = surface.find_entities_filtered({ position = origin, radius = OBSERVE_RADIUS, name = name, limit = 160 })
-    for _, entity in pairs(found) do add_unique_entity_snapshot(rows, seen, entity, origin) end
+  if not lightweight then
+    for _, name in pairs(names) do
+      local found = surface.find_entities_filtered({ position = origin, radius = OBSERVE_RADIUS, name = name, limit = 160 })
+      for _, entity in pairs(found) do add_unique_entity_snapshot(rows, seen, entity, origin) end
+    end
   end
   local global_force_names = {
     "burner-mining-drill", "electric-mining-drill", "stone-furnace", "steel-furnace", "electric-furnace",
@@ -686,8 +729,10 @@ local function collect_entities()
   for _, entity in pairs(immediate_trees) do add_unique_entity_snapshot(rows, seen, entity, origin) end
   local nearby_trees = surface.find_entities_filtered({ position = origin, radius = 48, type = "tree", limit = 160 })
   for _, entity in pairs(nearby_trees) do add_unique_entity_snapshot(rows, seen, entity, origin) end
-  local trees = surface.find_entities_filtered({ position = origin, radius = OBSERVE_RADIUS, type = "tree", limit = 80 })
-  for _, entity in pairs(trees) do add_unique_entity_snapshot(rows, seen, entity, origin) end
+  if not lightweight then
+    local trees = surface.find_entities_filtered({ position = origin, radius = OBSERVE_RADIUS, type = "tree", limit = 80 })
+    for _, entity in pairs(trees) do add_unique_entity_snapshot(rows, seen, entity, origin) end
+  end
   for _, obstacle_type in pairs({ "simple-entity", "simple-entity-with-owner", "cliff" }) do
     local ok_near_obstacles, near_obstacles = pcall(function()
       return surface.find_entities_filtered({ position = origin, radius = 48, type = obstacle_type, limit = 160 })
@@ -697,12 +742,14 @@ local function collect_entities()
         if entity.valid and entity.name ~= "character" and entity.type ~= "resource" then add_unique_entity_snapshot(rows, seen, entity, origin) end
       end
     end
-    local ok_obstacles, obstacles = pcall(function()
-      return surface.find_entities_filtered({ position = origin, radius = OBSERVE_RADIUS, type = obstacle_type, limit = 160 })
-    end)
-    if ok_obstacles and obstacles then
-      for _, entity in pairs(obstacles) do
-        if entity.valid and entity.name ~= "character" and entity.type ~= "resource" then add_unique_entity_snapshot(rows, seen, entity, origin) end
+    if not lightweight then
+      local ok_obstacles, obstacles = pcall(function()
+        return surface.find_entities_filtered({ position = origin, radius = OBSERVE_RADIUS, type = obstacle_type, limit = 160 })
+      end)
+      if ok_obstacles and obstacles then
+        for _, entity in pairs(obstacles) do
+          if entity.valid and entity.name ~= "character" and entity.type ~= "resource" then add_unique_entity_snapshot(rows, seen, entity, origin) end
+        end
       end
     end
   end
@@ -716,8 +763,9 @@ end
 local function collect_enemies()
   local rows = {}
   local enemy_force = game.forces.enemy
+  local enemy_radius = lightweight and LIGHTWEIGHT_ENEMY_RADIUS or OBSERVE_RADIUS
   for _, enemy_type in pairs({ "unit", "unit-spawner", "turret" }) do
-    local found = surface.find_entities_filtered({ position = origin, radius = OBSERVE_RADIUS, force = enemy_force, type = enemy_type, limit = 160 })
+    local found = surface.find_entities_filtered({ position = origin, radius = enemy_radius, force = enemy_force, type = enemy_type, limit = 160 })
     for _, entity in pairs(found) do
       if entity.valid and entity.force ~= agent.force then
         local row = entity_snapshot(entity, origin)
@@ -1433,6 +1481,114 @@ local function action_build()
   end
   return ok({ action = "build", name = entity.name, unit_number = entity.unit_number, position = position_table(entity.position) })
 end
+local function action_connect_entities()
+  if type(action.name) ~= "string" then return err("connect_entities requires entity/item name") end
+  if type(action.tiles) ~= "table" then return err("connect_entities requires a tiles list") end
+  local inventory = main_inventory(agent)
+  if not inventory or not inventory.valid then return err("agent inventory is not valid") end
+  local reach = action.reach or 64
+  local skip_blocked = action.skip_blocked ~= false
+  local allow_existing = action.allow_existing ~= false
+  local placed = 0
+  local already = 0
+  local failed = 0
+  local total = 0
+  local failures = {}
+  local first_unit = nil
+  local last_unit = nil
+  for _, tile in pairs(action.tiles) do
+    total = total + 1
+    local position = normalize_position(tile.position)
+    if not position then
+      failed = failed + 1
+      table.insert(failures, { reason = "bad_position" })
+      if not skip_blocked then break end
+    else
+      local direction = factorio_direction(tile.direction)
+      local existing = existing_built_entity(agent.surface, agent.force, action.name, position)
+      if existing and allow_existing then
+        already = already + 1
+        if existing.unit_number then last_unit = existing.unit_number; if not first_unit then first_unit = existing.unit_number end end
+      elseif distance(agent.position, position) > reach then
+        failed = failed + 1
+        table.insert(failures, { position = position_table(position), reason = "out_of_reach" })
+        if not skip_blocked then break end
+      elseif inventory.get_item_count(action.name) < 1 then
+        failed = failed + 1
+        table.insert(failures, { position = position_table(position), reason = "missing_item" })
+        if not skip_blocked then break end
+      elseif not build_candidate_valid(agent.surface, agent.force, action, position, direction) then
+        failed = failed + 1
+        table.insert(failures, { position = position_table(position), reason = "cannot_place" })
+        if not skip_blocked then break end
+      else
+        inventory.remove({ name = action.name, count = 1 })
+        local entity = agent.surface.create_entity({ name = action.name, position = position, direction = direction, force = agent.force })
+        if not entity then
+          inventory.insert({ name = action.name, count = 1 })
+          failed = failed + 1
+          table.insert(failures, { position = position_table(position), reason = "create_failed" })
+          if not skip_blocked then break end
+        else
+          placed = placed + 1
+          if entity.unit_number then last_unit = entity.unit_number; if not first_unit then first_unit = entity.unit_number end end
+        end
+      end
+    end
+  end
+  local result = { action = "connect_entities", name = action.name, placed = placed, already = already, failed = failed, total = total, failures = failures, first_unit_number = first_unit, last_unit_number = last_unit }
+  if failed == 0 then return ok(result) end
+  result.reason = "connect_entities placed " .. tostring(placed) .. "/" .. tostring(total) .. " (" .. tostring(failed) .. " failed)"
+  result.ok = false
+  result.mode = "modless-rcon-lua"
+  return result
+end
+local function action_place_fluid_connected()
+  if type(action.name) ~= "string" then return err("place_fluid_connected requires entity/item name") end
+  local target_pos = normalize_position(action.target_position)
+  if not target_pos then return err("place_fluid_connected requires target_position") end
+  local inventory = main_inventory(agent)
+  if not inventory or not inventory.valid then return err("agent inventory is not valid") end
+  if inventory.get_item_count(action.name) < 1 then return err("missing item", { item = action.name }) end
+  local found_targets = agent.surface.find_entities_filtered({ position = target_pos, radius = 1.5, force = agent.force })
+  local target = nil
+  for _, candidate in pairs(found_targets) do
+    if candidate.valid and candidate.fluidbox and #candidate.fluidbox > 0 then target = candidate break end
+  end
+  if not target then return err("no fluid entity at target_position", { position = position_table(target_pos) }) end
+  local existing = existing_built_entity(agent.surface, agent.force, action.name, target.position)
+  local max_radius = action.search_radius or 3
+  local dirs = { defines.direction.north, defines.direction.east, defines.direction.south, defines.direction.west }
+  local attempts = 0
+  for r = 1, max_radius do
+    for dx = -r, r do
+      for dy = -r, r do
+        if math.abs(dx) == r or math.abs(dy) == r then
+          local pos = { x = target.position.x + dx, y = target.position.y + dy }
+          for _, dd in pairs(dirs) do
+            if attempts < 220 and build_candidate_valid(agent.surface, agent.force, action, pos, dd) then
+              attempts = attempts + 1
+              local entity = agent.surface.create_entity({ name = action.name, position = pos, direction = dd, force = agent.force })
+              if entity then
+                local conn = false
+                for i = 1, #entity.fluidbox do
+                  local cs = entity.fluidbox.get_connections(i)
+                  if cs and #cs > 0 then conn = true break end
+                end
+                if conn then
+                  inventory.remove({ name = action.name, count = 1 })
+                  return ok({ action = "place_fluid_connected", name = entity.name, unit_number = entity.unit_number, position = position_table(entity.position), direction = planner_direction(entity.direction), target = position_table(target.position), attempts = attempts })
+                end
+                entity.destroy()
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  return err("no connecting placement found for " .. tostring(action.name), { name = action.name, target = position_table(target.position), attempts = attempts })
+end
 local function action_insert()
   if type(action.item) ~= "string" then return err("insert requires item") end
   local target = find_entity(agent.surface, action)
@@ -1574,6 +1730,10 @@ elseif action.type == "set_recipe" then
   reply_action(action_set_recipe())
 elseif action.type == "connect_power" then
   reply_action(action_connect_power())
+elseif action.type == "connect_entities" then
+  reply_action(action_connect_entities())
+elseif action.type == "place_fluid_connected" then
+  reply_action(action_place_fluid_connected())
 elseif action.type == "research" then
   reply_action(action_research())
 else

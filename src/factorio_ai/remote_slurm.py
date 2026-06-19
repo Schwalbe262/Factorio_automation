@@ -1333,6 +1333,21 @@ def _normalize_worker_env_value(name: str, value: str) -> str:
 def deploy(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
     cfg = cfg or config()
     remote_dir = resolve_remote_dir(cfg)
+    # Pre-upload cleanup so scp doesn't fail with "write remote ... Failure" / "fsetstat: Failure"
+    # (home-dir quota exceeded) on long-lived workers: over many hours the slurm task logs + the stale
+    # deploy archive pile up and fill /home. Drop the stale archive and logs older than 60 min (recent
+    # / in-flight task logs are kept). Best-effort: never let a cleanup hiccup abort the deploy.
+    try:
+        rd = shlex.quote(remote_dir)
+        _run_remote(
+            f'rm -f {rd}/factorio-ai.tar.gz 2>/dev/null || true; '
+            f'find {rd}/logs -type f -mmin +60 -delete 2>/dev/null || true; '
+            f'rm -rf {rd}/results/* {rd}/failed/* 2>/dev/null || true',
+            cfg,
+            timeout=120,
+        )
+    except Exception:  # noqa: BLE001
+        pass
     worker_env = base64.b64encode(json.dumps(_worker_env_values(cfg), separators=(",", ":")).encode("utf-8")).decode(
         "ascii"
     )
@@ -2618,6 +2633,38 @@ def request_strategy(
             raise RemoteSlurmError(f"remote strategy task failed: {data}")
         time.sleep(2)
     raise TimeoutError(f"remote strategy task timed out: {task_name}")
+
+
+def request_code_agent_program(
+    prompt: str,
+    *,
+    max_tokens: int = 2048,
+    cfg: RemoteSlurmConfig | None = None,
+    timeout_seconds: int | None = None,
+) -> dict[str, Any]:
+    """Offload one FLE-style control-PROGRAM generation to the node where vLLM is local (same task
+    mechanism as :func:`request_strategy`). Returns ``{"ok", "program", ...}``."""
+    cfg = cfg or config()
+    task = {
+        "id": f"codeagent-{uuid.uuid4().hex}",
+        "type": "code_agent_request",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "payload": {"prompt": prompt, "max_tokens": max_tokens},
+    }
+    if _use_attached_srun(cfg):
+        return _request_task_via_attached_srun(task, cfg, timeout_seconds)
+    if _use_scheduler_tasks():
+        return _request_task_via_scheduler(task, cfg, timeout_seconds)
+    task_name = submit_task(task, cfg)
+    deadline = time.monotonic() + (timeout_seconds or cfg.task_timeout_seconds)
+    while time.monotonic() < deadline:
+        state, data, _raw = read_task_state(task_name, cfg)
+        if state == "result" and data is not None:
+            return data
+        if state == "failed":
+            raise RemoteSlurmError(f"remote code-agent task failed: {data}")
+        time.sleep(2)
+    raise TimeoutError(f"remote code-agent task timed out: {task_name}")
 
 
 def request_skill_foundry_code(

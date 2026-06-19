@@ -960,10 +960,12 @@ class PlannerTests(unittest.TestCase):
 
         decision = CoalFuelFeedSkill().next_action(obs)
 
-        self.assertEqual(decision.action["type"], "build")
+        # The clean belt run to the boiler is routed in one connect_entities call (FLE-style),
+        # starting at the first missing segment.
+        self.assertEqual(decision.action["type"], "connect_entities")
         self.assertEqual(decision.action["name"], "transport-belt")
-        self.assertEqual(decision.action["position"], {"x": 2.5, "y": 0.5})
-        self.assertEqual(decision.action["direction"], 4)
+        self.assertEqual(decision.action["tiles"][0]["position"], {"x": 2.5, "y": 0.5})
+        self.assertEqual(decision.action["tiles"][0]["direction"], 4)
         self.assertIn("boiler", decision.reason)
 
     def test_coal_fuel_feed_refuels_inactive_coal_source_before_boiler_hand_fuel(self):
@@ -1038,9 +1040,10 @@ class PlannerTests(unittest.TestCase):
         decision = CoalFuelFeedSkill().next_action(obs)
 
         self.assertLessEqual(len(missing), 8)
-        self.assertEqual(decision.action["type"], "build")
-        self.assertEqual(decision.action["position"], {"x": 6.5, "y": 9.5})
-        self.assertEqual(decision.action["direction"], planner_module.WEST)
+        # The missing segments are routed in one connect_entities call, beginning at the safe join.
+        self.assertEqual(decision.action["type"], "connect_entities")
+        self.assertEqual(decision.action["tiles"][0]["position"], {"x": 6.5, "y": 9.5})
+        self.assertEqual(decision.action["tiles"][0]["direction"], planner_module.WEST)
         self.assertNotIn({"x": 6.5, "y": 8.5}, [segment["position"] for segment in missing])
 
     def test_coal_fuel_feed_takes_belts_from_belt_mall_output_chest_for_boiler_feed(self):
@@ -3522,9 +3525,12 @@ class PlannerTests(unittest.TestCase):
 
         decision = SetupPowerSkill().next_action(obs)
 
-        self.assertEqual(decision.action["type"], "build")
+        # Self-calibrating: the boiler is placed so the game finds the tile that actually connects to
+        # the pump (no hardcoded per-direction offset), so the action is place_fluid_connected with
+        # the pump as the connection target rather than a fixed build position.
+        self.assertEqual(decision.action["type"], "place_fluid_connected")
         self.assertEqual(decision.action["name"], "boiler")
-        self.assertEqual(decision.action["position"], {"x": 12.5, "y": 11})
+        self.assertEqual(decision.action["target_position"], {"x": 10.5, "y": 10.5})
 
     def test_setup_power_skill_mines_tree_when_pole_needs_wood(self):
         obs = base_observation()
@@ -5604,6 +5610,47 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("iron-plate logistic line", decision.reason)
         self.assertIn("refusing repeated hand-carry", decision.reason)
 
+    def test_build_item_mall_virtual_agent_handcarries_when_belt_line_unbuildable(self):
+        # Live deadlock regression (2026-06-19, autopilot cycle 130-133): the virtual RCON agent
+        # (character_valid=False, instant move) must NOT refuse the far iron-plate hand-carry when it
+        # has too few transport-belts to build the line. Refusing starves the belt mall -> 0 belts ->
+        # the boiler coal feed refuses hand-crafted belts -> power stalls -> the whole factory
+        # deadlocks. Hand-carry is free for the virtual agent, so it seeds the mall instead.
+        obs = powered_automation_observation()
+        obs["inventory"] = {}  # 0 spare belts -> a 120-tile belt line is unbuildable
+        obs["player"] = {"position": {"x": 0, "y": 0}, "character_valid": False}
+        obs["entities"].append(mall_assembler(recipe="iron-gear-wheel"))
+        obs["entities"].append({
+            "name": "stone-furnace", "unit_number": 980, "position": {"x": 120, "y": 0},
+            "recipe": "iron-plate", "inventories": {"3": {"iron-plate": 20}},
+        })
+
+        decision = BuildItemMallSkill("iron-gear-wheel", 4).next_action(obs)
+
+        self.assertNotIn("refusing repeated hand-carry", decision.reason or "")
+
+    def test_manual_site_input_blocker_threshold_for_virtual_agent(self):
+        # Directly exercise the threshold: virtual agent + far source. Too few belts -> allow
+        # (return None, no deadlock); enough belts to span the gap -> defer to the belt line (refuse).
+        from factorio_ai.planner import _manual_site_input_logistics_blocker
+
+        def _obs(belt_count):
+            obs = powered_automation_observation()
+            obs["player"] = {"position": {"x": 120, "y": 0}, "character_valid": False}
+            obs["inventory"] = {"transport-belt": belt_count} if belt_count else {}
+            obs["entities"].append({
+                "name": "stone-furnace", "unit_number": 980, "position": {"x": 0, "y": 0},
+                "recipe": "iron-plate", "inventories": {"3": {"iron-plate": 20}},
+            })
+            return obs
+
+        consumer = {"x": 120, "y": 0}
+        few = _manual_site_input_logistics_blocker(_obs(0), "iron-plate", consumer, consumer_label="belt mall")
+        self.assertIsNone(few)  # can't build a 120-tile line with 0 belts -> hand-carry, no deadlock
+        plenty = _manual_site_input_logistics_blocker(_obs(400), "iron-plate", consumer, consumer_label="belt mall")
+        self.assertIsNotNone(plenty)  # 400 belts span the gap -> prefer the line
+        self.assertIn("refusing repeated hand-carry", plenty.reason)
+
     def test_build_item_mall_places_output_chest_for_user_consumed_item(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"wooden-chest": 1, "inserter": 1}
@@ -6726,6 +6773,70 @@ class PlannerTests(unittest.TestCase):
 
         self.assertNotIn((90.5, -63.5), route_positions)
         self.assertIn((92.5, -63.5), route_positions)
+
+    def test_connect_entities_tiles_straight_belt_flows_east(self):
+        tiles = planner_module.connect_entities_tiles(
+            {"entities": []}, {"x": 0.5, "y": 0.5}, {"x": 5.5, "y": 0.5}, "transport-belt"
+        )
+        self.assertEqual(len(tiles), 6)
+        self.assertTrue(all(tile["direction"] == planner_module.EAST for tile in tiles))
+        self.assertEqual(planner_module._position_tuple(tiles[0]["position"]), (0.5, 0.5))
+        self.assertEqual(planner_module._position_tuple(tiles[-1]["position"]), (5.5, 0.5))
+
+    def test_connect_entities_tiles_belt_flows_west_toward_consumer(self):
+        # Regression: a lane feeding a consumer to the west must flow WEST, not EAST.
+        tiles = planner_module.connect_entities_tiles(
+            {"entities": []},
+            {"x": 5.5, "y": 0.5},
+            {"x": 0.5, "y": 0.5},
+            "transport-belt",
+            start_direction=planner_module.WEST,
+            end_direction=planner_module.WEST,
+        )
+        self.assertTrue(tiles)
+        self.assertEqual({tile["direction"] for tile in tiles}, {planner_module.WEST})
+
+    def test_connect_entities_tiles_l_shaped_has_two_axes(self):
+        tiles = planner_module.connect_entities_tiles(
+            {"entities": []}, {"x": 0.5, "y": 0.5}, {"x": 4.5, "y": 3.5}, "transport-belt"
+        )
+        directions = {tile["direction"] for tile in tiles}
+        self.assertIn(planner_module.EAST, directions)
+        self.assertIn(planner_module.SOUTH, directions)
+
+    def test_connect_entities_tiles_pipe_is_undirected(self):
+        tiles = planner_module.connect_entities_tiles(
+            {"entities": []}, {"x": 0.5, "y": 0.5}, {"x": 4.5, "y": 0.5}, "pipe"
+        )
+        self.assertTrue(tiles)
+        self.assertEqual({tile["direction"] for tile in tiles}, {0})
+
+    def test_connect_entities_tiles_poles_spaced_under_wire_reach(self):
+        tiles = planner_module.connect_entities_tiles(
+            {"entities": []}, {"x": 0.5, "y": 0.5}, {"x": 20.5, "y": 0.5}, "small-electric-pole"
+        )
+        xs = [tile["position"]["x"] for tile in tiles]
+        gaps = [round(xs[index + 1] - xs[index], 3) for index in range(len(xs) - 1)]
+        self.assertTrue(gaps)
+        self.assertLessEqual(max(gaps), 7.5)
+        self.assertEqual(xs[0], 0.5)
+        self.assertEqual(xs[-1], 20.5)
+
+    def test_connect_entities_tiles_respects_avoid_positions(self):
+        start = {"x": 0.5, "y": 0.5}
+        end = {"x": 6.5, "y": 4.5}
+        base = planner_module.connect_entities_tiles({"entities": []}, start, end, "transport-belt")
+        endpoints = {(0.5, 0.5), (6.5, 4.5)}
+        interior = next(
+            planner_module._position_tuple(tile["position"])
+            for tile in base
+            if planner_module._position_tuple(tile["position"]) not in endpoints
+        )
+        rerouted = planner_module.connect_entities_tiles(
+            {"entities": []}, start, end, "transport-belt", avoid_positions={interior}
+        )
+        route = {planner_module._position_tuple(tile["position"]) for tile in rerouted}
+        self.assertNotIn(interior, route)
 
     def test_iron_plate_logistic_line_treats_nearby_big_rock_as_blocker(self):
         obs = {

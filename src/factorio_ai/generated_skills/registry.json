@@ -1,4 +1,122 @@
 {
-  "version": 1,
-  "skills": {}
+  "skills": {
+    "bootstrap_build_item_mall": {
+      "attempts": 0,
+      "created_at": "2026-06-18T13:40:26.194381+00:00",
+      "default_max_steps": null,
+      "default_target": null,
+      "goal": "bootstrap_build_item_mall",
+      "history": [],
+      "log_prefix": "generated-bootstrap_build_item_mall",
+      "skill_name": "bootstrap_build_item_mall",
+      "status": "in_progress",
+      "target_item": null,
+      "updated_at": "2026-06-18T20:56:48.968233+00:00",
+      "version": 0
+    },
+    "build_gear_belt_mall_logistics": {
+      "attempts": 6,
+      "cooldown_until": "2026-06-19T09:53:19.195961+00:00",
+      "created_at": "2026-06-17T20:29:44.680299+00:00",
+      "default_max_steps": null,
+      "default_target": null,
+      "goal": "build_gear_belt_mall_logistics",
+      "history": [],
+      "last_failure_reason": "remote foundry codegen failed: TimeoutError: scheduler task timed out: 11971",
+      "log_prefix": "generated-build_gear_belt_mall_logistics",
+      "skill_name": "build_gear_belt_mall_logistics",
+      "status": "failed",
+      "target_item": null,
+      "updated_at": "2026-06-19T07:53:19.195961+00:00",
+      "version": 0
+    },
+    "build_iron_plate_logistic_line_to_gear_mall": {
+      "attempts": 3,
+      "cooldown_until": "2026-06-19T07:09:34.749265+00:00",
+      "created_at": "2026-06-18T22:45:35.863782+00:00",
+      "default_max_steps": null,
+      "default_target": null,
+      "goal": "build_iron_plate_logistic_line_to_gear_mall",
+      "history": [],
+      "last_failure_reason": "remote foundry codegen failed: TimeoutError: scheduler task timed out: 11924",
+      "log_prefix": "generated-build_iron_plate_logistic_line_to_gear_mall",
+      "skill_name": "build_iron_plate_logistic_line_to_gear_mall",
+      "status": "failed",
+      "target_item": null,
+      "updated_at": "2026-06-19T06:49:34.749784+00:00",
+      "version": 0
+    },
+    "connect_coal_fuel_feed": {
+      "attempts": 0,
+      "created_at": "2026-06-19T08:23:19.427906+00:00",
+      "default_max_steps": null,
+      "default_target": null,
+      "goal": "connect_coal_fuel_feed",
+      "history": [],
+      "log_prefix": "generated-connect_coal_fuel_feed",
+      "skill_name": "connect_coal_fuel_feed",
+      "status": "in_progress",
+      "target_item": null,
+      "updated_at": "2026-06-19T08:23:19.427906+00:00",
+      "version": 0
+    },
+    "research_automation": {
+      "attempts": 9,
+      "base_skill": "research_automation",
+      "class_name": "ResearchAutomationSkill",
+      "code_sha256": "e06aeaf1d8781adca9b922831da88bedeb5603c91ffd095ebbd90b7c8f40500b",
+      "cooldown_until": "2026-06-17T20:49:15.255461+00:00",
+      "created_at": "2026-06-17T07:13:13.357498+00:00",
+      "default_max_steps": null,
+      "default_target": null,
+      "file_path": "src/factorio_ai/generated_skills/research_automation.py",
+      "gates_passed": [
+        "static_safety",
+        "offline_replay",
+        "sandbox_dryrun"
+      ],
+      "goal": "research_automation",
+      "history": [
+        {
+          "code_sha256": "e06aeaf1d8781adca9b922831da88bedeb5603c91ffd095ebbd90b7c8f40500b",
+          "gates_passed": [
+            "static_safety",
+            "offline_replay",
+            "sandbox_dryrun"
+          ],
+          "registered_at": "2026-06-17T09:12:24.786514+00:00",
+          "version": 1
+        }
+      ],
+      "is_override": true,
+      "last_failure_reason": "LLM HTTP 400: {\"error\":{\"message\":\"This model's maximum context length is 8192 tokens. However, you requested 3072 output tokens and your prompt contains at least 5121 input tokens, for a total of at least 8193 tokens. Please reduce the length of the input prompt or the number of requested output tokens. (para...",
+      "live_failures": 0,
+      "live_runs": 11,
+      "log_prefix": "generated-research_automation",
+      "module": "factorio_ai.generated_skills.research_automation",
+      "skill_name": "research_automation",
+      "status": "failed",
+      "target_item": null,
+      "updated_at": "2026-06-17T18:49:15.255461+00:00",
+      "version": 1
+    },
+    "setup_power": {
+      "attempts": 12,
+      "cooldown_until": "2026-06-17T23:31:30.528692+00:00",
+      "created_at": "2026-06-17T11:22:34.104070+00:00",
+      "default_max_steps": null,
+      "default_target": null,
+      "goal": "setup_power",
+      "history": [],
+      "last_failure_reason": "sandbox dry-run: sandbox run made no measurable progress (steps=1, done=False, reason=action failed: cannot place entity)",
+      "log_prefix": "generated-setup_power",
+      "skill_name": "setup_power",
+      "status": "failed",
+      "target_item": null,
+      "updated_at": "2026-06-17T21:31:30.528692+00:00",
+      "version": 0
+    }
+  },
+  "updated_at": "2026-06-19T08:23:19.427906+00:00",
+  "version": 1
 }

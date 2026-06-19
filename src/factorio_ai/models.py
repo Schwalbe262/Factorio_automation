@@ -13,6 +13,8 @@ ALLOWED_ACTION_TYPES = {
     "take",
     "set_recipe",
     "connect_power",
+    "connect_entities",
+    "place_fluid_connected",
     "research",
     "restore_character_controller",
     "stop",
@@ -61,6 +63,18 @@ def validate_action(action: dict[str, Any]) -> dict[str, Any]:
     elif action_type == "connect_power":
         if "position" not in action and "unit_number" not in action:
             raise ActionValidationError("connect_power requires position or unit_number")
+    elif action_type == "connect_entities":
+        _require_string(action, "name")
+        tiles = action.get("tiles")
+        if not isinstance(tiles, list) or not tiles:
+            raise ActionValidationError("connect_entities requires a non-empty tiles list")
+        for tile in tiles:
+            if not isinstance(tile, dict):
+                raise ActionValidationError("each connect_entities tile must be an object")
+            _require_position(tile, "position")
+    elif action_type == "place_fluid_connected":
+        _require_string(action, "name")
+        _require_position(action, "target_position")
     elif action_type == "research":
         _require_string(action, "technology")
     elif action_type == "restore_character_controller":

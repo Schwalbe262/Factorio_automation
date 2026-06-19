@@ -1300,6 +1300,18 @@ def _footprint_text(design: dict[str, Any], fp: dict[str, Any]) -> str:
     return f"~{fp.get('area', 0)} tiles"
 
 
+def _revision_text(design: dict[str, Any]) -> str:
+    """How many times a design has been saved: revision 1 = added once (no edits); revision N = added
+    once + (N-1) updates."""
+    rev = design.get("revision")
+    if not isinstance(rev, int) or rev < 1:
+        return "—"
+    edits = rev - 1
+    if edits <= 0:
+        return f"rev {rev} (no edits)"
+    return f"rev {rev} ({edits} edit{'s' if edits != 1 else ''})"
+
+
 def _active_badge(design: dict[str, Any], available_machines: set[str] | None) -> str:
     """Green 'Active' badge when every machine the design needs is available in the current save;
     a muted 'Locked' badge when some required machine is not yet researched."""
@@ -1340,6 +1352,8 @@ def _layout_card(design: dict[str, Any], lang: str, available_machines: set[str]
         (_t(lang, "demand_kw"), f"{design.get('total_power_kw')} kW"),
         ("Footprint", _footprint_text(design, fp)),
         ("Added", str(design.get("added_at") or "—")),
+        ("Last modified", str(design.get("updated_at_display") or design.get("added_at") or "—")),
+        ("Revisions", _revision_text(design)),
     ]
     meta_html = "".join(
         f"<tr><td class=\"muted\">{escape(str(k))}</td><td>{escape(str(v))}</td></tr>"

@@ -3781,6 +3781,35 @@ class CoalFuelFeedSkill:
         if boiler_layout is not None:
             decision = self._next_boiler_feed_action(observation, player, boiler_layout)
             if decision is not None:
+                boiler = boiler_layout.get("boiler")
+                if isinstance(boiler, dict):
+                    # The belt-route boiler feed refuses (returns action=None) when there is no belt
+                    # automation/stock. On its own that lets steam power DIE (the boiler hits 0 fuel ->
+                    # no power -> assemblers/labs stop). Keep power alive with the same fallbacks
+                    # SetupPowerSkill uses: a one-time emergency insert, else a direct mine+hand-carry
+                    # (the virtual agent moves instantly so coal within the walk limit is reachable).
+                    emergency = _emergency_boiler_bootstrap_fuel_decision(observation, player, boiler, decision)
+                    if emergency is not None:
+                        return emergency
+                    if (
+                        decision.action is None
+                        and not decision.done
+                        and _entity_burner_fuel_count(boiler) < STEAM_POWER_BOILER_FUEL_RESERVE
+                    ):
+                        handfeed = _fuel_burner_line_entity(
+                            observation,
+                            player,
+                            boiler,
+                            entity_name="boiler",
+                            threshold=STEAM_POWER_BOILER_FUEL_RESERVE,
+                            insert_count=STEAM_POWER_BOILER_FUEL_RESERVE,
+                            context="steam power boiler coal feed fallback",
+                            support_skill=IronPlateSkill(40),
+                            far_fuel_reason="steam power boiler needs local fuel before it can run",
+                            wait_for_existing_fuel=True,
+                        )
+                        if handfeed is not None and handfeed.action is not None:
+                            return handfeed
                 return decision
 
         if not _coal_supply_output_belt_sources(observation):
@@ -3951,6 +3980,13 @@ class CoalFuelFeedSkill:
             for entity in (layout.get("boiler"), layout.get("source_drill"))
             if isinstance(entity, dict) and entity.get("unit_number") is not None
         }
+        # Fast path (FLE-style connect_entities): when every remaining belt segment is clean
+        # (nothing misoriented to remove, no blocker) and in reach, place the whole routed path in
+        # ONE RCON call instead of one build step (+observe+sleep) per tile. Falls through to the
+        # per-tile loop below whenever anything needs clearing / reorienting / relocating first.
+        batch = self._batch_boiler_feed_segments(observation, player, layout["segments"], protected_units)
+        if batch is not None:
+            return batch
         for segment in layout["segments"]:
             existing = segment.get("entity")
             if isinstance(existing, dict):
@@ -4149,6 +4185,49 @@ class CoalFuelFeedSkill:
         return PlannerDecision(
             {"type": "wait", "ticks": 180},
             "wait for boiler coal feed inserter to move coal into the boiler",
+        )
+
+    def _batch_boiler_feed_segments(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        segments: list[dict[str, Any]],
+        protected_units: set[int],
+    ) -> PlannerDecision | None:
+        """Collapse the routed coal-feed belt into a single ``connect_entities`` action when every
+        remaining segment is clean and in reach. Returns ``None`` (defer to the per-tile loop) if
+        any belt is misoriented, blocked, out of reach, or if belt stock is insufficient — so all
+        the existing mine/clear/move recovery paths stay authoritative."""
+
+        buildable: list[dict[str, Any]] = []
+        for segment in segments:
+            existing = segment.get("entity")
+            if isinstance(existing, dict):
+                if _direction_or_default(existing.get("direction"), segment["direction"]) != int(segment["direction"]):
+                    break  # a misoriented belt must be mined first; defer to the per-tile loop
+                continue  # already built correctly
+            if _belt_line_position_blocker(observation, segment["position"], protected_unit_numbers=protected_units) is not None:
+                break  # a blocker must be cleared first; defer to the per-tile loop
+            if distance(player, segment["position"]) > 20:
+                break  # must move closer first; defer to the per-tile loop
+            buildable.append(segment)
+        if len(buildable) < 2:
+            return None
+        if inventory_count(observation, "transport-belt") < len(buildable):
+            return None
+        tiles = [
+            {"position": segment["position"], "direction": int(segment["direction"])}
+            for segment in buildable
+        ]
+        return PlannerDecision(
+            {
+                "type": "connect_entities",
+                "name": "transport-belt",
+                "tiles": tiles,
+                "skip_blocked": True,
+                "allow_existing": True,
+            },
+            f"route {len(tiles)} boiler coal feed belt segments in one connect_entities call",
         )
 
 
@@ -4461,8 +4540,34 @@ class SetupPowerSkill:
             if layout.get(key) is not None:
                 continue
             spec = layout[f"{key}_spec"]
-            position = spec["position"]
             remote_prefix = "remote bootstrap " if layout.get("remote_bootstrap_power") else ""
+            # Self-calibrating fluid placement (kills the per-pump-direction geometry bug class):
+            # the boiler must connect to the pump and the engine to the boiler. Instead of hardcoded
+            # rotated offsets (wrong for N/S pumps -> the "boiler needs a pipe / no water" bug), let
+            # the game find the connecting tile via place_fluid_connected.
+            upstream_key = {"boiler": "offshore_pump", "steam_engine": "boiler"}.get(key)
+            if upstream_key is not None and isinstance(layout.get(upstream_key), dict):
+                target_position = _position(layout[upstream_key])
+                if distance(player, target_position) > 20:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": _power_stand_position(layout)},
+                        f"move near {upstream_key} to place {remote_prefix}{spec['name']}",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "place_fluid_connected",
+                        "name": spec["name"],
+                        "target_position": target_position,
+                        "search_radius": 4,
+                    },
+                    f"place {remote_prefix}{spec['name']} self-connected to {upstream_key} for first steam power block",
+                )
+            # The pole must sit within wire reach of the (self-calibrated, possibly relocated) engine
+            # to plug it into the network -- anchor it on the built engine, not the stale spec tile.
+            if key == "small_electric_pole" and isinstance(layout.get("steam_engine"), dict):
+                position = _position(layout["steam_engine"])
+            else:
+                position = spec["position"]
             if distance(player, position) > 20:
                 return PlannerDecision(
                     {"type": "move_to", "position": _power_stand_position(layout)},
@@ -4474,6 +4579,10 @@ class SetupPowerSkill:
                     "name": spec["name"],
                     "position": position,
                     "direction": spec.get("direction", NORTH),
+                    # The pump lands on its exact water-edge tile; the pole only needs land within wire
+                    # reach of the engine, so allow_nearby lets the Lua relocate it to the nearest
+                    # buildable tile next to the engine.
+                    "allow_nearby": key == "small_electric_pole",
                 },
                 f"place {remote_prefix}{spec['name']} for first steam power block",
             )
@@ -8258,6 +8367,85 @@ def _iron_plate_line_segments(
     return scored[0][1] if scored else []
 
 
+def connect_entities_tiles(
+    observation: dict[str, Any],
+    start: dict[str, float],
+    end: dict[str, float],
+    name: str,
+    *,
+    start_direction: int | None = None,
+    end_direction: int | None = None,
+    avoid_positions: set[tuple[float, float]] | None = None,
+) -> list[dict[str, Any]]:
+    """Ordered ``[{"position", "direction"}]`` placements that connect ``start`` to ``end``
+    with ``name`` (transport-belt / pipe / *-electric-pole), reusing the proven belt/pipe
+    router (``_iron_plate_line_segments``). Belt flow direction follows the consumer facing
+    via ``end_direction`` (so a consumer to the west yields WEST-flowing tiles). Pipes are
+    emitted undirected (direction 0). Power poles use a spaced stride under wire reach.
+
+    This is the pure path computation behind the ``connect_entities`` action primitive: the
+    whole list is placed in a single RCON call by the Lua ``action_connect_entities`` handler.
+    """
+
+    lowered = str(name).lower()
+    if "electric-pole" in lowered or lowered.endswith("-pole"):
+        return _pole_route_tiles(start, end)
+    segments = _iron_plate_line_segments(
+        observation,
+        start,
+        end,
+        center_tiles=True,
+        start_direction=start_direction,
+        end_direction=end_direction,
+        avoid_positions=avoid_positions,
+    )
+    is_pipe = lowered == "pipe"
+    tiles: list[dict[str, Any]] = []
+    for segment in segments:
+        direction = 0 if is_pipe else int(segment.get("direction", EAST))
+        tiles.append({"position": dict(segment["position"]), "direction": direction})
+    return tiles
+
+
+def _pole_route_tiles(
+    start: dict[str, float],
+    end: dict[str, float],
+    *,
+    stride: float = 6.0,
+) -> list[dict[str, Any]]:
+    """Spaced power-pole placements along the L-path from ``start`` to ``end``. ``stride``
+    stays under the small-electric-pole wire reach (7.5) so consecutive poles connect; both
+    endpoints are always included."""
+
+    waypoints = [
+        {"x": float(start["x"]), "y": float(start["y"])},
+        {"x": float(end["x"]), "y": float(start["y"])},
+        {"x": float(end["x"]), "y": float(end["y"])},
+    ]
+    raw = [dict(start)] + [dict(position) for position, _direction in _axis_route_positions(waypoints)] + [dict(end)]
+    centered_path: list[dict[str, float]] = []
+    seen_path: set[tuple[float, float]] = set()
+    for position in raw:
+        centered = _tile_center_position(position)
+        key = _position_tuple(centered)
+        if key in seen_path:
+            continue
+        seen_path.add(key)
+        centered_path.append(centered)
+    if not centered_path:
+        return []
+    tiles: list[dict[str, Any]] = [{"position": centered_path[0], "direction": 0}]
+    last = centered_path[0]
+    for centered in centered_path[1:-1]:
+        if distance(centered, last) >= stride:
+            tiles.append({"position": centered, "direction": 0})
+            last = centered
+    end_tile = centered_path[-1]
+    if _position_tuple(end_tile) != _position_tuple(tiles[-1]["position"]):
+        tiles.append({"position": end_tile, "direction": 0})
+    return tiles
+
+
 def _iron_plate_line_waypoint_candidates(
     observation: dict[str, Any],
     start_x: float,
@@ -8673,12 +8861,24 @@ def _power_layout_with_existing_entities(observation: dict[str, Any], layout: di
         spec = merged.get(f"{key}_spec")
         if not isinstance(spec, dict) or not isinstance(spec.get("position"), dict):
             continue
-        existing = _entity_near(
-            observation,
-            str(spec.get("name") or _power_spec_name(key)),
-            _xy_position(spec["position"]),
-            radius=1.0,
-        )
+        name = str(spec.get("name") or _power_spec_name(key))
+        # The boiler/engine are placed by the self-calibrating place_fluid_connected action, so their
+        # real tile is not the (stale) spec position -- match them by proximity to the upstream fluid
+        # entity they connect to (pump for boiler, boiler for engine). pump/pole keep spec matching
+        # (pole allow_nearby may shift it a few tiles, so use a wider radius).
+        if key == "boiler" and isinstance(merged.get("offshore_pump"), dict):
+            existing = _entity_near(observation, name, _position(merged["offshore_pump"]), radius=5.0)
+        elif key == "steam_engine" and isinstance(merged.get("boiler"), dict):
+            existing = _entity_near(observation, name, _position(merged["boiler"]), radius=7.0)
+        elif key == "small_electric_pole" and isinstance(merged.get("steam_engine"), dict):
+            existing = _entity_near(observation, name, _position(merged["steam_engine"]), radius=8.0)
+        else:
+            existing = _entity_near(
+                observation,
+                name,
+                _xy_position(spec["position"]),
+                radius=8.0 if key == "small_electric_pole" else 1.0,
+            )
         if existing is not None:
             merged[key] = existing
     return merged
@@ -8699,14 +8899,11 @@ def _find_steam_power_block(
             continue
         layout = _power_layout_from_pump_position(pump_position, _direction_or_default(pump.get("direction"), WEST))
         layout["offshore_pump"] = pump
-        layout["boiler"] = _entity_near(observation, "boiler", layout["boiler_spec"]["position"], radius=1.0)
-        layout["steam_engine"] = _entity_near(observation, "steam-engine", layout["steam_engine_spec"]["position"], radius=1.0)
-        layout["small_electric_pole"] = _entity_near(
-            observation,
-            "small-electric-pole",
-            layout["small_electric_pole_spec"]["position"],
-            radius=1.0,
-        )
+        # Match boiler/engine/pole by PROXIMITY to their upstream entity (pump->boiler->engine->pole),
+        # not the stale per-direction spec tile -- the self-calibrating place_fluid_connected action
+        # relocates them, so spec-tile matching would miss them and falsely report power-not-ready
+        # (the observed deadlock: ResearchAutomation waited forever for "power to settle").
+        layout = _power_layout_with_existing_entities(observation, layout)
         score = sum(1 for key in ("offshore_pump", "boiler", "steam_engine", "small_electric_pole") if layout.get(key) is not None)
         locality_penalty = 0.0 if starter_local else 1.0
         candidates.append((score, locality_penalty + reference_distance * 0.001, layout))
@@ -11127,6 +11324,13 @@ class BuildItemMallSkill:
                 )
                 if decision is not None:
                     return decision
+                # Still nothing carried and we could not obtain it -> do NOT emit an insert with
+                # count 0 (the executor raises ActionValidationError: "count must be positive", which
+                # crashes the whole cycle). Yield so the strategy/watchdog can try another approach.
+                return PlannerDecision(
+                    None,
+                    f"cannot obtain {ingredient} to feed the {self.target_item} mall assembler yet",
+                )
             if distance(player, assembler_position) > 20:
                 return PlannerDecision({"type": "move_to", "position": assembler_position}, f"move near mall assembler to insert {ingredient}")
             return PlannerDecision(
@@ -13328,6 +13532,19 @@ def _block_player_mall_output_collection_after_automation(observation: dict[str,
     return target_item == "iron-gear-wheel" and _gear_handcraft_automation_context_active(observation)
 
 
+def _is_virtual_agent(observation: dict[str, Any]) -> bool:
+    """True for the no-mod RCON 'server' agent (character_valid=false / execution.virtual=true).
+    Its move_to is instant (just updates a stored position), so the anti-hand-shuttle refusal that
+    protects a real walking player does not apply to it."""
+    player = observation.get("player")
+    if isinstance(player, dict) and player.get("character_valid") is False:
+        return True
+    execution = observation.get("execution")
+    if isinstance(execution, dict) and execution.get("virtual") is True:
+        return True
+    return False
+
+
 def _manual_site_input_logistics_blocker(
     observation: dict[str, Any],
     item: str,
@@ -13345,6 +13562,18 @@ def _manual_site_input_logistics_blocker(
     source_distance = distance(source.position, consumer_position)
     if source_distance <= MANUAL_SITE_INPUT_RADIUS:
         return None
+    # Bootstrap escape for the virtual RCON agent. The virtual agent teleports, so hand-carry is
+    # free; only defer to a belt logistic line when that line can ACTUALLY be built right now -- i.e.
+    # enough spare transport-belts exist to span the gap to the source. When the belt mall is starved
+    # (too few belts to build the very line that would feed it) refusing just DEADLOCKS the whole
+    # factory (observed live: belt-mall refuses 139-tile iron hand-carry -> 0 belts produced -> coal
+    # feed refuses hand-crafted belts -> power stalls). So let it hand-carry to seed production; once
+    # belts accumulate past the span the refusal resumes and real logistics take over. Real (walking)
+    # players always get the refusal (hand-shuttling distant sites is slow for them).
+    if _is_virtual_agent(observation):
+        spare_belts = total_item_count(observation, "transport-belt")
+        if spare_belts < max(1, int(source_distance)):
+            return None
     return PlannerDecision(
         None,
         (

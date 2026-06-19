@@ -124,6 +124,22 @@ $lastLlmReadyAt = [DateTime]::MinValue
 $lastSchedulerStatus = $null
 $lastVllmServiceStatus = $null
 
+# Driver selection: which loop actually plays the game.
+#   "autopilot"  (default) = deterministic strategy + hand-written skills (run-no-mod-autopilot)
+#   "code-agent" / "fle"   = FLE-style: the LLM writes a Python program each step (run-no-mod-code-agent)
+# Set $env:FACTORIO_AI_DRIVER="code-agent" before launching to drive with FLE. Default is unchanged.
+$Driver = if ($env:FACTORIO_AI_DRIVER) { $env:FACTORIO_AI_DRIVER.Trim().ToLower() } else { "autopilot" }
+if ($Driver -in @("code-agent", "code_agent", "codeagent", "fle")) {
+    $Driver = "code-agent"
+    $DriverCli = "run-no-mod-code-agent"
+    $DriverHeartbeatName = "code-agent-heartbeat.json"
+} else {
+    $Driver = "autopilot"
+    $DriverCli = "run-no-mod-autopilot"
+    $DriverHeartbeatName = "autopilot-heartbeat.json"
+}
+Write-Host "[factorio-ai] driver = $Driver ($DriverCli)"
+
 function Write-SupervisorLog {
     param([string]$Message)
     $line = "$(Get-Date -Format o) $Message"
@@ -430,7 +446,7 @@ function Test-SchedulerLlmReady {
 }
 
 function Test-AutopilotActiveCycle {
-    $heartbeat = Read-JsonFile (Join-Path $runtimeDir "autopilot-heartbeat.json")
+    $heartbeat = Read-JsonFile (Join-Path $runtimeDir $DriverHeartbeatName)
     if ($null -eq $heartbeat -or $heartbeat.state -ne "cycle_start") {
         return $false
     }
@@ -441,7 +457,7 @@ function Test-AutopilotActiveCycle {
 }
 
 function Write-AutopilotWaitingHeartbeat {
-    $existing = Read-JsonFile (Join-Path $runtimeDir "autopilot-heartbeat.json")
+    $existing = Read-JsonFile (Join-Path $runtimeDir $DriverHeartbeatName)
     $cycle = 0
     if ($existing -and $existing.cycle) {
         try {
@@ -459,7 +475,7 @@ function Write-AutopilotWaitingHeartbeat {
         reason = "waiting for scheduler local LLM readiness"
         pid = $null
     }
-    $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $runtimeDir "autopilot-heartbeat.json") -Encoding UTF8
+    $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $runtimeDir $DriverHeartbeatName) -Encoding UTF8
 }
 
 function Write-IdleLayoutWaitingHeartbeat {
@@ -561,13 +577,23 @@ function Test-LiveSkillFresh {
 }
 
 function Start-Autopilot {
-    Start-ManagedPython "unattended-no-mod-autopilot" @(
-        "-m", "factorio_ai.cli", "run-no-mod-autopilot",
-        "--objective", $Objective,
-        "--require-llm",
-        "--cycles", "0",
-        "--sleep-seconds", [string]$AutopilotSleepSeconds
-    ) | Out-Null
+    if ($Driver -eq "code-agent") {
+        # FLE-style driver: the LLM writes a Python program each step via the high-level API.
+        Start-ManagedPython "unattended-no-mod-code-agent" @(
+            "-m", "factorio_ai.cli", "run-no-mod-code-agent",
+            "--objective", $Objective,
+            "--cycles", "0",
+            "--sleep-seconds", [string]$AutopilotSleepSeconds
+        ) | Out-Null
+    } else {
+        Start-ManagedPython "unattended-no-mod-autopilot" @(
+            "-m", "factorio_ai.cli", "run-no-mod-autopilot",
+            "--objective", $Objective,
+            "--require-llm",
+            "--cycles", "0",
+            "--sleep-seconds", [string]$AutopilotSleepSeconds
+        ) | Out-Null
+    }
 }
 
 function Ensure-Autopilot {
@@ -575,17 +601,17 @@ function Ensure-Autopilot {
         if (Test-AutopilotActiveCycle) {
             return
         }
-        Stop-ManagedProcesses "autopilot" "run-no-mod-autopilot"
+        Stop-ManagedProcesses "autopilot" $DriverCli
         Write-AutopilotWaitingHeartbeat
         return
     }
-    $processes = @(Get-ManagedProcesses "run-no-mod-autopilot")
+    $processes = @(Get-ManagedProcesses $DriverCli)
     if ($processes.Count -eq 0) {
         Start-Autopilot
         return
     }
 
-    $heartbeat = Read-JsonFile (Join-Path $runtimeDir "autopilot-heartbeat.json")
+    $heartbeat = Read-JsonFile (Join-Path $runtimeDir $DriverHeartbeatName)
     $ageSeconds = Get-JsonAgeSeconds $heartbeat
     $staleState = $false
     if ($null -eq $heartbeat) {
@@ -609,7 +635,7 @@ function Ensure-Autopilot {
 }
 
 function Write-SupervisorStatus {
-    $autopilot = Read-JsonFile (Join-Path $runtimeDir "autopilot-heartbeat.json")
+    $autopilot = Read-JsonFile (Join-Path $runtimeDir $DriverHeartbeatName)
     $idle = Read-JsonFile (Join-Path $runtimeDir "idle-layout-loop.json")
     $live = Read-JsonFile (Join-Path $runtimeDir "live-skill-heartbeat.json")
     $foundry = Read-JsonFile (Join-Path $runtimeDir "skill-foundry-loop.json")
@@ -628,7 +654,7 @@ function Write-SupervisorStatus {
         scheduler_check_seconds = $SchedulerCheckSeconds
         autopilot_sleep_seconds = $AutopilotSleepSeconds
         autopilot_gate = $autopilotGate
-        autopilot_processes = @((Get-ManagedProcesses "run-no-mod-autopilot" | ForEach-Object { $_.ProcessId }))
+        autopilot_processes = @((Get-ManagedProcesses $DriverCli | ForEach-Object { $_.ProcessId }))
         idle_layout_processes = @((Get-ManagedProcesses "run-no-mod-idle-layout-loop" | ForEach-Object { $_.ProcessId }))
         skill_foundry_processes = @((Get-ManagedProcesses "run-no-mod-skill-foundry-loop" | ForEach-Object { $_.ProcessId }))
         vllm_service_status = $lastVllmServiceStatus

@@ -80,7 +80,23 @@ def save_design(
     Returns the record. Idempotent on the design key (overwrites the same key)."""
 
     key = design_key(spec)
-    created_iso = created_at or datetime.now(timezone.utc).isoformat()
+    lib = _library_dir(runtime_dir)
+    # Read any prior record for this key to (a) preserve the ORIGINAL add time across re-saves and
+    # (b) track how many times it has been (re)saved + when it was last modified.
+    prior: dict[str, Any] = {}
+    prior_path = lib / f"{key}.json"
+    if prior_path.exists():
+        try:
+            prior = json.loads(prior_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            prior = {}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if prior.get("created_at"):
+        created_iso = str(prior["created_at"])  # keep the first-added time stable
+    else:
+        created_iso = created_at or now_iso
+    updated_iso = created_at if (created_at and not prior) else now_iso
+    revision = int(prior.get("revision") or 0) + 1
     record: dict[str, Any] = {
         "key": key,
         "item": spec.target_item,
@@ -103,6 +119,11 @@ def save_design(
         "sandbox_status": sandbox_status,
         "created_at": created_iso,
         "added_at": _format_added_at(created_iso),
+        # Last-modified time + how many times this design has been (re)saved. revision=1 means it was
+        # only ever added once (0 modifications); revision N means it was updated N-1 times.
+        "updated_at": updated_iso,
+        "updated_at_display": _format_added_at(updated_iso),
+        "revision": revision,
     }
     if placed is not None and hasattr(placed, "required_box"):
         record["required_box"] = placed.required_box
@@ -115,7 +136,6 @@ def save_design(
         if isinstance(w, (int, float)) and isinstance(h, (int, float)):
             record["footprint"] = {**record["footprint"], "width": w, "height": h, "area": round(w * h, 1)}
 
-    lib = _library_dir(runtime_dir)
     lib.mkdir(parents=True, exist_ok=True)
     (lib / f"{key}.json").write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     _rewrite_index(lib)

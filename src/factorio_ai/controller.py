@@ -92,6 +92,13 @@ _STALL_PROGRESS_ITEMS = (
     "steam",
 )
 _STALL_ROTATION_SKILLS = (
+    # Bootstrap-builder recovery skills come first: the most common stall is the strategy looping a
+    # skill whose upstream prerequisite was never built. bootstrap_build_item_mall BUILDS the gear/belt
+    # assemblers that build_gear_belt_mall_logistics only WIRES (it loops "cannot find spaced powered
+    # gear and reusable belt assemblers" when none exist); produce_iron_plate rebuilds a direct beltless
+    # iron cell and relocates a drill stranded off its ore patch when iron production has died.
+    "bootstrap_build_item_mall",
+    "produce_iron_plate",
     "setup_coal_supply",
     "produce_copper_plate",
     "setup_power",
@@ -102,11 +109,66 @@ _STALL_ROTATION_SKILLS = (
 )
 
 
+def _failure_recovery_threshold() -> int:
+    # After this many consecutive failed cycles (ANY skills -- covers the strategy oscillating between
+    # several infeasible skills, which the same-skill stall counter misses), force prerequisite recovery.
+    try:
+        return max(2, int(os.getenv("FACTORIO_AI_AUTOPILOT_FAILURE_RECOVERY_CYCLES", "3")))
+    except (TypeError, ValueError):
+        return 3
+
+
 def _stall_threshold() -> int:
     try:
         return max(2, int(os.getenv("FACTORIO_AI_AUTOPILOT_STALL_CYCLES", "3")))
     except (TypeError, ValueError):
         return 3
+
+
+def _commit_skill_enabled() -> bool:
+    # When a skill is actively making progress, reuse it for a few cycles without paying a fresh
+    # (slow) LLM strategy call. The LLM still picks every new strategy: we re-strategize the moment
+    # progress stalls and at least every _commit_skill_max() cycles. Default on; set to 0 to force an
+    # LLM strategy call every cycle.
+    return os.getenv("FACTORIO_AI_AUTOPILOT_COMMIT_SKILL", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _commit_skill_max() -> int:
+    # Max consecutive LLM-skipping cycles before a fresh LLM re-evaluation is forced.
+    try:
+        return max(1, int(os.getenv("FACTORIO_AI_AUTOPILOT_COMMIT_MAX", "4")))
+    except (TypeError, ValueError):
+        return 4
+
+
+try:
+    # A skill 'wait' action of at least this many ticks yields the cycle (the agent goes and does
+    # other factory-expanding work) instead of idling, since the game fills in real-time anyway.
+    # Short settle-waits (< this) keep their brief sleep. Set to a huge value to disable yielding.
+    _WAIT_YIELD_TICKS = max(60, int(os.getenv("FACTORIO_AI_AUTOPILOT_WAIT_YIELD_TICKS", "180")))
+except (TypeError, ValueError):
+    _WAIT_YIELD_TICKS = 180
+
+
+def _llm_degrade_threshold() -> int:
+    # After this many consecutive failed cycles (remote LLM hang/error, RecursionError, or a refusal
+    # loop), run ONE cycle on the deterministic heuristic strategy so the factory keeps progressing
+    # instead of freezing on an unstable serving (require-llm otherwise raises and the agent stalls).
+    try:
+        return max(1, int(os.getenv("FACTORIO_AI_AUTOPILOT_LLM_DEGRADE_CYCLES", "2")))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _llm_degrade_cooldown_cycles() -> int:
+    # Once degraded, stay on the heuristic for this many cycles before retrying the (broken) remote.
+    # Each failed remote retry costs ~100-540s (RecursionError round-trip or a hung-serving timeout),
+    # so retrying every cycle wastes most wall-clock; a cooldown keeps the factory on the fast
+    # heuristic path while still periodically probing whether the serving recovered. 0 disables it.
+    try:
+        return max(0, int(os.getenv("FACTORIO_AI_AUTOPILOT_LLM_DEGRADE_COOLDOWN", "5")))
+    except (TypeError, ValueError):
+        return 5
 
 
 # Self-repair: when a hand-written skill fails this many times in a row, enqueue the local LLM to
@@ -763,13 +825,19 @@ class FactorioController:
             log_path=log_path,
         )
 
-    def strategy_decision(self, objective: str, require_llm: bool = False) -> dict[str, Any]:
+    def strategy_decision(
+        self, objective: str, require_llm: bool = False, skip_remote: bool = False
+    ) -> dict[str, Any]:
         observation = self.observe()
         production_targets = load_targets(self.cfg.runtime_dir, objective).per_minute
         selected_improvement_site = load_selected_improvement_site(self.cfg.runtime_dir, objective)
         request_summary = strategy_request_summary(observation, production_targets)
         result: dict[str, Any] | None = None
-        use_remote_strategy = self._should_try_remote_strategy(require_llm)
+        # skip_remote forces the deterministic heuristic path without even touching the remote.
+        # Used by the graceful-degradation cycle: _should_try_remote_strategy returns True whenever
+        # slurm is enabled (regardless of require_llm), so a degraded cycle would otherwise still
+        # call the remote and block on its full ~540s timeout when the serving hangs.
+        use_remote_strategy = (not skip_remote) and self._should_try_remote_strategy(require_llm)
         if use_remote_strategy:
             if self.cfg.slurm_enabled:
                 self._maybe_ensure_slurm_worker(reason="strategy_decision")
@@ -824,6 +892,27 @@ class FactorioController:
                 )
                 if require_llm:
                     raise
+
+        if result is None and skip_remote:
+            # Degraded cycle: skip BOTH the remote and the local LLM and go straight to the
+            # deterministic heuristic so a hung/erroring serving can't stall the factory.
+            result = heuristic_strategy(
+                objective,
+                observation,
+                production_targets,
+                selected_improvement_site=selected_improvement_site,
+            )
+            result["source"] = "heuristic"
+            result["ok"] = True
+            record_llm_decision(
+                self.cfg.log_dir,
+                objective=objective,
+                provider="heuristic_fallback",
+                result=result,
+                request_summary=request_summary,
+                error="degraded: skipped remote/local LLM, used heuristic strategy",
+                latency_ms=0,
+            )
 
         if result is None:
             started = time.monotonic()
@@ -912,6 +1001,7 @@ class FactorioController:
         target_count: int | None = None,
         max_steps: int | None = None,
         override_skill: str | None = None,
+        skip_remote_strategy: bool = False,
     ) -> StrategyStepSummary:
         if override_skill:
             # Stall watchdog override: skip the LLM and force a specific deterministic skill to break
@@ -929,7 +1019,9 @@ class FactorioController:
                 runtime_dir=self.cfg.runtime_dir,
             )
         else:
-            strategy = self.strategy_decision(objective, require_llm=require_llm)
+            strategy = self.strategy_decision(
+                objective, require_llm=require_llm, skip_remote=skip_remote_strategy
+            )
         selected = str(strategy.get("selected_skill") or strategy.get("selected_goal") or "")
         status = strategy.get("skill_status") if isinstance(strategy.get("skill_status"), dict) else {}
         if status.get("codex_required"):
@@ -1387,6 +1479,52 @@ class FactorioController:
         from . import strategy as strategy_mod
 
         recent = set(recent_skills)
+
+        # Prerequisite-aware recovery for the two most common bootstrap deadlocks: the strategy keeps
+        # re-selecting a skill that can never progress because an upstream prerequisite was never built.
+        # Checked before the generic heuristic/rotation so recovery is deterministic, not order-luck.
+        try:
+            from .planner import _find_gear_belt_mall_logistics_layout
+
+            entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+            # (1) Iron production has died -- no furnace producing iron-plate AND no drill mining iron-ore
+            #     while an iron patch is reachable (usually a drill stranded off-patch, mining_target=None).
+            #     produce_iron_plate rebuilds a direct beltless cell + relocates the stranded drill,
+            #     breaking the iron<-belts<-mall<-iron circular deadlock the strategy guardrails can't see.
+            iron_mining = any(
+                isinstance(e, dict)
+                and e.get("name") in ("burner-mining-drill", "electric-mining-drill")
+                and str(e.get("mining_target") or "") == "iron-ore"
+                for e in entities
+            )
+            iron_dead = (
+                not strategy_mod._iron_plate_source_furnaces(observation)
+                and not iron_mining
+                and strategy_mod._starter_resource_available(observation, "iron-ore")
+            )
+            if iron_dead and "produce_iron_plate" not in recent and self._skill_run_config("produce_iron_plate") is not None:
+                return "produce_iron_plate"
+            # (2) The mall-wiring / iron-line skills only WIRE an EXISTING gear+belt mall:
+            #       - build_gear_belt_mall_logistics loops "cannot find spaced powered gear and
+            #         reusable belt assemblers" when the gear+belt assembler pair doesn't exist;
+            #       - build_iron_plate_logistic_line_to_gear_mall first requires that same gear/belt
+            #         layout (it calls _find_gear_belt_mall_logistics_layout) and otherwise loops
+            #         "cannot find both an iron-plate source furnace and a powered iron-gear mall".
+            #     Both deadlock until bootstrap_build_item_mall actually BUILDS the missing assemblers.
+            mall_wiring_skills = {
+                "build_gear_belt_mall_logistics",
+                "build_iron_plate_logistic_line_to_gear_mall",
+            }
+            if (
+                recent & mall_wiring_skills
+                and "bootstrap_build_item_mall" not in recent
+                and _find_gear_belt_mall_logistics_layout(observation) is None
+                and self._skill_run_config("bootstrap_build_item_mall") is not None
+            ):
+                return "bootstrap_build_item_mall"
+        except Exception:  # noqa: BLE001
+            pass
+
         try:
             planner = strategy_mod.heuristic_strategy(objective, observation, {})
             candidate = str(planner.get("selected_skill") or planner.get("selected_goal") or "")
@@ -1431,6 +1569,28 @@ class FactorioController:
         stall_count = 0
         recent_skills: list[str] = []
         stall_threshold = _stall_threshold()
+        # Failure watchdog: the same-skill stall counter never trips when the strategy OSCILLATES
+        # between several different infeasible skills (iron-line -> coal-feed -> ...), each failing
+        # once. Count consecutive failed cycles regardless of which skill, and force prerequisite
+        # recovery (e.g. bootstrap_build_item_mall / produce_iron_plate) once it crosses the threshold.
+        consecutive_failed_cycles = 0
+        failure_recovery_threshold = max(stall_threshold, _failure_recovery_threshold())
+        # Commit-to-progressing-skill state: while a skill keeps changing the factory, reuse it
+        # without a fresh (slow) LLM strategy call; re-strategize the moment progress stalls and at
+        # least every commit_max cycles. The LLM still picks every genuinely new strategy.
+        commit_enabled = _commit_skill_enabled()
+        commit_max = _commit_skill_max()
+        committed_skill: str | None = None
+        commit_skips = 0
+        last_progress_key: tuple[Any, ...] | None = None
+        # Graceful LLM degradation: count consecutive failed cycles; after a threshold, run one cycle
+        # on the heuristic so an unstable/hung serving (or a refusal loop) can't freeze the autopilot.
+        consecutive_strategy_failures = 0
+        llm_degrade_threshold = _llm_degrade_threshold()
+        # Sticky degradation: after the threshold trips, stay on the heuristic for this many cycles
+        # before probing the remote again (each broken retry costs ~100-540s).
+        llm_degrade_cooldown_cycles = _llm_degrade_cooldown_cycles()
+        degrade_cooldown = 0
 
         try:
             with log_path.open("a", encoding="utf-8") as log_file:
@@ -1439,31 +1599,83 @@ class FactorioController:
                     self._write_autopilot_heartbeat(objective, "cycle_start", cycle=completed + 1)
                     self._maybe_progress_codex_wait_layout(objective)
                     override_skill: str | None = None
-                    if stall_count >= stall_threshold:
+                    recover_for_stall = stall_count >= stall_threshold
+                    recover_for_failures = consecutive_failed_cycles >= failure_recovery_threshold
+                    if recover_for_stall or recover_for_failures:
                         try:
                             stall_obs = self.observe()
                         except Exception:  # noqa: BLE001
                             stall_obs = None
                         if stall_obs is not None:
+                            # Use a window wide enough to see ALL recently-failed skills, so failure-driven
+                            # recovery catches the oscillation case (each distinct skill failing once).
+                            window = max(stall_threshold, failure_recovery_threshold)
                             override_skill = self._stall_recovery_skill(
-                                objective, stall_obs, recent_skills[-_stall_threshold():] or [last_selected]
+                                objective, stall_obs, recent_skills[-window:] or [last_selected]
                             )
                         if override_skill:
+                            trigger = (
+                                f"no progress for {stall_count} cycles on '{last_selected}'"
+                                if recover_for_stall
+                                else f"{consecutive_failed_cycles} consecutive failed cycles"
+                            )
                             self._write_autopilot_heartbeat(
                                 objective,
                                 "stall_recovery",
                                 cycle=completed + 1,
-                                reason=f"no progress for {stall_count} cycles on '{last_selected}'; forcing {override_skill}",
+                                reason=f"{trigger}; forcing {override_skill}",
                             )
                             stall_count = 0
+                            consecutive_failed_cycles = 0
+                    # Reuse a still-progressing skill instead of paying another LLM strategy call.
+                    if (
+                        override_skill is None
+                        and commit_enabled
+                        and committed_skill is not None
+                        and commit_skips < commit_max
+                    ):
+                        override_skill = committed_skill
+                        commit_skips += 1
+                        self._write_autopilot_heartbeat(
+                            objective,
+                            "commit_skill",
+                            cycle=completed + 1,
+                            reason=f"reusing progressing skill '{committed_skill}' without re-strategizing ({commit_skips}/{commit_max})",
+                        )
+                    elif override_skill is None:
+                        # A fresh LLM strategy decision is about to run; reset the skip budget.
+                        commit_skips = 0
+                    # After repeated failures, degrade this one cycle to the heuristic so a hung/erroring
+                    # serving can't freeze progress (the agent otherwise sits frozen mid-action). An
+                    # override_skill cycle already bypasses the LLM, so only degrade plain cycles.
+                    degrade_to_heuristic = (
+                        require_llm
+                        and override_skill is None
+                        and (
+                            consecutive_strategy_failures >= llm_degrade_threshold
+                            or degrade_cooldown > 0
+                        )
+                    )
+                    if degrade_to_heuristic and degrade_cooldown > 0:
+                        degrade_cooldown -= 1
+                    if degrade_to_heuristic:
+                        self._write_autopilot_heartbeat(
+                            objective,
+                            "llm_degraded",
+                            cycle=completed + 1,
+                            reason=f"{consecutive_strategy_failures} failed cycles; using heuristic strategy to keep progressing",
+                        )
                     started = time.monotonic()
                     try:
                         last_step = self.run_strategy_step(
                             objective=objective,
-                            require_llm=require_llm,
+                            require_llm=require_llm and not degrade_to_heuristic,
                             target_count=target_count,
                             max_steps=max_steps,
                             override_skill=override_skill,
+                            # A degraded cycle must NOT touch the hung remote (it would block on the
+                            # full remote timeout); force the local heuristic path immediately.
+                            skip_remote_strategy=degrade_to_heuristic,
                         )
                     except Exception as exc:
                         last_step = StrategyStepSummary(
@@ -1483,10 +1695,22 @@ class FactorioController:
                     # Stall watchdog bookkeeping: count consecutive cycles that re-ran the same skill
                     # without changing the progress fingerprint.
                     try:
-                        fingerprint = self._progress_fingerprint(self.observe())
+                        progress_obs = self.observe()
+                        fingerprint = self._progress_fingerprint(progress_obs)
+                        progress_key = self._live_progress_key(progress_obs)
                     except Exception:  # noqa: BLE001
                         fingerprint = None
+                        progress_key = None
                     selected_now = last_step.selected_skill or ""
+                    # "Progress" for commit purposes = entity count OR production/research changed
+                    # (so building a smelting line counts, not just producing items).
+                    made_progress = (
+                        progress_key is not None
+                        and last_progress_key is not None
+                        and progress_key != last_progress_key
+                    )
+                    if progress_key is not None:
+                        last_progress_key = progress_key
                     if (
                         fingerprint is not None
                         and last_fingerprint is not None
@@ -1497,9 +1721,32 @@ class FactorioController:
                         stall_count += 1
                     else:
                         stall_count = 0
+                    # Failure watchdog counter: any failed cycle (any skill) increments; any success
+                    # resets. Unlike stall_count this survives the strategy hopping between skills, so a
+                    # run that oscillates between several infeasible skills still triggers recovery.
+                    if last_step.ok:
+                        consecutive_failed_cycles = 0
+                    else:
+                        consecutive_failed_cycles += 1
                     if fingerprint is not None:
                         last_fingerprint = fingerprint
                     last_selected = selected_now
+                    # Commit to the skill only while it keeps making progress; otherwise drop the
+                    # commitment so the next cycle re-strategizes via the LLM.
+                    if commit_enabled and last_step.ok and made_progress and selected_now:
+                        committed_skill = selected_now
+                    else:
+                        committed_skill = None
+                    # Track consecutive failed cycles for graceful LLM degradation. A degraded
+                    # (heuristic) cycle resets the counter so the next cycle retries the real LLM.
+                    if last_step.ok or degrade_to_heuristic:
+                        consecutive_strategy_failures = 0
+                    else:
+                        consecutive_strategy_failures += 1
+                        # A real remote retry just failed (hang/RecursionError); arm the cooldown so
+                        # the next several cycles stay on the fast heuristic instead of re-paying it.
+                        if consecutive_strategy_failures >= llm_degrade_threshold:
+                            degrade_cooldown = llm_degrade_cooldown_cycles
                     self._write_progress_kpi(fingerprint, stall_count, selected_now)
                     recent_skills.append(selected_now)
                     if len(recent_skills) > 12:
@@ -2234,14 +2481,26 @@ class FactorioController:
                         return finish(False, f"action failed: {response.get('reason')}", step, observation)
                     if action.get("type") == "wait":
                         ticks = int(action.get("ticks") or 60)
-                        time.sleep(max(0.05, ticks / 60.0))
+                        # Factorio runs in real-time on the server: a long "wait for research /
+                        # production / steam to fill" idles the agent for nothing -- the process
+                        # completes in the background regardless. For such long waits, sleep briefly
+                        # then YIELD the cycle so the strategy can do other (factory-expanding) work
+                        # meanwhile; the stall watchdog rotates skills if it keeps re-picking the
+                        # waiting one. Short settle-waits keep their (capped) brief sleep.
+                        if ticks >= _WAIT_YIELD_TICKS:
+                            time.sleep(0.2)
+                            observation = self._observe_for_skill_loop(goal, step)
+                            return finish(True, f"yielded for other work instead of idling: {decision.reason}", step, observation)
+                        time.sleep(max(0.05, min(ticks / 60.0, 1.0)))
                     elif action.get("type") == "move_to":
                         arrived, reason = self._wait_for_move(action)
                         if not arrived:
                             observation = self._observe_for_skill_loop(goal, step)
                             return finish(False, reason, step, observation)
                     else:
-                        time.sleep(0.2)
+                        # Action applies synchronously over RCON; this is just pacing between the
+                        # action and the next observe. A few game ticks is enough for state to settle.
+                        time.sleep(0.1)
 
             observation = self._observe_for_skill_loop(goal, max_steps)
             self._maybe_progress_background_layout_work(observation, objective, goal, max_steps, force_poll=True)
@@ -3305,6 +3564,7 @@ class ModlessFactorioController(FactorioController):
         target_count: int | None = None,
         max_steps: int | None = None,
         override_skill: str | None = None,
+        skip_remote_strategy: bool = False,
     ) -> StrategyStepSummary:
         if _real_player_execution_required():
             observation = self.observe()
@@ -3365,6 +3625,7 @@ class ModlessFactorioController(FactorioController):
             target_count=target_count,
             max_steps=max_steps,
             override_skill=override_skill,
+            skip_remote_strategy=skip_remote_strategy,
         )
 
     def observe(self) -> dict[str, Any]:
@@ -3374,7 +3635,10 @@ class ModlessFactorioController(FactorioController):
         return self._observe_modless(include_planning_sites=False)
 
     def _observe_for_skill_loop(self, goal: str, step: int) -> dict[str, Any]:
-        return self._observe_modless(include_planning_sites=False)
+        # Per-step skill observe: drop the radius-768 far scans and trim resources to the nearest
+        # few per type (skills only act on nearby geometry + nearest resources). Full observes still
+        # happen for strategy decisions and the planning-site retry path.
+        return self._observe_modless(include_planning_sites=False, lightweight=True)
 
     def _maybe_retry_skill_with_planning_sites(
         self,
@@ -3392,10 +3656,11 @@ class ModlessFactorioController(FactorioController):
         full_observation = self._observe_modless(include_planning_sites=True)
         return full_observation, skill.next_action(full_observation)
 
-    def _observe_modless(self, *, include_planning_sites: bool) -> dict[str, Any]:
+    def _observe_modless(self, *, include_planning_sites: bool, lightweight: bool = False) -> dict[str, Any]:
         response = self._modless.observe(
             player_name=self._configured_agent_player_name(),
             include_planning_sites=include_planning_sites,
+            lightweight=lightweight,
         )
         if not response.get("ok"):
             raise RuntimeError(f"no-mod observe failed: {response}")

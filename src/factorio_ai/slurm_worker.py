@@ -40,12 +40,15 @@ STRATEGY_RESPONSE_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "selected_skill": {"type": "string"},
+        "selected_skill": {"type": "string", "maxLength": 64},
         "priority": {"type": "integer"},
-        "reason": {"type": "string"},
-        "evidence": {"type": "array", "items": {"type": "string"}},
-        "blockers": {"type": "array", "items": {"type": "string"}},
-        "expected_effect": {"type": "string"},
+        # maxLength/maxItems caps keep guided_json from rambling: decode time scales with output
+        # tokens, so short fields = far faster strategy calls (was 24-120s; the long tails were the
+        # model writing verbose reason/evidence to the 2048-token cap). One short sentence is enough.
+        "reason": {"type": "string", "maxLength": 160},
+        "evidence": {"type": "array", "items": {"type": "string", "maxLength": 48}, "maxItems": 3},
+        "blockers": {"type": "array", "items": {"type": "string", "maxLength": 48}, "maxItems": 3},
+        "expected_effect": {"type": "string", "maxLength": 160},
     },
     "required": ["selected_skill", "priority", "reason", "evidence", "blockers", "expected_effect"],
 }
@@ -193,7 +196,62 @@ def execute_task(task: dict[str, Any]) -> dict[str, Any]:
         return run_strategy_model_benchmark(payload)
     if task_type == "skill_foundry_request":
         return run_skill_foundry_request(payload)
+    if task_type == "code_agent_request":
+        return run_code_agent_request(payload)
     raise ValueError(f"unsupported task type: {task_type}")
+
+
+_CODE_AGENT_SYSTEM = (
+    "You are a Factorio automation engineer driving a live factory toward a rocket launch. You are "
+    "given a Python API object `api` and the current world state. Respond with ONLY a JSON object "
+    '{"program": "<python source>"} — no prose, no markdown. The program drives the factory using '
+    "ONLY the `api` verbs described in the user message (no imports). Do a few concrete operations, "
+    "print what you did and the resulting state, then stop."
+)
+_CODE_AGENT_SCHEMA = {
+    "type": "object",
+    "properties": {"program": {"type": "string", "maxLength": 6000}},
+    "required": ["program"],
+    "additionalProperties": False,
+}
+
+
+def run_code_agent_request(payload: dict[str, Any]) -> dict[str, Any]:
+    """Author one FLE-style control PROGRAM with the local LLM. Runs on the node where vLLM is
+    reachable (same offload pattern as strategy/skill_foundry). The client builds the full user prompt
+    (API reference + live state + previous-program feedback) and passes it in ``payload['prompt']``."""
+    prompt = str(payload.get("prompt") or "")
+    task_id = str(payload.get("task_id") or "")
+    raw_max_tokens = payload.get("max_tokens")
+    try:
+        max_tokens = 2048 if raw_max_tokens is None else max(512, min(4096, int(raw_max_tokens)))
+    except (TypeError, ValueError):
+        max_tokens = 2048
+    # NO guided_json schema here: the program is one large free-form string, and vLLM's guided-JSON
+    # decoder is pathologically slow / hangs on a big arbitrary-string schema (strategy works only
+    # because its schema is short structured fields). Plain response_format=json_object (always set by
+    # call_llm_json) is enough -- the system prompt instructs {"program": "..."} and we parse that.
+    parsed, diagnostics = call_llm_json_with_diagnostics(
+        _CODE_AGENT_SYSTEM,
+        prompt,
+        None,
+        kind="code_agent",
+        task_id=task_id,
+        max_tokens=max_tokens,
+        base_url=payload.get("llm_base_url"),
+    )
+    result: dict[str, Any] = {"ok": True, "type": "code_agent_request"}
+    for key, value in diagnostics.items():
+        if key in {"llm_trace", "llm_traces"} or value not in (None, ""):
+            result[key] = value
+    if isinstance(parsed, dict) and isinstance(parsed.get("program"), str) and parsed["program"].strip():
+        result["program"] = parsed["program"]
+        result["source"] = "llm"
+    else:
+        result["ok"] = False
+        result["program"] = ""
+        result.setdefault("llm_error", "code agent LLM returned no program")
+    return result
 
 
 def run_skill_foundry_request(payload: dict[str, Any]) -> dict[str, Any]:

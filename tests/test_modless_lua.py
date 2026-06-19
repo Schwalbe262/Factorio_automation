@@ -93,6 +93,20 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("lab_sites = lab_sites", command)
         self.assertIn("automation_sites = automation_sites", command)
 
+    def test_lightweight_observe_trims_far_scans_and_resources(self):
+        full = build_modless_observe_command("AI", include_planning_sites=False, lightweight=False)
+        light = build_modless_observe_command("AI", include_planning_sites=False, lightweight=True)
+
+        self.assertIn("local lightweight = false", full)
+        self.assertIn("local lightweight = true", light)
+        self.assertNotIn("__LIGHTWEIGHT__", full)
+        self.assertNotIn("__LIGHTWEIGHT__", light)
+        # Resource output is trimmed to the nearest few per type, gated on the lightweight flag.
+        self.assertIn("if lightweight then", light)
+        self.assertIn("LIGHTWEIGHT_RESOURCE_PER_TYPE", light)
+        # Far per-name entity scan is skipped in lightweight (the surface-wide force scan covers it).
+        self.assertIn("if not lightweight then", light)
+
     def test_auto_player_name_falls_through_to_connected_players(self):
         command = build_modless_observe_command("auto")
         named_lookup = 'if not auto_select_player_name(player_name) then local named = game.get_player(player_name)'
@@ -201,6 +215,29 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("distance(entity.position, probe) <= 0.25", command)
         self.assertIn('status = "already_exists"', command)
         self.assertLess(action_build.index("existing_built_entity(agent.surface"), action_build.index("inventory.get_item_count"))
+
+    def test_connect_entities_action_places_a_tile_path_in_one_command(self):
+        command = build_modless_action_command(
+            {
+                "type": "connect_entities",
+                "name": "transport-belt",
+                "tiles": [
+                    {"position": {"x": 0.5, "y": 0.5}, "direction": 4},
+                    {"position": {"x": 1.5, "y": 0.5}, "direction": 4},
+                ],
+            }
+        )
+        self.assertTrue(command.startswith("/silent-command"))
+        self.assertNotIn("\n", command)
+        self.assertIn("local function action_connect_entities", command)
+        self.assertIn('elseif action.type == "connect_entities" then', command)
+        self.assertIn("reply_action(action_connect_entities())", command)
+        for needle in ("existing_built_entity", "build_candidate_valid", "create_entity", "failures"):
+            self.assertIn(needle, command)
+
+    def test_connect_entities_action_requires_non_empty_tiles(self):
+        with self.assertRaises(Exception):
+            build_modless_action_command({"type": "connect_entities", "name": "transport-belt", "tiles": []})
 
 
 if __name__ == "__main__":
