@@ -1431,6 +1431,7 @@ def reconcile_strategy_decision(
             "automate_electronic_circuit_line",
             "bootstrap_build_item_mall",
             "bootstrap_power_pole_mall",
+            "setup_coal_supply",
             "research_electric_mining_drill",
             "bootstrap_electric_mining_drill_mall",
             "research_logistics",
@@ -1467,7 +1468,10 @@ def reconcile_strategy_decision(
             f"relocation_cost={gear_mall_iron_plate_issue.get('relocation_cost')}",
             f"route_cost_preference={gear_mall_iron_plate_issue.get('route_cost_preference')}",
             f"small_electric_pole_deficit={relocation_power_pole_deficit}",
-            "transport_belts_available_for_mall_logistics=false",
+            (
+                "transport_belts_available_for_mall_logistics="
+                f"{str(gear_mall_iron_plate_issue.get('transport_belts_available')).lower()}"
+            ),
             "gear_handcraft_blocked=true",
         ]
         if power_recovery_waits_on_belt_mall:
@@ -1719,6 +1723,7 @@ def reconcile_strategy_decision(
         "automate_electronic_circuit_line",
         "bootstrap_build_item_mall",
         "bootstrap_power_pole_mall",
+        "setup_coal_supply",
         "research_electric_mining_drill",
         "bootstrap_electric_mining_drill_mall",
         "research_logistics",
@@ -1751,7 +1756,10 @@ def reconcile_strategy_decision(
             f"relocation_power_poles_estimate={gear_mall_iron_plate_issue.get('relocation_power_poles_estimate')}",
             f"relocation_cost={gear_mall_iron_plate_issue.get('relocation_cost')}",
             f"route_cost_preference={gear_mall_iron_plate_issue.get('route_cost_preference')}",
-            "transport_belts_available_for_mall_logistics=false",
+            (
+                "transport_belts_available_for_mall_logistics="
+                f"{str(gear_mall_iron_plate_issue.get('transport_belts_available')).lower()}"
+            ),
             "gear_handcraft_blocked=true",
         ]:
             if item not in evidence:
@@ -2286,7 +2294,10 @@ def _heuristic_strategy_impl(
             f"relocation_cost={gear_mall_iron_plate_issue.get('relocation_cost')}",
             f"route_cost_preference={gear_mall_iron_plate_issue.get('route_cost_preference')}",
             f"small_electric_pole_deficit={relocation_power_pole_deficit}",
-            "transport_belts_available_for_mall_logistics=false",
+            (
+                "transport_belts_available_for_mall_logistics="
+                f"{str(gear_mall_iron_plate_issue.get('transport_belts_available')).lower()}"
+            ),
             "gear_handcraft_blocked=true",
         ]
         if power_recovery_waits_on_belt_mall:
@@ -4061,6 +4072,8 @@ def _recoverable_relocation_assembler(observation: dict[str, Any]) -> dict[str, 
 def _gear_mall_plate_route_needs_compaction(issue: dict[str, Any] | None) -> bool:
     if not isinstance(issue, dict):
         return False
+    if issue.get("gear_belt_logistics_pair_exists") is False:
+        return issue.get("route_cost_preference") == "relocate_mall_to_iron_source"
     if issue.get("route_cost_preference") == "relocate_mall_to_iron_source":
         return not bool(issue.get("transport_belts_available"))
     try:

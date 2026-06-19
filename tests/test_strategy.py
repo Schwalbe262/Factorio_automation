@@ -681,7 +681,7 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
         self.assertIn("transport_belts_available_for_mall_logistics=true", result["evidence"])
 
-    def test_rocket_goal_bootstraps_when_belt_output_exists_but_pair_is_not_logistics_compatible(self):
+    def test_rocket_goal_bootstraps_power_poles_when_belt_output_pair_requires_relocation(self):
         observation = gear_belt_mall_needs_bootstrap_observation()
         observation["entities"].append(
             {
@@ -694,8 +694,9 @@ class StrategyTests(unittest.TestCase):
 
         result = heuristic_strategy("launch_rocket_program", observation)
 
-        self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
-        self.assertIn("transport_belts_available_for_mall_logistics=true", result["evidence"])
+        self.assertEqual(result["selected_skill"], "bootstrap_power_pole_mall")
+        self.assertIn("route_cost_preference=relocate_mall_to_iron_source", result["evidence"])
+        self.assertIn("small_electric_pole_deficit=13", result["evidence"])
 
     def test_rocket_goal_bootstraps_belt_mall_from_local_plate_seed_before_circuit(self):
         result = heuristic_strategy("launch_rocket_program", gear_belt_mall_has_local_plate_seed_observation())
@@ -1322,6 +1323,30 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
         self.assertEqual(result["guardrail_adjusted"]["from"], "build_iron_plate_logistic_line_to_gear_mall")
         self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
+        self.assertIn("route_cost_preference=relocate_mall_to_iron_source", result["evidence"])
+
+    def test_reconcile_relocates_non_logistics_long_iron_route_even_with_belt_stock(self):
+        observation = gear_belt_mall_needs_bootstrap_observation()
+        observation["inventory"] = {"iron-plate": 40, "transport-belt": 20, "small-electric-pole": 80}
+        observation["entities"][2]["position"] = {"x": 180.5, "y": 0.5}
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "setup_coal_supply",
+                "priority": 50,
+                "reason": "Need coal before more burner expansion.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "heuristic",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "setup_coal_supply")
+        self.assertIn("transport_belts_available_for_mall_logistics=true", result["evidence"])
         self.assertIn("route_cost_preference=relocate_mall_to_iron_source", result["evidence"])
 
     def test_reconcile_repairs_power_even_when_belt_mall_has_output(self):
