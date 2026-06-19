@@ -1200,7 +1200,13 @@ def reconcile_strategy_decision(
     if selected == "connect_coal_fuel_feed" and not _transport_belt_automation_ready(observation):
         adjusted = dict(decision)
         automation_researched = _technology_researched(observation, "automation")
-        target_skill = "build_gear_belt_mall_logistics" if automation_researched else "research_automation"
+        target_skill = "research_automation"
+        if automation_researched:
+            target_skill = (
+                readiness.repair_skill
+                if readiness.repair_skill in {"bootstrap_build_item_mall", "build_gear_belt_mall_logistics"}
+                else "build_gear_belt_mall_logistics"
+            )
         adjusted["selected_skill"] = target_skill
         adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 87)
         original_reason = str(decision.get("reason") or "").strip()
@@ -1566,7 +1572,12 @@ def reconcile_strategy_decision(
         "research_logistics",
     }:
         adjusted = dict(decision)
-        adjusted["selected_skill"] = "build_gear_belt_mall_logistics"
+        target_skill = (
+            readiness.repair_skill
+            if readiness.repair_skill in {"bootstrap_build_item_mall", "build_gear_belt_mall_logistics"}
+            else "build_gear_belt_mall_logistics"
+        )
+        adjusted["selected_skill"] = target_skill
         adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 92)
         original_reason = str(decision.get("reason") or "").strip()
         guardrail_reason = (
@@ -1595,7 +1606,7 @@ def reconcile_strategy_decision(
         )
         adjusted["guardrail_adjusted"] = {
             "from": selected,
-            "to": "build_gear_belt_mall_logistics",
+            "to": target_skill,
             "reason": guardrail_reason,
         }
         return adjusted
@@ -2172,6 +2183,7 @@ def _heuristic_strategy_impl(
     critical_factory_power_issue = _critical_factory_power_issue(observation)
     gear_belt_mall_power_issue = _gear_belt_mall_power_issue(observation)
     gear_belt_mall_bootstrap_issue = _gear_belt_mall_bootstrap_issue(observation)
+    readiness = build_factory_readiness(observation)
     gear_mall_output_logistics_issue = _gear_mall_output_logistics_issue(observation)
     burner_drill_replacement_issue = _burner_drill_replacement_issue(observation)
     if threats["danger_level"] in {"critical", "high"} and int(threats.get("armed_gun_turret_count") or 0) <= 0:
@@ -2348,8 +2360,13 @@ def _heuristic_strategy_impl(
         ).to_dict()
 
     if gear_belt_mall_bootstrap_issue is not None:
+        target_skill = (
+            readiness.repair_skill
+            if readiness.repair_skill in {"bootstrap_build_item_mall", "build_gear_belt_mall_logistics"}
+            else "build_gear_belt_mall_logistics"
+        )
         return StrategicDecision(
-            selected_skill="build_gear_belt_mall_logistics",
+            selected_skill=target_skill,
             priority=92,
             reason=(
                 "Transport belts are exhausted, but the powered gear/belt mall can be restarted from existing "

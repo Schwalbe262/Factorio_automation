@@ -657,12 +657,12 @@ class StrategyTests(unittest.TestCase):
     def test_rocket_goal_bootstraps_belt_mall_when_belts_are_exhausted(self):
         result = heuristic_strategy("launch_rocket_program", gear_belt_mall_needs_bootstrap_observation())
 
-        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
+        self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
         self.assertIn("transport-belt mall bootstrap before iron-plate logistics", result["blockers"])
         self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
         self.assertIn("gear_handcraft_blocked=true", result["evidence"])
         self.assertEqual(result["factory_readiness"]["failure_root"], "belt_line_unbuildable")
-        self.assertEqual(result["factory_readiness"]["repair_skill"], "build_gear_belt_mall_logistics")
+        self.assertEqual(result["factory_readiness"]["repair_skill"], "bootstrap_build_item_mall")
 
     def test_rocket_goal_uses_belt_output_chest_as_available_mall_stock(self):
         observation = gear_belt_mall_needs_bootstrap_observation()
@@ -683,7 +683,7 @@ class StrategyTests(unittest.TestCase):
     def test_rocket_goal_bootstraps_belt_mall_from_local_plate_seed_before_circuit(self):
         result = heuristic_strategy("launch_rocket_program", gear_belt_mall_has_local_plate_seed_observation())
 
-        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
+        self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
         self.assertIn("transport-belt mall bootstrap before iron-plate logistics", result["blockers"])
         self.assertIn("local_iron_plate_seed_source_unit=102", result["evidence"])
 
@@ -693,7 +693,7 @@ class StrategyTests(unittest.TestCase):
         readiness = payload["factory_readiness"]
         self.assertFalse(readiness["belt_line_buildable"])
         self.assertEqual(readiness["failure_root"], "belt_line_unbuildable")
-        self.assertIn("build_gear_belt_mall_logistics", readiness["repair_skill"])
+        self.assertEqual(readiness["repair_skill"], "bootstrap_build_item_mall")
 
     def test_rocket_goal_finishes_gear_output_logistics_before_smelting_expansion(self):
         result = heuristic_strategy("launch_rocket_program", gear_mall_output_logistics_blocked_observation())
@@ -1214,7 +1214,7 @@ class StrategyTests(unittest.TestCase):
             gear_belt_mall_needs_bootstrap_observation(),
         )
 
-        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
+        self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
         self.assertEqual(result["source"], "llm")
         self.assertEqual(result["guardrail_adjusted"]["from"], "build_iron_plate_logistic_line_to_gear_mall")
         self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
@@ -1280,7 +1280,7 @@ class StrategyTests(unittest.TestCase):
             observation,
         )
 
-        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
+        self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
         self.assertEqual(result["guardrail_adjusted"]["from"], "setup_coal_supply")
         self.assertIn("transport_belts_available_for_mall_logistics=false", result["evidence"])
 

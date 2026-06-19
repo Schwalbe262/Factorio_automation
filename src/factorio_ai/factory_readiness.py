@@ -8,6 +8,7 @@ from .models import distance, entity_item_count, inventory_count, total_item_cou
 
 ASSEMBLER_ENTITY_NAMES = {"assembling-machine-1", "assembling-machine-2", "assembling-machine-3"}
 FURNACE_ENTITY_NAMES = {"stone-furnace", "steel-furnace", "electric-furnace"}
+GEAR_BELT_MALL_ASSEMBLER_SPACING = 4.0
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,7 @@ def build_factory_readiness(observation: dict[str, Any]) -> FactoryReadiness:
         for entity in assemblers
         if _recipe(entity) == "transport-belt" and _entity_powered(entity)
     ]
+    gear_belt_logistics_pair_exists = _gear_belt_logistics_pair_exists(assemblers, gear_assemblers)
     iron_sources = _iron_plate_sources(observation)
     transport_belt_stock = total_item_count(observation, "transport-belt")
     belt_mall_can_output = _belt_mall_can_output(observation, gear_assemblers, belt_assemblers)
@@ -75,13 +77,19 @@ def build_factory_readiness(observation: dict[str, Any]) -> FactoryReadiness:
         blocked_by.append("transport-belt mall")
     elif automation_researched and not belt_line_buildable:
         failure_root = "belt_line_unbuildable"
-        repair_skill = "build_gear_belt_mall_logistics" if belt_assemblers else "bootstrap_build_item_mall"
+        repair_skill = "build_gear_belt_mall_logistics" if gear_belt_logistics_pair_exists else "bootstrap_build_item_mall"
         blocked_by.append("construction transport belts")
         if not belt_mall_can_output:
             blocked_by.append("transport-belt mall output")
+        if belt_assemblers and not gear_belt_logistics_pair_exists:
+            blocked_by.append("gear/belt mall logistics pair")
     elif boiler_needs_fuel and not boiler_feed_buildable:
         failure_root = "boiler_feed_unbuildable"
-        repair_skill = "connect_coal_fuel_feed" if belt_line_buildable else "build_gear_belt_mall_logistics"
+        repair_skill = (
+            "connect_coal_fuel_feed"
+            if belt_line_buildable
+            else ("build_gear_belt_mall_logistics" if gear_belt_logistics_pair_exists else "bootstrap_build_item_mall")
+        )
         if not coal_supply_ready:
             blocked_by.append("coal supply")
         if not belt_line_buildable:
@@ -107,6 +115,7 @@ def build_factory_readiness(observation: dict[str, Any]) -> FactoryReadiness:
         "gear_mall_units": [_unit(entity) for entity in gear_assemblers],
         "belt_mall_units": [_unit(entity) for entity in belt_assemblers],
         "iron_plate_source_units": [_unit(entity) for entity in iron_sources],
+        "gear_belt_logistics_pair_exists": gear_belt_logistics_pair_exists,
         "coal_supply_ready": coal_supply_ready,
         "boiler_needs_fuel": boiler_needs_fuel,
         "belt_mall_can_output_reason": _belt_mall_output_reason(observation, gear_assemblers, belt_assemblers),
@@ -216,6 +225,30 @@ def _belt_mall_output_reason(
             if distance(gear_position, belt_position) <= 16.0 and entity_item_count(gear, "iron-gear-wheel") > 0:
                 return "nearby_gear_output_and_belt_plate"
     return None
+
+
+def _gear_belt_logistics_pair_exists(
+    assemblers: list[dict[str, Any]],
+    gear_assemblers: list[dict[str, Any]],
+) -> bool:
+    for gear in gear_assemblers:
+        gear_position = _position(gear)
+        if gear_position is None:
+            continue
+        for candidate in assemblers:
+            if candidate is gear or not _entity_powered(candidate):
+                continue
+            if _recipe(candidate) in {"copper-cable", "electronic-circuit"}:
+                continue
+            candidate_position = _position(candidate)
+            if candidate_position is None:
+                continue
+            if abs(candidate_position["y"] - gear_position["y"]) > 0.1:
+                continue
+            horizontal = abs(candidate_position["x"] - gear_position["x"])
+            if GEAR_BELT_MALL_ASSEMBLER_SPACING <= horizontal <= 8.0:
+                return True
+    return False
 
 
 def _coal_supply_ready(observation: dict[str, Any]) -> bool:

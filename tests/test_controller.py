@@ -2605,6 +2605,37 @@ class StallWatchdogTests(unittest.TestCase):
             )
             self.assertEqual(skill, "bootstrap_build_item_mall")
 
+    def test_stall_recovery_bootstraps_when_existing_belt_mall_is_not_logistics_pair(self):
+        observation = {
+            "player": {"position": {"x": 0, "y": 0}, "character_valid": False},
+            "inventory": {"iron-plate": 50, "coal": 10},
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 10,
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 0, "y": 0},
+                    "electric_network_connected": True,
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 11,
+                    "recipe": "transport-belt",
+                    "position": {"x": 0, "y": -3},
+                    "electric_network_connected": True,
+                },
+                {"name": "stone-furnace", "recipe": "iron-plate", "position": {"x": 4, "y": 0}},
+            ],
+            "resources": [{"name": "coal", "position": {"x": 8, "y": 0}, "distance": 8}],
+            "research": {"technologies": {"automation": {"researched": True}}},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FactorioController(make_test_config(Path(tmp)))
+            skill = controller._stall_recovery_skill(
+                "launch_rocket_program", observation, ["build_gear_belt_mall_logistics"]
+            )
+            self.assertEqual(skill, "bootstrap_build_item_mall")
+
     def test_stall_recovery_keeps_root_repair_even_if_recently_tried(self):
         observation = {
             "player": {"position": {"x": 0, "y": 0}},

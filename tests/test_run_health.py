@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from factorio_ai.run_health import format_run_health, gather_run_health
 
@@ -79,6 +80,48 @@ class RunHealthTests(unittest.TestCase):
         self.assertIn("foundry", text)
         self.assertIn("failure_root=belt_line_unbuildable", text)
         self.assertIn("stale implemented queue", text)
+
+    def test_scheduler_api_timeout_falls_back_to_supervisor_vllm_heartbeat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            logs = runtime / "logs"
+            logs.mkdir(parents=True, exist_ok=True)
+            (runtime / "unattended-llm-supervisor.json").write_text(
+                json.dumps(
+                    {
+                        "state": "running",
+                        "autopilot_gate": "ready",
+                        "updated_at": "2026-06-16T20:00:00.1234567+00:00",
+                        "vllm_service_status": {
+                            "ok": True,
+                            "service_ready": True,
+                            "checked_at": "2026-06-16T20:00:01+00:00",
+                            "active_services": [{"id": 42, "status": "running"}],
+                        },
+                        "scheduler_llm_status": {
+                            "ok": True,
+                            "llm_ready": True,
+                            "checked_at": "2026-06-16T20:00:01+00:00",
+                        },
+                    }
+                ),
+                encoding="utf-8-sig",
+            )
+            cfg = SimpleNamespace(runtime_dir=runtime, log_dir=logs)
+
+            with patch("factorio_ai.remote_slurm._scheduler_api_json", side_effect=TimeoutError("slow")):
+                with patch("factorio_ai.modless_lua.ModlessLuaController.observe", side_effect=RuntimeError("no server")):
+                    summary = gather_run_health(cfg, observe=True)
+
+        self.assertEqual(summary["scheduler"]["source"], "supervisor_heartbeat")
+        self.assertEqual(summary["scheduler"]["vllm_services"], 1)
+        self.assertEqual(summary["scheduler"]["vllm_service_ids"], [42])
+        self.assertTrue(summary["scheduler"]["healthy"])
+        self.assertEqual(summary["scheduler"]["api_error"], "TimeoutError")
+        text = format_run_health(summary)
+        self.assertIn("source=supervisor_heartbeat", text)
+        self.assertIn("scheduler api slow: TimeoutError", text)
+        self.assertNotIn("vLLM services=unavailable", text)
 
 
 if __name__ == "__main__":

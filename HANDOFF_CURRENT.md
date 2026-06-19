@@ -1,11 +1,10 @@
 # Current Handoff
 - Branch: `chore/part130-unattended-qwen9-supervisor`; unattended no-mod run is active under supervisor PID 70180 with autopilot PID 71688.
 - Startup context: read this file and targeted `goal.md`; never read `note.md`/`insight.md` in full.
-- Live status 2026-06-20 02:17 KST: server UP at tick 202303 with 4 researches; vLLM health probe still slow/unavailable; autopilot cycle 31 is sleeping.
-- Current recovery: `failure_root=None`, `repair_skill=None`, `seed_count=4`; `bootstrap_build_item_mall` stopped cleanly and transport-belt stock reached 10.
-- Part 134a pushed `ad85b09`: health reads PowerShell heartbeat JSON reliably and coal output builds move within 6.5 tiles before placement.
-- Part 134b fixes live bootstrap seed false-failure: repeated seed is blocked only if its expected follow-up item did not increase after the prior seed.
-- Validation: `PYTHONPATH=src python -m unittest tests.test_controller tests.test_run_health tests.test_planner.PlannerTests` -> 384 passed.
+- Live status 2026-06-20 02:30 KST: old autopilot PID 71688 is looping `belt_line_unbuildable -> build_gear_belt_mall_logistics` and must restart to load the new fix.
+- Part 135 fixes health visibility: `run-health` falls back to supervisor vLLM heartbeat when the direct scheduler API is slow, instead of showing vLLM unavailable.
+- Part 135 fixes readiness/strategy recovery: non-logistics gear/belt assembler pairs now repair via `bootstrap_build_item_mall`, not `build_gear_belt_mall_logistics`.
+- Validation: `PYTHONPATH=src python -m unittest tests.test_controller tests.test_strategy tests.test_factory_readiness tests.test_run_health` -> 191 passed.
 - Existing runtime foundry queue entries for implemented skills are override-mode self-repair, not new missing-skill backlog.
-- Token usage checkpoint: 372,694 goal-tracker tokens; weekly quota unavailable because project Codex state DB token sampler remains malformed.
-- Next: monitor whether the next cycle uses the new belt stock to complete `connect_coal_fuel_feed`; investigate vLLM slow/unavailable if it persists.
+- Token usage checkpoint: 581,052 goal-tracker tokens; weekly quota unavailable because project Codex state DB token sampler remains malformed.
+- Next: commit/push part135, restart only the autopilot process so supervisor reloads source, then verify recovery selects `bootstrap_build_item_mall`.

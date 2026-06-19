@@ -48,6 +48,36 @@ def _age_seconds(value: Any) -> float | None:
     return round(max(0.0, (datetime.now(timezone.utc) - ts.astimezone(timezone.utc)).total_seconds()), 1)
 
 
+def _scheduler_from_supervisor(supervisor: dict[str, Any], *, api_error: str | None = None) -> dict[str, Any] | None:
+    service = supervisor.get("vllm_service_status") if isinstance(supervisor.get("vllm_service_status"), dict) else {}
+    scheduler_llm = supervisor.get("scheduler_llm_status") if isinstance(supervisor.get("scheduler_llm_status"), dict) else {}
+    active_services = service.get("active_services") if isinstance(service.get("active_services"), list) else []
+    service_ids = [row.get("id") for row in active_services if isinstance(row, dict)]
+    ready = bool(service.get("service_ready") or scheduler_llm.get("llm_ready") or service.get("ok") or scheduler_llm.get("ok"))
+    if not ready and not service_ids:
+        return None
+    try:
+        expected_services = max(1, int(os.getenv("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_COUNT", "1")))
+    except (TypeError, ValueError):
+        expected_services = 1
+    result = {
+        "checked": True,
+        "source": "supervisor_heartbeat",
+        "vllm_services": len(service_ids) if service_ids else (1 if ready else 0),
+        "vllm_service_ids": service_ids,
+        "expected_services": expected_services,
+        "healthy": ready and (not service_ids or len(service_ids) <= expected_services),
+        "heartbeat_age_seconds": _age_seconds(
+            service.get("checked_at")
+            or scheduler_llm.get("checked_at")
+            or (service.get("heartbeat") if isinstance(service.get("heartbeat"), dict) else {}).get("updated_at")
+        ),
+    }
+    if api_error:
+        result["api_error"] = api_error
+    return result
+
+
 def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]:
     runtime = Path(cfg.runtime_dir)
     autopilot = _read_json(runtime / "autopilot-heartbeat.json")
@@ -160,7 +190,11 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
                 "healthy": len(services) <= expected_services,
             }
         except Exception as exc:  # noqa: BLE001 - scheduler API is sometimes slow; never hang the digest
-            scheduler = {"checked": True, "error": f"{type(exc).__name__}", "vllm_services": None}
+            scheduler = _scheduler_from_supervisor(supervisor, api_error=f"{type(exc).__name__}") or {
+                "checked": True,
+                "error": f"{type(exc).__name__}",
+                "vllm_services": None,
+            }
 
     game: dict[str, Any] = {"reachable": False}
     if observe:
@@ -266,8 +300,10 @@ def format_run_health(summary: dict[str, Any]) -> str:
             lines.append(f"scheduler: vLLM services=unavailable (api slow: {sch.get('error')})")
         else:
             warn = "" if sch.get("healthy") else "  (!) MULTIPLE (pileup)"
+            source = f" source={sch.get('source')}" if sch.get("source") else ""
+            api = f" (scheduler api slow: {sch.get('api_error')})" if sch.get("api_error") else ""
             lines.append(
-                f"scheduler: vLLM services={sch.get('vllm_services')} ids={sch.get('vllm_service_ids')}{warn}"
+                f"scheduler: vLLM services={sch.get('vllm_services')} ids={sch.get('vllm_service_ids')}{source}{api}{warn}"
             )
 
     sup = summary.get("supervisor") or {}

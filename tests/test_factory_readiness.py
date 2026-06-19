@@ -76,6 +76,21 @@ class FactoryReadinessTests(unittest.TestCase):
         self.assertEqual(readiness.failure_root, "gear_mall_missing")
         self.assertEqual(readiness.repair_skill, "bootstrap_build_item_mall")
 
+    def test_non_logistics_belt_mall_pair_maps_belt_line_to_bootstrap_repair(self):
+        obs = _powered_mall_observation()
+        for entity in obs["entities"]:
+            if entity.get("recipe") == "transport-belt":
+                entity["position"] = {"x": 0, "y": -3}
+
+        readiness = build_factory_readiness(obs)
+
+        self.assertTrue(readiness.gear_mall_exists)
+        self.assertTrue(readiness.belt_mall_exists)
+        self.assertEqual(readiness.failure_root, "belt_line_unbuildable")
+        self.assertEqual(readiness.repair_skill, "bootstrap_build_item_mall")
+        self.assertIn("gear/belt mall logistics pair", readiness.blocked_by)
+        self.assertFalse(readiness.details["gear_belt_logistics_pair_exists"])
+
     def test_missing_iron_source_maps_to_iron_repair(self):
         obs = _powered_mall_observation()
         obs["entities"] = [entity for entity in obs["entities"] if entity.get("name") != "stone-furnace"]
