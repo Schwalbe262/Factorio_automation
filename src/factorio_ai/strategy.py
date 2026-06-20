@@ -1967,26 +1967,45 @@ def reconcile_strategy_decision(
         item = str(missing_input_source_issue.get("item") or "")
         target_skill = _skill_for_bottleneck_item(item, observation)
         if target_skill and selected != target_skill:
+            source_builder_skill = target_skill
+            coal_feed_preempts_source = (
+                target_skill in _COAL_DEPENDENT_SKILLS
+                and _coal_fuel_feed_needed(observation, objective, production_targets)
+                and _transport_belt_automation_ready(observation)
+            )
+            if coal_feed_preempts_source:
+                target_skill = "connect_coal_fuel_feed"
             adjusted = dict(decision)
             adjusted["selected_skill"] = target_skill
             adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 91)
             original_reason = str(decision.get("reason") or "").strip()
             guardrail_reason = (
-                f"LLM selected {selected}, but the repeated {item} input link has no producer source yet; "
-                "build the source before attempting a site-to-site input route."
+                f"LLM selected {selected}, but the repeated {item} input link has no producer source yet and "
+                "the source builder depends on burner fuel; connect the coal feed before expanding that source."
+                if coal_feed_preempts_source
+                else (
+                    f"LLM selected {selected}, but the repeated {item} input link has no producer source yet; "
+                    "build the source before attempting a site-to-site input route."
+                )
             )
             adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
-            adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + [f"{item} source"]))
+            blocker = "coal fuel feed route" if coal_feed_preempts_source else f"{item} source"
+            adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + [blocker]))
             adjusted["evidence"] = _string_list(decision.get("evidence")) + [
                 f"guardrail_adjusted_from={selected}",
                 f"layout_kind={missing_input_source_issue.get('kind')}",
                 f"item={item}",
                 f"site_id={missing_input_source_issue.get('site_id')}",
                 "site_input_status=missing_source",
-                f"source_builder_skill={target_skill}",
+                f"source_builder_skill={source_builder_skill}",
             ]
+            if coal_feed_preempts_source:
+                adjusted["evidence"].append("coal_fuel_feed_preempts_source_builder=true")
             adjusted["expected_effect"] = (
-                f"Create an automated {item} source so a later site-input logistics route has a real producer endpoint."
+                "Build the coal belt/inserter feed first so burner-backed source expansion does not devolve into "
+                "long walking refuel loops."
+                if coal_feed_preempts_source
+                else f"Create an automated {item} source so a later site-input logistics route has a real producer endpoint."
             )
             adjusted["guardrail_adjusted"] = {
                 "from": selected,
@@ -2716,23 +2735,40 @@ def _heuristic_strategy_impl(
         item = str(missing_input_source_issue.get("item") or "")
         target_skill = _skill_for_bottleneck_item(item, observation)
         if target_skill:
+            source_builder_skill = target_skill
+            coal_feed_preempts_source = (
+                target_skill in _COAL_DEPENDENT_SKILLS
+                and _coal_fuel_feed_needed(observation, objective, production_targets)
+                and _transport_belt_automation_ready(observation)
+            )
+            if coal_feed_preempts_source:
+                target_skill = "connect_coal_fuel_feed"
             return StrategicDecision(
                 selected_skill=target_skill,
                 priority=91,
                 reason=(
-                    f"A repeated {item} input link is marked missing_source; build an automated source before "
-                    "attempting a site-to-site logistics route."
+                    f"A repeated {item} input link is marked missing_source, but its source builder depends on "
+                    "burner fuel; connect the coal feed before expanding that source."
+                    if coal_feed_preempts_source
+                    else (
+                        f"A repeated {item} input link is marked missing_source; build an automated source before "
+                        "attempting a site-to-site logistics route."
+                    )
                 ),
                 evidence=[
                     f"layout_kind={missing_input_source_issue.get('kind')}",
                     f"item={item}",
                     f"site_id={missing_input_source_issue.get('site_id')}",
                     "site_input_status=missing_source",
-                    f"source_builder_skill={target_skill}",
-                ],
-                blockers=[f"{item} source"],
+                    f"source_builder_skill={source_builder_skill}",
+                ]
+                + (["coal_fuel_feed_preempts_source_builder=true"] if coal_feed_preempts_source else []),
+                blockers=["coal fuel feed route"] if coal_feed_preempts_source else [f"{item} source"],
                 expected_effect=(
-                    f"Create an automated {item} producer endpoint so the later input route can be built by belts."
+                    "Build the coal belt/inserter feed first so burner-backed source expansion does not devolve into "
+                    "long walking refuel loops."
+                    if coal_feed_preempts_source
+                    else f"Create an automated {item} producer endpoint so the later input route can be built by belts."
                 ),
             ).to_dict()
 
