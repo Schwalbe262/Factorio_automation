@@ -11717,10 +11717,19 @@ class BuildItemMallSkill:
                 f"take {self.target_item} from build item mall assembler",
             )
 
-        if _build_item_mall_cell_ready(cell, self.target_item) and total_item_count(observation, self.target_item) >= self.target_count:
+        reached_count = total_item_count(observation, self.target_item)
+        if self.target_item == "iron-gear-wheel" and reference_position is not None:
+            reached_count = inventory_count(observation, self.target_item) + output_count
+            output_chest = cell.get("output_chest") if isinstance(cell, dict) else None
+            if not isinstance(output_chest, dict):
+                output_chest = _nearest_buffered_chest_item_source(observation, self.target_item, reference_position)
+            if isinstance(output_chest, dict) and distance(_position(output_chest), reference_position) <= 8.0:
+                reached_count += entity_item_count(output_chest, self.target_item)
+
+        if _build_item_mall_cell_ready(cell, self.target_item) and reached_count >= self.target_count:
             return PlannerDecision(
                 None,
-                f"build item mall is producing {self.target_item} and target reached: {total_item_count(observation, self.target_item)}/{self.target_count}",
+                f"build item mall is producing {self.target_item} and target reached: {reached_count}/{self.target_count}",
                 done=True,
             )
 
@@ -11770,6 +11779,7 @@ class BuildItemMallSkill:
                     needed_in_assembler,
                     allow_existing_remote=allow_existing_remote,
                     reference_position=assembler_position,
+                    exclude_units={assembler.get("unit_number")},
                     infrastructure_reason=f"{self.target_item} mall input bootstrap",
                 )
                 if decision is not None:
@@ -11791,6 +11801,9 @@ class BuildItemMallSkill:
                     allow_existing_remote=allow_existing_remote,
                     reference_position=assembler_position,
                     allow_assembler_output_gears=self.target_item == "transport-belt" and ingredient == "iron-gear-wheel",
+                    exclude_assembler_output_units={assembler.get("unit_number")}
+                    if self.target_item == "transport-belt" and ingredient == "iron-gear-wheel"
+                    else None,
                 )
                 if decision is not None:
                     return decision
@@ -12043,6 +12056,7 @@ class BuildItemMallSkill:
         reference_position: dict[str, float] | None = None,
         allow_first_assembler_gear_bootstrap: bool = False,
         allow_assembler_output_gears: bool = False,
+        exclude_assembler_output_units: set[Any] | None = None,
     ) -> PlannerDecision | None:
         if inventory_count(observation, item) >= quantity:
             return None
@@ -12098,6 +12112,7 @@ class BuildItemMallSkill:
                         quantity,
                         allow_existing_remote=allow_existing_remote,
                         reference_position=reference_position,
+                        exclude_units=exclude_assembler_output_units,
                     )
                     if decision is not None:
                         return decision
@@ -12499,6 +12514,7 @@ class BuildItemMallSkill:
         *,
         allow_existing_remote: bool = False,
         reference_position: dict[str, float] | None = None,
+        exclude_units: set[Any] | None = None,
     ) -> PlannerDecision | None:
         return _take_assembler_output_gears_for_infrastructure(
             observation,
@@ -12506,6 +12522,7 @@ class BuildItemMallSkill:
             quantity,
             allow_existing_remote=allow_existing_remote,
             reference_position=reference_position,
+            exclude_units=exclude_units,
             infrastructure_reason="build item mall infrastructure",
         )
 
@@ -12517,11 +12534,13 @@ def _take_assembler_output_gears_for_infrastructure(
     *,
     allow_existing_remote: bool = False,
     reference_position: dict[str, float] | None = None,
+    exclude_units: set[Any] | None = None,
     infrastructure_reason: str,
 ) -> PlannerDecision | None:
     target_gears = max(0, quantity - inventory_count(observation, "iron-gear-wheel"))
     if target_gears <= 0 or not _assembler_automation_available(observation):
         return None
+    excluded_units = set(exclude_units or set())
     cell = _find_build_item_mall_cell(
         observation,
         "iron-gear-wheel",
@@ -12536,16 +12555,16 @@ def _take_assembler_output_gears_for_infrastructure(
         chest = cell.get("output_chest") if isinstance(cell, dict) else None
         chest_count = entity_item_count(chest, "iron-gear-wheel") if isinstance(chest, dict) else 0
         if chest_count <= 0 and reference_position is not None:
-            exclude_units = {
+            local_excluded_units = set(excluded_units) | {
                 assembler.get("unit_number"),
             }
-            exclude_units.discard(None)
+            local_excluded_units.discard(None)
             chest = _nearest_local_item_seed_source(
                 observation,
                 "iron-gear-wheel",
                 reference_position,
                 max_distance=8.0,
-                exclude_units=exclude_units,
+                exclude_units=local_excluded_units,
             )
             chest_count = entity_item_count(chest, "iron-gear-wheel") if isinstance(chest, dict) else 0
         if not isinstance(chest, dict) or chest_count <= 0:
@@ -13323,6 +13342,7 @@ def _nearest_local_item_seed_source(
     exclude_units: set[Any] | None = None,
 ) -> dict[str, Any] | None:
     excluded = set(exclude_units or set())
+    excluded.discard(None)
     allowed_names = {
         "assembling-machine-1",
         "assembling-machine-2",

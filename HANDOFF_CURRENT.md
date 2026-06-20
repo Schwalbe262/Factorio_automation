@@ -1,10 +1,10 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running with autopilot PID `70120`.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running with autopilot PID `50800`.
 - Startup context: read this file and targeted `goal.md`; never read `note.md`/`insight.md` in full.
-- Live 2026-06-20 13:31 KST: server UP, research `logistics(0.05)`, autopilot `llm_degraded` but executing `bootstrap_build_item_mall` step 97.
-- Fixed loop: coal feed no longer preempts local fuel routes when boiler is working; buffered gear chests can seed local feed inserters.
-- Fixed bootstrap loop: readiness maps virtual zero-belt/no-output mall states to `bootstrap_build_item_mall`; strategy/reconcile stop overriding this seed repair to relocation/setup_power.
-- Added starter mall power seed path: virtual starter belt mall may borrow bounded fuel for one-time boiler bootstrap when belt automation is circularly blocked.
-- Validation: targeted 529 tests OK; full `PYTHONPATH=src python -m unittest discover -s tests` -> 1007 OK, one pre-existing socket ResourceWarning.
-- Current caveat: scheduler strategy uploads intermittently fail with remote `scp: write remote ... Failure`; heuristic degraded path continues locally.
-- Token checkpoint: goal tracker `2,656,371`; weekly quota unavailable.
+- Live 2026-06-20 14:21 KST: server UP tick `2748950`, scheduler vLLM service `12161`, skill `connect_coal_fuel_feed` step 11.
+- Fixed Slurm scheduler/attached task uploads: retry once after cleaning stale task temps on `scp: write remote`/quota-style failures.
+- Fixed belt-mall bootstrap self-loop: the target transport-belt assembler is excluded as a gear source.
+- Fixed local gear prerequisite checks: remote/consumer-held gears no longer satisfy local `iron-gear-wheel` mall completion.
+- Validation: `PYTHONPATH=src python -m unittest tests.test_remote_slurm tests.test_planner` -> 401 OK.
+- Live evidence: bootstrap produced 4 belts in chest unit 289; coal feed consumed them and laid belts units 292-295, then fueled/moved to coal.
+- Token checkpoint: goal tracker `3,204,576`; latest recorded delta `548,205`; weekly quota unavailable.

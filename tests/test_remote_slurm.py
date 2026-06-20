@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from factorio_ai.remote_slurm import (
+    RemoteSlurmError,
     RemoteSlurmConfig,
     _attached_env_setup,
     _gpu_allocation_visible,
@@ -582,6 +583,68 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertEqual(json.loads(uploaded[0]["payload"])["payload"]["blob"], large_blob)
         self.assertIn("/remote/factorio-ai/.factorio-ai-scheduler-tasks/.t1.", uploaded[0]["target"])
         self.assertTrue(any("mv \"$REMOTE_TEMP\" \"$REMOTE_TARGET\"" in script for script in remote_scripts))
+
+    def test_scheduler_task_upload_cleans_and_retries_write_remote_failure(self):
+        from factorio_ai import remote_slurm
+
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="factorio-ai-worker",
+            conda_env="factorio-ai",
+            partition="gpu4",
+            cpus_per_task=8,
+            gpus_per_node=1,
+            gres="gpu:1",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        first_error = RemoteSlurmError(
+            'scp: write remote "/remote/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-test.tmp": Failure\n'
+            "scp: failed to upload file local.json to /remote/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-test.tmp"
+        )
+        posted: list[dict] = []
+        remote_scripts: list[str] = []
+
+        def fake_post(path, data, timeout=0):
+            posted.append(data)
+            return "ok"
+
+        def fake_rows():
+            return [{"id": 42, "name": posted[0]["name"], "status": "queued"}] if posted else []
+
+        def fake_run_remote(script, _cfg, timeout=0):
+            remote_scripts.append(script)
+            if "SCHEDULER_CWD_RAW" in script:
+                return "/remote/factorio-ai"
+            return ""
+
+        with (
+            patch.dict(os.environ, {"FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT": "r1jae262"}),
+            patch("factorio_ai.remote_slurm._run_remote", side_effect=fake_run_remote) as run_remote,
+            patch("factorio_ai.remote_slurm._run_scp", side_effect=[first_error, None]) as run_scp,
+            patch("factorio_ai.remote_slurm._scheduler_post_form", side_effect=fake_post),
+            patch("factorio_ai.remote_slurm._scheduler_task_rows", side_effect=fake_rows),
+        ):
+            row = remote_slurm._submit_scheduler_task(
+                {"id": "strategy-test", "type": "strategy_request", "payload": {}},
+                cfg,
+            )
+
+        self.assertEqual(row["id"], 42)
+        self.assertEqual(run_scp.call_count, 2)
+        cleanup_script = next(script for script in remote_scripts if 'find "$DIR"' in script)
+        self.assertIn(".factorio-ai-scheduler-tasks", cleanup_script)
+        self.assertIn(".strategy-*.tmp", cleanup_script)
+        self.assertIn("strategy-*.json", cleanup_script)
+        self.assertGreaterEqual(run_remote.call_count, 3)
 
     def test_scheduler_task_command_requires_vllm_endpoint_when_model_requested(self):
         from factorio_ai import remote_slurm
@@ -1714,6 +1777,57 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertIn("strategy_payload", payload)
         self.assertEqual(payload["strategy_payload"]["factory_monitor"]["target_status"]["items"][0]["item"], "copper-plate")
         self.assertEqual(payload["strategy_payload"]["factory_monitor"]["target_status"]["items"][0]["estimated_per_minute"], 18.75)
+
+    def test_attached_strategy_upload_cleans_and_retries_write_remote_failure(self):
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="factorio-ai-worker",
+            conda_env="factorio-ai",
+            partition="gpu4",
+            cpus_per_task=8,
+            gpus_per_node=1,
+            gres="gpu:1",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        observation = {"inventory": {}, "entities": [], "resources": [], "research": {"technologies": {}}}
+        first_error = RemoteSlurmError(
+            'scp: write remote "/remote/tasks/.strategy-test.tmp": Failure\n'
+            "scp: failed to upload file local.json to /remote/tasks/.strategy-test.tmp"
+        )
+        with (
+            patch("factorio_ai.remote_slurm._use_attached_srun", return_value=True),
+            patch("factorio_ai.remote_slurm.resolve_remote_dir", return_value="/remote/tasks"),
+            patch("factorio_ai.remote_slurm._run_scp", side_effect=[first_error, None]) as run_scp,
+            patch("factorio_ai.remote_slurm._run_remote", return_value="") as run_remote,
+            patch(
+                "factorio_ai.remote_slurm._run_remote_attached_task_with_retry",
+                return_value='{"ok":true,"source":"llm","selected_skill":"produce_iron_plate"}',
+            ),
+        ):
+            result = request_strategy(
+                "launch_rocket_program",
+                observation,
+                production_targets={},
+                available_skills=skill_catalog_payload(),
+                cfg=cfg,
+                timeout_seconds=1,
+            )
+
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(run_scp.call_count, 2)
+        cleanup_script = run_remote.call_args.args[0]
+        self.assertIn('find "$DIR"', cleanup_script)
+        self.assertIn("strategy-*.json", cleanup_script)
+        self.assertIn(".strategy-*.tmp", cleanup_script)
 
     def test_scheduler_mode_request_strategy_uses_scheduler_task(self):
         cfg = RemoteSlurmConfig(

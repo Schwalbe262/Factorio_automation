@@ -839,7 +839,7 @@ def _upload_scheduler_task_payload(task: dict[str, Any], cfg: RemoteSlurmConfig,
         with tempfile.NamedTemporaryFile(prefix="factorio-ai-scheduler-task-", suffix=".json", delete=False) as file:
             file.write(payload_bytes)
             local_temp_path = Path(file.name)
-        _run_scp(local_temp_path, f"{cfg.user}@{cfg.host}:{remote_temp}", cfg, timeout=cfg.setup_timeout_seconds)
+        _upload_task_payload_with_cleanup(local_temp_path, remote_temp, remote_task_dir, cfg)
         _run_remote(
             f"""set -euo pipefail
 REMOTE_TEMP={json.dumps(remote_temp)}
@@ -2941,7 +2941,7 @@ def _request_task_via_attached_srun(
         with tempfile.NamedTemporaryFile(prefix="factorio-ai-attached-task-", suffix=".json", delete=False) as file:
             file.write(payload_bytes)
             local_temp_path = Path(file.name)
-        _run_scp(local_temp_path, f"{cfg.user}@{cfg.host}:{remote_temp}", cfg, timeout=cfg.setup_timeout_seconds)
+        _upload_task_payload_with_cleanup(local_temp_path, remote_temp, remote_dir, cfg)
     finally:
         if local_temp_path is not None:
             try:
@@ -3004,6 +3004,72 @@ rm -f "$TASK_PATH" "$RESULT_PATH"
     if not result.get("ok"):
         raise RemoteSlurmError(f"attached AUTO task failed: {result}")
     return result
+
+
+_REMOTE_TASK_CLEANUP_PATTERNS = (
+    ".planner-*.tmp",
+    ".strategy-*.tmp",
+    ".codeagent-*.tmp",
+    ".foundry-*.tmp",
+    ".layout-improvement-*.tmp",
+    ".strategy-model-benchmark-*.tmp",
+    "planner-*.json",
+    "strategy-*.json",
+    "codeagent-*.json",
+    "foundry-*.json",
+    "layout-improvement-*.json",
+)
+
+
+def _task_upload_retryable(exc: Exception) -> bool:
+    message = str(exc).lower()
+    retryable_markers = (
+        "write remote",
+        "failed to upload file",
+        "fsetstat",
+        "no space left",
+        "disk quota",
+        "quota exceeded",
+    )
+    return isinstance(exc, RemoteSlurmError) and any(marker in message for marker in retryable_markers)
+
+
+def _cleanup_task_upload_dir(remote_dir: str, cfg: RemoteSlurmConfig, *, remote_temp: str = "") -> None:
+    try:
+        max_age_minutes = max(5, _int_env("FACTORIO_AI_SLURM_ATTACHED_TASK_CLEANUP_MINUTES", 60, 1))
+    except (TypeError, ValueError):
+        max_age_minutes = 60
+    find_terms = " -o ".join(f"-name {shlex.quote(pattern)}" for pattern in _REMOTE_TASK_CLEANUP_PATTERNS)
+    _run_remote(
+        f"""set -euo pipefail
+DIR={json.dumps(remote_dir)}
+REMOTE_TEMP={json.dumps(remote_temp)}
+mkdir -p "$DIR"
+if [[ -n "$REMOTE_TEMP" ]]; then rm -f "$REMOTE_TEMP" 2>/dev/null || true; fi
+find "$DIR" -maxdepth 1 -type f \\( {find_terms} \\) -mmin +{max_age_minutes} -delete 2>/dev/null || true
+""",
+        cfg,
+        timeout=120,
+    )
+
+
+def _upload_task_payload_with_cleanup(
+    local_temp_path: Path,
+    remote_temp: str,
+    remote_dir: str,
+    cfg: RemoteSlurmConfig,
+) -> None:
+    remote_target = f"{cfg.user}@{cfg.host}:{remote_temp}"
+    try:
+        _run_scp(local_temp_path, remote_target, cfg, timeout=cfg.setup_timeout_seconds)
+    except Exception as exc:
+        if not _task_upload_retryable(exc):
+            raise
+        try:
+            _cleanup_task_upload_dir(remote_dir, cfg, remote_temp=remote_temp)
+        except Exception:
+            pass
+        _run_scp(local_temp_path, remote_target, cfg, timeout=cfg.setup_timeout_seconds)
 
 
 def _run_remote_attached_task_with_retry(script: str, cfg: RemoteSlurmConfig, *, timeout: int) -> str:

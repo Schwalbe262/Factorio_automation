@@ -6121,6 +6121,91 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 983)
         self.assertIn("chest-buffered assembler gears", decision.reason)
 
+    def test_build_item_mall_does_not_take_gears_back_from_target_belt_assembler(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt", inventory={"iron-gear-wheel": 2}),
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 981,
+                    "position": {"x": 0.5, "y": 6.5},
+                    "distance": 2,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"iron-plate": 4}},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertFalse(
+            decision.action
+            and decision.action.get("type") == "take"
+            and decision.action.get("item") == "iron-gear-wheel"
+            and decision.action.get("unit_number") == 901,
+            decision.reason,
+        )
+        self.assertNotIn("chest-buffered assembler gears", decision.reason)
+
+    def test_build_item_mall_does_not_count_remote_or_consumer_gears_as_local_prerequisite(self):
+        obs = base_observation()
+        obs["inventory"] = {}
+        obs["player"]["position"] = {"x": 56.5, "y": 58.5}
+        obs["player"]["character_valid"] = False
+        obs["execution"] = {"virtual": True}
+        obs["research"]["technologies"]["automation"]["researched"] = True
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 217,
+                    "position": {"x": 56.5, "y": 58.5},
+                    "distance": 2,
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"iron-gear-wheel": 2}},
+                    "status_name": "item_ingredient_shortage",
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 214,
+                    "position": {"x": 52.5, "y": 58.5},
+                    "distance": 2,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"iron-plate": 1}},
+                    "status_name": "item_ingredient_shortage",
+                },
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 15,
+                    "position": {"x": 47, "y": 63},
+                    "distance": 3,
+                    "recipe": "iron-plate",
+                    "inventories": {"1": {}, "2": {"iron-plate": 84}},
+                },
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 124,
+                    "position": {"x": -13.5, "y": -62.5},
+                    "distance": 140,
+                    "inventories": {"1": {"iron-gear-wheel": 14}},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("iron-gear-wheel", 4).next_action(
+            obs,
+            allow_existing_remote=False,
+            reference_position={"x": 56.5, "y": 58.5},
+        )
+
+        self.assertFalse(decision.done)
+        self.assertNotIn("target reached: 16/4", decision.reason)
+
     def test_build_item_mall_replaces_output_burner_inserter_when_regular_is_usable(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"inserter": 1}
