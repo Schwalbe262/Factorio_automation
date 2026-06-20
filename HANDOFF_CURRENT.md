@@ -3,9 +3,9 @@
 - Part152 fixed the belt mall bootstrap loop: next-assembler gear bootstrap now takes gear assembler output chest stock before iron seeding/waiting.
 - Build item mall can now derive a transport-belt sidecar from an existing gear assembler when lightweight observes have no `automation_sites`.
 - Gear/belt logistics now supports vertical direct gear->belt inserter pairs as well as horizontal pairs.
-- Live after restart: server tick 218865; supervisor/autopilot PID 64768; vLLM service 12304 healthy; no run-health warnings.
-- Current live work: `bootstrap_build_item_mall` active step 13; `belt_mall_missing` repair is progressing, seed_count=1, belts=18, gears=218.
-- Latest mall log shows belt assembler output chest/inserter built and waiting for belt output, not repeating assembler-produced gear waits.
+- Live after restart/push: server tick 224318; supervisor/autopilot PID 64768; vLLM service 12304 healthy; no run-health warnings.
+- Current live status: autopilot sleeping before cycle 9; `failure_root=null`, `repair_skill=null`, seed_count=3, belts=33, gears=204.
+- Latest mall log shows belt assembler output chest/inserter built and belt target exceeded, not repeating assembler-produced gear waits.
 - Validation: `tests.test_planner`, `tests.test_strategy`, `tests.test_controller`, and full `python -m unittest discover -s tests` passed (1101 tests; ResourceWarning only).
 - Token usage: recorded fallback sample 13,750,333 absolute, delta 361,926; weekly quota unavailable; Codex state DB was malformed.
 - Next: watch belt target completion, then gear/belt direct logistics, red science/labs, logistics research, electric mining drill, and burner replacement/main-belt migration.
