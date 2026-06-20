@@ -12822,6 +12822,11 @@ class BuildItemMallSkill:
             self.target_item,
             allow_existing_remote=allow_existing_remote,
             reference_position=reference_position,
+        ) or _select_build_item_mall_sidecar_from_existing_gear_cell(
+            observation,
+            self.target_item,
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position,
         )
         if cell is None:
             return PlannerDecision(None, "cannot find a powered or wireable site for the first build item mall assembler")
@@ -13821,6 +13826,16 @@ class BuildItemMallSkill:
                     f"clear {incompatible} before retooling assembler for bootstrap gears",
                 )
             return self._set_recipe_decision(player, assembler, "iron-gear-wheel")
+        output_decision = _take_assembler_output_gears_for_infrastructure(
+            observation,
+            player,
+            target_gears,
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position or assembler_position,
+            infrastructure_reason="next assembling-machine-1 bootstrap",
+        )
+        if output_decision is not None:
+            return output_decision
         output_count = entity_item_count(assembler, "iron-gear-wheel")
         if output_count > 0:
             if distance(player, assembler_position) > 20:
@@ -14526,8 +14541,7 @@ def _find_gear_belt_mall_logistics_layout(observation: dict[str, Any]) -> dict[s
             and item.get("electric_network_connected") is not False
             and item.get("recipe") not in {"copper-cable", "electronic-circuit"}
             and _within_allowed_factory_area(observation, _position(item))
-            and abs(_position(item)["y"] - gear_pos["y"]) <= 0.1
-            and GEAR_BELT_MALL_ASSEMBLER_SPACING <= abs(_position(item)["x"] - gear_pos["x"]) <= 8.0
+            and _gear_belt_pair_axis_distance(gear_pos, _position(item)) is not None
         ]
         if not belt_candidates:
             continue
@@ -14560,10 +14574,31 @@ def _gear_belt_mall_layout_for_pair(
 ) -> dict[str, Any] | None:
     gear_pos = _position(gear_assembler)
     belt_pos = _position(belt_assembler)
+    vertical_distance = abs(belt_pos["y"] - gear_pos["y"])
+    if abs(belt_pos["x"] - gear_pos["x"]) <= 0.1 and abs(vertical_distance - GEAR_BELT_MALL_ASSEMBLER_SPACING) <= 0.25:
+        vertical_sign = 1 if belt_pos["y"] >= gear_pos["y"] else -1
+        belt_direction = SOUTH if vertical_sign > 0 else NORTH
+        direct_position = {"x": gear_pos["x"], "y": gear_pos["y"] + vertical_sign * 2.0}
+        if not _mall_logistics_positions_clear(observation, belt_positions=[], inserter_positions=[direct_position]):
+            return None
+        return {
+            "gear_assembler": gear_assembler,
+            "belt_assembler": belt_assembler,
+            "distance": distance(gear_pos, belt_pos),
+            "gear_belts": [],
+            "gear_output_inserter": None,
+            "belt_input_inserter": None,
+            "direct_gear_transfer_inserter": {
+                "position": direct_position,
+                "direction": belt_direction,
+                "entity": _inserter_near(observation, direct_position),
+            },
+        }
+
     direction_sign = 1 if belt_pos["x"] >= gear_pos["x"] else -1
     belt_direction = EAST if direction_sign > 0 else WEST
     horizontal_distance = abs(belt_pos["x"] - gear_pos["x"])
-    if horizontal_distance < GEAR_BELT_MALL_ASSEMBLER_SPACING:
+    if abs(belt_pos["y"] - gear_pos["y"]) > 0.1 or horizontal_distance < GEAR_BELT_MALL_ASSEMBLER_SPACING:
         return None
     direct_transfer = None
     if abs(horizontal_distance - GEAR_BELT_MALL_ASSEMBLER_SPACING) <= 0.25 and abs(belt_pos["y"] - gear_pos["y"]) <= 0.1:
@@ -14624,6 +14659,19 @@ def _gear_belt_mall_layout_for_pair(
             },
             "direct_gear_transfer_inserter": direct_transfer,
         }
+    return None
+
+
+def _gear_belt_pair_axis_distance(
+    gear_pos: dict[str, float],
+    belt_pos: dict[str, float],
+) -> float | None:
+    horizontal = abs(belt_pos["x"] - gear_pos["x"])
+    vertical = abs(belt_pos["y"] - gear_pos["y"])
+    if vertical <= 0.1 and GEAR_BELT_MALL_ASSEMBLER_SPACING <= horizontal <= 8.0:
+        return horizontal
+    if horizontal <= 0.1 and abs(vertical - GEAR_BELT_MALL_ASSEMBLER_SPACING) <= 0.25:
+        return vertical
     return None
 
 
@@ -15476,6 +15524,74 @@ def _select_build_item_mall_site(
     return candidates[0]
 
 
+def _select_build_item_mall_sidecar_from_existing_gear_cell(
+    observation: dict[str, Any],
+    target_item: str,
+    *,
+    allow_existing_remote: bool = False,
+    reference_position: dict[str, float] | None = None,
+) -> dict[str, Any] | None:
+    if target_item != "transport-belt":
+        return None
+    gear_cell = _find_build_item_mall_cell(
+        observation,
+        "iron-gear-wheel",
+        allow_existing_remote=allow_existing_remote,
+        reference_position=reference_position,
+    )
+    gear_assembler = gear_cell.get("assembler") if isinstance(gear_cell, dict) else None
+    if not isinstance(gear_assembler, dict) or str(gear_assembler.get("recipe") or "") != "iron-gear-wheel":
+        return None
+    if gear_assembler.get("electric_network_connected") is False:
+        return None
+    gear_position = _position(gear_assembler)
+    source_pole = gear_cell.get("pole") if isinstance(gear_cell, dict) else None
+    source_pole_position = _position(source_pole) if isinstance(source_pole, dict) else None
+    if source_pole_position is None and isinstance(gear_cell, dict) and isinstance(gear_cell.get("pole_position"), dict):
+        source_pole_position = _xy_position(gear_cell["pole_position"])
+    power_positions = [source_pole_position] if source_pole_position is not None else []
+    assembler_position = _select_transport_belt_mall_sidecar_position(
+        observation,
+        gear_position,
+        power_positions=power_positions,
+    )
+    if assembler_position is None:
+        return None
+    pole_position = source_pole_position
+    pole = source_pole if isinstance(source_pole, dict) else None
+    pole_unit_number = pole.get("unit_number") if isinstance(pole, dict) else None
+    if pole_position is None or not _position_is_supplied_by_small_pole(
+        observation,
+        assembler_position,
+        extra_power_positions=[pole_position],
+    ):
+        pole_position = _select_build_item_sidecar_supply_pole_position(
+            observation,
+            assembler_position,
+            source_position=source_pole_position,
+        )
+        if pole_position is None:
+            return None
+        pole = _entity_near(observation, "small-electric-pole", pole_position, radius=1.0)
+        pole_unit_number = pole.get("unit_number") if isinstance(pole, dict) else None
+    return _attach_build_item_mall_output_layout(
+        observation,
+        target_item,
+        {
+            "pole_position": pole_position,
+            "assembler_position": assembler_position,
+            "pole_unit_number": pole_unit_number,
+            "source_pole_unit_number": (
+                source_pole.get("unit_number") if isinstance(source_pole, dict) else None
+            ),
+            "powered": bool(pole_unit_number),
+            "distance": distance(player_position(observation), assembler_position),
+            "pole": pole,
+            "assembler": _entity_near(observation, "assembling-machine-1", assembler_position, radius=1.5),
+        },
+    )
+
+
 def _transport_belt_mall_assembler_too_close_to_gear_mall(
     observation: dict[str, Any],
     belt_assembler: dict[str, Any],
@@ -15506,6 +15622,8 @@ def _select_transport_belt_mall_sidecar_position(
     offsets = [
         {"x": GEAR_BELT_MALL_ASSEMBLER_SPACING, "y": 0.0},
         {"x": -GEAR_BELT_MALL_ASSEMBLER_SPACING, "y": 0.0},
+        {"x": 0.0, "y": GEAR_BELT_MALL_ASSEMBLER_SPACING},
+        {"x": 0.0, "y": -GEAR_BELT_MALL_ASSEMBLER_SPACING},
     ]
     candidates: list[dict[str, float]] = []
     for offset in offsets:

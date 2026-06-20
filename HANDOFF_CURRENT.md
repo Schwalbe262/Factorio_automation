@@ -1,11 +1,11 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod map was reset and strict Qwen/vLLM unattended supervisor is running.
-- Part151: starter fuel batches now use coal reserve 20 / batch 30, direct smelting expands 2-4 burner cells, and coal supply expands toward 4 burner drills until electric mining is available.
-- Gear/belt mall now prefers direct gear->belt inserter spacing, relocates cramped belt assemblers, and removes obsolete empty buffer chests/inserters while protecting active inserters/non-empty chests.
-- Human layout learning is enabled: unexplained factory-entity layout deltas go to `operator-intervention-layout-learning.jsonl`; map reset, trees/rocks, furnace recipe flicker, and nearby agent build adjustment are filtered.
-- Live status after reset/restart: server reachable tick 70824; supervisor PID 46644, autopilot PID 60828, vLLM service 12304 healthy.
-- Current progress: researched=4 (`automation`, `automation-science-pack`, `electronics`, `steam-power`); repair root `belt_mall_missing` -> `bootstrap_build_item_mall`; no run-health warnings and no pending human layout event.
-- Recent strategy decisions are still `source=llm`; current work is bootstrapping the gear/belt mall.
-- Validation: `PYTHONPATH=src python -m unittest discover -s tests` passed (1097 tests; ResourceWarning only).
-- Token checkpoint: goal tracker 13,388,407; latest recorded deltas +994,562 and +110,428; weekly quota unavailable.
-- Next: watch Automation, bootstrap gear/belt mall, electronic circuits, then electric mining drill and burner replacement/main-belt migration.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod server, Qwen/vLLM supervisor, and autopilot are running after restart.
+- Part152 fixed the belt mall bootstrap loop: next-assembler gear bootstrap now takes gear assembler output chest stock before iron seeding/waiting.
+- Build item mall can now derive a transport-belt sidecar from an existing gear assembler when lightweight observes have no `automation_sites`.
+- Gear/belt logistics now supports vertical direct gear->belt inserter pairs as well as horizontal pairs.
+- Live after restart: server tick 218865; supervisor/autopilot PID 64768; vLLM service 12304 healthy; no run-health warnings.
+- Current live work: `bootstrap_build_item_mall` active step 13; `belt_mall_missing` repair is progressing, seed_count=1, belts=18, gears=218.
+- Latest mall log shows belt assembler output chest/inserter built and waiting for belt output, not repeating assembler-produced gear waits.
+- Validation: `tests.test_planner`, `tests.test_strategy`, `tests.test_controller`, and full `python -m unittest discover -s tests` passed (1101 tests; ResourceWarning only).
+- Token usage: recorded fallback sample 13,750,333 absolute, delta 361,926; weekly quota unavailable; Codex state DB was malformed.
+- Next: watch belt target completion, then gear/belt direct logistics, red science/labs, logistics research, electric mining drill, and burner replacement/main-belt migration.
