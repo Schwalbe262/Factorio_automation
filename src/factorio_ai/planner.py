@@ -9067,6 +9067,24 @@ def _iron_plate_line_source_recovery_decision(
     if (
         entity_item_count(source, "iron-plate") <= 0
         and entity_item_count(source, "iron-ore") > 0
+        and _entity_burner_fuel_count(source) < 1
+        and _entity_status_is(source, "no_fuel", 52)
+    ):
+        return _fuel_burner_line_entity(
+            observation,
+            player,
+            source,
+            entity_name=str(source.get("name") or "stone-furnace"),
+            threshold=SMELTING_LINE_FUEL_RESERVE["furnace"],
+            insert_count=SMELTING_LINE_FUEL_INSERT["furnace"],
+            context="iron source furnace for gear mall plate logistics",
+            support_skill=IronPlateSkill(),
+            far_fuel_reason="iron source furnace needs local fuel before the gear mall plate line can output plates",
+            prefer_coal_supply=True,
+        )
+    if (
+        entity_item_count(source, "iron-plate") <= 0
+        and entity_item_count(source, "iron-ore") > 0
         and _entity_burner_fuel_count(source) > 0
     ):
         return PlannerDecision(
