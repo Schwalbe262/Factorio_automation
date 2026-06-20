@@ -30,6 +30,27 @@ def _read_json(path: Path) -> dict[str, Any]:
     return {}
 
 
+def _read_last_jsonl(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("rb") as file:
+            file.seek(0, os.SEEK_END)
+            size = file.tell()
+            file.seek(max(0, size - 65536))
+            text = file.read().decode("utf-8", errors="ignore")
+    except OSError:
+        return {}
+    for line in reversed([item.strip() for item in text.splitlines() if item.strip()]):
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
 def _age_seconds(value: Any) -> float | None:
     if not value:
         return None
@@ -103,8 +124,10 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
     foundry = _read_json(runtime / "skill-foundry-loop.json")
     supervisor = _read_json(runtime / "unattended-llm-supervisor.json")
     progress_kpi = _read_json(runtime / "progress-kpi.json")
+    latest_operator_layout = _read_last_jsonl(Path(cfg.log_dir) / "operator-intervention-layout-learning.jsonl")
     supervisor_age = _age_seconds(supervisor.get("updated_at"))
     progress_age = _age_seconds(progress_kpi.get("updated_at"))
+    operator_layout_age = _age_seconds(latest_operator_layout.get("time"))
     autopilot_heartbeat_age = _age_seconds(autopilot.get("updated_at"))
     live_age = _age_seconds(live.get("updated_at"))
     autopilot_age = autopilot_heartbeat_age
@@ -184,6 +207,14 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
                 "failure_root": failure_root,
                 "repair_skill": repair_skill,
                 "detail": f"progress loop is stuck on {failure_root}; recovery should run {repair_skill}",
+            }
+        )
+    if latest_operator_layout:
+        delta_summary = latest_operator_layout.get("delta_summary")
+        warnings.append(
+            {
+                "kind": "operator_layout_learning_pending",
+                "detail": f"human layout candidate pending review; delta={delta_summary}",
             }
         )
 
@@ -309,6 +340,14 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
             "key_items": progress_kpi.get("key_items"),
             "age_seconds": progress_age,
         },
+        "human_layout_learning": {
+            "latest_event": latest_operator_layout.get("event"),
+            "learning_label": latest_operator_layout.get("learning_label"),
+            "active_skill": latest_operator_layout.get("active_skill"),
+            "delta_summary": latest_operator_layout.get("delta_summary"),
+            "age_seconds": operator_layout_age,
+            "trace": "operator-intervention-layout-learning.jsonl" if latest_operator_layout else None,
+        },
         "generated_skills": {
             "registered": registered,
             "overrides": overrides,
@@ -406,6 +445,18 @@ def format_run_health(summary: dict[str, Any]) -> str:
     lines.append(f"  self-repair overrides (active): {gs.get('overrides')}")
     if gs.get("stale_implemented_queue"):
         lines.append(f"  stale implemented queue: {gs.get('stale_implemented_queue')}")
+
+    hl = summary.get("human_layout_learning") or {}
+    if hl.get("latest_event"):
+        lines.append(
+            "operator layout learning: label={label} skill={skill} delta={delta} age={age} trace={trace}".format(
+                label=hl.get("learning_label"),
+                skill=hl.get("active_skill"),
+                delta=hl.get("delta_summary"),
+                age=_fmt_age(hl.get("age_seconds")),
+                trace=hl.get("trace"),
+            )
+        )
 
     warnings = summary.get("warnings") or []
     if warnings:

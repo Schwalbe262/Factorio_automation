@@ -35,15 +35,21 @@ STARTER_ENTITY_CLUSTER_RADIUS = 224.0
 STARTER_BOILER_FUEL_FEED_ROUTE_LIMIT = 192.0
 EMERGENCY_BOILER_BOOTSTRAP_FUEL_INSERT = 5
 STEAM_POWER_BOILER_FUEL_RESERVE = 10
+STARTER_FUEL_BATCH_COUNT = 30
+DIRECT_SMELTING_FUEL_RESERVE = 20
+DIRECT_SMELTING_CELL_TARGET_PLATES = 20
+DIRECT_SMELTING_MIN_PARALLEL_CELLS = 2
+DIRECT_SMELTING_MAX_PARALLEL_CELLS = 4
+STARTER_COAL_SUPPLY_DRILL_TARGET = 4
 SMELTING_LINE_FUEL_RESERVE = {
-    "drill": 8,
+    "drill": 20,
     "inserter": 4,
-    "furnace": 8,
+    "furnace": 20,
 }
 SMELTING_LINE_FUEL_INSERT = {
-    "drill": 16,
+    "drill": STARTER_FUEL_BATCH_COUNT,
     "inserter": 8,
-    "furnace": 16,
+    "furnace": STARTER_FUEL_BATCH_COUNT,
 }
 BURNER_FUEL_ITEMS = ("coal", "wood", "solid-fuel", "rocket-fuel")
 ASSEMBLER_ENTITY_NAMES = {"assembling-machine-1", "assembling-machine-2", "assembling-machine-3"}
@@ -3750,19 +3756,23 @@ class CoalSupplySkill:
             if drill_fuel_item is not None
             else _select_inventory_burner_fuel(observation)[1] > 0
         )
-        if drill_fuel < 12 and (drill_fuel <= 0 or matching_fuel_available):
+        if drill_fuel < DIRECT_SMELTING_FUEL_RESERVE and (drill_fuel <= 0 or matching_fuel_available):
             return _fuel_burner_line_entity(
                 observation,
                 player,
                 drill,
                 entity_name="burner-mining-drill",
-                threshold=12,
-                insert_count=16,
+                threshold=DIRECT_SMELTING_FUEL_RESERVE,
+                insert_count=STARTER_FUEL_BATCH_COUNT,
                 context="coal supply site",
                 support_skill=IronPlateSkill(target_count=20),
                 far_fuel_reason="coal supply site is too far from available hand fuel; build closer coal logistics first",
                 prefer_coal_supply=False,
             )
+
+        expansion_decision = self._parallel_coal_supply_decision(observation, player)
+        if expansion_decision is not None:
+            return expansion_decision
 
         chest = layout.get("output_chest")
         if use_output_chest and chest is not None:
@@ -3778,7 +3788,7 @@ class CoalSupplySkill:
                     {
                         "type": "take",
                         "item": "coal",
-                        "count": min(16, chest_coal),
+                        "count": min(STARTER_FUEL_BATCH_COUNT, chest_coal),
                         "unit_number": chest.get("unit_number"),
                         "name": chest.get("name") or "wooden-chest",
                         "position": chest_position,
@@ -3808,7 +3818,7 @@ class CoalSupplySkill:
                 {
                     "type": "take",
                     "item": "coal",
-                    "count": min(16, belt_coal),
+                    "count": min(STARTER_FUEL_BATCH_COUNT, belt_coal),
                     "unit_number": belt.get("unit_number"),
                     "name": "transport-belt",
                     "position": belt_position,
@@ -3852,6 +3862,178 @@ class CoalSupplySkill:
             )
         if item == "iron-chest":
             return IronPlateSkill(target_count=8).next_action(observation, target_count=8, inventory_only=True)
+        return None
+
+    def _parallel_coal_supply_decision(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+    ) -> PlannerDecision | None:
+        if _coal_supply_burner_drill_count(observation) >= _coal_supply_desired_parallel_drills(observation):
+            return None
+        layout = _select_coal_supply_expansion_layout(observation)
+        if layout is None:
+            return None
+        use_output_chest = _coal_supply_should_use_output_chest(observation, layout)
+        need = _coal_supply_missing_item(observation, layout, use_output_chest=use_output_chest)
+        if need:
+            if need == "burner-mining-drill":
+                if craftable_count(observation, "burner-mining-drill") > 0:
+                    return PlannerDecision(
+                        {"type": "craft", "recipe": "burner-mining-drill", "count": 1},
+                        "craft burner mining drill for parallel starter coal supply",
+                    )
+                reusable = _find_relocatable_burner_drill_for_coal_supply(observation, layout["drill_position"])
+                if reusable is not None:
+                    position = _position(reusable)
+                    if distance(player, position) > 4.5:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": _stand_position(position, offset=1.5)},
+                            "move within reach of idle temporary burner mining drill for parallel coal supply",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "mine",
+                            "unit_number": reusable.get("unit_number"),
+                            "name": "burner-mining-drill",
+                            "position": position,
+                        },
+                        "relocate idle temporary burner mining drill to parallel coal supply",
+                    )
+            if need in {"wooden-chest", "iron-chest"}:
+                decision = self._ensure_output_chest_item(observation, player, need)
+            else:
+                decision = self.support_skill._ensure_item(observation, player, need)
+            if decision is not None:
+                return decision
+
+        drill = layout.get("drill")
+        if drill is None:
+            position = layout["drill_position"]
+            blocker = _blocking_obstacle_near(observation, position)
+            if blocker is not None:
+                blocker_position = _position(blocker)
+                if distance(player, blocker_position) > 8:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": blocker_position},
+                        f"move near blocking {blocker.get('name')} before placing parallel coal drill",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "unit_number": blocker.get("unit_number"),
+                        "name": blocker.get("name"),
+                        "position": blocker_position,
+                        "count": 1,
+                    },
+                    f"clear blocking {blocker.get('name')} before placing parallel coal drill",
+                )
+            if distance(player, position) > 20 or distance(player, position) < 2.0:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position, offset=3.0)},
+                    "move near planned parallel coal burner mining drill",
+                )
+            return PlannerDecision(
+                {
+                    "type": "build",
+                    "name": "burner-mining-drill",
+                    "position": position,
+                    "direction": layout["drill_direction"],
+                    "required_resource": "coal",
+                    "allow_nearby": True,
+                },
+                "place parallel burner mining drill on coal supply patch",
+            )
+
+        if use_output_chest:
+            chest = layout.get("output_chest")
+            if chest is None:
+                chest_name = _available_coal_output_chest_name(observation)
+                if chest_name is None:
+                    return None
+                position = layout["output_position"]
+                blocker = _blocking_obstacle_near(observation, position)
+                if blocker is not None:
+                    blocker_position = _position(blocker)
+                    if distance(player, blocker_position) > 8:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": blocker_position},
+                            f"move near blocking {blocker.get('name')} before placing parallel coal output chest",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "mine",
+                            "name": blocker.get("name"),
+                            "position": blocker_position,
+                            "count": 1,
+                        },
+                        f"clear blocking {blocker.get('name')} before placing parallel coal output chest",
+                    )
+                if distance(player, position) > self.BUILD_STANDOFF_DISTANCE or distance(player, position) < 2.0:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": _stand_position(position, offset=3.0)},
+                        "move near planned parallel coal output chest",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "build",
+                        "name": chest_name,
+                        "position": position,
+                    },
+                    "place output chest for parallel starter coal supply",
+                )
+        else:
+            belt = layout.get("output_belt")
+            if belt is None:
+                position = layout["output_position"]
+                blocker = _blocking_obstacle_near(observation, position)
+                if blocker is not None:
+                    blocker_position = _position(blocker)
+                    if distance(player, blocker_position) > 8:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": blocker_position},
+                            f"move near blocking {blocker.get('name')} before placing parallel coal output belt",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "mine",
+                            "unit_number": blocker.get("unit_number"),
+                            "name": blocker.get("name"),
+                            "position": blocker_position,
+                            "count": 1,
+                        },
+                        f"clear blocking {blocker.get('name')} before placing parallel coal output belt",
+                    )
+                if distance(player, position) > self.BUILD_STANDOFF_DISTANCE or distance(player, position) < 2.0:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": _stand_position(position, offset=3.0)},
+                        "move near planned parallel coal output belt",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "build",
+                        "name": "transport-belt",
+                        "position": position,
+                        "direction": layout["belt_direction"],
+                    },
+                    "place output belt for parallel coal supply site",
+                )
+
+        drill_fuel = _entity_burner_fuel_count(drill)
+        if drill_fuel < DIRECT_SMELTING_FUEL_RESERVE:
+            return _fuel_burner_line_entity(
+                observation,
+                player,
+                drill,
+                entity_name="burner-mining-drill",
+                threshold=DIRECT_SMELTING_FUEL_RESERVE,
+                insert_count=STARTER_FUEL_BATCH_COUNT,
+                context="parallel coal supply site",
+                support_skill=IronPlateSkill(target_count=20),
+                far_fuel_reason="parallel coal supply site is too far from available hand fuel",
+                exclude_source_units=_coal_supply_fuel_unit_numbers(observation),
+                prefer_coal_supply=False,
+            )
         return None
 
 
@@ -5307,7 +5489,12 @@ def _direct_plate_smelting_decision(
             f"take {product_name} from starter furnace output",
         )
 
-    layout = _find_direct_smelting_cell(observation, resource_name) or _select_direct_smelting_layout(observation, resource_name)
+    direct_cells = _direct_smelting_cells(observation, resource_name)
+    layout = (
+        _find_low_fuel_direct_smelting_cell(observation, resource_name)
+        or (direct_cells[0] if direct_cells else None)
+        or _select_direct_smelting_layout(observation, resource_name)
+    )
     if layout is None:
         return PlannerDecision(None, f"cannot find open {resource_name} site for direct burner-drill smelting cell")
 
@@ -5380,7 +5567,7 @@ def _direct_plate_smelting_decision(
         coal = nearest_resource(observation, "coal")
         if coal is None:
             return PlannerDecision(None, f"cannot find nearby burner fuel for direct {product_name} smelting")
-        return support_skill._mine_resource(player, coal, "coal", 8)
+        return support_skill._mine_resource(player, coal, "coal", STARTER_FUEL_BATCH_COUNT)
 
     missing = _direct_smelting_missing_item(observation, layout)
     if missing:
@@ -5455,19 +5642,40 @@ def _direct_plate_smelting_decision(
         ("stone-furnace", "furnace"),
     ]:
         entity = layout.get(layout_key)
-        if entity and _entity_burner_fuel_count(entity) < 3:
+        if entity and _entity_burner_fuel_count(entity) < DIRECT_SMELTING_FUEL_RESERVE:
             return _fuel_burner_line_entity(
                 observation,
                 player,
                 entity,
                 entity_name=entity_name,
-                threshold=3,
-                insert_count=5,
+                threshold=DIRECT_SMELTING_FUEL_RESERVE,
+                insert_count=STARTER_FUEL_BATCH_COUNT,
                 context=f"direct {product_name} smelting cell",
                 support_skill=support_skill,
                 far_fuel_reason=f"direct {product_name} smelting needs local fuel before it can run",
+                exclude_source_units=_direct_smelting_fuel_unit_numbers(observation, resource_name),
                 wait_for_existing_fuel=True,
             )
+
+    desired_cells = _direct_smelting_desired_parallel_cells(
+        observation,
+        target_count=target_count,
+        inventory_only=inventory_only,
+    )
+    if len(direct_cells) < desired_cells:
+        expansion_layout = _select_direct_smelting_expansion_layout(observation, resource_name)
+        if expansion_layout is not None:
+            decision = _direct_smelting_expansion_decision(
+                observation,
+                player,
+                expansion_layout,
+                resource_name=resource_name,
+                product_name=product_name,
+                support_skill=support_skill,
+                allow_support_plate=allow_support_plate,
+            )
+            if decision is not None:
+                return decision
 
     return PlannerDecision(
         {"type": "wait", "ticks": 120},
@@ -5561,8 +5769,24 @@ def _direct_smelting_missing_item(observation: dict[str, Any], layout: dict[str,
     return None
 
 
-def _find_direct_smelting_cell(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
-    candidates: list[tuple[bool, float, dict[str, Any]]] = []
+def _direct_smelting_desired_parallel_cells(
+    observation: dict[str, Any],
+    *,
+    target_count: int,
+    inventory_only: bool,
+) -> int:
+    if bool(_technology_state(observation, "electric-mining-drill").get("researched")):
+        return 1
+    if total_item_count(observation, "electric-mining-drill") > 0 or entities_named(observation, "electric-mining-drill"):
+        return 1
+    target_cells = max(1, ceil(max(1, target_count) / DIRECT_SMELTING_CELL_TARGET_PLATES))
+    if not inventory_only and target_count >= 10:
+        target_cells = max(DIRECT_SMELTING_MIN_PARALLEL_CELLS, target_cells)
+    return min(DIRECT_SMELTING_MAX_PARALLEL_CELLS, target_cells)
+
+
+def _direct_smelting_cells(observation: dict[str, Any], resource_name: str) -> list[dict[str, Any]]:
+    candidates: list[tuple[float, dict[str, Any]]] = []
     for drill in entities_named(observation, "burner-mining-drill"):
         drill_position = _position(drill)
         target_resource = _entity_resource_name(observation, drill, radius=4.5)
@@ -5573,17 +5797,41 @@ def _find_direct_smelting_cell(observation: dict[str, Any], resource_name: str) 
         layout = _direct_smelting_layout_from_existing_drill(observation, drill, resource_name)
         if layout.get("furnace") is None:
             continue
-        candidates.append(
-            (
-                layout["furnace"] is not None,
-                float(drill.get("distance") or distance(player_position(observation), drill_position)),
-                layout,
-            )
-        )
+        candidates.append((float(drill.get("distance") or distance(player_position(observation), drill_position)), layout))
+    candidates.sort(key=lambda item: item[0])
+    return [layout for _distance, layout in candidates]
+
+
+def _find_low_fuel_direct_smelting_cell(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
+    candidates: list[tuple[int, float, dict[str, Any]]] = []
+    for layout in _direct_smelting_cells(observation, resource_name):
+        fuel_counts = [
+            _entity_burner_fuel_count(entity)
+            for entity in (layout.get("drill"), layout.get("furnace"))
+            if isinstance(entity, dict)
+        ]
+        if fuel_counts and min(fuel_counts) < DIRECT_SMELTING_FUEL_RESERVE:
+            drill = layout.get("drill") if isinstance(layout.get("drill"), dict) else {}
+            candidates.append((min(fuel_counts), float(drill.get("distance") or 999999), layout))
     if not candidates:
         return None
-    candidates.sort(key=lambda item: (not item[0], item[1]))
+    candidates.sort(key=lambda item: (item[0], item[1]))
     return candidates[0][2]
+
+
+def _direct_smelting_fuel_unit_numbers(observation: dict[str, Any], resource_name: str) -> set[Any]:
+    units: set[Any] = set()
+    for layout in _direct_smelting_cells(observation, resource_name):
+        for key in ("drill", "furnace"):
+            entity = layout.get(key)
+            if isinstance(entity, dict):
+                units.add(entity.get("unit_number"))
+    return units
+
+
+def _find_direct_smelting_cell(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
+    cells = _direct_smelting_cells(observation, resource_name)
+    return cells[0] if cells else None
 
 
 def _select_direct_smelting_layout(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
@@ -5611,6 +5859,156 @@ def _select_direct_smelting_layout(observation: dict[str, Any], resource_name: s
                     layout["misplaced_furnace"] = near_furnace
             if not _direct_smelting_layout_blocked_by_factory_entities(layout, entities):
                 return layout
+    return None
+
+
+def _select_direct_smelting_expansion_layout(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    for resource in _ranked_patch_drill_resources(observation, resource_name):
+        drill_position = _direct_smelting_drill_center(_position(resource))
+        for orientation in ("east", "west", "south", "north"):
+            layout = _direct_smelting_layout_from_drill_position(
+                drill_position,
+                resource_name=resource_name,
+                orientation=orientation,
+            )
+            drill = _entity_near(observation, "burner-mining-drill", layout["drill_position"], radius=2.0)
+            if isinstance(drill, dict) and _entity_resource_name(observation, drill, radius=4.5) == resource_name:
+                if distance(_position(drill), layout["drill_position"]) <= 0.75:
+                    layout = _direct_smelting_layout_from_existing_drill(observation, drill, resource_name)
+                else:
+                    continue
+            else:
+                layout["drill"] = None
+            layout["furnace"] = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=0.75)
+            if isinstance(layout.get("drill"), dict) and isinstance(layout.get("furnace"), dict):
+                if _burner_drill_output_touches_machine(layout["drill"], layout["furnace"]):
+                    continue
+                layout["misplaced_furnace"] = layout["furnace"]
+                layout["furnace"] = None
+            if layout.get("furnace") is None:
+                near_furnace = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=2.5)
+                if isinstance(near_furnace, dict):
+                    layout["misplaced_furnace"] = near_furnace
+            if not _direct_smelting_layout_blocked_by_factory_entities(layout, entities):
+                return layout
+    return None
+
+
+def _direct_smelting_expansion_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    layout: dict[str, Any],
+    *,
+    resource_name: str,
+    product_name: str,
+    support_skill: IronPlateSkill,
+    allow_support_plate: bool,
+) -> PlannerDecision | None:
+    misplaced_drill = layout.get("misplaced_drill")
+    if isinstance(misplaced_drill, dict) and layout.get("drill") is None:
+        position = _position(misplaced_drill)
+        if distance(player, position) > 8:
+            return PlannerDecision(
+                {"type": "move_to", "position": _stand_position(position, offset=2.0)},
+                f"move near misplaced parallel {product_name} mining drill before rebuilding exact smelting cell",
+            )
+        return PlannerDecision(
+            {
+                "type": "mine",
+                "unit_number": misplaced_drill.get("unit_number"),
+                "name": "burner-mining-drill",
+                "position": position,
+            },
+            f"recover misplaced parallel {product_name} mining drill before rebuilding exact smelting cell",
+        )
+
+    misplaced_furnace = layout.get("misplaced_furnace")
+    if isinstance(misplaced_furnace, dict) and layout.get("furnace") is None:
+        position = _position(misplaced_furnace)
+        if distance(player, position) > 8:
+            return PlannerDecision(
+                {"type": "move_to", "position": _stand_position(position, offset=2.0)},
+                f"move near misplaced parallel {product_name} furnace before rebuilding exact smelting cell",
+            )
+        return PlannerDecision(
+            {
+                "type": "mine",
+                "unit_number": misplaced_furnace.get("unit_number"),
+                "name": misplaced_furnace.get("name") or "stone-furnace",
+                "position": position,
+            },
+            f"recover misplaced parallel {product_name} furnace before rebuilding exact smelting cell",
+        )
+
+    missing = _direct_smelting_missing_item(observation, layout)
+    if missing:
+        decision = _ensure_direct_smelting_item(
+            observation,
+            player,
+            missing,
+            resource_name=resource_name,
+            product_name=product_name,
+            support_skill=support_skill,
+            allow_support_plate=allow_support_plate,
+        )
+        if decision is not None:
+            return decision
+
+    drill = layout.get("drill")
+    if isinstance(drill, dict) and _entity_status_is(drill, "no_minable_resources", 21):
+        position = _position(drill)
+        if distance(player, position) > 8:
+            return PlannerDecision(
+                {"type": "move_to", "position": _stand_position(position, offset=2.0)},
+                f"move near invalid parallel {product_name} mining drill before relocating it",
+            )
+        return PlannerDecision(
+            {
+                "type": "mine",
+                "unit_number": drill.get("unit_number"),
+                "name": "burner-mining-drill",
+                "position": position,
+            },
+            f"recover invalid parallel {product_name} mining drill with no minable resources",
+        )
+
+    if drill is None:
+        position = layout["drill_position"]
+        if distance(player, position) > 20:
+            return PlannerDecision(
+                {"type": "move_to", "position": _stand_position(position)},
+                f"move near {resource_name.replace('-', ' ')} before placing parallel direct burner mining drill",
+            )
+        return PlannerDecision(
+            {
+                "type": "build",
+                "name": "burner-mining-drill",
+                "position": position,
+                "direction": layout["drill_direction"],
+                "allow_nearby": False,
+                "required_resource": resource_name,
+            },
+            f"place parallel burner mining drill for direct {product_name} smelting cell",
+        )
+
+    if layout.get("furnace") is None:
+        position = layout["furnace_position"]
+        if distance(player, position) > 20:
+            return PlannerDecision(
+                {"type": "move_to", "position": _stand_position(position)},
+                f"move near parallel direct {product_name} furnace position",
+            )
+        return PlannerDecision(
+            {
+                "type": "build",
+                "name": "stone-furnace",
+                "position": position,
+                "allow_nearby": False,
+            },
+            f"place parallel furnace at {resource_name} drill output",
+        )
+
     return None
 
 
@@ -6009,6 +6407,51 @@ def _coal_supply_should_use_output_chest(observation: dict[str, Any], layout: di
     return not _transport_belt_automation_output_ready(observation)
 
 
+def _coal_supply_desired_parallel_drills(observation: dict[str, Any]) -> int:
+    if bool(_technology_state(observation, "electric-mining-drill").get("researched")):
+        return 1
+    if total_item_count(observation, "electric-mining-drill") > 0 or entities_named(observation, "electric-mining-drill"):
+        return 1
+    return STARTER_COAL_SUPPLY_DRILL_TARGET
+
+
+def _coal_supply_burner_drill_count(observation: dict[str, Any]) -> int:
+    return sum(
+        1
+        for drill in entities_named(observation, "burner-mining-drill")
+        if _entity_resource_name(observation, drill, radius=4.5) == "coal"
+        and _within_starter_logistics_area(observation, _position(drill))
+    )
+
+
+def _coal_supply_fuel_unit_numbers(observation: dict[str, Any]) -> set[Any]:
+    return {
+        drill.get("unit_number")
+        for drill in entities_named(observation, "burner-mining-drill")
+        if _entity_resource_name(observation, drill, radius=4.5) == "coal"
+    }
+
+
+def _select_coal_supply_expansion_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    for resource in _ranked_patch_drill_resources(observation, "coal"):
+        for orientation in ("east", "west", "south", "north"):
+            layout = _coal_supply_layout_from_drill_position(_position(resource), orientation=orientation)
+            layout["drill"] = _entity_near(observation, "burner-mining-drill", layout["drill_position"], radius=2.0)
+            if isinstance(layout.get("drill"), dict) and _entity_resource_name(observation, layout["drill"], radius=4.5) == "coal":
+                continue
+            layout["output_belt"] = _entity_at_build_position(
+                observation,
+                "transport-belt",
+                layout["output_position"],
+                radius=0.75,
+            )
+            layout["output_chest"] = _coal_output_chest_near(observation, layout["output_position"])
+            if not _coal_supply_layout_blocked_by_factory_entities(layout, entities):
+                return layout
+    return None
+
+
 def _coal_supply_missing_item(
     observation: dict[str, Any],
     layout: dict[str, Any],
@@ -6044,7 +6487,7 @@ def _find_relocatable_burner_drill_for_coal_supply(
     target_position: dict[str, float],
 ) -> dict[str, Any] | None:
     candidates: list[tuple[int, float, dict[str, Any]]] = []
-    priority_by_resource = {"stone": 0, "copper-ore": 1, "iron-ore": 2}
+    priority_by_resource = {"stone": 0}
     for drill in entities_named(observation, "burner-mining-drill"):
         if _entity_burner_fuel_count(drill) > 0:
             continue
@@ -6826,7 +7269,11 @@ def _fuel_burner_line_entity(
             if existing_fuel_item == "coal" and entity_name == "burner-mining-drill":
                 coal = _nearest_resource_to_position(observation, position, "coal")
                 if coal is not None and distance(position, _position(coal)) <= WALK_FUEL_LOGISTICS_LIMIT:
-                    return support_skill._mine_resource(player, coal, "coal", 16)
+                    return support_skill._mine_resource(player, coal, "coal", STARTER_FUEL_BATCH_COUNT)
+            if existing_fuel_item == "coal":
+                coal = _nearest_resource_to_position(observation, position, "coal")
+                if coal is not None and distance(position, _position(coal)) <= WALK_FUEL_LOGISTICS_LIMIT:
+                    return support_skill._mine_resource(player, coal, "coal", STARTER_FUEL_BATCH_COUNT)
             return PlannerDecision(
                 {"type": "wait", "ticks": 180},
                 f"wait for existing {existing_fuel_item} in {entity_name} before mixing burner fuel for {context}",
@@ -6863,7 +7310,7 @@ def _fuel_burner_line_entity(
                 f"wait for established coal supply output before refueling {context}; refusing repeated hand-mining",
             )
         if coal is not None and distance(position, _position(coal)) <= WALK_FUEL_LOGISTICS_LIMIT and source_surplus < 8:
-            return support_skill._mine_resource(player, coal, "coal", 16)
+            return support_skill._mine_resource(player, coal, "coal", STARTER_FUEL_BATCH_COUNT)
         local_coal = _nearest_resource_to_position(observation, player, "coal")
         if (
             local_coal is not None
@@ -6871,19 +7318,24 @@ def _fuel_burner_line_entity(
             and distance(player, position) > 20.0
             and source_surplus < max(8, desired_insert)
         ):
-            return support_skill._mine_resource(player, local_coal, "coal", max(16, desired_insert))
+            return support_skill._mine_resource(player, local_coal, "coal", max(STARTER_FUEL_BATCH_COUNT, desired_insert))
         if source is not None:
             return _take_surplus_fuel_source_decision(player, source, context)
         if coal is None:
             return PlannerDecision(None, f"cannot find burner fuel for {context}")
         if distance(position, _position(coal)) > WALK_FUEL_LOGISTICS_LIMIT:
             return PlannerDecision(None, far_fuel_reason)
-        return support_skill._mine_resource(player, coal, "coal", 16)
+        return support_skill._mine_resource(player, coal, "coal", STARTER_FUEL_BATCH_COUNT)
 
     if inventory_fuel_item == "coal" and inventory_fuel_count < desired_insert and distance(player, position) > 20.0:
         local_coal = _nearest_resource_to_position(observation, player, "coal")
         if local_coal is not None and distance(player, _position(local_coal)) <= 16.0:
-            return support_skill._mine_resource(player, local_coal, "coal", max(16, desired_insert - inventory_fuel_count))
+            return support_skill._mine_resource(
+                player,
+                local_coal,
+                "coal",
+                max(STARTER_FUEL_BATCH_COUNT, desired_insert - inventory_fuel_count),
+            )
 
     if distance(player, position) > 20:
         return PlannerDecision(
@@ -6982,7 +7434,8 @@ def _take_surplus_fuel_source_decision(
             f"move near surplus fuel source for {context}",
         )
     source_item, source_count = _select_surplus_fuel_item(source)
-    take_count = min(16, source_count)
+    take_count = min(STARTER_FUEL_BATCH_COUNT, source_count)
+    source_label = "supply belt" if str(source.get("name") or "") == "transport-belt" else str(source.get("name") or "")
     return PlannerDecision(
         {
             "type": "take",
@@ -6992,7 +7445,7 @@ def _take_surplus_fuel_source_decision(
             "name": source.get("name"),
             "position": source_position,
         },
-        f"recover surplus {source_item} from {source.get('name')} for {context}",
+        f"recover surplus {source_item} from {source_label} for {context}",
     )
 
 
@@ -10674,6 +11127,10 @@ class GearBeltMallLogisticsSkill:
                 "cannot find spaced powered gear and reusable belt assemblers for gear/belt mall logistics",
             )
 
+        cleanup_decision = _obsolete_gear_belt_mall_buffer_cleanup_decision(observation, player, layout)
+        if cleanup_decision is not None:
+            return cleanup_decision
+
         belt_assembler = layout["belt_assembler"]
         incompatible = _first_incompatible_assembler_item(belt_assembler, "transport-belt")
         if incompatible is not None:
@@ -12438,6 +12895,28 @@ class BuildItemMallSkill:
                     f"clear {incompatible} from reusable build item mall assembler before setting {self.target_item}",
                 )
             return self._set_recipe_decision(player, assembler, self.target_item)
+        if self.target_item == "transport-belt" and _transport_belt_mall_assembler_too_close_to_gear_mall(
+            observation,
+            assembler,
+        ):
+            if distance(player, assembler_position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": assembler_position},
+                    "move near cramped transport-belt mall assembler before relocating it",
+                )
+            return PlannerDecision(
+                {
+                    "type": "mine",
+                    "unit_number": assembler.get("unit_number"),
+                    "name": "assembling-machine-1",
+                    "position": assembler_position,
+                },
+                "relocate transport-belt mall assembler to leave a direct inserter gap from the gear assembler",
+            )
+
+        cleanup_decision = _obsolete_build_item_mall_buffer_cleanup_decision(observation, player, cell)
+        if cleanup_decision is not None:
+            return cleanup_decision
 
         output_count = entity_item_count(assembler, self.target_item)
         if output_count > 0:
@@ -14176,6 +14655,151 @@ def _gear_belt_lane_has_transfer_inserter(layout: dict[str, Any]) -> bool:
     return False
 
 
+def _obsolete_gear_belt_mall_buffer_cleanup_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    layout: dict[str, Any],
+) -> PlannerDecision | None:
+    protected_units: set[Any] = {
+        layout["gear_assembler"].get("unit_number"),
+        layout["belt_assembler"].get("unit_number"),
+    }
+    protected_positions: set[tuple[float, float]] = set()
+    for key in ("gear_output_inserter", "belt_input_inserter", "direct_gear_transfer_inserter"):
+        spec = layout.get(key)
+        if not isinstance(spec, dict):
+            continue
+        protected_positions.add(_position_tuple(spec["position"]))
+        entity = spec.get("entity")
+        if isinstance(entity, dict):
+            protected_units.add(entity.get("unit_number"))
+    for belt in layout.get("gear_belts") or []:
+        if isinstance(belt, dict):
+            protected_positions.add(_position_tuple(belt["position"]))
+            entity = belt.get("entity")
+            if isinstance(entity, dict):
+                protected_units.add(entity.get("unit_number"))
+
+    cleanup = _nearest_obsolete_empty_chest_or_inserter(
+        observation,
+        player,
+        anchors=[_position(layout["gear_assembler"]), _position(layout["belt_assembler"])],
+        protected_units=protected_units,
+        protected_positions=protected_positions,
+    )
+    if cleanup is None:
+        return None
+    entity_position = _position(cleanup)
+    if distance(player, entity_position) > 8:
+        return PlannerDecision(
+            {"type": "move_to", "position": _stand_position(entity_position, offset=2.0)},
+            f"move near obsolete {cleanup.get('name')} left from temporary gear/belt mall buffering",
+        )
+    return PlannerDecision(
+        {
+            "type": "mine",
+            "unit_number": cleanup.get("unit_number"),
+            "name": cleanup.get("name"),
+            "position": entity_position,
+        },
+        f"remove obsolete empty {cleanup.get('name')} left from temporary gear/belt mall buffering",
+    )
+
+
+def _obsolete_build_item_mall_buffer_cleanup_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    cell: dict[str, Any],
+) -> PlannerDecision | None:
+    assembler = cell.get("assembler")
+    if not isinstance(assembler, dict):
+        return None
+    protected_units: set[Any] = {assembler.get("unit_number")}
+    protected_positions: set[tuple[float, float]] = set()
+    for key in ("output_chest", "output_inserter"):
+        entity = cell.get(key)
+        if isinstance(entity, dict):
+            protected_units.add(entity.get("unit_number"))
+    for key in ("output_chest_position", "output_inserter_position"):
+        position = cell.get(key)
+        if isinstance(position, dict):
+            protected_positions.add(_position_tuple(position))
+    cleanup = _nearest_obsolete_empty_chest_or_inserter(
+        observation,
+        player,
+        anchors=[_position(assembler)],
+        protected_units=protected_units,
+        protected_positions=protected_positions,
+    )
+    if cleanup is None:
+        return None
+    entity_position = _position(cleanup)
+    if distance(player, entity_position) > 8:
+        return PlannerDecision(
+            {"type": "move_to", "position": _stand_position(entity_position, offset=2.0)},
+            f"move near obsolete {cleanup.get('name')} left from temporary item mall buffering",
+        )
+    return PlannerDecision(
+        {
+            "type": "mine",
+            "unit_number": cleanup.get("unit_number"),
+            "name": cleanup.get("name"),
+            "position": entity_position,
+        },
+        f"remove obsolete empty {cleanup.get('name')} left from temporary item mall buffering",
+    )
+
+
+def _nearest_obsolete_empty_chest_or_inserter(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    *,
+    anchors: list[dict[str, float]],
+    protected_units: set[Any],
+    protected_positions: set[tuple[float, float]],
+) -> dict[str, Any] | None:
+    candidates: list[tuple[float, dict[str, Any]]] = []
+    candidate_names = {"wooden-chest", "iron-chest", "steel-chest", "inserter", "burner-inserter", "fast-inserter"}
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict) or not isinstance(entity.get("position"), dict):
+            continue
+        name = str(entity.get("name") or "")
+        if name not in candidate_names:
+            continue
+        if entity.get("unit_number") in protected_units:
+            continue
+        position = _position(entity)
+        if _position_tuple(position) in protected_positions:
+            continue
+        if min(distance(position, anchor) for anchor in anchors) > 6.0:
+            continue
+        if _entity_inventory_totals(entity):
+            continue
+        if name in {"inserter", "burner-inserter", "fast-inserter"} and _inserter_serves_any_machine(observation, entity):
+            continue
+        candidates.append((distance(player, position), entity))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
+
+
+def _inserter_serves_any_machine(observation: dict[str, Any], inserter: dict[str, Any]) -> bool:
+    endpoints = _inserter_endpoints(inserter)
+    if endpoints is None:
+        return False
+    pickup, drop = endpoints
+    machine_names = ASSEMBLER_ENTITY_NAMES | {"stone-furnace", "steel-furnace", "electric-furnace", "boiler", "lab"}
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict) or not isinstance(entity.get("position"), dict):
+            continue
+        if str(entity.get("name") or "") not in machine_names:
+            continue
+        if _point_inside_machine(pickup, entity) or _point_inside_machine(drop, entity):
+            return True
+    return False
+
+
 def _mall_logistics_positions_clear(
     observation: dict[str, Any],
     *,
@@ -14796,11 +15420,18 @@ def _select_build_item_mall_site(
         source_pole_unit_number = site.get("source_pole_unit_number")
         pole_unit_number = site.get("pole_unit_number") or (pole.get("unit_number") if pole else None)
         if assembler is not None and assembler.get("recipe") not in (None, "", target_item):
-            sidecar_position = _select_build_item_sidecar_position(
-                observation,
-                assembler_position,
-                power_positions=[pole_position],
-            )
+            if target_item == "transport-belt" and assembler.get("recipe") == "iron-gear-wheel":
+                sidecar_position = _select_transport_belt_mall_sidecar_position(
+                    observation,
+                    assembler_position,
+                    power_positions=[pole_position],
+                )
+            else:
+                sidecar_position = _select_build_item_sidecar_position(
+                    observation,
+                    assembler_position,
+                    power_positions=[pole_position],
+                )
             if sidecar_position is None:
                 continue
             assembler_position = sidecar_position
@@ -14842,6 +15473,51 @@ def _select_build_item_mall_site(
             float(item.get("distance") or 999999),
         )
     )
+    return candidates[0]
+
+
+def _transport_belt_mall_assembler_too_close_to_gear_mall(
+    observation: dict[str, Any],
+    belt_assembler: dict[str, Any],
+) -> bool:
+    if entity_item_count(belt_assembler, "transport-belt") > 0:
+        return False
+    belt_position = _position(belt_assembler)
+    for gear in entities_named(observation, "assembling-machine-1"):
+        if gear is belt_assembler or gear.get("recipe") != "iron-gear-wheel":
+            continue
+        if gear.get("electric_network_connected") is False:
+            continue
+        gear_position = _position(gear)
+        if abs(gear_position["y"] - belt_position["y"]) > 0.1:
+            continue
+        horizontal = abs(belt_position["x"] - gear_position["x"])
+        if 0 < horizontal < GEAR_BELT_MALL_ASSEMBLER_SPACING:
+            return True
+    return False
+
+
+def _select_transport_belt_mall_sidecar_position(
+    observation: dict[str, Any],
+    gear_position: dict[str, float],
+    *,
+    power_positions: list[dict[str, float]] | None = None,
+) -> dict[str, float] | None:
+    offsets = [
+        {"x": GEAR_BELT_MALL_ASSEMBLER_SPACING, "y": 0.0},
+        {"x": -GEAR_BELT_MALL_ASSEMBLER_SPACING, "y": 0.0},
+    ]
+    candidates: list[dict[str, float]] = []
+    for offset in offsets:
+        candidate = {
+            "x": gear_position["x"] + offset["x"],
+            "y": gear_position["y"] + offset["y"],
+        }
+        if _build_item_sidecar_position_clear(observation, candidate):
+            candidates.append(candidate)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: _build_item_sidecar_power_score(observation, item, power_positions=power_positions))
     return candidates[0]
 
 

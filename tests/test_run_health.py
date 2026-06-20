@@ -58,6 +58,19 @@ class RunHealthTests(unittest.TestCase):
                 json.dumps({"state": "sleeping", "updated_at": "2026-06-16T20:00:00+00:00"}),
                 encoding="utf-8",
             )
+            (logs / "operator-intervention-layout-learning.jsonl").write_text(
+                json.dumps(
+                    {
+                        "event": "operator_intervention_candidate",
+                        "time": "2026-06-16T20:00:00+00:00",
+                        "learning_label": "pending_human_review",
+                        "active_skill": "idle",
+                        "delta_summary": {"added": 1, "removed": 0, "changed": 0},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             cfg = SimpleNamespace(runtime_dir=runtime, log_dir=logs)
 
             summary = gather_run_health(cfg, observe=False)
@@ -74,6 +87,8 @@ class RunHealthTests(unittest.TestCase):
         self.assertIn("connect_coal_fuel_feed", summary["generated_skills"]["stale_implemented_queue"])
         self.assertTrue(any(item["kind"] == "failure_root_loop" for item in summary["warnings"]))
         self.assertTrue(any(item["kind"] == "implemented_skill_stuck_in_foundry_queue" for item in summary["warnings"]))
+        self.assertEqual(summary["human_layout_learning"]["learning_label"], "pending_human_review")
+        self.assertTrue(any(item["kind"] == "operator_layout_learning_pending" for item in summary["warnings"]))
         text = format_run_health(summary)
         self.assertIn("run health", text)
         self.assertIn("supervisor: state=running gate=ready", text)
@@ -81,6 +96,7 @@ class RunHealthTests(unittest.TestCase):
         self.assertIn("foundry", text)
         self.assertIn("failure_root=belt_line_unbuildable", text)
         self.assertIn("stale implemented queue", text)
+        self.assertIn("operator layout learning", text)
 
     def test_scheduler_api_timeout_falls_back_to_supervisor_vllm_heartbeat(self):
         with tempfile.TemporaryDirectory() as tmp:

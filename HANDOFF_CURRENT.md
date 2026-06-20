@@ -1,10 +1,11 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; strict Qwen/vLLM run is live on the reset no-mod map.
-- Part149 code: `IronPlateSkill` recovers starter-area stone/copper temporary burner drills for iron bootstrap when no new drill can be crafted.
-- Recovery protects coal supply drills and avoids hand-smelting; live run cleared the missing-burner-drill loop.
-- Live proof: `produce_iron_plate` recovered to 10/10, `setup_coal_supply` refueled coal drill, and Automation research completed.
-- Current runtime: server up, supervisor PID 56828, autopilot PID 42984, vLLM service 12304 ready, recent decisions `src=llm`.
-- Current progress: researched=4, Automation complete, recovery root `gear_mall_missing`, repair skill `bootstrap_build_item_mall`.
-- Next: bootstrap item mall, gear/belt mall, electronic circuits, then research electric mining drill and replace burner mining.
-- Validation: `tests.test_planner` (359) and `py_compile src/factorio_ai/planner.py` passed.
-- Token checkpoint: goal tracker 12,298,924; part delta +246,686 since 12,052,238; weekly quota unavailable.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod map was reset and strict Qwen/vLLM unattended supervisor is running.
+- Part151: starter fuel batches now use coal reserve 20 / batch 30, direct smelting expands 2-4 burner cells, and coal supply expands toward 4 burner drills until electric mining is available.
+- Gear/belt mall now prefers direct gear->belt inserter spacing, relocates cramped belt assemblers, and removes obsolete empty buffer chests/inserters while protecting active inserters/non-empty chests.
+- Human layout learning is enabled: unexplained factory-entity layout deltas go to `operator-intervention-layout-learning.jsonl`; map reset, trees/rocks, and furnace recipe flicker are filtered.
+- Live status after reset: server reachable tick 18804; supervisor PID 20096, autopilot PID 44312, vLLM service 12304 healthy; live skill `research_automation`.
+- Current progress: researched=0, key items include iron-plate=33, coal=52; no run-health warnings and no pending human layout event.
+- Recent strategy decisions are still `source=llm`; current loop is reusing progressing `research_automation`.
+- Validation: `PYTHONPATH=src python -m unittest discover -s tests` passed (1096 tests; ResourceWarning only).
+- Token checkpoint: goal tracker 13,277,979; recorded part delta +994,562; weekly quota unavailable.
+- Next: watch Automation, bootstrap gear/belt mall, electronic circuits, then electric mining drill and burner replacement/main-belt migration.

@@ -22,6 +22,10 @@ from .config import AppConfig, REPO_ROOT
 from .factory_readiness import build_factory_readiness
 from .layout_llm_settings import load_layout_llm_settings
 from .layout_validation import layout_validation_feedback_summary
+from .human_layout_learning import (
+    record_human_layout_observation,
+    remember_agent_layout_action,
+)
 from .models import (
     ActionValidationError,
     PlannerDecision,
@@ -2668,6 +2672,13 @@ class FactorioController:
                             time.sleep(0.2)
                             continue
                         return finish(False, f"action failed: {response.get('reason')}", step, observation)
+                    remember_agent_layout_action(
+                        self.cfg.runtime_dir,
+                        action,
+                        objective=objective,
+                        active_skill=goal,
+                        active_step=step,
+                    )
                     if seed_key is not None:
                         followup_item = _bootstrap_seed_followup_item(action)
                         followup_count = total_item_count(observation, followup_item) if followup_item else None
@@ -3283,6 +3294,13 @@ class FactorioController:
         force_poll: bool = False,
         minimum_interval_seconds: float | None = None,
     ) -> None:
+        self._maybe_record_human_layout_learning(
+            observation,
+            objective,
+            active_skill,
+            active_step,
+            source="background_layout_observe",
+        )
         if not self.cfg.slurm_enabled or active_skill == "plan_factory_site":
             return
         if os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_ENABLED", "1").lower() in {"0", "false", "no", "off"}:
@@ -3438,6 +3456,49 @@ class FactorioController:
                     "active_skill": active_skill,
                     "active_step": active_step,
                     "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+
+    def _maybe_record_human_layout_learning(
+        self,
+        observation: dict[str, Any],
+        objective: str,
+        active_skill: str,
+        active_step: int,
+        *,
+        source: str,
+    ) -> None:
+        if os.getenv("FACTORIO_AI_HUMAN_LAYOUT_LEARNING", "1").strip().lower() in {"0", "false", "no", "off"}:
+            return
+        try:
+            event = record_human_layout_observation(
+                self.cfg.runtime_dir,
+                self.cfg.log_dir,
+                observation,
+                objective=objective,
+                active_skill=active_skill,
+                active_step=active_step,
+                source=source,
+            )
+        except Exception as exc:  # noqa: BLE001 - learning trace must not break the game loop
+            self._write_background_layout_log(
+                {
+                    "event": "human_layout_learning_error",
+                    "active_skill": active_skill,
+                    "active_step": active_step,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            return
+        if event is not None:
+            self._write_background_layout_log(
+                {
+                    "event": "operator_intervention_candidate_recorded",
+                    "active_skill": active_skill,
+                    "active_step": active_step,
+                    "delta_summary": event.get("delta_summary"),
+                    "trace": "operator-intervention-layout-learning.jsonl",
+                    "learning_label": event.get("learning_label"),
                 }
             )
 

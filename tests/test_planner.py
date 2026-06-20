@@ -372,7 +372,7 @@ class PlannerTests(unittest.TestCase):
                 "position": {"x": 6, "y": 0},
                 "direction": planner_module.EAST,
                 "mining_target": "coal",
-                "inventories": {"1": {"coal": 12}},
+                "inventories": {"1": {"coal": 20}},
             },
         ]
 
@@ -392,7 +392,7 @@ class PlannerTests(unittest.TestCase):
         decision = CoalSupplySkill().next_action(obs)
         self.assertEqual(decision.action["type"], "insert")
         self.assertEqual(decision.action["item"], "coal")
-        self.assertEqual(decision.action["count"], 12)
+        self.assertEqual(decision.action["count"], 16)
 
     def test_coal_supply_accepts_fueled_drill_without_more_matching_fuel(self):
         obs = base_observation()
@@ -434,7 +434,7 @@ class PlannerTests(unittest.TestCase):
 
         self.assertEqual(decision.action["type"], "insert")
         self.assertEqual(decision.action["item"], "coal")
-        self.assertEqual(decision.action["count"], 11)
+        self.assertEqual(decision.action["count"], 12)
         self.assertEqual(decision.action["unit_number"], 11)
 
     def test_coal_supply_done_when_fueled_and_belted(self):
@@ -448,12 +448,102 @@ class PlannerTests(unittest.TestCase):
                 "unit_number": 11,
                 "position": {"x": 6, "y": 0},
                 "direction": 4,
-                "inventories": {"1": {"coal": 12}},
+                "inventories": {"1": {"coal": 20}},
             },
         ]
         decision = CoalSupplySkill().next_action(obs)
         self.assertTrue(decision.done)
         self.assertIn("coal supply site is active", decision.reason)
+
+    def test_coal_supply_expands_parallel_burner_drills_before_done(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 15, "y": 0}
+        obs["inventory"] = {"burner-mining-drill": 1, "coal": 30}
+        obs["resources"] = [
+            {"name": "coal", "position": {"x": 6, "y": 0}, "distance": 6},
+            {"name": "coal", "position": {"x": 12, "y": 0}, "distance": 12},
+        ]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 11,
+                "position": {"x": 6, "y": 0},
+                "direction": 4,
+                "mining_target": "coal",
+                "inventories": {"1": {"coal": 20}},
+            },
+            {"name": "wooden-chest", "unit_number": 10, "position": {"x": 8, "y": 0}, "inventories": {"1": {"coal": 4}}},
+        ]
+
+        decision = CoalSupplySkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertEqual(decision.action["position"], {"x": 12.0, "y": 0.0})
+        self.assertIn("parallel", decision.reason)
+
+    def test_coal_supply_does_not_expand_burner_drills_after_electric_drill_research(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 30}
+        obs["research"]["technologies"]["electric-mining-drill"] = {"researched": True}
+        obs["resources"] = [
+            {"name": "coal", "position": {"x": 6, "y": 0}, "distance": 6},
+            {"name": "coal", "position": {"x": 12, "y": 0}, "distance": 12},
+        ]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 11,
+                "position": {"x": 6, "y": 0},
+                "direction": 4,
+                "mining_target": "coal",
+                "inventories": {"1": {"coal": 20}},
+            },
+            {"name": "wooden-chest", "unit_number": 10, "position": {"x": 8, "y": 0}, "inventories": {"1": {"coal": 4}}},
+        ]
+
+        decision = CoalSupplySkill().next_action(obs)
+
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
+
+    def test_coal_supply_does_not_steal_iron_or_copper_drills_for_parallel_coal(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 0, "y": 6}
+        obs["inventory"] = {"coal": 30}
+        obs["resources"] = [
+            {"name": "coal", "position": {"x": 6, "y": 0}, "distance": 6},
+            {"name": "coal", "position": {"x": 12, "y": 0}, "distance": 12},
+            {"name": "iron-ore", "position": {"x": 0, "y": 6}, "distance": 6},
+        ]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 11,
+                "position": {"x": 6, "y": 0},
+                "direction": 4,
+                "mining_target": "coal",
+                "inventories": {"1": {"coal": 20}},
+            },
+            {"name": "wooden-chest", "unit_number": 10, "position": {"x": 8, "y": 0}, "inventories": {"1": {"coal": 4}}},
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 91,
+                "position": {"x": 0, "y": 6},
+                "direction": 4,
+                "mining_target": "iron-ore",
+                "inventories": {},
+            },
+        ]
+
+        decision = CoalSupplySkill().next_action(obs)
+
+        self.assertFalse(
+            decision.action
+            and decision.action.get("type") == "mine"
+            and decision.action.get("unit_number") == 91,
+            decision.reason,
+        )
 
     def test_coal_supply_recovers_drill_with_no_minable_resources(self):
         obs = base_observation()
@@ -508,7 +598,7 @@ class PlannerTests(unittest.TestCase):
                 "unit_number": 11,
                 "position": {"x": 6, "y": 0},
                 "direction": 4,
-                "inventories": {"1": {"coal": 12}},
+                "inventories": {"1": {"coal": 20}},
             },
             {"name": "wooden-chest", "unit_number": 10, "position": {"x": 8, "y": 0}, "inventories": {"1": {"coal": 4}}},
         ]
@@ -2892,8 +2982,9 @@ class PlannerTests(unittest.TestCase):
             },
         ]
         decision = IronPlateSkill(target_count=10).next_action(obs)
-        self.assertEqual(decision.action["type"], "wait")
-        self.assertLess(decision.action["ticks"], 180)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["count"], 8)
         self.assertNotIn("iron ore", decision.reason.lower())
 
     def test_iron_skill_uses_wood_fuel_before_mining_coal(self):
@@ -2951,6 +3042,69 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["item"], "wood")
         self.assertEqual(decision.action["unit_number"], 101)
 
+    def test_iron_skill_buffers_direct_cell_with_large_coal_insert(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 4, "y": 0}}
+        obs["inventory"] = {"coal": 30}
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 101,
+                "position": {"x": 4, "y": 0},
+                "direction": 4,
+                "distance": 0,
+                "mining_target": "iron-ore",
+                "inventories": {},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 102,
+                "position": {"x": 6, "y": 0},
+                "distance": 2,
+                "inventories": {},
+            },
+        ]
+
+        decision = IronPlateSkill(target_count=20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["count"], 20)
+        self.assertEqual(decision.action["unit_number"], 101)
+
+    def test_iron_skill_mines_large_coal_batch_for_low_direct_cell(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 2, "y": 0}}
+        obs["inventory"] = {}
+        obs["resources"] = [
+            {"name": "iron-ore", "position": {"x": 4, "y": 0}, "distance": 2},
+            {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 0},
+        ]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 101,
+                "position": {"x": 4, "y": 0},
+                "direction": 4,
+                "distance": 2,
+                "mining_target": "iron-ore",
+                "inventories": {"1": {"coal": 3}},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 102,
+                "position": {"x": 6, "y": 0},
+                "distance": 4,
+                "inventories": {"1": {"coal": 3}},
+            },
+        ]
+
+        decision = IronPlateSkill(target_count=20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "coal")
+        self.assertEqual(decision.action["count"], 30)
+
     def test_iron_skill_inventory_only_can_take_furnace_output(self):
         obs = base_observation()
         obs["player"] = {"position": {"x": 6, "y": 0}}
@@ -2990,7 +3144,7 @@ class PlannerTests(unittest.TestCase):
                 "position": {"x": 4, "y": 0},
                 "direction": 4,
                 "distance": 2,
-                "inventories": {"1": {"wood": 3}},
+                "inventories": {"1": {"wood": 20}},
             },
             {
                 "name": "stone-furnace",
@@ -3003,8 +3157,9 @@ class PlannerTests(unittest.TestCase):
 
         decision = IronPlateSkill(target_count=20).next_action(obs)
 
-        self.assertEqual(decision.action["type"], "wait")
-        self.assertIn("before mixing burner fuel", decision.reason)
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "coal")
+        self.assertEqual(decision.action["count"], 30)
 
     def test_iron_skill_recovers_direct_drill_with_no_minable_resources(self):
         obs = base_observation()
@@ -3308,6 +3463,75 @@ class PlannerTests(unittest.TestCase):
                 )
                 self.assertEqual(layout["furnace_position"], expected)
 
+    def test_iron_skill_expands_second_direct_cell_instead_of_waiting(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 4, "y": 6}}
+        obs["inventory"] = {"coal": 20, "burner-mining-drill": 1, "stone-furnace": 1}
+        obs["resources"] = [
+            {"name": "iron-ore", "position": {"x": 4, "y": 0}, "distance": 6},
+            {"name": "iron-ore", "position": {"x": 4, "y": 6}, "distance": 0},
+            {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 8},
+        ]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 101,
+                "position": {"x": 4, "y": 0},
+                "direction": 4,
+                "distance": 6,
+                "mining_target": "iron-ore",
+                "inventories": {"1": {"coal": 20}},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 102,
+                "position": {"x": 6, "y": 0},
+                "distance": 8,
+                "inventories": {"1": {"coal": 20}, "2": {"iron-ore": 1}},
+            },
+        ]
+
+        decision = IronPlateSkill(target_count=40).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertEqual(decision.action["position"], {"x": 4, "y": 6})
+        self.assertNotEqual(decision.action["type"], "wait")
+
+    def test_iron_skill_does_not_expand_burner_cells_after_electric_drill_research(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 4, "y": 6}}
+        obs["inventory"] = {"coal": 20, "burner-mining-drill": 1, "stone-furnace": 1}
+        obs["research"]["technologies"]["electric-mining-drill"] = {"researched": True}
+        obs["resources"] = [
+            {"name": "iron-ore", "position": {"x": 4, "y": 0}, "distance": 6},
+            {"name": "iron-ore", "position": {"x": 4, "y": 6}, "distance": 0},
+            {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 8},
+        ]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 101,
+                "position": {"x": 4, "y": 0},
+                "direction": 4,
+                "distance": 6,
+                "mining_target": "iron-ore",
+                "inventories": {"1": {"coal": 20}},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 102,
+                "position": {"x": 6, "y": 0},
+                "distance": 8,
+                "inventories": {"1": {"coal": 20}, "2": {"iron-ore": 1}},
+            },
+        ]
+
+        decision = IronPlateSkill(target_count=40).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "wait")
+        self.assertIn("direct iron-plate", decision.reason)
+
     def test_copper_skill_does_not_accept_one_tile_gap_direct_furnace(self):
         obs = base_observation()
         obs["player"] = {"position": {"x": 11, "y": 0}}
@@ -3393,7 +3617,9 @@ class PlannerTests(unittest.TestCase):
             },
         ]
         decision = CopperPlateSkill(target_count=5).next_action(obs)
-        self.assertEqual(decision.action["type"], "wait")
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["count"], 8)
 
     def test_copper_skill_uses_belt_line_after_belt_automation_is_ready(self):
         obs = powered_automation_observation()
@@ -3758,7 +3984,7 @@ class PlannerTests(unittest.TestCase):
         decision = ExpandCopperSmeltingSkill(target_rate_per_minute=37).next_action(obs)
         self.assertEqual(decision.action["type"], "insert")
         self.assertEqual(decision.action["name"], "stone-furnace")
-        self.assertEqual(decision.action["count"], 7)
+        self.assertEqual(decision.action["count"], 16)
 
     def test_expand_smelting_uses_remaining_coal_before_mining_more(self):
         obs = base_observation()
@@ -3876,7 +4102,7 @@ class PlannerTests(unittest.TestCase):
         decision = ExpandCopperSmeltingSkill(target_rate_per_minute=18).next_action(obs)
         self.assertEqual(decision.action["type"], "mine")
         self.assertEqual(decision.action["name"], "coal")
-        self.assertEqual(decision.action["count"], 16)
+        self.assertEqual(decision.action["count"], 30)
 
     def test_expand_smelting_mines_walkable_coal_instead_of_tiny_surplus_trips(self):
         obs = base_observation()
@@ -7021,6 +7247,67 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.done)
         self.assertIsNone(decision.action)
 
+    def test_build_item_mall_removes_obsolete_empty_buffer_chest(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 2.0, "y": 5.0}}
+        obs["inventory"] = {"transport-belt": 20}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt", inventory={"transport-belt": 20}),
+                {"name": "wooden-chest", "unit_number": 980, "position": {"x": 5.0, "y": 2.0}, "inventories": {"1": {"transport-belt": 20}}},
+                {
+                    "name": "inserter",
+                    "unit_number": 981,
+                    "position": {"x": 4.0, "y": 2.0},
+                    "direction": 12,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {"name": "wooden-chest", "unit_number": 990, "position": {"x": 2.0, "y": 5.0}, "inventories": {}},
+            ]
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 990)
+        self.assertIn("obsolete empty", decision.reason)
+
+    def test_build_item_mall_places_transport_belt_assembler_with_direct_inserter_gap(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"assembling-machine-1": 1}
+        obs["entities"].append(mall_assembler(recipe="iron-gear-wheel", inventory={}))
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "assembling-machine-1")
+        self.assertEqual(decision.action["position"], {"x": 6.0, "y": 2.0})
+
+    def test_build_item_mall_recovers_cramped_transport_belt_assembler_next_to_gear_mall(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 5, "y": 2}}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="iron-gear-wheel", inventory={}),
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 902,
+                    "position": {"x": 5, "y": 2},
+                    "distance": 5,
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"iron-gear-wheel": 3}},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 902)
+        self.assertIn("direct inserter gap", decision.reason)
+
     def test_gear_belt_mall_sets_reusable_assembler_to_transport_belt(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"transport-belt": 3, "burner-inserter": 1, "inserter": 1}
@@ -7031,6 +7318,76 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "set_recipe")
         self.assertEqual(decision.action["recipe"], "transport-belt")
         self.assertEqual(decision.action["unit_number"], 911)
+
+    def test_gear_belt_mall_removes_obsolete_empty_buffer_chest(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 2.0, "y": 5.0}}
+        obs["inventory"] = {}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="transport-belt",
+                gear_inventory={"iron-gear-wheel": 4},
+                belt_inventory={"transport-belt": 20},
+            )
+        )
+        obs["entities"].extend(
+            [
+                {
+                    "name": "inserter",
+                    "unit_number": 912,
+                    "position": {"x": 4.0, "y": 2.0},
+                    "direction": 4,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {"name": "wooden-chest", "unit_number": 990, "position": {"x": 2.0, "y": 5.0}, "inventories": {}},
+            ]
+        )
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 990)
+        self.assertIn("obsolete empty", decision.reason)
+
+    def test_gear_belt_mall_preserves_nonempty_buffer_chest(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 2.0, "y": 5.0}}
+        obs["inventory"] = {}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="transport-belt",
+                gear_inventory={"iron-gear-wheel": 4},
+                belt_inventory={"transport-belt": 20},
+            )
+        )
+        obs["entities"].extend(
+            [
+                {
+                    "name": "inserter",
+                    "unit_number": 912,
+                    "position": {"x": 4.0, "y": 2.0},
+                    "direction": 4,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 990,
+                    "position": {"x": 2.0, "y": 5.0},
+                    "inventories": {"1": {"iron-gear-wheel": 2}},
+                },
+            ]
+        )
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertFalse(
+            decision.action
+            and decision.action.get("type") == "mine"
+            and decision.action.get("unit_number") == 990,
+            decision.reason,
+        )
 
     def test_gear_belt_mall_builds_short_belt_lane_without_taking_gears_when_direct_slot_is_blocked(self):
         obs = powered_automation_observation()
@@ -9555,9 +9912,9 @@ def _add_existing_relocation_power_corridor(obs):
 
 
 def complete_belt_smelting_entities(drill_x, drill_y, base_unit, resource="iron-ore", product="iron-plate", reserve_fuel=False):
-    drill_coal = 8 if reserve_fuel else 3
+    drill_coal = 20 if reserve_fuel else 3
     inserter_coal = 4 if reserve_fuel else 2
-    furnace_coal = 8 if reserve_fuel else 3
+    furnace_coal = 20 if reserve_fuel else 3
     return [
         {
             "name": "burner-mining-drill",
