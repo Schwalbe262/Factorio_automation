@@ -2807,6 +2807,45 @@ class PlannerTests(unittest.TestCase):
         self.assertNotIn("hand-smelting", decision.reason)
         self.assertNotIn("iron-ore", decision.reason)
 
+    def test_iron_skill_recovers_temporary_non_coal_drill_when_no_new_drill_is_available(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 12, "y": 0}}
+        obs["inventory"] = {
+            "coal": 8,
+            "stone": 5,
+            "stone-furnace": 1,
+            "iron-gear-wheel": 3,
+        }
+        obs["resources"] = [
+            {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 10},
+            {"name": "stone", "position": {"x": 12, "y": 0}, "distance": 0},
+            {"name": "copper-ore", "position": {"x": 18, "y": 0}, "distance": 6},
+            {"name": "iron-ore", "position": {"x": 40, "y": 0}, "distance": 28},
+        ]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 20,
+                "position": {"x": 2, "y": 0},
+                "mining_target": "coal",
+                "inventories": {"1": {"coal": 4}},
+            },
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 30,
+                "position": {"x": 12, "y": 0},
+                "mining_target": "stone",
+                "status_name": "no_fuel",
+                "inventories": {},
+            },
+        ]
+
+        decision = IronPlateSkill(target_count=5).next_action(obs, target_count=5, inventory_only=True)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 30)
+        self.assertIn("temporary stone burner mining drill", decision.reason)
+
     def test_iron_skill_completes_direct_furnace_instead_of_hand_mining_ore(self):
         obs = base_observation()
         obs["inventory"].pop("burner-mining-drill")

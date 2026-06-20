@@ -5388,6 +5388,8 @@ def _direct_plate_smelting_decision(
             observation,
             player,
             missing,
+            resource_name=resource_name,
+            product_name=product_name,
             support_skill=support_skill,
             allow_support_plate=allow_support_plate,
         )
@@ -5478,6 +5480,8 @@ def _ensure_direct_smelting_item(
     player: dict[str, float],
     item: str,
     *,
+    resource_name: str,
+    product_name: str,
     support_skill: IronPlateSkill,
     allow_support_plate: bool = True,
 ) -> PlannerDecision | None:
@@ -5497,6 +5501,24 @@ def _ensure_direct_smelting_item(
             return PlannerDecision(
                 {"type": "craft", "recipe": "burner-mining-drill", "count": 1},
                 "craft burner mining drill for direct smelting",
+            )
+        recyclable_drill = _recoverable_temporary_burner_drill_for_direct_smelting(observation, resource_name)
+        if recyclable_drill is not None:
+            position = _position(recyclable_drill)
+            if distance(player, position) > 8:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position, offset=2.0)},
+                    f"move near temporary burner mining drill before reallocating it to {product_name} production",
+                )
+            source_resource = _entity_resource_name(observation, recyclable_drill, radius=4.5) or "temporary resource"
+            return PlannerDecision(
+                {
+                    "type": "mine",
+                    "unit_number": recyclable_drill.get("unit_number"),
+                    "name": "burner-mining-drill",
+                    "position": position,
+                },
+                f"recover temporary {source_resource} burner mining drill for {product_name} production",
             )
         if inventory_count(observation, "stone") < 5:
             decision = StoneSupplySkill(target_count=8).next_action(observation)
@@ -5638,6 +5660,40 @@ def _recoverable_unpaired_direct_smelting_drill(
         return None
     candidates.sort(key=lambda item: item[0])
     return candidates[0][1]
+
+
+def _recoverable_temporary_burner_drill_for_direct_smelting(
+    observation: dict[str, Any],
+    resource_name: str,
+) -> dict[str, Any] | None:
+    # Coal supply is the bootstrap fuel spine; do not tear it down to repair plate production.
+    if resource_name != "iron-ore":
+        return None
+    player = player_position(observation)
+    resource_priority = {"stone": 0, "copper-ore": 1}
+    candidates: list[tuple[int, int, int, float, dict[str, Any]]] = []
+    for drill in entities_named(observation, "burner-mining-drill"):
+        drill_resource = _entity_resource_name(observation, drill, radius=4.5)
+        if drill_resource in {None, "", "coal", resource_name}:
+            continue
+        if drill_resource not in resource_priority:
+            continue
+        if not _within_starter_logistics_area(observation, _position(drill)):
+            continue
+        no_fuel_rank = 0 if _entity_status_is(drill, "no_fuel", 53) or _entity_burner_fuel_count(drill) <= 0 else 1
+        candidates.append(
+            (
+                resource_priority[drill_resource],
+                no_fuel_rank,
+                _entity_burner_fuel_count(drill),
+                float(drill.get("distance") or distance(player, _position(drill))),
+                drill,
+            )
+        )
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[:4])
+    return candidates[0][4]
 
 
 def _direct_smelting_layout_from_drill_position(
