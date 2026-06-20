@@ -8354,6 +8354,8 @@ def _site_input_hard_route_blockers(
 def _site_input_hard_route_blocker(entity: dict[str, Any], position: dict[str, float] | None = None) -> bool:
     name = str(entity.get("name") or "")
     large_names = ASSEMBLER_ENTITY_NAMES | {"lab", "stone-furnace", "burner-mining-drill", "boiler", "steam-engine"}
+    if name in POWER_CONNECTOR_NAMES:
+        return True
     if name in large_names:
         if isinstance(position, dict) and isinstance(entity.get("position"), dict):
             entity_position = _position(entity)
@@ -10416,6 +10418,41 @@ class CircuitAutomationSkill:
             return None
 
         if item == "assembling-machine-1":
+            buffered_source = _nearest_buffered_chest_item_source(
+                observation,
+                item,
+                reference_position or player,
+            )
+            if isinstance(buffered_source, dict):
+                source_count = entity_item_count(buffered_source, item)
+                if source_count > 0:
+                    source_position = _position(buffered_source)
+                    if distance(player, source_position) > 20:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": source_position},
+                            "move near buffered assembling-machine-1 output before circuit automation bootstrap",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "take",
+                            "item": item,
+                            "count": min(quantity - inventory_count(observation, item), source_count),
+                            "unit_number": buffered_source.get("unit_number"),
+                            "name": buffered_source.get("name") or "wooden-chest",
+                            "position": source_position,
+                        },
+                        "take buffered assembling-machine-1 output before circuit automation bootstrap",
+                    )
+            if bool(_technology_state(observation, "automation").get("researched")) and _recipe_assembler_exists_for_layout(
+                observation,
+                "assembling-machine-1",
+            ):
+                decision = BuildItemMallSkill("assembling-machine-1", quantity).next_action(
+                    observation,
+                    reference_position=reference_position,
+                )
+                if not decision.done:
+                    return decision
             for prerequisite, count in [
                 ("electronic-circuit", 3 * quantity),
                 ("iron-gear-wheel", 5 * quantity),
@@ -11346,6 +11383,59 @@ def _nearest_connected_power_anchor(observation: dict[str, Any], target: dict[st
     return _nearest_to(candidates, target) if candidates else None
 
 
+def _build_item_mall_power_bridge_gap_position(
+    observation: dict[str, Any],
+    target_position: dict[str, float],
+    target_pole: dict[str, Any] | None = None,
+) -> dict[str, float] | None:
+    anchor = _nearest_connected_power_anchor(observation, target_position)
+    if not isinstance(anchor, dict):
+        return None
+    source_network_id = anchor.get("electric_network_id")
+    target_network_id = target_pole.get("electric_network_id") if isinstance(target_pole, dict) else None
+    if source_network_id is None or target_network_id is None or source_network_id == target_network_id:
+        return None
+
+    reach = _power_wire_reach("small-electric-pole")
+    power_entities = [
+        entity
+        for entity in observation.get("entities") or []
+        if isinstance(entity, dict)
+        and str(entity.get("name") or "") in (POWER_CONNECTOR_NAMES | {"steam-engine", "steam-turbine", "solar-panel", "accumulator"})
+        and isinstance(entity.get("position"), dict)
+    ]
+    source_candidates = [
+        entity
+        for entity in power_entities
+        if entity is anchor
+        or entity.get("electric_network_connected") is True
+        or entity.get("electric_network_id") == source_network_id
+    ]
+    target_candidates = [
+        entity
+        for entity in power_entities
+        if entity.get("electric_network_id") == target_network_id
+        or (isinstance(target_pole, dict) and entity.get("unit_number") == target_pole.get("unit_number"))
+    ]
+    best: tuple[float, dict[str, float]] | None = None
+    for source in source_candidates:
+        source_position = _power_corridor_wire_anchor_position(source)
+        for target in target_candidates:
+            target_anchor = _power_corridor_wire_anchor_position(target)
+            span = distance(source_position, target_anchor)
+            if span <= reach or span > (reach * 2.0):
+                continue
+            bridge = _bridge_power_corridor_position(observation, source_position, target_anchor)
+            if _existing_power_connector_near_position(observation, bridge, radius=1.6) is not None:
+                continue
+            if _power_corridor_position_blocker(observation, bridge) is not None:
+                continue
+            score = distance(bridge, target_position) + (span / 100.0)
+            if best is None or score < best[0]:
+                best = (score, bridge)
+    return best[1] if best is not None else None
+
+
 def _missing_power_corridor_positions(
     observation: dict[str, Any],
     positions: list[dict[str, float]],
@@ -12258,6 +12348,9 @@ class BuildItemMallSkill:
             )
 
         if not assembler.get("electric_network_connected"):
+            corridor_repair = self._power_corridor_repair_decision(observation, player, cell)
+            if corridor_repair is not None:
+                return corridor_repair
             pole_position = cell["pole_position"]
             if distance(player, pole_position) > 20:
                 return PlannerDecision({"type": "move_to", "position": pole_position}, "move near mall pole to connect power")
@@ -12339,16 +12432,23 @@ class BuildItemMallSkill:
                 f"take {self.target_item} from build item mall assembler",
             )
 
-        reached_count = total_item_count(observation, self.target_item)
+        reached_count = _build_item_mall_available_product_count(
+            observation,
+            cell,
+            self.target_item,
+            reference_position=reference_position,
+        )
         if _build_item_mall_should_use_output_chest(self.target_item):
-            reached_count = inventory_count(observation, self.target_item) + output_count
             output_chest = cell.get("output_chest") if isinstance(cell, dict) else None
             if not isinstance(output_chest, dict) and reference_position is not None:
                 output_chest = _nearest_buffered_chest_item_source(observation, self.target_item, reference_position)
             if isinstance(output_chest, dict) and (
                 reference_position is None or distance(_position(output_chest), reference_position) <= 8.0
             ):
-                reached_count += entity_item_count(output_chest, self.target_item)
+                reached_count = inventory_count(observation, self.target_item) + output_count + entity_item_count(
+                    output_chest,
+                    self.target_item,
+                )
 
         if _build_item_mall_cell_ready(cell, self.target_item) and reached_count >= target_count:
             return PlannerDecision(
@@ -12387,6 +12487,54 @@ class BuildItemMallSkill:
                 seed_reason=f"{self.target_item}_mall_buffered_gear_plate_seed",
                 expected_followup=f"{self.target_item} assembler produces output or exposes an output-buffer task",
             )
+
+        if self.target_item == "assembling-machine-1":
+            plates_per_craft = max(1, int(recipe.ingredients.get("iron-plate", 1)))
+            gears_per_craft = max(1, int(recipe.ingredients.get("iron-gear-wheel", 1)))
+            circuits_per_craft = max(1, int(recipe.ingredients.get("electronic-circuit", 1)))
+            buffered_for_one = (
+                entity_item_count(assembler, "iron-gear-wheel") >= gears_per_craft
+                and entity_item_count(assembler, "electronic-circuit") >= circuits_per_craft
+            )
+            missing_plates = max(0, plates_per_craft - entity_item_count(assembler, "iron-plate"))
+            if buffered_for_one and missing_plates > 0:
+                if inventory_count(observation, "iron-plate") < missing_plates:
+                    decision = self._ensure_item_quantity(
+                        observation,
+                        player,
+                        "iron-plate",
+                        missing_plates,
+                        allow_existing_remote=allow_existing_remote,
+                        reference_position=assembler_position,
+                    )
+                    if decision is not None:
+                        return decision
+                logistics_blocker = _manual_site_input_logistics_blocker(
+                    observation,
+                    "iron-plate",
+                    _position(assembler),
+                    consumer_label=f"{self.target_item} mall assembler",
+                )
+                if logistics_blocker is not None:
+                    return logistics_blocker
+                if distance(player, assembler_position) > 20:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": assembler_position},
+                        "move near assembling-machine-1 mall assembler to insert first-craft iron plates",
+                    )
+                return _bootstrap_seed_decision(
+                    {
+                        "type": "insert",
+                        "item": "iron-plate",
+                        "count": min(missing_plates, inventory_count(observation, "iron-plate")),
+                        "unit_number": assembler.get("unit_number"),
+                        "name": "assembling-machine-1",
+                        "position": assembler_position,
+                    },
+                    "insert iron-plate into assembling-machine-1 mall assembler to complete the first assembler craft",
+                    seed_reason="assembling-machine-1_mall_first_craft_plate_seed",
+                    expected_followup="assembling-machine-1 mall assembler produces output before requesting more gear seed",
+                )
 
         for ingredient, amount in sorted(recipe.ingredients.items()):
             needed_in_assembler = max(1, int(amount * batch_count))
@@ -12480,6 +12628,42 @@ class BuildItemMallSkill:
                 return decision
 
         return PlannerDecision({"type": "wait", "ticks": 600}, f"wait for build item mall to produce {self.target_item}")
+
+    def _power_corridor_repair_decision(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        cell: dict[str, Any],
+    ) -> PlannerDecision | None:
+        target_pole = cell.get("pole") if isinstance(cell.get("pole"), dict) else None
+        target_position = _position(target_pole) if isinstance(target_pole, dict) else cell.get("pole_position")
+        if not isinstance(target_position, dict):
+            assembler = cell.get("assembler")
+            target_position = _position(assembler) if isinstance(assembler, dict) else None
+        if not isinstance(target_position, dict):
+            return None
+
+        bridge_position = _build_item_mall_power_bridge_gap_position(observation, target_position, target_pole)
+        if bridge_position is None:
+            return None
+        if inventory_count(observation, "small-electric-pole") <= 0:
+            decision = self.power_skill._ensure_item_quantity(observation, player, "small-electric-pole", 1)
+            if decision is not None:
+                return decision
+        if distance(player, bridge_position) > 20:
+            return PlannerDecision(
+                {"type": "move_to", "position": _stand_position(bridge_position)},
+                f"move near disconnected {self.target_item} mall power corridor gap",
+            )
+        return PlannerDecision(
+            {
+                "type": "build",
+                "name": "small-electric-pole",
+                "position": bridge_position,
+                "allow_nearby": False,
+            },
+            f"bridge disconnected {self.target_item} mall power corridor before retrying power connection",
+        )
 
     def _set_recipe_decision(
         self,
@@ -14336,6 +14520,31 @@ def _transport_belt_automation_factory_output_ready(observation: dict[str, Any])
 
 def _build_item_mall_should_use_output_chest(target_item: str) -> bool:
     return target_item in USER_OUTPUT_MALL_ITEMS
+
+
+def _build_item_mall_available_product_count(
+    observation: dict[str, Any],
+    cell: dict[str, Any],
+    target_item: str,
+    *,
+    reference_position: dict[str, float] | None = None,
+) -> int:
+    if target_item not in USER_OUTPUT_MALL_ITEMS:
+        return total_item_count(observation, target_item)
+
+    total = inventory_count(observation, target_item)
+    assembler = cell.get("assembler") if isinstance(cell, dict) else None
+    if isinstance(assembler, dict):
+        total += entity_item_count(assembler, target_item)
+
+    output_chest = cell.get("output_chest") if isinstance(cell, dict) else None
+    if not isinstance(output_chest, dict) and reference_position is not None:
+        output_chest = _nearest_buffered_chest_item_source(observation, target_item, reference_position)
+    if isinstance(output_chest, dict) and (
+        reference_position is None or distance(_position(output_chest), reference_position) <= 8.0
+    ):
+        total += entity_item_count(output_chest, target_item)
+    return total
 
 
 def _attach_build_item_mall_output_layout(

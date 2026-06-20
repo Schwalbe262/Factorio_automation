@@ -5177,6 +5177,50 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["recipe"], "assembling-machine-1")
         self.assertEqual(decision.action["unit_number"], 918)
 
+    def test_circuit_automation_feeds_assembler_mall_before_handcrafting_assemblers(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {
+            "electronic-circuit": 6,
+            "iron-gear-wheel": 10,
+            "iron-plate": 18,
+            "inserter": 1,
+        }
+        obs["craftable"] = {"assembling-machine-1": 2}
+        obs["entities"].append(mall_assembler(recipe="assembling-machine-1", inventory={}))
+
+        decision = CircuitAutomationSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["unit_number"], 901)
+        self.assertNotEqual(decision.action.get("type"), "craft")
+        self.assertNotIn("take iron-plate", decision.reason)
+
+    def test_circuit_automation_takes_buffered_assembler_before_feeding_mall(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {
+            "electronic-circuit": 6,
+            "iron-gear-wheel": 10,
+            "iron-plate": 18,
+            "inserter": 1,
+        }
+        obs["entities"].append(mall_assembler(recipe="assembling-machine-1", inventory={"iron-gear-wheel": 1}))
+        obs["entities"].append(
+            {
+                "name": "wooden-chest",
+                "unit_number": 917,
+                "position": {"x": 4.0, "y": 2.0},
+                "distance": 4,
+                "inventories": {"1": {"assembling-machine-1": 3}},
+            }
+        )
+
+        decision = CircuitAutomationSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "assembling-machine-1")
+        self.assertEqual(decision.action["unit_number"], 917)
+        self.assertIn("buffered assembling-machine-1", decision.reason)
+
     def test_circuit_automation_uses_gear_mall_before_handcrafting_assembler_prerequisite(self):
         obs = powered_automation_observation()
         obs["inventory"] = {
@@ -5514,6 +5558,48 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "set_recipe")
         self.assertEqual(decision.action["recipe"], "transport-belt")
         self.assertEqual(decision.action["unit_number"], 901)
+
+    def test_build_item_mall_bridges_disconnected_power_corridor_gap(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 35.5, "y": 0.5}}
+        obs["inventory"] = {"small-electric-pole": 1, "iron-plate": 10, "iron-gear-wheel": 10}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "small-electric-pole",
+                    "unit_number": 980,
+                    "position": {"x": 30.5, "y": 0.5},
+                    "electric_network_connected": True,
+                    "electric_network_id": 1,
+                    "inventories": {},
+                },
+                {
+                    "name": "small-electric-pole",
+                    "unit_number": 981,
+                    "position": {"x": 40.5, "y": 0.5},
+                    "electric_network_connected": False,
+                    "electric_network_id": 3,
+                    "inventories": {},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 982,
+                    "position": {"x": 42.5, "y": 0.5},
+                    "distance": 42,
+                    "recipe": "transport-belt",
+                    "electric_network_connected": False,
+                    "electric_network_id": 3,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "small-electric-pole")
+        self.assertNotEqual(decision.action.get("type"), "connect_power")
+        self.assertIn("bridge disconnected transport-belt mall power corridor", decision.reason)
 
     def test_build_item_mall_preserves_belt_assembler_when_bootstrapping_gears(self):
         obs = powered_automation_observation()
@@ -6142,6 +6228,62 @@ class PlannerTests(unittest.TestCase):
         )
         self.assertNotEqual(decision.action and decision.action.get("unit_number"), 964)
 
+    def test_site_input_logistics_detours_instead_of_mining_power_pole(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 3.5, "y": 0.5}}
+        obs["inventory"] = {"transport-belt": 10, "inserter": 2}
+        obs["research"]["technologies"]["logistics"] = {"researched": False}
+        blocker = {
+            "name": "small-electric-pole",
+            "unit_number": 969,
+            "position": {"x": 4.5, "y": -1.5},
+            "distance": 5,
+            "electric_network_connected": True,
+            "inventories": {},
+        }
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 970,
+                    "position": {"x": 0.0, "y": 0.0},
+                    "distance": 4,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"iron-gear-wheel": 4}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 971,
+                    "position": {"x": 6.0, "y": -4.0},
+                    "distance": 8,
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "inventories": {"2": {}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 972,
+                    "position": {"x": 0.0, "y": 8.0},
+                    "distance": 8,
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"transport-belt": 8}},
+                },
+                blocker,
+            ]
+        )
+
+        layout = planner_module._find_site_input_logistic_line_layout(obs, item="iron-gear-wheel")
+        decision = SiteInputLogisticLineSkill(20, item="iron-gear-wheel").next_action(obs)
+
+        self.assertIsNotNone(layout)
+        self.assertFalse(
+            any(planner_module.distance(segment["position"], blocker["position"]) < 0.45 for segment in layout["segments"])
+        )
+        self.assertNotEqual(decision.action and decision.action.get("type"), "mine")
+        self.assertNotEqual(decision.action and decision.action.get("unit_number"), 969)
+
     def test_site_input_logistics_detour_avoids_opposite_direction_existing_belt(self):
         obs = powered_automation_observation()
         obs["player"] = {"position": {"x": 3.5, "y": 0.5}}
@@ -6356,6 +6498,44 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["item"], "iron-plate")
         self.assertEqual(decision.action["unit_number"], 910)
         self.assertIn("insert iron-plate into iron-gear-wheel mall assembler", decision.reason)
+
+    def test_build_item_mall_completes_first_assembler_before_more_gear_seed(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 2, "y": 2}, "character_valid": False}
+        obs["inventory"] = {"iron-plate": 18}
+        obs["entities"].append(
+            mall_assembler(
+                recipe="assembling-machine-1",
+                inventory={"electronic-circuit": 6, "iron-gear-wheel": 9},
+            )
+        )
+
+        decision = BuildItemMallSkill("assembling-machine-1", 2).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertEqual(decision.action["count"], 9)
+        self.assertEqual(decision.action["unit_number"], 901)
+        self.assertTrue(decision.action["bootstrap_seed"])
+        self.assertEqual(decision.action["seed_reason"], "assembling-machine-1_mall_first_craft_plate_seed")
+        self.assertNotIn("gear seed", decision.reason)
+
+    def test_build_item_mall_does_not_count_placed_assemblers_as_mall_output(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {
+            "electronic-circuit": 3,
+            "iron-gear-wheel": 5,
+            "iron-plate": 9,
+        }
+        obs["entities"].append(mall_assembler(recipe="assembling-machine-1", inventory={}))
+        obs["entities"].extend(circuit_cell_entities())
+
+        decision = BuildItemMallSkill("assembling-machine-1", 2).next_action(obs)
+
+        self.assertFalse(decision.done)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["unit_number"], 901)
+        self.assertNotIn("target reached", decision.reason)
 
     def test_build_item_mall_repurposes_existing_assembler_for_gears_before_handcrafting(self):
         obs = powered_automation_observation()
