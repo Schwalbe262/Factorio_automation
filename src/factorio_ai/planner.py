@@ -5311,6 +5311,48 @@ def _direct_plate_smelting_decision(
     if layout is None:
         return PlannerDecision(None, f"cannot find open {resource_name} site for direct burner-drill smelting cell")
 
+    misplaced_drill = layout.get("misplaced_drill")
+    if (
+        not isinstance(misplaced_drill, dict)
+        and layout.get("drill") is None
+        and inventory_count(observation, "burner-mining-drill") <= 0
+    ):
+        misplaced_drill = _recoverable_unpaired_direct_smelting_drill(observation, resource_name)
+    if isinstance(misplaced_drill, dict) and layout.get("drill") is None:
+        position = _position(misplaced_drill)
+        if distance(player, position) > 8:
+            return PlannerDecision(
+                {"type": "move_to", "position": _stand_position(position, offset=2.0)},
+                f"move near misplaced direct {product_name} mining drill before rebuilding exact smelting cell",
+            )
+        return PlannerDecision(
+            {
+                "type": "mine",
+                "unit_number": misplaced_drill.get("unit_number"),
+                "name": "burner-mining-drill",
+                "position": position,
+            },
+            f"recover misplaced direct {product_name} mining drill before rebuilding exact smelting cell",
+        )
+
+    misplaced_furnace = layout.get("misplaced_furnace")
+    if isinstance(misplaced_furnace, dict) and layout.get("furnace") is None:
+        position = _position(misplaced_furnace)
+        if distance(player, position) > 8:
+            return PlannerDecision(
+                {"type": "move_to", "position": _stand_position(position, offset=2.0)},
+                f"move near misplaced direct {product_name} furnace before rebuilding exact smelting cell",
+            )
+        return PlannerDecision(
+            {
+                "type": "mine",
+                "unit_number": misplaced_furnace.get("unit_number"),
+                "name": misplaced_furnace.get("name") or "stone-furnace",
+                "position": position,
+            },
+            f"recover misplaced direct {product_name} furnace before rebuilding exact smelting cell",
+        )
+
     furnace = layout.get("furnace")
     if inventory_only and furnace and entity_item_count(furnace, product_name) > 0:
         furnace_pos = _position(furnace)
@@ -5383,7 +5425,7 @@ def _direct_plate_smelting_decision(
                 "name": "burner-mining-drill",
                 "position": position,
                 "direction": layout["drill_direction"],
-                "allow_nearby": True,
+                "allow_nearby": False,
                 "required_resource": resource_name,
             },
             f"place burner mining drill for direct {product_name} smelting cell",
@@ -5426,7 +5468,7 @@ def _direct_plate_smelting_decision(
             )
 
     return PlannerDecision(
-        {"type": "wait", "ticks": 300},
+        {"type": "wait", "ticks": 120},
         f"wait for direct {product_name} burner-drill smelting cell",
     )
 
@@ -5506,10 +5548,9 @@ def _find_direct_smelting_cell(observation: dict[str, Any], resource_name: str) 
             continue
         if not _within_starter_logistics_area(observation, drill_position):
             continue
-        orientation = _direction_to_orientation(_direction_or_default(drill.get("direction"), EAST))
-        layout = _direct_smelting_layout_from_drill_position(drill_position, resource_name=resource_name, orientation=orientation)
-        layout["drill"] = drill
-        layout["furnace"] = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=0.75)
+        layout = _direct_smelting_layout_from_existing_drill(observation, drill, resource_name)
+        if layout.get("furnace") is None:
+            continue
         candidates.append(
             (
                 layout["furnace"] is not None,
@@ -5526,13 +5567,77 @@ def _find_direct_smelting_cell(observation: dict[str, Any], resource_name: str) 
 def _select_direct_smelting_layout(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
     entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
     for resource in _ranked_patch_drill_resources(observation, resource_name):
+        drill_position = _direct_smelting_drill_center(_position(resource))
         for orientation in ("east", "west", "south", "north"):
-            layout = _direct_smelting_layout_from_drill_position(_position(resource), resource_name=resource_name, orientation=orientation)
-            layout["drill"] = _entity_near(observation, "burner-mining-drill", layout["drill_position"], radius=2.0)
+            layout = _direct_smelting_layout_from_drill_position(drill_position, resource_name=resource_name, orientation=orientation)
+            drill = _entity_near(observation, "burner-mining-drill", layout["drill_position"], radius=2.0)
+            if isinstance(drill, dict) and _entity_resource_name(observation, drill, radius=4.5) == resource_name:
+                if distance(_position(drill), layout["drill_position"]) <= 0.75:
+                    layout = _direct_smelting_layout_from_existing_drill(observation, drill, resource_name)
+                else:
+                    continue
+            else:
+                layout["drill"] = None
             layout["furnace"] = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=0.75)
+            if isinstance(layout.get("drill"), dict) and isinstance(layout.get("furnace"), dict):
+                if not _burner_drill_output_touches_machine(layout["drill"], layout["furnace"]):
+                    layout["misplaced_furnace"] = layout["furnace"]
+                    layout["furnace"] = None
+            if layout.get("furnace") is None:
+                near_furnace = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=2.5)
+                if isinstance(near_furnace, dict):
+                    layout["misplaced_furnace"] = near_furnace
             if not _direct_smelting_layout_blocked_by_factory_entities(layout, entities):
                 return layout
     return None
+
+
+def _direct_smelting_drill_center(position: dict[str, float]) -> dict[str, float]:
+    return {
+        "x": round(floor(float(position["x"]) + 0.5), 1),
+        "y": round(floor(float(position["y"]) + 0.5), 1),
+    }
+
+
+def _direct_smelting_layout_from_existing_drill(
+    observation: dict[str, Any],
+    drill: dict[str, Any],
+    resource_name: str,
+) -> dict[str, Any]:
+    drill_position = _position(drill)
+    orientation = _direction_to_orientation(_direction_or_default(drill.get("direction"), EAST))
+    layout = _direct_smelting_layout_from_drill_position(
+        drill_position,
+        resource_name=resource_name,
+        orientation=orientation,
+    )
+    layout["drill"] = drill
+    furnace = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=0.75)
+    if isinstance(furnace, dict) and not _burner_drill_output_touches_machine(drill, furnace):
+        furnace = None
+    layout["furnace"] = furnace
+    return layout
+
+
+def _recoverable_unpaired_direct_smelting_drill(
+    observation: dict[str, Any],
+    resource_name: str,
+) -> dict[str, Any] | None:
+    candidates: list[tuple[float, dict[str, Any]]] = []
+    player = player_position(observation)
+    for drill in entities_named(observation, "burner-mining-drill"):
+        if _entity_resource_name(observation, drill, radius=4.5) != resource_name:
+            continue
+        if not _within_starter_logistics_area(observation, _position(drill)):
+            continue
+        layout = _direct_smelting_layout_from_existing_drill(observation, drill, resource_name)
+        if isinstance(layout.get("furnace"), dict):
+            continue
+        candidates.append((float(drill.get("distance") or distance(player, _position(drill))), drill))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
 
 
 def _direct_smelting_layout_from_drill_position(
@@ -5549,14 +5654,22 @@ def _direct_smelting_layout_from_drill_position(
         "drill_direction": drill_direction,
         "drill": None,
         "furnace": None,
+        "misplaced_drill": None,
+        "misplaced_furnace": None,
     }
 
 
 def _direct_smelting_layout_blocked_by_factory_entities(layout: dict[str, Any], entities: list[Any]) -> bool:
-    layout_entities = {id(entity) for entity in (layout.get("drill"), layout.get("furnace")) if isinstance(entity, dict)}
+    planned_entities = (
+        layout.get("drill"),
+        layout.get("furnace"),
+        layout.get("misplaced_drill"),
+        layout.get("misplaced_furnace"),
+    )
+    layout_entities = {id(entity) for entity in planned_entities if isinstance(entity, dict)}
     layout_units = {
         entity.get("unit_number")
-        for entity in (layout.get("drill"), layout.get("furnace"))
+        for entity in planned_entities
         if isinstance(entity, dict) and entity.get("unit_number") is not None
     }
     footprint = [layout["drill_position"], layout["furnace_position"]]
@@ -5566,11 +5679,13 @@ def _direct_smelting_layout_blocked_by_factory_entities(layout: dict[str, Any], 
         if id(entity) in layout_entities or (entity.get("unit_number") is not None and entity.get("unit_number") in layout_units):
             continue
         name = str(entity.get("name") or "")
-        if name in {"character", "stone-furnace", "burner-mining-drill"}:
-            entity_pos = _position(entity)
-            threshold = 3.0 if name in {"stone-furnace", "burner-mining-drill"} else 2.0
-            if any(distance(entity_pos, pos) < threshold for pos in footprint):
-                return True
+        entity_type = str(entity.get("type") or "")
+        if not name or entity_type == "resource":
+            continue
+        entity_pos = _position(entity)
+        threshold = 3.0 if name in {"stone-furnace", "burner-mining-drill"} else 2.0
+        if any(distance(entity_pos, pos) < threshold for pos in footprint):
+            return True
     return False
 
 
@@ -9322,6 +9437,9 @@ def _iron_plate_source_furnace_burner_drill(
 
 
 def _burner_drill_output_touches_machine(drill: dict[str, Any], machine: dict[str, Any]) -> bool:
+    drop_position = drill.get("drop_position")
+    if isinstance(drop_position, dict):
+        return _point_inside_machine(_tile_center_position(drop_position), machine)
     drill_position = _position(drill)
     vector = _direction_vector(_direction_or_default(drill.get("direction"), EAST))
     for amount in (1.0, 2.0, 3.0):

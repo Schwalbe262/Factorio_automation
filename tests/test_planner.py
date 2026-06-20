@@ -2766,7 +2766,7 @@ class PlannerTests(unittest.TestCase):
         self.assertFalse(decision.done)
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "burner-mining-drill")
-        self.assertTrue(decision.action["allow_nearby"])
+        self.assertFalse(decision.action["allow_nearby"])
         self.assertEqual(decision.action["required_resource"], "iron-ore")
 
     def test_moves_next_to_ore_before_building_distant_drill(self):
@@ -2827,9 +2827,10 @@ class PlannerTests(unittest.TestCase):
             },
         ]
         decision = IronPlateSkill(target_count=10).next_action(obs)
-        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["type"], "mine")
         self.assertEqual(decision.action["name"], "stone-furnace")
-        self.assertEqual(decision.action["position"], {"x": 6.0, "y": 0.0})
+        self.assertEqual(decision.action["unit_number"], 102)
+        self.assertIn("misplaced direct iron-plate furnace", decision.reason)
 
     def test_iron_skill_waits_for_direct_furnace_instead_of_hand_mining_ore(self):
         obs = base_observation()
@@ -2853,6 +2854,7 @@ class PlannerTests(unittest.TestCase):
         ]
         decision = IronPlateSkill(target_count=10).next_action(obs)
         self.assertEqual(decision.action["type"], "wait")
+        self.assertLess(decision.action["ticks"], 180)
         self.assertNotIn("iron ore", decision.reason.lower())
 
     def test_iron_skill_uses_wood_fuel_before_mining_coal(self):
@@ -3218,6 +3220,39 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["position"], {"x": 10.0, "y": 0.0})
         self.assertFalse(decision.action["allow_nearby"])
 
+    def test_direct_smelting_drill_from_resource_tile_uses_entity_center(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 47, "y": 67}}
+        obs["inventory"] = {"coal": 8, "burner-mining-drill": 1, "stone-furnace": 1}
+        obs["resources"] = [{"name": "iron-ore", "position": {"x": 46.5, "y": 66.5}, "distance": 2}]
+
+        decision = IronPlateSkill(target_count=5).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertEqual(decision.action["position"], {"x": 47, "y": 67})
+        self.assertFalse(decision.action["allow_nearby"])
+
+    def test_direct_smelting_skips_orientation_blocked_by_existing_belts(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 47, "y": 67}}
+        obs["inventory"] = {"coal": 8, "burner-mining-drill": 1, "stone-furnace": 1}
+        obs["resources"] = [
+            {"name": "iron-ore", "position": {"x": 46.5, "y": 66.5}, "distance": 2},
+            {"name": "iron-ore", "position": {"x": 39.5, "y": 62.5}, "distance": 9},
+        ]
+        obs["entities"] = [
+            {"name": "transport-belt", "type": "transport-belt", "unit_number": 850, "position": {"x": 49.5, "y": 66.5}},
+            {"name": "inserter", "type": "inserter", "unit_number": 893, "position": {"x": 48.5, "y": 63.5}},
+        ]
+
+        decision = IronPlateSkill(target_count=5).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertEqual(decision.action["position"], {"x": 47, "y": 67})
+        self.assertEqual(decision.action["direction"], 12)
+
     def test_direct_smelting_layout_keeps_furnace_touching_drill_output(self):
         cases = {
             "east": {"x": 10.0, "y": 0.0},
@@ -3236,6 +3271,7 @@ class PlannerTests(unittest.TestCase):
 
     def test_copper_skill_does_not_accept_one_tile_gap_direct_furnace(self):
         obs = base_observation()
+        obs["player"] = {"position": {"x": 11, "y": 0}}
         obs["inventory"] = {"coal": 8, "stone-furnace": 1}
         obs["entities"] = [
             {
@@ -3256,10 +3292,45 @@ class PlannerTests(unittest.TestCase):
             },
         ]
         decision = CopperPlateSkill(target_count=5).next_action(obs)
-        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["type"], "mine")
         self.assertEqual(decision.action["name"], "stone-furnace")
-        self.assertEqual(decision.action["position"], {"x": 10.0, "y": 0.0})
-        self.assertFalse(decision.action["allow_nearby"])
+        self.assertEqual(decision.action["unit_number"], 702)
+        self.assertIn("misplaced direct copper-plate furnace", decision.reason)
+
+    def test_iron_skill_recovers_shifted_direct_drill_before_rebuilding_cell(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 47, "y": 67}}
+        obs["inventory"] = {"coal": 8, "stone-furnace": 1}
+        obs["resources"] = [{"name": "iron-ore", "position": {"x": 39.5, "y": 62.5}, "distance": 9}]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 1019,
+                "position": {"x": 47, "y": 67},
+                "direction": 4,
+                "drop_position": {"x": 48.296875, "y": 66.5},
+                "distance": 0,
+                "mining_target": "iron-ore",
+                "inventories": {"1": {"coal": 3}},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 15,
+                "position": {"x": 47, "y": 63},
+                "distance": 4,
+                "recipe": "iron-plate",
+                "status_name": "no_ingredients",
+                "inventories": {"1": {"coal": 3}},
+            },
+        ]
+
+        decision = IronPlateSkill(target_count=5).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertEqual(decision.action["unit_number"], 1019)
+        self.assertIn("misplaced direct iron-plate mining drill", decision.reason)
+        self.assertNotIn("wait for direct", decision.reason)
 
     def test_copper_skill_waits_for_direct_cell_instead_of_hand_mining_ore(self):
         obs = base_observation()

@@ -1,11 +1,9 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor/autopilot running in heuristic fallback while scheduler LLM readiness is unavailable.
-- Part145: fallback autopilot now starts without `--require-llm`, forces heuristic strategy, and is replaced by strict LLM autopilot when scheduler readiness returns.
-- Strategy hot path now skips remote/local LLM in forced fallback and avoids repeated heavy layout/gear-route scoring when mall stock/output is healthy.
-- Monitor/planner perf fixes: cache entity/resource lookups for logistics links and cache starter anchors during route scoring.
-- Circuit automation bugfixes: `reference_position` is passed through prerequisite sourcing and the bad `self.target_item` label was removed.
-- Wait-yield cycles with a known readiness root now commit the next cycle to `repair_skill` instead of blindly reusing the waiting skill.
-- Live: server UP; fallback autopilot PID 20712 running; latest cycle reached `automate_electronic_circuit_line` step 2, prior cycle completed without crash.
-- Validation: `tests.test_planner`, `tests.test_monitor`, `tests.test_strategy`, `tests.test_controller` all pass (611 tests).
-- Runtime `note.md`/`insight.md` have large generated churn; stage only intentional source/tests/docs/handoff unless explicitly requested.
-- Token checkpoint: goal tracker 10,294,587; part delta +600,475 since 9,694,112; weekly quota unavailable.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod server/web/autopilot are running, heuristic fallback active when scheduler LLM is unavailable.
+- Part146: fixed direct burner-drill smelting recovery: short waits stay inside skills, direct drills use exact placement, bad drill/furnace pairs are recovered, and belt/inserter blockers are avoided.
+- Live result: `automate_electronic_circuit_line` broke the build/mine loop, built a working west-facing iron direct cell, recovered iron plates, and electronic circuits rose to 26.
+- Validation passed: `tests.test_planner` (352), `tests.test_controller` (80), `tests.test_strategy tests.test_monitor` (182).
+- Full `unittest discover -s tests` was attempted but timed out at 304s; targeted suites above passed.
+- Runtime `note.md`/`insight.md` have large generated churn; stage only intentional source/tests/handoff unless explicitly requested.
+- Next: continue watching circuit automation, then push toward electric-mining-drill research/mall and legacy burner mining retirement.
+- Token checkpoint: goal tracker 10,859,174; part delta +564,587 since 10,294,587; weekly quota unavailable.
