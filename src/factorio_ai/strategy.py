@@ -9,6 +9,7 @@ from .knowledge import facility_legend, objective_roots, recipe_details
 from .monitor import recent_damage_events, summarize_factory
 from .models import distance, entities_named, entity_item_count, inventory_count, player_position, total_item_count
 from .planner import (
+    _boiler_coal_feed_missing_belt_count,
     _direct_gear_transfer_blocked,
     _find_gear_belt_mall_relocation_layout,
     _find_gear_belt_mall_logistics_layout,
@@ -1080,6 +1081,7 @@ def reconcile_strategy_decision(
     selected = str(decision.get("selected_skill") or decision.get("selected_goal") or "")
     readiness = build_factory_readiness(observation)
     decision = _with_factory_readiness(decision, readiness)
+    boiler_feed_belt_shortfall = _boiler_feed_belt_shortfall_issue(observation)
     rocket_objective = _is_rocket_objective(objective)
     remote_guardrail = decision.get("guardrail_adjusted") if isinstance(decision.get("guardrail_adjusted"), dict) else {}
     if remote_guardrail.get("from") == "plan_factory_site" and selected == remote_guardrail.get("to"):
@@ -1104,7 +1106,7 @@ def reconcile_strategy_decision(
         decision["expected_effect"] = ""
         decision.pop("guardrail_adjusted", None)
         selected = "bootstrap_build_item_mall"
-    readiness_bootstrap_decision = _readiness_bootstrap_missing_mall_decision(readiness)
+    readiness_bootstrap_decision = _readiness_bootstrap_missing_mall_decision(readiness, observation)
     if readiness_bootstrap_decision is not None and selected != "bootstrap_build_item_mall":
         adjusted = dict(decision)
         adjusted["selected_skill"] = "bootstrap_build_item_mall"
@@ -1121,6 +1123,14 @@ def reconcile_strategy_decision(
             f"factory_readiness_failure_root={readiness.failure_root}",
             f"factory_readiness_repair_skill={readiness.repair_skill}",
         ]
+        for key in ("target_item", "target_count"):
+            if key in readiness_bootstrap_decision:
+                adjusted[key] = readiness_bootstrap_decision[key]
+        adjusted["evidence"].extend(
+            item
+            for item in _string_list(readiness_bootstrap_decision.get("evidence"))
+            if item not in adjusted["evidence"]
+        )
         adjusted["expected_effect"] = "Recreate the starter gear/belt mall and then resume logistics wiring."
         adjusted["guardrail_adjusted"] = {
             "from": selected,
@@ -1128,6 +1138,22 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
+    if boiler_feed_belt_shortfall is not None and selected in {
+        "plan_factory_site",
+        "connect_coal_fuel_feed",
+        "setup_power",
+        "setup_coal_supply",
+        "expand_copper_smelting",
+        "build_gear_belt_mall_logistics",
+        "build_iron_plate_logistic_line_to_gear_mall",
+        "bootstrap_build_item_mall",
+        "research_logistics",
+    }:
+        return _boiler_feed_belt_shortfall_guardrail_adjustment(
+            decision,
+            selected,
+            boiler_feed_belt_shortfall,
+        )
     gear_mall_output_logistics_issue = _gear_mall_output_logistics_issue(observation)
     if gear_mall_output_logistics_issue is not None and selected in GEAR_MALL_OUTPUT_LOGISTICS_PREEMPT_SKILLS:
         return _gear_mall_output_logistics_guardrail_adjustment(decision, selected, gear_mall_output_logistics_issue)
@@ -2105,9 +2131,14 @@ def reconcile_strategy_decision(
     burner_drill_replacement_issue = _burner_drill_replacement_issue(observation)
     if burner_drill_replacement_issue is not None and selected in {
         "plan_factory_site",
+        "setup_coal_supply",
+        "setup_stone_supply",
+        "produce_iron_plate",
+        "produce_copper_plate",
         "research_logistics",
         "produce_electronic_circuit",
         "automate_electronic_circuit_line",
+        "connect_coal_fuel_feed",
         "bootstrap_build_item_mall",
         "build_belt_smelting_line",
         "expand_iron_smelting",
@@ -2136,6 +2167,7 @@ def reconcile_strategy_decision(
                 f"electric_mining_drill_count={burner_drill_replacement_issue.get('electric_drill_count')}",
                 f"electric_mining_drill_researched={str(bool(burner_drill_replacement_issue.get('electric_mining_drill_researched'))).lower()}",
                 f"electric_mining_drill_automated={str(bool(burner_drill_replacement_issue.get('electric_mining_drill_automated'))).lower()}",
+                "burner_drills_bootstrap_only=true",
             ]
             adjusted["expected_effect"] = (
                 "Move the factory from coal-fueled burner mining toward powered electric mining before scaling more raw throughput."
@@ -2391,7 +2423,7 @@ def _heuristic_strategy_impl(
             expected_effect="Pause expansion and build armed gun turrets plus firearm-magazine supply around threatened factory sites.",
         ).to_dict()
 
-    readiness_bootstrap_decision = _readiness_bootstrap_missing_mall_decision(readiness)
+    readiness_bootstrap_decision = _readiness_bootstrap_missing_mall_decision(readiness, observation)
     if readiness_bootstrap_decision is not None:
         return readiness_bootstrap_decision
 
@@ -2433,6 +2465,10 @@ def _heuristic_strategy_impl(
             blockers=["boiler coal fuel feed"],
             expected_effect="Build a coal belt and burner inserter feed for the boiler before resuming powered work.",
         ).to_dict()
+
+    boiler_feed_belt_shortfall = _boiler_feed_belt_shortfall_issue(observation)
+    if boiler_feed_belt_shortfall is not None:
+        return _boiler_feed_belt_shortfall_strategy_decision(boiler_feed_belt_shortfall)
 
     if _coal_fuel_feed_needed(observation, objective, production_targets, monitor=monitor):
         if not _transport_belt_automation_ready(observation):
@@ -3066,12 +3102,16 @@ def heuristic_strategy(
     return _with_factory_readiness(result, readiness)
 
 
-def _readiness_bootstrap_missing_mall_decision(readiness: FactoryReadiness) -> dict[str, Any] | None:
+def _readiness_bootstrap_missing_mall_decision(
+    readiness: FactoryReadiness,
+    observation: dict[str, Any],
+) -> dict[str, Any] | None:
     if readiness.repair_skill != "bootstrap_build_item_mall":
         return None
     if readiness.failure_root not in {"gear_mall_missing", "belt_mall_missing", "belt_line_unbuildable"}:
         return None
     details = readiness.details if isinstance(readiness.details, dict) else {}
+    bootstrap_target = _construction_belt_bootstrap_target(observation)
     output_bootstrap_ready = (
         readiness.failure_root == "belt_line_unbuildable"
         and readiness.virtual_agent
@@ -3081,7 +3121,7 @@ def _readiness_bootstrap_missing_mall_decision(readiness: FactoryReadiness) -> d
         and not bool(details.get("belt_mall_output_source_ready"))
     )
     if output_bootstrap_ready:
-        return StrategicDecision(
+        decision = StrategicDecision(
             selected_skill="bootstrap_build_item_mall",
             priority=94,
             reason=(
@@ -3094,11 +3134,15 @@ def _readiness_bootstrap_missing_mall_decision(readiness: FactoryReadiness) -> d
                 f"bootstrap_seed_allowed={str(readiness.bootstrap_seed_allowed).lower()}",
                 "gear_belt_logistics_connection_ready=true",
                 "belt_mall_output_source_ready=false",
+                f"transport_belt_bootstrap_target={bootstrap_target}",
             ],
             blockers=list(readiness.blocked_by) or ["transport-belt mall output"],
             expected_effect="Seed or finish the transport-belt mall so construction belts resume without boiler hand-fueling loops.",
             source="heuristic",
         ).to_dict()
+        decision["target_item"] = "transport-belt"
+        decision["target_count"] = bootstrap_target
+        return decision
     if not (
         readiness.virtual_agent
         and int(details.get("transport_belt_stock") or 0) <= 0
@@ -3106,7 +3150,7 @@ def _readiness_bootstrap_missing_mall_decision(readiness: FactoryReadiness) -> d
         and bool(details.get("boiler_needs_fuel"))
     ):
         return None
-    return StrategicDecision(
+    decision = StrategicDecision(
         selected_skill="bootstrap_build_item_mall",
         priority=94,
         reason=(
@@ -3117,11 +3161,97 @@ def _readiness_bootstrap_missing_mall_decision(readiness: FactoryReadiness) -> d
             f"factory_readiness_failure_root={readiness.failure_root}",
             f"factory_readiness_repair_skill={readiness.repair_skill}",
             f"bootstrap_seed_allowed={str(readiness.bootstrap_seed_allowed).lower()}",
+            f"transport_belt_bootstrap_target={bootstrap_target}",
         ],
         blockers=list(readiness.blocked_by) or ["starter item mall"],
         expected_effect="Recreate or seed the starter gear/belt mall so construction belts can resume.",
         source="heuristic",
     ).to_dict()
+    decision["target_item"] = "transport-belt"
+    decision["target_count"] = bootstrap_target
+    return decision
+
+
+def _construction_belt_bootstrap_target(observation: dict[str, Any]) -> int:
+    missing_boiler_route_belts = _boiler_coal_feed_missing_belt_count(observation)
+    if missing_boiler_route_belts <= 0:
+        return 20
+    return max(20, missing_boiler_route_belts + 4)
+
+
+def _boiler_feed_belt_shortfall_issue(observation: dict[str, Any]) -> dict[str, int] | None:
+    missing = _boiler_coal_feed_missing_belt_count(observation)
+    if missing <= 0:
+        return None
+    available = total_item_count(observation, "transport-belt")
+    if available >= missing:
+        return None
+    if not _transport_belt_automation_ready(observation):
+        return None
+    return {
+        "missing": missing,
+        "available": available,
+        "target_count": max(20, missing + 4),
+    }
+
+
+def _boiler_feed_belt_shortfall_strategy_decision(issue: dict[str, int]) -> dict[str, Any]:
+    decision = StrategicDecision(
+        selected_skill="bootstrap_build_item_mall",
+        priority=93,
+        reason=(
+            f"The boiler coal feed route still needs {issue['missing']} transport belts, but only "
+            f"{issue['available']} are available; build enough belt-mall output before extending that route."
+        ),
+        evidence=[
+            f"boiler_feed_missing_transport_belts={issue['missing']}",
+            f"transport_belts_available={issue['available']}",
+            f"transport_belt_bootstrap_target={issue['target_count']}",
+            "prevent_partial_boiler_feed_route=true",
+        ],
+        blockers=["boiler coal feed construction belts"],
+        expected_effect="Buffer enough transport belts from the mall so connect_coal_fuel_feed can complete in one repair pass.",
+        source="heuristic",
+    ).to_dict()
+    decision["target_item"] = "transport-belt"
+    decision["target_count"] = issue["target_count"]
+    return decision
+
+
+def _boiler_feed_belt_shortfall_guardrail_adjustment(
+    decision: dict[str, Any],
+    selected: str,
+    issue: dict[str, int],
+) -> dict[str, Any]:
+    adjusted = dict(decision)
+    adjusted["selected_skill"] = "bootstrap_build_item_mall"
+    adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 93)
+    adjusted["target_item"] = "transport-belt"
+    adjusted["target_count"] = max(_positive_int_or_none(decision.get("target_count")) or 0, issue["target_count"])
+    original_reason = str(decision.get("reason") or "").strip()
+    guardrail_reason = (
+        f"LLM selected {selected}, but the boiler coal feed route still needs {issue['missing']} transport belts "
+        f"and only {issue['available']} are available; bootstrap belt-mall output before rerunning the route executor."
+    )
+    adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+    adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["boiler coal feed construction belts"]))
+    adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+        f"guardrail_adjusted_from={selected}",
+        f"boiler_feed_missing_transport_belts={issue['missing']}",
+        f"transport_belts_available={issue['available']}",
+        f"transport_belt_bootstrap_target={adjusted['target_count']}",
+        "prevent_partial_boiler_feed_route=true",
+    ]
+    adjusted["expected_effect"] = (
+        "Buffer enough transport belts from the mall so connect_coal_fuel_feed can complete without repeatedly "
+        "consuming partial belt batches."
+    )
+    adjusted["guardrail_adjusted"] = {
+        "from": selected,
+        "to": "bootstrap_build_item_mall",
+        "reason": guardrail_reason,
+    }
+    return adjusted
 
 
 def _with_factory_readiness(decision: dict[str, Any], readiness: FactoryReadiness) -> dict[str, Any]:
@@ -4473,6 +4603,20 @@ def _gear_mall_specialized_plate_line_complete(observation: dict[str, Any], gear
             return False
         if _direction_or_default(entity.get("direction"), 0) != int(spec.get("direction") or 0):
             return False
+        if entity.get("name") != "burner-inserter" and (
+            entity.get("electric_network_connected") is False or _entity_no_power(entity)
+        ):
+            return False
+        if entity.get("name") == "burner-inserter" and _entity_status_name_in(entity, {"no_fuel"}):
+            return False
+    source = layout.get("source")
+    if (
+        isinstance(source, dict)
+        and str(source.get("name") or "") == "stone-furnace"
+        and entity_item_count(source, "iron-plate") <= 0
+        and _entity_status_name_in(source, {"no_fuel"})
+    ):
+        return False
     return True
 
 

@@ -1,10 +1,10 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running with autopilot PID `47068`.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running, latest health shows autopilot PID `59432`.
 - Startup context: read this file and targeted `goal.md`; never read `note.md`/`insight.md` in full.
-- Live 2026-06-20 15:45 KST: server UP, scheduler vLLM service `12161`, autopilot active.
-- Strategy fix: missing-source copper source-builder guard now lets coal-feed preempt burner-backed expansion; `plan_factory_site` -> `connect_coal_fuel_feed`.
-- Runtime confirmed: stale `expand_copper_smelting` loop was killed; coal-feed ran, then `belt_line_unbuildable` repaired via `bootstrap_build_item_mall`.
-- Current live path: bootstrap mall recovery restored construction belts (18+), research `logistics` at 0.05; circuits/science still 0.
-- Validation: targeted coal-feed tests OK; `PYTHONPATH=src python -m unittest tests.test_strategy` 126 OK; live strategy check OK.
-- Foundry warning persists: implemented skills remain in stale generated queue; do not let foundry queue steer repair.
-- Token checkpoint: goal tracker `4,497,734`; part135 delta `344,755`; weekly quota unavailable; Codex thread DB malformed.
+- Part136 live fix: coal-feed/iron-line oscillation narrowed; latest `llm_decisions.jsonl` entry chose `build_iron_plate_logistic_line_to_gear_mall` ok=true at 2026-06-20 17:13:51 KST.
+- Planner fixes: refuel gear-mall iron source burner drill, repair unpowered iron-line inserters, prefer direct gear->belt assembler inserter only when no active lane repair exists.
+- Boiler feed: refuses partial long belt routes when belt mall stock is short; boiler feed endpoint prefers expandable bus side opposite steam engines.
+- Strategy fixes: completed gear-mall plate line now requires powered inserters and usable fueled source; burner drills are bootstrap-only once Automation+stable power+science allow electric-drill research/mall.
+- Live status: server UP, research `logistics` still 0.05; boiler working, but health still reports stale live-skill PID and foundry stale implemented-skill queue.
+- Validation: targeted live-fix tests OK; `tests.test_strategy tests.test_planner tests.test_controller` 540 OK; full `unittest discover -s tests` 1027 OK.
+- Token checkpoint: goal tracker `5,742,318`; part136 delta `1,244,584`; weekly quota unavailable; token sample recorded.

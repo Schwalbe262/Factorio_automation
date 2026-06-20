@@ -3839,6 +3839,7 @@ class CoalFuelFeedSkill:
                             return PlannerDecision(
                                 None,
                                 f"{decision.reason}; boiler feed route already started, refusing repeated boiler hand-fueling",
+                                metadata=decision.metadata,
                             )
                         handfeed = _fuel_burner_line_entity(
                             observation,
@@ -3964,7 +3965,8 @@ class CoalFuelFeedSkill:
         player: dict[str, float],
         layout: dict[str, Any],
     ) -> PlannerDecision | None:
-        missing_belt_segments = any(not isinstance(segment.get("entity"), dict) for segment in layout["segments"])
+        missing_belt_count = _missing_boiler_feed_belt_count(layout)
+        missing_belt_segments = missing_belt_count > 0
         if (
             missing_belt_segments
             and not _transport_belt_assembler_exists(observation)
@@ -3976,6 +3978,26 @@ class CoalFuelFeedSkill:
             )
 
         belt_assembler = _transport_belt_output_assembler(observation)
+        available_belts = _available_boiler_feed_construction_belts(observation)
+        if (
+            missing_belt_segments
+            and _transport_belt_assembler_exists(observation)
+            and available_belts < missing_belt_count
+        ):
+            return PlannerDecision(
+                None,
+                (
+                    f"boiler coal feed needs {missing_belt_count} transport belts for the remaining route; "
+                    f"only {available_belts} available from inventory/belt mall, so bootstrap the belt mall "
+                    "before partial route extension"
+                ),
+                metadata={
+                    "failure_root": "belt_line_unbuildable",
+                    "repair_skill": "bootstrap_build_item_mall",
+                    "required_transport_belts": missing_belt_count,
+                    "available_transport_belts": available_belts,
+                },
+            )
         if missing_belt_segments and inventory_count(observation, "transport-belt") <= 0:
             belt_chest = _transport_belt_output_chest(observation)
             if isinstance(belt_chest, dict) and entity_item_count(belt_chest, "transport-belt") > 0:
@@ -4273,6 +4295,29 @@ class CoalFuelFeedSkill:
             },
             f"route {len(tiles)} boiler coal feed belt segments in one connect_entities call",
         )
+
+
+def _boiler_coal_feed_missing_belt_count(observation: dict[str, Any]) -> int:
+    layout = _coal_boiler_fuel_feed_layout(observation)
+    if layout is None:
+        return 0
+    return _missing_boiler_feed_belt_count(layout)
+
+
+def _missing_boiler_feed_belt_count(layout: dict[str, Any]) -> int:
+    segments = layout.get("segments") if isinstance(layout.get("segments"), list) else []
+    return sum(1 for segment in segments if isinstance(segment, dict) and not isinstance(segment.get("entity"), dict))
+
+
+def _available_boiler_feed_construction_belts(observation: dict[str, Any]) -> int:
+    total = inventory_count(observation, "transport-belt")
+    belt_chest = _transport_belt_output_chest(observation)
+    if isinstance(belt_chest, dict):
+        total += entity_item_count(belt_chest, "transport-belt")
+    belt_assembler = _transport_belt_output_assembler(observation)
+    if isinstance(belt_assembler, dict):
+        total += entity_item_count(belt_assembler, "transport-belt")
+    return total
 
 
 def _boiler_feed_should_preempt_local_coal_feed(
@@ -5792,7 +5837,7 @@ def _coal_boiler_fuel_feed_layout(observation: dict[str, Any]) -> dict[str, Any]
             route_distance = distance(source_position, boiler_position)
             if route_distance > STARTER_BOILER_FUEL_FEED_ROUTE_LIMIT:
                 continue
-            endpoints = _boiler_fuel_feed_endpoints(source_position, boiler_position)
+            endpoints = _boiler_fuel_feed_endpoints(observation, source_position, boiler)
             segments = _coal_boiler_fuel_feed_route_segments(
                 observation,
                 source_belt,
@@ -6071,15 +6116,12 @@ def _coal_supply_output_belt_sources(observation: dict[str, Any]) -> list[dict[s
 
 
 def _boiler_fuel_feed_endpoints(
+    observation: dict[str, Any],
     source_position: dict[str, float],
-    boiler_position: dict[str, float],
+    boiler: dict[str, Any],
 ) -> dict[str, Any]:
-    dx = float(source_position["x"]) - float(boiler_position["x"])
-    dy = float(source_position["y"]) - float(boiler_position["y"])
-    if abs(dx) >= abs(dy):
-        side = {"x": 1.0 if dx >= 0 else -1.0, "y": 0.0}
-    else:
-        side = {"x": 0.0, "y": 1.0 if dy >= 0 else -1.0}
+    boiler_position = _position(boiler)
+    side = _scalable_boiler_feed_side(observation, source_position, boiler)
     target_inserter = _offset_along_axis(boiler_position, side, 2.0)
     target_belt = _tile_center_position(_offset_along_axis(boiler_position, side, 3.0))
     return {
@@ -6087,6 +6129,64 @@ def _boiler_fuel_feed_endpoints(
         "target_belt": target_belt,
         "inserter_direction": _direction_from_axis_vector(side),
     }
+
+
+def _scalable_boiler_feed_side(
+    observation: dict[str, Any],
+    source_position: dict[str, float],
+    boiler: dict[str, Any],
+) -> dict[str, float]:
+    boiler_position = _position(boiler)
+    source_side = _dominant_axis_vector(boiler_position, source_position)
+    engine_side = _boiler_steam_engine_side(observation, boiler)
+    preferred_bus_side = _opposite_axis_vector(engine_side) if engine_side is not None else None
+    sides = [
+        {"x": 1.0, "y": 0.0},
+        {"x": -1.0, "y": 0.0},
+        {"x": 0.0, "y": 1.0},
+        {"x": 0.0, "y": -1.0},
+    ]
+
+    def score(side: dict[str, float]) -> tuple[float, float]:
+        target_inserter = _offset_along_axis(boiler_position, side, 2.0)
+        target_belt = _tile_center_position(_offset_along_axis(boiler_position, side, 3.0))
+        value = distance(source_position, target_belt) * 0.01
+        if _axis_vectors_equal(side, source_side):
+            value -= 1.0
+        if preferred_bus_side is not None and _axis_vectors_equal(side, preferred_bus_side):
+            value -= 20.0
+        if engine_side is not None and _axis_vectors_equal(side, engine_side):
+            value += 50.0
+        if _entity_at_build_position(observation, "transport-belt", target_belt, radius=0.75) is not None:
+            value -= 100.0
+        if _inserter_near(observation, target_inserter, radius=0.75) is not None:
+            value -= 75.0
+        blocker = _belt_line_position_blocker(observation, target_belt, protected_unit_numbers={int(boiler.get("unit_number") or -1)})
+        if blocker is not None:
+            value += 100.0
+        return (value, distance(source_position, target_belt))
+
+    return min(sides, key=score)
+
+
+def _boiler_steam_engine_side(observation: dict[str, Any], boiler: dict[str, Any]) -> dict[str, float] | None:
+    boiler_position = _position(boiler)
+    engines = [
+        engine
+        for engine in entities_named(observation, "steam-engine")
+        if distance(_position(engine), boiler_position) <= 8.0
+    ]
+    engine = _nearest_to(engines, boiler_position)
+    if engine is None:
+        return None
+    return _dominant_axis_vector(boiler_position, _position(engine))
+
+
+def _axis_vectors_equal(left: dict[str, float], right: dict[str, float]) -> bool:
+    return (
+        abs(float(left.get("x") or 0.0) - float(right.get("x") or 0.0)) < 0.01
+        and abs(float(left.get("y") or 0.0) - float(right.get("y") or 0.0)) < 0.01
+    )
 
 
 def _boiler_has_belt_fuel_feed(observation: dict[str, Any], boiler: dict[str, Any]) -> bool:
@@ -8852,6 +8952,55 @@ def _available_logistics_line_inserter_item(observation: dict[str, Any]) -> str 
     return None
 
 
+def _logistics_line_powered_inserter_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    inserter: dict[str, Any],
+    label: str,
+) -> PlannerDecision | None:
+    if str(inserter.get("name") or "") == "burner-inserter" or inserter.get("electric_network_connected") is not False:
+        return None
+    position = _position(inserter)
+    existing = _nearest_connected_small_pole_supplying_position(observation, position)
+    if existing is None:
+        existing = _nearest_small_pole_supplying_position(observation, position)
+    if existing is not None:
+        pole_position = _position(existing)
+        if distance(player, pole_position) > 20:
+            return PlannerDecision({"type": "move_to", "position": pole_position}, f"move near supply pole for {label}")
+        return PlannerDecision(
+            {
+                "type": "connect_power",
+                "unit_number": existing.get("unit_number"),
+                "name": existing.get("name") or "small-electric-pole",
+                "position": pole_position,
+            },
+            f"connect supply pole for {label}",
+        )
+
+    if inventory_count(observation, "small-electric-pole") <= 0:
+        if craftable_count(observation, "small-electric-pole") > 0:
+            return PlannerDecision(
+                {"type": "craft", "recipe": "small-electric-pole", "count": 1},
+                f"craft small-electric-pole to power {label}",
+            )
+        return PlannerDecision(None, f"{label} needs small-electric-pole power coverage")
+    pole_position = _select_mall_inserter_power_pole_position(observation, position)
+    if pole_position is None:
+        return PlannerDecision(None, f"cannot find clear power pole position for {label}")
+    if distance(player, pole_position) > 20:
+        return PlannerDecision({"type": "move_to", "position": _stand_position(pole_position)}, f"move near power pole position for {label}")
+    return PlannerDecision(
+        {
+            "type": "build",
+            "name": "small-electric-pole",
+            "position": pole_position,
+            "allow_nearby": False,
+        },
+        f"place supply pole for {label}",
+    )
+
+
 def _iron_plate_line_source_recovery_decision(
     observation: dict[str, Any],
     player: dict[str, float],
@@ -8882,6 +9031,25 @@ def _iron_plate_line_source_recovery_decision(
             },
             f"clear {incompatible} from iron source furnace output before building endpoint inserters",
         )
+    source_drill = _iron_plate_source_furnace_burner_drill(observation, source)
+    if (
+        isinstance(source_drill, dict)
+        and _entity_burner_fuel_count(source_drill) < 1
+        and _entity_status_is(source_drill, "no_fuel", 53)
+    ):
+        return _fuel_burner_line_entity(
+            observation,
+            player,
+            source_drill,
+            entity_name="burner-mining-drill",
+            threshold=SMELTING_LINE_FUEL_RESERVE["drill"],
+            insert_count=SMELTING_LINE_FUEL_INSERT["drill"],
+            context="iron source drill for gear mall plate logistics",
+            support_skill=IronPlateSkill(),
+            far_fuel_reason="iron source drill needs local fuel before the gear mall plate line can stay active",
+            exclude_source_units={source.get("unit_number")},
+            prefer_coal_supply=True,
+        )
     if (
         entity_item_count(source, "iron-plate") <= 0
         and entity_item_count(source, "iron-ore") > 0
@@ -8892,6 +9060,33 @@ def _iron_plate_line_source_recovery_decision(
             "wait for iron source furnace to produce iron plates before endpoint inserter construction",
         )
     return None
+
+
+def _iron_plate_source_furnace_burner_drill(
+    observation: dict[str, Any],
+    furnace: dict[str, Any],
+) -> dict[str, Any] | None:
+    furnace_position = _position(furnace)
+    candidates: list[tuple[int, float, dict[str, Any]]] = []
+    for drill in entities_named(observation, "burner-mining-drill"):
+        drill_position = _position(drill)
+        if distance(drill_position, furnace_position) > 4.5:
+            continue
+        feeds_furnace = _burner_drill_output_touches_machine(drill, furnace)
+        candidates.append((0 if feeds_furnace else 1, distance(drill_position, furnace_position), drill))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return candidates[0][2]
+
+
+def _burner_drill_output_touches_machine(drill: dict[str, Any], machine: dict[str, Any]) -> bool:
+    drill_position = _position(drill)
+    vector = _direction_vector(_direction_or_default(drill.get("direction"), EAST))
+    for amount in (1.0, 2.0, 3.0):
+        if _point_inside_machine(_offset_along_axis(drill_position, vector, amount), machine):
+            return True
+    return False
 
 
 def _furnace_output_incompatible_item(furnace: dict[str, Any], expected_item: str) -> str | None:
@@ -10028,10 +10223,11 @@ class GearBeltMallLogisticsSkill:
         direct_transfer = layout.get("direct_gear_transfer_inserter")
         direct_transfer_blocked = _direct_gear_transfer_blocked(layout)
         belt_lane_empty = all(belt.get("entity") is None for belt in layout["gear_belts"])
+        belt_lane_has_transfer_inserter = _gear_belt_lane_has_transfer_inserter(layout)
         use_direct_transfer = (
             isinstance(direct_transfer, dict)
             and not direct_transfer_blocked
-            and belt_lane_empty
+            and (belt_lane_empty or not belt_lane_has_transfer_inserter)
         )
         if use_direct_transfer:
             decision = self._ensure_inserter(
@@ -10449,7 +10645,9 @@ class GearBeltMallLogisticsSkill:
             return None
 
         position = _position(inserter)
-        existing = _nearest_small_pole_supplying_position(observation, position)
+        existing = _nearest_connected_small_pole_supplying_position(observation, position)
+        if existing is None:
+            existing = _nearest_small_pole_supplying_position(observation, position)
         if existing is not None:
             pole_position = _position(existing)
             if distance(player, pole_position) > 20:
@@ -11245,6 +11443,15 @@ class IronPlateLogisticLineToGearMallSkill:
                         },
                         f"fuel {label} burner inserter",
                     )
+                if str(inserter.get("name") or "") != "burner-inserter" and inserter.get("electric_network_connected") is False:
+                    power_decision = _logistics_line_powered_inserter_decision(
+                        observation,
+                        player,
+                        inserter,
+                        label,
+                    )
+                    if power_decision is not None:
+                        return power_decision
                 continue
             item_name = _available_logistics_line_inserter_item(observation)
             if item_name is None:
@@ -11558,6 +11765,17 @@ class BuildItemMallSkill:
         self.copper_skill = CopperPlateSkill(target_count=20)
         self.circuit_skill = ElectronicCircuitSkill(target_count=10)
 
+    def _effective_target_count(self, observation: dict[str, Any]) -> int:
+        if self.target_item != "transport-belt":
+            return self.target_count
+        missing_boiler_route_belts = _boiler_coal_feed_missing_belt_count(observation)
+        if missing_boiler_route_belts <= 0:
+            return self.target_count
+        available_belts = total_item_count(observation, "transport-belt")
+        if available_belts >= missing_boiler_route_belts:
+            return self.target_count
+        return max(self.target_count, missing_boiler_route_belts + 4)
+
     def next_action(
         self,
         observation: dict[str, Any],
@@ -11568,6 +11786,7 @@ class BuildItemMallSkill:
         recipe = RECIPES.get(self.target_item)
         if recipe is None:
             return PlannerDecision(None, f"build item mall recipe is not known: {self.target_item}")
+        target_count = self._effective_target_count(observation)
 
         player = player_position(observation)
         if not bool(_technology_state(observation, "automation").get("researched")):
@@ -11701,7 +11920,7 @@ class BuildItemMallSkill:
                     logistics_layout = _find_site_input_logistic_line_layout(observation, item="iron-gear-wheel")
                     consumer = logistics_layout.get("consumer") if isinstance(logistics_layout, dict) else None
                     if isinstance(consumer, dict) and distance(_position(consumer), reference_position) <= 4.5:
-                        logistics_decision = SiteInputLogisticLineSkill(max(12, self.target_count), item="iron-gear-wheel").next_action(
+                        logistics_decision = SiteInputLogisticLineSkill(max(12, target_count), item="iron-gear-wheel").next_action(
                             observation
                         )
                         if not logistics_decision.done:
@@ -11724,7 +11943,7 @@ class BuildItemMallSkill:
                 {
                     "type": "take",
                     "item": self.target_item,
-                    "count": min(output_count, self.target_count),
+                    "count": min(output_count, target_count),
                     "unit_number": assembler.get("unit_number"),
                     "name": "assembling-machine-1",
                     "position": assembler_position,
@@ -11741,14 +11960,14 @@ class BuildItemMallSkill:
             if isinstance(output_chest, dict) and distance(_position(output_chest), reference_position) <= 8.0:
                 reached_count += entity_item_count(output_chest, self.target_item)
 
-        if _build_item_mall_cell_ready(cell, self.target_item) and reached_count >= self.target_count:
+        if _build_item_mall_cell_ready(cell, self.target_item) and reached_count >= target_count:
             return PlannerDecision(
                 None,
-                f"build item mall is producing {self.target_item} and target reached: {reached_count}/{self.target_count}",
+                f"build item mall is producing {self.target_item} and target reached: {reached_count}/{target_count}",
                 done=True,
             )
 
-        batch_count = _build_item_mall_batch_count(recipe.products.get(self.target_item, 1.0), self.target_count)
+        batch_count = _build_item_mall_batch_count(recipe.products.get(self.target_item, 1.0), target_count)
         if (
             self.target_item == "transport-belt"
             and entity_item_count(assembler, "iron-gear-wheel") > 0
@@ -11971,7 +12190,9 @@ class BuildItemMallSkill:
                     f"fuel {self.target_item} mall output burner inserter",
                 )
             if inserter.get("name") != "burner-inserter" and inserter.get("electric_network_connected") is False:
-                existing = _nearest_small_pole_supplying_position(observation, _position(inserter))
+                existing = _nearest_connected_small_pole_supplying_position(observation, _position(inserter))
+                if existing is None:
+                    existing = _nearest_small_pole_supplying_position(observation, _position(inserter))
                 if existing is not None:
                     pole_position = _position(existing)
                     if distance(player, pole_position) > 20:
@@ -12041,7 +12262,8 @@ class BuildItemMallSkill:
         recipe = RECIPES.get("transport-belt")
         if recipe is None:
             return None
-        batch_count = _build_item_mall_batch_count(recipe.products.get("transport-belt", 1.0), self.target_count)
+        target_count = self._effective_target_count(observation)
+        batch_count = _build_item_mall_batch_count(recipe.products.get("transport-belt", 1.0), target_count)
         needed_gears = max(1, int(recipe.ingredients.get("iron-gear-wheel", 1) * batch_count))
         if entity_item_count(belt_assembler, "iron-gear-wheel") >= needed_gears:
             return None
@@ -12845,6 +13067,10 @@ def _power_poles(observation: dict[str, Any]) -> list[dict[str, Any]]:
     return poles
 
 
+def _connected_power_poles(observation: dict[str, Any]) -> list[dict[str, Any]]:
+    return [pole for pole in _power_poles(observation) if pole.get("electric_network_connected") is not False]
+
+
 def _nearest_power_pole_to_supply(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:
     candidates = [pole for pole in _power_poles(observation) if distance(_position(pole), position) <= 2.5]
     return _nearest_to(candidates, position) if candidates else None
@@ -13301,6 +13527,14 @@ def _direct_gear_transfer_blocked(layout: dict[str, Any]) -> bool:
     return False
 
 
+def _gear_belt_lane_has_transfer_inserter(layout: dict[str, Any]) -> bool:
+    for key in ("gear_output_inserter", "belt_input_inserter"):
+        spec = layout.get(key)
+        if isinstance(spec, dict) and isinstance(spec.get("entity"), dict):
+            return True
+    return False
+
+
 def _mall_logistics_positions_clear(
     observation: dict[str, Any],
     *,
@@ -13429,7 +13663,9 @@ def _select_mall_inserter_power_pole_position(
     observation: dict[str, Any],
     inserter_position: dict[str, float],
 ) -> dict[str, float] | None:
-    source = _nearest_to(_power_poles(observation), inserter_position)
+    source = _nearest_to(_connected_power_poles(observation), inserter_position)
+    if source is None:
+        source = _nearest_to(_power_poles(observation), inserter_position)
     source_position = _position(source) if source is not None else None
     offsets = [
         {"x": 2.0, "y": 0.0},
@@ -14083,6 +14319,15 @@ def _nearest_small_pole_supplying_position(observation: dict[str, Any], position
     candidates = [
         pole
         for pole in _power_poles(observation)
+        if str(pole.get("name") or "") == "small-electric-pole" and _small_pole_supplies_position(_position(pole), position)
+    ]
+    return _nearest_to(candidates, position) if candidates else None
+
+
+def _nearest_connected_small_pole_supplying_position(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:
+    candidates = [
+        pole
+        for pole in _connected_power_poles(observation)
         if str(pole.get("name") or "") == "small-electric-pole" and _small_pole_supplies_position(_position(pole), position)
     ]
     return _nearest_to(candidates, position) if candidates else None
