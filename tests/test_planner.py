@@ -1408,6 +1408,35 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["item"], "iron-gear-wheel")
         self.assertIn("boiler coal feed construction", decision.reason)
 
+    def test_coal_fuel_feed_gets_powered_inserter_materials_before_retiring_burner_feed_inserter(self):
+        obs = base_observation()
+        obs["inventory"] = {"iron-plate": 1, "electronic-circuit": 1, "coal": 1}
+        obs["research"]["technologies"]["automation"]["researched"] = True
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 2.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 23, "position": {"x": 3.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 24, "position": {"x": 4.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 26, "position": {"x": 5.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "burner-inserter", "unit_number": 25, "position": {"x": 6, "y": 0}, "direction": 12, "inventories": {}},
+            {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+            {
+                "name": "wooden-chest",
+                "unit_number": 981,
+                "position": {"x": 0.5, "y": 6.5},
+                "inventories": {"1": {"iron-gear-wheel": 3}},
+            },
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 981)
+        self.assertIn("boiler coal feed construction", decision.reason)
+
     def test_coal_fuel_feed_relocates_existing_inserter_for_boiler_feed(self):
         obs = base_observation()
         obs["player"]["position"] = {"x": -8, "y": -8}

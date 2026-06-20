@@ -2294,13 +2294,27 @@ def reconcile_strategy_decision(
     }:
         target_skill = _electric_drill_dependency_active_skill(observation, burner_drill_replacement_issue)
         if target_skill is not None and selected != target_skill:
+            power_recovery = _power_or_fuel_recovery_target_before_electric_work(
+                observation,
+                objective,
+                production_targets,
+            )
+            if power_recovery is not None:
+                target_skill = str(power_recovery.get("selected_skill") or target_skill)
+                guardrail_reason = str(power_recovery.get("reason") or _electric_drill_upgrade_reason(target_skill))
+                blockers = [str(power_recovery.get("blocker") or "electric power network")]
+                expected_effect = str(power_recovery.get("expected_effect") or _electric_drill_upgrade_expected_effect(target_skill))
+                recovery_evidence = _string_list(power_recovery.get("evidence"))
+            else:
+                guardrail_reason = _electric_drill_upgrade_reason(target_skill)
+                blockers = _electric_drill_upgrade_blockers(target_skill)
+                expected_effect = _electric_drill_upgrade_expected_effect(target_skill)
+                recovery_evidence = []
             adjusted = dict(decision)
             adjusted["selected_skill"] = target_skill
             adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 90)
             original_reason = str(decision.get("reason") or "").strip()
-            guardrail_reason = _electric_drill_upgrade_reason(target_skill)
             adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
-            blockers = _electric_drill_upgrade_blockers(target_skill)
             adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + blockers))
             adjusted["evidence"] = _string_list(decision.get("evidence")) + [
                 f"guardrail_adjusted_from={selected}",
@@ -2315,14 +2329,57 @@ def reconcile_strategy_decision(
                     f"{str(bool(burner_drill_replacement_issue.get('electric_drill_research_supply_ready'))).lower()}"
                 ),
                 "burner_drills_bootstrap_only=true",
+                *recovery_evidence,
             ]
-            adjusted["expected_effect"] = _electric_drill_upgrade_expected_effect(target_skill)
+            adjusted["expected_effect"] = expected_effect
             adjusted["guardrail_adjusted"] = {
                 "from": selected,
                 "to": target_skill,
                 "reason": guardrail_reason,
             }
             return adjusted
+    if selected in {
+        "plan_factory_site",
+        "produce_electronic_circuit",
+        "automate_electronic_circuit_line",
+        "research_logistics",
+        "research_electric_mining_drill",
+        "bootstrap_electric_mining_drill_mall",
+        "produce_automation_science_pack",
+        "bootstrap_power_pole_mall",
+        "build_site_input_logistic_line",
+    }:
+        power_recovery = _power_or_fuel_recovery_target_before_electric_work(
+            observation,
+            objective,
+            production_targets,
+        )
+        if power_recovery is not None:
+            target_skill = str(power_recovery.get("selected_skill") or "")
+            if target_skill and selected != target_skill:
+                adjusted = dict(decision)
+                adjusted["selected_skill"] = target_skill
+                adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 91)
+                original_reason = str(decision.get("reason") or "").strip()
+                guardrail_reason = str(power_recovery.get("reason") or "Power recovery preempts powered work.")
+                adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+                adjusted["blockers"] = sorted(
+                    set(_string_list(decision.get("blockers")) + [str(power_recovery.get("blocker") or "electric power network")])
+                )
+                adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+                    f"guardrail_adjusted_from={selected}",
+                    *_string_list(power_recovery.get("evidence")),
+                ]
+                adjusted["expected_effect"] = str(
+                    power_recovery.get("expected_effect")
+                    or "Restore power before starting powered factory work."
+                )
+                adjusted["guardrail_adjusted"] = {
+                    "from": selected,
+                    "to": target_skill,
+                    "reason": guardrail_reason,
+                }
+                return adjusted
     if (
         rocket_objective
         and selected != "research_automation"
@@ -4440,8 +4497,19 @@ def _satisfied_gear_belt_mall_guardrail_adjustment(
     blocker = ""
     expected_effect = ""
     target_evidence: list[str] = []
+    power_recovery = _power_or_fuel_recovery_target_before_electric_work(
+        observation,
+        objective,
+        production_targets,
+    )
+    if power_recovery is not None:
+        target_skill = str(power_recovery.get("selected_skill") or "")
+        blocker = str(power_recovery.get("blocker") or "")
+        expected_effect = str(power_recovery.get("expected_effect") or "")
+        target_evidence.extend(_string_list(power_recovery.get("evidence")))
+
     missing_source_issue = _site_input_missing_source_issue(observation)
-    if _technology_researched(observation, "automation") and missing_source_issue is not None:
+    if not target_skill and _technology_researched(observation, "automation") and missing_source_issue is not None:
         item = str(missing_source_issue.get("item") or "")
         source_builder_skill = _skill_for_bottleneck_item(item, observation)
         if source_builder_skill:
@@ -4520,6 +4588,51 @@ def _satisfied_gear_belt_mall_guardrail_adjustment(
         "reason": guardrail_reason,
     }
     return adjusted
+
+
+def _power_or_fuel_recovery_target_before_electric_work(
+    observation: dict[str, Any],
+    objective: str,
+    production_targets: dict[str, float] | None,
+) -> dict[str, Any] | None:
+    if _boiler_coal_feed_should_preempt_power(observation):
+        return {
+            "selected_skill": "connect_coal_fuel_feed",
+            "blocker": "boiler coal fuel feed",
+            "reason": (
+                "Power/fuel recovery preempts the electric-drill dependency chain because the starter "
+                "boiler can be belt-fed instead of manually refueled."
+            ),
+            "expected_effect": "Build a coal belt/inserter feed into the boiler before resuming powered work.",
+            "evidence": [
+                "power_or_fuel_recovery_preempts_electric_drill_dependency=true",
+                "boiler_no_fuel=true",
+                "coal_supply_ready=true",
+                "transport_belt_automation_ready=true",
+            ],
+        }
+
+    monitor = summarize_factory(observation, objective, production_targets=production_targets)
+    power_issue = _first_power_issue(monitor)
+    critical_power_issue = _critical_factory_power_issue(observation)
+    if power_issue is None and critical_power_issue is None:
+        return None
+    issue = critical_power_issue or power_issue or {}
+    return {
+        "selected_skill": "setup_power",
+        "blocker": "electric power network",
+        "reason": (
+            "Power recovery preempts the electric-drill dependency chain because circuit/drill automation "
+            "cannot start from an unpowered factory state."
+        ),
+        "expected_effect": "Restore electric coverage before starting new circuit or electric-drill automation.",
+        "evidence": [
+            "power_or_fuel_recovery_preempts_electric_drill_dependency=true",
+            f"power_issue_status={issue.get('status')}",
+            f"power_issue_entity={issue.get('entity')}",
+            f"power_issue_recipe={issue.get('recipe')}",
+        ],
+    }
 
 
 def _gear_mall_output_logistics_strategy_decision(issue: dict[str, Any]) -> dict[str, Any]:

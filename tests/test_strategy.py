@@ -2948,6 +2948,107 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("electronic circuit production for electric mining drills", result["blockers"])
         self.assertIn("electronic_circuit_automated=false", result["evidence"])
 
+    def test_reconcile_repairs_power_before_electric_drill_circuit_dependency_after_belt_mall_done(self):
+        observation = burner_drill_replacement_observation(electric_researched=True)
+        observation["inventory"]["transport-belt"] = 28
+        observation["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 91,
+                "recipe": "electronic-circuit",
+                "position": {"x": 12, "y": 4},
+                "status": 3,
+                "status_name": "no_power",
+                "electric_network_connected": False,
+                "inventories": {},
+            }
+        )
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "build_gear_belt_mall_logistics",
+                "priority": 80,
+                "reason": "Finish belt mall wiring.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "setup_power")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "build_gear_belt_mall_logistics")
+        self.assertIn("electric power network", result["blockers"])
+        self.assertIn("power_or_fuel_recovery_preempts_electric_drill_dependency=true", result["evidence"])
+
+    def test_reconcile_repairs_power_before_general_electric_drill_dependency_guardrail(self):
+        observation = burner_drill_replacement_observation(electric_researched=True)
+        observation["entities"].append(
+            {
+                "name": "inserter",
+                "unit_number": 92,
+                "position": {"x": 14, "y": 4},
+                "status": 3,
+                "status_name": "no_power",
+                "electric_network_connected": False,
+                "inventories": {},
+            }
+        )
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 80,
+                "reason": "Improve starter layout.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "setup_power")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertIn("electric power network", result["blockers"])
+        self.assertIn("power_or_fuel_recovery_preempts_electric_drill_dependency=true", result["evidence"])
+
+    def test_reconcile_repairs_power_before_direct_circuit_line_choice(self):
+        observation = burner_drill_replacement_observation(electric_researched=True)
+        observation["entities"].append(
+            {
+                "name": "inserter",
+                "unit_number": 93,
+                "position": {"x": 16, "y": 4},
+                "status": 3,
+                "status_name": "no_power",
+                "electric_network_connected": False,
+                "inventories": {},
+            }
+        )
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "automate_electronic_circuit_line",
+                "priority": 90,
+                "reason": "Build circuits now.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "setup_power")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "automate_electronic_circuit_line")
+        self.assertIn("electric power network", result["blockers"])
+        self.assertIn("power_or_fuel_recovery_preempts_electric_drill_dependency=true", result["evidence"])
+
     def test_reconcile_promotes_layout_planning_to_electric_drill_mall_after_circuits(self):
         result = reconcile_strategy_decision(
             {

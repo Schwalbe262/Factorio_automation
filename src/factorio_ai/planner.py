@@ -4196,6 +4196,44 @@ class CoalFuelFeedSkill:
                         },
                         "replace boiler coal feed burner inserter with a powered inserter",
                     )
+                try:
+                    excluded_burner_units = {int(inserter.get("unit_number"))}
+                except (TypeError, ValueError):
+                    excluded_burner_units = set()
+                reusable = _find_relocatable_inserter_for_iron_plate_line(
+                    observation,
+                    position,
+                    exclude_unit_numbers=excluded_burner_units,
+                    protected_positions=[position, _tile_center_position(position)],
+                    allow_burner=False,
+                )
+                if reusable is not None:
+                    reusable_position = _position(reusable)
+                    if distance(player, reusable_position) > 4.5:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": _stand_position(reusable_position, offset=1.5)},
+                            "move within reach of reusable powered inserter before retiring boiler coal feed burner inserter",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "mine",
+                            "unit_number": reusable.get("unit_number"),
+                            "name": reusable.get("name") or "inserter",
+                            "position": reusable_position,
+                        },
+                        "relocate existing powered inserter before retiring boiler coal feed burner inserter",
+                    )
+                decision = _logistics_line_inserter_material_decision(
+                    observation,
+                    player,
+                    layout,
+                    "boiler coal feed",
+                )
+                if decision is not None and (decision.done or decision.action is not None):
+                    return decision
+                decision = self.support_skill._ensure_item(observation, player, "inserter")
+                if decision is not None and (decision.done or decision.action is not None):
+                    return decision
                 return PlannerDecision(
                     None,
                     "boiler coal feed needs a powered inserter; refusing to fuel burner inserter",

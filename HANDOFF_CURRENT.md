@@ -1,10 +1,9 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running, autopilot PID 72360.
-- Part142/143: electric drill research fast-path, modless electric-drill observe, site-input material recovery, science gear chest path.
-- Tech dependency tree is now canonical in `knowledge.py`: automation -> power -> red science -> electric-drill tech -> circuit automation -> drill mall -> legacy burner mining retirement.
-- Strategy/planner use that tree; after drill mall is available, remaining burner mining routes to `plan_factory_site` for rebuild/relocation instead of preserving starter layout.
-- Layout unlock context now treats electric mining drills as a retool trigger for burner-mining/smelting blocks.
-- Validation: `tests.test_strategy` 146 OK; `tests.test_planner` 348 OK; `tests.test_controller` 78 OK; `tests.test_modless_lua` 21 OK; `tests.test_monitor` 33 OK.
-- Full discover was attempted but timed out at ~304s before this part; targeted suites above passed.
-- Health no-observe: supervisor ready, autopilot cycle 19, progress-kpi still stale at researched=4, foundry queue still has stale implemented skills.
-- Token checkpoint: goal tracker 9,221,774; part delta 282,226; weekly quota unavailable; sample `part143-tech-dependency-tree`.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running but autopilot gated because scheduler LLM is not ready.
+- Part144: boiler coal feed no longer keeps/hand-fuels burner inserters; it relocates or builds powered inserter materials first.
+- Strategy now lets power/fuel recovery preempt electric-drill/circuit dependency guardrails and satisfied gear/belt mall fallback.
+- Live before commit: health no-observe shows no autopilot process, gate=`waiting_for_scheduler_llm`; `slurm-llm-status` reports no running worker job / `llm_ready=false`.
+- Validation: `tests.test_strategy` 149 OK; `tests.test_planner` 349 OK; `tests.test_controller` 78 OK.
+- Direct live check before LLM outage: `build_gear_belt_mall_logistics` reconciled to `setup_power` when belt stock was 28/20 and power was unconnected.
+- Runtime `note.md`/`insight.md` have large generated churn; stage only intentional source/tests/handoff unless told otherwise.
+- Token checkpoint: goal tracker 9,694,112; part delta 472,338 since prior checkpoint; weekly quota unavailable; token_usage.py failed with malformed sqlite.
