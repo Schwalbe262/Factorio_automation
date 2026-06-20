@@ -2943,6 +2943,12 @@ class AutomationScienceSkill:
         science_assembler = _nearest_to(science_assemblers, player_position(observation)) if science_assemblers else None
         science_reference = _position(science_assembler) if isinstance(science_assembler, dict) else None
 
+        if _automation_researched(observation):
+            return BuildItemMallSkill("automation-science-pack", self.target_count).next_action(
+                observation,
+                reference_position=science_reference,
+            )
+
         if craftable_count(observation, "automation-science-pack") > 0:
             return PlannerDecision(
                 {

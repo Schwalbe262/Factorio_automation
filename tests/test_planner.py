@@ -2987,6 +2987,46 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "craft")
         self.assertEqual(decision.action["recipe"], "automation-science-pack")
 
+    def test_science_skill_uses_seed_aware_mall_after_automation(self):
+        obs = powered_automation_observation()
+        obs["player"]["character_valid"] = False
+        obs["execution"] = {"virtual": True}
+        obs["inventory"] = {"iron-plate": 10, "copper-plate": 4, "electronic-circuit": 1}
+        obs["craftable"] = {"iron-gear-wheel": 4}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="automation-science-pack",
+                gear_inventory={},
+                belt_inventory={"copper-plate": 4},
+            )
+        )
+        obs["entities"].extend(
+            [
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 980,
+                    "position": {"x": 5.0, "y": 2.0},
+                    "inventories": {"1": {"iron-gear-wheel": 37}},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 981,
+                    "position": {"x": 4.0, "y": 2.0},
+                    "direction": 12,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = AutomationScienceSkill(target_count=5).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["recipe"], "iron-gear-wheel")
+        self.assertTrue(decision.action["bootstrap_seed"])
+        self.assertEqual(decision.metadata["seed_reason"], "virtual_agent_automation-science-pack_mall_gear_seed")
+        self.assertNotIn("wait for iron gear wheel mall output", decision.reason)
+
     def test_science_skill_replenishes_inventory_iron_before_missing_gears(self):
         obs = base_observation()
         obs["inventory"] = {"iron-plate": 1, "coal": 8, "burner-mining-drill": 1, "stone-furnace": 1}
