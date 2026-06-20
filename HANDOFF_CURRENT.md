@@ -1,10 +1,10 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running with autopilot PID `29124`.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running with autopilot PID `70120`.
 - Startup context: read this file and targeted `goal.md`; never read `note.md`/`insight.md` in full.
-- Live 2026-06-20 05:35 KST: iron-plate logistics line to relocated gear mall completed; research still `logistics(0.05)`.
-- Fixed loop: incomplete gear/belt transfer now routes to `build_gear_belt_mall_logistics`; iron-line can use buffered belt chests and repair blocked source furnace output.
-- Current health: `setup_power` recently yielded waiting for boiler wood; stall=2, next monitor power/research/science recovery.
-- Validation: targeted 550 tests OK; full `PYTHONPATH=src python -m unittest discover -s tests` -> 1003 OK, one pre-existing socket ResourceWarning.
-- Foundry queue still lists implemented skills as override-mode backlog, not missing-skill work.
-- Token checkpoint: 1,799,460 goal-tracker tokens; weekly quota unavailable because token sampler state remains unusable.
-- Next: watch `setup_power`/boiler fuel recovery, then resume Logistics research and automation-science replenishment.
+- Live 2026-06-20 13:31 KST: server UP, research `logistics(0.05)`, autopilot `llm_degraded` but executing `bootstrap_build_item_mall` step 97.
+- Fixed loop: coal feed no longer preempts local fuel routes when boiler is working; buffered gear chests can seed local feed inserters.
+- Fixed bootstrap loop: readiness maps virtual zero-belt/no-output mall states to `bootstrap_build_item_mall`; strategy/reconcile stop overriding this seed repair to relocation/setup_power.
+- Added starter mall power seed path: virtual starter belt mall may borrow bounded fuel for one-time boiler bootstrap when belt automation is circularly blocked.
+- Validation: targeted 529 tests OK; full `PYTHONPATH=src python -m unittest discover -s tests` -> 1007 OK, one pre-existing socket ResourceWarning.
+- Current caveat: scheduler strategy uploads intermittently fail with remote `scp: write remote ... Failure`; heuristic degraded path continues locally.
+- Token checkpoint: goal tracker `2,656,371`; weekly quota unavailable.

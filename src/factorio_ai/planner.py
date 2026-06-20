@@ -3815,7 +3815,8 @@ class CoalFuelFeedSkill:
     def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
         player = player_position(observation)
         boiler_layout = _coal_boiler_fuel_feed_layout(observation)
-        if boiler_layout is not None:
+        local_layout = _coal_fuel_feed_layout(observation)
+        if boiler_layout is not None and _boiler_feed_should_preempt_local_coal_feed(boiler_layout, local_layout):
             decision = self._next_boiler_feed_action(observation, player, boiler_layout)
             if decision is not None:
                 boiler = boiler_layout.get("boiler")
@@ -3854,7 +3855,7 @@ class CoalFuelFeedSkill:
             if not supply.done:
                 return supply
 
-        layout = _coal_fuel_feed_layout(observation)
+        layout = local_layout or _coal_fuel_feed_layout(observation)
         if layout is None:
             supply = CoalSupplySkill(target_count=16).next_action(observation)
             if not supply.done:
@@ -4268,6 +4269,41 @@ class CoalFuelFeedSkill:
         )
 
 
+def _boiler_feed_should_preempt_local_coal_feed(
+    boiler_layout: dict[str, Any],
+    local_layout: dict[str, Any] | None,
+) -> bool:
+    boiler = boiler_layout.get("boiler")
+    if not isinstance(boiler, dict):
+        return False
+    if _boiler_coal_fuel_feed_layout_complete(boiler_layout):
+        return True
+    if local_layout is None or _local_coal_fuel_feed_complete(local_layout):
+        return True
+    if _entity_status_is(boiler, "no_fuel", 52) or _entity_status_is(boiler, "no_input_fluid", 23):
+        return True
+    if _entity_burner_fuel_count(boiler) <= 0:
+        return True
+    return False
+
+
+def _local_coal_fuel_feed_complete(layout: dict[str, Any]) -> bool:
+    consumer = layout.get("consumer")
+    return isinstance(consumer, dict) and _entity_burner_fuel_count(consumer) > 0
+
+
+def _boiler_coal_fuel_feed_layout_complete(layout: dict[str, Any]) -> bool:
+    boiler = layout.get("boiler")
+    target_inserter = layout.get("target_inserter")
+    return (
+        isinstance(boiler, dict)
+        and _entity_burner_fuel_count(boiler) > 0
+        and all(isinstance(segment.get("entity"), dict) for segment in layout.get("segments") or [])
+        and isinstance(target_inserter, dict)
+        and isinstance(target_inserter.get("entity"), dict)
+    )
+
+
 class _ExpandPlateSmeltingSkill:
     """Incrementally add belt-fed plate smelting capacity."""
 
@@ -4550,6 +4586,7 @@ class SetupPowerSkill:
         *,
         allow_existing_remote: bool = False,
         reference_position: dict[str, float] | None = None,
+        allow_bootstrap_power_seed: bool = False,
     ) -> PlannerDecision:
         block = _find_steam_power_block(
             observation,
@@ -4630,7 +4667,13 @@ class SetupPowerSkill:
             if feed_layout is not None:
                 feed_decision = CoalFuelFeedSkill()._next_boiler_feed_action(observation, player, feed_layout)
                 if feed_decision is not None:
-                    emergency = _emergency_boiler_bootstrap_fuel_decision(observation, player, boiler, feed_decision)
+                    emergency = _emergency_boiler_bootstrap_fuel_decision(
+                        observation,
+                        player,
+                        boiler,
+                        feed_decision,
+                        allow_without_critical_factory=allow_bootstrap_power_seed,
+                    )
                     if emergency is not None:
                         return emergency
                     return feed_decision
@@ -6465,12 +6508,14 @@ def _emergency_boiler_bootstrap_fuel_decision(
     player: dict[str, float],
     boiler: dict[str, Any],
     blocked_feed_decision: PlannerDecision,
+    *,
+    allow_without_critical_factory: bool = False,
 ) -> PlannerDecision | None:
     if blocked_feed_decision.action is not None or blocked_feed_decision.done:
         return None
     if _entity_burner_fuel_count(boiler) > 0:
         return None
-    if not _critical_electric_factory_present_for_planner(observation):
+    if not allow_without_critical_factory and not _critical_electric_factory_present_for_planner(observation):
         return None
     reason = str(blocked_feed_decision.reason or "")
     if not any(token in reason for token in ("needs automated transport-belt production", "needs transport belts", "missing burner inserter")):
@@ -6502,6 +6547,12 @@ def _emergency_boiler_bootstrap_fuel_decision(
         boiler_position,
         exclude_units={boiler.get("unit_number")},
     )
+    if source is None and allow_without_critical_factory:
+        source = _nearest_bootstrap_fuel_source(
+            observation,
+            boiler_position,
+            exclude_units={boiler.get("unit_number")},
+        )
     if source is None:
         return None
     source_position = _position(source)
@@ -6512,7 +6563,10 @@ def _emergency_boiler_bootstrap_fuel_decision(
             {"type": "move_to", "position": source_position},
             "move near surplus fuel source for one-time emergency power bootstrap",
         )
-    source_item, source_count = _select_surplus_fuel_item(source)
+    if allow_without_critical_factory:
+        source_item, source_count = _select_bootstrap_fuel_item(source)
+    else:
+        source_item, source_count = _select_surplus_fuel_item(source)
     if source_count <= 0:
         return None
     return PlannerDecision(
@@ -6582,6 +6636,29 @@ def _nearest_surplus_fuel_source(
     return candidates[0][2]
 
 
+def _nearest_bootstrap_fuel_source(
+    observation: dict[str, Any],
+    target_position: dict[str, float],
+    *,
+    exclude_units: set[Any] | None = None,
+) -> dict[str, Any] | None:
+    excluded = set(exclude_units or set())
+    candidates = []
+    for entity_name in ("wooden-chest", "iron-chest", "steel-chest", "burner-mining-drill", "burner-inserter", "stone-furnace"):
+        for entity in entities_named(observation, entity_name):
+            if entity.get("unit_number") in excluded:
+                continue
+            _item, usable = _select_bootstrap_fuel_item(entity)
+            if usable <= 0:
+                continue
+            entity_position = _position(entity)
+            candidates.append((distance(target_position, entity_position), -usable, entity))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return candidates[0][2]
+
+
 def _nearest_surplus_fuel_source_with_item(
     observation: dict[str, Any],
     target_position: dict[str, float],
@@ -6620,6 +6697,16 @@ def _select_surplus_fuel_item(entity: dict[str, Any]) -> tuple[str, int]:
             continue
         if reserve >= count:
             reserve -= count
+            continue
+        return item, count - reserve
+    return "coal", 0
+
+
+def _select_bootstrap_fuel_item(entity: dict[str, Any]) -> tuple[str, int]:
+    reserve = 1 if str(entity.get("name") or "") in {"burner-mining-drill", "burner-inserter", "stone-furnace"} else 0
+    for item in BURNER_FUEL_ITEMS:
+        count = entity_item_count(entity, item)
+        if count <= reserve:
             continue
         return item, count - reserve
     return "coal", 0
@@ -11492,6 +11579,10 @@ class BuildItemMallSkill:
                 observation,
                 allow_existing_remote=allow_existing_remote,
                 reference_position=reference_position,
+                allow_bootstrap_power_seed=(
+                    self.target_item in {"transport-belt", "iron-gear-wheel", "assembling-machine-1", "small-electric-pole"}
+                    and _is_virtual_agent(observation)
+                ),
             )
             if decision.done:
                 return PlannerDecision({"type": "wait", "ticks": 120}, "wait for power observation to settle")
@@ -12605,6 +12696,31 @@ def _ensure_iron_gears_without_post_automation_handcraft(
         )
         if decision is not None:
             return decision
+        chest = _nearest_buffered_chest_item_source(
+            observation,
+            "iron-gear-wheel",
+            reference_position or player_position(observation),
+        )
+        chest_count = entity_item_count(chest, "iron-gear-wheel") if isinstance(chest, dict) else 0
+        if isinstance(chest, dict) and chest_count > 0:
+            chest_position = _position(chest)
+            player = player_position(observation)
+            if distance(player, chest_position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": chest_position},
+                    f"move near buffered gear chest for {infrastructure_reason}",
+                )
+            return PlannerDecision(
+                {
+                    "type": "take",
+                    "item": "iron-gear-wheel",
+                    "count": min(chest_count, missing),
+                    "unit_number": chest.get("unit_number"),
+                    "name": chest.get("name") or "wooden-chest",
+                    "position": chest_position,
+                },
+                f"take buffered gears for {infrastructure_reason}",
+            )
 
     decision = BuildItemMallSkill("iron-gear-wheel", max(target_count, 4)).next_action(
         observation,

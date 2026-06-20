@@ -839,6 +839,40 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("transport-belt mall bootstrap before iron-plate logistics", result["blockers"])
         self.assertIn("local_iron_plate_seed_source_unit=102", result["evidence"])
 
+    def test_rocket_goal_bootstraps_when_mall_assemblers_are_unpowered(self):
+        observation = gear_belt_mall_needs_bootstrap_observation()
+        observation["player"] = {"name": "server", "kind": "server", "position": {"x": 0, "y": 0}, "character_valid": False}
+        for entity in observation["entities"]:
+            if entity.get("name") == "assembling-machine-1":
+                entity["electric_network_connected"] = False
+                entity["status_name"] = "no_power"
+        observation["inventory"] = {}
+        observation["entities"].extend(
+            [
+                {
+                    "name": "burner-mining-drill",
+                    "unit_number": 300,
+                    "position": {"x": 20, "y": 0},
+                    "direction": 4,
+                    "resource_name": "coal",
+                    "inventories": {"1": {"coal": 3}},
+                },
+                {
+                    "name": "boiler",
+                    "unit_number": 301,
+                    "position": {"x": 24, "y": 0},
+                    "status_name": "no_fuel",
+                    "inventories": {},
+                },
+            ]
+        )
+
+        result = heuristic_strategy("launch_rocket_program", observation)
+
+        self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(result["factory_readiness"]["failure_root"], "gear_mall_missing")
+        self.assertIn("factory_readiness_repair_skill=bootstrap_build_item_mall", result["evidence"])
+
     def test_strategy_payload_includes_shared_factory_readiness(self):
         payload = make_strategy_payload("launch_rocket_program", gear_belt_mall_needs_bootstrap_observation())
 

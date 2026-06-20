@@ -989,6 +989,58 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["tiles"][0]["direction"], 4)
         self.assertIn("boiler", decision.reason)
 
+    def test_coal_fuel_feed_prefers_local_receiver_when_boiler_is_working(self):
+        obs = base_observation()
+        obs["inventory"] = {"transport-belt": 4, "burner-inserter": 1, "coal": 1, "stone-furnace": 1}
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {
+                "name": "boiler",
+                "unit_number": 30,
+                "position": {"x": 20, "y": 0},
+                "status_name": "working",
+                "inventories": {"1": {"wood": 8}},
+                "fluids": {"2": {"name": "steam", "amount": 200}},
+            },
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertEqual(decision.action["position"], {"x": 2.5, "y": 0.5})
+        self.assertIn("coal fuel feed", decision.reason)
+        self.assertNotIn("boiler", decision.reason)
+
+    def test_coal_fuel_feed_takes_buffered_gears_for_local_feed_inserter(self):
+        obs = base_observation()
+        obs["inventory"] = {"transport-belt": 1, "iron-plate": 1, "coal": 1}
+        obs["research"]["technologies"]["automation"]["researched"] = True
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 2.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "wooden-chest", "unit_number": 28, "position": {"x": 0, "y": 4}, "inventories": {"1": {"iron-gear-wheel": 3}}},
+            {
+                "name": "boiler",
+                "unit_number": 30,
+                "position": {"x": 20, "y": 0},
+                "status_name": "working",
+                "inventories": {"1": {"wood": 8}},
+                "fluids": {"2": {"name": "steam", "amount": 200}},
+            },
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 28)
+        self.assertIn("buffered gears", decision.reason)
+
     def test_coal_fuel_feed_refuels_inactive_coal_source_before_boiler_hand_fuel(self):
         obs = base_observation()
         obs["player"]["position"] = {"x": 0, "y": 0}
@@ -3979,6 +4031,63 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["count"], 5)
         self.assertTrue(decision.action["emergency_bootstrap"])
         self.assertIn("one-time emergency boiler fuel bootstrap", decision.reason)
+
+    def test_build_item_mall_allows_one_time_boiler_seed_for_starter_belt_mall(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 0.0, "y": 9.5}, "character_valid": False}
+        obs["inventory"] = {}
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 9.5}, "distance": 0}]
+        obs["research"]["technologies"]["automation"]["researched"] = True
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 620, "position": {"x": 0, "y": 9.5}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+            {"name": "transport-belt", "unit_number": 621, "position": {"x": 2, "y": 9.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {
+                "name": "offshore-pump",
+                "unit_number": 601,
+                "position": {"x": 10.5, "y": 10.5},
+                "direction": 12,
+                "distance": 2,
+                "inventories": {},
+                "fluids": {"1": {"name": "water", "amount": 100}},
+            },
+            {
+                "name": "boiler",
+                "unit_number": 602,
+                "position": {"x": 12.5, "y": 11},
+                "direction": 8,
+                "status_name": "no_fuel",
+                "distance": 0,
+                "inventories": {},
+                "fluids": {"1": {"name": "water", "amount": 200}},
+            },
+            {
+                "name": "steam-engine",
+                "unit_number": 603,
+                "position": {"x": 12.5, "y": 14.5},
+                "direction": 8,
+                "distance": 4,
+                "inventories": {},
+                "fluids": {},
+            },
+            {
+                "name": "small-electric-pole",
+                "unit_number": 604,
+                "position": {"x": 10.5, "y": 14.5},
+                "direction": 0,
+                "distance": 4,
+                "inventories": {},
+                "fluids": {},
+            },
+        ]
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["unit_number"], 620)
+        self.assertEqual(decision.action["count"], 2)
+        self.assertTrue(decision.action["emergency_bootstrap"])
+        self.assertIn("one-time emergency boiler bootstrap", decision.reason)
 
     def test_setup_power_skill_done_when_engine_has_steam_and_pole_connected(self):
         obs = base_observation()

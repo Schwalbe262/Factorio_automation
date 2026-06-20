@@ -49,7 +49,7 @@ class FactoryReadinessTests(unittest.TestCase):
         self.assertTrue(readiness.virtual_agent)
         self.assertTrue(readiness.bootstrap_seed_allowed)
         self.assertEqual(readiness.failure_root, "belt_line_unbuildable")
-        self.assertEqual(readiness.repair_skill, "build_gear_belt_mall_logistics")
+        self.assertEqual(readiness.repair_skill, "bootstrap_build_item_mall")
 
         obs["inventory"] = {"transport-belt": 12}
         ready_with_belts = build_factory_readiness(obs)

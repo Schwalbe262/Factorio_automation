@@ -72,6 +72,15 @@ def build_factory_readiness(observation: dict[str, Any]) -> FactoryReadiness:
     coal_supply_ready = _coal_supply_ready(observation)
     boiler_needs_fuel = _boiler_needs_fuel(observation)
     boiler_feed_buildable = boiler_needs_fuel and coal_supply_ready and belt_line_buildable
+    bootstrap_seed_allowed = (
+        automation_researched
+        and virtual_agent
+        and bool(gear_assemblers)
+        and bool(belt_assemblers)
+        and bool(iron_sources)
+        and not belt_line_buildable
+        and not belt_mall_can_output
+    )
 
     blocked_by: list[str] = []
     failure_root: str | None = None
@@ -100,7 +109,11 @@ def build_factory_readiness(observation: dict[str, Any]) -> FactoryReadiness:
         blocked_by.append("gear/belt mall logistics connection")
     elif automation_researched and not belt_line_buildable:
         failure_root = "belt_line_unbuildable"
-        repair_skill = "build_gear_belt_mall_logistics" if gear_belt_logistics_pair_exists else "bootstrap_build_item_mall"
+        repair_skill = (
+            "bootstrap_build_item_mall"
+            if bootstrap_seed_allowed or not gear_belt_logistics_pair_exists
+            else "build_gear_belt_mall_logistics"
+        )
         blocked_by.append("construction transport belts")
         if not belt_mall_can_output:
             blocked_by.append("transport-belt mall output")
@@ -118,15 +131,6 @@ def build_factory_readiness(observation: dict[str, Any]) -> FactoryReadiness:
         if not belt_line_buildable:
             blocked_by.append("construction transport belts")
 
-    bootstrap_seed_allowed = (
-        automation_researched
-        and virtual_agent
-        and bool(gear_assemblers)
-        and bool(belt_assemblers)
-        and bool(iron_sources)
-        and not belt_line_buildable
-        and not belt_mall_can_output
-    )
     seed_reason = None
     expected_followup = None
     if bootstrap_seed_allowed:

@@ -1103,6 +1103,30 @@ def reconcile_strategy_decision(
         decision["expected_effect"] = ""
         decision.pop("guardrail_adjusted", None)
         selected = "bootstrap_build_item_mall"
+    readiness_bootstrap_decision = _readiness_bootstrap_missing_mall_decision(readiness)
+    if readiness_bootstrap_decision is not None and selected != "bootstrap_build_item_mall":
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "bootstrap_build_item_mall"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 94)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            f"LLM selected {selected}, but factory readiness reports {readiness.failure_root}; "
+            "bootstrap the starter item mall before running gear/belt logistics."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + list(readiness.blocked_by)))
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            f"factory_readiness_failure_root={readiness.failure_root}",
+            f"factory_readiness_repair_skill={readiness.repair_skill}",
+        ]
+        adjusted["expected_effect"] = "Recreate the starter gear/belt mall and then resume logistics wiring."
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": "bootstrap_build_item_mall",
+            "reason": guardrail_reason,
+        }
+        return adjusted
     gear_mall_output_logistics_issue = _gear_mall_output_logistics_issue(observation)
     if gear_mall_output_logistics_issue is not None and selected in GEAR_MALL_OUTPUT_LOGISTICS_PREEMPT_SKILLS:
         return _gear_mall_output_logistics_guardrail_adjustment(decision, selected, gear_mall_output_logistics_issue)
@@ -1484,6 +1508,11 @@ def reconcile_strategy_decision(
             or power_recovery_waits_on_belt_mall
             or bool(gear_mall_iron_plate_issue.get("relocation_in_progress"))
         )
+        and not (
+            selected == "bootstrap_build_item_mall"
+            and readiness.repair_skill == "bootstrap_build_item_mall"
+            and readiness.bootstrap_seed_allowed
+        )
         and selected in {
             "setup_power",
             "plan_factory_site",
@@ -1549,7 +1578,14 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
-    if critical_factory_power_issue is not None and selected in {
+    if (
+        critical_factory_power_issue is not None
+        and not (
+            selected == "bootstrap_build_item_mall"
+            and readiness.repair_skill == "bootstrap_build_item_mall"
+            and readiness.bootstrap_seed_allowed
+        )
+        and selected in {
         "plan_factory_site",
         "produce_electronic_circuit",
         "automate_electronic_circuit_line",
@@ -1562,7 +1598,8 @@ def reconcile_strategy_decision(
         "bootstrap_electric_mining_drill_mall",
         "produce_automation_science_pack",
         "build_site_input_logistic_line",
-    }:
+        }
+    ):
         adjusted = dict(decision)
         adjusted["selected_skill"] = "setup_power"
         adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 94)
@@ -2334,6 +2371,10 @@ def _heuristic_strategy_impl(
             expected_effect="Pause expansion and build armed gun turrets plus firearm-magazine supply around threatened factory sites.",
         ).to_dict()
 
+    readiness_bootstrap_decision = _readiness_bootstrap_missing_mall_decision(readiness)
+    if readiness_bootstrap_decision is not None:
+        return readiness_bootstrap_decision
+
     if gear_mall_output_logistics_issue is not None:
         return _gear_mall_output_logistics_strategy_decision(gear_mall_output_logistics_issue)
     gear_belt_mall_transfer_logistics_issue = _gear_belt_mall_transfer_logistics_issue(observation)
@@ -2986,6 +3027,37 @@ def heuristic_strategy(
         selected_improvement_site=selected_improvement_site,
     )
     return _with_factory_readiness(result, readiness)
+
+
+def _readiness_bootstrap_missing_mall_decision(readiness: FactoryReadiness) -> dict[str, Any] | None:
+    if readiness.repair_skill != "bootstrap_build_item_mall":
+        return None
+    if readiness.failure_root not in {"gear_mall_missing", "belt_mall_missing", "belt_line_unbuildable"}:
+        return None
+    details = readiness.details if isinstance(readiness.details, dict) else {}
+    if not (
+        readiness.virtual_agent
+        and int(details.get("transport_belt_stock") or 0) <= 0
+        and bool(details.get("coal_supply_ready"))
+        and bool(details.get("boiler_needs_fuel"))
+    ):
+        return None
+    return StrategicDecision(
+        selected_skill="bootstrap_build_item_mall",
+        priority=94,
+        reason=(
+            f"Factory readiness reports {readiness.failure_root}; bootstrap the starter item mall before "
+            "running gear/belt logistics or long belt routes."
+        ),
+        evidence=[
+            f"factory_readiness_failure_root={readiness.failure_root}",
+            f"factory_readiness_repair_skill={readiness.repair_skill}",
+            f"bootstrap_seed_allowed={str(readiness.bootstrap_seed_allowed).lower()}",
+        ],
+        blockers=list(readiness.blocked_by) or ["starter item mall"],
+        expected_effect="Recreate or seed the starter gear/belt mall so construction belts can resume.",
+        source="heuristic",
+    ).to_dict()
 
 
 def _with_factory_readiness(decision: dict[str, Any], readiness: FactoryReadiness) -> dict[str, Any]:
