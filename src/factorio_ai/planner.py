@@ -3150,6 +3150,8 @@ class StoneSupplySkill:
                     observation,
                     3,
                     pre_automation_reason="craft gears for stone supply drill",
+                    allow_assembler_output_gears=True,
+                    infrastructure_reason="stone supply drill infrastructure",
                 )
                 if decision is not None:
                     return decision
@@ -3296,7 +3298,7 @@ class BeltSmeltingLineSkill:
         for name, key, direction_key in [
             ("transport-belt", "belt1_position", "belt_direction"),
             ("transport-belt", "belt2_position", "belt_direction"),
-            ("burner-inserter", "inserter_position", "inserter_direction"),
+            ("inserter", "inserter_position", "inserter_direction"),
             ("stone-furnace", "furnace_position", None),
             ("burner-mining-drill", "drill_position", "drill_direction"),
         ]:
@@ -3322,12 +3324,8 @@ class BeltSmeltingLineSkill:
                 action["direction"] = direction
             return PlannerDecision(action, f"place {name} for belt smelting line")
 
-        for entity_name, item, threshold, count in [
-            ("burner-mining-drill", "coal", 3, 5),
-            ("burner-inserter", "coal", 2, 3),
-            ("stone-furnace", "coal", 3, 5),
-        ]:
-            entity = layout.get(_entity_key(entity_name))
+        for entity_name, layout_key, item, threshold, count in _smelting_line_fuel_requirements(layout, reserve=False):
+            entity = layout.get(layout_key)
             if entity and entity_item_count(entity, item) < threshold:
                 return _fuel_burner_line_entity(
                     observation,
@@ -3398,12 +3396,14 @@ class BeltSmeltingLineSkill:
                     observation,
                     3,
                     pre_automation_reason="craft gears for line drill",
+                    allow_assembler_output_gears=True,
+                    infrastructure_reason="belt smelting drill infrastructure",
                 )
                 if decision is not None:
                     return decision
             return self.support_skill.next_action(observation, target_count=20, inventory_only=True)
 
-        if item in {"transport-belt", "burner-inserter"}:
+        if item in {"transport-belt", "inserter", "burner-inserter"}:
             if inventory_count(observation, "iron-gear-wheel") < 1:
                 decision = _ensure_iron_gears_without_post_automation_handcraft(
                     observation,
@@ -4444,7 +4444,7 @@ class _ExpandPlateSmeltingSkill:
         for name, key, direction_key in [
             ("transport-belt", "belt1_position", "belt_direction"),
             ("transport-belt", "belt2_position", "belt_direction"),
-            ("burner-inserter", "inserter_position", "inserter_direction"),
+            ("inserter", "inserter_position", "inserter_direction"),
             ("stone-furnace", "furnace_position", None),
             ("burner-mining-drill", "drill_position", "drill_direction"),
         ]:
@@ -4508,11 +4508,7 @@ class _ExpandPlateSmeltingSkill:
             for key in ("drill", "inserter", "furnace")
             if isinstance(layout.get(key), dict)
         )
-        for entity_name, layout_key in [
-            ("burner-mining-drill", "drill"),
-            ("burner-inserter", "inserter"),
-            ("stone-furnace", "furnace"),
-        ]:
+        for entity_name, layout_key, _item, _threshold, _insert_count in _smelting_line_fuel_requirements(layout, reserve=False):
             entity = layout.get(layout_key)
             if entity and _entity_burner_fuel_count(entity) < 1:
                 return _fuel_burner_line_entity(
@@ -4528,13 +4524,8 @@ class _ExpandPlateSmeltingSkill:
                     exclude_source_units=line_units,
                 )
 
-        for entity_name, layout_key in [
-            ("burner-mining-drill", "drill"),
-            ("burner-inserter", "inserter"),
-            ("stone-furnace", "furnace"),
-        ]:
+        for entity_name, layout_key, _item, threshold, insert_count in _smelting_line_fuel_requirements(layout, reserve=True):
             entity = layout.get(layout_key)
-            threshold = SMELTING_LINE_FUEL_RESERVE[layout_key]
             if entity and _entity_burner_fuel_count(entity) < threshold:
                 return _fuel_burner_line_entity(
                     observation,
@@ -4542,7 +4533,7 @@ class _ExpandPlateSmeltingSkill:
                     entity,
                     entity_name=entity_name,
                     threshold=threshold,
-                    insert_count=SMELTING_LINE_FUEL_INSERT[layout_key],
+                    insert_count=insert_count,
                     context=f"expanded {self.product_name} smelting reserve",
                     support_skill=self.line_skill.support_skill,
                     far_fuel_reason=f"expanded {self.product_name} smelting needs fuel logistics before more walking refuels",
@@ -4649,6 +4640,8 @@ class StarterDefenseSkill:
                 observation,
                 10,
                 pre_automation_reason="craft gears for starter defense turret",
+                allow_assembler_output_gears=True,
+                infrastructure_reason="starter defense turret infrastructure",
             )
             if decision is not None:
                 return decision
@@ -5376,6 +5369,8 @@ def _ensure_direct_smelting_item(
                 observation,
                 3,
                 pre_automation_reason="craft gears for direct smelting drill",
+                allow_assembler_output_gears=True,
+                infrastructure_reason="direct smelting drill infrastructure",
             )
             if decision is not None:
                 return decision
@@ -6294,7 +6289,7 @@ def _coal_fuel_feed_missing_item(observation: dict[str, Any], layout: dict[str, 
 def _coal_fuel_feed_entity_key(entity_name: str) -> str:
     if entity_name == "transport-belt":
         return "belt2"
-    if entity_name == "burner-inserter":
+    if entity_name in {"burner-inserter", "inserter", "fast-inserter"}:
         return "inserter"
     if entity_name in {"stone-furnace", "boiler"}:
         return "consumer"
@@ -6321,7 +6316,7 @@ def _line_missing_item(observation: dict[str, Any], layout: dict[str, Any]) -> s
     if missing_belts > inventory_count(observation, "transport-belt"):
         return "transport-belt"
     for item, entity_name in [
-        ("burner-inserter", "burner-inserter"),
+        ("inserter", "inserter"),
         ("stone-furnace", "stone-furnace"),
         ("burner-mining-drill", "burner-mining-drill"),
     ]:
@@ -6393,8 +6388,8 @@ def _find_low_fuel_belt_smelting_line(observation: dict[str, Any], resource_name
             if not all(layout.get(key) is not None for key in ("belt1", "belt2", "inserter", "furnace", "drill")):
                 continue
             if any(
-                _entity_burner_fuel_count(layout[key]) < SMELTING_LINE_FUEL_RESERVE[key]
-                for key in ("drill", "inserter", "furnace")
+                _entity_burner_fuel_count(layout[layout_key]) < threshold
+                for _entity_name, layout_key, _item, threshold, _count in _smelting_line_fuel_requirements(layout, reserve=True)
             ):
                 candidates.append((float(belt.get("distance") or 999999), layout))
     if not candidates:
@@ -6411,8 +6406,8 @@ def _smelting_line_fuel_unit_numbers(observation: dict[str, Any], resource_name:
                 continue
             if not all(layout.get(key) is not None for key in ("belt1", "belt2", "inserter", "furnace", "drill")):
                 continue
-            for key in ("drill", "inserter", "furnace"):
-                entity = layout.get(key)
+            for _entity_name, layout_key, _item, _threshold, _count in _smelting_line_fuel_requirements(layout, reserve=True):
+                entity = layout.get(layout_key)
                 if isinstance(entity, dict):
                     units.add(entity.get("unit_number"))
     return units
@@ -6432,7 +6427,7 @@ def _belt_layouts_from_anchor(observation: dict[str, Any], belt: dict[str, Any])
             continue
         layout["belt1"] = belt
         layout["belt2"] = _entity_near(observation, "transport-belt", layout["belt2_position"], radius=0.75)
-        layout["inserter"] = _entity_near(observation, "burner-inserter", layout["inserter_position"], radius=1.0)
+        layout["inserter"] = _inserter_near(observation, layout["inserter_position"], radius=1.0)
         layout["furnace"] = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=1.5)
         layout["drill"] = _entity_near(observation, "burner-mining-drill", layout["drill_position"], radius=2.0)
         layout["resource_name"] = (
@@ -6481,11 +6476,32 @@ def _complete_belt_smelting_line_count(observation: dict[str, Any], resource_nam
 
 
 def _belt_line_fueled(layout: dict[str, Any]) -> bool:
-    for key, minimum in [("drill", 1), ("inserter", 1), ("furnace", 1)]:
-        entity = layout.get(key)
+    for _entity_name, layout_key, _item, minimum, _count in _smelting_line_fuel_requirements(layout, reserve=False):
+        entity = layout.get(layout_key)
         if not isinstance(entity, dict) or _entity_burner_fuel_count(entity) < minimum:
             return False
     return True
+
+
+def _smelting_line_fuel_requirements(
+    layout: dict[str, Any],
+    *,
+    reserve: bool,
+) -> list[tuple[str, str, str, int, int]]:
+    requirements: list[tuple[str, str, str, int, int]] = []
+    for entity_name, layout_key in [
+        ("burner-mining-drill", "drill"),
+        ("stone-furnace", "furnace"),
+    ]:
+        threshold = SMELTING_LINE_FUEL_RESERVE[layout_key] if reserve else 1
+        insert_count = SMELTING_LINE_FUEL_INSERT[layout_key] if reserve else 1
+        requirements.append((entity_name, layout_key, "coal", threshold, insert_count))
+    inserter = layout.get("inserter")
+    if isinstance(inserter, dict) and str(inserter.get("name") or "") == "burner-inserter":
+        threshold = SMELTING_LINE_FUEL_RESERVE["inserter"] if reserve else 1
+        insert_count = SMELTING_LINE_FUEL_INSERT["inserter"] if reserve else 1
+        requirements.insert(1, ("burner-inserter", "inserter", "coal", threshold, insert_count))
+    return requirements
 
 
 def _fuel_burner_line_entity(
@@ -7198,7 +7214,7 @@ def _entity_key_for_layout(entity_name: str, layout_key: str) -> str:
         return "drill"
     if entity_name == "stone-furnace":
         return "furnace"
-    if entity_name == "burner-inserter":
+    if entity_name in {"burner-inserter", "inserter", "fast-inserter"}:
         return "inserter"
     return entity_name
 
@@ -12055,12 +12071,14 @@ class BuildItemMallSkill:
             )
 
         reached_count = total_item_count(observation, self.target_item)
-        if self.target_item == "iron-gear-wheel" and reference_position is not None:
+        if _build_item_mall_should_use_output_chest(self.target_item):
             reached_count = inventory_count(observation, self.target_item) + output_count
             output_chest = cell.get("output_chest") if isinstance(cell, dict) else None
-            if not isinstance(output_chest, dict):
+            if not isinstance(output_chest, dict) and reference_position is not None:
                 output_chest = _nearest_buffered_chest_item_source(observation, self.target_item, reference_position)
-            if isinstance(output_chest, dict) and distance(_position(output_chest), reference_position) <= 8.0:
+            if isinstance(output_chest, dict) and (
+                reference_position is None or distance(_position(output_chest), reference_position) <= 8.0
+            ):
                 reached_count += entity_item_count(output_chest, self.target_item)
 
         if _build_item_mall_cell_ready(cell, self.target_item) and reached_count >= target_count:

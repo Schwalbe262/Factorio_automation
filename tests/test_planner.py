@@ -3151,7 +3151,7 @@ class PlannerTests(unittest.TestCase):
             "coal": 8,
             "burner-mining-drill": 1,
             "stone-furnace": 1,
-            "burner-inserter": 1,
+            "inserter": 1,
             "transport-belt": 2,
         }
         obs["resources"] = [
@@ -3310,7 +3310,7 @@ class PlannerTests(unittest.TestCase):
             "coal": 12,
             "burner-mining-drill": 1,
             "stone-furnace": 1,
-            "burner-inserter": 1,
+            "inserter": 1,
             "transport-belt": 2,
         }
         decision = BeltSmeltingLineSkill(target_count=10).next_action(obs)
@@ -3324,7 +3324,7 @@ class PlannerTests(unittest.TestCase):
             "coal": 12,
             "burner-mining-drill": 1,
             "stone-furnace": 1,
-            "burner-inserter": 1,
+            "inserter": 1,
         }
         obs["entities"] = [
             {
@@ -3344,7 +3344,7 @@ class PlannerTests(unittest.TestCase):
         ]
         decision = BeltSmeltingLineSkill(target_count=10).next_action(obs)
         self.assertEqual(decision.action["type"], "build")
-        self.assertEqual(decision.action["name"], "burner-inserter")
+        self.assertEqual(decision.action["name"], "inserter")
         self.assertEqual(decision.action["direction"], 12)
 
     def test_belt_smelting_skill_done_after_line_outputs_plates(self):
@@ -3441,7 +3441,7 @@ class PlannerTests(unittest.TestCase):
             "coal": 12,
             "burner-mining-drill": 1,
             "stone-furnace": 1,
-            "burner-inserter": 1,
+            "inserter": 1,
             "transport-belt": 2,
         }
         decision = ExpandIronSmeltingSkill(target_rate_per_minute=37).next_action(obs)
@@ -3671,7 +3671,7 @@ class PlannerTests(unittest.TestCase):
             "coal": 12,
             "burner-mining-drill": 1,
             "stone-furnace": 1,
-            "burner-inserter": 1,
+            "inserter": 1,
             "transport-belt": 2,
         }
         obs["resources"] = [
@@ -3692,7 +3692,7 @@ class PlannerTests(unittest.TestCase):
             "coal": 12,
             "burner-mining-drill": 1,
             "stone-furnace": 1,
-            "burner-inserter": 1,
+            "inserter": 1,
             "transport-belt": 2,
         }
         obs["resources"] = [
@@ -3723,7 +3723,7 @@ class PlannerTests(unittest.TestCase):
             "coal": 12,
             "burner-mining-drill": 1,
             "stone-furnace": 1,
-            "burner-inserter": 1,
+            "inserter": 1,
             "transport-belt": 2,
         }
         obs["resources"] = [
@@ -3740,7 +3740,7 @@ class PlannerTests(unittest.TestCase):
             "coal": 12,
             "burner-mining-drill": 1,
             "stone-furnace": 1,
-            "burner-inserter": 1,
+            "inserter": 1,
             "transport-belt": 2,
         }
         obs["entities"] = [
@@ -3761,13 +3761,71 @@ class PlannerTests(unittest.TestCase):
             "coal": 12,
             "burner-mining-drill": 1,
             "stone-furnace": 1,
-            "burner-inserter": 1,
+            "inserter": 1,
             "transport-belt": 2,
         }
         decision = ExpandCopperSmeltingSkill(target_rate_per_minute=37).next_action(obs)
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "transport-belt")
         self.assertEqual(decision.action["position"], {"x": 10.0, "y": 0.0})
+
+    def test_expand_copper_smelting_places_regular_inserter_after_automation(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {
+            "coal": 12,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "inserter": 1,
+        }
+        obs["resources"] = [{"name": "copper-ore", "position": {"x": 8, "y": 0}, "distance": 8}]
+        layout = planner_module._select_belt_smelting_layout(obs, "copper-ore")
+        self.assertIsNotNone(layout)
+        obs["entities"].extend(
+            [
+                {
+                    "name": "transport-belt",
+                    "unit_number": 990,
+                    "position": layout["belt1_position"],
+                    "direction": layout["belt_direction"],
+                    "inventories": {},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 991,
+                    "position": layout["belt2_position"],
+                    "direction": layout["belt_direction"],
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=37).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "inserter")
+        self.assertNotEqual(decision.action["name"], "burner-inserter")
+
+    def test_expand_smelting_regular_inserter_does_not_require_fuel(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 12}
+        obs["entities"] = complete_belt_smelting_entities(
+            8,
+            0,
+            700,
+            resource="copper-ore",
+            product="copper-plate",
+            reserve_fuel=True,
+        )
+        for entity in obs["entities"]:
+            if entity["name"] == "burner-inserter":
+                entity["name"] = "inserter"
+                entity["electric_network_connected"] = True
+                entity["inventories"] = {}
+
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=18).next_action(obs)
+
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
 
     def test_expand_copper_smelting_done_when_capacity_target_reached(self):
         obs = base_observation()
@@ -3800,7 +3858,7 @@ class PlannerTests(unittest.TestCase):
             "coal": 12,
             "burner-mining-drill": 1,
             "stone-furnace": 1,
-            "burner-inserter": 1,
+            "inserter": 1,
             "transport-belt": 2,
         }
         obs["entities"] = [
@@ -6054,6 +6112,39 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "wooden-chest")
         self.assertIn("output chest for iron-gear-wheel mall", decision.reason)
+
+    def test_build_item_mall_gear_target_ignores_non_output_gear_stock(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 10}
+        obs["entities"].extend(gear_belt_mall_entities(gear_inventory={}, belt_inventory={"iron-gear-wheel": 20}))
+        layout = planner_module._build_item_mall_output_layout(obs, {"x": 2, "y": 2})
+        self.assertIsNotNone(layout)
+        obs["entities"].extend(
+            [
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 990,
+                    "position": layout["output_chest_position"],
+                    "inventories": {},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 991,
+                    "position": layout["output_inserter_position"],
+                    "direction": layout["output_inserter_direction"],
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("iron-gear-wheel", 4).next_action(obs)
+
+        self.assertFalse(decision.done)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertEqual(decision.action["unit_number"], 910)
+        self.assertIn("insert iron-plate into iron-gear-wheel mall assembler", decision.reason)
 
     def test_build_item_mall_repurposes_existing_assembler_for_gears_before_handcrafting(self):
         obs = powered_automation_observation()
@@ -8653,7 +8744,7 @@ class PlannerTests(unittest.TestCase):
             "coal": 12,
             "burner-mining-drill": 1,
             "stone-furnace": 1,
-            "burner-inserter": 1,
+            "inserter": 1,
             "transport-belt": 2,
         }
         obs["resources"] = [
@@ -8674,7 +8765,7 @@ class PlannerTests(unittest.TestCase):
             "coal": 12,
             "burner-mining-drill": 1,
             "stone-furnace": 1,
-            "burner-inserter": 1,
+            "inserter": 1,
             "transport-belt": 2,
         }
         obs["resources"] = [

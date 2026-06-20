@@ -381,6 +381,7 @@ SKILL_CATALOG: dict[str, SkillContract] = {
         description="Research electric mining drills so burner miners can be replaced soon after power is stable.",
         executor="ResearchTechnologySkill",
         preconditions=[
+            "automation researched",
             "powered lab exists or can be fed",
             "automation science packs are available or producible",
             "burner mining drills are still active in factory sites",
@@ -924,6 +925,14 @@ def make_build_item_supply_context(observation: dict[str, Any], monitor: dict[st
 
 
 def _build_item_mall_item_available(observation: dict[str, Any], item: str) -> bool:
+    if item == "electric-mining-drill":
+        return (
+            _technology_researched(observation, "electric-mining-drill")
+            or _recipe_unlocked(observation, item)
+            or total_item_count(observation, item) > 0
+            or _entity_count_by_name(observation, item) > 0
+            or _recipe_assembler_exists(observation, item)
+        )
     if item == "long-handed-inserter":
         return (
             _technology_researched(observation, "long-inserters")
@@ -934,49 +943,115 @@ def _build_item_mall_item_available(observation: dict[str, Any], item: str) -> b
     return True
 
 
+def _electric_drill_dependency_milestones(
+    observation: dict[str, Any],
+    issue: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    automation_ready = _technology_researched(observation, "automation")
+    power_ready = _electric_network_available(observation)
+    electric_researched = _technology_researched(observation, "electric-mining-drill")
+    research_supply_ready = _electric_drill_research_supply_ready(observation)
+    circuit_ready = _circuit_automation_ready(observation)
+    drill_automated = bool(
+        issue.get("electric_mining_drill_automated")
+        if isinstance(issue, dict)
+        else _recipe_assembler_exists(observation, "electric-mining-drill")
+    )
+    return [
+        {
+            "node": "automation",
+            "kind": "technology",
+            "skill": "research_automation",
+            "purpose": "unlock assemblers so recurring science, circuits, and drill production are not hand-crafted",
+            "ready": automation_ready,
+            "blocked_by": [],
+        },
+        {
+            "node": "electric power",
+            "kind": "infrastructure",
+            "skill": "setup_power",
+            "purpose": "power labs, assemblers, regular inserters, and future electric mining drills",
+            "ready": power_ready,
+            "blocked_by": [] if automation_ready else ["automation"],
+        },
+        {
+            "node": "automation-science-pack",
+            "kind": "item_flow",
+            "skill": "produce_automation_science_pack",
+            "purpose": "stock red science for electric-mining-drill research",
+            "recipe": {"copper-plate": 1, "iron-gear-wheel": 1},
+            "ready": research_supply_ready or electric_researched,
+            "blocked_by": [
+                blocker
+                for blocker, ready in [
+                    ("automation", automation_ready),
+                    ("electric power", power_ready),
+                ]
+                if not ready
+            ],
+        },
+        {
+            "node": "electric-mining-drill technology",
+            "kind": "technology",
+            "technology": "electric-mining-drill",
+            "skill": "research_electric_mining_drill",
+            "purpose": "unlock the electric-mining-drill recipe before attempting the drill mall",
+            "requires": {"automation-science-pack": 25},
+            "ready": electric_researched,
+            "blocked_by": [] if research_supply_ready or electric_researched else ["automation-science-pack"],
+        },
+        {
+            "node": "electronic-circuit automation",
+            "kind": "item_flow",
+            "item": "electronic-circuit",
+            "skill": "automate_electronic_circuit_line",
+            "purpose": "supply 3 electronic circuits per electric mining drill without repeated hand crafting",
+            "recipe": {"iron-plate": 1, "copper-cable": 3},
+            "ready": circuit_ready,
+            "blocked_by": [] if electric_researched else ["electric-mining-drill technology"],
+        },
+        {
+            "node": "electric-mining-drill mall",
+            "kind": "item_flow",
+            "item": "electric-mining-drill",
+            "skill": "bootstrap_electric_mining_drill_mall",
+            "purpose": "produce drills by assembler before replacing burner miners",
+            "recipe": {"electronic-circuit": 3, "iron-gear-wheel": 5, "iron-plate": 10},
+            "ready": drill_automated,
+            "blocked_by": [
+                blocker
+                for blocker, ready in [
+                    ("electric-mining-drill technology", electric_researched),
+                    ("electronic-circuit automation", circuit_ready),
+                ]
+                if not ready
+            ],
+        },
+    ]
+
+
+def _electric_drill_dependency_blocked_node(milestones: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for milestone in milestones:
+        if not bool(milestone.get("ready")):
+            return milestone
+    return None
+
+
 def make_technology_dependency_context(observation: dict[str, Any]) -> dict[str, Any]:
     electric_drill_issue = _burner_drill_replacement_issue(observation)
     active_skill = _electric_drill_upgrade_target_skill(electric_drill_issue)
+    electric_milestones = _electric_drill_dependency_milestones(observation, electric_drill_issue)
+    blocked_node = _electric_drill_dependency_blocked_node(electric_milestones)
     return {
         "llm_responsibility": (
             "Resolve technology and recipe prerequisites in dependency order. For electric mining drills, do not skip "
             "from research directly to drill production until electronic-circuit production is available."
         ),
         "electric_mining_drill": {
-            "ordered_milestones": [
-                {
-                    "node": "automation-science-pack",
-                    "skill": "produce_automation_science_pack",
-                    "purpose": "stock red science for electric-mining-drill research",
-                    "ready": bool(
-                        electric_drill_issue
-                        and electric_drill_issue.get("electric_drill_research_supply_ready")
-                    )
-                    or _technology_researched(observation, "electric-mining-drill"),
-                },
-                {
-                    "node": "electric-mining-drill technology",
-                    "skill": "research_electric_mining_drill",
-                    "purpose": "unlock electric-mining-drill recipe",
-                    "ready": _technology_researched(observation, "electric-mining-drill"),
-                },
-                {
-                    "node": "electronic-circuit",
-                    "skill": "automate_electronic_circuit_line",
-                    "purpose": "supply 3 circuits per electric mining drill without hand-crafting",
-                    "ready": _circuit_automation_ready(observation),
-                },
-                {
-                    "node": "electric-mining-drill mall",
-                    "skill": "bootstrap_electric_mining_drill_mall",
-                    "purpose": "produce drills by assembler before replacing burner miners",
-                    "ready": bool(
-                        electric_drill_issue
-                        and electric_drill_issue.get("electric_mining_drill_automated")
-                    ),
-                },
-            ],
+            "ordered_milestones": electric_milestones,
             "active_prerequisite_skill": active_skill,
+            "current_blocked_node": blocked_node.get("node") if blocked_node else None,
+            "blocked_prerequisites": list(blocked_node.get("blocked_by") or []) if blocked_node else [],
             "burner_drill_replacement": electric_drill_issue,
             "technology_chain": technology_chain("electric-mining-drill"),
             "recipe_dependency_tree": dependency_tree("electric-mining-drill", max_depth=3),

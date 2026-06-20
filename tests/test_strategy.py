@@ -3503,7 +3503,8 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(items["transport-belt"]["needs_mall"])
         self.assertTrue(items["long-handed-inserter"]["needs_mall"])
         self.assertTrue(items["assembling-machine-1"]["needs_mall"])
-        self.assertTrue(items["electric-mining-drill"]["needs_mall"])
+        self.assertFalse(items["electric-mining-drill"]["available_for_mall"])
+        self.assertFalse(items["electric-mining-drill"]["needs_mall"])
 
     def test_strategy_payload_exposes_electric_drill_dependency_plan(self):
         payload = make_strategy_payload(
@@ -3513,8 +3514,39 @@ class StrategyTests(unittest.TestCase):
         plan = payload["technology_dependency_plan"]["electric_mining_drill"]
 
         self.assertEqual(plan["active_prerequisite_skill"], "automate_electronic_circuit_line")
+        self.assertEqual(
+            [step["node"] for step in plan["ordered_milestones"]],
+            [
+                "automation",
+                "electric power",
+                "automation-science-pack",
+                "electric-mining-drill technology",
+                "electronic-circuit automation",
+                "electric-mining-drill mall",
+            ],
+        )
+        self.assertEqual(plan["current_blocked_node"], "electronic-circuit automation")
+        self.assertEqual(plan["blocked_prerequisites"], [])
+        mall_step = next(step for step in plan["ordered_milestones"] if step["node"] == "electric-mining-drill mall")
+        self.assertEqual(mall_step["recipe"]["electronic-circuit"], 3)
+        self.assertEqual(mall_step["blocked_by"], ["electronic-circuit automation"])
         self.assertEqual(plan["recipe_map"]["electric-mining-drill"]["in"]["electronic-circuit"], 3)
         self.assertEqual(plan["recipe_dependency_tree"]["technology"], "electric-mining-drill")
+
+    def test_strategy_payload_keeps_electric_drill_mall_locked_before_research(self):
+        payload = make_strategy_payload(
+            "launch_rocket_program",
+            burner_drill_replacement_observation(electric_researched=False),
+        )
+        plan = payload["technology_dependency_plan"]["electric_mining_drill"]
+        items = {item["item"]: item for item in payload["build_item_supply"]["items"]}
+
+        self.assertEqual(plan["active_prerequisite_skill"], "research_electric_mining_drill")
+        self.assertEqual(plan["current_blocked_node"], "electric-mining-drill technology")
+        self.assertEqual(plan["ordered_milestones"][4]["node"], "electronic-circuit automation")
+        self.assertEqual(plan["ordered_milestones"][4]["blocked_by"], ["electric-mining-drill technology"])
+        self.assertFalse(items["electric-mining-drill"]["available_for_mall"])
+        self.assertFalse(items["electric-mining-drill"]["needs_mall"])
 
     def test_normalize_preserves_build_item_target(self):
         result = normalize_strategy_response(
