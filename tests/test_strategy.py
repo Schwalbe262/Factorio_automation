@@ -2,6 +2,7 @@ import unittest
 
 from factorio_ai import planner as planner_module
 from factorio_ai import strategy as strategy_module
+from factorio_ai.knowledge import electric_mining_drill_dependency_milestones
 from factorio_ai.strategy import (
     heuristic_strategy,
     make_layout_improvement_context,
@@ -3523,15 +3524,58 @@ class StrategyTests(unittest.TestCase):
                 "electric-mining-drill technology",
                 "electronic-circuit automation",
                 "electric-mining-drill mall",
+                "legacy burner mining retirement",
             ],
         )
         self.assertEqual(plan["current_blocked_node"], "electronic-circuit automation")
         self.assertEqual(plan["blocked_prerequisites"], [])
         mall_step = next(step for step in plan["ordered_milestones"] if step["node"] == "electric-mining-drill mall")
         self.assertEqual(mall_step["recipe"]["electronic-circuit"], 3)
+        self.assertEqual(
+            mall_step["prerequisites"],
+            ["electric-mining-drill technology", "electronic-circuit automation"],
+        )
         self.assertEqual(mall_step["blocked_by"], ["electronic-circuit automation"])
         self.assertEqual(plan["recipe_map"]["electric-mining-drill"]["in"]["electronic-circuit"], 3)
         self.assertEqual(plan["recipe_dependency_tree"]["technology"], "electric-mining-drill")
+
+    def test_electric_drill_dependency_tree_is_recipe_and_research_backed(self):
+        milestones = electric_mining_drill_dependency_milestones()
+        by_node = {step["node"]: step for step in milestones}
+
+        self.assertEqual(by_node["electric-mining-drill technology"]["requires"]["automation-science-pack"], 25)
+        self.assertEqual(by_node["electronic-circuit automation"]["recipe"]["copper-cable"], 3)
+        self.assertEqual(by_node["electric-mining-drill mall"]["recipe"]["electronic-circuit"], 3)
+        self.assertEqual(
+            by_node["electric-mining-drill mall"]["prerequisites"],
+            ["electric-mining-drill technology", "electronic-circuit automation"],
+        )
+        self.assertEqual(by_node["legacy burner mining retirement"]["skill"], "plan_factory_site")
+        self.assertEqual(by_node["legacy burner mining retirement"]["prerequisites"], ["electric-mining-drill mall"])
+
+    def test_electric_drill_dependency_plan_retires_legacy_burner_mining_after_mall(self):
+        observation = burner_drill_replacement_with_circuit_automation_observation(electric_researched=True)
+        observation["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 42,
+                "recipe": "electric-mining-drill",
+                "position": {"x": 16, "y": 4},
+                "electric_network_connected": True,
+                "inventories": {"2": {"electric-mining-drill": 1}},
+            }
+        )
+
+        payload = make_strategy_payload("launch_rocket_program", observation)
+        plan = payload["technology_dependency_plan"]["electric_mining_drill"]
+
+        self.assertEqual(plan["active_prerequisite_skill"], "plan_factory_site")
+        self.assertEqual(plan["current_blocked_node"], "legacy burner mining retirement")
+        self.assertEqual(plan["blocked_prerequisites"], [])
+
+        result = heuristic_strategy("launch_rocket_program", observation)
+        self.assertEqual(result["selected_skill"], "plan_factory_site")
+        self.assertIn("legacy burner mining retirement", result["blockers"])
 
     def test_strategy_payload_keeps_electric_drill_mall_locked_before_research(self):
         payload = make_strategy_payload(

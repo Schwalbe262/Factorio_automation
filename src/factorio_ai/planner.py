@@ -694,6 +694,29 @@ def _unlock_retool_opportunity(
         affected_kinds.update(str(site.get("kind") or "") for site in smelting_sites)
         obsolete_patterns.append(f"stone-furnace columns that can be rerated around {preferred_furnace} {furnace_rate}/min throughput")
 
+    mining_drills = unlocks.get("mining_drills") if isinstance(unlocks.get("mining_drills"), dict) else {}
+    electric_drill_state = (
+        mining_drills.get("electric-mining-drill")
+        if isinstance(mining_drills.get("electric-mining-drill"), dict)
+        else {}
+    )
+    burner_drills_present = any(
+        isinstance(entity, dict) and str(entity.get("name") or "") == "burner-mining-drill"
+        for entity in entities
+    )
+    if bool(electric_drill_state.get("available")) and burner_drills_present:
+        affected_smelting_sites = [
+            site
+            for site in smelting_sites
+            if any("burner-mining-drill" in str(machine) for machine in (site.get("machines") or []))
+        ] or smelting_sites
+        retool_tools.append("electric-mining-drill")
+        affected_site_ids.extend(str(site.get("site_id") or "") for site in affected_smelting_sites[:6])
+        affected_kinds.update(str(site.get("kind") or "") for site in affected_smelting_sites)
+        obsolete_patterns.append(
+            "burner-mining-drill mining/smelting blocks that should be benchmarked for electric-drill rebuild or relocation"
+        )
+
     module_group = unlocks.get("modules") if isinstance(unlocks.get("modules"), dict) else {}
     module_tools = [
         str(name)
@@ -927,6 +950,23 @@ def _layout_unlock_context(observation: dict[str, Any]) -> dict[str, Any]:
         }
         for name, technology in furnace_techs.items()
     }
+    mining_drills = {
+        "electric-mining-drill": {
+            "available": _technology_researched_for_layout(observation, "electric-mining-drill")
+            or _recipe_unlocked_for_layout(observation, "electric-mining-drill")
+            or total_item_count(observation, "electric-mining-drill") > 0
+            or _entity_exists_for_layout(observation, "electric-mining-drill")
+            or _recipe_assembler_exists_for_layout(observation, "electric-mining-drill"),
+            "researched": _technology_researched_for_layout(observation, "electric-mining-drill"),
+            "recipe_unlocked": _recipe_unlocked_for_layout(observation, "electric-mining-drill"),
+            "stock": total_item_count(observation, "electric-mining-drill"),
+            "built": _entity_count_for_layout(observation, "electric-mining-drill"),
+            "automated": _recipe_assembler_exists_for_layout(observation, "electric-mining-drill"),
+            "layout_impact": (
+                "electric drills remove burner fuel logistics and can make starter burner-mining layouts obsolete"
+            ),
+        }
+    }
     beacons = {
         "beacon": {
             "available": _technology_researched_for_layout(observation, "effect-transmission")
@@ -945,12 +985,14 @@ def _layout_unlock_context(observation: dict[str, Any]) -> dict[str, Any]:
         "modules": modules,
         "machines": machines,
         "furnaces": furnaces,
+        "mining_drills": mining_drills,
         "beacons": beacons,
         "rerank_trigger": bool(
             long_handed["available"]
             or any(row["available"] for row in modules.values())
             or any(row["available"] for row in machines.values())
             or any(row["available"] for row in furnaces.values())
+            or any(row["available"] for row in mining_drills.values())
             or any(row["available"] for row in beacons.values())
         ),
     }
@@ -991,7 +1033,7 @@ def _layout_considered_unlocked_items(unlocks: dict[str, Any]) -> list[str]:
     long_handed = unlocks.get("long_handed_inserter") if isinstance(unlocks.get("long_handed_inserter"), dict) else {}
     if bool(long_handed.get("available")):
         considered.append("long-handed-inserter")
-    for group_name in ("modules", "machines", "furnaces", "beacons"):
+    for group_name in ("modules", "machines", "furnaces", "mining_drills", "beacons"):
         group = unlocks.get(group_name) if isinstance(unlocks.get(group_name), dict) else {}
         for name, state in group.items():
             if isinstance(state, dict) and bool(state.get("available")):
@@ -1013,7 +1055,7 @@ def _layout_used_unlocked_item_state(unlocks: dict[str, Any], used: list[str]) -
             if isinstance(raw, dict):
                 state = raw
         else:
-            for group_name in ("modules", "machines", "furnaces", "beacons"):
+            for group_name in ("modules", "machines", "furnaces", "mining_drills", "beacons"):
                 group = unlocks.get(group_name) if isinstance(unlocks.get(group_name), dict) else {}
                 raw = group.get(item)
                 if isinstance(raw, dict):
@@ -11755,6 +11797,25 @@ class SiteInputLogisticLineSkill:
                     f"clear blocking {blocker.get('name')} before extending site input logistics belt",
                 )
             if inventory_count(observation, "transport-belt") <= 0:
+                belt_chest = _transport_belt_output_chest(observation)
+                if isinstance(belt_chest, dict) and entity_item_count(belt_chest, "transport-belt") > 0:
+                    position = _position(belt_chest)
+                    if distance(player, position) > 20:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": position},
+                            "move near belt mall output chest to collect transport belts for site input logistics",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "take",
+                            "item": "transport-belt",
+                            "count": min(entity_item_count(belt_chest, "transport-belt"), max(1, self.target_segments)),
+                            "unit_number": belt_chest.get("unit_number"),
+                            "name": belt_chest.get("name") or "wooden-chest",
+                            "position": position,
+                        },
+                        "take transport belts from the belt mall output chest as construction material for site input logistics",
+                    )
                 if isinstance(belt_assembler, dict) and entity_item_count(belt_assembler, "transport-belt") > 0:
                     position = _position(belt_assembler)
                     if distance(player, position) > 20:
@@ -11819,6 +11880,9 @@ class SiteInputLogisticLineSkill:
                 continue
             item_name = _available_logistics_line_inserter_item(observation)
             if item_name is None:
+                material_decision = _logistics_line_inserter_material_decision(observation, player, layout, label)
+                if material_decision is not None:
+                    return material_decision
                 protected_endpoint_units = {
                     int(endpoint.get("entity", {}).get("unit_number"))
                     for endpoint in (layout["source_inserter"], layout["target_inserter"])
@@ -12154,6 +12218,30 @@ class BuildItemMallSkill:
             if logistics_blocker is not None:
                 return logistics_blocker
             if inventory_count(observation, ingredient) <= 0:
+                if self.target_item == "automation-science-pack" and ingredient == "iron-gear-wheel":
+                    gear_chest = _nearest_buffered_chest_item_source(observation, ingredient, assembler_position)
+                    if isinstance(gear_chest, dict) and distance(_position(gear_chest), assembler_position) <= 8.0:
+                        position = _position(gear_chest)
+                        if distance(player, position) > 20:
+                            return PlannerDecision(
+                                {"type": "move_to", "position": position},
+                                "move near buffered gear chest for automation science input",
+                            )
+                        return PlannerDecision(
+                            {
+                                "type": "take",
+                                "item": ingredient,
+                                "count": min(entity_item_count(gear_chest, ingredient), needed_in_assembler),
+                                "unit_number": gear_chest.get("unit_number"),
+                                "name": gear_chest.get("name") or "wooden-chest",
+                                "position": position,
+                            },
+                            "take chest-buffered iron gears for automation-science-pack mall input",
+                        )
+                allow_output_gears = (
+                    ingredient == "iron-gear-wheel"
+                    and self.target_item == "transport-belt"
+                )
                 decision = self._ensure_item_quantity(
                     observation,
                     player,
@@ -12161,10 +12249,8 @@ class BuildItemMallSkill:
                     needed_in_assembler,
                     allow_existing_remote=allow_existing_remote,
                     reference_position=assembler_position,
-                    allow_assembler_output_gears=self.target_item == "transport-belt" and ingredient == "iron-gear-wheel",
-                    exclude_assembler_output_units={assembler.get("unit_number")}
-                    if self.target_item == "transport-belt" and ingredient == "iron-gear-wheel"
-                    else None,
+                    allow_assembler_output_gears=allow_output_gears,
+                    exclude_assembler_output_units={assembler.get("unit_number")} if allow_output_gears else None,
                 )
                 if decision is not None:
                     return decision

@@ -6,6 +6,7 @@ from typing import Any
 
 from .factory_readiness import FactoryReadiness, build_factory_readiness
 from .knowledge import dependency_tree, facility_legend, objective_roots, recipe_details, technology_chain
+from .knowledge import electric_mining_drill_dependency_milestones
 from .monitor import recent_damage_events, summarize_factory
 from .models import distance, entities_named, entity_item_count, inventory_count, player_position, total_item_count
 from .planner import (
@@ -529,13 +530,14 @@ SKILL_CATALOG: dict[str, SkillContract] = {
     ),
     "plan_factory_site": SkillContract(
         name="plan_factory_site",
-        description="Diagnose inefficient site layout, site-to-site logistics gaps, and expansion parameters before building more.",
+        description="Diagnose inefficient site layout, site-to-site logistics gaps, rebuild/relocation options, and expansion parameters before building more.",
         executor="FactoryLayoutImprovementSkill",
         preconditions=["observed factory sites", "site-level logistics links", "known near-term production goal"],
-        completion=["layout issues and recommended improvement parameters are logged for the next executor"],
+        completion=["layout issues, rebuild options, and recommended improvement parameters are logged for the next executor"],
         llm_scope=(
             "Choose when layout correction is more important than raw expansion. "
             "Use site graph, link status, distance, power, resource preservation, and corridor parameters; "
+            "retire or relocate obsolete starter-era processes only after a better replacement path is identified; "
             "do not emit exact tile placements."
         ),
     ),
@@ -650,6 +652,7 @@ def make_strategy_payload(
             "against future input/output traffic, and co-locate tightly coupled producer/consumer sites unless a trunk or rail corridor is justified. "
             "Do not hard-ban factories near power blocks, but account for lost boiler, engine, pole, fuel, water, and future power expansion clearance. "
             "When new buildings, inserters, modules, beacons, rails, quality tiers, or logistics tools unlock, re-evaluate site layout candidates because optimal footprint and bottlenecks can change. "
+            "Do not preserve obsolete starter-era process locations by default; compare teardown/rebuild and relocation options once a replacement path exists. "
             "For spatial work, choose districts, corridors, or rail topology only. "
             "When urgent production, defense, research, and power work are satisfied, use idle LLM cycles "
             "to improve factory site layout against reusable blueprint-style patterns. "
@@ -775,6 +778,24 @@ def make_layout_capability_context(observation: dict[str, Any]) -> dict[str, Any
         }
         for name, technology in furnace_techs.items()
     }
+    mining_drills = {
+        "electric-mining-drill": {
+            "available": _technology_researched(observation, "electric-mining-drill")
+            or _recipe_unlocked(observation, "electric-mining-drill")
+            or total_item_count(observation, "electric-mining-drill") > 0
+            or _entity_count_by_name(observation, "electric-mining-drill") > 0
+            or _recipe_assembler_exists(observation, "electric-mining-drill"),
+            "researched": _technology_researched(observation, "electric-mining-drill"),
+            "recipe_unlocked": _recipe_unlocked(observation, "electric-mining-drill"),
+            "stock": total_item_count(observation, "electric-mining-drill"),
+            "built": _entity_count_by_name(observation, "electric-mining-drill"),
+            "automated": _recipe_assembler_exists(observation, "electric-mining-drill"),
+            "layout_impact": (
+                "electric drills remove burner fuel logistics and can justify tearing down or relocating "
+                "starter burner-mining blocks instead of extending their old footprints"
+            ),
+        }
+    }
     beacons = {
         "beacon": {
             "available": _technology_researched(observation, "effect-transmission")
@@ -797,17 +818,20 @@ def make_layout_capability_context(observation: dict[str, Any]) -> dict[str, Any
         "modules": modules,
         "machines": machines,
         "furnaces": furnaces,
+        "mining_drills": mining_drills,
         "beacons": beacons,
         "rerank_trigger": bool(
             inserters["long-handed-inserter"]["available"]
             or any(row["available"] for row in modules.values())
             or any(row["available"] for row in machines.values())
             or any(row["available"] for row in furnaces.values())
+            or any(row["available"] for row in mining_drills.values())
             or any(row["available"] for row in beacons.values())
         ),
         "constraints": [
             "prefer long-handed inserters when they reduce belt crossings, input bottlenecks, or site footprint without harming expansion access",
-            "re-evaluate existing sites after new machines, inserters, modules, beacons, rails, or quality tiers unlock",
+            "re-evaluate existing sites after new machines, inserters, mining drills, modules, beacons, rails, or quality tiers unlock",
+            "retire or relocate obsolete starter blocks when the replacement layout improves throughput, fuel logistics, footprint, or expansion corridors",
             "record before/after layout metrics when a newly unlocked item improves footprint, throughput, power, pollution, or bottlenecks",
         ],
     }
@@ -947,87 +971,34 @@ def _electric_drill_dependency_milestones(
     observation: dict[str, Any],
     issue: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    automation_ready = _technology_researched(observation, "automation")
-    power_ready = _electric_network_available(observation)
-    electric_researched = _technology_researched(observation, "electric-mining-drill")
-    research_supply_ready = _electric_drill_research_supply_ready(observation)
-    circuit_ready = _circuit_automation_ready(observation)
+    ready_by_node = {
+        "automation": _technology_researched(observation, "automation"),
+        "electric power": _electric_network_available(observation),
+        "automation-science-pack": (
+            _electric_drill_research_supply_ready(observation)
+            or _technology_researched(observation, "electric-mining-drill")
+        ),
+        "electric-mining-drill technology": _technology_researched(observation, "electric-mining-drill"),
+        "electronic-circuit automation": _circuit_automation_ready(observation),
+    }
     drill_automated = bool(
         issue.get("electric_mining_drill_automated")
         if isinstance(issue, dict)
         else _recipe_assembler_exists(observation, "electric-mining-drill")
     )
-    return [
-        {
-            "node": "automation",
-            "kind": "technology",
-            "skill": "research_automation",
-            "purpose": "unlock assemblers so recurring science, circuits, and drill production are not hand-crafted",
-            "ready": automation_ready,
-            "blocked_by": [],
-        },
-        {
-            "node": "electric power",
-            "kind": "infrastructure",
-            "skill": "setup_power",
-            "purpose": "power labs, assemblers, regular inserters, and future electric mining drills",
-            "ready": power_ready,
-            "blocked_by": [] if automation_ready else ["automation"],
-        },
-        {
-            "node": "automation-science-pack",
-            "kind": "item_flow",
-            "skill": "produce_automation_science_pack",
-            "purpose": "stock red science for electric-mining-drill research",
-            "recipe": {"copper-plate": 1, "iron-gear-wheel": 1},
-            "ready": research_supply_ready or electric_researched,
-            "blocked_by": [
-                blocker
-                for blocker, ready in [
-                    ("automation", automation_ready),
-                    ("electric power", power_ready),
-                ]
-                if not ready
-            ],
-        },
-        {
-            "node": "electric-mining-drill technology",
-            "kind": "technology",
-            "technology": "electric-mining-drill",
-            "skill": "research_electric_mining_drill",
-            "purpose": "unlock the electric-mining-drill recipe before attempting the drill mall",
-            "requires": {"automation-science-pack": 25},
-            "ready": electric_researched,
-            "blocked_by": [] if research_supply_ready or electric_researched else ["automation-science-pack"],
-        },
-        {
-            "node": "electronic-circuit automation",
-            "kind": "item_flow",
-            "item": "electronic-circuit",
-            "skill": "automate_electronic_circuit_line",
-            "purpose": "supply 3 electronic circuits per electric mining drill without repeated hand crafting",
-            "recipe": {"iron-plate": 1, "copper-cable": 3},
-            "ready": circuit_ready,
-            "blocked_by": [] if electric_researched else ["electric-mining-drill technology"],
-        },
-        {
-            "node": "electric-mining-drill mall",
-            "kind": "item_flow",
-            "item": "electric-mining-drill",
-            "skill": "bootstrap_electric_mining_drill_mall",
-            "purpose": "produce drills by assembler before replacing burner miners",
-            "recipe": {"electronic-circuit": 3, "iron-gear-wheel": 5, "iron-plate": 10},
-            "ready": drill_automated,
-            "blocked_by": [
-                blocker
-                for blocker, ready in [
-                    ("electric-mining-drill technology", electric_researched),
-                    ("electronic-circuit automation", circuit_ready),
-                ]
-                if not ready
-            ],
-        },
-    ]
+    ready_by_node["electric-mining-drill mall"] = drill_automated
+    ready_by_node["legacy burner mining retirement"] = (
+        not isinstance(issue, dict) or _bounded_int(issue.get("burner_drill_count"), 0, 0, 999999) <= 0
+    )
+    milestones: list[dict[str, Any]] = []
+    for milestone in electric_mining_drill_dependency_milestones():
+        row = dict(milestone)
+        node = str(row.get("node") or "")
+        prerequisites = [str(item) for item in row.get("prerequisites", [])]
+        row["ready"] = bool(ready_by_node.get(node, False))
+        row["blocked_by"] = [prerequisite for prerequisite in prerequisites if not ready_by_node.get(prerequisite, False)]
+        milestones.append(row)
+    return milestones
 
 
 def _electric_drill_dependency_blocked_node(milestones: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -1037,11 +1008,24 @@ def _electric_drill_dependency_blocked_node(milestones: list[dict[str, Any]]) ->
     return None
 
 
+def _electric_drill_dependency_active_skill(
+    observation: dict[str, Any],
+    issue: dict[str, Any] | None,
+) -> str | None:
+    if not isinstance(issue, dict):
+        return None
+    blocked_node = _electric_drill_dependency_blocked_node(_electric_drill_dependency_milestones(observation, issue))
+    if not isinstance(blocked_node, dict):
+        return None
+    skill = str(blocked_node.get("skill") or "")
+    return skill or None
+
+
 def make_technology_dependency_context(observation: dict[str, Any]) -> dict[str, Any]:
     electric_drill_issue = _burner_drill_replacement_issue(observation)
-    active_skill = _electric_drill_upgrade_target_skill(electric_drill_issue)
     electric_milestones = _electric_drill_dependency_milestones(observation, electric_drill_issue)
     blocked_node = _electric_drill_dependency_blocked_node(electric_milestones)
+    active_skill = _electric_drill_dependency_active_skill(observation, electric_drill_issue)
     return {
         "llm_responsibility": (
             "Resolve technology and recipe prerequisites in dependency order. For electric mining drills, do not skip "
@@ -2308,7 +2292,7 @@ def reconcile_strategy_decision(
         "expand_iron_smelting",
         "expand_copper_smelting",
     }:
-        target_skill = _electric_drill_upgrade_target_skill(burner_drill_replacement_issue)
+        target_skill = _electric_drill_dependency_active_skill(observation, burner_drill_replacement_issue)
         if target_skill is not None and selected != target_skill:
             adjusted = dict(decision)
             adjusted["selected_skill"] = target_skill
@@ -2891,7 +2875,7 @@ def _heuristic_strategy_impl(
     if gear_mall_iron_plate_issue is not None:
         return _gear_mall_iron_plate_strategy_decision(gear_mall_iron_plate_issue)
 
-    electric_drill_upgrade_target = _electric_drill_upgrade_target_skill(burner_drill_replacement_issue)
+    electric_drill_upgrade_target = _electric_drill_dependency_active_skill(observation, burner_drill_replacement_issue)
     if electric_drill_upgrade_target == "produce_automation_science_pack":
         return StrategicDecision(
             selected_skill="produce_automation_science_pack",
@@ -2969,6 +2953,28 @@ def _heuristic_strategy_impl(
             ],
             blockers=["electric mining drill mall"],
             expected_effect="Produce electric mining drills by assembler so burner miners can be replaced without hand-crafting.",
+        ).to_dict()
+
+    if electric_drill_upgrade_target == "plan_factory_site":
+        return StrategicDecision(
+            selected_skill="plan_factory_site",
+            priority=88,
+            reason=(
+                "Electric mining drill production is available while burner mining drills still remain; benchmark a "
+                "rebuild or relocation plan instead of preserving starter-era mining positions by default."
+            ),
+            evidence=[
+                f"burner_mining_drill_count={burner_drill_replacement_issue.get('burner_drill_count')}",
+                f"electric_mining_drill_count={burner_drill_replacement_issue.get('electric_drill_count')}",
+                f"electric_mining_drill_stock={burner_drill_replacement_issue.get('electric_mining_drill_stock')}",
+                "electric_mining_drill_automated=true",
+                "legacy_burner_mining_retirement_ready=false",
+            ],
+            blockers=["legacy burner mining retirement"],
+            expected_effect=(
+                "Compare teardown/rebuild and relocation candidates, then replace burner mining blocks with "
+                "electric-drill layouts when the new site graph is better."
+            ),
         ).to_dict()
 
     if automation_researched and missing_input_source_issue is not None:
@@ -4161,20 +4167,6 @@ def _burner_drill_replacement_issue(observation: dict[str, Any]) -> dict[str, An
     }
 
 
-def _electric_drill_upgrade_target_skill(issue: dict[str, Any] | None) -> str | None:
-    if not isinstance(issue, dict):
-        return None
-    if not bool(issue.get("electric_mining_drill_researched")):
-        if not bool(issue.get("electric_drill_research_supply_ready")):
-            return "produce_automation_science_pack"
-        return "research_electric_mining_drill"
-    if not bool(issue.get("electronic_circuit_automated")):
-        return "automate_electronic_circuit_line"
-    if not bool(issue.get("electric_mining_drill_automated")):
-        return "bootstrap_electric_mining_drill_mall"
-    return None
-
-
 def _electric_drill_upgrade_reason(target_skill: str) -> str:
     if target_skill == "produce_automation_science_pack":
         return (
@@ -4191,6 +4183,11 @@ def _electric_drill_upgrade_reason(target_skill: str) -> str:
             "Electric mining drill technology is available, but the drill recipe requires electronic circuits; "
             "automate green circuits before building the electric mining drill mall."
         )
+    if target_skill == "plan_factory_site":
+        return (
+            "Electric mining drill production is available while burner mining drills still remain; compare "
+            "rebuild and relocation candidates before preserving starter-era mining positions."
+        )
     return (
         "Electric mining drill technology is available while burner mining drills remain; automate electric drill "
         "production before scaling more coal-fueled mining."
@@ -4204,6 +4201,8 @@ def _electric_drill_upgrade_blockers(target_skill: str) -> list[str]:
         return ["electric mining drill research"]
     if target_skill == "automate_electronic_circuit_line":
         return ["electronic circuit production for electric mining drills"]
+    if target_skill == "plan_factory_site":
+        return ["legacy burner mining retirement"]
     return ["electric mining drill mall"]
 
 
@@ -4214,6 +4213,8 @@ def _electric_drill_upgrade_expected_effect(target_skill: str) -> str:
         return "Unlock electric mining drills before adding more burner-drill mining capacity."
     if target_skill == "automate_electronic_circuit_line":
         return "Build recurring electronic-circuit output so electric mining drills can be produced by assembler."
+    if target_skill == "plan_factory_site":
+        return "Benchmark teardown/rebuild or relocation candidates for replacing burner mining blocks with electric drills."
     return "Produce electric mining drills by assembler so burner miners can be replaced without hand-crafting."
 
 
@@ -4469,7 +4470,10 @@ def _satisfied_gear_belt_mall_guardrail_adjustment(
                 target_evidence.append("coal_fuel_feed_preempts_source_builder=true")
 
     if not target_skill:
-        electric_target = _electric_drill_upgrade_target_skill(_burner_drill_replacement_issue(observation))
+        electric_target = _electric_drill_dependency_active_skill(
+            observation,
+            _burner_drill_replacement_issue(observation),
+        )
         if electric_target:
             target_skill = electric_target
             blocker = _electric_drill_upgrade_blockers(electric_target)[0]

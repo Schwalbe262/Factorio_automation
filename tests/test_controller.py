@@ -2654,6 +2654,47 @@ class StallWatchdogTests(unittest.TestCase):
             )
             self.assertNotEqual(before, after)
 
+    def test_ongoing_research_override_keeps_electric_drill_research_without_llm(self):
+        observation = {
+            "inventory": {},
+            "entities": [],
+            "research": {
+                "current": "electric-mining-drill",
+                "progress": 0.32,
+                "technologies": {"electric-mining-drill": {"researched": False}},
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FactorioController(make_test_config(Path(tmp)))
+            with patch(
+                "factorio_ai.controller.heuristic_strategy",
+                return_value={"selected_skill": "setup_coal_supply"},
+            ) as heuristic:
+                skill = controller._ongoing_research_override_skill("launch_rocket_program", observation)
+
+        self.assertEqual(skill, "research_electric_mining_drill")
+        heuristic.assert_not_called()
+
+    def test_ongoing_research_override_does_not_fight_dependency_replan(self):
+        observation = {
+            "inventory": {},
+            "entities": [],
+            "research": {
+                "current": "logistics",
+                "progress": 0.05,
+                "technologies": {"logistics": {"researched": False}},
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FactorioController(make_test_config(Path(tmp)))
+            with patch(
+                "factorio_ai.controller.heuristic_strategy",
+                return_value={"selected_skill": "research_electric_mining_drill"},
+            ):
+                skill = controller._ongoing_research_override_skill("launch_rocket_program", observation)
+
+        self.assertIsNone(skill)
+
     def test_stall_recovery_returns_skill_other_than_stalled_one(self):
         observation = {
             "player": {"position": {"x": 0, "y": 0}},

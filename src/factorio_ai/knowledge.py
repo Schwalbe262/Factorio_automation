@@ -30,6 +30,33 @@ class Technology:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class DependencyMilestone:
+    node: str
+    kind: str
+    skill: str
+    purpose: str
+    prerequisites: tuple[str, ...] = ()
+    item: str | None = None
+    technology: str | None = None
+    recipe_item: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["prerequisites"] = list(self.prerequisites)
+        if self.recipe_item:
+            recipe = recipe_for_product(self.recipe_item)
+            if recipe is not None:
+                data["recipe"] = {name: _num(amount) for name, amount in recipe.ingredients.items()}
+        if self.technology:
+            technology = ALL_TECHNOLOGIES.get(self.technology)
+            if technology is not None:
+                data["requires"] = {name: _num(amount) for name, amount in technology.science_packs.items()}
+                data["technology_prerequisites"] = list(technology.prerequisites)
+                data["unlocks"] = list(technology.unlocks)
+        return data
+
+
 RECIPES: dict[str, Recipe] = {
     "iron-plate": Recipe("iron-plate", 3.2, {"iron-ore": 1}, {"iron-plate": 1}),
     "copper-plate": Recipe("copper-plate", 3.2, {"copper-ore": 1}, {"copper-plate": 1}),
@@ -643,6 +670,78 @@ def recipe_for_product(item: str) -> Recipe | None:
         return None
     name = _canonical_product_map().get(item)
     return ALL_RECIPES.get(name) if name else None
+
+
+_ELECTRIC_MINING_DRILL_DEPENDENCY: tuple[DependencyMilestone, ...] = (
+    DependencyMilestone(
+        node="automation",
+        kind="technology",
+        technology="automation",
+        skill="research_automation",
+        purpose="unlock assemblers so recurring science, circuits, and drill production are not hand-crafted",
+    ),
+    DependencyMilestone(
+        node="electric power",
+        kind="infrastructure",
+        skill="setup_power",
+        purpose="power labs, assemblers, regular inserters, and future electric mining drills",
+        prerequisites=("automation",),
+    ),
+    DependencyMilestone(
+        node="automation-science-pack",
+        kind="item_flow",
+        item="automation-science-pack",
+        recipe_item="automation-science-pack",
+        skill="produce_automation_science_pack",
+        purpose="stock red science for electric-mining-drill research",
+        prerequisites=("automation", "electric power"),
+    ),
+    DependencyMilestone(
+        node="electric-mining-drill technology",
+        kind="technology",
+        technology="electric-mining-drill",
+        skill="research_electric_mining_drill",
+        purpose="unlock the electric-mining-drill recipe before attempting the drill mall",
+        prerequisites=("automation-science-pack",),
+    ),
+    DependencyMilestone(
+        node="electronic-circuit automation",
+        kind="item_flow",
+        item="electronic-circuit",
+        recipe_item="electronic-circuit",
+        skill="automate_electronic_circuit_line",
+        purpose="supply 3 electronic circuits per electric mining drill without repeated hand crafting",
+        prerequisites=("electric-mining-drill technology",),
+    ),
+    DependencyMilestone(
+        node="electric-mining-drill mall",
+        kind="item_flow",
+        item="electric-mining-drill",
+        recipe_item="electric-mining-drill",
+        skill="bootstrap_electric_mining_drill_mall",
+        purpose="produce drills by assembler before replacing burner miners",
+        prerequisites=("electric-mining-drill technology", "electronic-circuit automation"),
+    ),
+    DependencyMilestone(
+        node="legacy burner mining retirement",
+        kind="migration",
+        skill="plan_factory_site",
+        purpose=(
+            "compare rebuild/relocation candidates and retire burner-mining-drill blocks once electric drills "
+            "can replace them without preserving bad starter-era positions"
+        ),
+        prerequisites=("electric-mining-drill mall",),
+    ),
+)
+
+
+def electric_mining_drill_dependency_milestones() -> list[dict[str, Any]]:
+    """Canonical early-game dependency path for replacing burner miners.
+
+    This mixes research gates with production gates because the drill recipe is
+    researched separately from its required electronic-circuit supply.
+    """
+    return [milestone.to_dict() for milestone in _ELECTRIC_MINING_DRILL_DEPENDENCY]
 
 
 def _collect_required(item: str, output: set[str], max_depth: int) -> None:

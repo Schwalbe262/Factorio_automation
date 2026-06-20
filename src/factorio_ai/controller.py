@@ -1446,6 +1446,32 @@ class FactorioController:
         entity_count = len(entities) if isinstance(entities, list) else 0
         return (entity_count, self._progress_fingerprint(observation))
 
+    def _ongoing_research_override_skill(self, objective: str, observation: dict[str, Any]) -> str | None:
+        """Keep feeding an already-active research dependency without waiting on another LLM turn."""
+        research = observation.get("research") if isinstance(observation.get("research"), dict) else {}
+        current = str(research.get("current_research") or research.get("current") or "")
+        research_skill_by_technology = {
+            "logistics": "research_logistics",
+            "electric-mining-drill": "research_electric_mining_drill",
+        }
+        skill = research_skill_by_technology.get(current)
+        if not skill or self._skill_run_config(skill) is None:
+            return None
+        techs = research.get("technologies") if isinstance(research.get("technologies"), dict) else {}
+        tech_state = techs.get(current) if isinstance(techs.get(current), dict) else {}
+        if bool(tech_state.get("researched")):
+            return None
+        if current == "electric-mining-drill":
+            return skill
+        try:
+            production_targets = load_targets(self.cfg.runtime_dir, objective).per_minute
+            selected = str(heuristic_strategy(objective, observation, production_targets).get("selected_skill") or "")
+        except Exception:  # noqa: BLE001 - a fast-path failure should fall back to normal strategy.
+            return None
+        if selected != skill:
+            return None
+        return skill
+
     def _quarantine_generated_skill(self, skill_name: str, reason: str, *, signal: str) -> None:
         from . import skill_foundry
 
@@ -1724,6 +1750,22 @@ class FactorioController:
                     elif override_skill is None:
                         # A fresh LLM strategy decision is about to run; reset the skip budget.
                         commit_skips = 0
+                        try:
+                            research_obs = self.observe()
+                            research_skill = self._ongoing_research_override_skill(objective, research_obs)
+                        except Exception:  # noqa: BLE001 - normal strategy path can handle observe/LLM errors.
+                            research_skill = None
+                        if research_skill is not None:
+                            override_skill = research_skill
+                            self._write_autopilot_heartbeat(
+                                objective,
+                                "research_commit",
+                                cycle=completed + 1,
+                                reason=(
+                                    f"continuing active research with '{research_skill}' without waiting for a fresh "
+                                    "LLM strategy turn"
+                                ),
+                            )
                     # After repeated failures, degrade this one cycle to the heuristic so a hung/erroring
                     # serving can't freeze progress (the agent otherwise sits frozen mid-action). An
                     # override_skill cycle already bypasses the LLM, so only degrade plain cycles.

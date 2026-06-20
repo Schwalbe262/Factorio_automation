@@ -798,6 +798,7 @@ end
 local function collect_research()
   local watched = {
     "steam-power", "electronics", "automation-science-pack", "automation", "logistics", "long-inserters",
+    "electric-mining-drill",
     "steel-processing", "advanced-material-processing", "advanced-material-processing-2",
     "automation-2", "automation-3", "fast-inserter", "stack-inserter",
     "modules", "speed-module", "speed-module-2", "speed-module-3",
@@ -819,6 +820,7 @@ local function collect_research()
 end
 local function collect_recipe_unlocks()
   local watched = {
+    "electric-mining-drill",
     "long-handed-inserter", "fast-inserter", "stack-inserter", "bulk-inserter",
     "assembling-machine-2", "assembling-machine-3",
     "steel-furnace", "electric-furnace",

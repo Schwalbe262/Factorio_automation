@@ -70,6 +70,7 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn('observed_from = source_spec.source', command)
         self.assertIn("resources = collect_resources(base_anchor)", command)
         self.assertIn('"long-inserters"', command)
+        self.assertIn('"electric-mining-drill"', command)
         self.assertIn('"automation-2"', command)
         self.assertIn('"automation-3"', command)
         self.assertIn('"advanced-material-processing"', command)

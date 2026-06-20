@@ -2418,6 +2418,41 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("long-handed-inserter", opportunity["parameters"]["retool_tools"])
         self.assertIn("build_item_mall", opportunity["parameters"]["affected_site_kinds"])
 
+    def test_factory_layout_adds_unlock_reassessment_when_electric_drills_replace_burner_mining(self):
+        obs = base_observation()
+        obs["research"]["technologies"]["electric-mining-drill"] = {"researched": True}
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 1,
+                "position": {"x": 4, "y": 0},
+                "inventories": {"1": {"coal": 1}},
+            },
+            {"name": "transport-belt", "position": {"x": 6, "y": 0}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "position": {"x": 7, "y": 0}, "direction": 4, "inventories": {}},
+            {
+                "name": "burner-inserter",
+                "position": {"x": 8, "y": 0},
+                "direction": 4,
+                "inventories": {"1": {"coal": 1}},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 2,
+                "position": {"x": 9, "y": 0},
+                "inventories": {"1": {"coal": 1}},
+            },
+        ]
+
+        opportunities = factory_layout_opportunities(obs)
+        opportunity = next(item for item in opportunities if item["kind"] == "unlock_layout_reassessment")
+
+        self.assertIn("electric-mining-drill", opportunity["parameters"]["retool_tools"])
+        self.assertIn("plate_smelting_line", opportunity["parameters"]["affected_site_kinds"])
+        self.assertTrue(
+            any("burner-mining-drill" in pattern for pattern in opportunity["parameters"]["obsolete_patterns"])
+        )
+
     def test_factory_layout_flags_splitter_fanout_for_one_source_two_consumers(self):
         class Link:
             def __init__(self, row):
@@ -3021,11 +3056,47 @@ class PlannerTests(unittest.TestCase):
 
         decision = AutomationScienceSkill(target_count=5).next_action(obs)
 
-        self.assertEqual(decision.action["type"], "craft")
-        self.assertEqual(decision.action["recipe"], "iron-gear-wheel")
-        self.assertTrue(decision.action["bootstrap_seed"])
-        self.assertEqual(decision.metadata["seed_reason"], "virtual_agent_automation-science-pack_mall_gear_seed")
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 980)
         self.assertNotIn("wait for iron gear wheel mall output", decision.reason)
+
+    def test_science_mall_takes_automated_output_gears_for_input(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["craftable"] = {}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="automation-science-pack",
+                gear_inventory={},
+                belt_inventory={"copper-plate": 4},
+            )
+        )
+        obs["entities"].extend(
+            [
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 980,
+                    "position": {"x": 5.0, "y": 2.0},
+                    "inventories": {"1": {"iron-gear-wheel": 12}},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 981,
+                    "position": {"x": 4.0, "y": 2.0},
+                    "direction": 12,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("automation-science-pack", 5).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 980)
+        self.assertIn("chest-buffered iron gears", decision.reason)
 
     def test_science_skill_replenishes_inventory_iron_before_missing_gears(self):
         obs = base_observation()
@@ -8440,6 +8511,52 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 901)
         self.assertNotEqual(decision.action.get("item"), "copper-plate")
 
+    def test_site_input_logistic_line_takes_belts_from_belt_mall_output_chest(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt"),
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 980,
+                    "position": {"x": 5.0, "y": 2.0},
+                    "inventories": {"1": {"transport-belt": 8}},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 981,
+                    "position": {"x": 4.0, "y": 2.0},
+                    "direction": 12,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": -8, "y": 8},
+                    "recipe": "copper-plate",
+                    "inventories": {"3": {"copper-plate": 20}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 951,
+                    "position": {"x": 8, "y": 8},
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = SiteInputLogisticLineSkill(20, item="copper-plate").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "transport-belt")
+        self.assertEqual(decision.action["unit_number"], 980)
+        self.assertIn("output chest", decision.reason)
+
     def test_site_input_logistic_line_places_belt_without_item_handcarry(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"transport-belt": 4}
@@ -8746,8 +8863,69 @@ class PlannerTests(unittest.TestCase):
 
         decision = SiteInputLogisticLineSkill(20, item="iron-plate").next_action(obs)
 
-        self.assertIsNone(decision.action)
-        self.assertIn("missing inserter for site consumer input inserter", decision.reason)
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertNotEqual(decision.action.get("unit_number"), 970)
+        self.assertIn("site consumer input inserter", decision.reason)
+
+    def test_site_input_logistic_line_takes_buffered_gears_for_endpoint_inserter(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 1, "electronic-circuit": 1}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt"),
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": -12, "y": 8},
+                    "recipe": "iron-plate",
+                    "inventories": {"3": {"iron-plate": 20}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 952,
+                    "position": {"x": 8, "y": 8},
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {},
+                },
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 990,
+                    "position": {"x": 0, "y": 8},
+                    "inventories": {"1": {"iron-gear-wheel": 8}},
+                },
+            ]
+        )
+        layout = planner_module._find_site_input_logistic_line_layout(obs, item="iron-plate")
+        for index, segment in enumerate(layout["segments"], start=980):
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": index,
+                    "position": segment["position"],
+                    "direction": segment["direction"],
+                    "inventories": {},
+                }
+            )
+        obs["entities"].append(
+            {
+                "name": "inserter",
+                "unit_number": 970,
+                "position": layout["source_inserter"]["position"],
+                "direction": layout["source_inserter"]["direction"],
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
+
+        decision = SiteInputLogisticLineSkill(20, item="iron-plate").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 990)
+        self.assertIn("site consumer input inserter", decision.reason)
 
     def test_site_input_logistic_line_refuses_without_belt_automation(self):
         obs = powered_automation_observation()
