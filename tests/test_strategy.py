@@ -1,5 +1,6 @@
 import unittest
 
+from factorio_ai import planner as planner_module
 from factorio_ai.strategy import (
     heuristic_strategy,
     make_layout_improvement_context,
@@ -955,6 +956,54 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("site_input_status=route_needed", result["evidence"])
         self.assertIn("source_distance_tiles=20.9", result["evidence"])
         self.assertIn("transport_belts_available_for_mall_logistics=true", result["evidence"])
+
+    def test_rocket_goal_does_not_repeat_completed_gear_mall_plate_line(self):
+        observation = gear_mall_short_site_input_route_observation()
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(observation)
+        self.assertIsInstance(layout, dict)
+        next_unit = 900
+        for segment in layout["segments"]:
+            observation["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": next_unit,
+                    "position": segment["position"],
+                    "direction": segment["direction"],
+                    "inventories": {},
+                }
+            )
+            next_unit += 1
+        for spec in (layout["source_inserter"], layout["target_inserter"]):
+            observation["entities"].append(
+                {
+                    "name": "inserter",
+                    "unit_number": next_unit,
+                    "position": spec["position"],
+                    "direction": spec["direction"],
+                    "electric_network_connected": True,
+                    "inventories": {},
+                }
+            )
+            next_unit += 1
+
+        result = heuristic_strategy("launch_rocket_program", observation)
+
+        self.assertNotEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
+        reconciled = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 50,
+                "reason": "layout",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+        self.assertNotEqual(reconciled["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertNotEqual(reconciled["selected_skill"], "relocate_gear_belt_mall_to_iron_source")
 
     def test_rocket_goal_repairs_power_before_unpowered_gear_mall_logistics(self):
         observation = gear_mall_needs_plate_line_observation()

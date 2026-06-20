@@ -12,6 +12,7 @@ from .planner import (
     _direct_gear_transfer_blocked,
     _find_gear_belt_mall_relocation_layout,
     _find_gear_belt_mall_logistics_layout,
+    _find_iron_plate_logistic_line_to_gear_mall_layout,
     _find_site_input_logistic_line_layout,
     _gear_belt_mall_relocation_power_corridor_positions,
     _missing_power_corridor_positions,
@@ -4400,6 +4401,8 @@ def _gear_mall_iron_plate_site_input_issue(
     source_distance = _distance(source_position, consumer_position)
     if source_position is None or consumer_position is None or source_distance is None:
         return None
+    if _gear_mall_specialized_plate_line_complete(observation, consumer):
+        return None
     route_cost = _gear_mall_plate_route_cost_estimate(observation, source_position, consumer_position)
     return {
         "gear_unit": consumer.get("unit_number"),
@@ -4411,6 +4414,30 @@ def _gear_mall_iron_plate_site_input_issue(
         "site_input_status": "route_needed",
         **route_cost,
     }
+
+
+def _gear_mall_specialized_plate_line_complete(observation: dict[str, Any], gear_assembler: dict[str, Any]) -> bool:
+    layout = _find_iron_plate_logistic_line_to_gear_mall_layout(observation)
+    if not isinstance(layout, dict):
+        return False
+    layout_gear = layout.get("gear_assembler")
+    if not isinstance(layout_gear, dict):
+        return False
+    if layout_gear.get("unit_number") != gear_assembler.get("unit_number"):
+        return False
+    segments = layout.get("segments") if isinstance(layout.get("segments"), list) else []
+    if not segments or any(not isinstance(segment.get("entity"), dict) for segment in segments if isinstance(segment, dict)):
+        return False
+    for key in ("source_inserter", "target_inserter"):
+        spec = layout.get(key)
+        if not isinstance(spec, dict):
+            return False
+        entity = spec.get("entity")
+        if not isinstance(entity, dict):
+            return False
+        if _direction_or_default(entity.get("direction"), 0) != int(spec.get("direction") or 0):
+            return False
+    return True
 
 
 def _relocated_gear_belt_mall_target_issue(
@@ -4429,6 +4456,8 @@ def _relocated_gear_belt_mall_target_issue(
         compact_belt = relocation_layout.get("belt_assembler")
         gear = target_gear if isinstance(target_gear, dict) else compact_gear
         belt = target_belt if isinstance(target_belt, dict) else compact_belt
+        if isinstance(gear, dict) and _gear_mall_specialized_plate_line_complete(observation, gear):
+            return None
         if isinstance(source, dict) and (isinstance(gear, dict) or isinstance(belt, dict)):
             route_cost = {
                 "belt_route_tiles_estimate": relocation_layout.get("belt_route_tiles_estimate"),
