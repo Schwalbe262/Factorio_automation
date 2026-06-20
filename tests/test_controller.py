@@ -311,6 +311,71 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(run.seed_count, 1)
         self.assertIn("bootstrap seed already attempted", run.reason)
 
+    def test_run_skill_allows_bootstrap_seed_topoff_with_different_count(self):
+        observation = {
+            "tick": 1,
+            "inventory": {"iron-plate": 4},
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 10,
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 0, "y": 0},
+                    "electric_network_connected": True,
+                }
+            ],
+            "research": {"technologies": {"automation": {"researched": True}}},
+        }
+
+        class TopoffSeedSkill:
+            def __init__(self):
+                self.counts = [1, 2, 2]
+
+            def next_action(self, _observation):
+                count = self.counts.pop(0)
+                return PlannerDecision(
+                    {
+                        "type": "insert",
+                        "item": "iron-plate",
+                        "count": count,
+                        "unit_number": 10,
+                        "name": "assembling-machine-1",
+                        "position": {"x": 0, "y": 0},
+                        "bootstrap_seed": True,
+                        "seed_reason": "test_seed",
+                        "expected_followup": "test output increases",
+                    },
+                    "seed topoff",
+                    metadata={
+                        "bootstrap_seed": True,
+                        "seed_reason": "test_seed",
+                        "expected_followup": "test output increases",
+                    },
+                )
+
+        class FakeController(FactorioController):
+            def observe(self):
+                return observation
+
+            def act(self, _action):
+                return {"ok": True}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_test_config(Path(tmp))
+            controller = FakeController(cfg)
+            run = controller._run_skill(
+                TopoffSeedSkill(),
+                target_item="transport-belt",
+                target=1,
+                goal="test_seed",
+                max_steps=4,
+                log_prefix="test-seed-topoff",
+            )
+
+        self.assertFalse(run.ok)
+        self.assertEqual(run.seed_count, 2)
+        self.assertIn("bootstrap seed already attempted", run.reason)
+
     def test_run_skill_allows_repeated_bootstrap_seed_after_followup_item_increases(self):
         observations = [
             {

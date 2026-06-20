@@ -590,6 +590,7 @@ def _bootstrap_seed_action_key(action: dict[str, Any] | None) -> tuple[Any, ...]
     return (
         action.get("type"),
         action.get("recipe") or action.get("item"),
+        action.get("count"),
         action.get("unit_number"),
         action.get("name"),
         action.get("seed_reason"),
