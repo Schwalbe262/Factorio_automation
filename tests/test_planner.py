@@ -1179,7 +1179,7 @@ class PlannerTests(unittest.TestCase):
 
     def test_coal_fuel_feed_takes_buffered_gears_for_local_feed_inserter(self):
         obs = base_observation()
-        obs["inventory"] = {"transport-belt": 1, "iron-plate": 1, "coal": 1}
+        obs["inventory"] = {"transport-belt": 1, "iron-plate": 1, "electronic-circuit": 1, "coal": 1}
         obs["research"]["technologies"]["automation"]["researched"] = True
         obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
         obs["entities"] = [
@@ -1359,7 +1359,7 @@ class PlannerTests(unittest.TestCase):
 
     def test_coal_fuel_feed_places_boiler_inserter_after_belt_route(self):
         obs = base_observation()
-        obs["inventory"] = {"transport-belt": 1, "burner-inserter": 1, "coal": 1}
+        obs["inventory"] = {"transport-belt": 1, "inserter": 1, "coal": 1}
         obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
         obs["entities"] = [
             {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
@@ -1374,13 +1374,13 @@ class PlannerTests(unittest.TestCase):
         decision = CoalFuelFeedSkill().next_action(obs)
 
         self.assertEqual(decision.action["type"], "build")
-        self.assertEqual(decision.action["name"], "burner-inserter")
+        self.assertEqual(decision.action["name"], "inserter")
         self.assertEqual(decision.action["position"], {"x": 6.0, "y": 0.0})
         self.assertEqual(decision.action["direction"], 12)
 
     def test_coal_fuel_feed_takes_assembler_gears_for_boiler_feed_inserter(self):
         obs = base_observation()
-        obs["inventory"] = {"transport-belt": 1, "iron-plate": 1, "coal": 1}
+        obs["inventory"] = {"transport-belt": 1, "iron-plate": 1, "electronic-circuit": 1, "coal": 1}
         obs["research"]["technologies"]["automation"]["researched"] = True
         obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
         obs["entities"] = [
@@ -1406,7 +1406,7 @@ class PlannerTests(unittest.TestCase):
 
         self.assertEqual(decision.action["type"], "take")
         self.assertEqual(decision.action["item"], "iron-gear-wheel")
-        self.assertIn("burner-inserter infrastructure", decision.reason)
+        self.assertIn("boiler coal feed construction", decision.reason)
 
     def test_coal_fuel_feed_relocates_existing_inserter_for_boiler_feed(self):
         obs = base_observation()
@@ -1420,7 +1420,14 @@ class PlannerTests(unittest.TestCase):
             {"name": "transport-belt", "unit_number": 23, "position": {"x": 3.5, "y": 0.5}, "direction": 4, "inventories": {}},
             {"name": "transport-belt", "unit_number": 24, "position": {"x": 4.5, "y": 0.5}, "direction": 4, "inventories": {}},
             {"name": "transport-belt", "unit_number": 26, "position": {"x": 5.5, "y": 0.5}, "direction": 4, "inventories": {}},
-            {"name": "burner-inserter", "unit_number": 27, "position": {"x": -8, "y": -8}, "direction": 4, "inventories": {}},
+            {
+                "name": "inserter",
+                "unit_number": 27,
+                "position": {"x": -8, "y": -8},
+                "direction": 4,
+                "electric_network_connected": True,
+                "inventories": {},
+            },
             {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
         ]
 
@@ -1447,10 +1454,10 @@ class PlannerTests(unittest.TestCase):
 
         decision = CoalFuelFeedSkill().next_action(obs)
 
-        self.assertEqual(decision.action["type"], "insert")
-        self.assertEqual(decision.action["item"], "coal")
-        self.assertEqual(decision.action["unit_number"], 25)
-        self.assertEqual(decision.action["name"], "burner-inserter")
+        self.assertIsNone(decision.action)
+        self.assertFalse(decision.done)
+        self.assertIn("powered inserter", decision.reason)
+        self.assertIn("refusing to fuel burner inserter", decision.reason)
 
     def test_coal_fuel_feed_detects_tile_centered_boiler_inserter_after_build(self):
         obs = base_observation()
@@ -1463,14 +1470,20 @@ class PlannerTests(unittest.TestCase):
             {"name": "transport-belt", "unit_number": 23, "position": {"x": 3.5, "y": 0.5}, "direction": 4, "inventories": {}},
             {"name": "transport-belt", "unit_number": 24, "position": {"x": 4.5, "y": 0.5}, "direction": 4, "inventories": {}},
             {"name": "transport-belt", "unit_number": 26, "position": {"x": 5.5, "y": 0.5}, "direction": 4, "inventories": {}},
-            {"name": "burner-inserter", "unit_number": 25, "position": {"x": 6.0, "y": 0.5}, "direction": 12, "inventories": {}},
+            {
+                "name": "inserter",
+                "unit_number": 25,
+                "position": {"x": 6.0, "y": 0.5},
+                "direction": 12,
+                "electric_network_connected": True,
+                "inventories": {},
+            },
             {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
         ]
 
         decision = CoalFuelFeedSkill().next_action(obs)
 
-        self.assertEqual(decision.action["type"], "insert")
-        self.assertEqual(decision.action["unit_number"], 25)
+        self.assertEqual(decision.action["type"], "wait")
         self.assertNotEqual(decision.action["type"], "mine")
 
     def test_coal_fuel_feed_done_when_boiler_receives_belt_fed_coal(self):
@@ -1484,7 +1497,14 @@ class PlannerTests(unittest.TestCase):
             {"name": "transport-belt", "unit_number": 23, "position": {"x": 3.5, "y": 0.5}, "direction": 4, "inventories": {}},
             {"name": "transport-belt", "unit_number": 24, "position": {"x": 4.5, "y": 0.5}, "direction": 4, "inventories": {}},
             {"name": "transport-belt", "unit_number": 26, "position": {"x": 5.5, "y": 0.5}, "direction": 4, "inventories": {}},
-            {"name": "burner-inserter", "unit_number": 25, "position": {"x": 6, "y": 0}, "direction": 12, "inventories": {"1": {"coal": 1}}},
+            {
+                "name": "inserter",
+                "unit_number": 25,
+                "position": {"x": 6, "y": 0},
+                "direction": 12,
+                "electric_network_connected": True,
+                "inventories": {},
+            },
             {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "working", "inventories": {"1": {"coal": 1}}},
         ]
 
@@ -6023,16 +6043,17 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["direction"], planner_module.NORTH)
         self.assertEqual(decision.action["underground_type"], "input")
 
-    def test_build_item_mall_refuses_player_gear_output_collection_after_automation(self):
+    def test_build_item_mall_buffers_gear_output_after_automation(self):
         obs = powered_automation_observation()
-        obs["inventory"] = {}
+        obs["inventory"] = {"wooden-chest": 1}
         obs["craftable"] = {"iron-gear-wheel": 5}
         obs["entities"].append(mall_assembler(recipe="iron-gear-wheel", inventory={"iron-gear-wheel": 4}))
 
         decision = BuildItemMallSkill("iron-gear-wheel", 4).next_action(obs)
 
-        self.assertEqual(decision.action["type"], "wait")
-        self.assertIn("refusing player collection of iron gear wheels", decision.reason)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "wooden-chest")
+        self.assertIn("output chest for iron-gear-wheel mall", decision.reason)
 
     def test_build_item_mall_repurposes_existing_assembler_for_gears_before_handcrafting(self):
         obs = powered_automation_observation()
@@ -6213,6 +6234,13 @@ class PlannerTests(unittest.TestCase):
 
         self.assertEqual(decision.action["type"], "craft")
         self.assertEqual(decision.action["recipe"], "inserter")
+
+    def test_build_item_mall_does_not_use_burner_output_inserter_fallback(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"burner-inserter": 1}
+
+        self.assertIsNone(planner_module._available_build_item_mall_output_inserter_name(obs))
+        self.assertEqual(planner_module._build_item_mall_missing_output_inserter_item(obs), "inserter")
 
     def test_build_item_mall_takes_assembler_gears_for_output_inserter_infrastructure(self):
         obs = powered_automation_observation()
@@ -6727,7 +6755,7 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["position"], {"x": 3, "y": 0})
         self.assertEqual(decision.action["direction"], 8)
 
-    def test_gear_belt_mall_uses_burner_output_inserter_only_before_regular_inserters_are_usable(self):
+    def test_gear_belt_mall_refuses_new_burner_output_inserter_when_regular_unavailable(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"burner-inserter": 1}
         obs["entities"].extend(
@@ -6758,9 +6786,8 @@ class PlannerTests(unittest.TestCase):
 
         decision = GearBeltMallLogisticsSkill(20).next_action(obs)
 
-        self.assertEqual(decision.action["type"], "build")
-        self.assertEqual(decision.action["name"], "burner-inserter")
-        self.assertEqual(decision.action["position"], {"x": 3, "y": 0})
+        self.assertIsNone(decision.action)
+        self.assertIn("missing inserter for gear mall output inserter", decision.reason)
 
     def test_gear_belt_mall_crafts_regular_inserter_instead_of_burner_when_regular_is_usable(self):
         obs = powered_automation_observation()
@@ -7894,7 +7921,7 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(layout["target_inserter"]["position"], {"x": 83.5, "y": -55.5})
         self.assertEqual(layout["target_inserter"]["direction"], planner_module.SOUTH)
 
-    def test_iron_plate_logistic_line_fuels_burner_endpoint_inserter(self):
+    def test_iron_plate_logistic_line_refuses_to_fuel_burner_endpoint_inserter(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"coal": 2}
         obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
@@ -7942,10 +7969,9 @@ class PlannerTests(unittest.TestCase):
 
         decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
 
-        self.assertEqual(decision.action["type"], "insert")
-        self.assertEqual(decision.action["item"], "coal")
-        self.assertEqual(decision.action["unit_number"], 981)
-        self.assertIn("fuel gear mall iron input inserter", decision.reason)
+        self.assertIsNone(decision.action)
+        self.assertIn("gear mall iron input inserter needs a powered inserter", decision.reason)
+        self.assertIn("refusing to fuel burner inserter", decision.reason)
 
     def test_iron_plate_logistic_line_repairs_unpowered_endpoint_inserter(self):
         obs = powered_automation_observation()

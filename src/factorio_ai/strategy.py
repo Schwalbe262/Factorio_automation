@@ -5,12 +5,14 @@ from math import ceil
 from typing import Any
 
 from .factory_readiness import FactoryReadiness, build_factory_readiness
-from .knowledge import facility_legend, objective_roots, recipe_details
+from .knowledge import dependency_tree, facility_legend, objective_roots, recipe_details, technology_chain
 from .monitor import recent_damage_events, summarize_factory
 from .models import distance, entities_named, entity_item_count, inventory_count, player_position, total_item_count
 from .planner import (
+    _boiler_has_belt_fuel_feed,
     _boiler_coal_feed_missing_belt_count,
     _direct_gear_transfer_blocked,
+    _entity_burner_fuel_count,
     _find_gear_belt_mall_relocation_layout,
     _find_gear_belt_mall_logistics_layout,
     _find_iron_plate_logistic_line_to_gear_mall_layout,
@@ -32,7 +34,6 @@ BUILD_ITEM_MALL_ITEMS = [
     "transport-belt",
     "inserter",
     "long-handed-inserter",
-    "burner-inserter",
     "firearm-magazine",
     "gun-turret",
     "burner-mining-drill",
@@ -41,6 +42,7 @@ BUILD_ITEM_MALL_ITEMS = [
     "small-electric-pole",
     "assembling-machine-1",
 ]
+GEAR_MALL_OUTPUT_LOGISTICS_STOCK_TARGET = 20
 PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT = 128.0
 SMALL_POWER_POLE_REACH = 7.5
 GEAR_MALL_RELOCATION_FIXED_COST = 18.0
@@ -396,7 +398,8 @@ SKILL_CATALOG: dict[str, SkillContract] = {
         preconditions=[
             "electric-mining-drill technology researched",
             "electric power available",
-            "iron plates, iron gears, and electronic circuits available through nearby logistics or producer cells",
+            "electronic-circuit production or nearby circuit logistics is ready; each electric drill requires 3 circuits",
+            "iron plates and iron gears are available through nearby logistics or producer cells",
             "burner mining drills remain in active factory sites",
         ],
         completion=[
@@ -417,6 +420,7 @@ SKILL_CATALOG: dict[str, SkillContract] = {
             "electric power available",
             "powered iron-gear assembler and reusable adjacent assembler are available",
             "direct assembler-to-assembler inserter transfer is preferred when the machines are within inserter reach; short belts are fallback only when direct transfer is blocked",
+            "post-Automation transfer endpoints use powered inserters; do not place or fuel burner inserters for the mall",
             "existing inventory iron plates may be used only as a one-time assembler seed; distant plate shuttle loops are not allowed",
         ],
         completion=[
@@ -425,7 +429,7 @@ SKILL_CATALOG: dict[str, SkillContract] = {
         ],
         llm_scope=(
             "Choose this when belt automation is blocked by gear mall output logistics or when the belt mall needs a one-time iron seed before it can replenish construction belts. "
-            "Executor handles exact direct-transfer inserter placement, belt-lane fallback, inserter direction, burner fuel, and recipe changes."
+            "Executor handles exact direct-transfer inserter placement, belt-lane fallback, powered inserter repair, and recipe changes."
         ),
         blocked_by=[
             "missing powered iron-gear assembler",
@@ -468,6 +472,7 @@ SKILL_CATALOG: dict[str, SkillContract] = {
             "gear/belt mall exists",
             "transport belts are available from the belt mall output or inventory",
             "iron-plate source furnace is known",
+            "endpoint inserters should be electric; burner inserter fueling is not a recovery path after Automation",
         ],
         completion=[
             "iron plates can move toward the iron-gear assembler by belt and inserter endpoints",
@@ -626,6 +631,7 @@ def make_strategy_payload(
         ),
         "automation_policy": make_automation_policy_context(monitor),
         "factory_readiness": readiness.to_dict(),
+        "technology_dependency_plan": make_technology_dependency_context(observation),
         "build_item_supply": make_build_item_supply_context(observation, monitor),
         "research_planning": make_research_planning_context(observation, monitor),
         "threats": make_threat_context(observation),
@@ -703,7 +709,8 @@ def make_layout_capability_context(observation: dict[str, Any]) -> dict[str, Any
         "burner-inserter": {
             "available": total_item_count(observation, "burner-inserter") > 0,
             "stock": total_item_count(observation, "burner-inserter"),
-            "layout_impact": "fuel-dependent inserter; use only for bootstrap or burner fuel loops",
+            "layout_impact": "fuel-dependent inserter; legacy/bootstrap only; avoid for factory logistics",
+            "policy": "avoid for post-Automation factory logistics; prefer powered inserters",
         },
         "inserter": {
             "available": total_item_count(observation, "inserter") > 0 or _technology_researched(observation, "automation"),
@@ -925,6 +932,65 @@ def _build_item_mall_item_available(observation: dict[str, Any], item: str) -> b
             or _recipe_assembler_exists(observation, item)
         )
     return True
+
+
+def make_technology_dependency_context(observation: dict[str, Any]) -> dict[str, Any]:
+    electric_drill_issue = _burner_drill_replacement_issue(observation)
+    active_skill = _electric_drill_upgrade_target_skill(electric_drill_issue)
+    return {
+        "llm_responsibility": (
+            "Resolve technology and recipe prerequisites in dependency order. For electric mining drills, do not skip "
+            "from research directly to drill production until electronic-circuit production is available."
+        ),
+        "electric_mining_drill": {
+            "ordered_milestones": [
+                {
+                    "node": "automation-science-pack",
+                    "skill": "produce_automation_science_pack",
+                    "purpose": "stock red science for electric-mining-drill research",
+                    "ready": bool(
+                        electric_drill_issue
+                        and electric_drill_issue.get("electric_drill_research_supply_ready")
+                    )
+                    or _technology_researched(observation, "electric-mining-drill"),
+                },
+                {
+                    "node": "electric-mining-drill technology",
+                    "skill": "research_electric_mining_drill",
+                    "purpose": "unlock electric-mining-drill recipe",
+                    "ready": _technology_researched(observation, "electric-mining-drill"),
+                },
+                {
+                    "node": "electronic-circuit",
+                    "skill": "automate_electronic_circuit_line",
+                    "purpose": "supply 3 circuits per electric mining drill without hand-crafting",
+                    "ready": _circuit_automation_ready(observation),
+                },
+                {
+                    "node": "electric-mining-drill mall",
+                    "skill": "bootstrap_electric_mining_drill_mall",
+                    "purpose": "produce drills by assembler before replacing burner miners",
+                    "ready": bool(
+                        electric_drill_issue
+                        and electric_drill_issue.get("electric_mining_drill_automated")
+                    ),
+                },
+            ],
+            "active_prerequisite_skill": active_skill,
+            "burner_drill_replacement": electric_drill_issue,
+            "technology_chain": technology_chain("electric-mining-drill"),
+            "recipe_dependency_tree": dependency_tree("electric-mining-drill", max_depth=3),
+            "recipe_map": recipe_details(
+                [
+                    "electric-mining-drill",
+                    "electronic-circuit",
+                    "copper-cable",
+                    "iron-gear-wheel",
+                    "automation-science-pack",
+                ]
+            ),
+        },
+    }
 
 
 def make_research_planning_context(observation: dict[str, Any], monitor: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1187,6 +1253,16 @@ def reconcile_strategy_decision(
         and selected in GEAR_MALL_IRON_PLATE_PREEMPT_SKILLS
     ):
         return _gear_mall_iron_plate_guardrail_adjustment(decision, selected, gear_mall_iron_plate_issue)
+    if selected == "build_gear_belt_mall_logistics":
+        satisfied_adjustment = _satisfied_gear_belt_mall_guardrail_adjustment(
+            decision,
+            observation,
+            objective,
+            production_targets,
+            readiness,
+        )
+        if satisfied_adjustment is not None:
+            return satisfied_adjustment
     if selected in _COAL_DEPENDENT_SKILLS and _coal_supply_needed(observation):
         adjusted = dict(decision)
         adjusted["selected_skill"] = "setup_coal_supply"
@@ -2092,10 +2168,11 @@ def reconcile_strategy_decision(
                 f"item={site_input_line_issue.get('item')}",
                 f"site_id={site_input_line_issue.get('site_id')}",
                 f"transport_belt_automation_ready={str(_transport_belt_automation_ready(observation)).lower()}",
+                f"main_belt_preferred={str(target_skill == 'build_site_input_logistic_line').lower()}",
                 "hand_carry_seed_risk=true",
             ]
             adjusted["expected_effect"] = (
-                "Build the missing repeated input route by belt and endpoint inserters."
+                "Build or extend the missing repeated input route as an expandable main-belt/trunk corridor with endpoint inserters."
                 if target_skill == "build_site_input_logistic_line"
                 else "Automate transport-belt supply before spending belts on repeated site-to-site input routes."
             )
@@ -2156,22 +2233,15 @@ def reconcile_strategy_decision(
         "expand_iron_smelting",
         "expand_copper_smelting",
     }:
-        target_skill = (
-            "research_electric_mining_drill"
-            if not bool(burner_drill_replacement_issue.get("electric_mining_drill_researched"))
-            else "bootstrap_electric_mining_drill_mall"
-        )
-        if selected != target_skill:
+        target_skill = _electric_drill_upgrade_target_skill(burner_drill_replacement_issue)
+        if target_skill is not None and selected != target_skill:
             adjusted = dict(decision)
             adjusted["selected_skill"] = target_skill
             adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 90)
             original_reason = str(decision.get("reason") or "").strip()
-            guardrail_reason = (
-                "Burner mining drills remain after Automation and stable power; introduce electric mining drills "
-                "before letting layout diagnostics or downstream automation consume the next strategy cycle."
-            )
+            guardrail_reason = _electric_drill_upgrade_reason(target_skill)
             adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
-            blockers = ["electric mining drill research"] if target_skill == "research_electric_mining_drill" else ["electric mining drill mall"]
+            blockers = _electric_drill_upgrade_blockers(target_skill)
             adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + blockers))
             adjusted["evidence"] = _string_list(decision.get("evidence")) + [
                 f"guardrail_adjusted_from={selected}",
@@ -2179,11 +2249,15 @@ def reconcile_strategy_decision(
                 f"electric_mining_drill_count={burner_drill_replacement_issue.get('electric_drill_count')}",
                 f"electric_mining_drill_researched={str(bool(burner_drill_replacement_issue.get('electric_mining_drill_researched'))).lower()}",
                 f"electric_mining_drill_automated={str(bool(burner_drill_replacement_issue.get('electric_mining_drill_automated'))).lower()}",
+                f"electronic_circuit_total={burner_drill_replacement_issue.get('electronic_circuit_total')}",
+                f"electronic_circuit_automated={str(bool(burner_drill_replacement_issue.get('electronic_circuit_automated'))).lower()}",
+                (
+                    "electric_drill_research_supply_ready="
+                    f"{str(bool(burner_drill_replacement_issue.get('electric_drill_research_supply_ready'))).lower()}"
+                ),
                 "burner_drills_bootstrap_only=true",
             ]
-            adjusted["expected_effect"] = (
-                "Move the factory from coal-fueled burner mining toward powered electric mining before scaling more raw throughput."
-            )
+            adjusted["expected_effect"] = _electric_drill_upgrade_expected_effect(target_skill)
             adjusted["guardrail_adjusted"] = {
                 "from": selected,
                 "to": target_skill,
@@ -2742,9 +2816,28 @@ def _heuristic_strategy_impl(
     if gear_mall_iron_plate_issue is not None:
         return _gear_mall_iron_plate_strategy_decision(gear_mall_iron_plate_issue)
 
-    if burner_drill_replacement_issue is not None and not bool(
-        burner_drill_replacement_issue.get("electric_mining_drill_researched")
-    ):
+    electric_drill_upgrade_target = _electric_drill_upgrade_target_skill(burner_drill_replacement_issue)
+    if electric_drill_upgrade_target == "produce_automation_science_pack":
+        return StrategicDecision(
+            selected_skill="produce_automation_science_pack",
+            priority=91,
+            reason=(
+                "Burner mining drills are still active after Automation and stable power; produce automation science now "
+                "so electric mining drill research can start before more fuel-dependent mining is scaled."
+            ),
+            evidence=[
+                f"burner_mining_drill_count={burner_drill_replacement_issue.get('burner_drill_count')}",
+                f"electric_mining_drill_count={burner_drill_replacement_issue.get('electric_drill_count')}",
+                f"burner_drill_resources={burner_drill_replacement_issue.get('resource_counts')}",
+                "electric_mining_drill_researched=false",
+                "electric_drill_research_supply_ready=false",
+                "burner_drills_bootstrap_only=true",
+            ],
+            blockers=["automation science for electric mining drill research"],
+            expected_effect="Stock red science so electric mining drills can be researched before expanding more burner mining.",
+        ).to_dict()
+
+    if electric_drill_upgrade_target == "research_electric_mining_drill":
         return StrategicDecision(
             selected_skill="research_electric_mining_drill",
             priority=90,
@@ -2757,16 +2850,35 @@ def _heuristic_strategy_impl(
                 f"electric_mining_drill_count={burner_drill_replacement_issue.get('electric_drill_count')}",
                 f"burner_drill_resources={burner_drill_replacement_issue.get('resource_counts')}",
                 "electric_mining_drill_researched=false",
+                "electric_drill_research_supply_ready=true",
             ],
             blockers=["electric mining drill research"],
             expected_effect="Unlock electric mining drills before adding more burner-drill mining capacity.",
         ).to_dict()
 
-    if (
-        burner_drill_replacement_issue is not None
-        and bool(burner_drill_replacement_issue.get("electric_mining_drill_researched"))
-        and not bool(burner_drill_replacement_issue.get("electric_mining_drill_automated"))
-    ):
+    if electric_drill_upgrade_target == "automate_electronic_circuit_line":
+        return StrategicDecision(
+            selected_skill="automate_electronic_circuit_line",
+            priority=90,
+            reason=(
+                "Electric mining drill technology is researched, but each drill requires electronic circuits; "
+                "build recurring green-circuit production before the drill mall."
+            ),
+            evidence=[
+                f"burner_mining_drill_count={burner_drill_replacement_issue.get('burner_drill_count')}",
+                f"electric_mining_drill_count={burner_drill_replacement_issue.get('electric_drill_count')}",
+                f"burner_drill_resources={burner_drill_replacement_issue.get('resource_counts')}",
+                "electric_mining_drill_researched=true",
+                f"electronic_circuit_total={burner_drill_replacement_issue.get('electronic_circuit_total')}",
+                "electronic_circuit_automated=false",
+                "electric_drill_recipe_requires_electronic_circuit=3",
+                "burner_drills_bootstrap_only=true",
+            ],
+            blockers=["electronic circuit production for electric mining drills"],
+            expected_effect="Build recurring electronic-circuit output so electric mining drills can be produced by assembler.",
+        ).to_dict()
+
+    if electric_drill_upgrade_target == "bootstrap_electric_mining_drill_mall":
         return StrategicDecision(
             selected_skill="bootstrap_electric_mining_drill_mall",
             priority=89,
@@ -2832,8 +2944,8 @@ def _heuristic_strategy_impl(
             selected_skill=target_skill,
             priority=90,
             reason=(
-                "A repeated producer-to-consumer input flow is missing; build the logistics route instead of "
-                "letting the player carry items between factory sites."
+                "A repeated producer-to-consumer input flow is missing; extend a main-belt/trunk-style logistics "
+                "route instead of letting the player carry items between factory sites."
                 if belt_ready
                 else "A repeated producer-to-consumer input flow is missing, but transport-belt production is not ready; "
                 "automate belts before building site-to-site routes."
@@ -2843,6 +2955,7 @@ def _heuristic_strategy_impl(
                 f"item={site_input_line_issue.get('item')}",
                 f"site_id={site_input_line_issue.get('site_id')}",
                 f"transport_belt_automation_ready={str(belt_ready).lower()}",
+                f"main_belt_preferred={str(belt_ready).lower()}",
             ],
             blockers=[
                 "site input logistic line"
@@ -2850,7 +2963,7 @@ def _heuristic_strategy_impl(
                 else "transport-belt automation before site input line"
             ],
             expected_effect=(
-                "Build a belt and endpoint-inserter route for the repeated input."
+                "Build or extend an expandable trunk belt with endpoint inserters for the repeated input."
                 if belt_ready
                 else "Replenish automated construction belts before spending them on repeated site input lines."
             ),
@@ -3935,8 +4048,7 @@ def _burner_drill_replacement_issue(observation: dict[str, Any]) -> dict[str, An
     if not _electric_network_available(observation):
         return None
     electric_researched = _technology_researched(observation, "electric-mining-drill")
-    if not electric_researched and not _electric_drill_research_supply_ready(observation):
-        return None
+    electric_research_supply_ready = _electric_drill_research_supply_ready(observation)
     burners = [
         drill
         for drill in entities_named(observation, "burner-mining-drill")
@@ -3960,6 +4072,7 @@ def _burner_drill_replacement_issue(observation: dict[str, Any]) -> dict[str, An
         assembler.get("recipe") == "electric-mining-drill" and assembler.get("electric_network_connected") is not False
         for assembler in entities_named(observation, "assembling-machine-1")
     )
+    circuit_automated = _circuit_automation_ready(observation)
     return {
         "burner_drill_count": len(burners),
         "electric_drill_count": len(electric_drills),
@@ -3967,7 +4080,66 @@ def _burner_drill_replacement_issue(observation: dict[str, Any]) -> dict[str, An
         "electric_mining_drill_researched": electric_researched,
         "electric_mining_drill_stock": total_item_count(observation, "electric-mining-drill"),
         "electric_mining_drill_automated": automated,
+        "electric_drill_research_supply_ready": electric_research_supply_ready,
+        "electronic_circuit_total": total_item_count(observation, "electronic-circuit"),
+        "electronic_circuit_automated": circuit_automated,
     }
+
+
+def _electric_drill_upgrade_target_skill(issue: dict[str, Any] | None) -> str | None:
+    if not isinstance(issue, dict):
+        return None
+    if not bool(issue.get("electric_mining_drill_researched")):
+        if not bool(issue.get("electric_drill_research_supply_ready")):
+            return "produce_automation_science_pack"
+        return "research_electric_mining_drill"
+    if not bool(issue.get("electronic_circuit_automated")):
+        return "automate_electronic_circuit_line"
+    if not bool(issue.get("electric_mining_drill_automated")):
+        return "bootstrap_electric_mining_drill_mall"
+    return None
+
+
+def _electric_drill_upgrade_reason(target_skill: str) -> str:
+    if target_skill == "produce_automation_science_pack":
+        return (
+            "Burner mining drills remain after Automation and stable power, but electric mining drill research "
+            "has no red-science supply yet; produce automation science before layout diagnostics or downstream expansion."
+        )
+    if target_skill == "research_electric_mining_drill":
+        return (
+            "Burner mining drills remain after Automation and stable power; research electric mining drills "
+            "before letting layout diagnostics or downstream automation consume the next strategy cycle."
+        )
+    if target_skill == "automate_electronic_circuit_line":
+        return (
+            "Electric mining drill technology is available, but the drill recipe requires electronic circuits; "
+            "automate green circuits before building the electric mining drill mall."
+        )
+    return (
+        "Electric mining drill technology is available while burner mining drills remain; automate electric drill "
+        "production before scaling more coal-fueled mining."
+    )
+
+
+def _electric_drill_upgrade_blockers(target_skill: str) -> list[str]:
+    if target_skill == "produce_automation_science_pack":
+        return ["automation science for electric mining drill research"]
+    if target_skill == "research_electric_mining_drill":
+        return ["electric mining drill research"]
+    if target_skill == "automate_electronic_circuit_line":
+        return ["electronic circuit production for electric mining drills"]
+    return ["electric mining drill mall"]
+
+
+def _electric_drill_upgrade_expected_effect(target_skill: str) -> str:
+    if target_skill == "produce_automation_science_pack":
+        return "Stock red science so electric mining drills can be researched before expanding more burner mining."
+    if target_skill == "research_electric_mining_drill":
+        return "Unlock electric mining drills before adding more burner-drill mining capacity."
+    if target_skill == "automate_electronic_circuit_line":
+        return "Build recurring electronic-circuit output so electric mining drills can be produced by assembler."
+    return "Produce electric mining drills by assembler so burner miners can be replaced without hand-crafting."
 
 
 def _electric_drill_research_supply_ready(observation: dict[str, Any]) -> bool:
@@ -4039,6 +4211,8 @@ def _coal_fuel_feed_needed(
     *,
     monitor: dict[str, Any] | None = None,
 ) -> bool:
+    if _boiler_coal_feed_active(observation):
+        return False
     monitor = monitor or summarize_factory(observation, objective, production_targets=production_targets)
     links = monitor.get("logistics_links") if isinstance(monitor.get("logistics_links"), list) else []
     for link in links:
@@ -4053,6 +4227,17 @@ def _coal_fuel_feed_needed(
         except (TypeError, ValueError):
             length = 999999.0
         if length <= 32.0:
+            return True
+    return False
+
+
+def _boiler_coal_feed_active(observation: dict[str, Any]) -> bool:
+    for boiler in entities_named(observation, "boiler"):
+        if _entity_status_is(boiler, "no_fuel", 53):
+            continue
+        if str(boiler.get("status_name") or "") != "working" and _entity_burner_fuel_count(boiler) <= 0:
+            continue
+        if _boiler_has_belt_fuel_feed(observation, boiler):
             return True
     return False
 
@@ -4096,6 +4281,9 @@ def _transport_belt_automation_ready(observation: dict[str, Any]) -> bool:
 def _gear_mall_output_logistics_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
     if not _technology_researched(observation, "automation"):
         return None
+    transport_belt_stock = total_item_count(observation, "transport-belt")
+    if transport_belt_stock >= GEAR_MALL_OUTPUT_LOGISTICS_STOCK_TARGET:
+        return None
     layout = _find_gear_belt_mall_logistics_layout(observation)
     if not isinstance(layout, dict):
         return None
@@ -4118,6 +4306,7 @@ def _gear_mall_output_logistics_issue(observation: dict[str, Any]) -> dict[str, 
         "belt_assembler_iron_gear": entity_item_count(belt_assembler, "iron-gear-wheel"),
         "belt_assembler_iron_plate": entity_item_count(belt_assembler, "iron-plate"),
         "belt_assembler_transport_belt": belt_output,
+        "transport_belt_stock": transport_belt_stock,
         "direct_transfer_blocked": _direct_gear_transfer_blocked(layout),
     }
 
@@ -4155,6 +4344,100 @@ def _gear_mall_output_logistics_guardrail_adjustment(
     adjusted["guardrail_adjusted"] = {
         "from": selected,
         "to": "build_gear_belt_mall_logistics",
+        "reason": guardrail_reason,
+    }
+    return adjusted
+
+
+def _satisfied_gear_belt_mall_guardrail_adjustment(
+    decision: dict[str, Any],
+    observation: dict[str, Any],
+    objective: str,
+    production_targets: dict[str, float] | None,
+    readiness: FactoryReadiness,
+) -> dict[str, Any] | None:
+    transport_belt_stock = total_item_count(observation, "transport-belt")
+    if transport_belt_stock < GEAR_MALL_OUTPUT_LOGISTICS_STOCK_TARGET and not readiness.belt_mall_can_output:
+        return None
+
+    target_skill = ""
+    blocker = ""
+    expected_effect = ""
+    target_evidence: list[str] = []
+    missing_source_issue = _site_input_missing_source_issue(observation)
+    if _technology_researched(observation, "automation") and missing_source_issue is not None:
+        item = str(missing_source_issue.get("item") or "")
+        source_builder_skill = _skill_for_bottleneck_item(item, observation)
+        if source_builder_skill:
+            target_skill = source_builder_skill
+            blocker = f"{item} source"
+            expected_effect = (
+                f"Create an automated {item} producer endpoint now that belt mall output is already sufficient."
+            )
+            target_evidence = [
+                f"layout_kind={missing_source_issue.get('kind')}",
+                f"item={item}",
+                f"site_id={missing_source_issue.get('site_id')}",
+                "site_input_status=missing_source",
+                f"source_builder_skill={source_builder_skill}",
+            ]
+            if (
+                source_builder_skill in _COAL_DEPENDENT_SKILLS
+                and _coal_fuel_feed_needed(observation, objective, production_targets)
+                and _transport_belt_automation_ready(observation)
+            ):
+                target_skill = "connect_coal_fuel_feed"
+                blocker = "coal fuel feed route"
+                expected_effect = (
+                    "Connect the coal feed first because the missing source builder still depends on burner fuel."
+                )
+                target_evidence.append("coal_fuel_feed_preempts_source_builder=true")
+
+    if not target_skill:
+        electric_target = _electric_drill_upgrade_target_skill(_burner_drill_replacement_issue(observation))
+        if electric_target:
+            target_skill = electric_target
+            blocker = _electric_drill_upgrade_blockers(electric_target)[0]
+            expected_effect = _electric_drill_upgrade_expected_effect(electric_target)
+            target_evidence.append(f"electric_drill_dependency_next={electric_target}")
+
+    if not target_skill and _technology_researched(observation, "automation") and not _technology_researched(observation, "logistics"):
+        target_skill = "research_logistics"
+        blocker = "logistics research"
+        expected_effect = "Feed the powered lab with automation science after the completed belt-mall repair."
+
+    if not target_skill and _technology_researched(observation, "logistics") and not _circuit_automation_ready(observation):
+        target_skill = "automate_electronic_circuit_line"
+        blocker = "assembler-based electronic circuit production"
+        expected_effect = "Build recurring green-circuit output after the completed belt-mall repair."
+
+    if not target_skill:
+        target_skill = "produce_automation_science_pack"
+        blocker = "next science tier"
+        expected_effect = "Continue science production after the completed belt-mall repair."
+
+    adjusted = dict(decision)
+    adjusted["selected_skill"] = target_skill
+    adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 88)
+    original_reason = str(decision.get("reason") or "").strip()
+    guardrail_reason = (
+        "LLM selected build_gear_belt_mall_logistics, but the belt mall can already output enough construction "
+        f"belts ({transport_belt_stock}/{GEAR_MALL_OUTPUT_LOGISTICS_STOCK_TARGET}); advance to {target_skill}."
+    )
+    adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+    adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + [blocker]))
+    adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+        "guardrail_adjusted_from=build_gear_belt_mall_logistics",
+        f"transport_belt_stock={transport_belt_stock}",
+        f"gear_output_logistics_stock_target={GEAR_MALL_OUTPUT_LOGISTICS_STOCK_TARGET}",
+        f"belt_mall_can_output={str(readiness.belt_mall_can_output).lower()}",
+        "gear_belt_mall_repair_satisfied=true",
+        *target_evidence,
+    ]
+    adjusted["expected_effect"] = expected_effect
+    adjusted["guardrail_adjusted"] = {
+        "from": "build_gear_belt_mall_logistics",
+        "to": target_skill,
         "reason": guardrail_reason,
     }
     return adjusted

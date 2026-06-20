@@ -73,11 +73,11 @@ AUTOMATED_SITE_INPUT_ITEMS = {
     "logistic-science-pack",
 }
 USER_OUTPUT_MALL_ITEMS = {
+    "iron-gear-wheel",
     "transport-belt",
     "underground-belt",
     "splitter",
     "inserter",
-    "burner-inserter",
     "long-handed-inserter",
     "fast-inserter",
     "small-electric-pole",
@@ -4130,6 +4130,28 @@ class CoalFuelFeedSkill:
                     },
                     "remove misoriented inserter before rebuilding boiler coal feed",
                 )
+            if str(inserter.get("name") or "") == "burner-inserter":
+                replacement = _available_boiler_feed_inserter_item(observation)
+                position = _position(inserter)
+                if replacement is not None:
+                    if distance(player, position) > 4.5:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": _stand_position(position, offset=1.5)},
+                            "move within reach of obsolete boiler coal feed burner inserter",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "mine",
+                            "unit_number": inserter.get("unit_number"),
+                            "name": "burner-inserter",
+                            "position": position,
+                        },
+                        "replace boiler coal feed burner inserter with a powered inserter",
+                    )
+                return PlannerDecision(
+                    None,
+                    "boiler coal feed needs a powered inserter; refusing to fuel burner inserter",
+                )
         else:
             item_name = _available_boiler_feed_inserter_item(observation)
             position = inserter_spec["position"]
@@ -4138,6 +4160,7 @@ class CoalFuelFeedSkill:
                     observation,
                     position,
                     protected_positions=[position, _tile_center_position(position)],
+                    allow_burner=False,
                 )
                 if reusable is not None:
                     reusable_position = _position(reusable)
@@ -4155,10 +4178,18 @@ class CoalFuelFeedSkill:
                         },
                         "relocate existing inserter for boiler coal feed instead of hand-fueling the boiler",
                     )
-                decision = self.support_skill._ensure_item(observation, player, "burner-inserter")
+                decision = _logistics_line_inserter_material_decision(
+                    observation,
+                    player,
+                    layout,
+                    "boiler coal feed",
+                )
                 if decision is not None:
                     return decision
-                return PlannerDecision(None, "missing burner inserter for boiler coal feed; refusing boiler hand-fueling")
+                decision = self.support_skill._ensure_item(observation, player, "inserter")
+                if decision is not None:
+                    return decision
+                return PlannerDecision(None, "missing powered inserter for boiler coal feed; refusing burner inserter fallback")
             blocker = _build_position_blocker(observation, position, allowed_names={"burner-inserter", "inserter", "fast-inserter"})
             if blocker is not None:
                 blocker_position = _position(blocker)
@@ -4189,7 +4220,7 @@ class CoalFuelFeedSkill:
                     "direction": inserter_spec["direction"],
                     "allow_nearby": False,
                 },
-                "place burner inserter for automated boiler coal feed",
+                "place powered inserter for automated boiler coal feed",
             )
 
         if str(inserter.get("name") or "") == "burner-inserter" and _entity_burner_fuel_count(inserter) < 1:
@@ -6235,7 +6266,7 @@ def _boiler_feed_route_has_coal_upstream(layout: dict[str, Any]) -> bool:
 
 
 def _available_boiler_feed_inserter_item(observation: dict[str, Any]) -> str | None:
-    for item in ("burner-inserter", "inserter", "fast-inserter"):
+    for item in ("inserter", "fast-inserter"):
         if inventory_count(observation, item) > 0:
             return item
     return None
@@ -9010,7 +9041,7 @@ def _belt_line_position_blocker(
 
 
 def _available_logistics_line_inserter_item(observation: dict[str, Any]) -> str | None:
-    for item in ("inserter", "fast-inserter", "burner-inserter"):
+    for item in ("inserter", "fast-inserter"):
         if inventory_count(observation, item) > 0:
             return item
     return None
@@ -9206,7 +9237,7 @@ def _logistics_line_inserter_material_decision(
     layout: dict[str, Any],
     label: str,
 ) -> PlannerDecision | None:
-    for item in ("inserter", "fast-inserter", "burner-inserter"):
+    for item in ("inserter", "fast-inserter"):
         recipe = RECIPES.get(item)
         if recipe is None:
             continue
@@ -9254,7 +9285,7 @@ def _logistics_line_inserter_ingredient_decision(
             source = candidate
             reason_source = "iron source"
     if source is None:
-        source = _nearest_buffered_chest_item_source(observation, item, player)
+        source = _nearest_local_item_seed_source(observation, item, player)
     if not isinstance(source, dict) or entity_item_count(source, item) <= 0:
         return None
     position = _position(source)
@@ -9282,6 +9313,7 @@ def _find_relocatable_inserter_for_iron_plate_line(
     *,
     exclude_unit_numbers: set[int] | None = None,
     protected_positions: list[dict[str, float]] | None = None,
+    allow_burner: bool = False,
 ) -> dict[str, Any] | None:
     excluded_units = set(exclude_unit_numbers or set())
     protected = list(protected_positions or [])
@@ -9293,7 +9325,8 @@ def _find_relocatable_inserter_for_iron_plate_line(
         and str(entity.get("recipe") or "") in {"iron-gear-wheel", "transport-belt", "copper-cable", "electronic-circuit"}
     ]
     candidates: list[dict[str, Any]] = []
-    for name in ("inserter", "fast-inserter", "burner-inserter"):
+    names = ("inserter", "fast-inserter", "burner-inserter") if allow_burner else ("inserter", "fast-inserter")
+    for name in names:
         for entity in entities_named(observation, name):
             try:
                 if int(entity.get("unit_number")) in excluded_units:
@@ -10375,7 +10408,7 @@ class GearBeltMallLogisticsSkill:
                 observation,
                 player,
                 layout["gear_output_inserter"],
-                prefer_burner=True,
+                prefer_burner=False,
                 label="gear mall output inserter",
                 allow_bootstrap_craft=True,
             )
@@ -10572,11 +10605,33 @@ class GearBeltMallLogisticsSkill:
         label: str,
         allow_bootstrap_craft: bool = False,
     ) -> PlannerDecision | None:
-        prefer_burner = prefer_burner and not _regular_inserter_can_be_used(observation)
+        prefer_burner = False
         inserter = spec.get("entity")
         if isinstance(inserter, dict):
-            if inserter.get("name") == "burner-inserter" and _regular_inserter_can_be_used(observation):
+            if inserter.get("name") == "burner-inserter":
                 position = _position(inserter)
+                if _direction_or_default(inserter.get("direction"), 0) != int(spec["direction"]):
+                    if distance(player, position) > 4.5:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": _stand_position(position, offset=1.5)},
+                            f"move within mining reach of misoriented {label}",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "mine",
+                            "unit_number": inserter.get("unit_number"),
+                            "name": "burner-inserter",
+                            "position": position,
+                        },
+                        f"remove misoriented {label} before rebuilding the gear/belt mall line",
+                    )
+                if not _regular_inserter_can_be_used(observation):
+                    if not _entity_status_is(inserter, "no_fuel", 53):
+                        return None
+                    return PlannerDecision(
+                        None,
+                        f"{label} needs a powered inserter; refusing to fuel burner inserter",
+                    )
                 if distance(player, position) > 4.5:
                     return PlannerDecision(
                         {"type": "move_to", "position": _stand_position(position, offset=1.5)},
@@ -10606,28 +10661,6 @@ class GearBeltMallLogisticsSkill:
                         "position": position,
                     },
                     f"remove misoriented {label} before rebuilding the gear/belt mall line",
-                )
-            if (
-                inserter.get("name") == "burner-inserter"
-                and _entity_burner_fuel_count(inserter) < 1
-                and str(inserter.get("status_name") or "") == "no_fuel"
-            ):
-                fuel_item, fuel_count = _select_inventory_burner_fuel(observation)
-                if fuel_count <= 0:
-                    return PlannerDecision(None, f"{label} needs starter burner fuel")
-                position = _position(inserter)
-                if distance(player, position) > 20:
-                    return PlannerDecision({"type": "move_to", "position": position}, f"move near {label} to fuel it")
-                return PlannerDecision(
-                    {
-                        "type": "insert",
-                        "item": fuel_item,
-                        "count": 1,
-                        "unit_number": inserter.get("unit_number"),
-                        "name": "burner-inserter",
-                        "position": position,
-                    },
-                    f"fuel {label}",
                 )
             return None
 
@@ -10681,32 +10714,7 @@ class GearBeltMallLogisticsSkill:
         prefer_burner: bool,
         label: str,
     ) -> PlannerDecision | None:
-        if _regular_inserter_can_be_used(observation):
-            for item in ("inserter", "fast-inserter"):
-                if craftable_count(observation, item) > 0:
-                    return _bootstrap_seed_decision(
-                        {"type": "craft", "recipe": item, "count": 1},
-                        f"craft one-time bootstrap {item} for {label}",
-                        seed_reason=f"{label}_inserter_seed",
-                        expected_followup=f"{label} is placed and moves gear or belt ingredients automatically",
-                    )
-            if inventory_count(observation, "iron-gear-wheel") <= 0 and craftable_count(observation, "iron-gear-wheel") > 0:
-                return _bootstrap_seed_decision(
-                    {
-                        "type": "craft",
-                        "recipe": "iron-gear-wheel",
-                        "count": 1,
-                        "allow_gear_belt_direct_transfer_bootstrap": True,
-                    },
-                    f"craft one-time bootstrap gear for regular {label}",
-                    seed_reason=f"{label}_gear_seed",
-                    expected_followup=f"crafted gear becomes one {label} inserter and automated transfer starts",
-                )
-            return None
-
-        first = "burner-inserter" if prefer_burner else "inserter"
-        second = "inserter" if prefer_burner else "burner-inserter"
-        for item in (first, second):
+        for item in ("inserter", "fast-inserter"):
             if craftable_count(observation, item) > 0:
                 return _bootstrap_seed_decision(
                     {"type": "craft", "recipe": item, "count": 1},
@@ -10722,7 +10730,7 @@ class GearBeltMallLogisticsSkill:
                     "count": 1,
                     "allow_gear_belt_direct_transfer_bootstrap": True,
                 },
-                f"craft one-time bootstrap gear for {label}",
+                f"craft one-time bootstrap gear for regular {label}",
                 seed_reason=f"{label}_gear_seed",
                 expected_followup=f"crafted gear becomes one {label} inserter and automated transfer starts",
             )
@@ -10781,17 +10789,9 @@ class GearBeltMallLogisticsSkill:
         )
 
     def _available_inserter_item(self, observation: dict[str, Any], *, prefer_burner: bool) -> str | None:
-        if _regular_inserter_can_be_used(observation):
-            for item in ("inserter", "fast-inserter"):
-                if inventory_count(observation, item) > 0:
-                    return item
-            return None
-        first = "burner-inserter" if prefer_burner else "inserter"
-        second = "inserter" if prefer_burner else "burner-inserter"
-        if inventory_count(observation, first) > 0:
-            return first
-        if inventory_count(observation, second) > 0:
-            return second
+        for item in ("inserter", "fast-inserter"):
+            if inventory_count(observation, item) > 0:
+                return item
         return None
 
 
@@ -11520,29 +11520,31 @@ class IronPlateLogisticLineToGearMallSkill:
                     )
                 if (
                     str(inserter.get("name") or "") == "burner-inserter"
-                    and _entity_burner_fuel_count(inserter) < 1
-                    and _entity_status_is(inserter, "no_fuel", 53)
                 ):
-                    fuel_item, fuel_count = _select_inventory_burner_fuel(observation)
-                    if fuel_count <= 0:
-                        return PlannerDecision(None, f"{label} burner inserter needs fuel")
                     position = _position(inserter)
+                    if _regular_inserter_can_be_used(observation):
+                        if distance(player, position) > 4.5:
+                            return PlannerDecision(
+                                {"type": "move_to", "position": _stand_position(position, offset=1.5)},
+                                f"move within reach of obsolete {label} burner inserter",
+                            )
+                        return PlannerDecision(
+                            {
+                                "type": "mine",
+                                "unit_number": inserter.get("unit_number"),
+                                "name": "burner-inserter",
+                                "position": position,
+                            },
+                            f"replace {label} burner inserter with a powered inserter",
+                        )
+                    if not _entity_status_is(inserter, "no_fuel", 53):
+                        continue
                     if distance(player, position) > 20:
                         return PlannerDecision(
                             {"type": "move_to", "position": position},
-                            f"move near {label} burner inserter to fuel it",
+                            f"move near obsolete {label} burner inserter",
                         )
-                    return PlannerDecision(
-                        {
-                            "type": "insert",
-                            "item": fuel_item,
-                            "count": 1,
-                            "unit_number": inserter.get("unit_number"),
-                            "name": "burner-inserter",
-                            "position": position,
-                        },
-                        f"fuel {label} burner inserter",
-                    )
+                    return PlannerDecision(None, f"{label} needs a powered inserter; refusing to fuel burner inserter")
                 if str(inserter.get("name") or "") != "burner-inserter" and inserter.get("electric_network_connected") is False:
                     power_decision = _logistics_line_powered_inserter_decision(
                         observation,
@@ -12005,6 +12007,20 @@ class BuildItemMallSkill:
 
         output_count = entity_item_count(assembler, self.target_item)
         if output_count > 0:
+            block_player_collection = _block_player_mall_output_collection_after_automation(observation, self.target_item)
+            if block_player_collection and reference_position is not None:
+                logistics_layout = _find_site_input_logistic_line_layout(observation, item="iron-gear-wheel")
+                consumer = logistics_layout.get("consumer") if isinstance(logistics_layout, dict) else None
+                if isinstance(consumer, dict) and distance(_position(consumer), reference_position) <= 4.5:
+                    logistics_decision = SiteInputLogisticLineSkill(max(12, target_count), item="iron-gear-wheel").next_action(
+                        observation
+                    )
+                    if not logistics_decision.done:
+                        return logistics_decision
+                    return PlannerDecision(
+                        {"type": "wait", "ticks": 300},
+                        f"wait for iron gear wheel site input logistics to feed {self.target_item} consumer",
+                    )
             if _build_item_mall_should_use_output_chest(self.target_item):
                 if not _build_item_mall_output_buffer_ready(cell, observation):
                     decision = self._ensure_output_buffer(observation, player, cell)
@@ -12015,20 +12031,7 @@ class BuildItemMallSkill:
                         {"type": "wait", "ticks": 300},
                         f"wait for {self.target_item} mall output inserter to buffer items into chest",
                     )
-            if _block_player_mall_output_collection_after_automation(observation, self.target_item):
-                if reference_position is not None:
-                    logistics_layout = _find_site_input_logistic_line_layout(observation, item="iron-gear-wheel")
-                    consumer = logistics_layout.get("consumer") if isinstance(logistics_layout, dict) else None
-                    if isinstance(consumer, dict) and distance(_position(consumer), reference_position) <= 4.5:
-                        logistics_decision = SiteInputLogisticLineSkill(max(12, target_count), item="iron-gear-wheel").next_action(
-                            observation
-                        )
-                        if not logistics_decision.done:
-                            return logistics_decision
-                        return PlannerDecision(
-                            {"type": "wait", "ticks": 300},
-                            f"wait for iron gear wheel site input logistics to feed {self.target_item} consumer",
-                        )
+            if block_player_collection:
                 return PlannerDecision(
                     {"type": "wait", "ticks": 300},
                     (
@@ -12239,8 +12242,15 @@ class BuildItemMallSkill:
         position = cell["output_inserter_position"]
         direction = int(cell["output_inserter_direction"])
         if isinstance(inserter, dict):
-            if inserter.get("name") == "burner-inserter" and _regular_inserter_can_be_used(observation):
+            if inserter.get("name") == "burner-inserter":
                 inserter_position = _position(inserter)
+                if not _regular_inserter_can_be_used(observation):
+                    if not _entity_status_is(inserter, "no_fuel", 53):
+                        return None
+                    return PlannerDecision(
+                        None,
+                        f"{self.target_item} mall output needs a powered inserter; refusing to fuel burner inserter",
+                    )
                 if distance(player, inserter_position) > 4.5:
                     return PlannerDecision(
                         {"type": "move_to", "position": _stand_position(inserter_position, offset=1.5)},
@@ -12270,24 +12280,6 @@ class BuildItemMallSkill:
                         "position": inserter_position,
                     },
                     f"remove misoriented {self.target_item} mall output inserter",
-                )
-            if inserter.get("name") == "burner-inserter" and _entity_burner_fuel_count(inserter) < 1:
-                fuel_item, fuel_count = _select_inventory_burner_fuel(observation)
-                if fuel_count <= 0:
-                    return PlannerDecision(None, f"{self.target_item} mall output burner inserter needs fuel")
-                inserter_position = _position(inserter)
-                if distance(player, inserter_position) > 20:
-                    return PlannerDecision({"type": "move_to", "position": inserter_position}, f"move near {self.target_item} mall output burner inserter")
-                return PlannerDecision(
-                    {
-                        "type": "insert",
-                        "item": fuel_item,
-                        "count": 1,
-                        "unit_number": inserter.get("unit_number"),
-                        "name": "burner-inserter",
-                        "position": inserter_position,
-                    },
-                    f"fuel {self.target_item} mall output burner inserter",
                 )
             if inserter.get("name") != "burner-inserter" and inserter.get("electric_network_connected") is False:
                 existing = _nearest_connected_small_pole_supplying_position(observation, _position(inserter))
@@ -14144,8 +14136,10 @@ def _build_item_mall_output_buffer_ready(cell: dict[str, Any], observation: dict
     direction = cell.get("output_inserter_direction")
     if direction is not None and _direction_or_default(inserter.get("direction"), -1) != int(direction):
         return False
-    if observation is not None and inserter.get("name") == "burner-inserter" and _regular_inserter_can_be_used(observation):
-        return False
+    if observation is not None and inserter.get("name") == "burner-inserter":
+        if _regular_inserter_can_be_used(observation):
+            return False
+        return not _entity_status_is(inserter, "no_fuel", 53)
     if inserter.get("name") != "burner-inserter" and inserter.get("electric_network_connected") is False:
         return False
     return True
@@ -14180,17 +14174,14 @@ def _build_item_mall_missing_output_chest_item(observation: dict[str, Any]) -> s
 
 
 def _available_build_item_mall_output_inserter_name(observation: dict[str, Any]) -> str | None:
-    items = ("inserter", "fast-inserter") if _regular_inserter_can_be_used(observation) else ("inserter", "burner-inserter", "fast-inserter")
-    for item in items:
+    for item in ("inserter", "fast-inserter"):
         if inventory_count(observation, item) > 0:
             return item
     return None
 
 
 def _build_item_mall_missing_output_inserter_item(observation: dict[str, Any]) -> str:
-    if _regular_inserter_can_be_used(observation) or craftable_count(observation, "inserter") > 0 or inventory_count(observation, "electronic-circuit") > 0:
-        return "inserter"
-    return "burner-inserter"
+    return "inserter"
 
 
 def _select_build_item_mall_site(
