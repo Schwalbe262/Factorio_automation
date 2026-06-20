@@ -175,8 +175,10 @@ and writes `runtime\layout-llm-settings.json` with one max active layout job so 
 not occupy every ready GPU. It keeps a scheduler vLLM service warm for three hours at a time so the
 9B model is not reloaded for every strategy/layout task; the supervisor checks the service heartbeat
 and resubmits it if the scheduler pool times out or is replaced. Until scheduler LLM readiness and
-the vLLM service heartbeat are true, the supervisor stops unattended autopilot and idle layout
-workers instead of letting them retry every few seconds and grow logs without progress. Status,
+the vLLM service heartbeat are true, idle layout and foundry workers stay paused, while the main
+autopilot can run a deterministic/heuristic fallback (`FACTORIO_AI_ALLOW_HEURISTIC_AUTOPILOT_FALLBACK=1`
+by default) so the factory does not stop during temporary scheduler outages. When LLM readiness
+returns, the supervisor replaces that fallback with strict `--require-llm` autopilot. Status,
 including compact LLM readiness and vLLM service readiness, is written to
 `runtime\unattended-llm-supervisor.json`, and restart logs go to
 `logs\unattended-llm-supervisor.log`.

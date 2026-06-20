@@ -882,11 +882,16 @@ class FactorioController:
         selected_improvement_site = load_selected_improvement_site(self.cfg.runtime_dir, objective)
         request_summary = strategy_request_summary(observation, production_targets)
         result: dict[str, Any] | None = None
+        force_heuristic = (
+            not require_llm
+            and os.getenv("FACTORIO_AI_FORCE_HEURISTIC_STRATEGY", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
         # skip_remote forces the deterministic heuristic path without even touching the remote.
         # Used by the graceful-degradation cycle: _should_try_remote_strategy returns True whenever
         # slurm is enabled (regardless of require_llm), so a degraded cycle would otherwise still
         # call the remote and block on its full ~540s timeout when the serving hangs.
-        use_remote_strategy = (not skip_remote) and self._should_try_remote_strategy(require_llm)
+        use_remote_strategy = (not skip_remote) and (not force_heuristic) and self._should_try_remote_strategy(require_llm)
         if use_remote_strategy:
             if self.cfg.slurm_enabled:
                 self._maybe_ensure_slurm_worker(reason="strategy_decision")
@@ -942,7 +947,7 @@ class FactorioController:
                 if require_llm:
                     raise
 
-        if result is None and skip_remote:
+        if result is None and (skip_remote or force_heuristic):
             # Degraded cycle: skip BOTH the remote and the local LLM and go straight to the
             # deterministic heuristic so a hung/erroring serving can't stall the factory.
             result = heuristic_strategy(
@@ -959,7 +964,11 @@ class FactorioController:
                 provider="heuristic_fallback",
                 result=result,
                 request_summary=request_summary,
-                error="degraded: skipped remote/local LLM, used heuristic strategy",
+                error=(
+                    "forced heuristic strategy; skipped remote/local LLM"
+                    if force_heuristic
+                    else "degraded: skipped remote/local LLM, used heuristic strategy"
+                ),
                 latency_ms=0,
             )
 
@@ -1034,10 +1043,10 @@ class FactorioController:
         return annotate_strategy_with_skill_status(result, runtime_dir=self.cfg.runtime_dir)
 
     def _should_try_remote_strategy(self, require_llm: bool) -> bool:
-        if self.cfg.slurm_enabled:
-            return True
         if not require_llm:
             return False
+        if self.cfg.slurm_enabled:
+            return True
         if _local_llm_env_configured():
             return False
         auto_slurm = os.getenv("FACTORIO_AI_REQUIRE_LLM_AUTO_SLURM", "1").strip().lower()
@@ -1861,7 +1870,21 @@ class FactorioController:
                     last_selected = selected_now
                     # Commit to the skill only while it keeps making progress; otherwise drop the
                     # commitment so the next cycle re-strategizes via the LLM.
-                    if commit_enabled and last_step.ok and made_progress and selected_now:
+                    yielded_wait = str(last_step.reason or "").startswith("yielded for other work")
+                    if (
+                        commit_enabled
+                        and last_step.ok
+                        and yielded_wait
+                        and repair_skill
+                        and selected_now
+                        and selected_now != repair_skill
+                    ):
+                        # A wait-yield is operationally OK, but if readiness already knows the root
+                        # prerequisite is missing, the next committed cycle should repair that root
+                        # instead of reusing the waiting skill and creating a no-progress loop.
+                        committed_skill = repair_skill
+                        commit_skips = 0
+                    elif commit_enabled and last_step.ok and made_progress and selected_now:
                         committed_skill = selected_now
                     else:
                         committed_skill = None

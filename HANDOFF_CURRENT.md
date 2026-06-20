@@ -1,9 +1,11 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running but autopilot gated because scheduler LLM is not ready.
-- Part144: boiler coal feed no longer keeps/hand-fuels burner inserters; it relocates or builds powered inserter materials first.
-- Strategy now lets power/fuel recovery preempt electric-drill/circuit dependency guardrails and satisfied gear/belt mall fallback.
-- Live before commit: health no-observe shows no autopilot process, gate=`waiting_for_scheduler_llm`; `slurm-llm-status` reports no running worker job / `llm_ready=false`.
-- Validation: `tests.test_strategy` 149 OK; `tests.test_planner` 349 OK; `tests.test_controller` 78 OK.
-- Direct live check before LLM outage: `build_gear_belt_mall_logistics` reconciled to `setup_power` when belt stock was 28/20 and power was unconnected.
-- Runtime `note.md`/`insight.md` have large generated churn; stage only intentional source/tests/handoff unless told otherwise.
-- Token checkpoint: goal tracker 9,694,112; part delta 472,338 since prior checkpoint; weekly quota unavailable; token_usage.py failed with malformed sqlite.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor/autopilot running in heuristic fallback while scheduler LLM readiness is unavailable.
+- Part145: fallback autopilot now starts without `--require-llm`, forces heuristic strategy, and is replaced by strict LLM autopilot when scheduler readiness returns.
+- Strategy hot path now skips remote/local LLM in forced fallback and avoids repeated heavy layout/gear-route scoring when mall stock/output is healthy.
+- Monitor/planner perf fixes: cache entity/resource lookups for logistics links and cache starter anchors during route scoring.
+- Circuit automation bugfixes: `reference_position` is passed through prerequisite sourcing and the bad `self.target_item` label was removed.
+- Wait-yield cycles with a known readiness root now commit the next cycle to `repair_skill` instead of blindly reusing the waiting skill.
+- Live: server UP; fallback autopilot PID 20712 running; latest cycle reached `automate_electronic_circuit_line` step 2, prior cycle completed without crash.
+- Validation: `tests.test_planner`, `tests.test_monitor`, `tests.test_strategy`, `tests.test_controller` all pass (611 tests).
+- Runtime `note.md`/`insight.md` have large generated churn; stage only intentional source/tests/docs/handoff unless explicitly requested.
+- Token checkpoint: goal tracker 10,294,587; part delta +600,475 since 9,694,112; weekly quota unavailable.

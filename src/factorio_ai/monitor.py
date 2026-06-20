@@ -20,6 +20,9 @@ from .knowledge import (
 from .models import distance, entity_item_count, total_item_count
 
 
+_RESOURCE_GRID_SIZE = 8.0
+
+
 @dataclass(frozen=True)
 class ProductionEstimate:
     item: str
@@ -645,10 +648,12 @@ def estimate_bottlenecks(
 def estimate_factory_sites(observation: dict[str, Any]) -> list[FactorySiteEstimate]:
     sites: list[FactorySiteEstimate] = []
     seen_site_ids: set[str] = set()
+    entities_by_name = _entities_by_name(observation)
+    resource_grid = _resource_grid(observation)
 
-    for boiler in [item for item in _entities(observation) if item.get("name") == "boiler"]:
+    for boiler in entities_by_name.get("boiler", []):
         position = _position(boiler)
-        fuel_link = _fuel_feed_type(observation, position)
+        fuel_link = _fuel_feed_type(observation, position, entities_by_name=entities_by_name)
         site = FactorySiteEstimate(
             site_id=_entity_site_id("power", boiler),
             kind="steam_power",
@@ -667,7 +672,11 @@ def estimate_factory_sites(observation: dict[str, Any]) -> list[FactorySiteEstim
         sites.append(site)
         seen_site_ids.add(site.site_id)
 
-    for layout in _deduped_belt_line_layouts(observation):
+    for layout in _deduped_belt_line_layouts(
+        observation,
+        entities_by_name=entities_by_name,
+        resource_grid=resource_grid,
+    ):
         furnace = layout.get("furnace")
         position = _position(furnace) if isinstance(furnace, dict) else _layout_center(layout)
         resource_name = str(layout.get("resource_name") or "iron-ore")
@@ -1312,6 +1321,13 @@ def estimate_logistics_links(observation: dict[str, Any]) -> list[LogisticsLinkE
     links: list[LogisticsLinkEstimate] = []
     seen: set[str] = set()
     sources_by_item: dict[str, list[FactorySiteEstimate]] = {}
+    entities_by_name = _entities_by_name(observation)
+    resource_grid = _resource_grid(observation)
+    belt_line_layouts = _deduped_belt_line_layouts(
+        observation,
+        entities_by_name=entities_by_name,
+        resource_grid=resource_grid,
+    )
     for site in sites:
         for item in _site_output_items(site):
             sources_by_item.setdefault(item, []).append(site)
@@ -1319,13 +1335,24 @@ def estimate_logistics_links(observation: dict[str, Any]) -> list[LogisticsLinkE
     for consumer in sites:
         for required_item in _site_required_input_items(consumer):
             source = _nearest_source_site(required_item, consumer, sources_by_item)
-            link = _site_logistics_link(observation, required_item, source, consumer)
+            link = _site_logistics_link(
+                observation,
+                required_item,
+                source,
+                consumer,
+                belt_line_layouts=belt_line_layouts,
+                entities_by_name=entities_by_name,
+            )
             if link.link_id not in seen:
                 links.append(link)
                 seen.add(link.link_id)
 
-    rails = [item for item in _entities(observation) if item.get("name") in {"straight-rail", "curved-rail-a", "curved-rail-b", "half-diagonal-rail"}]
-    train_stops = [item for item in _entities(observation) if item.get("name") == "train-stop"]
+    rails = [
+        item
+        for name in ("straight-rail", "curved-rail-a", "curved-rail-b", "half-diagonal-rail")
+        for item in entities_by_name.get(name, [])
+    ]
+    train_stops = list(entities_by_name.get("train-stop", []))
     if rails or train_stops:
         links.append(
             LogisticsLinkEstimate(
@@ -1397,10 +1424,20 @@ def _site_logistics_link(
     item: str,
     source: FactorySiteEstimate | None,
     consumer: FactorySiteEstimate,
+    *,
+    belt_line_layouts: list[dict[str, Any]] | None = None,
+    entities_by_name: dict[str, list[dict[str, Any]]] | None = None,
 ) -> LogisticsLinkEstimate:
     source_id = source.site_id if source is not None else f"missing_source:{item}"
     source_position = source.position if source is not None else consumer.position
-    route = _site_route_observed(observation, item, source, consumer)
+    route = _site_route_observed(
+        observation,
+        item,
+        source,
+        consumer,
+        belt_line_layouts=belt_line_layouts,
+        entities_by_name=entities_by_name,
+    )
     kind = "belt" if route else "site_flow"
     status = "route_observed" if route else ("missing_source" if source is None else "route_needed")
     notes = [
@@ -1426,11 +1463,19 @@ def _site_route_observed(
     item: str,
     source: FactorySiteEstimate | None,
     consumer: FactorySiteEstimate,
+    *,
+    belt_line_layouts: list[dict[str, Any]] | None = None,
+    entities_by_name: dict[str, list[dict[str, Any]]] | None = None,
 ) -> bool:
     if source is None:
         return False
     if item in {"iron-ore", "copper-ore"} and consumer.kind == "plate_smelting_line":
-        for layout in _deduped_belt_line_layouts(observation):
+        layouts = (
+            belt_line_layouts
+            if belt_line_layouts is not None
+            else _deduped_belt_line_layouts(observation, entities_by_name=entities_by_name)
+        )
+        for layout in layouts:
             if str(layout.get("resource_name") or "") != item:
                 continue
             start = _position(layout["drill"]) if isinstance(layout.get("drill"), dict) else layout.get("drill_position")
@@ -1442,11 +1487,19 @@ def _site_route_observed(
     if item == "coal" and consumer.kind == "plate_smelting_line":
         if distance(source.position, consumer.position) > 48:
             return False
-        return _fuel_feed_type(observation, consumer.position) == "belt"
+        return _fuel_feed_type(observation, consumer.position, entities_by_name=entities_by_name) == "belt"
     if item == "coal" and consumer.kind == "steam_power":
         if distance(source.position, consumer.position) > 48:
             return False
-        return any(_fuel_feed_type(observation, _position(entity)) == "belt" for entity in _entities(observation) if entity.get("name") == "boiler")
+        boilers = (
+            entities_by_name.get("boiler", [])
+            if entities_by_name is not None
+            else [entity for entity in _entities(observation) if entity.get("name") == "boiler"]
+        )
+        return any(
+            _fuel_feed_type(observation, _position(entity), entities_by_name=entities_by_name) == "belt"
+            for entity in boilers
+        )
     return False
 
 
@@ -1465,11 +1518,26 @@ def technology_requirements_for_objective(objective: str) -> list[dict[str, Any]
     return output
 
 
-def _deduped_belt_line_layouts(observation: dict[str, Any]) -> list[dict[str, Any]]:
+def _deduped_belt_line_layouts(
+    observation: dict[str, Any],
+    *,
+    entities_by_name: dict[str, list[dict[str, Any]]] | None = None,
+    resource_grid: dict[tuple[int, int], list[dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
     layouts: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for belt in [item for item in _entities(observation) if item.get("name") == "transport-belt"]:
-        for layout in _belt_line_layouts_from_anchor(observation, belt):
+    belts = (
+        entities_by_name.get("transport-belt", [])
+        if entities_by_name is not None
+        else [entity for entity in _entities(observation) if entity.get("name") == "transport-belt"]
+    )
+    for belt in belts:
+        for layout in _belt_line_layouts_from_anchor(
+            observation,
+            belt,
+            entities_by_name=entities_by_name,
+            resource_grid=resource_grid,
+        ):
             key_position = (
                 _position(layout["furnace"])
                 if isinstance(layout.get("furnace"), dict)
@@ -1483,16 +1551,29 @@ def _deduped_belt_line_layouts(observation: dict[str, Any]) -> list[dict[str, An
     return layouts
 
 
-def _fuel_feed_type(observation: dict[str, Any], target_position: dict[str, float]) -> str:
+def _fuel_feed_type(
+    observation: dict[str, Any],
+    target_position: dict[str, float],
+    *,
+    entities_by_name: dict[str, list[dict[str, Any]]] | None = None,
+) -> str:
+    if entities_by_name is not None:
+        source_entities = [
+            item
+            for name in ("burner-inserter", "inserter", "fast-inserter")
+            for item in entities_by_name.get(name, [])
+        ]
+    else:
+        source_entities = _entities(observation)
     inserters = [
         item
-        for item in _entities(observation)
+        for item in source_entities
         if item.get("name") in {"burner-inserter", "inserter", "fast-inserter"}
         and distance(_position(item), target_position) <= 3.0
     ]
     for inserter in inserters:
         inserter_position = _position(inserter)
-        if _entity_near(observation, "transport-belt", inserter_position, 2.5) is not None:
+        if _entity_near(observation, "transport-belt", inserter_position, 2.5, entities_by_name=entities_by_name) is not None:
             return "belt"
     return "manual"
 
@@ -1778,17 +1859,49 @@ def _safe_float(value: Any) -> float:
         return 0.0
 
 
-def _nearest_resource(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:
-    resources = observation.get("resources")
-    if not isinstance(resources, list):
-        return None
-    candidates = [item for item in resources if isinstance(item, dict) and isinstance(item.get("position"), dict)]
+def _nearest_resource(
+    observation: dict[str, Any],
+    position: dict[str, float],
+    *,
+    resource_grid: dict[tuple[int, int], list[dict[str, Any]]] | None = None,
+) -> dict[str, Any] | None:
+    if resource_grid is not None:
+        cell_x, cell_y = _resource_grid_key(position)
+        candidates = [
+            resource
+            for dx in (-1, 0, 1)
+            for dy in (-1, 0, 1)
+            for resource in resource_grid.get((cell_x + dx, cell_y + dy), [])
+        ]
+    else:
+        resources = observation.get("resources")
+        if not isinstance(resources, list):
+            return None
+        candidates = [item for item in resources if isinstance(item, dict) and isinstance(item.get("position"), dict)]
     if not candidates:
         return None
     nearest = min(candidates, key=lambda item: distance(position, item["position"]))
     if distance(position, nearest["position"]) > 3.0:
         return None
     return nearest
+
+
+def _resource_grid(observation: dict[str, Any]) -> dict[tuple[int, int], list[dict[str, Any]]]:
+    resources = observation.get("resources")
+    if not isinstance(resources, list):
+        return {}
+    grouped: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    for resource in resources:
+        if not isinstance(resource, dict) or not isinstance(resource.get("position"), dict):
+            continue
+        grouped.setdefault(_resource_grid_key(resource["position"]), []).append(resource)
+    return grouped
+
+
+def _resource_grid_key(position: dict[str, Any]) -> tuple[int, int]:
+    x = _safe_float(position.get("x"))
+    y = _safe_float(position.get("y"))
+    return (int(x // _RESOURCE_GRID_SIZE), int(y // _RESOURCE_GRID_SIZE))
 
 
 def _complete_belt_line_count(
@@ -1810,7 +1923,13 @@ def _complete_belt_line_count(
     return len(furnace_positions)
 
 
-def _belt_line_layouts_from_anchor(observation: dict[str, Any], belt: dict[str, Any]) -> list[dict[str, Any]]:
+def _belt_line_layouts_from_anchor(
+    observation: dict[str, Any],
+    belt: dict[str, Any],
+    *,
+    entities_by_name: dict[str, list[dict[str, Any]]] | None = None,
+    resource_grid: dict[tuple[int, int], list[dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
     belt_position = _position(belt)
     output = []
     for orientation in ("east", "west", "south", "north"):
@@ -1818,8 +1937,14 @@ def _belt_line_layouts_from_anchor(observation: dict[str, Any], belt: dict[str, 
         if not _entity_direction_matches(belt, belt_direction):
             continue
         drill_position = {"x": belt_position["x"] - 2 * dx, "y": belt_position["y"] - 2 * dy}
-        drill = _entity_near(observation, "burner-mining-drill", drill_position, 2.0)
-        resource = _nearest_resource(observation, drill_position)
+        drill = _entity_near(
+            observation,
+            "burner-mining-drill",
+            drill_position,
+            2.0,
+            entities_by_name=entities_by_name,
+        )
+        resource = _nearest_resource(observation, drill_position, resource_grid=resource_grid)
         resource_name = (
             _entity_mining_target_name(drill)
             or (str(resource.get("name")) if resource is not None and resource.get("name") else None)
@@ -1839,18 +1964,21 @@ def _belt_line_layouts_from_anchor(observation: dict[str, Any], belt: dict[str, 
                     "transport-belt",
                     {"x": belt_position["x"] + dx, "y": belt_position["y"] + dy},
                     0.75,
+                    entities_by_name=entities_by_name,
                 ),
                 "inserter": _entity_near(
                     observation,
                     "burner-inserter",
                     {"x": belt_position["x"] + 2 * dx, "y": belt_position["y"] + 2 * dy},
                     1.0,
+                    entities_by_name=entities_by_name,
                 ),
                 "furnace": _entity_near(
                     observation,
                     "stone-furnace",
                     {"x": belt_position["x"] + 3 * dx, "y": belt_position["y"] + 3 * dy},
                     1.75,
+                    entities_by_name=entities_by_name,
                 ),
                 "drill": drill,
             }
@@ -1892,15 +2020,33 @@ def _belt_line_fueled(layout: dict[str, Any]) -> bool:
     return True
 
 
-def _entity_near(observation: dict[str, Any], name: str, position: dict[str, float], radius: float) -> dict[str, Any] | None:
+def _entity_near(
+    observation: dict[str, Any],
+    name: str,
+    position: dict[str, float],
+    radius: float,
+    *,
+    entities_by_name: dict[str, list[dict[str, Any]]] | None = None,
+) -> dict[str, Any] | None:
+    source_entities = entities_by_name.get(name, []) if entities_by_name is not None else _entities(observation)
     candidates = [
         item
-        for item in _entities(observation)
+        for item in source_entities
         if item.get("name") == name and distance(position, _position(item)) <= radius
     ]
     if not candidates:
         return None
     return min(candidates, key=lambda item: distance(position, _position(item)))
+
+
+def _entities_by_name(observation: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for entity in _entities(observation):
+        name = str(entity.get("name") or "")
+        if not name:
+            continue
+        grouped.setdefault(name, []).append(entity)
+    return grouped
 
 
 def _position(entity: dict[str, Any]) -> dict[str, float]:

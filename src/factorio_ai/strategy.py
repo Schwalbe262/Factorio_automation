@@ -2123,7 +2123,12 @@ def reconcile_strategy_decision(
         "research_logistics",
     }:
         return _gear_mall_iron_plate_guardrail_adjustment(decision, selected, gear_mall_iron_plate_issue)
-    missing_input_source_issue = _site_input_missing_source_issue(observation)
+    site_input_guardrails_needed = not (
+        selected == "automate_electronic_circuit_line"
+        and readiness.iron_plate_source_ready
+        and total_item_count(observation, "copper-plate") > 0
+    )
+    missing_input_source_issue = _site_input_missing_source_issue(observation) if site_input_guardrails_needed else None
     if (
         _technology_researched(observation, "automation")
         and missing_input_source_issue is not None
@@ -2186,7 +2191,7 @@ def reconcile_strategy_decision(
                 "reason": guardrail_reason,
             }
             return adjusted
-    site_input_line_issue = _site_input_line_issue(observation)
+    site_input_line_issue = _site_input_line_issue(observation) if site_input_guardrails_needed else None
     if (
         _technology_researched(observation, "automation")
         and site_input_line_issue is not None
@@ -5005,11 +5010,33 @@ def _gear_mall_source_status_fields(source: dict[str, Any] | None) -> dict[str, 
     }
 
 
+def _gear_mall_route_issue_deferred_by_stock(readiness: FactoryReadiness, observation: dict[str, Any]) -> bool:
+    """Avoid expensive route/relocation scoring while the mall is currently usable.
+
+    The missing iron-plate line still matters, but it should not preempt electric-drill
+    prerequisites while the gear/belt mall can output and starter construction stock is healthy.
+    Once belt/gear stock drops or mall output is blocked, the full repair graph runs again.
+    """
+
+    try:
+        belt_stock = int(readiness.details.get("transport_belt_stock") or 0)
+    except (TypeError, ValueError):
+        belt_stock = total_item_count(observation, "transport-belt")
+    return (
+        readiness.gear_belt_logistics_connection_ready
+        and readiness.belt_mall_can_output
+        and belt_stock >= 12
+        and total_item_count(observation, "iron-gear-wheel") >= 20
+    )
+
+
 def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
     if not _technology_researched(observation, "automation"):
         return None
     belts_available = _transport_belts_available_for_mall_logistics(observation)
     readiness = build_factory_readiness(observation)
+    if _gear_mall_route_issue_deferred_by_stock(readiness, observation):
+        return None
     gear_belt_logistics_pair_exists = bool(readiness.details.get("gear_belt_logistics_pair_exists"))
     assemblers = (
         entities_named(observation, "assembling-machine-1")

@@ -89,6 +89,12 @@ $env:FACTORIO_AI_SCHEDULER_VLLM_CLIENT_GPUS = "0"
 # lets it grab a free a6000 node (e.g. n106). Lower back toward 120 once contention eases.
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_PRIORITY = "300"
 $env:FACTORIO_AI_REQUIRE_LLM_STRATEGY = "1"
+# Keep the rocket run moving when the scheduler/vLLM service is temporarily unavailable. The
+# autopilot still uses deterministic strategy guardrails and will be restarted in strict LLM mode
+# when scheduler readiness returns. Set to 0 to restore the older "pause autopilot until LLM" policy.
+if (-not $env:FACTORIO_AI_ALLOW_HEURISTIC_AUTOPILOT_FALLBACK) {
+    $env:FACTORIO_AI_ALLOW_HEURISTIC_AUTOPILOT_FALLBACK = "1"
+}
 $env:FACTORIO_AI_LLM_GUIDED_JSON = "1"
 # Qwen3.6 emits a verbose chain-of-thought when unconstrained, overflowing the old 512-token
 # cap so the JSON never closes ("LLM response content is not a JSON object"). guided_json above
@@ -198,6 +204,18 @@ function Test-PidAlive {
         return $false
     }
     return $null -ne (Get-Process -Id $pidNumber -ErrorAction SilentlyContinue)
+}
+
+function Test-HeuristicAutopilotFallbackAllowed {
+    return $Driver -eq "autopilot" -and $env:FACTORIO_AI_ALLOW_HEURISTIC_AUTOPILOT_FALLBACK -notin @("0", "false", "False", "FALSE", "no", "off")
+}
+
+function Test-ProcessRequiresLlm {
+    param($Process)
+    if ($null -eq $Process -or -not $Process.CommandLine) {
+        return $false
+    }
+    return [string]$Process.CommandLine -like "*--require-llm*"
 }
 
 function Get-ManagedProcesses {
@@ -602,6 +620,7 @@ function Test-LiveSkillFresh {
 }
 
 function Start-Autopilot {
+    param([bool]$RequireLlm = $true)
     if ($Driver -eq "code-agent") {
         # FLE-style driver: the LLM writes a Python program each step via the high-level API.
         Start-ManagedPython "unattended-no-mod-code-agent" @(
@@ -611,18 +630,70 @@ function Start-Autopilot {
             "--sleep-seconds", [string]$AutopilotSleepSeconds
         ) | Out-Null
     } else {
-        Start-ManagedPython "unattended-no-mod-autopilot" @(
+        $arguments = @(
             "-m", "factorio_ai.cli", "run-no-mod-autopilot",
-            "--objective", $Objective,
-            "--require-llm",
+            "--objective", $Objective
+        )
+        $processName = "unattended-no-mod-autopilot"
+        if ($RequireLlm) {
+            $arguments += "--require-llm"
+        } else {
+            $processName = "unattended-no-mod-autopilot-heuristic"
+        }
+        $arguments += @(
             "--cycles", "0",
             "--sleep-seconds", [string]$AutopilotSleepSeconds
-        ) | Out-Null
+        )
+        $previousRequireLlm = $env:FACTORIO_AI_REQUIRE_LLM_STRATEGY
+        $previousForceHeuristic = $env:FACTORIO_AI_FORCE_HEURISTIC_STRATEGY
+        try {
+            if ($RequireLlm) {
+                $env:FACTORIO_AI_REQUIRE_LLM_STRATEGY = "1"
+                $env:FACTORIO_AI_FORCE_HEURISTIC_STRATEGY = "0"
+            } else {
+                $env:FACTORIO_AI_REQUIRE_LLM_STRATEGY = "0"
+                $env:FACTORIO_AI_FORCE_HEURISTIC_STRATEGY = "1"
+            }
+            Start-ManagedPython $processName $arguments | Out-Null
+        } finally {
+            $env:FACTORIO_AI_REQUIRE_LLM_STRATEGY = $previousRequireLlm
+            $env:FACTORIO_AI_FORCE_HEURISTIC_STRATEGY = $previousForceHeuristic
+        }
     }
 }
 
 function Ensure-Autopilot {
     if (-not (Test-SchedulerLlmReady)) {
+        if (Test-HeuristicAutopilotFallbackAllowed) {
+            $processes = @(Get-ManagedProcesses $DriverCli)
+            if ($processes.Count -eq 0) {
+                Write-SupervisorLog "scheduler LLM not ready; starting heuristic autopilot fallback"
+                Start-Autopilot $false
+                return
+            }
+            if (Test-AutopilotActiveCycle -or (Test-LiveSkillFresh)) {
+                return
+            }
+            $heartbeat = Read-JsonFile (Join-Path $runtimeDir $DriverHeartbeatName)
+            $ageSeconds = Get-JsonAgeSeconds $heartbeat
+            $staleState = $false
+            if ($null -eq $heartbeat) {
+                $staleState = $true
+            } elseif ($heartbeat.state -in @("stopped", "failed", "interrupted", "cycle_error")) {
+                $staleState = $true
+            } elseif ($ageSeconds -gt $AutopilotStaleSeconds) {
+                $staleState = $true
+            }
+            if ($staleState) {
+                Write-SupervisorLog "restarting stale heuristic autopilot fallback while scheduler LLM is unavailable"
+                foreach ($process in $processes) {
+                    Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+                }
+                Start-Sleep -Seconds 3
+                Start-Autopilot $false
+            }
+            return
+        }
         if (Test-AutopilotActiveCycle) {
             return
         }
@@ -631,8 +702,20 @@ function Ensure-Autopilot {
         return
     }
     $processes = @(Get-ManagedProcesses $DriverCli)
+    if ($Driver -eq "autopilot" -and $processes.Count -gt 0) {
+        $fallbackProcesses = @($processes | Where-Object { -not (Test-ProcessRequiresLlm $_) })
+        if ($fallbackProcesses.Count -gt 0) {
+            Write-SupervisorLog "scheduler LLM ready; replacing heuristic autopilot fallback with strict LLM autopilot"
+            foreach ($process in $processes) {
+                Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+            Start-Sleep -Seconds 3
+            Start-Autopilot $true
+            return
+        }
+    }
     if ($processes.Count -eq 0) {
-        Start-Autopilot
+        Start-Autopilot $true
         return
     }
 
@@ -656,7 +739,7 @@ function Ensure-Autopilot {
         Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
     }
     Start-Sleep -Seconds 3
-    Start-Autopilot
+    Start-Autopilot $true
 }
 
 function Write-SupervisorStatus {
@@ -669,6 +752,8 @@ function Write-SupervisorStatus {
         $autopilotGate = "ready"
     } elseif (Test-AutopilotActiveCycle) {
         $autopilotGate = "active_cycle_waiting_for_scheduler_capacity"
+    } elseif (Test-HeuristicAutopilotFallbackAllowed -and @((Get-ManagedProcesses $DriverCli)).Count -gt 0) {
+        $autopilotGate = "heuristic_fallback_waiting_for_scheduler_llm"
     }
     $status = [ordered]@{
         state = "running"

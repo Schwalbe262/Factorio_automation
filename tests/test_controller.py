@@ -553,6 +553,72 @@ class ControllerTests(unittest.TestCase):
         self.assertIn("Slurm worker job pending GPU allocation", rows[0]["error"])
         self.assertIn("677406", rows[0]["error"])
 
+    def test_non_required_strategy_skips_remote_even_when_slurm_enabled(self):
+        class FakeController(FactorioController):
+            def observe(self):
+                return {"ok": True, "tick": 1, "inventory": {}, "entities": [], "enemies": [], "research": {}}
+
+        heuristic_result = {
+            "selected_skill": "setup_power",
+            "priority": 90,
+            "reason": "fallback can keep moving",
+            "evidence": [],
+            "blockers": [],
+            "expected_effect": "restore power",
+            "source": "heuristic",
+            "ok": True,
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            controller = FakeController(cfg)
+            with (
+                patch("factorio_ai.remote_slurm.llm_status") as status,
+                patch("factorio_ai.remote_slurm.request_strategy") as request_strategy,
+                patch("factorio_ai.slurm_worker.run_strategy_request", return_value=heuristic_result) as local_strategy,
+            ):
+                result = controller.strategy_decision("launch_rocket_program", require_llm=False)
+
+        status.assert_not_called()
+        request_strategy.assert_not_called()
+        local_strategy.assert_called_once()
+        self.assertIn("selected_skill", result)
+
+    def test_forced_heuristic_strategy_skips_remote_and_local_llm(self):
+        class FakeController(FactorioController):
+            def observe(self):
+                return {
+                    "ok": True,
+                    "tick": 1,
+                    "inventory": {},
+                    "entities": [],
+                    "enemies": [],
+                    "research": {"technologies": {"automation": {"researched": False}}},
+                }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            controller = FakeController(cfg)
+            with (
+                patch.dict("os.environ", {"FACTORIO_AI_FORCE_HEURISTIC_STRATEGY": "1"}),
+                patch("factorio_ai.remote_slurm.llm_status") as status,
+                patch("factorio_ai.remote_slurm.request_strategy") as request_strategy,
+                patch("factorio_ai.slurm_worker.run_strategy_request") as local_strategy,
+            ):
+                result = controller.strategy_decision("launch_rocket_program", require_llm=False)
+
+            rows = [
+                json.loads(line)
+                for line in llm_decision_log_path(cfg.log_dir).read_text(encoding="utf-8").splitlines()
+            ]
+
+        status.assert_not_called()
+        request_strategy.assert_not_called()
+        local_strategy.assert_not_called()
+        self.assertEqual(result["source"], "heuristic")
+        heuristic_rows = [row for row in rows if row["provider"] == "heuristic_fallback"]
+        self.assertTrue(heuristic_rows)
+        self.assertIn("forced heuristic strategy", heuristic_rows[-1]["error"])
+
     def test_required_llm_auto_uses_ready_remote_slurm_when_local_env_missing(self):
         class FakeController(FactorioController):
             def observe(self):

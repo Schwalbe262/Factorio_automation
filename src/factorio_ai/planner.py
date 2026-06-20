@@ -48,6 +48,7 @@ SMELTING_LINE_FUEL_INSERT = {
 BURNER_FUEL_ITEMS = ("coal", "wood", "solid-fuel", "rocket-fuel")
 ASSEMBLER_ENTITY_NAMES = {"assembling-machine-1", "assembling-machine-2", "assembling-machine-3"}
 FURNACE_ENTITY_NAMES = {"stone-furnace", "steel-furnace", "electric-furnace"}
+_STARTER_ANCHOR_CACHE: dict[int, tuple[int, int, list[dict[str, float]]]] = {}
 POWER_CONNECTOR_NAMES = {"small-electric-pole", "medium-electric-pole", "big-electric-pole", "substation"}
 PROTECTED_RESOURCE_NAMES = {"iron-ore", "copper-ore", "coal", "stone", "uranium-ore"}
 PRESERVED_STARTER_ARTIFACT_KEYWORDS = ("crash", "wreck", "spaceship")
@@ -5070,9 +5071,15 @@ def _base_anchor_position(observation: dict[str, Any]) -> dict[str, float] | Non
 
 
 def _starter_logistics_anchors(observation: dict[str, Any]) -> list[dict[str, float]]:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    cache_key = id(observation)
+    cache_signature = (id(entities), len(entities))
+    cached = _STARTER_ANCHOR_CACHE.get(cache_key)
+    if cached is not None and cached[0] == cache_signature[0] and cached[1] == cache_signature[1]:
+        return [dict(anchor) for anchor in cached[2]]
+
     base_anchor = _base_anchor_position(observation)
     anchors: list[dict[str, float]] = [base_anchor] if base_anchor is not None else [player_position(observation)]
-    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
     local_positions = [
         _position(entity)
         for entity in entities
@@ -5087,6 +5094,9 @@ def _starter_logistics_anchors(observation: dict[str, Any]) -> list[dict[str, fl
         centroid = _centroid(local_positions)
         if centroid is not None:
             anchors.append(centroid)
+    if len(_STARTER_ANCHOR_CACHE) > 64:
+        _STARTER_ANCHOR_CACHE.clear()
+    _STARTER_ANCHOR_CACHE[cache_key] = (cache_signature[0], cache_signature[1], [dict(anchor) for anchor in anchors])
     return anchors
 
 
@@ -10038,7 +10048,14 @@ class CircuitAutomationSkill:
 
         missing_item = _missing_circuit_cell_item(observation, line)
         if missing_item:
-            decision = self._ensure_item_quantity(observation, player, missing_item, _circuit_cell_required_count(line, missing_item))
+            reference_position = line.get("circuit_assembler_position") or line.get("pole_position")
+            decision = self._ensure_item_quantity(
+                observation,
+                player,
+                missing_item,
+                _circuit_cell_required_count(line, missing_item),
+                reference_position=reference_position if isinstance(reference_position, dict) else None,
+            )
             if decision is not None:
                 return decision
 
@@ -10274,6 +10291,8 @@ class CircuitAutomationSkill:
         player: dict[str, float],
         item: str,
         quantity: int,
+        *,
+        reference_position: dict[str, float] | None = None,
     ) -> PlannerDecision | None:
         if inventory_count(observation, item) >= quantity:
             return None
@@ -10284,11 +10303,20 @@ class CircuitAutomationSkill:
                 ("iron-gear-wheel", 5 * quantity),
                 ("iron-plate", 9 * quantity),
             ]:
-                decision = self._ensure_item_quantity(observation, player, prerequisite, count)
+                decision = self._ensure_item_quantity(
+                    observation,
+                    player,
+                    prerequisite,
+                    count,
+                    reference_position=reference_position,
+                )
                 if decision is not None:
                     return decision
             if bool(_technology_state(observation, "automation").get("researched")):
-                decision = BuildItemMallSkill("assembling-machine-1", quantity).next_action(observation)
+                decision = BuildItemMallSkill("assembling-machine-1", quantity).next_action(
+                    observation,
+                    reference_position=reference_position,
+                )
                 if not decision.done:
                     return decision
             if craftable_count(observation, "assembling-machine-1") > 0:
@@ -10316,7 +10344,13 @@ class CircuitAutomationSkill:
                 ("iron-gear-wheel", quantity),
                 ("iron-plate", quantity),
             ]:
-                decision = self._ensure_item_quantity(observation, player, prerequisite, count)
+                decision = self._ensure_item_quantity(
+                    observation,
+                    player,
+                    prerequisite,
+                    count,
+                    reference_position=reference_position,
+                )
                 if decision is not None:
                     return decision
             return None
@@ -10329,7 +10363,10 @@ class CircuitAutomationSkill:
 
         if item == "iron-gear-wheel":
             if _gear_handcraft_automation_context_active(observation):
-                decision = BuildItemMallSkill("iron-gear-wheel", max(quantity, 4)).next_action(observation)
+                decision = BuildItemMallSkill("iron-gear-wheel", max(quantity, 4)).next_action(
+                    observation,
+                    reference_position=reference_position,
+                )
                 if not decision.done:
                     return decision
                 return None
@@ -10342,7 +10379,13 @@ class CircuitAutomationSkill:
                     },
                     "craft gears for circuit automation",
                 )
-            return self._ensure_item_quantity(observation, player, "iron-plate", 2 * (quantity - inventory_count(observation, "iron-gear-wheel")))
+            return self._ensure_item_quantity(
+                observation,
+                player,
+                "iron-plate",
+                2 * (quantity - inventory_count(observation, "iron-gear-wheel")),
+                reference_position=reference_position,
+            )
 
         if item == "iron-plate":
             if reference_position is not None:
@@ -10350,7 +10393,7 @@ class CircuitAutomationSkill:
                     observation,
                     item,
                     reference_position,
-                    consumer_label=f"{self.target_item} mall prerequisite",
+                    consumer_label="electronic-circuit automation prerequisite",
                 )
                 if logistics_blocker is not None:
                     return logistics_blocker
@@ -10365,7 +10408,7 @@ class CircuitAutomationSkill:
                     observation,
                     item,
                     reference_position,
-                    consumer_label=f"{self.target_item} mall prerequisite",
+                    consumer_label="electronic-circuit automation prerequisite",
                 )
                 if logistics_blocker is not None:
                     return logistics_blocker
