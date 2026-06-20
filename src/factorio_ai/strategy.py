@@ -1082,6 +1082,7 @@ def reconcile_strategy_decision(
     readiness = build_factory_readiness(observation)
     decision = _with_factory_readiness(decision, readiness)
     boiler_feed_belt_shortfall = _boiler_feed_belt_shortfall_issue(observation)
+    gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
     rocket_objective = _is_rocket_objective(objective)
     remote_guardrail = decision.get("guardrail_adjusted") if isinstance(decision.get("guardrail_adjusted"), dict) else {}
     if remote_guardrail.get("from") == "plan_factory_site" and selected == remote_guardrail.get("to"):
@@ -1155,6 +1156,11 @@ def reconcile_strategy_decision(
             boiler_feed_belt_shortfall,
         )
     gear_mall_output_logistics_issue = _gear_mall_output_logistics_issue(observation)
+    if (
+        _gear_mall_source_fuel_blocker_preempts(gear_mall_iron_plate_issue)
+        and selected in GEAR_MALL_IRON_PLATE_PREEMPT_SKILLS
+    ):
+        return _gear_mall_iron_plate_guardrail_adjustment(decision, selected, gear_mall_iron_plate_issue)
     if gear_mall_output_logistics_issue is not None and selected in GEAR_MALL_OUTPUT_LOGISTICS_PREEMPT_SKILLS:
         return _gear_mall_output_logistics_guardrail_adjustment(decision, selected, gear_mall_output_logistics_issue)
     gear_belt_mall_transfer_logistics_issue = _gear_belt_mall_transfer_logistics_issue(observation)
@@ -1167,7 +1173,6 @@ def reconcile_strategy_decision(
             selected,
             gear_belt_mall_transfer_logistics_issue,
         )
-    gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
     if _gear_belt_mall_relocation_in_progress(observation) and selected in GEAR_BELT_MALL_PARTIAL_RELOCATION_PREEMPT_SKILLS:
         return _partial_gear_belt_relocation_guardrail_adjustment(decision, selected)
     if (
@@ -2426,6 +2431,9 @@ def _heuristic_strategy_impl(
     readiness_bootstrap_decision = _readiness_bootstrap_missing_mall_decision(readiness, observation)
     if readiness_bootstrap_decision is not None:
         return readiness_bootstrap_decision
+
+    if _gear_mall_source_fuel_blocker_preempts(gear_mall_iron_plate_issue):
+        return _gear_mall_iron_plate_strategy_decision(gear_mall_iron_plate_issue)
 
     if gear_mall_output_logistics_issue is not None:
         return _gear_mall_output_logistics_strategy_decision(gear_mall_output_logistics_issue)
@@ -4380,6 +4388,8 @@ def _gear_mall_iron_plate_guardrail_adjustment(
         f"source_distance_tiles={issue.get('source_distance_tiles')}",
         f"gear_assembler_iron_plate={issue.get('gear_assembler_iron_plate')}",
         f"gear_assembler_status={issue.get('gear_assembler_status')}",
+        f"source_status={issue.get('source_status')}",
+        f"source_fuel_blocked={str(issue.get('source_fuel_blocked')).lower()}",
         f"transport_belts_available_for_mall_logistics={str(issue.get('transport_belts_available')).lower()}",
         f"site_input_status={issue.get('site_input_status', 'route_needed')}",
         "gear_handcraft_blocked=true",
@@ -4484,6 +4494,14 @@ def _gear_mall_iron_plate_preempts_expansion(issue: dict[str, Any] | None) -> bo
     if issue.get("site_input_status") != "route_needed":
         return False
     return source_distance < 32.0
+
+
+def _gear_mall_source_fuel_blocker_preempts(issue: dict[str, Any] | None) -> bool:
+    return (
+        isinstance(issue, dict)
+        and bool(issue.get("source_fuel_blocked"))
+        and _gear_mall_iron_plate_preempts_expansion(issue)
+    )
 
 
 def _gear_mall_source_status_fields(source: dict[str, Any] | None) -> dict[str, Any]:
