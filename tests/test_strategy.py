@@ -1222,6 +1222,60 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("source_status=no_fuel", result["evidence"])
         self.assertIn("source_fuel_blocked=true", result["evidence"])
 
+    def test_rocket_goal_finishes_iron_plate_line_before_gear_output_when_source_fueled(self):
+        observation = gear_mall_short_site_input_route_observation()
+        for entity in observation["entities"]:
+            if entity.get("unit_number") == 1458:
+                entity["status_name"] = "working"
+                entity["inventories"] = {"1": {"coal": 3}, "2": {"iron-ore": 2}}
+            if entity.get("unit_number") == 146:
+                entity["status_name"] = "full_output"
+                entity["inventories"] = {"3": {"iron-gear-wheel": 5}}
+            if entity.get("unit_number") == 1779:
+                entity["status_name"] = "item_ingredient_shortage"
+                entity["inventories"] = {"2": {"iron-gear-wheel": 3}}
+
+        self.assertIsNotNone(strategy_module._gear_mall_output_logistics_issue(observation))
+        iron_issue = strategy_module._gear_mall_iron_plate_logistics_issue(observation)
+        self.assertIsNotNone(iron_issue)
+        self.assertFalse(iron_issue["source_fuel_blocked"])
+
+        result = heuristic_strategy("launch_rocket_program", observation)
+
+        self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertIn("site_input_status=route_needed", result["evidence"])
+
+    def test_reconcile_finishes_iron_plate_line_before_direct_gear_output_choice(self):
+        observation = gear_mall_short_site_input_route_observation()
+        for entity in observation["entities"]:
+            if entity.get("unit_number") == 1458:
+                entity["status_name"] = "working"
+                entity["inventories"] = {"1": {"coal": 3}, "2": {"iron-ore": 2}}
+            if entity.get("unit_number") == 146:
+                entity["status_name"] = "full_output"
+                entity["inventories"] = {"3": {"iron-gear-wheel": 5}}
+            if entity.get("unit_number") == 1779:
+                entity["status_name"] = "item_ingredient_shortage"
+                entity["inventories"] = {"2": {"iron-gear-wheel": 3}}
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "build_gear_belt_mall_logistics",
+                "priority": 93,
+                "reason": "Finish gear output logistics.",
+                "evidence": [],
+                "blockers": ["gear mall output logistics"],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "build_gear_belt_mall_logistics")
+        self.assertIn("site_input_status=route_needed", result["evidence"])
+
     def test_rocket_goal_repairs_power_before_unpowered_gear_mall_logistics(self):
         observation = gear_mall_needs_plate_line_observation()
         for entity in observation["entities"]:

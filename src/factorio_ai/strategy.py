@@ -1164,6 +1164,11 @@ def reconcile_strategy_decision(
     ):
         return _gear_mall_iron_plate_guardrail_adjustment(decision, selected, gear_mall_iron_plate_issue)
     if gear_mall_output_logistics_issue is not None and selected in GEAR_MALL_OUTPUT_LOGISTICS_PREEMPT_SKILLS:
+        if (
+            _gear_mall_iron_plate_preempts_expansion(gear_mall_iron_plate_issue)
+            and selected in GEAR_MALL_IRON_PLATE_PREEMPT_SKILLS
+        ):
+            return _gear_mall_iron_plate_guardrail_adjustment(decision, selected, gear_mall_iron_plate_issue)
         return _gear_mall_output_logistics_guardrail_adjustment(decision, selected, gear_mall_output_logistics_issue)
     gear_belt_mall_transfer_logistics_issue = _gear_belt_mall_transfer_logistics_issue(observation)
     if (
@@ -2438,6 +2443,8 @@ def _heuristic_strategy_impl(
         return _gear_mall_iron_plate_strategy_decision(gear_mall_iron_plate_issue)
 
     if gear_mall_output_logistics_issue is not None:
+        if _gear_mall_iron_plate_preempts_expansion(gear_mall_iron_plate_issue):
+            return _gear_mall_iron_plate_strategy_decision(gear_mall_iron_plate_issue)
         return _gear_mall_output_logistics_strategy_decision(gear_mall_output_logistics_issue)
     gear_belt_mall_transfer_logistics_issue = _gear_belt_mall_transfer_logistics_issue(observation)
     if gear_belt_mall_transfer_logistics_issue is not None:
