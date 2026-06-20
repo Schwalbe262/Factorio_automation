@@ -1541,6 +1541,16 @@ class FactorioController:
 
         recent = set(recent_skills)
 
+        try:
+            iron_issue = strategy_mod._gear_mall_iron_plate_logistics_issue(observation)
+            if (
+                strategy_mod._gear_mall_source_fuel_blocker_preempts(iron_issue)
+                and self._skill_run_config("build_iron_plate_logistic_line_to_gear_mall") is not None
+            ):
+                return "build_iron_plate_logistic_line_to_gear_mall"
+        except Exception:  # noqa: BLE001
+            pass
+
         # Prerequisite-aware recovery for the two most common bootstrap deadlocks: the strategy keeps
         # re-selecting a skill that can never progress because an upstream prerequisite was never built.
         # Checked before the generic heuristic/rotation so recovery is deterministic, not order-luck.

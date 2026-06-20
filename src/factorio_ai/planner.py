@@ -6471,9 +6471,11 @@ def _fuel_burner_line_entity(
     exclude_source_units: set[Any] | None = None,
     wait_for_existing_fuel: bool = False,
     prefer_coal_supply: bool = True,
+    allow_bootstrap_seed: bool = False,
 ) -> PlannerDecision:
     position = _position(entity)
     current_fuel = _entity_burner_fuel_count(entity)
+    desired_insert = min(insert_count, max(1, threshold - current_fuel))
     existing_fuel_item = _entity_existing_burner_fuel_item(entity)
     if existing_fuel_item is not None:
         inventory_fuel_item = existing_fuel_item
@@ -6496,6 +6498,13 @@ def _fuel_burner_line_entity(
                 and existing_fuel_item == "coal"
                 and _established_coal_supply_output_exists(observation)
             ):
+                belt_source = _nearest_fuel_belt_source(observation, position, fuel_item=existing_fuel_item)
+                if belt_source is not None:
+                    return _take_surplus_fuel_source_decision(player, belt_source, context)
+                if allow_bootstrap_seed:
+                    seed = _bootstrap_fuel_seed_decision(observation, player, position, context, support_skill, desired_insert)
+                    if seed is not None:
+                        return seed
                 return PlannerDecision(
                     {"type": "wait", "ticks": 240},
                     f"wait for established coal supply output before refueling {context}; refusing repeated hand-mining",
@@ -6510,7 +6519,6 @@ def _fuel_burner_line_entity(
             )
     else:
         inventory_fuel_item, inventory_fuel_count = _select_inventory_burner_fuel(observation)
-    desired_insert = min(insert_count, max(1, threshold - current_fuel))
     if inventory_fuel_count <= 0:
         if prefer_coal_supply and _coal_supply_can_reduce_hand_mining(observation):
             supply = CoalSupplySkill(target_count=max(16, desired_insert)).next_action(observation)
@@ -6529,6 +6537,13 @@ def _fuel_burner_line_entity(
         ):
             if source is not None:
                 return _take_surplus_fuel_source_decision(player, source, context)
+            belt_source = _nearest_fuel_belt_source(observation, position, fuel_item="coal")
+            if belt_source is not None:
+                return _take_surplus_fuel_source_decision(player, belt_source, context)
+            if allow_bootstrap_seed:
+                seed = _bootstrap_fuel_seed_decision(observation, player, position, context, support_skill, desired_insert)
+                if seed is not None:
+                    return seed
             return PlannerDecision(
                 {"type": "wait", "ticks": 240},
                 f"wait for established coal supply output before refueling {context}; refusing repeated hand-mining",
@@ -6572,6 +6587,55 @@ def _fuel_burner_line_entity(
         },
         f"fuel {entity_name} in {context}",
     )
+
+
+def _bootstrap_fuel_seed_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    target_position: dict[str, float],
+    context: str,
+    support_skill: IronPlateSkill,
+    desired_insert: int,
+) -> PlannerDecision | None:
+    if not _is_virtual_agent(observation):
+        return None
+    coal = _nearest_resource_to_position(observation, target_position, "coal")
+    if coal is None:
+        return None
+    if distance(target_position, _position(coal)) > WALK_FUEL_LOGISTICS_LIMIT:
+        return None
+    decision = support_skill._mine_resource(player, coal, "coal", max(4, desired_insert))
+    if decision.action is None:
+        return None
+    return _bootstrap_seed_decision(
+        decision.action,
+        f"{decision.reason} for one-time bootstrap fuel seed for {context}",
+        seed_reason="gear_mall_source_fuel_seed",
+        expected_followup=f"insert coal into {context} and verify automated output increases",
+    )
+
+
+def _nearest_fuel_belt_source(
+    observation: dict[str, Any],
+    target_position: dict[str, float],
+    *,
+    fuel_item: str | None = None,
+) -> dict[str, Any] | None:
+    candidates: list[tuple[float, int, dict[str, Any]]] = []
+    for belt in entities_named(observation, "transport-belt"):
+        if fuel_item:
+            source_count = entity_item_count(belt, fuel_item)
+            if source_count <= 0:
+                continue
+        else:
+            _source_item, source_count = _select_surplus_fuel_item(belt)
+            if source_count <= 0:
+                continue
+        candidates.append((distance(target_position, _position(belt)), -source_count, belt))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return candidates[0][2]
 
 
 def _coal_supply_can_reduce_hand_mining(observation: dict[str, Any]) -> bool:
@@ -9063,6 +9127,7 @@ def _iron_plate_line_source_recovery_decision(
             far_fuel_reason="iron source drill needs local fuel before the gear mall plate line can stay active",
             exclude_source_units={source.get("unit_number")},
             prefer_coal_supply=True,
+            allow_bootstrap_seed=True,
         )
     if (
         entity_item_count(source, "iron-plate") <= 0
@@ -9081,6 +9146,7 @@ def _iron_plate_line_source_recovery_decision(
             support_skill=IronPlateSkill(),
             far_fuel_reason="iron source furnace needs local fuel before the gear mall plate line can output plates",
             prefer_coal_supply=True,
+            allow_bootstrap_seed=True,
         )
     if (
         entity_item_count(source, "iron-plate") <= 0

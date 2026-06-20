@@ -2755,6 +2755,50 @@ class StallWatchdogTests(unittest.TestCase):
             )
             self.assertEqual(skill, "bootstrap_build_item_mall")
 
+    def test_stall_recovery_repairs_source_furnace_fuel_before_repeating_belt_mall(self):
+        observation = {
+            "player": {"position": {"x": 0, "y": 0}},
+            "inventory": {"transport-belt": 20, "coal": 2},
+            "entities": [
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 1458,
+                    "recipe": "iron-plate",
+                    "position": {"x": -12, "y": 2},
+                    "status_name": "no_fuel",
+                    "inventories": {"2": {"iron-ore": 2}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 146,
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 8, "y": 8},
+                    "electric_network_connected": True,
+                    "status_name": "full_output",
+                    "inventories": {"3": {"iron-gear-wheel": 5}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 1779,
+                    "recipe": "transport-belt",
+                    "position": {"x": 12, "y": 8},
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {"2": {"iron-gear-wheel": 3}},
+                },
+            ],
+            "resources": [{"name": "coal", "position": {"x": 2, "y": 0}, "distance": 2}],
+            "research": {"technologies": {"automation": {"researched": True}, "logistics": {"researched": True}}},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FactorioController(make_test_config(Path(tmp)))
+            skill = controller._stall_recovery_skill(
+                "launch_rocket_program",
+                observation,
+                ["build_gear_belt_mall_logistics", "bootstrap_build_item_mall"],
+            )
+            self.assertEqual(skill, "build_iron_plate_logistic_line_to_gear_mall")
+
     def test_both_controllers_run_strategy_step_accept_override_skill(self):
         # run_autopilot_loop (base) always calls run_strategy_step(override_skill=...). Every subclass
         # override of run_strategy_step must accept it, or the no-mod autopilot raises TypeError every

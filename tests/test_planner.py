@@ -663,6 +663,97 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("established coal supply output", decision.reason)
         self.assertIn("refusing repeated hand-mining", decision.reason)
 
+    def test_fuel_burner_takes_coal_from_established_output_belt_before_waiting(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 20, "y": 0}
+        obs["inventory"] = {}
+        obs["resources"] = [
+            {"name": "coal", "position": {"x": 0, "y": 0}, "distance": 20},
+            {"name": "coal", "position": {"x": 20, "y": 0}, "distance": 0},
+        ]
+        target = {"name": "stone-furnace", "unit_number": 11, "position": {"x": 20, "y": 0}, "inventories": {}}
+        obs["entities"] = [
+            target,
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 10,
+                "position": {"x": 0, "y": 0},
+                "direction": planner_module.EAST,
+                "mining_target": "coal",
+                "inventories": {"1": {"coal": 3}},
+            },
+            {
+                "name": "transport-belt",
+                "unit_number": 12,
+                "position": {"x": 1.5, "y": 0.5},
+                "direction": planner_module.EAST,
+                "inventories": {"1": {"coal": 6}},
+            },
+        ]
+
+        decision = planner_module._fuel_burner_line_entity(
+            obs,
+            obs["player"]["position"],
+            target,
+            entity_name="stone-furnace",
+            threshold=3,
+            insert_count=5,
+            context="test burner",
+            support_skill=IronPlateSkill(),
+            far_fuel_reason="too far",
+        )
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["unit_number"], 12)
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertIn("supply belt", decision.reason)
+
+    def test_fuel_burner_allows_virtual_bootstrap_seed_when_coal_output_empty(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 20, "y": 0}, "character_valid": False}
+        obs["inventory"] = {}
+        obs["resources"] = [
+            {"name": "coal", "position": {"x": 0, "y": 0}, "distance": 20},
+            {"name": "coal", "position": {"x": 20, "y": 0}, "distance": 0},
+        ]
+        target = {"name": "stone-furnace", "unit_number": 11, "position": {"x": 20, "y": 0}, "inventories": {}}
+        obs["entities"] = [
+            target,
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 10,
+                "position": {"x": 0, "y": 0},
+                "direction": planner_module.EAST,
+                "mining_target": "coal",
+                "inventories": {"1": {"coal": 3}},
+            },
+            {
+                "name": "transport-belt",
+                "unit_number": 12,
+                "position": {"x": 1.5, "y": 0.5},
+                "direction": planner_module.EAST,
+                "inventories": {},
+            },
+        ]
+
+        decision = planner_module._fuel_burner_line_entity(
+            obs,
+            obs["player"]["position"],
+            target,
+            entity_name="stone-furnace",
+            threshold=3,
+            insert_count=5,
+            context="iron source furnace for gear mall plate logistics",
+            support_skill=IronPlateSkill(),
+            far_fuel_reason="too far",
+            allow_bootstrap_seed=True,
+        )
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertTrue(decision.action["bootstrap_seed"])
+        self.assertEqual(decision.metadata["seed_reason"], "gear_mall_source_fuel_seed")
+        self.assertIn("one-time bootstrap fuel seed", decision.reason)
+
     def test_fuel_burner_takes_small_surplus_before_mining_with_established_coal_output(self):
         obs = base_observation()
         obs["player"]["position"] = {"x": 20, "y": 0}
