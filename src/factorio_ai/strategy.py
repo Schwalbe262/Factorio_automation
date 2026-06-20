@@ -3035,6 +3035,33 @@ def _readiness_bootstrap_missing_mall_decision(readiness: FactoryReadiness) -> d
     if readiness.failure_root not in {"gear_mall_missing", "belt_mall_missing", "belt_line_unbuildable"}:
         return None
     details = readiness.details if isinstance(readiness.details, dict) else {}
+    output_bootstrap_ready = (
+        readiness.failure_root == "belt_line_unbuildable"
+        and readiness.virtual_agent
+        and readiness.bootstrap_seed_allowed
+        and int(details.get("transport_belt_stock") or 0) <= 0
+        and bool(details.get("gear_belt_logistics_connection_ready"))
+        and not bool(details.get("belt_mall_output_source_ready"))
+    )
+    if output_bootstrap_ready:
+        return StrategicDecision(
+            selected_skill="bootstrap_build_item_mall",
+            priority=94,
+            reason=(
+                "Factory readiness reports belt_line_unbuildable with a connected gear/belt mall but no "
+                "transport-belt output; bootstrap the mall output before rerunning logistics or relocation."
+            ),
+            evidence=[
+                f"factory_readiness_failure_root={readiness.failure_root}",
+                f"factory_readiness_repair_skill={readiness.repair_skill}",
+                f"bootstrap_seed_allowed={str(readiness.bootstrap_seed_allowed).lower()}",
+                "gear_belt_logistics_connection_ready=true",
+                "belt_mall_output_source_ready=false",
+            ],
+            blockers=list(readiness.blocked_by) or ["transport-belt mall output"],
+            expected_effect="Seed or finish the transport-belt mall so construction belts resume without boiler hand-fueling loops.",
+            source="heuristic",
+        ).to_dict()
     if not (
         readiness.virtual_agent
         and int(details.get("transport_belt_stock") or 0) <= 0

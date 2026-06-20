@@ -3821,12 +3821,13 @@ class CoalFuelFeedSkill:
             if decision is not None:
                 boiler = boiler_layout.get("boiler")
                 if isinstance(boiler, dict):
+                    route_started = _boiler_feed_route_started(boiler_layout)
                     # The belt-route boiler feed refuses (returns action=None) when there is no belt
                     # automation/stock. On its own that lets steam power DIE (the boiler hits 0 fuel ->
                     # no power -> assemblers/labs stop). Keep power alive with the same fallbacks
                     # SetupPowerSkill uses: a one-time emergency insert, else a direct mine+hand-carry
                     # (the virtual agent moves instantly so coal within the walk limit is reachable).
-                    emergency = _emergency_boiler_bootstrap_fuel_decision(observation, player, boiler, decision)
+                    emergency = None if route_started else _emergency_boiler_bootstrap_fuel_decision(observation, player, boiler, decision)
                     if emergency is not None:
                         return emergency
                     if (
@@ -3834,6 +3835,11 @@ class CoalFuelFeedSkill:
                         and not decision.done
                         and _entity_burner_fuel_count(boiler) < STEAM_POWER_BOILER_FUEL_RESERVE
                     ):
+                        if route_started:
+                            return PlannerDecision(
+                                None,
+                                f"{decision.reason}; boiler feed route already started, refusing repeated boiler hand-fueling",
+                            )
                         handfeed = _fuel_burner_line_entity(
                             observation,
                             player,
@@ -4302,6 +4308,15 @@ def _boiler_coal_fuel_feed_layout_complete(layout: dict[str, Any]) -> bool:
         and isinstance(target_inserter, dict)
         and isinstance(target_inserter.get("entity"), dict)
     )
+
+
+def _boiler_feed_route_started(layout: dict[str, Any]) -> bool:
+    segments = layout.get("segments") if isinstance(layout.get("segments"), list) else []
+    # Segment 0 is usually the source drill output belt that existed before this route.
+    if any(isinstance(segment.get("entity"), dict) for segment in segments[1:] if isinstance(segment, dict)):
+        return True
+    target_inserter = layout.get("target_inserter")
+    return isinstance(target_inserter, dict) and isinstance(target_inserter.get("entity"), dict)
 
 
 class _ExpandPlateSmeltingSkill:

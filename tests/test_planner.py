@@ -1148,6 +1148,34 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["item"], "transport-belt")
         self.assertIn("output chest", decision.reason)
 
+    def test_coal_fuel_feed_does_not_repeat_boiler_hand_fuel_after_route_started(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 8, "y": 0}
+        obs["inventory"] = {"coal": 5}
+        obs["research"]["technologies"]["automation"]["researched"] = True
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": planner_module.EAST, "inventories": {"1": {"coal": 3}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": planner_module.EAST, "inventories": {"1": {"coal": 1}}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 2.5, "y": 0.5}, "direction": planner_module.EAST, "inventories": {}},
+            {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 981,
+                "position": {"x": 0, "y": 4},
+                "recipe": "transport-belt",
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertIsNone(decision.action)
+        self.assertFalse(decision.done)
+        self.assertIn("route already started", decision.reason)
+        self.assertIn("refusing repeated boiler hand-fueling", decision.reason)
+
     def test_coal_fuel_feed_clears_chest_blocking_boiler_belt_route(self):
         obs = base_observation()
         obs["player"]["position"] = {"x": 3, "y": 0}

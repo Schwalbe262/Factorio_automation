@@ -105,6 +105,55 @@ def gear_belt_mall_has_local_plate_seed_observation() -> dict:
     return observation
 
 
+def gear_belt_mall_connected_but_output_empty_observation() -> dict:
+    return {
+        "player": {"position": {"x": 56.5, "y": 58.5}, "character_valid": False},
+        "inventory": {"iron-plate": 40},
+        "entities": [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 214,
+                "recipe": "iron-gear-wheel",
+                "position": {"x": 52.5, "y": 58.5},
+                "electric_network_connected": True,
+                "status_name": "item_ingredient_shortage",
+                "inventories": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 217,
+                "recipe": "transport-belt",
+                "position": {"x": 56.5, "y": 58.5},
+                "electric_network_connected": True,
+                "status_name": "item_ingredient_shortage",
+                "inventories": {"1": {"iron-gear-wheel": 2}},
+            },
+            {
+                "name": "inserter",
+                "unit_number": 290,
+                "position": {"x": 54.5, "y": 58.5},
+                "direction": 4,
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 15,
+                "recipe": "iron-plate",
+                "position": {"x": 47.5, "y": 58.5},
+                "inventories": {"2": {"iron-plate": 79}},
+            },
+        ],
+        "resources": [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}],
+        "research": {
+            "technologies": {
+                "automation": {"researched": True},
+                "logistics": {"researched": False, "progress": 0.05},
+            }
+        },
+    }
+
+
 def gear_belt_mall_transfer_connection_missing_observation() -> dict:
     return {
         "player": {"position": {"x": 52.5, "y": 54.5}, "character_valid": False},
@@ -838,6 +887,15 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
         self.assertIn("transport-belt mall bootstrap before iron-plate logistics", result["blockers"])
         self.assertIn("local_iron_plate_seed_source_unit=102", result["evidence"])
+
+    def test_rocket_goal_bootstraps_connected_belt_mall_when_output_empty(self):
+        result = heuristic_strategy("launch_rocket_program", gear_belt_mall_connected_but_output_empty_observation())
+
+        self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(result["factory_readiness"]["failure_root"], "belt_line_unbuildable")
+        self.assertEqual(result["factory_readiness"]["repair_skill"], "bootstrap_build_item_mall")
+        self.assertIn("gear_belt_logistics_connection_ready=true", result["evidence"])
+        self.assertIn("belt_mall_output_source_ready=false", result["evidence"])
 
     def test_rocket_goal_bootstraps_when_mall_assemblers_are_unpowered(self):
         observation = gear_belt_mall_needs_bootstrap_observation()
