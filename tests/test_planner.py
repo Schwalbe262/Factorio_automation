@@ -7861,6 +7861,62 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 982)
         self.assertIn("iron source output inserter", decision.reason)
 
+    def test_iron_plate_logistic_line_gets_pole_material_before_unpowered_endpoint_repair(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 20}
+        obs["craftable"] = {}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].extend(
+            [
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": -8, "y": 2},
+                    "recipe": "iron-plate",
+                    "inventories": {"3": {"iron-plate": 20}},
+                },
+                {
+                    "name": "tree-01",
+                    "type": "tree",
+                    "unit_number": 951,
+                    "position": {"x": 1, "y": 0},
+                    "distance": 1,
+                    "inventories": {},
+                },
+            ]
+        )
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+        unit_number = 960
+        for segment in layout["segments"]:
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": unit_number,
+                    "position": segment["position"],
+                    "direction": segment["direction"],
+                    "inventories": {},
+                }
+            )
+            unit_number += 1
+        obs["entities"].append(
+            {
+                "name": "inserter",
+                "unit_number": 980,
+                "position": layout["source_inserter"]["position"],
+                "direction": layout["source_inserter"]["direction"],
+                "inventories": {},
+                "electric_network_connected": False,
+                "status_name": "no_power",
+            }
+        )
+
+        decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "tree-01")
+        self.assertIn("pole wood", decision.reason)
+        self.assertIn("iron source output inserter", decision.reason)
+
     def test_iron_plate_logistic_line_refuels_source_drill_before_endpoint_completion(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"transport-belt": 20, "coal": 2}

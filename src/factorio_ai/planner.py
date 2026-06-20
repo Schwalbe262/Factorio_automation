@@ -8979,11 +8979,9 @@ def _logistics_line_powered_inserter_decision(
         )
 
     if inventory_count(observation, "small-electric-pole") <= 0:
-        if craftable_count(observation, "small-electric-pole") > 0:
-            return PlannerDecision(
-                {"type": "craft", "recipe": "small-electric-pole", "count": 1},
-                f"craft small-electric-pole to power {label}",
-            )
+        decision = _ensure_small_power_pole_for_local_repair(observation, player, label)
+        if decision is not None:
+            return decision
         return PlannerDecision(None, f"{label} needs small-electric-pole power coverage")
     pole_position = _select_mall_inserter_power_pole_position(observation, position)
     if pole_position is None:
@@ -8998,6 +8996,22 @@ def _logistics_line_powered_inserter_decision(
             "allow_nearby": False,
         },
         f"place supply pole for {label}",
+    )
+
+
+def _ensure_small_power_pole_for_local_repair(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    label: str,
+) -> PlannerDecision | None:
+    decision = SetupPowerSkill()._ensure_item_quantity(observation, player, "small-electric-pole", 1)
+    if decision is None:
+        return None
+    return PlannerDecision(
+        decision.action,
+        f"{decision.reason} for {label}",
+        done=decision.done,
+        metadata=decision.metadata,
     )
 
 
@@ -10662,9 +10676,11 @@ class GearBeltMallLogisticsSkill:
                 f"connect supply pole for {label}",
             )
 
-        decision = self._ensure_inventory_item(observation, "small-electric-pole", 1)
-        if decision is not None:
-            return decision
+        if inventory_count(observation, "small-electric-pole") <= 0:
+            decision = _ensure_small_power_pole_for_local_repair(observation, player, label)
+            if decision is not None:
+                return decision
+            return PlannerDecision(None, f"{label} needs small-electric-pole power coverage")
         pole_position = _select_mall_inserter_power_pole_position(observation, position)
         if pole_position is None:
             return PlannerDecision(None, f"cannot find clear power pole position for {label}")
