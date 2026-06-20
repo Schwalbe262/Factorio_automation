@@ -215,7 +215,7 @@ def _action_explains_delta(action: dict[str, Any], delta: dict[str, Any]) -> boo
             and not removed
             and not changed
             and added[0].get("name") == action.get("name")
-            and _positions_close(added[0].get("position"), action.get("position"), radius=2.0)
+            and _positions_close(added[0].get("position"), action.get("position"), radius=4.0)
         )
     if action_type == "mine":
         return len(removed) == 1 and not added and not changed and _entity_matches_action(removed[0], action)
@@ -283,6 +283,7 @@ def _compact_action(action: dict[str, Any]) -> dict[str, Any]:
         "bootstrap_seed",
         "seed_reason",
         "expected_followup",
+        "allow_nearby",
     }
     return {key: action.get(key) for key in keep if key in action}
 

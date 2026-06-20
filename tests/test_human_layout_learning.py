@@ -112,6 +112,55 @@ class HumanLayoutLearningTests(unittest.TestCase):
         self.assertIsNone(event)
         self.assertFalse(human_layout_learning_trace_path(logs).exists())
 
+    def test_does_not_record_nearby_agent_build_adjustment_as_human_intervention(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = root / "runtime"
+            logs = root / "logs"
+            before = observation_with_entities()
+            after = observation_with_entities(
+                {
+                    "name": "small-electric-pole",
+                    "unit_number": 72,
+                    "position": {"x": -39.5, "y": 17.5},
+                    "inventories": {},
+                }
+            )
+
+            record_human_layout_observation(
+                runtime,
+                logs,
+                before,
+                objective="launch_rocket_program",
+                active_skill="research_automation",
+                active_step=44,
+                source="test",
+            )
+            remember_agent_layout_action(
+                runtime,
+                {
+                    "type": "build",
+                    "name": "small-electric-pole",
+                    "position": {"x": -37.5, "y": 19.5},
+                    "allow_nearby": True,
+                },
+                objective="launch_rocket_program",
+                active_skill="research_automation",
+                active_step=45,
+            )
+            event = record_human_layout_observation(
+                runtime,
+                logs,
+                after,
+                objective="launch_rocket_program",
+                active_skill="research_automation",
+                active_step=46,
+                source="test",
+            )
+
+        self.assertIsNone(event)
+        self.assertFalse(human_layout_learning_trace_path(logs).exists())
+
     def test_tick_reset_refreshes_baseline_without_human_intervention_event(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -2,10 +2,10 @@
 - Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod map was reset and strict Qwen/vLLM unattended supervisor is running.
 - Part151: starter fuel batches now use coal reserve 20 / batch 30, direct smelting expands 2-4 burner cells, and coal supply expands toward 4 burner drills until electric mining is available.
 - Gear/belt mall now prefers direct gear->belt inserter spacing, relocates cramped belt assemblers, and removes obsolete empty buffer chests/inserters while protecting active inserters/non-empty chests.
-- Human layout learning is enabled: unexplained factory-entity layout deltas go to `operator-intervention-layout-learning.jsonl`; map reset, trees/rocks, and furnace recipe flicker are filtered.
-- Live status after reset: server reachable tick 18804; supervisor PID 20096, autopilot PID 44312, vLLM service 12304 healthy; live skill `research_automation`.
-- Current progress: researched=0, key items include iron-plate=33, coal=52; no run-health warnings and no pending human layout event.
-- Recent strategy decisions are still `source=llm`; current loop is reusing progressing `research_automation`.
-- Validation: `PYTHONPATH=src python -m unittest discover -s tests` passed (1096 tests; ResourceWarning only).
-- Token checkpoint: goal tracker 13,277,979; recorded part delta +994,562; weekly quota unavailable.
+- Human layout learning is enabled: unexplained factory-entity layout deltas go to `operator-intervention-layout-learning.jsonl`; map reset, trees/rocks, furnace recipe flicker, and nearby agent build adjustment are filtered.
+- Live status after reset/restart: server reachable tick 70824; supervisor PID 46644, autopilot PID 60828, vLLM service 12304 healthy.
+- Current progress: researched=4 (`automation`, `automation-science-pack`, `electronics`, `steam-power`); repair root `belt_mall_missing` -> `bootstrap_build_item_mall`; no run-health warnings and no pending human layout event.
+- Recent strategy decisions are still `source=llm`; current work is bootstrapping the gear/belt mall.
+- Validation: `PYTHONPATH=src python -m unittest discover -s tests` passed (1097 tests; ResourceWarning only).
+- Token checkpoint: goal tracker 13,388,407; latest recorded deltas +994,562 and +110,428; weekly quota unavailable.
 - Next: watch Automation, bootstrap gear/belt mall, electronic circuits, then electric mining drill and burner replacement/main-belt migration.
