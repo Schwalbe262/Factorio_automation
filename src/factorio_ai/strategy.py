@@ -4415,6 +4415,7 @@ def _gear_mall_iron_plate_strategy_decision(issue: dict[str, Any]) -> dict[str, 
             f"source_distance_tiles={issue.get('source_distance_tiles')}",
             f"gear_assembler_iron_plate={issue.get('gear_assembler_iron_plate')}",
             f"gear_assembler_status={issue.get('gear_assembler_status')}",
+            f"source_status={issue.get('source_status')}",
             f"transport_belts_available_for_mall_logistics={str(issue.get('transport_belts_available')).lower()}",
             f"site_input_status={issue.get('site_input_status', 'route_needed')}",
             "gear_handcraft_blocked=true",
@@ -4472,15 +4473,34 @@ def _belt_mall_missing_before_relocation_adjustment(
 def _gear_mall_iron_plate_preempts_expansion(issue: dict[str, Any] | None) -> bool:
     if not isinstance(issue, dict):
         return False
-    if issue.get("site_input_status") != "route_needed":
-        return False
     if not bool(issue.get("transport_belts_available")):
         return False
     try:
         source_distance = float(issue.get("source_distance_tiles") or 0.0)
     except (TypeError, ValueError):
         return False
+    if bool(issue.get("source_fuel_blocked")):
+        return source_distance < 32.0
+    if issue.get("site_input_status") != "route_needed":
+        return False
     return source_distance < 32.0
+
+
+def _gear_mall_source_status_fields(source: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(source, dict):
+        return {"source_status": None, "source_fuel_blocked": False}
+    source_status = source.get("status_name") or source.get("status")
+    source_fuel_blocked = (
+        str(source.get("name") or "") in {"stone-furnace", "steel-furnace", "electric-furnace"}
+        and str(source.get("recipe") or source.get("recipe_name") or "") == "iron-plate"
+        and entity_item_count(source, "iron-plate") <= 0
+        and entity_item_count(source, "iron-ore") > 0
+        and _entity_status_name_in(source, {"no_fuel"})
+    )
+    return {
+        "source_status": source_status,
+        "source_fuel_blocked": source_fuel_blocked,
+    }
 
 
 def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
@@ -4539,6 +4559,7 @@ def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[s
                 "transport_belts_available": belts_available,
                 "gear_belt_logistics_pair_exists": gear_belt_logistics_pair_exists,
                 "site_input_status": "route_needed",
+                **_gear_mall_source_status_fields(source),
                 **route_cost,
             }
     return best_issue or _relocated_gear_belt_mall_target_issue(observation, source_furnaces, belts_available)
@@ -4578,6 +4599,7 @@ def _gear_mall_iron_plate_site_input_issue(
         "gear_assembler_status": consumer.get("status_name") or consumer.get("status"),
         "transport_belts_available": belts_available,
         "site_input_status": "route_needed",
+        **_gear_mall_source_status_fields(source),
         **route_cost,
     }
 
@@ -4666,6 +4688,7 @@ def _relocated_gear_belt_mall_target_issue(
                 "relocation_in_progress": True,
                 "target_gear_assembler_unit": target_gear.get("unit_number") if isinstance(target_gear, dict) else None,
                 "target_belt_assembler_unit": target_belt.get("unit_number") if isinstance(target_belt, dict) else None,
+                **_gear_mall_source_status_fields(source),
                 **route_cost,
             }
     for source in source_furnaces:
@@ -4690,6 +4713,7 @@ def _relocated_gear_belt_mall_target_issue(
             "relocation_in_progress": True,
             "target_gear_assembler_unit": target_gear.get("unit_number") if isinstance(target_gear, dict) else None,
             "target_belt_assembler_unit": target_belt.get("unit_number") if isinstance(target_belt, dict) else None,
+            **_gear_mall_source_status_fields(source),
             **route_cost,
         }
     return None
@@ -4746,6 +4770,7 @@ def _partial_gear_mall_relocation_issue(
         "transport_belts_available": belts_available,
         "relocation_in_progress": True,
         "recoverable_assembler_unit": recoverable.get("unit_number") if isinstance(recoverable, dict) else None,
+        **_gear_mall_source_status_fields(source),
         **route_cost,
     }
 

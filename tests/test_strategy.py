@@ -1,6 +1,7 @@
 import unittest
 
 from factorio_ai import planner as planner_module
+from factorio_ai import strategy as strategy_module
 from factorio_ai.strategy import (
     heuristic_strategy,
     make_layout_improvement_context,
@@ -1124,6 +1125,23 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
         self.assertIn("iron-plate logistic line to gear mall", result["blockers"])
         self.assertIn("site_input_status=route_needed", result["evidence"])
+
+    def test_gear_mall_source_furnace_fuel_blocker_preempts_without_site_input_status(self):
+        source = {
+            "name": "stone-furnace",
+            "recipe": "iron-plate",
+            "status_name": "no_fuel",
+            "inventories": {"2": {"iron-ore": 10}},
+        }
+        fields = strategy_module._gear_mall_source_status_fields(source)
+        issue = {
+            "source_distance_tiles": 7.1,
+            "transport_belts_available": True,
+            **fields,
+        }
+
+        self.assertTrue(fields["source_fuel_blocked"])
+        self.assertTrue(strategy_module._gear_mall_iron_plate_preempts_expansion(issue))
 
     def test_rocket_goal_repairs_power_before_unpowered_gear_mall_logistics(self):
         observation = gear_mall_needs_plate_line_observation()
