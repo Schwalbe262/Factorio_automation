@@ -172,6 +172,15 @@ def _llm_degrade_cooldown_cycles() -> int:
         return 5
 
 
+def _heuristic_autopilot_fallback_allowed() -> bool:
+    return os.getenv("FACTORIO_AI_ALLOW_HEURISTIC_AUTOPILOT_FALLBACK", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
 # Self-repair: when a hand-written skill fails this many times in a row, enqueue the local LLM to
 # generate a sandbox-gated OVERRIDE that replaces it (auto-rollback to the hand-written one on regress).
 def _skill_repair_enabled() -> bool:
@@ -1701,6 +1710,7 @@ class FactorioController:
         # on the heuristic so an unstable/hung serving (or a refusal loop) can't freeze the autopilot.
         consecutive_strategy_failures = 0
         llm_degrade_threshold = _llm_degrade_threshold()
+        allow_heuristic_fallback = _heuristic_autopilot_fallback_allowed()
         # Sticky degradation: after the threshold trips, stay on the heuristic for this many cycles
         # before probing the remote again (each broken retry costs ~100-540s).
         llm_degrade_cooldown_cycles = _llm_degrade_cooldown_cycles()
@@ -1780,6 +1790,7 @@ class FactorioController:
                     # override_skill cycle already bypasses the LLM, so only degrade plain cycles.
                     degrade_to_heuristic = (
                         require_llm
+                        and allow_heuristic_fallback
                         and override_skill is None
                         and (
                             consecutive_strategy_failures >= llm_degrade_threshold

@@ -1987,6 +1987,32 @@ def ensure_vllm_service(
             _close_orphan_vllm_allocations(_scheduler_account())
             status_payload = vllm_service_status(cfg)
             active_services = status_payload.get("active_services") if isinstance(status_payload.get("active_services"), list) else []
+        else:
+            startup_stale_seconds = max(
+                queue_stale_seconds,
+                _int_env("FACTORIO_AI_VLLM_STARTUP_SECONDS", 900, 1)
+                + _int_env("FACTORIO_AI_SCHEDULER_VLLM_SERVICE_STARTUP_GRACE_SECONDS", 60, 0),
+            )
+            stale_running_services = []
+            for row in running_services:
+                age_seconds = _iso_age_seconds(row.get("started_at") or row.get("created_at"))
+                if age_seconds != float("inf") and age_seconds >= startup_stale_seconds:
+                    stale_running_services.append(row)
+            for row in stale_running_services:
+                # Do not close the shared allocation for a running service; cancelling just the task
+                # frees the service slot while preserving the warm GPU allocation for replacement.
+                cancelled = _scheduler_cancel_task(row.get("id"))
+                cancelled_services.append(
+                    {
+                        "id": row.get("id"),
+                        "name": row.get("name"),
+                        "status": row.get("status"),
+                        "cancel_result": cancelled,
+                    }
+                )
+            if stale_running_services:
+                status_payload = vllm_service_status(cfg)
+                active_services = status_payload.get("active_services") if isinstance(status_payload.get("active_services"), list) else []
     target = _dynamic_vllm_service_target(active_services)
     active_count = len(active_services)
     # Downscale: if grantable GPUs dropped below what we currently have queued, cancel the excess
@@ -2094,10 +2120,12 @@ def _scheduler_status_payload(
     resources = _scheduler_task_resources(task_type, selected_gpu_model)
     wanted_gpu_models = {_scheduler_gpu_model_name(model) for model in gpu_model_candidates if model}
     active_vllm_services: list[dict[str, Any]] = []
+    running_vllm_services: list[dict[str, Any]] = []
     vllm_service_ready_for_clients = False
     vllm_service_heartbeat: dict[str, Any] | None = None
     vllm_service_heartbeat_age_seconds = float("inf")
-    if _scheduler_vllm_service_enabled() and task_type != VLLM_SERVICE_TASK_TYPE:
+    vllm_service_mode = _scheduler_vllm_service_enabled() and task_type != VLLM_SERVICE_TASK_TYPE
+    if vllm_service_mode:
         active_vllm_services = _scheduler_active_vllm_service_rows(task_rows, account, wanted_gpu_models)
         running_vllm_services = [
             row for row in active_vllm_services if str(row.get("status") or "").lower() == "running"
@@ -2198,14 +2226,19 @@ def _scheduler_status_payload(
         )
     else:
         has_gpu_queue_capacity = sum(ready_slots_by_model.values()) > resource_fit_pending_gpu_tasks
-    has_gpu_path = not needs_gpu or has_gpu_queue_capacity or vllm_service_ready_for_clients
+    has_gpu_path = vllm_service_ready_for_clients if vllm_service_mode else (not needs_gpu or has_gpu_queue_capacity)
     missing = []
     if not has_llm_runtime:
         missing.append("FACTORIO_AI_VLLM_MODEL or FACTORIO_AI_LLM_BASE_URL")
     if not has_layout_task_capacity:
         missing.append("active scheduler layout task capacity")
     elif not has_gpu_path:
-        if scheduler_ready_free_gpus <= 0:
+        if vllm_service_mode:
+            if not active_vllm_services or not running_vllm_services:
+                missing.append("running scheduler vLLM service task")
+            else:
+                missing.append("ready scheduler vLLM service heartbeat")
+        elif scheduler_ready_free_gpus <= 0:
             missing.append("ready scheduler GPU allocation")
         else:
             missing.append("scheduler GPU queue capacity")
@@ -3253,7 +3286,16 @@ fi
 
 
 def _create_archive(target: Path) -> None:
-    skip_parts = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", "runtime", "logs", "factorio_mods"}
+    skip_parts = {
+        ".git",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".factorio-ai-scheduler-tasks",
+        "runtime",
+        "logs",
+        "factorio_mods",
+    }
     with tarfile.open(target, "w:gz") as archive:
         for path in REPO_ROOT.rglob("*"):
             rel = path.relative_to(REPO_ROOT)

@@ -2707,6 +2707,43 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(summary.ok)
         self.assertEqual(summary.failures, 1)
 
+    def test_strict_require_llm_autopilot_does_not_degrade_to_heuristic(self):
+        observation = {"inventory": {}, "entities": [], "resources": [], "research": {"technologies": {}}}
+
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.calls = []
+
+            def observe(self):
+                return observation
+
+            def run_strategy_step(self, **kwargs):
+                self.calls.append(kwargs)
+                return StrategyStepSummary(
+                    ok=False,
+                    reason="LLM response content is not a JSON object",
+                    objective=kwargs.get("objective", "launch_rocket_program"),
+                    selected_skill="",
+                    strategy={},
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with patch.dict(
+                "os.environ",
+                {
+                    "FACTORIO_AI_AUTOPILOT_LLM_DEGRADE_CYCLES": "1",
+                    "FACTORIO_AI_ALLOW_HEURISTIC_AUTOPILOT_FALLBACK": "0",
+                },
+            ):
+                summary = controller.run_autopilot_loop(cycles=2, sleep_seconds=0, require_llm=True)
+
+        self.assertFalse(summary.ok)
+        self.assertEqual(len(controller.calls), 2)
+        self.assertTrue(all(call["require_llm"] for call in controller.calls))
+        self.assertTrue(all(not call["skip_remote_strategy"] for call in controller.calls))
+
 
 class StallWatchdogTests(unittest.TestCase):
     def test_progress_fingerprint_changes_with_research(self):

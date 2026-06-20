@@ -89,11 +89,10 @@ $env:FACTORIO_AI_SCHEDULER_VLLM_CLIENT_GPUS = "0"
 # lets it grab a free a6000 node (e.g. n106). Lower back toward 120 once contention eases.
 $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_PRIORITY = "300"
 $env:FACTORIO_AI_REQUIRE_LLM_STRATEGY = "1"
-# Keep the rocket run moving when the scheduler/vLLM service is temporarily unavailable. The
-# autopilot still uses deterministic strategy guardrails and will be restarted in strict LLM mode
-# when scheduler readiness returns. Set to 0 to restore the older "pause autopilot until LLM" policy.
+# Default to strict local-LLM operation: if scheduler/vLLM is unavailable, pause autopilot instead
+# of silently switching to heuristic strategy. Set to 1 only for an explicitly degraded run.
 if (-not $env:FACTORIO_AI_ALLOW_HEURISTIC_AUTOPILOT_FALLBACK) {
-    $env:FACTORIO_AI_ALLOW_HEURISTIC_AUTOPILOT_FALLBACK = "1"
+    $env:FACTORIO_AI_ALLOW_HEURISTIC_AUTOPILOT_FALLBACK = "0"
 }
 $env:FACTORIO_AI_LLM_GUIDED_JSON = "1"
 # Qwen3.6 emits a verbose chain-of-thought when unconstrained, overflowing the old 512-token
@@ -457,25 +456,23 @@ function Ensure-SchedulerLlm {
 }
 
 function Test-SchedulerLlmReady {
-    $strict = $true
     if ($null -eq $script:lastSchedulerStatus -or $script:lastSchedulerStatus.llm_ready -ne $true) {
-        $strict = $false
-    }
-    elseif ($env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED -notin @("0", "false", "False", "FALSE", "no", "off")) {
-        if (-not ($null -ne $script:lastVllmServiceStatus -and $script:lastVllmServiceStatus.service_ready -eq $true)) {
-            $strict = $false
+        # Ride through transient scheduler-API blips: if the LLM was confirmed ready very recently,
+        # keep the loops alive instead of tearing them down on a single failed/timed-out status check.
+        if ($script:lastLlmReadyAt -ne [DateTime]::MinValue -and ((Get-Date) - $script:lastLlmReadyAt).TotalSeconds -lt $LlmReadyGraceSeconds) {
+            return $true
         }
+        return $false
     }
-    if ($strict) {
-        $script:lastLlmReadyAt = Get-Date
-        return $true
+
+    $script:lastLlmReadyAt = Get-Date
+    if (
+        $env:FACTORIO_AI_SCHEDULER_VLLM_SERVICE_ENABLED -notin @("0", "false", "False", "FALSE", "no", "off") -and
+        -not ($null -ne $script:lastVllmServiceStatus -and $script:lastVllmServiceStatus.service_ready -eq $true)
+    ) {
+        Write-SupervisorLog "scheduler local LLM is ready; ignoring stale vLLM service heartbeat gate"
     }
-    # Ride through transient scheduler-API blips: if the LLM was confirmed ready very recently, keep the
-    # loops alive instead of tearing them down on a single failed/timed-out status check.
-    if ($script:lastLlmReadyAt -ne [DateTime]::MinValue -and ((Get-Date) - $script:lastLlmReadyAt).TotalSeconds -lt $LlmReadyGraceSeconds) {
-        return $true
-    }
-    return $false
+    return $true
 }
 
 function Test-AutopilotActiveCycle {

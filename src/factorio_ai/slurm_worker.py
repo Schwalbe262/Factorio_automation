@@ -755,7 +755,7 @@ def try_llm_strategy_with_diagnostics(payload: dict[str, Any]) -> tuple[dict[str
         base_url=llm_base_url,
     )
     diagnostics.update(call_diagnostics)
-    if parsed is None and _context_limit_error(str(diagnostics.get("llm_error") or "")):
+    if parsed is None and _strategy_retryable_llm_error(str(diagnostics.get("llm_error") or "")):
         retry_payload = ultra_compact_strategy_payload(base_payload)
         retry_prompt = _strategy_prompt(retry_payload)
         diagnostics["llm_initial_error"] = diagnostics.get("llm_error")
@@ -810,6 +810,11 @@ def _strategy_prompt(payload: dict[str, Any]) -> str:
 def _context_limit_error(message: str) -> bool:
     lowered = message.lower()
     return "context length" in lowered or "maximum context" in lowered or "reduce the length" in lowered
+
+
+def _strategy_retryable_llm_error(message: str) -> bool:
+    lowered = message.lower()
+    return _context_limit_error(message) or "not a json object" in lowered
 
 
 def call_llm_json(system: str, prompt: str, schema: dict[str, Any] | None = None) -> dict[str, Any] | None:
