@@ -5567,6 +5567,22 @@ def _direct_plate_smelting_decision(
         or _select_direct_smelting_layout(observation, resource_name)
     )
     if layout is None:
+        if _inventory_burner_fuel_count(observation) <= 0:
+            source = _nearest_surplus_fuel_source(observation, player)
+            if source is not None and _surplus_fuel_source_is_logistic_output(source, observation):
+                return _take_surplus_fuel_source_decision(player, source, f"direct {product_name} smelting")
+            coal = nearest_resource(observation, "coal")
+            if coal is not None:
+                return support_skill._mine_resource(player, coal, "coal", STARTER_FUEL_BATCH_COUNT)
+        if inventory_count(observation, "burner-mining-drill") <= 0:
+            recovery = _recover_direct_smelting_drill_decision(
+                observation,
+                player,
+                resource_name=resource_name,
+                product_name=product_name,
+            )
+            if recovery is not None:
+                return recovery
         return PlannerDecision(None, f"cannot find open {resource_name} site for direct burner-drill smelting cell")
 
     misplaced_drill = layout.get("misplaced_drill")
@@ -5781,24 +5797,14 @@ def _ensure_direct_smelting_item(
                 {"type": "craft", "recipe": "burner-mining-drill", "count": 1},
                 "craft burner mining drill for direct smelting",
             )
-        recyclable_drill = _recoverable_temporary_burner_drill_for_direct_smelting(observation, resource_name)
-        if recyclable_drill is not None:
-            position = _position(recyclable_drill)
-            if distance(player, position) > 8:
-                return PlannerDecision(
-                    {"type": "move_to", "position": _stand_position(position, offset=2.0)},
-                    f"move near temporary burner mining drill before reallocating it to {product_name} production",
-                )
-            source_resource = _entity_resource_name(observation, recyclable_drill, radius=4.5) or "temporary resource"
-            return PlannerDecision(
-                {
-                    "type": "mine",
-                    "unit_number": recyclable_drill.get("unit_number"),
-                    "name": "burner-mining-drill",
-                    "position": position,
-                },
-                f"recover temporary {source_resource} burner mining drill for {product_name} production",
-            )
+        recovery = _recover_direct_smelting_drill_decision(
+            observation,
+            player,
+            resource_name=resource_name,
+            product_name=product_name,
+        )
+        if recovery is not None:
+            return recovery
         if inventory_count(observation, "stone") < 5:
             decision = StoneSupplySkill(target_count=8).next_action(observation)
             if not decision.done:
@@ -5818,6 +5824,39 @@ def _ensure_direct_smelting_item(
         return support_skill.next_action(observation, target_count=20, inventory_only=True)
 
     return None
+
+
+def _recover_direct_smelting_drill_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    *,
+    resource_name: str,
+    product_name: str,
+) -> PlannerDecision | None:
+    recoverable_drill = _recoverable_unpaired_direct_smelting_drill(observation, resource_name)
+    temporary = False
+    if recoverable_drill is None:
+        recoverable_drill = _recoverable_temporary_burner_drill_for_direct_smelting(observation, resource_name)
+        temporary = recoverable_drill is not None
+    if recoverable_drill is None:
+        return None
+    position = _position(recoverable_drill)
+    if distance(player, position) > 8:
+        return PlannerDecision(
+            {"type": "move_to", "position": _stand_position(position, offset=2.0)},
+            f"move near recoverable burner mining drill before reallocating it to {product_name} production",
+        )
+    source_resource = _entity_resource_name(observation, recoverable_drill, radius=4.5) or "temporary resource"
+    reason_prefix = "temporary" if temporary else "incomplete direct"
+    return PlannerDecision(
+        {
+            "type": "mine",
+            "unit_number": recoverable_drill.get("unit_number"),
+            "name": "burner-mining-drill",
+            "position": position,
+        },
+        f"recover {reason_prefix} {source_resource} burner mining drill for {product_name} production",
+    )
 
 
 def _select_plate_output_furnace(observation: dict[str, Any], resource_name: str, product_name: str) -> dict[str, Any] | None:

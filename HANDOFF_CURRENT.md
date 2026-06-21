@@ -1,11 +1,11 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod supervisor/autopilot running again, autopilot PID `46176`, scheduler Qwen service `12755`.
-- Part162: strategy treats unpowered site-input endpoint inserters as incomplete logistics, preserving `build_site_input_logistic_line` before `setup_power` override.
-- Part162: planner repairs site-input endpoint inserter power, including remote small-pole corridors and `electric_network_id` pole anchors on powered networks.
-- Validation: targeted 638 tests passed; full `PYTHONPATH=src python -m unittest discover -s tests` passed 1129 (existing ResourceWarning only).
-- Live validation: trace `strategy-site-input-logistics-20260621-085812.jsonl` placed pole unit `420`; skill stopped done: copper-plate site input line built.
-- Current live: researched `4`, cycle 13 running; stall recovery root `iron_plate_source_missing`, skill `produce_iron_plate`, belts `41`, poles `19`, coal `31`.
-- Current blockers: iron plate source recovery, boiler/fuel stability, labs/electric drills, burner replacement, main-belt migration.
-- Operator layout learning exists via `operator-intervention-layout-learning.jsonl`; user edits are pending-review examples, not auto-promoted.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod supervisor/autopilot running, autopilot PID `52048`, scheduler Qwen service `12755`.
+- Part163: direct plate smelting no longer returns `cannot find open iron-ore site` before trying to recover an unpaired or temporary burner mining drill.
+- Part163 invariant: if direct smelting has no burner fuel, fuel recovery/mining still happens before drill reallocation so coal-empty expansion does not steal drills.
+- Validation: targeted planner/strategy/controller passed 630; full `PYTHONPATH=src python -m unittest discover -s tests` passed 1130 with existing socket ResourceWarning.
+- Live validation: after supervisor restart, `produce_automation_science_pack` progressed past step 1 to step 33; current live skill is `relocate_gear_belt_mall_to_iron_source` step 713.
+- Current live: researched `4`, server UP tick `2364725`, inventory includes coal `4`, automation science `4`, transport belt `3`; health progress snapshot remains stale for some stock counts.
+- Current blockers: mall relocation, iron source recovery, boiler/fuel stability, labs/electric drills, burner replacement, main-belt migration.
+- Operator layout learning exists via `operator-intervention-layout-learning.jsonl`; user edits are pending-review examples, not auto-promoted into skills.
 - Runtime journals are dirty from unattended autopilot (`note.md`, `insight.md`); stage code/test/handoff selectively unless intentionally archiving runtime logs.
-- Token usage fallback goal sample: `18,180,141` absolute, delta `513,549`; weekly quota unavailable because Codex state DB is malformed.
+- Token usage fallback goal sample: `18,503,853` absolute; weekly quota unavailable because Codex state DB is malformed.

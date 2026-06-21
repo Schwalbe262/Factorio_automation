@@ -3746,6 +3746,36 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["position"], {"x": 47, "y": 67})
         self.assertEqual(decision.action["direction"], 12)
 
+    def test_direct_smelting_recovers_unpaired_drill_when_no_open_layout_exists(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 0, "y": 0}}
+        obs["inventory"] = {"coal": 8, "stone-furnace": 1}
+        obs["resources"] = [
+            {"name": "iron-ore", "position": {"x": 0, "y": 0}, "distance": 0},
+            {"name": "coal", "position": {"x": 4, "y": 0}, "distance": 4},
+        ]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 701,
+                "position": {"x": 0, "y": 0},
+                "direction": planner_module.EAST,
+                "distance": 0,
+                "mining_target": "iron-ore",
+                "inventories": {},
+            },
+            {"name": "transport-belt", "unit_number": 702, "position": {"x": 2, "y": 0}, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 703, "position": {"x": -2, "y": 0}, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 704, "position": {"x": 0, "y": 2}, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 705, "position": {"x": 0, "y": -2}, "inventories": {}},
+        ]
+
+        decision = IronPlateSkill(target_count=10).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 701)
+        self.assertIn("recover incomplete direct iron-ore burner mining drill", decision.reason)
+
     def test_direct_smelting_layout_keeps_furnace_touching_drill_output(self):
         cases = {
             "east": {"x": 10.0, "y": 0.0},
