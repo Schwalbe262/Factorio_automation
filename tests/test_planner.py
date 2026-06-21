@@ -4353,6 +4353,31 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["position"], {"x": 22.0, "y": 0.0})
         self.assertNotIn("wait for belt smelting line", decision.reason)
 
+    def test_belt_smelting_skill_does_not_treat_support_iron_done_as_copper_done(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 20, "y": 0}}
+        obs["inventory"] = {
+            "coal": 12,
+            "iron-plate": 30,
+            "iron-gear-wheel": 1,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "transport-belt": 2,
+        }
+        obs["resources"] = [{"name": "copper-ore", "position": {"x": 20, "y": 0}, "distance": 0}]
+        obs["craftable"] = {}
+
+        decision = BeltSmeltingLineSkill(
+            target_count=90,
+            resource_name="copper-ore",
+            product_name="copper-plate",
+            inventory_only=True,
+        ).next_action(obs)
+
+        self.assertFalse(decision.done)
+        self.assertIsNone(decision.action)
+        self.assertIn("cannot obtain inserter for belt smelting line yet", decision.reason)
+
     def test_expand_iron_smelting_places_new_belt_when_below_capacity(self):
         obs = base_observation()
         obs["inventory"] = {
@@ -10063,6 +10088,234 @@ class PlannerTests(unittest.TestCase):
         self.assertIn(decision.action["type"], {"build", "connect_power"})
         self.assertEqual(decision.action["name"], "small-electric-pole")
         self.assertIn("site consumer input inserter", decision.reason)
+
+    def test_site_input_logistic_line_fuels_empty_copper_source_before_done(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 0.0, "y": 0.0}}
+        obs["inventory"] = {"coal": 12, "transport-belt": 4}
+        source = {
+            "name": "stone-furnace",
+            "unit_number": 950,
+            "position": {"x": 0.0, "y": 0.0},
+            "recipe": "copper-plate",
+            "status_name": "no_fuel",
+            "status": 52,
+            "inventories": {"2": {"copper-ore": 28}},
+        }
+        consumer = {
+            "name": "assembling-machine-1",
+            "unit_number": 951,
+            "position": {"x": 8.0, "y": 0.0},
+            "recipe": "automation-science-pack",
+            "electric_network_connected": True,
+            "status_name": "item_ingredient_shortage",
+            "inventories": {},
+        }
+        source_inserter = {
+            "name": "inserter",
+            "unit_number": 952,
+            "position": {"x": 1.0, "y": 0.0},
+            "direction": planner_module.EAST,
+            "electric_network_connected": True,
+        }
+        target_inserter = {
+            "name": "inserter",
+            "unit_number": 953,
+            "position": {"x": 4.0, "y": 0.0},
+            "direction": planner_module.EAST,
+            "electric_network_connected": True,
+        }
+        obs["entities"].extend([mall_assembler(recipe="transport-belt"), source, consumer, source_inserter, target_inserter])
+        layout = {
+            "item": "copper-plate",
+            "source": source,
+            "consumer": consumer,
+            "source_inserter": {
+                "position": {"x": 1.0, "y": 0.0},
+                "direction": planner_module.EAST,
+                "entity": source_inserter,
+            },
+            "target_inserter": {
+                "position": {"x": 4.0, "y": 0.0},
+                "direction": planner_module.EAST,
+                "entity": target_inserter,
+            },
+            "segments": [
+                {
+                    "position": {"x": 2.0, "y": 0.0},
+                    "direction": planner_module.EAST,
+                    "entity": {"name": "transport-belt", "unit_number": 954, "direction": planner_module.EAST},
+                }
+            ],
+        }
+
+        with patch("factorio_ai.planner._find_site_input_logistic_line_layout", return_value=layout):
+            decision = SiteInputLogisticLineSkill(20, item="copper-plate").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["unit_number"], 950)
+        self.assertIn("copper source furnace", decision.reason)
+
+    def test_site_input_logistic_line_fuels_copper_source_before_collecting_belts(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 0.0, "y": 0.0}}
+        obs["inventory"] = {"coal": 12}
+        source = {
+            "name": "stone-furnace",
+            "unit_number": 950,
+            "position": {"x": 0.0, "y": 0.0},
+            "recipe": "copper-plate",
+            "status_name": "no_fuel",
+            "status": 52,
+            "inventories": {"2": {"copper-ore": 28}},
+        }
+        consumer = {
+            "name": "assembling-machine-1",
+            "unit_number": 951,
+            "position": {"x": 8.0, "y": 0.0},
+            "recipe": "automation-science-pack",
+            "electric_network_connected": True,
+            "status_name": "item_ingredient_shortage",
+            "inventories": {},
+        }
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt", inventory={"transport-belt": 8}),
+                source,
+                consumer,
+            ]
+        )
+        layout = {
+            "item": "copper-plate",
+            "source": source,
+            "consumer": consumer,
+            "source_inserter": {
+                "position": {"x": 1.0, "y": 0.0},
+                "direction": planner_module.EAST,
+                "entity": None,
+            },
+            "target_inserter": {
+                "position": {"x": 4.0, "y": 0.0},
+                "direction": planner_module.EAST,
+                "entity": None,
+            },
+            "segments": [
+                {
+                    "position": {"x": 2.0, "y": 0.0},
+                    "direction": planner_module.EAST,
+                    "entity": None,
+                }
+            ],
+        }
+
+        with patch("factorio_ai.planner._find_site_input_logistic_line_layout", return_value=layout):
+            decision = SiteInputLogisticLineSkill(20, item="copper-plate").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["unit_number"], 950)
+        self.assertIn("copper source furnace", decision.reason)
+
+    def test_build_item_mall_follows_copper_site_input_source_recovery(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 0.0, "y": 0.0}}
+        obs["inventory"] = {"coal": 12, "transport-belt": 4, "iron-gear-wheel": 1}
+        source = {
+            "name": "stone-furnace",
+            "unit_number": 950,
+            "position": {"x": 0.0, "y": 0.0},
+            "recipe": "copper-plate",
+            "status_name": "no_fuel",
+            "status": 52,
+            "inventories": {"2": {"copper-ore": 28}},
+        }
+        consumer = {
+            "name": "assembling-machine-1",
+            "unit_number": 951,
+            "position": {"x": 8.0, "y": 0.0},
+            "recipe": "automation-science-pack",
+            "electric_network_connected": True,
+            "status_name": "item_ingredient_shortage",
+            "inventories": {"1": {"iron-gear-wheel": 1}},
+        }
+        source_inserter = {
+            "name": "inserter",
+            "unit_number": 952,
+            "position": {"x": 1.0, "y": 0.0},
+            "direction": planner_module.EAST,
+            "electric_network_connected": True,
+        }
+        target_inserter = {
+            "name": "inserter",
+            "unit_number": 953,
+            "position": {"x": 4.0, "y": 0.0},
+            "direction": planner_module.EAST,
+            "electric_network_connected": True,
+        }
+        obs["entities"].extend([mall_assembler(recipe="transport-belt"), source, consumer, source_inserter, target_inserter])
+        layout = {
+            "item": "copper-plate",
+            "source": source,
+            "consumer": consumer,
+            "source_inserter": {
+                "position": {"x": 1.0, "y": 0.0},
+                "direction": planner_module.EAST,
+                "entity": source_inserter,
+            },
+            "target_inserter": {
+                "position": {"x": 4.0, "y": 0.0},
+                "direction": planner_module.EAST,
+                "entity": target_inserter,
+            },
+            "segments": [
+                {
+                    "position": {"x": 2.0, "y": 0.0},
+                    "direction": planner_module.EAST,
+                    "entity": {"name": "transport-belt", "unit_number": 954, "direction": planner_module.EAST},
+                }
+            ],
+        }
+
+        with (
+            patch("factorio_ai.planner._find_site_input_logistic_line_layout", return_value=layout),
+            patch("factorio_ai.planner._obsolete_build_item_mall_buffer_cleanup_decision", return_value=None),
+        ):
+            decision = BuildItemMallSkill("automation-science-pack", 20).next_action(
+                obs,
+                reference_position=consumer["position"],
+            )
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["unit_number"], 950)
+        self.assertIn("copper source furnace", decision.reason)
+
+    def test_build_item_mall_feeds_missing_science_gear_before_copper_batch_topup(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 8.0, "y": 0.0}}
+        obs["inventory"] = {"iron-gear-wheel": 1}
+        assembler = {
+            "name": "assembling-machine-1",
+            "unit_number": 951,
+            "position": {"x": 8.0, "y": 0.0},
+            "recipe": "automation-science-pack",
+            "electric_network_connected": True,
+            "status_name": "item_ingredient_shortage",
+            "inventories": {"2": {"copper-plate": 3}},
+        }
+        obs["entities"].append(assembler)
+
+        with patch("factorio_ai.planner._obsolete_build_item_mall_buffer_cleanup_decision", return_value=None):
+            decision = BuildItemMallSkill("automation-science-pack", 20).next_action(
+                obs,
+                reference_position=assembler["position"],
+            )
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 951)
+        self.assertIn("insert iron-gear-wheel into automation-science-pack mall assembler", decision.reason)
 
     def test_site_input_logistic_line_builds_remote_endpoint_power_corridor(self):
         obs = powered_automation_observation()

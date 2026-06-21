@@ -3482,7 +3482,10 @@ class BeltSmeltingLineSkill:
                 )
                 if decision is not None:
                     return decision
-            return self.support_skill.next_action(observation, target_count=20, inventory_only=True)
+            decision = self.support_skill.next_action(observation, target_count=20, inventory_only=True)
+            if not decision.done:
+                return decision
+            return PlannerDecision(None, "cannot obtain burner-mining-drill for belt smelting line yet")
 
         if item in {"transport-belt", "inserter", "burner-inserter"}:
             if inventory_count(observation, "iron-gear-wheel") < 1:
@@ -3505,7 +3508,10 @@ class BeltSmeltingLineSkill:
                     return decision
             if craftable_count(observation, item) > 0:
                 return PlannerDecision({"type": "craft", "recipe": item, "count": 1}, f"craft {item} for line")
-            return self.support_skill.next_action(observation, target_count=20, inventory_only=True)
+            decision = self.support_skill.next_action(observation, target_count=20, inventory_only=True)
+            if not decision.done:
+                return decision
+            return PlannerDecision(None, f"cannot obtain {item} for belt smelting line yet")
 
         return None
 
@@ -10171,19 +10177,57 @@ def _iron_plate_line_source_recovery_decision(
     player: dict[str, float],
     source: Any,
 ) -> PlannerDecision | None:
+    return _plate_line_source_recovery_decision(observation, player, source, "iron-plate")
+
+
+def _plate_line_source_recovery_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    source: Any,
+    item: str,
+) -> PlannerDecision | None:
     if not isinstance(source, dict):
         return None
+    if item not in {"iron-plate", "copper-plate"}:
+        return None
+    resource_name = "iron-ore" if item == "iron-plate" else "copper-ore"
+    item_label = "iron" if item == "iron-plate" else "copper"
+    drill_context = (
+        "iron source drill for gear mall plate logistics"
+        if item == "iron-plate"
+        else "copper source drill for site input plate logistics"
+    )
+    drill_far_fuel_reason = (
+        "iron source drill needs local fuel before the gear mall plate line can stay active"
+        if item == "iron-plate"
+        else "copper source drill needs local fuel before the site input plate line can stay active"
+    )
+    furnace_context = (
+        "iron source furnace for gear mall plate logistics"
+        if item == "iron-plate"
+        else "copper source furnace for site input plate logistics"
+    )
+    furnace_far_fuel_reason = (
+        "iron source furnace needs local fuel before the gear mall plate line can output plates"
+        if item == "iron-plate"
+        else "copper source furnace needs local fuel before the site input plate line can output plates"
+    )
+    furnace_wait_reason = (
+        "wait for iron source furnace to produce iron plates before endpoint inserter construction"
+        if item == "iron-plate"
+        else "wait for copper source furnace to produce copper plates before endpoint inserter construction"
+    )
     if str(source.get("name") or "") not in FURNACE_ENTITY_NAMES:
         return None
-    if str(source.get("recipe") or source.get("recipe_name") or "") != "iron-plate":
+    if str(source.get("recipe") or source.get("recipe_name") or "") != item:
         return None
-    incompatible = _furnace_output_incompatible_item(source, "iron-plate")
+    incompatible = _furnace_output_incompatible_item(source, item)
     if incompatible is not None:
         position = _position(source)
         if distance(player, position) > 20:
             return PlannerDecision(
                 {"type": "move_to", "position": position},
-                f"move near iron source furnace to clear {incompatible} from output",
+                f"move near {item_label} source furnace to clear {incompatible} from output",
             )
         return PlannerDecision(
             {
@@ -10194,7 +10238,7 @@ def _iron_plate_line_source_recovery_decision(
                 "name": source.get("name") or "stone-furnace",
                 "position": position,
             },
-            f"clear {incompatible} from iron source furnace output before building endpoint inserters",
+            f"clear {incompatible} from {item_label} source furnace output before building endpoint inserters",
         )
     source_drill = _iron_plate_source_furnace_burner_drill(observation, source)
     if (
@@ -10209,16 +10253,16 @@ def _iron_plate_line_source_recovery_decision(
             entity_name="burner-mining-drill",
             threshold=SMELTING_LINE_FUEL_RESERVE["drill"],
             insert_count=SMELTING_LINE_FUEL_INSERT["drill"],
-            context="iron source drill for gear mall plate logistics",
+            context=drill_context,
             support_skill=IronPlateSkill(),
-            far_fuel_reason="iron source drill needs local fuel before the gear mall plate line can stay active",
+            far_fuel_reason=drill_far_fuel_reason,
             exclude_source_units={source.get("unit_number")},
             prefer_coal_supply=True,
             allow_bootstrap_seed=True,
         )
     if (
-        entity_item_count(source, "iron-plate") <= 0
-        and entity_item_count(source, "iron-ore") > 0
+        entity_item_count(source, item) <= 0
+        and entity_item_count(source, resource_name) > 0
         and _entity_burner_fuel_count(source) < 1
         and _entity_status_is(source, "no_fuel", 52)
     ):
@@ -10229,20 +10273,20 @@ def _iron_plate_line_source_recovery_decision(
             entity_name=str(source.get("name") or "stone-furnace"),
             threshold=SMELTING_LINE_FUEL_RESERVE["furnace"],
             insert_count=SMELTING_LINE_FUEL_INSERT["furnace"],
-            context="iron source furnace for gear mall plate logistics",
+            context=furnace_context,
             support_skill=IronPlateSkill(),
-            far_fuel_reason="iron source furnace needs local fuel before the gear mall plate line can output plates",
+            far_fuel_reason=furnace_far_fuel_reason,
             prefer_coal_supply=True,
             allow_bootstrap_seed=True,
         )
     if (
-        entity_item_count(source, "iron-plate") <= 0
-        and entity_item_count(source, "iron-ore") > 0
+        entity_item_count(source, item) <= 0
+        and entity_item_count(source, resource_name) > 0
         and _entity_burner_fuel_count(source) > 0
     ):
         return PlannerDecision(
             {"type": "wait", "ticks": 300},
-            "wait for iron source furnace to produce iron plates before endpoint inserter construction",
+            furnace_wait_reason,
         )
     return None
 
@@ -12895,6 +12939,16 @@ class SiteInputLogisticLineSkill:
             return PlannerDecision(None, "no executable repeated site input logistics route was found")
 
         belt_assembler = _transport_belt_output_assembler(observation)
+        source_recovery: PlannerDecision | None = None
+        if layout.get("item") in {"iron-plate", "copper-plate"}:
+            source_recovery = _plate_line_source_recovery_decision(
+                observation,
+                player,
+                layout.get("source"),
+                str(layout["item"]),
+            )
+            if source_recovery is not None and (source_recovery.action or {}).get("type") != "wait":
+                return source_recovery
 
         protected_units = {
             int(entity.get("unit_number"))
@@ -13146,6 +13200,9 @@ class SiteInputLogisticLineSkill:
                 },
                 f"place {label} for automated {layout['item']} delivery",
             )
+
+        if source_recovery is not None:
+            return source_recovery
 
         return PlannerDecision(
             None,
@@ -13515,7 +13572,17 @@ class BuildItemMallSkill:
                     expected_followup="assembling-machine-1 mall assembler produces output before requesting more gear seed",
                 )
 
-        for ingredient, amount in sorted(recipe.ingredients.items()):
+        ingredient_order = sorted(recipe.ingredients.items())
+        if self.target_item == "automation-science-pack":
+            copper_per_craft = max(1, int(recipe.ingredients.get("copper-plate", 1)))
+            gear_per_craft = max(1, int(recipe.ingredients.get("iron-gear-wheel", 1)))
+            if (
+                entity_item_count(assembler, "copper-plate") >= copper_per_craft
+                and entity_item_count(assembler, "iron-gear-wheel") < gear_per_craft
+            ):
+                ingredient_order.sort(key=lambda item: 0 if item[0] == "iron-gear-wheel" else 1)
+
+        for ingredient, amount in ingredient_order:
             needed_in_assembler = max(1, int(amount * batch_count))
             if entity_item_count(assembler, ingredient) >= needed_in_assembler:
                 continue
