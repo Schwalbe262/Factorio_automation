@@ -390,7 +390,7 @@ class ControllerTests(unittest.TestCase):
         self.assertIn("bootstrap seed already attempted", run.reason)
         sleep_mock.assert_called()
 
-    def test_run_skill_allows_bootstrap_seed_topoff_with_different_count(self):
+    def test_run_skill_blocks_bootstrap_seed_topoff_with_different_count(self):
         observation = {
             "tick": 1,
             "inventory": {"iron-plate": 4},
@@ -453,7 +453,7 @@ class ControllerTests(unittest.TestCase):
                 )
 
         self.assertFalse(run.ok)
-        self.assertEqual(run.seed_count, 2)
+        self.assertEqual(run.seed_count, 1)
         self.assertIn("bootstrap seed already attempted", run.reason)
 
     def test_run_skill_allows_repeated_bootstrap_seed_after_followup_item_increases(self):

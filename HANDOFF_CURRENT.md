@@ -1,9 +1,9 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running, autopilot PID `11296`, scheduler vLLM service `12917`.
-- Part181 fixed stale completed site-input issues and repeated gear/belt mall iron seed by routing to prerequisite line repair.
-- Part182 fixed site-input route destruction of production inserter lanes: route segments now treat existing inserters and reserved inserter slots around other machines as hard reroute blockers.
-- Live validation: server UP, researched 5, vLLM ready; new route avoided `86.5,-7.5` and built belts at `84.5,-13.5` onward, entity count 758 -> 762.
-- Current live is still extending the copper-plate site-input trunk and taking belts from the belt mall; this is real work, not the old mine/rebuild inserter loop.
-- Tests: `tests.test_planner` 417 OK, `tests.test_strategy` 162 OK; prior full discover log `runtime/unittest-discover-part181-final.log` was 1167 OK.
-- Health warnings remain: stale operator layout learning, implemented skills still listed in foundry queue, and noisy auto-appends in dirty `note.md`/`insight.md`.
-- Token sample `24,138,075`, weekly quota unavailable; do not stage dirty `note.md`/`insight.md` wholesale.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running with autopilot PID `60808`, vLLM service `12917`.
+- Part183 fixed belt/gear mall bootstrap loops: belt stock is reserved for gear-mall iron route, zero-belt bootstrap skips self-feeding site-input, and repeated seed topoff cannot vary only `count`.
+- `BuildItemMallSkill` now finishes started gear-mall iron logistics or started iron site-input before another belt-mall plate seed.
+- Live: server UP, researched 5; belt mall reached `transport-belt=22`; new PID is extending copper-plate site-input belts, entities 862.
+- Tests: targeted planner/controller OK, `tests.test_planner tests.test_controller` 511 OK, full discover 1174 OK (one ResourceWarning only).
+- Remaining ops warnings: stale operator layout learning, implemented skills still listed in foundry queue, and large dirty `note.md`/`insight.md`.
+- Do not stage dirty `note.md`/`insight.md` wholesale; append-only journal entries were added separately.
+- Token sample pending; weekly quota unavailable.

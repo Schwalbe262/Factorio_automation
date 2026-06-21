@@ -51,6 +51,7 @@ GEAR_MALL_RELOCATION_FIXED_COST = 18.0
 GEAR_MALL_RELOCATION_POWER_POLE_COST = 2.0
 GEAR_MALL_PLATE_BELT_TILE_COST = 1.0
 GEAR_MALL_RELOCATION_ADVANTAGE_RATIO = 0.75
+GEAR_MALL_IRON_ROUTE_STOCK_RESERVE = 12
 POWER_ANCHOR_ENTITY_NAMES = {
     "small-electric-pole",
     "medium-electric-pole",
@@ -5228,6 +5229,7 @@ def _gear_mall_iron_plate_guardrail_adjustment(
         f"source_status={issue.get('source_status')}",
         f"source_fuel_blocked={str(issue.get('source_fuel_blocked')).lower()}",
         f"transport_belts_available_for_mall_logistics={str(issue.get('transport_belts_available')).lower()}",
+        f"gear_mall_iron_route_missing_belts={issue.get('iron_route_missing_belts')}",
         f"site_input_status={issue.get('site_input_status', 'route_needed')}",
         "gear_handcraft_blocked=true",
     ]
@@ -5264,6 +5266,7 @@ def _gear_mall_iron_plate_strategy_decision(issue: dict[str, Any]) -> dict[str, 
             f"gear_assembler_status={issue.get('gear_assembler_status')}",
             f"source_status={issue.get('source_status')}",
             f"transport_belts_available_for_mall_logistics={str(issue.get('transport_belts_available')).lower()}",
+            f"gear_mall_iron_route_missing_belts={issue.get('iron_route_missing_belts')}",
             f"site_input_status={issue.get('site_input_status', 'route_needed')}",
             "gear_handcraft_blocked=true",
         ],
@@ -5366,16 +5369,26 @@ def _gear_mall_route_issue_deferred_by_stock(readiness: FactoryReadiness, observ
     Once belt/gear stock drops or mall output is blocked, the full repair graph runs again.
     """
 
+    if not (
+        readiness.gear_belt_logistics_connection_ready
+        and readiness.belt_mall_can_output
+        and total_item_count(observation, "iron-gear-wheel") >= 20
+    ):
+        return False
+    layout = _find_iron_plate_logistic_line_to_gear_mall_layout(observation)
+    if not isinstance(layout, dict):
+        return False
+    gear_assembler = layout.get("gear_assembler") if isinstance(layout.get("gear_assembler"), dict) else None
+    if isinstance(gear_assembler, dict) and _gear_mall_specialized_plate_line_complete(observation, gear_assembler):
+        return True
+    missing_belts = _gear_mall_iron_route_missing_belt_count(observation)
+    if missing_belts is None or missing_belts <= 0:
+        return False
     try:
         belt_stock = int(readiness.details.get("transport_belt_stock") or 0)
     except (TypeError, ValueError):
         belt_stock = total_item_count(observation, "transport-belt")
-    return (
-        readiness.gear_belt_logistics_connection_ready
-        and readiness.belt_mall_can_output
-        and belt_stock >= 12
-        and total_item_count(observation, "iron-gear-wheel") >= 20
-    )
+    return belt_stock >= missing_belts + GEAR_MALL_IRON_ROUTE_STOCK_RESERVE
 
 
 def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
@@ -5436,6 +5449,7 @@ def _gear_mall_iron_plate_logistics_issue(observation: dict[str, Any]) -> dict[s
                 "transport_belts_available": belts_available,
                 "gear_belt_logistics_pair_exists": gear_belt_logistics_pair_exists,
                 "site_input_status": "route_needed",
+                "iron_route_missing_belts": _gear_mall_iron_route_missing_belt_count(observation),
                 **_gear_mall_source_status_fields(source),
                 **route_cost,
             }
@@ -5476,9 +5490,24 @@ def _gear_mall_iron_plate_site_input_issue(
         "gear_assembler_status": consumer.get("status_name") or consumer.get("status"),
         "transport_belts_available": belts_available,
         "site_input_status": "route_needed",
+        "iron_route_missing_belts": _gear_mall_iron_route_missing_belt_count(observation),
         **_gear_mall_source_status_fields(source),
         **route_cost,
     }
+
+
+def _gear_mall_iron_route_missing_belt_count(observation: dict[str, Any]) -> int | None:
+    layout = _find_iron_plate_logistic_line_to_gear_mall_layout(observation)
+    if not isinstance(layout, dict):
+        return None
+    segments = layout.get("segments") if isinstance(layout.get("segments"), list) else []
+    if not segments:
+        return None
+    return sum(
+        1
+        for segment in segments
+        if isinstance(segment, dict) and not isinstance(segment.get("entity"), dict)
+    )
 
 
 def _gear_mall_specialized_plate_line_complete(observation: dict[str, Any], gear_assembler: dict[str, Any]) -> bool:

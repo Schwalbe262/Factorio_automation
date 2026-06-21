@@ -866,6 +866,37 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
         self.assertIn("transport_belts_available_for_mall_logistics=true", result["evidence"])
 
+    def test_rocket_goal_reserves_partial_belts_for_gear_mall_iron_route_before_copper_site_input(self):
+        observation = gear_belt_mall_needs_bootstrap_observation()
+        observation["inventory"] = {"iron-plate": 40, "iron-gear-wheel": 144}
+        observation["entities"][1]["position"] = {"x": 4.5, "y": 0.5}
+        observation["entities"].extend(
+            [
+                {
+                    "name": "inserter",
+                    "unit_number": 250,
+                    "position": {"x": 2.5, "y": 0.5},
+                    "direction": planner_module.EAST,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 300,
+                    "position": {"x": 6.5, "y": 0.5},
+                    "inventories": {"1": {"transport-belt": 19}},
+                },
+            ]
+        )
+
+        with patch("factorio_ai.strategy._executable_site_input_line_issue", return_value=_executable_copper_site_input_issue()):
+            result = heuristic_strategy("launch_rocket_program", observation)
+
+        self.assertEqual(result["selected_skill"], "build_iron_plate_logistic_line_to_gear_mall")
+        self.assertIn("iron-plate logistic line to gear mall", result["blockers"])
+        self.assertIn("transport_belts_available_for_mall_logistics=true", result["evidence"])
+        self.assertTrue(any(str(item).startswith("gear_mall_iron_route_missing_belts=") for item in result["evidence"]))
+
     def test_rocket_goal_bootstraps_power_poles_when_belt_output_pair_requires_relocation(self):
         observation = gear_belt_mall_needs_bootstrap_observation()
         observation["entities"].append(

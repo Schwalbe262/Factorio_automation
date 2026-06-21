@@ -8713,6 +8713,17 @@ def _site_input_local_route_observed(
     return _direction_or_default(inserter.get("direction"), endpoints["target_direction"]) == int(endpoints["target_direction"])
 
 
+def _site_input_logistics_started(layout: dict[str, Any]) -> bool:
+    for key in ("source_inserter", "target_inserter", "splitter"):
+        spec = layout.get(key)
+        if isinstance(spec, dict) and isinstance(spec.get("entity"), dict):
+            return True
+    for segment in layout.get("segments") or []:
+        if isinstance(segment, dict) and isinstance(segment.get("entity"), dict):
+            return True
+    return False
+
+
 def _logistics_researched_or_underground_unlocked(observation: dict[str, Any]) -> bool:
     return bool(_technology_state(observation, "logistics").get("researched")) or _recipe_unlocked_for_layout(
         observation,
@@ -13802,6 +13813,22 @@ class BuildItemMallSkill:
             and entity_item_count(assembler, "iron-plate") <= 0
             and inventory_count(observation, "iron-plate") > 0
         ):
+            gear_mall_line_decision = self._started_gear_mall_iron_input_decision(
+                observation,
+                reference_position=assembler_position,
+                target_segments=max(20, target_count),
+            )
+            if gear_mall_line_decision is not None:
+                return gear_mall_line_decision
+            logistics_decision = self._started_prerequisite_site_input_decision(
+                observation,
+                "iron-plate",
+                consumer_recipe="iron-gear-wheel",
+                reference_position=assembler_position,
+                target_segments=max(12, target_count),
+            )
+            if logistics_decision is not None:
+                return logistics_decision
             logistics_blocker = _manual_site_input_logistics_blocker(
                 observation,
                 "iron-plate",
@@ -13976,6 +14003,63 @@ class BuildItemMallSkill:
                 return decision
 
         return PlannerDecision({"type": "wait", "ticks": 600}, f"wait for build item mall to produce {self.target_item}")
+
+    def _started_gear_mall_iron_input_decision(
+        self,
+        observation: dict[str, Any],
+        *,
+        reference_position: dict[str, float],
+        target_segments: int,
+    ) -> PlannerDecision | None:
+        layout = _find_iron_plate_logistic_line_to_gear_mall_layout(observation)
+        if layout is None:
+            return None
+        gear_assembler = layout.get("gear_assembler")
+        if not isinstance(gear_assembler, dict) or distance(_position(gear_assembler), reference_position) > 8.0:
+            return None
+        started = any(isinstance(segment.get("entity"), dict) for segment in layout.get("segments") or [])
+        started = started or isinstance(layout.get("source_inserter", {}).get("entity"), dict)
+        started = started or isinstance(layout.get("target_inserter", {}).get("entity"), dict)
+        if not started:
+            return None
+        decision = IronPlateLogisticLineToGearMallSkill(max(20, target_segments)).next_action(observation)
+        if decision.done:
+            return PlannerDecision(
+                {"type": "wait", "ticks": 300},
+                "wait for started gear mall iron-plate logistics to feed gears before another belt mall seed",
+            )
+        if decision.action is None and "cannot find both an iron-plate source furnace" in decision.reason:
+            return None
+        return decision
+
+    def _started_prerequisite_site_input_decision(
+        self,
+        observation: dict[str, Any],
+        item: str,
+        *,
+        consumer_recipe: str,
+        reference_position: dict[str, float],
+        target_segments: int,
+    ) -> PlannerDecision | None:
+        layout = _find_site_input_logistic_line_layout(observation, item=item)
+        if layout is None or not _site_input_logistics_started(layout):
+            return None
+        consumer = layout.get("consumer")
+        if not isinstance(consumer, dict):
+            return None
+        if str(consumer.get("recipe") or consumer.get("recipe_name") or "") != consumer_recipe:
+            return None
+        if distance(_position(consumer), reference_position) > 8.0:
+            return None
+        decision = SiteInputLogisticLineSkill(max(12, target_segments), item=item).next_action(observation)
+        if decision.done:
+            return PlannerDecision(
+                {"type": "wait", "ticks": 300},
+                f"wait for started {item} site input logistics to feed {consumer_recipe} before another bootstrap seed",
+            )
+        if decision.action is None and "no executable repeated site input logistics route was found" in decision.reason:
+            return None
+        return decision
 
     def _power_corridor_repair_decision(
         self,
@@ -14302,7 +14386,15 @@ class BuildItemMallSkill:
                         "craft one-time iron gears for first assembling-machine-1 bootstrap",
                     )
                 if self.target_item != "iron-gear-wheel":
-                    logistics_layout = _find_site_input_logistic_line_layout(observation, item="iron-gear-wheel")
+                    skip_gear_site_input_until_belts_recover = (
+                        self.target_item == "transport-belt"
+                        and total_item_count(observation, "transport-belt") <= 0
+                    )
+                    logistics_layout = (
+                        None
+                        if skip_gear_site_input_until_belts_recover
+                        else _find_site_input_logistic_line_layout(observation, item="iron-gear-wheel")
+                    )
                     if logistics_layout is not None:
                         consumer = logistics_layout.get("consumer")
                         if (
@@ -14385,7 +14477,11 @@ class BuildItemMallSkill:
             return None
 
         if item == "iron-plate":
-            if reference_position is not None:
+            skip_site_input_until_belts_recover = (
+                self.target_item in {"transport-belt", "iron-gear-wheel"}
+                and total_item_count(observation, "transport-belt") <= 0
+            )
+            if reference_position is not None and not skip_site_input_until_belts_recover:
                 logistics_layout = _find_site_input_logistic_line_layout(observation, item="iron-plate")
                 consumer = logistics_layout.get("consumer") if isinstance(logistics_layout, dict) else None
                 if isinstance(consumer, dict) and distance(_position(consumer), reference_position) <= 4.5:

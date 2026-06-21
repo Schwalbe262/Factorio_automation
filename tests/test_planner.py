@@ -6510,6 +6510,85 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["recipe"], "transport-belt")
         self.assertEqual(decision.action["unit_number"], 901)
 
+    def test_build_item_mall_recovers_plate_directly_when_belt_bootstrap_has_no_belts(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        assembler = mall_assembler(recipe="transport-belt", inventory={"iron-gear-wheel": 10})
+        furnace = {
+            "name": "stone-furnace",
+            "unit_number": 950,
+            "position": {"x": 5.0, "y": 0.0},
+            "recipe": "iron-plate",
+            "inventories": {"3": {"iron-plate": 8}},
+        }
+        obs["entities"].extend([assembler, furnace])
+        layout = {
+            "item": "iron-plate",
+            "source": furnace,
+            "consumer": assembler,
+            "segments": [{"position": {"x": 4.0, "y": 1.0}, "direction": planner_module.EAST, "entity": None}],
+            "source_inserter": {"position": {"x": 4.0, "y": 0.0}, "direction": planner_module.EAST, "entity": None},
+            "target_inserter": {"position": {"x": 3.0, "y": 2.0}, "direction": planner_module.EAST, "entity": None},
+        }
+
+        with (
+            patch("factorio_ai.planner._find_site_input_logistic_line_layout", return_value=layout),
+            patch(
+                "factorio_ai.planner.SiteInputLogisticLineSkill.next_action",
+                side_effect=AssertionError("site-input should not run without belts"),
+            ),
+        ):
+            decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertEqual(decision.action["unit_number"], 950)
+        self.assertIn("furnace output", decision.reason)
+
+    def test_build_item_mall_bootstraps_gear_mall_instead_of_gear_site_input_when_no_belts(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        belt_assembler = mall_assembler(recipe="transport-belt", inventory={})
+        gear_assembler = {
+            "name": "assembling-machine-1",
+            "unit_number": 902,
+            "position": {"x": 6.0, "y": 2.0},
+            "distance": 6,
+            "recipe": "iron-gear-wheel",
+            "electric_network_connected": True,
+            "inventories": {"1": {}},
+        }
+        furnace = {
+            "name": "stone-furnace",
+            "unit_number": 950,
+            "position": {"x": 5.0, "y": 0.0},
+            "recipe": "iron-plate",
+            "inventories": {"3": {"iron-plate": 8}},
+        }
+        obs["entities"].extend([belt_assembler, gear_assembler, furnace])
+        layout = {
+            "item": "iron-gear-wheel",
+            "source": gear_assembler,
+            "consumer": belt_assembler,
+            "segments": [{"position": {"x": 4.0, "y": 2.0}, "direction": planner_module.EAST, "entity": None}],
+            "source_inserter": {"position": {"x": 5.0, "y": 2.0}, "direction": planner_module.WEST, "entity": None},
+            "target_inserter": {"position": {"x": 3.0, "y": 2.0}, "direction": planner_module.EAST, "entity": None},
+        }
+
+        with (
+            patch("factorio_ai.planner._find_site_input_logistic_line_layout", return_value=layout),
+            patch(
+                "factorio_ai.planner.SiteInputLogisticLineSkill.next_action",
+                side_effect=AssertionError("gear site-input should not run without belts"),
+            ),
+        ):
+            decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertEqual(decision.action["unit_number"], 950)
+        self.assertIn("furnace output", decision.reason)
+
     def test_build_item_mall_bridges_disconnected_power_corridor_gap(self):
         obs = powered_automation_observation()
         obs["player"] = {"position": {"x": 35.5, "y": 0.5}}
@@ -7947,6 +8026,142 @@ class PlannerTests(unittest.TestCase):
             decision.reason,
         )
         self.assertNotIn("chest-buffered assembler gears", decision.reason)
+
+    def test_build_item_mall_finishes_started_iron_site_input_before_repeating_plate_seed(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 4.0, "y": 6.0}, "character_valid": False}
+        obs["inventory"] = {"iron-plate": 1, "inserter": 1, "transport-belt": 4}
+        source = {
+            "name": "wooden-chest",
+            "unit_number": 980,
+            "position": {"x": 0.0, "y": 6.0},
+            "inventories": {"1": {"iron-plate": 20}},
+        }
+        gear_assembler = {
+            "name": "assembling-machine-1",
+            "unit_number": 981,
+            "position": {"x": 8.0, "y": 6.0},
+            "recipe": "iron-gear-wheel",
+            "electric_network_connected": True,
+            "inventories": {},
+            "status_name": "item_ingredient_shortage",
+        }
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt", inventory={"iron-gear-wheel": 1}),
+                source,
+                gear_assembler,
+                {
+                    "name": "transport-belt",
+                    "unit_number": 983,
+                    "position": {"x": 2.0, "y": 6.0},
+                    "direction": planner_module.EAST,
+                    "inventories": {},
+                },
+            ]
+        )
+        layout = {
+            "item": "iron-plate",
+            "source": source,
+            "consumer": gear_assembler,
+            "source_inserter": {
+                "position": {"x": 1.0, "y": 6.0},
+                "direction": planner_module.EAST,
+                "entity": None,
+            },
+            "target_inserter": {
+                "position": {"x": 4.0, "y": 6.0},
+                "direction": planner_module.EAST,
+                "entity": None,
+            },
+            "segments": [
+                {
+                    "position": {"x": 2.0, "y": 6.0},
+                    "direction": planner_module.EAST,
+                    "entity": obs["entities"][-1],
+                }
+            ],
+        }
+
+        with patch("factorio_ai.planner._find_site_input_logistic_line_layout", return_value=layout):
+            decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "inserter")
+        self.assertEqual(decision.action["position"], {"x": 1.0, "y": 6.0})
+        self.assertNotEqual(decision.action.get("bootstrap_seed"), True)
+        self.assertIn("site source output inserter", decision.reason)
+
+    def test_build_item_mall_finishes_started_gear_mall_iron_line_before_repeating_plate_seed(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 4.0, "y": 0.0}, "character_valid": False}
+        obs["inventory"] = {"iron-plate": 1, "transport-belt": 1}
+        source = {
+            "name": "wooden-chest",
+            "unit_number": 980,
+            "position": {"x": 0.0, "y": 0.0},
+            "inventories": {"1": {"iron-plate": 20}},
+        }
+        gear_assembler = {
+            "name": "assembling-machine-1",
+            "unit_number": 981,
+            "position": {"x": 8.0, "y": 0.0},
+            "recipe": "iron-gear-wheel",
+            "electric_network_connected": True,
+            "inventories": {},
+            "status_name": "item_ingredient_shortage",
+        }
+        built_segment = {
+            "name": "transport-belt",
+            "unit_number": 982,
+            "position": {"x": 2.0, "y": 0.0},
+            "direction": planner_module.EAST,
+            "inventories": {},
+        }
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt", inventory={"iron-gear-wheel": 1}),
+                source,
+                gear_assembler,
+                built_segment,
+            ]
+        )
+        layout = {
+            "source": source,
+            "gear_assembler": gear_assembler,
+            "belt_assembler": obs["entities"][-4],
+            "source_inserter": {
+                "position": {"x": 1.0, "y": 0.0},
+                "direction": planner_module.EAST,
+                "entity": None,
+            },
+            "target_inserter": {
+                "position": {"x": 7.0, "y": 0.0},
+                "direction": planner_module.EAST,
+                "entity": None,
+            },
+            "segments": [
+                {
+                    "position": {"x": 2.0, "y": 0.0},
+                    "direction": planner_module.EAST,
+                    "entity": built_segment,
+                },
+                {
+                    "position": {"x": 3.0, "y": 0.0},
+                    "direction": planner_module.EAST,
+                    "entity": None,
+                },
+            ],
+        }
+
+        with patch("factorio_ai.planner._find_iron_plate_logistic_line_to_gear_mall_layout", return_value=layout):
+            decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertEqual(decision.action["position"], {"x": 3.0, "y": 0.0})
+        self.assertNotEqual(decision.action.get("bootstrap_seed"), True)
+        self.assertIn("iron-plate belt logistics", decision.reason)
 
     def test_build_item_mall_does_not_count_remote_or_consumer_gears_as_local_prerequisite(self):
         obs = base_observation()
