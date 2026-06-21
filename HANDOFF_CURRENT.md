@@ -1,11 +1,11 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor/autopilot restarted with new code, supervisor PID `42660`, autopilot PID `32644`, scheduler Qwen service `12755`.
-- Part166: fixed item-mall cleanup oscillation by globally protecting active user-output mall output chest/inserter units and planned positions during obsolete buffer cleanup.
-- Regression: science mall cleanup now preserves a neighboring gear mall output chest instead of mining it as an empty temporary buffer.
-- Validation: targeted 3-test regression passed; `tests.test_planner tests.test_controller tests.test_strategy` passed 634; full `PYTHONPATH=src python -m unittest discover -s tests` passed 1134 with existing socket ResourceWarning.
-- Live validation: new run placed gear output chest `unit 686` at `91.5,-9.5`; no `temporary item mall buffering` mine appeared in new science logs.
-- Live Qwen path works: Qwen selected `plan_factory_site`, guardrail adjusted to `produce_automation_science_pack`, readiness metadata was recorded.
-- Current live blocker: `produce_automation_science_pack` repeats `wait for belt smelting line to move ore and smelt plates`; automation science remains `4/90`.
-- Next part: replace the serial smelting wait with prerequisite repair/parallel early production, prioritizing plate throughput and red science feed.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor/autopilot restarted with new code, supervisor PID `37464`, autopilot PID `74504`, scheduler Qwen service `12755`.
+- Part166: fixed item-mall cleanup oscillation; active user-output mall output chest/inserter units and planned positions are protected during obsolete buffer cleanup.
+- Part167: fixed lightweight smelting observation bug; unknown-resource belt smelting layouts no longer match requested copper/iron lines.
+- Part167: `BeltSmeltingLineSkill` now completes an incomplete parallel line before falling back to smelting wait.
+- Validation: targeted smelting tests passed; `tests.test_planner tests.test_controller tests.test_strategy` passed 636; full `PYTHONPATH=src python -m unittest discover -s tests` passed 1136 with existing socket ResourceWarning.
+- Live validation: `wait for belt smelting line` loop broke; science inserted gears, produced red science, and `electric-mining-drill` research reached `20%`.
+- Current live: researched `4`, current research `electric-mining-drill`, automation science `0`, copper plate `3`, gears `134`, belts `26`.
+- Current blocker: red science refill waits on copper plate site input logistics feeding the automation-science-pack assembler.
 - Operator layout learning is present in `operator-intervention-layout-learning.jsonl`; examples remain pending review, not auto-promoted into skills.
-- Token usage sample: `19,177,078` absolute; weekly quota unavailable.
+- Token usage sample: `19,336,032` absolute; weekly quota unavailable.

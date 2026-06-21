@@ -4263,6 +4263,96 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.done)
         self.assertIsNone(decision.action)
 
+    def test_belt_smelting_skill_extends_incomplete_parallel_line_before_waiting(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 25, "y": 0}}
+        obs["inventory"] = {"coal": 12, "stone-furnace": 1, "burner-mining-drill": 1, "transport-belt": 10}
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 8, "y": 0}, "distance": 17},
+            {"name": "copper-ore", "position": {"x": 20, "y": 0}, "distance": 5},
+        ]
+        obs["entities"] = complete_belt_smelting_entities(
+            8,
+            0,
+            500,
+            resource="copper-ore",
+            product="copper-plate",
+        )
+        obs["entities"][-1]["inventories"] = {"1": {"coal": 3}}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "transport-belt",
+                    "unit_number": 600,
+                    "position": {"x": 22, "y": 0},
+                    "distance": 3,
+                    "inventories": {},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 601,
+                    "position": {"x": 23, "y": 0},
+                    "distance": 2,
+                    "inventories": {},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 602,
+                    "position": {"x": 24, "y": 0},
+                    "distance": 1,
+                    "direction": planner_module.EAST,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = BeltSmeltingLineSkill(
+            target_count=90,
+            resource_name="copper-ore",
+            product_name="copper-plate",
+            inventory_only=True,
+        ).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "stone-furnace")
+        self.assertEqual(decision.action["position"], {"x": 25, "y": 0})
+        self.assertNotIn("wait for belt smelting line", decision.reason)
+
+    def test_belt_smelting_skill_ignores_unknown_resource_line_for_copper(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 25, "y": 0}}
+        obs["inventory"] = {
+            "coal": 12,
+            "stone-furnace": 1,
+            "burner-mining-drill": 1,
+            "inserter": 1,
+            "transport-belt": 2,
+        }
+        obs["resources"] = [{"name": "copper-ore", "position": {"x": 20, "y": 0}, "distance": 5}]
+        obs["entities"] = complete_belt_smelting_entities(
+            8,
+            0,
+            500,
+            resource="iron-ore",
+            product="iron-plate",
+        )
+        obs["entities"][0].pop("mining_target")
+        obs["entities"][0]["status_name"] = "no_minable_resources"
+        obs["entities"][-1]["inventories"] = {"1": {"coal": 3}}
+
+        decision = BeltSmeltingLineSkill(
+            target_count=90,
+            resource_name="copper-ore",
+            product_name="copper-plate",
+            inventory_only=True,
+        ).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertEqual(decision.action["position"], {"x": 22.0, "y": 0.0})
+        self.assertNotIn("wait for belt smelting line", decision.reason)
+
     def test_expand_iron_smelting_places_new_belt_when_below_capacity(self):
         obs = base_observation()
         obs["inventory"] = {

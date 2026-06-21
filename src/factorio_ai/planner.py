@@ -3353,40 +3353,9 @@ class BeltSmeltingLineSkill:
         if layout is None:
             return PlannerDecision(None, f"cannot find open {self.resource_name} site for belt smelting line")
 
-        need = _line_missing_item(observation, layout)
-        if need:
-            decision = self._ensure_item(observation, player, need)
-            if decision is not None:
-                return decision
-
-        for name, key, direction_key in [
-            ("transport-belt", "belt1_position", "belt_direction"),
-            ("transport-belt", "belt2_position", "belt_direction"),
-            ("inserter", "inserter_position", "inserter_direction"),
-            ("stone-furnace", "furnace_position", None),
-            ("burner-mining-drill", "drill_position", "drill_direction"),
-        ]:
-            entity_key = _entity_key_for_layout(name, key)
-            if layout.get(entity_key) is not None:
-                continue
-            position = layout[key]
-            if distance(player, position) > 20:
-                return PlannerDecision(
-                    {"type": "move_to", "position": _stand_position(position)},
-                    f"move near planned {name} position",
-                )
-            action: dict[str, Any] = {
-                "type": "build",
-                "name": name,
-                "position": position,
-                "allow_nearby": name in {"burner-mining-drill", "stone-furnace"},
-            }
-            if name == "burner-mining-drill":
-                action["required_resource"] = self.resource_name
-            direction = layout.get(direction_key) if direction_key else None
-            if direction is not None:
-                action["direction"] = direction
-            return PlannerDecision(action, f"place {name} for belt smelting line")
+        decision = self._line_construction_decision(observation, player, layout)
+        if decision is not None:
+            return decision
 
         for entity_name, layout_key, item, threshold, count in _smelting_line_fuel_requirements(layout, reserve=False):
             entity = layout.get(layout_key)
@@ -3423,10 +3392,58 @@ class BeltSmeltingLineSkill:
                 f"take {self.product_name} produced by belt smelting line",
             )
 
+        incomplete_layout = _find_incomplete_belt_smelting_line(observation, self.resource_name)
+        if incomplete_layout is not None:
+            decision = self._line_construction_decision(observation, player, incomplete_layout)
+            if decision is not None:
+                return decision
+
         return PlannerDecision(
             {"type": "wait", "ticks": 300},
             "wait for belt smelting line to move ore and smelt plates",
         )
+
+    def _line_construction_decision(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+        layout: dict[str, Any],
+    ) -> PlannerDecision | None:
+        need = _line_missing_item(observation, layout)
+        if need:
+            decision = self._ensure_item(observation, player, need)
+            if decision is not None:
+                return decision
+
+        for name, key, direction_key in [
+            ("transport-belt", "belt1_position", "belt_direction"),
+            ("transport-belt", "belt2_position", "belt_direction"),
+            ("inserter", "inserter_position", "inserter_direction"),
+            ("stone-furnace", "furnace_position", None),
+            ("burner-mining-drill", "drill_position", "drill_direction"),
+        ]:
+            entity_key = _entity_key_for_layout(name, key)
+            if layout.get(entity_key) is not None:
+                continue
+            position = layout[key]
+            if distance(player, position) > 20:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position)},
+                    f"move near planned {name} position",
+                )
+            action: dict[str, Any] = {
+                "type": "build",
+                "name": name,
+                "position": position,
+                "allow_nearby": name in {"burner-mining-drill", "stone-furnace"},
+            }
+            if name == "burner-mining-drill":
+                action["required_resource"] = self.resource_name
+            direction = layout.get(direction_key) if direction_key else None
+            if direction is not None:
+                action["direction"] = direction
+            return PlannerDecision(action, f"place {name} for belt smelting line")
+        return None
 
     def _ensure_item(
         self,
@@ -5518,7 +5535,7 @@ def _resource_name_near_position(
 
 def _layout_matches_resource(layout: dict[str, Any], resource_name: str) -> bool:
     actual = layout.get("resource_name")
-    return actual is None or actual == resource_name
+    return actual == resource_name
 
 
 def _direct_plate_smelting_decision(
