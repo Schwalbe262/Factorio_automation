@@ -11999,6 +11999,42 @@ class GearBeltMallRelocationSkill:
                     f"before mining the existing mall; available {available_poles}"
                 ),
             )
+
+        target_specs = [
+            ("target_gear_assembler", "target_gear_position", "iron-gear-wheel", "gear assembler"),
+            ("target_belt_assembler", "target_belt_position", "transport-belt", "belt assembler"),
+        ]
+        placed_targets = sum(1 for entity_key, *_ in target_specs if isinstance(layout.get(entity_key), dict))
+        if placed_targets < 2 and inventory_count(observation, "assembling-machine-1") + placed_targets < 2:
+            target_units = {
+                layout.get(entity_key, {}).get("unit_number")
+                for entity_key, *_ in target_specs
+                if isinstance(layout.get(entity_key), dict)
+            }
+            target_units.discard(None)
+            for source_key, label in (("gear_assembler", "existing gear assembler"), ("belt_assembler", "existing belt assembler")):
+                source = layout.get(source_key)
+                if not isinstance(source, dict):
+                    continue
+                if source.get("unit_number") in target_units:
+                    continue
+                source_position = _position(source)
+                if distance(player, source_position) > 4.5:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": _stand_position(source_position, offset=1.5)},
+                        f"move within reach of {label} for costed relocation",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "unit_number": source.get("unit_number"),
+                        "name": source.get("name") or "assembling-machine-1",
+                        "position": source_position,
+                    },
+                    f"recover {label} for costed relocation after relocation power corridor materials are available",
+                )
+            return PlannerDecision(None, "gear/belt mall relocation needs two assembling machines before rebuilding near iron plates")
+
         if missing_corridor_positions:
             position = missing_corridor_positions[0]
             build_position = _select_power_corridor_build_position(observation, corridor_positions, position)
@@ -12057,11 +12093,6 @@ class GearBeltMallRelocationSkill:
                 "connect gear/belt mall relocation power corridor before moving assemblers",
             )
 
-        target_specs = [
-            ("target_gear_assembler", "target_gear_position", "iron-gear-wheel", "gear assembler"),
-            ("target_belt_assembler", "target_belt_position", "transport-belt", "belt assembler"),
-        ]
-
         for entity_key, _position_key, recipe, label in target_specs:
             assembler = layout.get(entity_key)
             if isinstance(assembler, dict) and assembler.get("recipe") != recipe:
@@ -12078,37 +12109,6 @@ class GearBeltMallRelocationSkill:
                     },
                     f"set relocated {label} recipe to {recipe}",
                 )
-
-        placed_targets = sum(1 for entity_key, *_ in target_specs if isinstance(layout.get(entity_key), dict))
-        if placed_targets < 2 and inventory_count(observation, "assembling-machine-1") + placed_targets < 2:
-            target_units = {
-                layout.get(entity_key, {}).get("unit_number")
-                for entity_key, *_ in target_specs
-                if isinstance(layout.get(entity_key), dict)
-            }
-            target_units.discard(None)
-            for source_key, label in (("gear_assembler", "existing gear assembler"), ("belt_assembler", "existing belt assembler")):
-                source = layout.get(source_key)
-                if not isinstance(source, dict):
-                    continue
-                if source.get("unit_number") in target_units:
-                    continue
-                source_position = _position(source)
-                if distance(player, source_position) > 4.5:
-                    return PlannerDecision(
-                        {"type": "move_to", "position": _stand_position(source_position, offset=1.5)},
-                        f"move within reach of {label} for costed relocation",
-                    )
-                return PlannerDecision(
-                    {
-                        "type": "mine",
-                        "unit_number": source.get("unit_number"),
-                        "name": source.get("name") or "assembling-machine-1",
-                        "position": source_position,
-                    },
-                    f"recover {label} for costed relocation only after relocation power corridor materials are available",
-                )
-            return PlannerDecision(None, "gear/belt mall relocation needs two assembling machines before rebuilding near iron plates")
 
         for entity_key, position_key, recipe, label in target_specs:
             if isinstance(layout.get(entity_key), dict):

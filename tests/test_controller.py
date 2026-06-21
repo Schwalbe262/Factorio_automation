@@ -2493,6 +2493,33 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(heartbeat["cycle"], 1)
         self.assertEqual(heartbeat["objective"], "launch_rocket_program")
 
+    def test_autopilot_heartbeat_clears_stale_live_skill_from_dead_pid(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = make_test_config(Path(temp_dir))
+            cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+            (cfg.runtime_dir / "live-skill-heartbeat.json").write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "state": "step",
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                        "objective": "launch_rocket_program",
+                        "skill": "relocate_gear_belt_mall_to_iron_source",
+                        "step": 17,
+                        "pid": 987654,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            controller = FactorioController(cfg)
+            with patch("factorio_ai.controller._pid_is_running", return_value=False):
+                controller._write_autopilot_heartbeat("launch_rocket_program", "cycle_start", cycle=1)
+            heartbeat = json.loads((cfg.runtime_dir / "live-skill-heartbeat.json").read_text(encoding="utf-8"))
+
+        self.assertFalse(heartbeat["active"])
+        self.assertEqual(heartbeat["state"], "stale")
+        self.assertIn("cleared stale live skill pid 987654", heartbeat["reason"])
+
     def test_run_skill_writes_live_skill_heartbeat(self):
         class DoneSkill:
             def next_action(self, observation):

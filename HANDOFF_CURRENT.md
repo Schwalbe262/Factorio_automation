@@ -1,11 +1,11 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod supervisor/autopilot running, autopilot PID `52048`, scheduler Qwen service `12755`.
-- Part163: direct plate smelting no longer returns `cannot find open iron-ore site` before trying to recover an unpaired or temporary burner mining drill.
-- Part163 invariant: if direct smelting has no burner fuel, fuel recovery/mining still happens before drill reallocation so coal-empty expansion does not steal drills.
-- Validation: targeted planner/strategy/controller passed 630; full `PYTHONPATH=src python -m unittest discover -s tests` passed 1130 with existing socket ResourceWarning.
-- Live validation: after supervisor restart, `produce_automation_science_pack` progressed past step 1 to step 33; current live skill is `relocate_gear_belt_mall_to_iron_source` step 713.
-- Current live: researched `4`, server UP tick `2364725`, inventory includes coal `4`, automation science `4`, transport belt `3`; health progress snapshot remains stale for some stock counts.
-- Current blockers: mall relocation, iron source recovery, boiler/fuel stability, labs/electric drills, burner replacement, main-belt migration.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod supervisor/autopilot running, autopilot PID `67380`, scheduler Qwen service `12755`.
+- Part164: fixed gear/belt mall relocation oscillation by recovering existing assemblers after power-pole materials are available, before building the relocation corridor.
+- Part164: autopilot heartbeat now clears active live-skill heartbeats from dead PIDs before a new cycle, preventing stale live-skill warnings after restart.
+- Validation: targeted planner/controller/strategy passed 632; full `PYTHONPATH=src python -m unittest discover -s tests` passed 1132 with existing socket ResourceWarning.
+- Live validation: stale live PID warning cleared; `build_iron_plate_logistic_line_to_gear_mall` completed in 30 steps with belts and endpoint inserters.
+- Current live: server UP tick `2476709`, researched `4`, current skill `bootstrap_build_item_mall` step 37 under stall recovery; iron plates `42`, belts `18`, gears `136`.
+- Current blocker: `build_gear_belt_mall_logistics` is failing/reselected; next part should diagnose gear-to-belt mall logistics completion/assembler state.
 - Operator layout learning exists via `operator-intervention-layout-learning.jsonl`; user edits are pending-review examples, not auto-promoted into skills.
 - Runtime journals are dirty from unattended autopilot (`note.md`, `insight.md`); stage code/test/handoff selectively unless intentionally archiving runtime logs.
-- Token usage fallback goal sample: `18,503,853` absolute; weekly quota unavailable because Codex state DB is malformed.
+- Token usage fallback goal sample: `18,753,800` absolute; weekly quota unavailable because Codex state DB is malformed.

@@ -3003,6 +3003,32 @@ class FactorioController:
     def _read_live_skill_heartbeat(self) -> dict[str, Any]:
         return _read_json_file(self._live_skill_heartbeat_path())
 
+    def _clear_stale_live_skill_heartbeat_for_current_process(self, objective: str) -> None:
+        live_skill = self._read_live_skill_heartbeat()
+        if not live_skill.get("active"):
+            return
+        live_pid = _int_or_none(live_skill.get("pid"))
+        if live_pid in {None, os.getpid()}:
+            return
+        if _pid_is_running(live_pid):
+            return
+        payload = dict(live_skill)
+        payload.update(
+            {
+                "active": False,
+                "state": "stale",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "objective": objective,
+                "reason": f"cleared stale live skill pid {live_pid} before starting a new autopilot cycle",
+                "pid": os.getpid(),
+            }
+        )
+        try:
+            with self._live_skill_heartbeat_path().open("w", encoding="utf-8") as file:
+                json.dump(payload, file, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+
     def _write_autopilot_heartbeat(
         self,
         objective: str,
@@ -3012,6 +3038,8 @@ class FactorioController:
         reason: str = "",
     ) -> None:
         self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+        if state in {"starting", "cycle_start"}:
+            self._clear_stale_live_skill_heartbeat_for_current_process(objective)
         payload = {
             "active": state not in {"stopped", "interrupted"},
             "state": state,

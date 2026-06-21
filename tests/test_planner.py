@@ -1992,9 +1992,23 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 901)
         self.assertIn("buffered small electric poles", decision.reason)
 
-    def test_gear_belt_mall_relocation_builds_power_corridor_before_teardown(self):
+    def test_gear_belt_mall_relocation_recovers_assembler_once_power_pole_materials_exist(self):
         obs = long_gear_mall_relocation_observation()
         obs["inventory"] = {"small-electric-pole": 23}
+        obs["player"]["position"] = {"x": 0.5, "y": 0.5}
+
+        decision = GearBeltMallRelocationSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 100)
+        self.assertIn("after relocation power corridor materials are available", decision.reason)
+
+    def test_gear_belt_mall_relocation_builds_power_corridor_after_assemblers_recovered(self):
+        obs = long_gear_mall_relocation_observation()
+        obs["inventory"] = {"small-electric-pole": 23, "assembling-machine-1": 2}
+        obs["entities"] = [
+            entity for entity in obs["entities"] if entity.get("unit_number") not in {100, 101}
+        ]
         obs["player"]["position"] = {"x": 0.5, "y": 0.5}
 
         decision = GearBeltMallRelocationSkill(20).next_action(obs)
@@ -2072,8 +2086,11 @@ class PlannerTests(unittest.TestCase):
 
     def test_gear_belt_mall_relocation_detours_power_corridor_around_crash_artifact(self):
         obs = long_gear_mall_relocation_observation()
-        obs["inventory"] = {"small-electric-pole": 23}
+        obs["inventory"] = {"small-electric-pole": 23, "assembling-machine-1": 2}
         obs["player"]["position"] = {"x": 0.5, "y": 0.5}
+        obs["entities"] = [
+            entity for entity in obs["entities"] if entity.get("unit_number") not in {100, 101}
+        ]
         layout = planner_module._find_gear_belt_mall_relocation_layout(obs)
         first_position = planner_module._gear_belt_mall_relocation_power_corridor_positions(obs, layout)[0]
         obs["entities"].append(
@@ -2124,7 +2141,10 @@ class PlannerTests(unittest.TestCase):
 
     def test_gear_belt_mall_relocation_bridges_snapped_power_corridor_gap(self):
         obs = long_gear_mall_relocation_observation()
-        obs["inventory"] = {"small-electric-pole": 1}
+        obs["inventory"] = {"small-electric-pole": 1, "assembling-machine-1": 2}
+        obs["entities"] = [
+            entity for entity in obs["entities"] if entity.get("unit_number") not in {100, 101}
+        ]
         layout = planner_module._find_gear_belt_mall_relocation_layout(obs)
         positions = planner_module._gear_belt_mall_relocation_power_corridor_positions(obs, layout)
         split_index = len(positions) - 2
@@ -2201,7 +2221,10 @@ class PlannerTests(unittest.TestCase):
 
     def test_gear_belt_mall_relocation_clears_recoverable_power_corridor_blocker(self):
         obs = long_gear_mall_relocation_observation()
-        obs["inventory"] = {"small-electric-pole": 23}
+        obs["inventory"] = {"small-electric-pole": 23, "assembling-machine-1": 2}
+        obs["entities"] = [
+            entity for entity in obs["entities"] if entity.get("unit_number") not in {100, 101}
+        ]
         layout = planner_module._find_gear_belt_mall_relocation_layout(obs)
         positions = planner_module._gear_belt_mall_relocation_power_corridor_positions(obs, layout)
         blocked_position = positions[0]
