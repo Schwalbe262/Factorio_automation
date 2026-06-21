@@ -11865,12 +11865,20 @@ class GearBeltMallRelocationSkill:
             build_position = _select_power_corridor_build_position(observation, corridor_positions, position)
             blocker = _power_corridor_position_blocker(observation, build_position)
             if blocker is not None:
+                blocker_position = _position(blocker)
+                if distance(player, blocker_position) > 8:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": blocker_position},
+                        f"move near blocking {blocker.get('name')} before placing gear/belt mall relocation power corridor",
+                    )
                 return PlannerDecision(
-                    None,
-                    (
-                        f"gear/belt mall relocation power corridor is blocked by {blocker.get('name')} "
-                        f"near {build_position}; refusing to mine existing mall first"
-                    ),
+                    {
+                        "type": "mine",
+                        "unit_number": blocker.get("unit_number"),
+                        "name": blocker.get("name"),
+                        "position": blocker_position,
+                    },
+                    f"clear blocking {blocker.get('name')} before placing gear/belt mall relocation power corridor",
                 )
             if distance(player, build_position) > 20:
                 return PlannerDecision(

@@ -2173,6 +2173,29 @@ class PlannerTests(unittest.TestCase):
             planner_module._existing_power_connector_near_position(obs, second_detour, radius=0.75)
         )
 
+    def test_gear_belt_mall_relocation_clears_recoverable_power_corridor_blocker(self):
+        obs = long_gear_mall_relocation_observation()
+        obs["inventory"] = {"small-electric-pole": 23}
+        layout = planner_module._find_gear_belt_mall_relocation_layout(obs)
+        positions = planner_module._gear_belt_mall_relocation_power_corridor_positions(obs, layout)
+        blocked_position = positions[0]
+        obs["player"]["position"] = blocked_position
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 7102,
+                "position": blocked_position,
+                "inventories": {},
+            }
+        )
+
+        with patch("factorio_ai.planner._select_power_corridor_build_position", return_value=blocked_position):
+            decision = GearBeltMallRelocationSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 7102)
+        self.assertIn("clear blocking stone-furnace", decision.reason)
+
     def test_gear_belt_mall_relocation_rebuilds_from_inventory_after_reaching_source(self):
         obs = long_gear_mall_relocation_observation()
         _add_existing_relocation_power_corridor(obs)
