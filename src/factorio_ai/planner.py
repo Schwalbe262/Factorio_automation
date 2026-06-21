@@ -12300,6 +12300,8 @@ def _select_power_corridor_build_position(
     for candidate in candidates:
         if previous_anchor is not None and distance(candidate, previous_anchor) > reach:
             continue
+        if _existing_power_connector_near_position(observation, candidate, radius=0.75) is not None:
+            continue
         if _power_corridor_position_blocker(observation, candidate) is None:
             return candidate
     return desired_position

@@ -2141,6 +2141,38 @@ class PlannerTests(unittest.TestCase):
         )
         self.assertIn("power corridor before mining existing mall", decision.reason)
 
+    def test_gear_belt_mall_relocation_does_not_rebuild_existing_detour_pole(self):
+        obs = long_gear_mall_relocation_observation()
+        layout = planner_module._find_gear_belt_mall_relocation_layout(obs)
+        positions = planner_module._gear_belt_mall_relocation_power_corridor_positions(obs, layout)
+        desired = positions[3]
+        obs["entities"].append(
+            {
+                "name": "tree-02-red",
+                "unit_number": 7100,
+                "type": "tree",
+                "position": desired,
+                "inventories": {},
+            }
+        )
+        first_detour = planner_module._select_power_corridor_build_position(obs, positions, desired)
+        obs["entities"].append(
+            {
+                "name": "small-electric-pole",
+                "unit_number": 7101,
+                "position": first_detour,
+                "electric_network_connected": False,
+                "inventories": {},
+            }
+        )
+
+        second_detour = planner_module._select_power_corridor_build_position(obs, positions, desired)
+
+        self.assertNotEqual(second_detour, first_detour)
+        self.assertIsNone(
+            planner_module._existing_power_connector_near_position(obs, second_detour, radius=0.75)
+        )
+
     def test_gear_belt_mall_relocation_rebuilds_from_inventory_after_reaching_source(self):
         obs = long_gear_mall_relocation_observation()
         _add_existing_relocation_power_corridor(obs)

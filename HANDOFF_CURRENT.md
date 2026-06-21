@@ -1,10 +1,10 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod Factorio, Qwen/vLLM, dashboard, supervisor, and autopilot are running.
-- Part158: boiler coal feed geometry fixed; feed inserter now sits one tile from boiler, belt target one tile behind, with one-time electric-feed power seed only after route completion.
-- Part158 route repair now reuses existing feed belts/spurs, avoids offshore-pump shoreline belt targets, and prefers repairing a legacy feed side before routing around steam/pump water.
-- Live validation: `connect_coal_fuel_feed` repaired the bad feed, mined stale belt/furnace/inserter/ground coal, rebuilt belts/inserter, seeded 1 coal, and ended active at step 9.
-- Current live: tick `1476829`, autopilot PID `64224`, vLLM service `12304`; next active skill is `relocate_gear_belt_mall_to_iron_source`.
-- Key items from health: iron-plate 147, copper-plate 49, transport-belt 88, gears 108, small-electric-pole 19, coal 27, electronic-circuit 1; red science/labs/electric drills still 0.
-- Validation: targeted `tests.test_planner tests.test_strategy tests.test_controller` passed 618 tests; full `python -m unittest discover -s tests` passed 1118 tests (ResourceWarning only).
-- Token usage: fallback goal sample `16,405,050` absolute, delta `553,903`; weekly quota unavailable because Codex state DB is malformed.
-- Next: monitor mall relocation, then stabilize e-circuit automation, electric mining drill rollout, burner replacement, red science/labs, and main-belt migration.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod Factorio server/web/supervisor/autopilot are running with scheduler vLLM service `12304`.
+- Part159: fixed gear/belt mall relocation power-corridor detour loop by skipping candidate pole build positions that already contain a power connector.
+- Regression added: relocation now refuses to rebuild an existing detour pole while preserving pre-teardown small-pole shortage/bootstrap behavior.
+- Validation: relocation subset passed, `tests.test_planner tests.test_strategy tests.test_controller` passed 619 tests, full discover passed 1119 tests (ResourceWarning only).
+- Live validation: autopilot PID `21020` restarted on new code; latest relocation trace built a detour pole at `83.5,-19.5` with no repeated `already_exists`; stale PID warning cleared.
+- Current live: tick `1587412`, researched `4`, vLLM ready; `bootstrap_power_pole_mall` stopped after reaching small-electric-pole `22/20`.
+- Current blockers: red science/labs/electric drills still absent; next work should stabilize e-circuit automation, electric mining drill rollout, burner replacement, red science/labs, and main-belt migration.
+- Runtime journals are dirty from unattended autopilot (`note.md`, `insight.md`); stage code/test/handoff/token usage selectively unless intentionally archiving runtime logs.
+- Token usage: fallback goal sample `17,002,339` absolute, delta `597,289`; weekly quota unavailable because Codex state DB is malformed.
