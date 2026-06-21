@@ -9190,16 +9190,31 @@ def _site_input_hard_route_blockers(
             segment["position"],
             protected_unit_numbers=protected_unit_numbers,
         )
-        if isinstance(blocker, dict) and _site_input_hard_route_blocker(blocker, segment["position"]):
+        if isinstance(blocker, dict) and _site_input_hard_route_blocker(blocker, segment["position"], route_segment=True):
             blockers.append(blocker)
+            continue
+        reserved = _site_input_reserved_inserter_slot_blocker(
+            observation,
+            segment["position"],
+            protected_unit_numbers=protected_unit_numbers,
+        )
+        if isinstance(reserved, dict):
+            blockers.append(reserved)
     return blockers
 
 
-def _site_input_hard_route_blocker(entity: dict[str, Any], position: dict[str, float] | None = None) -> bool:
+def _site_input_hard_route_blocker(
+    entity: dict[str, Any],
+    position: dict[str, float] | None = None,
+    *,
+    route_segment: bool = False,
+) -> bool:
     name = str(entity.get("name") or "")
     large_names = ASSEMBLER_ENTITY_NAMES | {"lab", "stone-furnace", "burner-mining-drill", "boiler", "steam-engine"}
     if name in POWER_CONNECTOR_NAMES:
         return False
+    if route_segment and name in {"inserter", "burner-inserter", "fast-inserter"}:
+        return True
     if name in large_names:
         if isinstance(position, dict) and isinstance(entity.get("position"), dict):
             entity_position = _position(entity)
@@ -9209,6 +9224,40 @@ def _site_input_hard_route_blocker(entity: dict[str, Any], position: dict[str, f
             )
         return True
     return name in {"wooden-chest", "iron-chest", "steel-chest"}
+
+
+def _site_input_reserved_inserter_slot_blocker(
+    observation: dict[str, Any],
+    position: dict[str, float],
+    *,
+    protected_unit_numbers: set[int] | None = None,
+) -> dict[str, Any] | None:
+    protected_unit_numbers = protected_unit_numbers or set()
+    reserved_entities = ASSEMBLER_ENTITY_NAMES | {
+        "lab",
+        "stone-furnace",
+        "steel-furnace",
+        "electric-furnace",
+        "boiler",
+        "steam-engine",
+    }
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict) or not isinstance(entity.get("position"), dict):
+            continue
+        try:
+            if int(entity.get("unit_number")) in protected_unit_numbers:
+                continue
+        except (TypeError, ValueError):
+            pass
+        if str(entity.get("name") or "") not in reserved_entities:
+            continue
+        entity_position = _position(entity)
+        radius = _site_input_endpoint_radius(entity)
+        for direction in (NORTH, EAST, SOUTH, WEST):
+            slot = _offset_along_axis(entity_position, _direction_vector(direction), radius)
+            if distance(slot, position) <= 0.1:
+                return entity
+    return None
 
 
 def _site_input_line_route_score(
@@ -13181,7 +13230,7 @@ class SiteInputLogisticLineSkill:
             )
             if blocker is not None:
                 blocker_position = _position(blocker)
-                if _site_input_hard_route_blocker(blocker, segment["position"]):
+                if _site_input_hard_route_blocker(blocker, segment["position"], route_segment=True):
                     return PlannerDecision(
                         None,
                         f"site input logistics route is blocked by existing {blocker.get('name')}; needs a reroute instead of mining production infrastructure",
@@ -13199,6 +13248,19 @@ class SiteInputLogisticLineSkill:
                         "position": blocker_position,
                     },
                     f"clear blocking {blocker.get('name')} before extending site input logistics belt",
+                )
+            reserved = _site_input_reserved_inserter_slot_blocker(
+                observation,
+                segment["position"],
+                protected_unit_numbers=protected_units,
+            )
+            if isinstance(reserved, dict):
+                return PlannerDecision(
+                    None,
+                    (
+                        "site input logistics route crosses a reserved inserter slot for existing "
+                        f"{reserved.get('name')}; needs a reroute instead of blocking production"
+                    ),
                 )
             if inventory_count(observation, "transport-belt") <= 0:
                 belt_chest = _transport_belt_output_chest(observation)
@@ -13462,6 +13524,12 @@ def _nearest_buildable_missing_site_input_segment(
         if position is None:
             continue
         if _belt_line_position_blocker(
+            observation,
+            position,
+            protected_unit_numbers=protected_units,
+        ) is not None:
+            continue
+        if _site_input_reserved_inserter_slot_blocker(
             observation,
             position,
             protected_unit_numbers=protected_units,
