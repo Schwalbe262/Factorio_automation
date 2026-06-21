@@ -1,11 +1,11 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod supervisor/autopilot running, autopilot PID `67380`, scheduler Qwen service `12755`.
-- Part164: fixed gear/belt mall relocation oscillation by recovering existing assemblers after power-pole materials are available, before building the relocation corridor.
-- Part164: autopilot heartbeat now clears active live-skill heartbeats from dead PIDs before a new cycle, preventing stale live-skill warnings after restart.
-- Validation: targeted planner/controller/strategy passed 632; full `PYTHONPATH=src python -m unittest discover -s tests` passed 1132 with existing socket ResourceWarning.
-- Live validation: stale live PID warning cleared; `build_iron_plate_logistic_line_to_gear_mall` completed in 30 steps with belts and endpoint inserters.
-- Current live: server UP tick `2476709`, researched `4`, current skill `bootstrap_build_item_mall` step 37 under stall recovery; iron plates `42`, belts `18`, gears `136`.
-- Current blocker: `build_gear_belt_mall_logistics` is failing/reselected; next part should diagnose gear-to-belt mall logistics completion/assembler state.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod supervisor/autopilot running, autopilot PID `39140`, scheduler Qwen service `12755`.
+- Part165: fixed direct gear-to-belt transfer inserter direction; adjacent gear/belt assemblers now use gear->belt flow (`WEST`/`NORTH` as needed), not belt->gear.
+- Part165: existing reversed direct inserters are treated as misoriented and mined before replacement, so user-preferred direct assembler transfer can become sustained.
+- Validation: targeted planner/controller/strategy passed 633; full `PYTHONPATH=src python -m unittest discover -s tests` passed 1133 with existing socket ResourceWarning.
+- Live validation: read-only live planner now selects `move within mining reach of misoriented direct gear-to-belt transfer inserter` for unit `451`; stale restart cleanup remains healthy.
+- Current live: server UP tick `2551190`, researched `4`, current skill `produce_automation_science_pack` step 65; inventory has iron plates `30`, belts total around `26`, automation science `4`.
+- Current blocker: old reversed direct inserter still exists in the map until `build_gear_belt_mall_logistics` is selected/executed again; then it should be mined and rebuilt.
 - Operator layout learning exists via `operator-intervention-layout-learning.jsonl`; user edits are pending-review examples, not auto-promoted into skills.
 - Runtime journals are dirty from unattended autopilot (`note.md`, `insight.md`); stage code/test/handoff selectively unless intentionally archiving runtime logs.
-- Token usage fallback goal sample: `18,753,800` absolute; weekly quota unavailable because Codex state DB is malformed.
+- Token usage fallback goal sample: `18,974,054` absolute; weekly quota unavailable because Codex state DB is malformed.

@@ -14999,7 +14999,7 @@ def _gear_belt_mall_layout_for_pair(
     vertical_distance = abs(belt_pos["y"] - gear_pos["y"])
     if abs(belt_pos["x"] - gear_pos["x"]) <= 0.1 and abs(vertical_distance - GEAR_BELT_MALL_ASSEMBLER_SPACING) <= 0.25:
         vertical_sign = 1 if belt_pos["y"] >= gear_pos["y"] else -1
-        belt_direction = SOUTH if vertical_sign > 0 else NORTH
+        direct_direction = NORTH if vertical_sign > 0 else SOUTH
         direct_position = {"x": gear_pos["x"], "y": gear_pos["y"] + vertical_sign * 2.0}
         if not _mall_logistics_positions_clear(observation, belt_positions=[], inserter_positions=[direct_position]):
             return None
@@ -15012,7 +15012,7 @@ def _gear_belt_mall_layout_for_pair(
             "belt_input_inserter": None,
             "direct_gear_transfer_inserter": {
                 "position": direct_position,
-                "direction": belt_direction,
+                "direction": direct_direction,
                 "entity": _inserter_near(observation, direct_position),
             },
         }
@@ -15026,9 +15026,10 @@ def _gear_belt_mall_layout_for_pair(
     if abs(horizontal_distance - GEAR_BELT_MALL_ASSEMBLER_SPACING) <= 0.25 and abs(belt_pos["y"] - gear_pos["y"]) <= 0.1:
         direct_position = {"x": gear_pos["x"] + direction_sign * 2.0, "y": gear_pos["y"]}
         if _mall_logistics_positions_clear(observation, belt_positions=[], inserter_positions=[direct_position]):
+            direct_direction = WEST if direction_sign > 0 else EAST
             direct_transfer = {
                 "position": direct_position,
-                "direction": belt_direction,
+                "direction": direct_direction,
                 "entity": _inserter_near(observation, direct_position),
             }
 

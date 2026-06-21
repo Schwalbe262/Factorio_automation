@@ -7911,7 +7911,7 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "inserter")
         self.assertEqual(decision.action["position"], {"x": 4.0, "y": 2.0})
-        self.assertEqual(decision.action["direction"], 4)
+        self.assertEqual(decision.action["direction"], 12)
 
     def test_gear_belt_mall_prefers_direct_transfer_over_existing_belt_lane(self):
         obs = powered_automation_observation()
@@ -7938,7 +7938,7 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "inserter")
         self.assertEqual(decision.action["position"], {"x": 4.0, "y": 2.0})
-        self.assertEqual(decision.action["direction"], 4)
+        self.assertEqual(decision.action["direction"], 12)
 
     def test_gear_belt_mall_crafts_bootstrap_gear_for_direct_transfer_when_no_belts(self):
         obs = powered_automation_observation()
@@ -7964,7 +7964,7 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "inserter")
         self.assertEqual(decision.action["position"], {"x": 4.0, "y": 2.0})
-        self.assertEqual(decision.action["direction"], 4)
+        self.assertEqual(decision.action["direction"], 12)
 
     def test_gear_belt_mall_places_vertical_direct_transfer_inserter(self):
         obs = powered_automation_observation()
@@ -7989,9 +7989,31 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "inserter")
         self.assertEqual(decision.action["position"], {"x": 2.0, "y": 4.0})
-        self.assertEqual(decision.action["direction"], 8)
+        self.assertEqual(decision.action["direction"], 0)
 
     def test_gear_belt_mall_seeds_iron_after_direct_transfer_exists(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 8}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].append(
+            {
+                "name": "inserter",
+                "unit_number": 930,
+                "position": {"x": 4.0, "y": 2.0},
+                "direction": 12,
+                "inventories": {},
+                "electric_network_connected": True,
+            }
+        )
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertTrue(decision.action["bootstrap_seed"])
+        self.assertEqual(decision.metadata["seed_reason"], "gear_mall_iron_plate_seed")
+
+    def test_gear_belt_mall_replaces_reversed_direct_transfer_inserter(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"iron-plate": 8}
         obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
@@ -8008,10 +8030,9 @@ class PlannerTests(unittest.TestCase):
 
         decision = GearBeltMallLogisticsSkill(20).next_action(obs)
 
-        self.assertEqual(decision.action["type"], "insert")
-        self.assertEqual(decision.action["item"], "iron-plate")
-        self.assertTrue(decision.action["bootstrap_seed"])
-        self.assertEqual(decision.metadata["seed_reason"], "gear_mall_iron_plate_seed")
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 930)
+        self.assertIn("misoriented direct gear-to-belt transfer inserter", decision.reason)
 
     def test_gear_belt_mall_recovers_bootstrap_gears_when_direct_transfer_is_blocked(self):
         obs = powered_automation_observation()
@@ -8028,7 +8049,7 @@ class PlannerTests(unittest.TestCase):
                 "name": "inserter",
                 "unit_number": 930,
                 "position": {"x": 4.0, "y": 2.0},
-                "direction": 4,
+                "direction": 12,
                 "status_name": "waiting_for_space_in_destination",
                 "inventories": {},
                 "electric_network_connected": True,
@@ -8055,7 +8076,7 @@ class PlannerTests(unittest.TestCase):
                 "name": "inserter",
                 "unit_number": 930,
                 "position": {"x": 4.0, "y": 2.0},
-                "direction": 4,
+                "direction": 12,
                 "status_name": "waiting_for_space_in_destination",
                 "inventories": {},
                 "electric_network_connected": True,
