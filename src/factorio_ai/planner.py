@@ -15195,6 +15195,7 @@ def _obsolete_build_item_mall_buffer_cleanup_decision(
         position = cell.get(key)
         if isinstance(position, dict):
             protected_positions.add(_position_tuple(position))
+    _protect_active_build_item_mall_output_buffers(observation, protected_units, protected_positions)
     cleanup = _nearest_obsolete_empty_chest_or_inserter(
         observation,
         player,
@@ -15219,6 +15220,30 @@ def _obsolete_build_item_mall_buffer_cleanup_decision(
         },
         f"remove obsolete empty {cleanup.get('name')} left from temporary item mall buffering",
     )
+
+
+def _protect_active_build_item_mall_output_buffers(
+    observation: dict[str, Any],
+    protected_units: set[Any],
+    protected_positions: set[tuple[float, float]],
+) -> None:
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict) or str(entity.get("name") or "") not in ASSEMBLER_ENTITY_NAMES:
+            continue
+        recipe = str(entity.get("recipe") or "")
+        if recipe not in USER_OUTPUT_MALL_ITEMS or not isinstance(entity.get("position"), dict):
+            continue
+        layout = _build_item_mall_output_layout(observation, _position(entity))
+        if layout is None:
+            continue
+        for key in ("output_chest", "output_inserter"):
+            buffered = layout.get(key)
+            if isinstance(buffered, dict):
+                protected_units.add(buffered.get("unit_number"))
+        for key in ("output_chest_position", "output_inserter_position"):
+            position = layout.get(key)
+            if isinstance(position, dict):
+                protected_positions.add(_position_tuple(position))
 
 
 def _nearest_obsolete_empty_chest_or_inserter(

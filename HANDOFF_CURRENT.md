@@ -1,11 +1,11 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod supervisor/autopilot running, autopilot PID `39140`, scheduler Qwen service `12755`.
-- Part165: fixed direct gear-to-belt transfer inserter direction; adjacent gear/belt assemblers now use gear->belt flow (`WEST`/`NORTH` as needed), not belt->gear.
-- Part165: existing reversed direct inserters are treated as misoriented and mined before replacement, so user-preferred direct assembler transfer can become sustained.
-- Validation: targeted planner/controller/strategy passed 633; full `PYTHONPATH=src python -m unittest discover -s tests` passed 1133 with existing socket ResourceWarning.
-- Live validation: read-only live planner now selects `move within mining reach of misoriented direct gear-to-belt transfer inserter` for unit `451`; stale restart cleanup remains healthy.
-- Current live: server UP tick `2551190`, researched `4`, current skill `produce_automation_science_pack` step 65; inventory has iron plates `30`, belts total around `26`, automation science `4`.
-- Current blocker: old reversed direct inserter still exists in the map until `build_gear_belt_mall_logistics` is selected/executed again; then it should be mined and rebuilt.
-- Operator layout learning exists via `operator-intervention-layout-learning.jsonl`; user edits are pending-review examples, not auto-promoted into skills.
-- Runtime journals are dirty from unattended autopilot (`note.md`, `insight.md`); stage code/test/handoff selectively unless intentionally archiving runtime logs.
-- Token usage fallback goal sample: `18,974,054` absolute; weekly quota unavailable because Codex state DB is malformed.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor/autopilot restarted with new code, supervisor PID `42660`, autopilot PID `32644`, scheduler Qwen service `12755`.
+- Part166: fixed item-mall cleanup oscillation by globally protecting active user-output mall output chest/inserter units and planned positions during obsolete buffer cleanup.
+- Regression: science mall cleanup now preserves a neighboring gear mall output chest instead of mining it as an empty temporary buffer.
+- Validation: targeted 3-test regression passed; `tests.test_planner tests.test_controller tests.test_strategy` passed 634; full `PYTHONPATH=src python -m unittest discover -s tests` passed 1134 with existing socket ResourceWarning.
+- Live validation: new run placed gear output chest `unit 686` at `91.5,-9.5`; no `temporary item mall buffering` mine appeared in new science logs.
+- Live Qwen path works: Qwen selected `plan_factory_site`, guardrail adjusted to `produce_automation_science_pack`, readiness metadata was recorded.
+- Current live blocker: `produce_automation_science_pack` repeats `wait for belt smelting line to move ore and smelt plates`; automation science remains `4/90`.
+- Next part: replace the serial smelting wait with prerequisite repair/parallel early production, prioritizing plate throughput and red science feed.
+- Operator layout learning is present in `operator-intervention-layout-learning.jsonl`; examples remain pending review, not auto-promoted into skills.
+- Token usage sample: `19,177,078` absolute; weekly quota unavailable.

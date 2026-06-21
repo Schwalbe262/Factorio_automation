@@ -7755,6 +7755,35 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 990)
         self.assertIn("obsolete empty", decision.reason)
 
+    def test_build_item_mall_preserves_neighbor_output_chest_during_science_cleanup(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 5.0, "y": 2.0}}
+        obs["inventory"] = {"copper-plate": 4}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="iron-gear-wheel", inventory={"iron-gear-wheel": 4}),
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 902,
+                    "position": {"x": 0.5, "y": 3.5},
+                    "distance": 4,
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {"name": "wooden-chest", "unit_number": 980, "position": {"x": 5.0, "y": 2.0}, "inventories": {}},
+            ]
+        )
+
+        decision = BuildItemMallSkill("automation-science-pack", 20).next_action(obs)
+
+        self.assertFalse(
+            decision.action
+            and decision.action.get("type") == "mine"
+            and decision.action.get("unit_number") == 980,
+            decision.reason,
+        )
+
     def test_build_item_mall_places_transport_belt_assembler_with_direct_inserter_gap(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"assembling-machine-1": 1}
