@@ -4722,6 +4722,19 @@ def _available_boiler_feed_construction_belts(observation: dict[str, Any]) -> in
     return total
 
 
+def _available_transport_belt_construction_stock(observation: dict[str, Any]) -> int:
+    total = inventory_count(observation, "transport-belt")
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict):
+            continue
+        if str(entity.get("name") or "") in {"wooden-chest", "iron-chest", "steel-chest"}:
+            total += entity_item_count(entity, "transport-belt")
+    belt_assembler = _transport_belt_output_assembler(observation)
+    if isinstance(belt_assembler, dict):
+        total += entity_item_count(belt_assembler, "transport-belt")
+    return total
+
+
 def _boiler_feed_should_preempt_local_coal_feed(
     boiler_layout: dict[str, Any],
     local_layout: dict[str, Any] | None,
@@ -11699,10 +11712,11 @@ class GearBeltMallLogisticsSkill:
                 if decision is not None:
                     return decision
 
-        if entity_item_count(belt_assembler, "transport-belt") > 0:
+        available_belts = _available_transport_belt_construction_stock(observation)
+        if available_belts >= self.target_count:
             return PlannerDecision(
                 None,
-                f"gear-fed belt mall logistics produced transport belts in assembler output: {entity_item_count(belt_assembler, 'transport-belt')}",
+                f"gear-fed belt mall logistics is running and available belt target reached: {available_belts}/{self.target_count}",
                 done=True,
             )
 
@@ -11805,16 +11819,9 @@ class GearBeltMallLogisticsSkill:
                 )
             return PlannerDecision(None, "belt mall logistics needs an automated iron-plate input line")
 
-        if total_item_count(observation, "transport-belt") >= self.target_count:
-            return PlannerDecision(
-                None,
-                f"gear-fed belt mall logistics is running and belt target reached: {total_item_count(observation, 'transport-belt')}/{self.target_count}",
-                done=True,
-            )
-
         return PlannerDecision(
             {"type": "wait", "ticks": 600},
-            "wait for gear inserters and belt assembler to produce transport belts",
+            f"wait for gear inserters and belt assembler to accumulate transport belts: {available_belts}/{self.target_count}",
         )
 
     def _ensure_inventory_item(self, observation: dict[str, Any], item: str, quantity: int) -> PlannerDecision | None:
@@ -13171,6 +13178,25 @@ class SiteInputLogisticLineSkill:
                             "position": position,
                         },
                         "take transport belts from the belt mall as construction material for site input logistics",
+                    )
+                buffered_belts = _nearest_buffered_chest_item_source(observation, "transport-belt", player)
+                if isinstance(buffered_belts, dict) and entity_item_count(buffered_belts, "transport-belt") > 0:
+                    position = _position(buffered_belts)
+                    if distance(player, position) > 20:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": position},
+                            "move near buffered transport-belt chest for site input logistics",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "take",
+                            "item": "transport-belt",
+                            "count": min(entity_item_count(buffered_belts, "transport-belt"), max(1, self.target_segments)),
+                            "unit_number": buffered_belts.get("unit_number"),
+                            "name": buffered_belts.get("name") or "wooden-chest",
+                            "position": position,
+                        },
+                        "take buffered transport belts as construction material for site input logistics",
                     )
                 return PlannerDecision(
                     None,
@@ -16686,6 +16712,7 @@ def _bootstrap_seed_decision(
     seeded_action["bootstrap_seed"] = True
     seeded_action["seed_reason"] = seed_reason
     seeded_action["expected_followup"] = expected_followup
+    seeded_action.setdefault("post_seed_wait_ticks", 180)
     return PlannerDecision(
         seeded_action,
         reason,
@@ -16693,6 +16720,7 @@ def _bootstrap_seed_decision(
             "bootstrap_seed": True,
             "seed_reason": seed_reason,
             "expected_followup": expected_followup,
+            "post_seed_wait_ticks": seeded_action["post_seed_wait_ticks"],
         },
     )
 

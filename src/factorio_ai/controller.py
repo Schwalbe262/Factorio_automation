@@ -2820,6 +2820,9 @@ class FactorioController:
                             if not arrived:
                                 observation = self._observe_for_skill_loop(goal, step)
                                 return finish(False, reason, step, observation)
+                    elif seed_key is not None:
+                        ticks = int(action.get("post_seed_wait_ticks") or 180)
+                        time.sleep(max(0.1, min(ticks / 60.0, 3.0)))
                     else:
                         # Action applies synchronously over RCON; this is just pacing between the
                         # action and the next observe. A few game ticks is enough for state to settle.

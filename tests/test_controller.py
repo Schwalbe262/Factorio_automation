@@ -375,18 +375,20 @@ class ControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = make_test_config(Path(tmp))
             controller = FakeController(cfg)
-            run = controller._run_skill(
-                RepeatingSeedSkill(),
-                target_item="transport-belt",
-                target=1,
-                goal="test_seed",
-                max_steps=3,
-                log_prefix="test-seed",
-            )
+            with patch("factorio_ai.controller.time.sleep", return_value=None) as sleep_mock:
+                run = controller._run_skill(
+                    RepeatingSeedSkill(),
+                    target_item="transport-belt",
+                    target=1,
+                    goal="test_seed",
+                    max_steps=3,
+                    log_prefix="test-seed",
+                )
 
         self.assertFalse(run.ok)
         self.assertEqual(run.seed_count, 1)
         self.assertIn("bootstrap seed already attempted", run.reason)
+        sleep_mock.assert_called()
 
     def test_run_skill_allows_bootstrap_seed_topoff_with_different_count(self):
         observation = {
@@ -440,14 +442,15 @@ class ControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = make_test_config(Path(tmp))
             controller = FakeController(cfg)
-            run = controller._run_skill(
-                TopoffSeedSkill(),
-                target_item="transport-belt",
-                target=1,
-                goal="test_seed",
-                max_steps=4,
-                log_prefix="test-seed-topoff",
-            )
+            with patch("factorio_ai.controller.time.sleep", return_value=None):
+                run = controller._run_skill(
+                    TopoffSeedSkill(),
+                    target_item="transport-belt",
+                    target=1,
+                    goal="test_seed",
+                    max_steps=4,
+                    log_prefix="test-seed-topoff",
+                )
 
         self.assertFalse(run.ok)
         self.assertEqual(run.seed_count, 2)
@@ -532,14 +535,15 @@ class ControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = make_test_config(Path(tmp))
             controller = FakeController(cfg)
-            run = controller._run_skill(
-                RepeatingSeedSkill(),
-                target_item="transport-belt",
-                target=1,
-                goal="test_seed",
-                max_steps=3,
-                log_prefix="test-seed",
-            )
+            with patch("factorio_ai.controller.time.sleep", return_value=None):
+                run = controller._run_skill(
+                    RepeatingSeedSkill(),
+                    target_item="transport-belt",
+                    target=1,
+                    goal="test_seed",
+                    max_steps=3,
+                    log_prefix="test-seed",
+                )
 
         self.assertTrue(run.ok)
         self.assertEqual(run.seed_count, 2)

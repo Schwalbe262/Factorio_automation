@@ -1,10 +1,10 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor PID `75296`, autopilot PID `20804`, scheduler Qwen service task `12755` ready.
-- Part176 committed/pushed: starter stone drill with `no_minable_resources` is mined/relocated instead of waiting.
-- Part177: circuit/site-input guardrail now avoids plate recovery when iron/copper stock is already recovered, and stall recovery skips already-satisfied stock/research/power candidates.
-- Part177 follow-up: `GearBeltMallLogisticsSkill` top-offs partial iron seeds with only the missing plate count, avoiding repeated identical seed failure.
-- Validation: `tests.test_planner` 408 OK, `tests.test_strategy` 161 OK, `tests.test_controller` 90 OK.
-- Live: Qwen selected `automate_electronic_circuit_line`; gear/belt repair then succeeded, belt output reached 4 and transport belts rose to 22.
-- Current blocker: circuit automation still needs belt-mall/site-input logistics to feed belts and copper plates; next likely repair is `build_gear_belt_mall_logistics` or `build_site_input_logistic_line`.
-- Operator layout learning records before/after traces only; it does not update model weights live, but traces are usable for skill rules/GEPA/LoRA later.
-- Token sample: `22,300,820` recorded; weekly quota unavailable; `note.md`/`insight.md` have preexisting generated dirty trace data, do not stage wholesale.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor PID `75296`, autopilot PID `7632`, scheduler Qwen service task `12755` ready.
+- Part178: `GearBeltMallLogisticsSkill` now completes on available construction stock, not mere belt assembler output or already-placed belts.
+- Part178: available stock includes inventory, belt assembler output, and buffered belt chests; boiler feed target keeps its stricter output-only stock rule.
+- Part178: site-input logistics can take buffered transport belts for construction, avoiding failure when mall output is empty but belt chests exist.
+- Bootstrap seed actions now carry `post_seed_wait_ticks=180`; controller pauses briefly after a seed before rechecking follow-up.
+- Validation: `tests.test_planner` 411 OK; `tests.test_controller` 90 OK earlier after controller seed pacing change.
+- Live: new PID loaded code; gear/belt repair reached `available belt target reached: 20/20` and stopped instead of repeating `gear_mall_iron_plate_seed`.
+- Current live cycle has not yet advanced to a fresh circuit/site-input result after that repair; next watch should verify buffered belt pickup in circuit route.
+- Operator learning records traces/templates only, not live model weights; token sample `22,783,076` recorded, weekly quota unavailable; do not stage dirty `note.md`/`insight.md` wholesale.
