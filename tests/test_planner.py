@@ -1043,6 +1043,30 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "wait")
         self.assertIn("wait for starter stone drill", decision.reason)
 
+    def test_stone_supply_recovers_drill_with_no_minable_resources(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 6, "y": 0}
+        obs["inventory"] = {"coal": 4}
+        obs["resources"] = [{"name": "stone", "position": {"x": 6, "y": 0}, "distance": 6}]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 11,
+                "position": {"x": 6, "y": 0},
+                "direction": 4,
+                "mining_target": "stone",
+                "status_name": "no_minable_resources",
+                "inventories": {"1": {"coal": 1}},
+            },
+            {"name": "wooden-chest", "unit_number": 10, "position": {"x": 8, "y": 0}, "inventories": {}},
+        ]
+
+        decision = StoneSupplySkill(target_count=16).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 11)
+        self.assertIn("no minable resources", decision.reason)
+
     def test_coal_fuel_feed_extends_coal_output_belt(self):
         obs = base_observation()
         obs["inventory"] = {"transport-belt": 1, "burner-inserter": 1, "stone-furnace": 1, "coal": 8}

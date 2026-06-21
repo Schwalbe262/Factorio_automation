@@ -3190,6 +3190,23 @@ class StoneSupplySkill:
                 "place burner mining drill for starter stone supply",
             )
 
+        if isinstance(drill, dict) and _entity_status_is(drill, "no_minable_resources", 21):
+            position = _position(drill)
+            if distance(player, position) > 8:
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(position, offset=2.0)},
+                    "move near invalid starter stone mining drill before relocating it",
+                )
+            return PlannerDecision(
+                {
+                    "type": "mine",
+                    "unit_number": drill.get("unit_number"),
+                    "name": "burner-mining-drill",
+                    "position": position,
+                },
+                "recover invalid starter stone mining drill with no minable resources",
+            )
+
         if _entity_burner_fuel_count(drill) < 1:
             return _fuel_burner_line_entity(
                 observation,
