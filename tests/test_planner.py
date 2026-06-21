@@ -8348,6 +8348,34 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.action["bootstrap_seed"])
         self.assertEqual(decision.metadata["seed_reason"], "gear_mall_iron_plate_seed")
 
+    def test_gear_belt_mall_topoffs_partial_iron_seed_with_missing_count(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 8}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="transport-belt",
+                gear_inventory={"iron-plate": 1},
+            )
+        )
+        obs["entities"].append(
+            {
+                "name": "inserter",
+                "unit_number": 930,
+                "position": {"x": 4.0, "y": 2.0},
+                "direction": 12,
+                "inventories": {},
+                "electric_network_connected": True,
+            }
+        )
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertEqual(decision.action["count"], 1)
+        self.assertTrue(decision.action["bootstrap_seed"])
+        self.assertEqual(decision.metadata["seed_reason"], "gear_mall_iron_plate_seed")
+
     def test_gear_belt_mall_replaces_reversed_direct_transfer_inserter(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"iron-plate": 8}

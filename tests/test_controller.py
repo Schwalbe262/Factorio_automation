@@ -6,6 +6,7 @@ import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from factorio_ai.config import AppConfig
@@ -3185,6 +3186,43 @@ class StallWatchdogTests(unittest.TestCase):
                 ["build_gear_belt_mall_logistics", "bootstrap_build_item_mall"],
             )
             self.assertEqual(skill, "build_iron_plate_logistic_line_to_gear_mall")
+
+    def test_stall_recovery_skips_satisfied_stock_candidates(self):
+        observation = {
+            "player": {"position": {"x": 0, "y": 0}},
+            "inventory": {
+                "iron-plate": 146,
+                "copper-plate": 121,
+                "coal": 73,
+                "transport-belt": 25,
+                "electronic-circuit": 6,
+            },
+            "entities": [
+                {"name": "stone-furnace", "unit_number": 11, "recipe": "iron-plate", "position": {"x": 4, "y": 0}},
+                {
+                    "name": "steam-engine",
+                    "unit_number": 12,
+                    "position": {"x": 0, "y": 3},
+                    "electric_network_connected": True,
+                }
+            ],
+            "resources": [
+                {"name": "iron-ore", "position": {"x": 4, "y": 0}, "distance": 4},
+                {"name": "copper-ore", "position": {"x": 8, "y": 0}, "distance": 8},
+                {"name": "coal", "position": {"x": 12, "y": 0}, "distance": 12},
+            ],
+            "research": {"technologies": {"automation": {"researched": True}, "logistics": {"researched": True}}},
+        }
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "factorio_ai.controller.build_factory_readiness",
+            return_value=SimpleNamespace(repair_skill=None, failure_root=None),
+        ), patch(
+            "factorio_ai.strategy.heuristic_strategy",
+            return_value={"selected_skill": "produce_copper_plate"},
+        ):
+            controller = FactorioController(make_test_config(Path(tmp)))
+            skill = controller._stall_recovery_skill("launch_rocket_program", observation, [])
+            self.assertEqual(skill, "automate_electronic_circuit_line")
 
     def test_both_controllers_run_strategy_step_accept_override_skill(self):
         # run_autopilot_loop (base) always calls run_strategy_step(override_skill=...). Every subclass

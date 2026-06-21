@@ -11707,10 +11707,11 @@ class GearBeltMallLogisticsSkill:
             )
 
         gear_assembler = layout["gear_assembler"]
+        gear_assembler_plate_count = entity_item_count(gear_assembler, "iron-plate")
         if (
             entity_item_count(belt_assembler, "iron-gear-wheel") <= 0
             and entity_item_count(gear_assembler, "iron-gear-wheel") <= 0
-            and entity_item_count(gear_assembler, "iron-plate") < 2
+            and gear_assembler_plate_count < 2
         ):
             if inventory_count(observation, "iron-plate") > 0:
                 position = _position(gear_assembler)
@@ -11720,7 +11721,7 @@ class GearBeltMallLogisticsSkill:
                     {
                         "type": "insert",
                         "item": "iron-plate",
-                        "count": min(4, inventory_count(observation, "iron-plate")),
+                        "count": min(max(1, 2 - gear_assembler_plate_count), inventory_count(observation, "iron-plate")),
                         "unit_number": gear_assembler.get("unit_number"),
                         "name": "assembling-machine-1",
                         "position": position,
@@ -11746,7 +11747,7 @@ class GearBeltMallLogisticsSkill:
                     {
                         "type": "take",
                         "item": "iron-plate",
-                        "count": min(4, entity_item_count(local_source, "iron-plate")),
+                        "count": min(max(1, 2 - gear_assembler_plate_count), entity_item_count(local_source, "iron-plate")),
                         "unit_number": local_source.get("unit_number"),
                         "name": local_source.get("name"),
                         "position": source_position,
@@ -11757,7 +11758,8 @@ class GearBeltMallLogisticsSkill:
                 )
             return PlannerDecision(None, "gear mall logistics needs iron plates before gears can enter the belt mall")
 
-        if entity_item_count(belt_assembler, "iron-plate") < 2:
+        belt_assembler_plate_count = entity_item_count(belt_assembler, "iron-plate")
+        if belt_assembler_plate_count < 2:
             if inventory_count(observation, "iron-plate") > 0:
                 position = _position(belt_assembler)
                 if distance(player, position) > 20:
@@ -11766,7 +11768,7 @@ class GearBeltMallLogisticsSkill:
                     {
                         "type": "insert",
                         "item": "iron-plate",
-                        "count": min(4, inventory_count(observation, "iron-plate")),
+                        "count": min(max(1, 2 - belt_assembler_plate_count), inventory_count(observation, "iron-plate")),
                         "unit_number": belt_assembler.get("unit_number"),
                         "name": "assembling-machine-1",
                         "position": position,
@@ -11792,7 +11794,7 @@ class GearBeltMallLogisticsSkill:
                     {
                         "type": "take",
                         "item": "iron-plate",
-                        "count": min(4, entity_item_count(local_source, "iron-plate")),
+                        "count": min(max(1, 2 - belt_assembler_plate_count), entity_item_count(local_source, "iron-plate")),
                         "unit_number": local_source.get("unit_number"),
                         "name": local_source.get("name"),
                         "position": source_position,

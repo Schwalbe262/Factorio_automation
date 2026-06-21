@@ -488,6 +488,60 @@ def _automation_researched_in_observation(observation: dict[str, Any]) -> bool:
     return bool(isinstance(automation, dict) and automation.get("researched"))
 
 
+def _technology_researched_in_observation(observation: dict[str, Any], technology: str) -> bool:
+    research = observation.get("research")
+    if not isinstance(research, dict):
+        return False
+    technologies = research.get("technologies")
+    if not isinstance(technologies, dict):
+        return False
+    state = technologies.get(technology)
+    return bool(isinstance(state, dict) and state.get("researched"))
+
+
+def _has_connected_power_generator(observation: dict[str, Any]) -> bool:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    return any(
+        isinstance(entity, dict)
+        and str(entity.get("name") or "") in _POWER_GENERATORS
+        and bool(entity.get("electric_network_connected"))
+        for entity in entities
+    )
+
+
+def _stall_recovery_candidate_satisfied(
+    skill_name: str,
+    observation: dict[str, Any],
+    config: dict[str, Any],
+) -> bool:
+    if skill_name == "research_automation":
+        return _technology_researched_in_observation(observation, "automation")
+    if skill_name == "research_logistics":
+        return _technology_researched_in_observation(observation, "logistics")
+    if skill_name == "research_electric_mining_drill":
+        return _technology_researched_in_observation(observation, "electric-mining-drill")
+    if skill_name == "setup_power":
+        return _has_connected_power_generator(observation)
+
+    if skill_name not in {
+        "bootstrap_build_item_mall",
+        "build_gear_belt_mall_logistics",
+        "produce_automation_science_pack",
+        "produce_copper_plate",
+        "produce_electronic_circuit",
+        "produce_iron_plate",
+        "setup_coal_supply",
+        "setup_stone_supply",
+        "automate_electronic_circuit_line",
+    }:
+        return False
+    target_item = str(config.get("target_item") or "")
+    target = _int_or_none(config.get("target"))
+    if not target_item or target is None:
+        return False
+    return total_item_count(observation, target_item) >= target
+
+
 def _gear_handcraft_automation_context_in_observation(observation: dict[str, Any]) -> bool:
     if _automation_researched_in_observation(observation):
         return True
@@ -1674,7 +1728,7 @@ class FactorioController:
         try:
             planner = strategy_mod.heuristic_strategy(objective, observation, {})
             candidate = str(planner.get("selected_skill") or planner.get("selected_goal") or "")
-            if candidate and candidate not in recent and self._skill_run_config(candidate) is not None:
+            if candidate and candidate not in recent and self._stall_recovery_candidate_useful(candidate, observation):
                 return candidate
         except Exception:  # noqa: BLE001
             pass
@@ -1682,11 +1736,19 @@ class FactorioController:
             if candidate in recent:
                 continue
             try:
-                if self._skill_run_config(candidate) is not None:
+                if self._stall_recovery_candidate_useful(candidate, observation):
                     return candidate
             except Exception:  # noqa: BLE001
                 continue
         return None
+
+    def _stall_recovery_candidate_useful(self, skill_name: str, observation: dict[str, Any]) -> bool:
+        config = self._skill_run_config(skill_name)
+        if config is None:
+            return False
+        if _stall_recovery_candidate_satisfied(skill_name, observation, config):
+            return False
+        return True
 
     def run_autopilot_loop(
         self,

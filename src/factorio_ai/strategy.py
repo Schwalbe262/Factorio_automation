@@ -1555,8 +1555,11 @@ def reconcile_strategy_decision(
         }
         return adjusted
     smelting_fuel_blocker = _expanded_smelting_fuel_blocker(observation, selected)
-    if smelting_fuel_blocker is not None:
-        target_skill = "produce_copper_plate" if selected == "expand_copper_smelting" else "produce_iron_plate"
+    if smelting_fuel_blocker is not None and not (
+        selected == "automate_electronic_circuit_line"
+        and _smelting_fuel_recovery_stock_satisfied(observation, smelting_fuel_blocker)
+    ):
+        target_skill = _smelting_fuel_recovery_skill(smelting_fuel_blocker)
         adjusted = dict(decision)
         adjusted["selected_skill"] = target_skill
         adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 85)
@@ -2236,6 +2239,13 @@ def reconcile_strategy_decision(
         )
         if not site_input_executable and _transport_belt_automation_ready(observation):
             target_skill = _site_input_nonexecutable_repair_skill(observation, site_input_line_issue, readiness) or target_skill
+            if target_skill == "automate_electronic_circuit_line":
+                smelting_fuel_blocker = _expanded_smelting_fuel_blocker(observation, target_skill)
+                if (
+                    smelting_fuel_blocker is not None
+                    and not _smelting_fuel_recovery_stock_satisfied(observation, smelting_fuel_blocker)
+                ):
+                    target_skill = _smelting_fuel_recovery_skill(smelting_fuel_blocker)
         if selected != target_skill:
             adjusted = dict(decision)
             adjusted["selected_skill"] = target_skill
@@ -2251,7 +2261,7 @@ def reconcile_strategy_decision(
                 )
             )
             adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
-            blocker = (
+            base_blocker = (
                 "site input logistic line"
                 if target_skill == "build_site_input_logistic_line"
                 else (
@@ -2260,7 +2270,10 @@ def reconcile_strategy_decision(
                     else "executable site input route"
                 )
             )
-            adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + [blocker]))
+            blockers = [base_blocker]
+            if target_skill in {"produce_iron_plate", "produce_copper_plate"}:
+                blockers.append("smelting fuel logistics")
+            adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + blockers))
             adjusted["evidence"] = _string_list(decision.get("evidence")) + [
                 f"guardrail_adjusted_from={selected}",
                 f"layout_kind={site_input_line_issue.get('kind')}",
@@ -2271,13 +2284,19 @@ def reconcile_strategy_decision(
                 f"site_input_executable={str(site_input_executable).lower()}",
                 "hand_carry_seed_risk=true",
             ]
+            if target_skill in {"produce_iron_plate", "produce_copper_plate"}:
+                adjusted["evidence"].append("site_input_repair_preempted_by_smelting_fuel_logistics=true")
             adjusted["expected_effect"] = (
                 "Build or extend the missing repeated input route as an expandable main-belt/trunk corridor with endpoint inserters."
                 if target_skill == "build_site_input_logistic_line"
                 else (
                     "Automate transport-belt supply before spending belts on repeated site-to-site input routes."
                     if not _transport_belt_automation_ready(observation)
-                    else "Repair the missing producer/source layout before retrying the site-to-site route executor."
+                    else (
+                        "Recover the fuel-starved plate producer before retrying the circuit input logistics route."
+                        if target_skill in {"produce_iron_plate", "produce_copper_plate"}
+                        else "Repair the missing producer/source layout before retrying the site-to-site route executor."
+                    )
                 )
             )
             adjusted["guardrail_adjusted"] = {
@@ -4639,8 +4658,29 @@ def _expanded_smelting_fuel_blocker(observation: dict[str, Any], selected: str) 
         "expand_iron_smelting": "iron-ore",
         "build_belt_smelting_line": "iron-ore",
     }.get(selected)
+    if selected == "automate_electronic_circuit_line":
+        iron_blocker = _expanded_smelting_fuel_blocker_for_resource(observation, "iron-ore")
+        if iron_blocker is not None:
+            return iron_blocker
+        return _expanded_smelting_fuel_blocker_for_resource(observation, "copper-ore")
     if resource is None:
         return None
+    return _expanded_smelting_fuel_blocker_for_resource(observation, resource)
+
+
+def _smelting_fuel_recovery_skill(blocker: dict[str, Any]) -> str:
+    return "produce_copper_plate" if blocker.get("resource") == "copper-ore" else "produce_iron_plate"
+
+
+def _smelting_fuel_recovery_stock_satisfied(observation: dict[str, Any], blocker: dict[str, Any]) -> bool:
+    item = "copper-plate" if blocker.get("resource") == "copper-ore" else "iron-plate"
+    return total_item_count(observation, item) >= 90
+
+
+def _expanded_smelting_fuel_blocker_for_resource(
+    observation: dict[str, Any],
+    resource: str,
+) -> dict[str, Any] | None:
     for drill in entities_named(observation, "burner-mining-drill"):
         drill_resource = str(drill.get("mining_target") or drill.get("resource_name") or "")
         if not drill_resource:

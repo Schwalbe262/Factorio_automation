@@ -1,11 +1,10 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor PID `75296`, current autopilot PID `73400`, scheduler Qwen service `12755` active.
-- Part173: stocked plate site-input guardrail now skips redundant `produce_copper_plate` and routes circuit copper gaps to `automate_electronic_circuit_line`.
-- Part174: scaled circuit automation ignores incidental hand-held cable, repairs missing plate input through site-input routes or smelting expansion instead of wait loops.
-- Part175: no-mod skill loops use full observes for site-input, circuit automation, and smelting expansion so resource selectors can see valid ore sites.
-- Part176: `StoneSupplySkill` now relocates starter stone drills with `no_minable_resources` instead of yielding a repeated output wait.
-- Validation: `tests.test_planner` passed 407; targeted stone tests passed 2; live decision changed from wait to invalid-drill recovery.
-- Live validation: circuit skill mined invalid stone drill 220, built/fueled drill 721 and chest 720; chest had stone 6 and next decision was `take stone`.
-- Current live: researched `5`, current research empty, circuits `6`, belts `27`, gears `147`, coal about `40`, stone supply repaired but still needs circuit/electric-drill progression.
-- Operator layout learning is enabled and records pending/retracted examples; it captures raw before/after layout deltas, not live model-weight learning.
-- Weekly quota unavailable; `note.md`/`insight.md` still contain preexisting generated dirty trace data.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor PID `75296`, autopilot PID `20804`, scheduler Qwen service task `12755` ready.
+- Part176 committed/pushed: starter stone drill with `no_minable_resources` is mined/relocated instead of waiting.
+- Part177: circuit/site-input guardrail now avoids plate recovery when iron/copper stock is already recovered, and stall recovery skips already-satisfied stock/research/power candidates.
+- Part177 follow-up: `GearBeltMallLogisticsSkill` top-offs partial iron seeds with only the missing plate count, avoiding repeated identical seed failure.
+- Validation: `tests.test_planner` 408 OK, `tests.test_strategy` 161 OK, `tests.test_controller` 90 OK.
+- Live: Qwen selected `automate_electronic_circuit_line`; gear/belt repair then succeeded, belt output reached 4 and transport belts rose to 22.
+- Current blocker: circuit automation still needs belt-mall/site-input logistics to feed belts and copper plates; next likely repair is `build_gear_belt_mall_logistics` or `build_site_input_logistic_line`.
+- Operator layout learning records before/after traces only; it does not update model weights live, but traces are usable for skill rules/GEPA/LoRA later.
+- Token sample: `22,300,820` recorded; weekly quota unavailable; `note.md`/`insight.md` have preexisting generated dirty trace data, do not stage wholesale.
