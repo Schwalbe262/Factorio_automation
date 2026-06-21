@@ -2757,6 +2757,48 @@ class StallWatchdogTests(unittest.TestCase):
             )
             self.assertNotEqual(before, after)
 
+    def test_progress_fingerprint_tracks_power_pole_mall_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FactorioController(make_test_config(Path(tmp)))
+            base = {
+                "inventory": {},
+                "entities": [],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            }
+            before = controller._progress_fingerprint(base)
+            after = controller._progress_fingerprint(
+                {
+                    "inventory": {},
+                    "entities": [
+                        {
+                            "name": "wooden-chest",
+                            "unit_number": 1,
+                            "position": {"x": 0, "y": 0},
+                            "inventories": {"1": {"small-electric-pole": 20}},
+                        }
+                    ],
+                    "research": base["research"],
+                }
+            )
+
+        self.assertNotEqual(before, after)
+
+    def test_progress_fingerprint_tracks_power_pole_mall_bootstrap_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FactorioController(make_test_config(Path(tmp)))
+            before = controller._progress_fingerprint(
+                {"inventory": {}, "entities": [], "research": {"technologies": {"automation": {"researched": True}}}}
+            )
+            after = controller._progress_fingerprint(
+                {
+                    "inventory": {"wood": 4, "copper-cable": 8},
+                    "entities": [],
+                    "research": {"technologies": {"automation": {"researched": True}}},
+                }
+            )
+
+        self.assertNotEqual(before, after)
+
     def test_ongoing_research_override_keeps_electric_drill_research_without_llm(self):
         observation = {
             "inventory": {},

@@ -87,12 +87,20 @@ LLM_TRACE_RESULT_KEYS = {"llm_trace", "llm_traces"}
 # skill so it never gets permanently stuck on one already-satisfied skill. This is not learning; it
 # just guarantees forward motion using the skills that already exist.
 _STALL_PROGRESS_ITEMS = (
+    "wood",
     "iron-plate",
     "copper-plate",
+    "copper-cable",
     "electronic-circuit",
     "automation-science-pack",
     "transport-belt",
     "iron-gear-wheel",
+    "small-electric-pole",
+    "assembling-machine-1",
+    "inserter",
+    "electric-mining-drill",
+    "lab",
+    "logistic-science-pack",
     "coal",
     "steam",
 )
