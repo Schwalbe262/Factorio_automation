@@ -1639,6 +1639,34 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "wait")
         self.assertNotEqual(decision.action["type"], "mine")
 
+    def test_coal_fuel_feed_powers_tile_centered_boiler_inserter_before_waiting(self):
+        obs = base_observation()
+        obs["inventory"] = {"small-electric-pole": 1, "coal": 1}
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 3}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 2.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 23, "position": {"x": 3.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 24, "position": {"x": 4.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 26, "position": {"x": 5.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {
+                "name": "inserter",
+                "unit_number": 25,
+                "position": {"x": 6.0, "y": 0.5},
+                "direction": 12,
+                "electric_network_connected": False,
+                "inventories": {},
+            },
+            {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "small-electric-pole")
+        self.assertIn("boiler coal feed", decision.reason)
+
     def test_coal_fuel_feed_done_when_boiler_receives_belt_fed_coal(self):
         obs = base_observation()
         obs["inventory"] = {}
@@ -6158,6 +6186,51 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "take")
         self.assertEqual(decision.action["item"], "copper-plate")
         self.assertEqual(decision.action["unit_number"], 931)
+
+    def test_power_pole_mall_takes_remote_copper_output_before_stone_bootstrap_wait(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 0, "y": 0}}
+        obs["inventory"] = {"stone": 1}
+        obs["craftable"] = {}
+        obs["resources"] = [
+            {"name": "stone", "position": {"x": -18, "y": -84}, "distance": 90},
+            {"name": "copper-ore", "position": {"x": 72, "y": -60}, "distance": 94},
+        ]
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="small-electric-pole"),
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 932,
+                    "position": {"x": 74, "y": -60},
+                    "distance": 95,
+                    "recipe": "copper-plate",
+                    "status_name": "no_fuel",
+                    "inventories": {"3": {"copper-plate": 57}},
+                },
+                {
+                    "name": "burner-mining-drill",
+                    "unit_number": 933,
+                    "position": {"x": -18, "y": -84},
+                    "direction": 4,
+                    "mining_target": "stone",
+                    "inventories": {"1": {"coal": 1}},
+                },
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 934,
+                    "position": {"x": -17, "y": -84},
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("small-electric-pole", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "move_to")
+        self.assertEqual(decision.action["position"], {"x": 74.0, "y": -60.0})
+        self.assertIn("copper-plate furnace output", decision.reason)
+        self.assertNotIn("starter stone drill", decision.reason)
 
     def test_power_pole_mall_mines_tree_when_recipe_needs_wood(self):
         obs = powered_automation_observation()

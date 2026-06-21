@@ -3061,6 +3061,15 @@ class CopperPlateSkill:
         if copper_total >= target:
             return PlannerDecision(None, f"copper plate target reached: {copper_total}/{target}", done=True)
 
+        if inventory_only:
+            output_decision = _take_existing_plate_output_decision(
+                observation,
+                resource_name="copper-ore",
+                product_name="copper-plate",
+            )
+            if output_decision is not None:
+                return output_decision
+
         if _belt_smelting_ready(observation):
             return BeltSmeltingLineSkill(
                 target_count=target,
@@ -4421,6 +4430,14 @@ class CoalFuelFeedSkill:
                     None,
                     "boiler coal feed needs a powered inserter; refusing to fuel burner inserter",
                 )
+            power_repair = _logistics_line_powered_inserter_decision(
+                observation,
+                player,
+                inserter,
+                "boiler coal feed",
+            )
+            if power_repair is not None:
+                return power_repair
         else:
             item_name = _available_boiler_feed_inserter_item(observation)
             position = inserter_spec["position"]
@@ -5750,6 +5767,9 @@ def _ensure_direct_smelting_item(
 
 
 def _select_plate_output_furnace(observation: dict[str, Any], resource_name: str, product_name: str) -> dict[str, Any] | None:
+    output_furnace = _select_any_plate_output_furnace(observation, product_name)
+    if output_furnace is not None:
+        return output_furnace
     if resource_name == "iron-ore" and product_name == "iron-plate":
         return _select_iron_furnace(observation)
     if resource_name == "copper-ore" and product_name == "copper-plate":
@@ -5759,6 +5779,43 @@ def _select_plate_output_furnace(observation: dict[str, Any], resource_name: str
         if entity_item_count(furnace, product_name) > 0 or entity_item_count(furnace, resource_name) > 0:
             return furnace
     return None
+
+
+def _select_any_plate_output_furnace(observation: dict[str, Any], product_name: str) -> dict[str, Any] | None:
+    furnaces: list[dict[str, Any]] = []
+    for name in FURNACE_ENTITY_NAMES:
+        furnaces.extend(entities_named(observation, name))
+    output_furnaces = [furnace for furnace in furnaces if entity_item_count(furnace, product_name) > 0]
+    return _nearest_to(output_furnaces, player_position(observation))
+
+
+def _take_existing_plate_output_decision(
+    observation: dict[str, Any],
+    *,
+    resource_name: str,
+    product_name: str,
+) -> PlannerDecision | None:
+    furnace = _select_plate_output_furnace(observation, resource_name, product_name)
+    if not isinstance(furnace, dict) or entity_item_count(furnace, product_name) <= 0:
+        return None
+    furnace_pos = _position(furnace)
+    player = player_position(observation)
+    if distance(player, furnace_pos) > 20:
+        return PlannerDecision(
+            {"type": "move_to", "position": furnace_pos},
+            f"move near existing {product_name} furnace output",
+        )
+    return PlannerDecision(
+        {
+            "type": "take",
+            "item": product_name,
+            "count": min(50, entity_item_count(furnace, product_name)),
+            "unit_number": furnace.get("unit_number"),
+            "name": furnace.get("name") or "stone-furnace",
+            "position": furnace_pos,
+        },
+        f"take {product_name} from existing furnace output",
+    )
 
 
 def _direct_smelting_missing_item(observation: dict[str, Any], layout: dict[str, Any]) -> str | None:
