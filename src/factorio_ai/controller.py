@@ -1078,6 +1078,8 @@ class FactorioController:
         objective: str = "launch_rocket_program",
         require_llm: bool = False,
         target_count: int | None = None,
+        target_item: str | None = None,
+        input_item: str | None = None,
         max_steps: int | None = None,
         override_skill: str | None = None,
         skip_remote_strategy: bool = False,
@@ -1097,6 +1099,12 @@ class FactorioController:
                 },
                 runtime_dir=self.cfg.runtime_dir,
             )
+            if target_count is not None:
+                strategy["target_count"] = target_count
+            if target_item is not None:
+                strategy["target_item"] = target_item
+            if input_item is not None:
+                strategy["input_item"] = input_item
         else:
             strategy = self.strategy_decision(
                 objective, require_llm=require_llm, skip_remote=skip_remote_strategy
@@ -1112,8 +1120,12 @@ class FactorioController:
                 max_steps=max_steps,
             )
 
-        strategy_target_item = _strategy_target_item(strategy) if selected == "bootstrap_build_item_mall" else None
-        strategy_input_item = _strategy_site_input_item(strategy) if selected == "build_site_input_logistic_line" else None
+        strategy_target_item = target_item
+        if strategy_target_item is None and selected == "bootstrap_build_item_mall":
+            strategy_target_item = _strategy_target_item(strategy)
+        strategy_input_item = input_item
+        if strategy_input_item is None and selected == "build_site_input_logistic_line":
+            strategy_input_item = _strategy_site_input_item(strategy)
         strategy_target_count = target_count
         if strategy_target_count is None:
             strategy_target_count = _int_or_none(strategy.get("target_count"))
@@ -1716,6 +1728,9 @@ class FactorioController:
         commit_enabled = _commit_skill_enabled()
         commit_max = _commit_skill_max()
         committed_skill: str | None = None
+        committed_target_count: int | None = None
+        committed_target_item: str | None = None
+        committed_input_item: str | None = None
         commit_skips = 0
         last_progress_key: tuple[Any, ...] | None = None
         # Graceful LLM degradation: count consecutive failed cycles; after a threshold, run one cycle
@@ -1735,6 +1750,7 @@ class FactorioController:
                     self._write_autopilot_heartbeat(objective, "cycle_start", cycle=completed + 1)
                     self._maybe_progress_codex_wait_layout(objective)
                     override_skill: str | None = None
+                    override_from_commit = False
                     recover_for_stall = stall_count >= stall_threshold
                     recover_for_failures = consecutive_failed_cycles >= failure_recovery_threshold
                     if recover_for_stall or recover_for_failures:
@@ -1771,6 +1787,7 @@ class FactorioController:
                         and commit_skips < commit_max
                     ):
                         override_skill = committed_skill
+                        override_from_commit = True
                         commit_skips += 1
                         self._write_autopilot_heartbeat(
                             objective,
@@ -1819,11 +1836,21 @@ class FactorioController:
                             reason=f"{consecutive_strategy_failures} failed cycles; using heuristic strategy to keep progressing",
                         )
                     started = time.monotonic()
+                    step_target_count = target_count
+                    step_target_item: str | None = None
+                    step_input_item: str | None = None
+                    if override_from_commit:
+                        if step_target_count is None:
+                            step_target_count = committed_target_count
+                        step_target_item = committed_target_item
+                        step_input_item = committed_input_item
                     try:
                         last_step = self.run_strategy_step(
                             objective=objective,
                             require_llm=require_llm and not degrade_to_heuristic,
-                            target_count=target_count,
+                            target_count=step_target_count,
+                            target_item=step_target_item,
+                            input_item=step_input_item,
                             max_steps=max_steps,
                             override_skill=override_skill,
                             # A degraded cycle must NOT touch the hung remote (it would block on the
@@ -1906,11 +1933,29 @@ class FactorioController:
                         # prerequisite is missing, the next committed cycle should repair that root
                         # instead of reusing the waiting skill and creating a no-progress loop.
                         committed_skill = repair_skill
+                        committed_target_count = None
+                        committed_target_item = None
+                        committed_input_item = None
                         commit_skips = 0
                     elif commit_enabled and last_step.ok and made_progress and selected_now:
+                        strategy_target_count = _int_or_none(last_step.strategy.get("target_count"))
                         committed_skill = selected_now
+                        committed_target_count = strategy_target_count
+                        committed_target_item = (
+                            _strategy_target_item(last_step.strategy)
+                            if selected_now == "bootstrap_build_item_mall"
+                            else None
+                        )
+                        committed_input_item = (
+                            _strategy_site_input_item(last_step.strategy)
+                            if selected_now == "build_site_input_logistic_line"
+                            else None
+                        )
                     else:
                         committed_skill = None
+                        committed_target_count = None
+                        committed_target_item = None
+                        committed_input_item = None
                     # Track consecutive failed cycles for graceful LLM degradation. A degraded
                     # (heuristic) cycle resets the counter so the next cycle retries the real LLM.
                     if last_step.ok or degrade_to_heuristic:
@@ -3829,6 +3874,8 @@ class ModlessFactorioController(FactorioController):
         objective: str = "launch_rocket_program",
         require_llm: bool = False,
         target_count: int | None = None,
+        target_item: str | None = None,
+        input_item: str | None = None,
         max_steps: int | None = None,
         override_skill: str | None = None,
         skip_remote_strategy: bool = False,
@@ -3890,6 +3937,8 @@ class ModlessFactorioController(FactorioController):
             objective=objective,
             require_llm=require_llm,
             target_count=target_count,
+            target_item=target_item,
+            input_item=input_item,
             max_steps=max_steps,
             override_skill=override_skill,
             skip_remote_strategy=skip_remote_strategy,

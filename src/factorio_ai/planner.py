@@ -15063,7 +15063,7 @@ def _select_mall_inserter_power_pole_position(
     if source is None:
         source = _nearest_to(_power_poles(observation), inserter_position)
     source_position = _position(source) if source is not None else None
-    offsets = [
+    primary_offsets = [
         {"x": 2.0, "y": 0.0},
         {"x": -2.0, "y": 0.0},
         {"x": 2.0, "y": 2.0},
@@ -15073,21 +15073,31 @@ def _select_mall_inserter_power_pole_position(
         {"x": 0.0, "y": 2.0},
         {"x": 0.0, "y": -2.0},
     ]
-    candidates: list[dict[str, float]] = []
-    for offset in offsets:
-        candidate = {
-            "x": inserter_position["x"] + offset["x"],
-            "y": inserter_position["y"] + offset["y"],
-        }
-        if source_position is not None and distance(candidate, source_position) > 7.5:
+    fallback_offsets: list[dict[str, float]] = []
+    for dy in (0.0, -1.0, 1.0, -2.0, 2.0):
+        for dx in (2.0, -2.0, 1.0, -1.0, 0.0):
+            if dx == 0.0 and dy == 0.0:
+                continue
+            offset = {"x": dx, "y": dy}
+            if offset not in primary_offsets:
+                fallback_offsets.append(offset)
+    for offsets in (primary_offsets, fallback_offsets):
+        candidates: list[dict[str, float]] = []
+        for offset in offsets:
+            candidate = {
+                "x": inserter_position["x"] + offset["x"],
+                "y": inserter_position["y"] + offset["y"],
+            }
+            if source_position is not None and distance(candidate, source_position) > 7.5:
+                continue
+            if _mall_power_pole_position_clear(observation, candidate):
+                candidates.append(candidate)
+        if not candidates:
             continue
-        if _mall_power_pole_position_clear(observation, candidate):
-            candidates.append(candidate)
-    if not candidates:
-        return None
-    if source_position is not None:
-        candidates.sort(key=lambda item: distance(item, source_position))
-    return candidates[0]
+        if source_position is not None:
+            candidates.sort(key=lambda item: distance(item, source_position))
+        return candidates[0]
+    return None
 
 
 def _mall_power_pole_position_clear(observation: dict[str, Any], position: dict[str, float]) -> bool:
@@ -15101,6 +15111,8 @@ def _mall_power_pole_position_clear(observation: dict[str, Any], position: dict[
         name = str(entity.get("name") or "")
         if name == "character" or name in {"tree", "fish"}:
             continue
+        if name == "offshore-pump" and _power_pole_candidate_on_offshore_pump_water_side(position, entity):
+            return False
         if name in large_entities and _point_inside_machine(position, entity):
             return False
         if distance(_position(entity), position) < 0.75:
@@ -15112,6 +15124,29 @@ def _mall_power_pole_position_clear(observation: dict[str, Any], position: dict[
         if str(resource.get("name") or "") in PROTECTED_RESOURCE_NAMES and distance(_position(resource), position) < 1.0:
             return False
     return True
+
+
+def _power_pole_candidate_on_offshore_pump_water_side(
+    position: dict[str, float],
+    pump: dict[str, Any],
+) -> bool:
+    pump_position = _position(pump)
+    if distance(position, pump_position) > 6.0:
+        return False
+    direction = _direction_or_default(pump.get("direction"), NORTH)
+    x = float(position["x"])
+    y = float(position["y"])
+    pump_x = float(pump_position["x"])
+    pump_y = float(pump_position["y"])
+    if direction == WEST:
+        return x <= pump_x + 0.1 and abs(y - pump_y) <= 5.0
+    if direction == EAST:
+        return x >= pump_x - 0.1 and abs(y - pump_y) <= 5.0
+    if direction == NORTH:
+        return y <= pump_y + 0.1 and abs(x - pump_x) <= 5.0
+    if direction == SOUTH:
+        return y >= pump_y - 0.1 and abs(x - pump_x) <= 5.0
+    return False
 
 
 def _first_incompatible_assembler_item(assembler: dict[str, Any], target_recipe: str) -> str | None:

@@ -2766,6 +2766,78 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(controller.calls, 2)
         self.assertEqual(len(lines), 2)
 
+    def test_autopilot_commit_reuses_strategy_target_metadata(self):
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.calls: list[dict[str, object]] = []
+                self.observe_calls = 0
+
+            def observe(self):
+                self.observe_calls += 1
+                return {
+                    "inventory": {"transport-belt": self.observe_calls},
+                    "entities": [],
+                    "resources": [],
+                    "research": {"technologies": {"automation": {"researched": True}}},
+                }
+
+            def run_strategy_step(self, **kwargs):
+                self.calls.append(dict(kwargs))
+                selected = str(kwargs.get("override_skill") or "bootstrap_build_item_mall")
+                strategy = {
+                    "selected_skill": selected,
+                    "target_item": str(kwargs.get("target_item") or "transport-belt"),
+                    "target_count": int(kwargs.get("target_count") or 104),
+                }
+                return StrategyStepSummary(
+                    ok=True,
+                    reason="done",
+                    objective=kwargs.get("objective", "launch_rocket_program"),
+                    selected_skill=selected,
+                    strategy=strategy,
+                    run=RunSummary(True, "stubbed", 1, 0, self.cfg.log_dir / "stub.log", "transport-belt"),
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with patch.dict(
+                "os.environ",
+                {
+                    "FACTORIO_AI_AUTOPILOT_COMMIT_SKILL_ENABLED": "1",
+                    "FACTORIO_AI_AUTOPILOT_COMMIT_SKILL_MAX": "4",
+                },
+            ):
+                summary = controller.run_autopilot_loop(cycles=3, sleep_seconds=0)
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(len(controller.calls), 3)
+        self.assertEqual(controller.calls[2]["override_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(controller.calls[2]["target_count"], 104)
+        self.assertEqual(controller.calls[2]["target_item"], "transport-belt")
+
+    def test_modless_strategy_step_accepts_committed_target_metadata(self):
+        captured: dict[str, object] = {}
+
+        class FakeController(ModlessFactorioController):
+            def _run_skill(self, **kwargs):
+                captured.update(kwargs)
+                return RunSummary(True, "stubbed", 1, 0, self.cfg.log_dir / "stub.log", kwargs.get("target_item", ""))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            summary = controller.run_strategy_step(
+                "launch_rocket_program",
+                override_skill="bootstrap_build_item_mall",
+                target_count=104,
+                target_item="transport-belt",
+            )
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(captured["goal"], "bootstrap_build_item_mall")
+        self.assertEqual(captured["target"], 104)
+        self.assertEqual(captured["target_item"], "transport-belt")
+
     def test_finite_autopilot_loop_reports_failed_cycle(self):
         class FakeController(FactorioController):
             def run_strategy_step(self, **kwargs):

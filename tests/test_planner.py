@@ -1667,6 +1667,44 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["name"], "small-electric-pole")
         self.assertIn("boiler coal feed", decision.reason)
 
+    def test_coal_fuel_feed_power_pole_avoids_offshore_pump_shoreline(self):
+        obs = base_observation()
+        obs["inventory"] = {"small-electric-pole": 1}
+        obs["resources"] = []
+        obs["entities"] = [
+            {
+                "name": "inserter",
+                "unit_number": 217,
+                "position": {"x": -37.5, "y": 25.5},
+                "direction": planner_module.WEST,
+                "electric_network_connected": False,
+            },
+            {
+                "name": "offshore-pump",
+                "unit_number": 9,
+                "position": {"x": -39.5, "y": 23.5},
+                "direction": planner_module.WEST,
+                "electric_network_connected": False,
+            },
+            {
+                "name": "small-electric-pole",
+                "unit_number": 107,
+                "position": {"x": -39.5, "y": 19.5},
+                "electric_network_connected": False,
+            },
+            {"name": "boiler", "unit_number": 26, "position": {"x": -37.5, "y": 23.0}},
+            {"name": "stone-furnace", "unit_number": 221, "position": {"x": -36.0, "y": 25.0}},
+            {"name": "stone-furnace", "unit_number": 225, "position": {"x": -35.0, "y": 23.0}},
+            {"name": "stone-furnace", "unit_number": 226, "position": {"x": -34.0, "y": 25.0}},
+        ]
+
+        position = planner_module._select_mall_inserter_power_pole_position(
+            obs,
+            {"x": -37.5, "y": 25.5},
+        )
+
+        self.assertEqual(position, {"x": -38.5, "y": 25.5})
+
     def test_coal_fuel_feed_done_when_boiler_receives_belt_fed_coal(self):
         obs = base_observation()
         obs["inventory"] = {}
