@@ -11665,6 +11665,32 @@ class GearBeltMallRelocationSkill:
                     },
                     "take buffered small electric poles for gear/belt mall relocation power corridor",
                 )
+            pole_target = max(self.target_count, required_for_corridor)
+            bootstrap_decision = BuildItemMallSkill("small-electric-pole", pole_target).next_action(
+                observation,
+                allow_existing_remote=True,
+                reference_position=_gear_belt_mall_relocation_power_target(layout),
+            )
+            if bootstrap_decision.action is not None:
+                metadata = dict(bootstrap_decision.metadata)
+                metadata.update(
+                    {
+                        "failure_root": "relocation_power_pole_shortage",
+                        "repair_skill": "bootstrap_build_item_mall",
+                        "target_item": "small-electric-pole",
+                        "target_count": pole_target,
+                        "required_for_corridor": required_for_corridor,
+                        "available_poles": available_poles,
+                    }
+                )
+                return PlannerDecision(
+                    bootstrap_decision.action,
+                    (
+                        "bootstrap small-electric-pole for gear/belt mall relocation power corridor: "
+                        f"{bootstrap_decision.reason}"
+                    ),
+                    metadata=metadata,
+                )
             return PlannerDecision(
                 None,
                 (
@@ -12761,7 +12787,7 @@ class BuildItemMallSkill:
         missing_boiler_route_belts = _boiler_coal_feed_missing_belt_count(observation)
         if missing_boiler_route_belts <= 0:
             return self.target_count
-        available_belts = total_item_count(observation, "transport-belt")
+        available_belts = _available_boiler_feed_construction_belts(observation)
         if available_belts >= missing_boiler_route_belts:
             return self.target_count
         return max(self.target_count, missing_boiler_route_belts + 4)

@@ -1242,6 +1242,40 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.metadata["required_transport_belts"], missing)
         self.assertIn("before partial route extension", decision.reason)
 
+    def test_belt_mall_target_for_boiler_route_ignores_already_placed_belts(self):
+        obs = base_observation()
+        obs["inventory"] = {"transport-belt": 2, "burner-inserter": 1, "coal": 16}
+        obs["research"]["technologies"]["automation"]["researched"] = True
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 8}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 2.5, "y": 0.5}, "direction": 4, "inventories": {}},
+            {"name": "boiler", "unit_number": 30, "position": {"x": 50, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 981,
+                "position": {"x": 0, "y": 4},
+                "recipe": "transport-belt",
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+        ]
+        obs["entities"].append(
+            {
+                "name": "wooden-chest",
+                "unit_number": 5000,
+                "position": {"x": 200, "y": 200},
+                "inventories": {"1": {"transport-belt": 120}},
+            }
+        )
+
+        missing = planner_module._boiler_coal_feed_missing_belt_count(obs)
+        target = BuildItemMallSkill("transport-belt", 20)._effective_target_count(obs)
+
+        self.assertGreater(planner_module.total_item_count(obs, "transport-belt"), missing)
+        self.assertEqual(target, missing + 4)
+
     def test_coal_fuel_feed_prefers_local_receiver_when_boiler_is_working(self):
         obs = base_observation()
         obs["inventory"] = {"transport-belt": 4, "burner-inserter": 1, "coal": 1, "stone-furnace": 1}
@@ -1753,6 +1787,46 @@ class PlannerTests(unittest.TestCase):
         self.assertIsNone(decision.action)
         self.assertIn("needs 23 small-electric-pole", decision.reason)
         self.assertIn("before mining the existing mall", decision.reason)
+
+    def test_gear_belt_mall_relocation_repairs_power_pole_mall_before_teardown(self):
+        obs = long_gear_mall_relocation_observation()
+        obs["inventory"] = {"small-electric-pole": 1, "wood": 4, "copper-cable": 8}
+        obs["automation_sites"] = [
+            {
+                "powered": True,
+                "pole_unit_number": 9604,
+                "pole_position": {"x": 10.5, "y": 6.5},
+                "cable_assembler_position": {"x": 2, "y": 2},
+                "circuit_assembler_position": {"x": 6, "y": 2},
+                "transfer_inserter_position": {"x": 4, "y": 2},
+                "transfer_inserter_direction": 4,
+                "distance": 4,
+            }
+        ]
+        for entity in powered_research_observation()["entities"]:
+            copied = dict(entity)
+            copied["unit_number"] = int(copied.get("unit_number") or 0) + 9000
+            obs["entities"].append(copied)
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 903,
+                "recipe": "small-electric-pole",
+                "position": {"x": 2, "y": 2},
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
+
+        decision = GearBeltMallRelocationSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "copper-cable")
+        self.assertEqual(decision.action["unit_number"], 903)
+        self.assertIn("bootstrap small-electric-pole", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "relocation_power_pole_shortage")
+        self.assertEqual(decision.metadata["repair_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(decision.metadata["target_item"], "small-electric-pole")
 
     def test_gear_belt_mall_relocation_takes_buffered_power_poles_before_teardown(self):
         obs = long_gear_mall_relocation_observation()

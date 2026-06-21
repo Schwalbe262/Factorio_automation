@@ -17,6 +17,7 @@ from factorio_ai.controller import (
     _guard_post_automation_handcraft,
     _move_detour_action,
     _stale_take_response,
+    _virtual_move_response_arrived,
 )
 from factorio_ai.llm_log import llm_decision_log_path, llm_io_trace_log_path, make_llm_io_trace
 from factorio_ai.models import PlannerDecision
@@ -51,6 +52,28 @@ class ControllerTests(unittest.TestCase):
             _stale_take_response(
                 {"type": "insert", "item": "iron-gear-wheel"},
                 {"ok": False, "reason": "target does not have item"},
+            )
+        )
+
+    def test_virtual_move_response_arrived_detects_server_agent_move(self):
+        self.assertTrue(
+            _virtual_move_response_arrived(
+                {
+                    "ok": True,
+                    "action": "move_to",
+                    "status": "arrived",
+                    "execution": {"mode": "virtual", "virtual": True},
+                }
+            )
+        )
+        self.assertFalse(
+            _virtual_move_response_arrived(
+                {
+                    "ok": True,
+                    "action": "move_to",
+                    "status": "arrived",
+                    "execution": {"mode": "player", "virtual": False},
+                }
             )
         )
 
@@ -249,6 +272,59 @@ class ControllerTests(unittest.TestCase):
 
         self.assertFalse(response["ok"])
         self.assertIn("blocked direct iron-gear-wheel handcraft", response["reason"])
+
+    def test_run_skill_skips_wait_for_virtual_arrived_move(self):
+        observation = {
+            "tick": 1,
+            "inventory": {},
+            "entities": [],
+            "research": {"technologies": {}},
+            "player": {"kind": "server", "character_valid": False, "position": {"x": 0, "y": 0}},
+            "execution": {"mode": "virtual", "virtual": True},
+        }
+
+        class MoveThenDoneSkill:
+            def __init__(self):
+                self.calls = 0
+
+            def next_action(self, _observation):
+                self.calls += 1
+                if self.calls == 1:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": {"x": 100, "y": 0}},
+                        "virtual move to remote buffer",
+                    )
+                return PlannerDecision(None, "done after virtual move", done=True)
+
+        class FakeController(FactorioController):
+            def observe(self):
+                return observation
+
+            def act(self, action):
+                self.last_action = action
+                return {
+                    "ok": True,
+                    "action": "move_to",
+                    "status": "arrived",
+                    "execution": {"mode": "virtual", "virtual": True},
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_test_config(Path(tmp))
+            controller = FakeController(cfg)
+            with patch.object(controller, "_wait_for_move", side_effect=AssertionError("wait should be skipped")):
+                run = controller._run_skill(
+                    MoveThenDoneSkill(),
+                    target_item="transport-belt",
+                    target=1,
+                    goal="test_virtual_move",
+                    max_steps=2,
+                    log_prefix="test-virtual-move",
+                )
+
+        self.assertTrue(run.ok)
+        self.assertEqual(run.steps, 2)
+        self.assertEqual(controller.last_action["type"], "move_to")
 
     def test_run_skill_stops_repeated_bootstrap_seed_without_followup(self):
         observation = {

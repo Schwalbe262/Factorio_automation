@@ -217,6 +217,20 @@ def _action_explains_delta(action: dict[str, Any], delta: dict[str, Any]) -> boo
             and added[0].get("name") == action.get("name")
             and _positions_close(added[0].get("position"), action.get("position"), radius=4.0)
         )
+    if action_type == "connect_entities":
+        tiles = action.get("tiles") if isinstance(action.get("tiles"), list) else []
+        tile_positions = [tile.get("position") for tile in tiles if isinstance(tile, dict)]
+        return (
+            bool(added)
+            and not removed
+            and not changed
+            and len(added) <= len(tile_positions)
+            and all(item.get("name") == action.get("name") for item in added)
+            and all(
+                any(_positions_close(item.get("position"), position, radius=1.25) for position in tile_positions)
+                for item in added
+            )
+        )
     if action_type == "mine":
         return len(removed) == 1 and not added and not changed and _entity_matches_action(removed[0], action)
     if action_type in {"set_recipe", "rotate"}:
@@ -267,7 +281,7 @@ def _learning_event(
 
 
 def _layout_mutating_action(action: dict[str, Any]) -> bool:
-    return str(action.get("type") or "") in {"build", "mine", "set_recipe", "rotate"}
+    return str(action.get("type") or "") in {"build", "mine", "set_recipe", "rotate", "connect_entities"}
 
 
 def _compact_action(action: dict[str, Any]) -> dict[str, Any]:
@@ -278,6 +292,7 @@ def _compact_action(action: dict[str, Any]) -> dict[str, Any]:
         "unit_number",
         "position",
         "direction",
+        "tiles",
         "required_resource",
         "reason",
         "bootstrap_seed",

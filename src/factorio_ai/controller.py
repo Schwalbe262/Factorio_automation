@@ -2706,10 +2706,13 @@ class FactorioController:
                             return finish(True, f"yielded for other work instead of idling: {decision.reason}", step, observation)
                         time.sleep(max(0.05, min(ticks / 60.0, 1.0)))
                     elif action.get("type") == "move_to":
-                        arrived, reason = self._wait_for_move(action)
-                        if not arrived:
-                            observation = self._observe_for_skill_loop(goal, step)
-                            return finish(False, reason, step, observation)
+                        if _virtual_move_response_arrived(response):
+                            time.sleep(0.05)
+                        else:
+                            arrived, reason = self._wait_for_move(action)
+                            if not arrived:
+                                observation = self._observe_for_skill_loop(goal, step)
+                                return finish(False, reason, step, observation)
                     else:
                         # Action applies synchronously over RCON; this is just pacing between the
                         # action and the next observe. A few game ticks is enough for state to settle.
@@ -4442,6 +4445,15 @@ def _stale_take_response(action: dict[str, Any], response: dict[str, Any]) -> bo
     return (
         action.get("type") == "take"
         and str(response.get("reason") or "") == "target does not have item"
+    )
+
+
+def _virtual_move_response_arrived(response: dict[str, Any]) -> bool:
+    execution = response.get("execution") if isinstance(response.get("execution"), dict) else {}
+    return (
+        str(response.get("action") or "") == "move_to"
+        and str(response.get("status") or "") == "arrived"
+        and (execution.get("virtual") is True or str(execution.get("mode") or "").lower() == "virtual")
     )
 
 

@@ -1,12 +1,11 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod server, Qwen/vLLM supervisor, and autopilot are running after restart.
-- Part152 fixed the belt mall bootstrap loop: next-assembler gear bootstrap now takes gear assembler output chest stock before iron seeding/waiting.
-- Build item mall can now derive a transport-belt sidecar from an existing gear assembler when lightweight observes have no `automation_sites`.
-- Gear/belt logistics now supports vertical direct gear->belt inserter pairs as well as horizontal pairs.
-- Part153: stall KPI now tracks wood/copper-cable/small-electric-pole/assembler/inserter/electric-drill/lab/logistic-science so pole/drill mall progress is not false-stalled.
-- Live before restart: server tick 282699; supervisor/autopilot PID 64768; vLLM service 12304 healthy; no run-health warnings.
-- Current live status: last skill `connect_coal_fuel_feed` failed needing 88 route belts with 72 locally available; recent recovery selected belt mall again.
-- Latest progress: `failure_root=null`, `repair_skill=null`, seed_count=10, belts=90 total, gears=174, e-circuits=0, red science=0.
-- Validation: `tests.test_controller`, `tests.test_run_health`, and full `python -m unittest discover -s tests` passed (1103 tests; ResourceWarning only).
-- Token usage: recorded fallback sample 14,016,669 absolute, delta 266,336; weekly quota unavailable; Codex state DB was malformed.
-- Next: restart supervisor for Part153 code, watch coal feed route belt sufficiency, then red science/labs, logistics research, electric mining drill, and burner replacement/main-belt migration.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod server, Qwen/vLLM, dashboard, and autopilot are running.
+- Part154: relocation now repairs missing corridor `small-electric-pole` via `bootstrap_build_item_mall` before tearing down the old gear/belt mall.
+- Part154: virtual/server `move_to` with `status=arrived` skips real-player wait loops, preventing stale-observe movement stalls.
+- Part154: transport-belt mall target for boiler coal feed uses construction-available belts, not total belts hidden in remote/non-output inventories.
+- Live after restart: supervisor/autopilot PID `54416`; latest run-health tick 579769; vLLM service 12304 healthy; no warnings.
+- Live status: relocation completed enough to move on; belt mall/coal feed advanced, latest `connect_coal_fuel_feed` yielded for boiler inserter movement.
+- Learning: human layout learning is enabled; false `connect_entities` operator event was retracted as `retracted_agent_action`.
+- Validation: targeted tests, `tests.test_planner tests.test_controller tests.test_strategy tests.test_human_layout_learning tests.test_run_health`, and full `python -m unittest discover -s tests` passed (1109 tests; ResourceWarning only).
+- Token usage: fallback samples recorded through 14,540,705 absolute; Part154 delta about 524,036; weekly quota unavailable because Codex state DB is malformed.
+- Next: watch coal feed completion, then red science/labs, logistics research, electric mining drill, burner replacement, and main-belt migration.

@@ -161,6 +161,65 @@ class HumanLayoutLearningTests(unittest.TestCase):
         self.assertIsNone(event)
         self.assertFalse(human_layout_learning_trace_path(logs).exists())
 
+    def test_does_not_record_agent_connect_entities_as_human_intervention(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = root / "runtime"
+            logs = root / "logs"
+            before = observation_with_entities()
+            after = observation_with_entities(
+                {
+                    "name": "transport-belt",
+                    "unit_number": 41,
+                    "position": {"x": 1.5, "y": 0.5},
+                    "direction": 4,
+                    "inventories": {},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 42,
+                    "position": {"x": 2.5, "y": 0.5},
+                    "direction": 4,
+                    "inventories": {},
+                },
+            )
+
+            record_human_layout_observation(
+                runtime,
+                logs,
+                before,
+                objective="launch_rocket_program",
+                active_skill="connect_coal_fuel_feed",
+                active_step=1,
+                source="test",
+            )
+            remember_agent_layout_action(
+                runtime,
+                {
+                    "type": "connect_entities",
+                    "name": "transport-belt",
+                    "tiles": [
+                        {"position": {"x": 1.5, "y": 0.5}, "direction": 4},
+                        {"position": {"x": 2.5, "y": 0.5}, "direction": 4},
+                    ],
+                },
+                objective="launch_rocket_program",
+                active_skill="connect_coal_fuel_feed",
+                active_step=1,
+            )
+            event = record_human_layout_observation(
+                runtime,
+                logs,
+                after,
+                objective="launch_rocket_program",
+                active_skill="connect_coal_fuel_feed",
+                active_step=2,
+                source="test",
+            )
+
+        self.assertIsNone(event)
+        self.assertFalse(human_layout_learning_trace_path(logs).exists())
+
     def test_tick_reset_refreshes_baseline_without_human_intervention_event(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -229,6 +229,31 @@ class RunHealthTests(unittest.TestCase):
         self.assertTrue(any(item["kind"] == "stale_live_skill_pid" for item in summary["warnings"]))
         self.assertIn("stale=live skill pid", format_run_health(summary))
 
+    def test_non_pending_operator_layout_event_does_not_warn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            logs = runtime / "logs"
+            logs.mkdir(parents=True, exist_ok=True)
+            (logs / "operator-intervention-layout-learning.jsonl").write_text(
+                json.dumps(
+                    {
+                        "event": "operator_intervention_candidate_retracted",
+                        "time": "2026-06-16T20:00:00+00:00",
+                        "learning_label": "retracted_agent_action",
+                        "active_skill": "connect_coal_fuel_feed",
+                        "delta_summary": {"added": 14, "removed": 0, "changed": 0},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cfg = SimpleNamespace(runtime_dir=runtime, log_dir=logs)
+
+            summary = gather_run_health(cfg, observe=False)
+
+        self.assertEqual(summary["human_layout_learning"]["learning_label"], "retracted_agent_action")
+        self.assertFalse(any(item["kind"] == "operator_layout_learning_pending" for item in summary["warnings"]))
+
 
 if __name__ == "__main__":
     unittest.main()

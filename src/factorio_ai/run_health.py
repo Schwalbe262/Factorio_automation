@@ -209,7 +209,7 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
                 "detail": f"progress loop is stuck on {failure_root}; recovery should run {repair_skill}",
             }
         )
-    if latest_operator_layout:
+    if latest_operator_layout and latest_operator_layout.get("learning_label") == "pending_human_review":
         delta_summary = latest_operator_layout.get("delta_summary")
         warnings.append(
             {
