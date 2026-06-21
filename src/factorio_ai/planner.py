@@ -8535,7 +8535,10 @@ def _find_site_input_logistic_line_layout(
             if source is None:
                 continue
             source_position = _position(source)
-            if distance(source_position, consumer_position) < 6.0:
+            source_consumer_distance = distance(source_position, consumer_position)
+            if source_consumer_distance < 6.0:
+                continue
+            if not _logistics_researched_or_underground_unlocked(observation) and source_consumer_distance > 64.0:
                 continue
             if _site_input_local_route_observed(observation, required_item, source, consumer):
                 continue
@@ -8603,7 +8606,7 @@ def _find_site_input_logistic_line_layout(
                 score = (
                     _site_input_item_priority(required_item)
                     + link_priority.get((required_item, site_id), 0)
-                    + min(20.0, distance(source_position, consumer_position) / 8.0)
+                    + min(20.0, source_consumer_distance / 8.0)
                     - float(endpoints.get("preference_penalty") or 0.0)
                     - route_penalty
                 )
@@ -8614,7 +8617,7 @@ def _find_site_input_logistic_line_layout(
                         "consumer": consumer,
                         "consumer_recipe": recipe,
                         "consumer_site_id": site_id,
-                        "distance": round(distance(source_position, consumer_position), 1),
+                        "distance": round(source_consumer_distance, 1),
                         "segments": segments,
                         "source_inserter": {
                             "position": source_inserter_position,
@@ -8948,6 +8951,20 @@ def _site_input_line_waypoint_candidates(
         add_y_lanes()
     elif _direction_axis(start_direction) == _direction_axis(end_direction) == "y":
         add_x_lanes()
+    elif (
+        abs(start_point["x"] - end_point["x"]) > 0.25
+        and abs(start_point["y"] - end_point["y"]) > 0.25
+        and abs(start_point["x"] - end_point["x"]) + abs(start_point["y"] - end_point["y"]) <= 48.0
+    ):
+        add([start_point, {"x": end_point["x"], "y": start_point["y"]}, end_point])
+        add([start_point, {"x": start_point["x"], "y": end_point["y"]}, end_point])
+        for offset in (2.0, -2.0, 4.0, -4.0):
+            for base_y in (start_point["y"], end_point["y"]):
+                lane_y = round(base_y + offset, 3)
+                add([start_point, {"x": start_point["x"], "y": lane_y}, {"x": end_point["x"], "y": lane_y}, end_point])
+            for base_x in (start_point["x"], end_point["x"]):
+                lane_x = round(base_x + offset, 3)
+                add([start_point, {"x": lane_x, "y": start_point["y"]}, {"x": lane_x, "y": end_point["y"]}, end_point])
     return candidates
 
 
@@ -9182,7 +9199,7 @@ def _site_input_hard_route_blocker(entity: dict[str, Any], position: dict[str, f
     name = str(entity.get("name") or "")
     large_names = ASSEMBLER_ENTITY_NAMES | {"lab", "stone-furnace", "burner-mining-drill", "boiler", "steam-engine"}
     if name in POWER_CONNECTOR_NAMES:
-        return True
+        return False
     if name in large_names:
         if isinstance(position, dict) and isinstance(entity.get("position"), dict):
             entity_position = _position(entity)
@@ -9206,6 +9223,11 @@ def _site_input_line_route_score(
         _site_input_hard_route_blockers(observation, segments, protected_unit_numbers=protected_unit_numbers)
     )
     for segment in segments:
+        entity = segment.get("entity") if isinstance(segment, dict) else None
+        if isinstance(entity, dict) and str(entity.get("name") or "") == "transport-belt":
+            planned_direction = _direction_or_default(segment.get("direction"), EAST)
+            existing_direction = _direction_or_default(entity.get("direction"), planned_direction)
+            score -= 60.0 if existing_direction == planned_direction else 25.0
         if _planned_machine_over_protected_resource(observation, segment["position"]):
             score += 1500.0
     return score

@@ -7337,6 +7337,50 @@ class PlannerTests(unittest.TestCase):
         self.assertNotEqual(decision.action and decision.action.get("type"), "mine")
         self.assertNotEqual(decision.action and decision.action.get("unit_number"), 969)
 
+    def test_site_input_logistics_relocates_power_pole_when_no_clear_route_remains(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 2.5, "y": 0.5}}
+        obs["inventory"] = {"transport-belt": 2}
+        source = {
+            "name": "wooden-chest",
+            "unit_number": 970,
+            "position": {"x": 0.5, "y": 0.5},
+            "inventories": {"1": {"iron-gear-wheel": 20}},
+        }
+        consumer = {
+            "name": "assembling-machine-1",
+            "unit_number": 971,
+            "position": {"x": 8.0, "y": 0.5},
+            "recipe": "automation-science-pack",
+            "electric_network_connected": True,
+            "status_name": "item_ingredient_shortage",
+            "inventories": {},
+        }
+        blocker = {
+            "name": "small-electric-pole",
+            "unit_number": 972,
+            "position": {"x": 2.5, "y": 0.5},
+            "electric_network_connected": True,
+            "inventories": {},
+        }
+        layout = {
+            "item": "iron-gear-wheel",
+            "source": source,
+            "consumer": consumer,
+            "consumer_recipe": "automation-science-pack",
+            "source_inserter": {"position": {"x": 1.5, "y": 0.5}, "direction": planner_module.WEST, "entity": None},
+            "target_inserter": {"position": {"x": 7.5, "y": 0.5}, "direction": planner_module.EAST, "entity": None},
+            "segments": [{"position": {"x": 2.5, "y": 0.5}, "direction": planner_module.EAST, "entity": None}],
+        }
+        obs["entities"].extend([mall_assembler(recipe="transport-belt"), source, consumer, blocker])
+
+        with patch("factorio_ai.planner._find_site_input_logistic_line_layout", return_value=layout):
+            decision = SiteInputLogisticLineSkill(20, item="iron-gear-wheel").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 972)
+        self.assertIn("blocking small-electric-pole", decision.reason)
+
     def test_site_input_logistics_detour_avoids_opposite_direction_existing_belt(self):
         obs = powered_automation_observation()
         obs["player"] = {"position": {"x": 3.5, "y": 0.5}}

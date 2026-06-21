@@ -1,10 +1,11 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor PID `75296`, autopilot PID `55560`, scheduler Qwen service task `12755` ready.
-- Part178 pushed: belt mall recovery now uses available construction stock and site-input can take buffered transport belts.
-- Part179: site-input endpoint geometry fixes 2x2 furnace endpoints at negative coordinates; source inserter no longer lands inside the furnace footprint.
-- Part179: site-input and gear-mall iron-line endpoints remove blocking belts/poles/chests before placing endpoint inserters, preventing `cannot place entity` loops.
-- Validation: `tests.test_planner` 413 OK; targeted endpoint blocker tests OK; `git diff --check` OK.
-- Live before fix: `automate_electronic_circuit_line` failed placing inserter at `(79.5,-20.5)` inside/near stone furnace.
-- Live dry-run after fix: planner selected belt recovery/route extension rather than the bad endpoint build; PID `55560` running, next watch should verify fresh circuit retry.
-- Current stock: belts 20, circuits 5, inserters 2; current blocker likely circuit/site-input route repair rather than belt seed loop.
-- Operator learning records traces/templates only, not live model weights; token sample `23,052,864` recorded, weekly quota unavailable; do not stage dirty `note.md`/`insight.md` wholesale.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor PID `75296`, autopilot PID `59232`, scheduler vLLM service `12917`.
+- Part180 fixed site-input route recovery after endpoint repair: power poles are relocatable route blockers, not hard `no executable` blockers.
+- Part180 limits pre-logistics site-input to <=64 tile source-consumer spans and adds bounded mixed-axis detours for local routes.
+- Part180 site-input route scoring now prefers repairing mostly built belt lines over abandoning them for empty reroutes.
+- Tests: targeted site-input/circuit tests OK; `tests.test_planner` 414 OK; `tests.test_strategy` 161 OK; `tests.test_controller` 90 OK.
+- Saved live observation now returns `move near blocking small-electric-pole before extending site input logistics belt` instead of generic circuit iron-input refusal.
+- Live: server UP, researched 5, vLLM ready, recent LLM decision selected `build_site_input_logistic_line`; autopilot restarted to load new code.
+- Current stock observed by health: iron 37, copper 24, coal 24, belts 6; progress KPI stale stock may lag live observe.
+- Operator layout learning records traces/templates only, not live model weights; use observations/interventions to promote reusable layout rules.
+- Token sample `23,369,721`, weekly quota unavailable; do not stage dirty `note.md`/`insight.md` wholesale.
