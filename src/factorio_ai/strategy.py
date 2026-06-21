@@ -2139,6 +2139,8 @@ def reconcile_strategy_decision(
         "produce_automation_science_pack",
         "expand_copper_smelting",
         "expand_iron_smelting",
+        "research_electric_mining_drill",
+        "bootstrap_electric_mining_drill_mall",
     }:
         site_input_line_issue = _executable_site_input_line_issue(observation)
     if (
@@ -2155,6 +2157,8 @@ def reconcile_strategy_decision(
             "produce_automation_science_pack",
             "expand_copper_smelting",
             "expand_iron_smelting",
+            "research_electric_mining_drill",
+            "bootstrap_electric_mining_drill_mall",
         }
     ):
         target_skill = (
@@ -2202,6 +2206,8 @@ def reconcile_strategy_decision(
                 if target_skill == "build_site_input_logistic_line"
                 else adjusted
             )
+        if target_skill == "build_site_input_logistic_line":
+            return _with_site_input_target(dict(decision), site_input_line_issue)
     missing_input_source_issue = _site_input_missing_source_issue(observation) if site_input_guardrails_needed else None
     if (
         _technology_researched(observation, "automation")
@@ -2805,6 +2811,9 @@ def _heuristic_strategy_impl(
                 "iron-plate production."
             ),
         ).to_dict()
+
+    if automation_researched and site_input_line_issue is not None and site_input_line_issue.get("endpoint_power_issue"):
+        return _site_input_line_strategy_decision(observation, site_input_line_issue)
 
     if power_issue:
         return StrategicDecision(
@@ -3827,7 +3836,15 @@ def _executable_site_input_line_issue(
         for segment in segments
     )
     missing_endpoint = any(
-        isinstance(layout.get(key), dict) and not isinstance(layout[key].get("entity"), dict)
+        isinstance(layout.get(key), dict)
+        and (
+            not isinstance(layout[key].get("entity"), dict)
+            or _site_input_endpoint_needs_power(layout[key].get("entity"))
+        )
+        for key in ("source_inserter", "target_inserter")
+    )
+    endpoint_power_issue = any(
+        isinstance(layout.get(key), dict) and _site_input_endpoint_needs_power(layout[key].get("entity"))
         for key in ("source_inserter", "target_inserter")
     )
     if not missing_segment and not missing_endpoint:
@@ -3841,12 +3858,21 @@ def _executable_site_input_line_issue(
         "item": route_item,
         "site_id": f"site-input:{route_item}:{source.get('name')}:{source_unit}->{consumer.get('name')}:{consumer_unit}",
         "severity": 90,
+        "endpoint_power_issue": endpoint_power_issue,
         "detail": (
             f"An executable {route_item} route exists between producer unit {source_unit} and "
-            f"consumer unit {consumer_unit}, but belts or endpoint inserters are missing."
+            f"consumer unit {consumer_unit}, but belts or powered endpoint inserters are missing."
         ),
         "recommendation": "Build the site input logistics route before retrying the consumer skill.",
     }
+
+
+def _site_input_endpoint_needs_power(entity: Any) -> bool:
+    return (
+        isinstance(entity, dict)
+        and str(entity.get("name") or "") != "burner-inserter"
+        and (entity.get("electric_network_connected") is False or _entity_no_power(entity))
+    )
 
 
 def _site_input_line_strategy_decision(

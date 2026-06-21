@@ -2022,6 +2022,32 @@ class PlannerTests(unittest.TestCase):
 
         self.assertLessEqual(max(gaps), planner_module._power_wire_reach("small-electric-pole"))
 
+    def test_power_anchor_uses_network_id_pole_on_powered_network(self):
+        obs = {
+            "entities": [
+                {
+                    "name": "steam-engine",
+                    "unit_number": 900,
+                    "position": {"x": 0.5, "y": 0.5},
+                    "electric_network_connected": True,
+                    "electric_network_id": 1,
+                    "inventories": {},
+                },
+                {
+                    "name": "small-electric-pole",
+                    "unit_number": 901,
+                    "position": {"x": 30.5, "y": 0.5},
+                    "electric_network_connected": False,
+                    "electric_network_id": 1,
+                    "inventories": {},
+                },
+            ]
+        }
+
+        anchor = planner_module._nearest_connected_power_anchor(obs, {"x": 40.5, "y": 0.5})
+
+        self.assertEqual(anchor["unit_number"], 901)
+
     def test_gear_belt_mall_relocation_power_corridor_starts_with_generator_side_pole(self):
         obs = long_gear_mall_relocation_observation()
         obs["entities"] = [entity for entity in obs["entities"] if entity.get("name") != "small-electric-pole"]
@@ -9779,6 +9805,160 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "move_to")
         self.assertEqual(decision.action["position"], {"x": 43.0, "y": 0.0})
         self.assertIn("nearest buildable site input logistics belt", decision.reason)
+
+    def test_site_input_logistic_line_repairs_unpowered_endpoint_inserter(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 4.0, "y": 0.0}}
+        obs["inventory"] = {"transport-belt": 4, "small-electric-pole": 1}
+        source = {
+            "name": "stone-furnace",
+            "unit_number": 950,
+            "position": {"x": 0.0, "y": 0.0},
+            "recipe": "copper-plate",
+            "inventories": {"3": {"copper-plate": 20}},
+        }
+        consumer = {
+            "name": "assembling-machine-1",
+            "unit_number": 951,
+            "position": {"x": 8.0, "y": 0.0},
+            "recipe": "automation-science-pack",
+            "electric_network_connected": True,
+            "status_name": "item_ingredient_shortage",
+            "inventories": {},
+        }
+        unpowered_inserter = {
+            "name": "inserter",
+            "unit_number": 953,
+            "position": {"x": 4.0, "y": 0.0},
+            "direction": planner_module.EAST,
+            "electric_network_connected": False,
+            "status_name": "no_power",
+        }
+        obs["entities"].extend([mall_assembler(recipe="transport-belt"), source, consumer, unpowered_inserter])
+        layout = {
+            "item": "copper-plate",
+            "source": source,
+            "consumer": consumer,
+            "source_inserter": {
+                "position": {"x": 1.0, "y": 0.0},
+                "direction": planner_module.EAST,
+                "entity": {
+                    "name": "inserter",
+                    "unit_number": 952,
+                    "position": {"x": 1.0, "y": 0.0},
+                    "direction": planner_module.EAST,
+                    "electric_network_connected": True,
+                },
+            },
+            "target_inserter": {
+                "position": {"x": 4.0, "y": 0.0},
+                "direction": planner_module.EAST,
+                "entity": unpowered_inserter,
+            },
+            "segments": [
+                {
+                    "position": {"x": 2.0, "y": 0.0},
+                    "direction": planner_module.EAST,
+                    "entity": {"name": "transport-belt", "unit_number": 954, "direction": planner_module.EAST},
+                }
+            ],
+        }
+
+        with patch("factorio_ai.planner._find_site_input_logistic_line_layout", return_value=layout):
+            decision = SiteInputLogisticLineSkill(20, item="copper-plate").next_action(obs)
+
+        self.assertIn(decision.action["type"], {"build", "connect_power"})
+        self.assertEqual(decision.action["name"], "small-electric-pole")
+        self.assertIn("site consumer input inserter", decision.reason)
+
+    def test_site_input_logistic_line_builds_remote_endpoint_power_corridor(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 34.5, "y": 0.5}}
+        obs["inventory"] = {"transport-belt": 4, "small-electric-pole": 1}
+        source = {
+            "name": "stone-furnace",
+            "unit_number": 950,
+            "position": {"x": 0.0, "y": 0.0},
+            "recipe": "copper-plate",
+            "inventories": {"3": {"copper-plate": 20}},
+        }
+        consumer = {
+            "name": "assembling-machine-1",
+            "unit_number": 951,
+            "position": {"x": 42.0, "y": 0.0},
+            "recipe": "automation-science-pack",
+            "electric_network_connected": True,
+            "status_name": "item_ingredient_shortage",
+            "inventories": {},
+        }
+        unpowered_inserter = {
+            "name": "inserter",
+            "unit_number": 953,
+            "position": {"x": 40.0, "y": 0.0},
+            "direction": planner_module.EAST,
+            "electric_network_connected": False,
+            "status_name": "no_power",
+        }
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt"),
+                {
+                    "name": "steam-engine",
+                    "unit_number": 990,
+                    "position": {"x": 0.5, "y": 0.5},
+                    "electric_network_connected": True,
+                    "electric_network_id": 1,
+                    "inventories": {},
+                },
+                {
+                    "name": "small-electric-pole",
+                    "unit_number": 991,
+                    "position": {"x": 30.5, "y": 0.5},
+                    "electric_network_connected": False,
+                    "electric_network_id": 1,
+                    "inventories": {},
+                },
+                source,
+                consumer,
+                unpowered_inserter,
+            ]
+        )
+        layout = {
+            "item": "copper-plate",
+            "source": source,
+            "consumer": consumer,
+            "source_inserter": {
+                "position": {"x": 1.0, "y": 0.0},
+                "direction": planner_module.EAST,
+                "entity": {
+                    "name": "inserter",
+                    "unit_number": 952,
+                    "position": {"x": 1.0, "y": 0.0},
+                    "direction": planner_module.EAST,
+                    "electric_network_connected": True,
+                },
+            },
+            "target_inserter": {
+                "position": {"x": 40.0, "y": 0.0},
+                "direction": planner_module.EAST,
+                "entity": unpowered_inserter,
+            },
+            "segments": [
+                {
+                    "position": {"x": 39.0, "y": 0.0},
+                    "direction": planner_module.EAST,
+                    "entity": {"name": "transport-belt", "unit_number": 954, "direction": planner_module.EAST},
+                }
+            ],
+        }
+
+        with patch("factorio_ai.planner._find_site_input_logistic_line_layout", return_value=layout):
+            decision = SiteInputLogisticLineSkill(20, item="copper-plate").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "small-electric-pole")
+        self.assertIs(decision.action["allow_nearby"], False)
+        self.assertIn("power corridor for site consumer input inserter", decision.reason)
 
     def test_site_input_logistic_line_ignores_nearby_consumer_input_inventory_as_source(self):
         obs = powered_automation_observation()

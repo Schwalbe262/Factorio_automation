@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from factorio_ai import planner as planner_module
 from factorio_ai import strategy as strategy_module
@@ -2732,6 +2733,106 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["input_item"], "copper-plate")
         self.assertEqual(result["guardrail_adjusted"]["from"], "expand_copper_smelting")
         self.assertIn("site input logistic line", result["blockers"])
+
+    def test_reconcile_routes_unpowered_site_input_endpoint_before_setup_power(self):
+        source = {
+            "name": "stone-furnace",
+            "unit_number": 104,
+            "position": {"x": 5, "y": 0},
+            "inventories": {"3": {"copper-plate": 20}},
+        }
+        consumer = {
+            "name": "assembling-machine-1",
+            "unit_number": 200,
+            "recipe": "automation-science-pack",
+            "position": {"x": 40, "y": 0},
+            "electric_network_connected": True,
+            "inventories": {},
+        }
+        layout = {
+            "item": "copper-plate",
+            "source": source,
+            "consumer": consumer,
+            "source_inserter": {
+                "position": {"x": 6, "y": 0},
+                "direction": planner_module.EAST,
+                "entity": {
+                    "name": "inserter",
+                    "unit_number": 301,
+                    "position": {"x": 6, "y": 0},
+                    "direction": planner_module.EAST,
+                    "electric_network_connected": False,
+                    "status_name": "no_power",
+                },
+            },
+            "target_inserter": {
+                "position": {"x": 39, "y": 0},
+                "direction": planner_module.EAST,
+                "entity": {
+                    "name": "inserter",
+                    "unit_number": 302,
+                    "position": {"x": 39, "y": 0},
+                    "direction": planner_module.EAST,
+                    "electric_network_connected": True,
+                },
+            },
+            "segments": [
+                {
+                    "position": {"x": 7, "y": 0},
+                    "direction": planner_module.EAST,
+                    "entity": {"name": "transport-belt", "unit_number": 303},
+                }
+            ],
+        }
+        observation = {
+            "inventory": {"small-electric-pole": 2},
+            "entities": [
+                source,
+                consumer,
+                layout["source_inserter"]["entity"],
+                layout["target_inserter"]["entity"],
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 300,
+                    "recipe": "transport-belt",
+                    "position": {"x": 20, "y": 0},
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"transport-belt": 8}},
+                },
+            ],
+            "resources": [{"name": "copper-ore", "position": {"x": 0, "y": 0}}],
+            "research": {"technologies": {"automation": {"researched": True}, "logistics": {"researched": True}}},
+        }
+
+        with patch("factorio_ai.strategy._find_site_input_logistic_line_layout", return_value=layout):
+            result = reconcile_strategy_decision(
+                {
+                    "selected_skill": "produce_automation_science_pack",
+                    "priority": 60,
+                    "reason": "Retry red science.",
+                    "evidence": [],
+                    "blockers": [],
+                    "expected_effect": "",
+                    "source": "llm",
+                },
+                "launch_rocket_program",
+                observation,
+            )
+            heuristic = heuristic_strategy("launch_rocket_program", observation)
+            reconciled_heuristic = reconcile_strategy_decision(
+                heuristic,
+                "launch_rocket_program",
+                observation,
+            )
+
+        self.assertEqual(result["selected_skill"], "build_site_input_logistic_line")
+        self.assertEqual(result["input_item"], "copper-plate")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "produce_automation_science_pack")
+        self.assertIn("site input logistic line", result["blockers"])
+        self.assertEqual(heuristic["selected_skill"], "build_site_input_logistic_line")
+        self.assertEqual(heuristic["input_item"], "copper-plate")
+        self.assertEqual(reconciled_heuristic["selected_skill"], "build_site_input_logistic_line")
+        self.assertEqual(reconciled_heuristic["input_item"], "copper-plate")
 
     def test_heuristic_builds_copper_source_before_missing_source_site_route(self):
         result = heuristic_strategy(

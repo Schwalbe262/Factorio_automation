@@ -9980,6 +9980,9 @@ def _logistics_line_powered_inserter_decision(
         return PlannerDecision(None, f"{label} needs small-electric-pole power coverage")
     pole_position = _select_mall_inserter_power_pole_position(observation, position)
     if pole_position is None:
+        corridor_decision = _logistics_line_power_corridor_decision(observation, player, position, label)
+        if corridor_decision is not None:
+            return corridor_decision
         return PlannerDecision(None, f"cannot find clear power pole position for {label}")
     if distance(player, pole_position) > 20:
         return PlannerDecision({"type": "move_to", "position": _stand_position(pole_position)}, f"move near power pole position for {label}")
@@ -9992,6 +9995,103 @@ def _logistics_line_powered_inserter_decision(
         },
         f"place supply pole for {label}",
     )
+
+
+def _logistics_line_power_corridor_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    inserter_position: dict[str, float],
+    label: str,
+) -> PlannerDecision | None:
+    pole_position = _select_logistics_line_inserter_power_pole_position(observation, inserter_position)
+    if pole_position is None:
+        return None
+    corridor_positions = _small_power_corridor_positions_to_target(observation, pole_position)
+    if not corridor_positions:
+        return PlannerDecision(None, f"{label} needs a connected power anchor before endpoint power corridor repair")
+
+    missing_corridor_positions = _missing_power_corridor_positions(observation, corridor_positions)
+    if missing_corridor_positions:
+        if inventory_count(observation, "small-electric-pole") <= 0:
+            decision = _ensure_small_power_pole_for_local_repair(observation, player, label)
+            if decision is not None:
+                return decision
+            return PlannerDecision(None, f"{label} needs small-electric-pole for endpoint power corridor repair")
+        position = missing_corridor_positions[0]
+        build_position = _select_power_corridor_build_position(observation, corridor_positions, position)
+        blocker = _power_corridor_position_blocker(observation, build_position)
+        if blocker is not None:
+            blocker_position = _position(blocker)
+            if distance(player, blocker_position) > 8:
+                return PlannerDecision(
+                    {"type": "move_to", "position": blocker_position},
+                    f"move near blocking {blocker.get('name')} before placing power corridor for {label}",
+                )
+            return PlannerDecision(
+                {
+                    "type": "mine",
+                    "unit_number": blocker.get("unit_number"),
+                    "name": blocker.get("name"),
+                    "position": blocker_position,
+                },
+                f"clear blocking {blocker.get('name')} before placing power corridor for {label}",
+            )
+        if distance(player, build_position) > 20:
+            return PlannerDecision(
+                {"type": "move_to", "position": _stand_position(build_position)},
+                f"move near power corridor for {label}",
+            )
+        return PlannerDecision(
+            {
+                "type": "build",
+                "name": "small-electric-pole",
+                "position": build_position,
+                "allow_nearby": False,
+            },
+            f"build power corridor for {label}",
+        )
+
+    unconnected_pole = _first_unconnected_power_corridor_pole(observation, corridor_positions)
+    if unconnected_pole is not None:
+        pole_position = _position(unconnected_pole)
+        source_network_id = _power_corridor_source_network_id(observation, corridor_positions)
+        if distance(player, pole_position) > 20:
+            return PlannerDecision(
+                {"type": "move_to", "position": pole_position},
+                f"move near power corridor pole for {label}",
+            )
+        return PlannerDecision(
+            {
+                "type": "connect_power",
+                "unit_number": unconnected_pole.get("unit_number"),
+                "name": unconnected_pole.get("name") or "small-electric-pole",
+                "position": pole_position,
+                "source_network_id": source_network_id,
+            },
+            f"connect power corridor for {label}",
+        )
+    return PlannerDecision(None, f"{label} still lacks powered endpoint coverage after corridor check")
+
+
+def _select_logistics_line_inserter_power_pole_position(
+    observation: dict[str, Any],
+    inserter_position: dict[str, float],
+) -> dict[str, float] | None:
+    anchor = _nearest_connected_power_anchor(observation, inserter_position)
+    anchor_position = _power_corridor_wire_anchor_position(anchor) if isinstance(anchor, dict) else None
+    candidates: list[dict[str, float]] = []
+    for candidate in _nearby_power_pole_center_positions(inserter_position, radius=3.5):
+        if not _small_pole_supplies_position(candidate, inserter_position):
+            continue
+        if _existing_power_connector_near_position(observation, candidate, radius=1.6) is not None:
+            continue
+        if _power_corridor_position_blocker(observation, candidate) is None:
+            candidates.append(candidate)
+    if not candidates:
+        return None
+    if anchor_position is not None:
+        candidates.sort(key=lambda item: distance(item, anchor_position))
+    return candidates[0]
 
 
 def _ensure_small_power_pole_for_local_repair(
@@ -12020,6 +12120,13 @@ def _gear_belt_mall_relocation_power_corridor_positions(
     layout: dict[str, Any],
 ) -> list[dict[str, float]]:
     target = _gear_belt_mall_relocation_power_target(layout)
+    return _small_power_corridor_positions_to_target(observation, target)
+
+
+def _small_power_corridor_positions_to_target(
+    observation: dict[str, Any],
+    target: dict[str, float],
+) -> list[dict[str, float]]:
     anchor = _nearest_connected_power_anchor(observation, target)
     if anchor is None:
         return []
@@ -12087,9 +12194,32 @@ def _nearest_connected_power_anchor(observation: dict[str, Any], target: dict[st
         if isinstance(entity, dict)
         and str(entity.get("name") or "") in names
         and isinstance(entity.get("position"), dict)
-        and entity.get("electric_network_connected") is True
+        and _entity_is_power_anchor(observation, entity)
     ]
     return _nearest_to(candidates, target) if candidates else None
+
+
+def _entity_is_power_anchor(observation: dict[str, Any], entity: dict[str, Any]) -> bool:
+    name = str(entity.get("name") or "")
+    if name in POWER_CONNECTOR_NAMES:
+        if entity.get("electric_network_connected") is True:
+            return True
+        network_id = entity.get("electric_network_id")
+        return network_id is not None and _electric_network_has_power_source(observation, network_id)
+    return entity.get("electric_network_connected") is True
+
+
+def _electric_network_has_power_source(observation: dict[str, Any], network_id: Any) -> bool:
+    if network_id is None:
+        return False
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict):
+            continue
+        if entity.get("electric_network_id") != network_id:
+            continue
+        if str(entity.get("name") or "") in {"steam-engine", "steam-turbine", "solar-panel", "accumulator"}:
+            return entity.get("electric_network_connected") is not False
+    return False
 
 
 def _build_item_mall_power_bridge_gap_position(
@@ -12268,7 +12398,7 @@ def _existing_power_corridor_reaches_position(
     visited_units: set[Any] = {
         pole.get("unit_number")
         for pole in poles
-        if pole.get("electric_network_connected") is True
+        if _entity_is_power_anchor(observation, pole)
         or any(distance(_position(pole), _position(source)) <= 3.0 for source in connected_sources)
     }
     if not visited_units:
@@ -12879,6 +13009,15 @@ class SiteInputLogisticLineSkill:
         ]:
             inserter = spec.get("entity")
             if isinstance(inserter, dict):
+                if str(inserter.get("name") or "") != "burner-inserter" and inserter.get("electric_network_connected") is False:
+                    power_decision = _logistics_line_powered_inserter_decision(
+                        observation,
+                        player,
+                        inserter,
+                        label,
+                    )
+                    if power_decision is not None:
+                        return power_decision
                 if _direction_or_default(inserter.get("direction"), 0) != int(spec["direction"]):
                     position = _position(inserter)
                     if distance(player, position) > 4.5:
@@ -14447,7 +14586,7 @@ def _power_poles(observation: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _connected_power_poles(observation: dict[str, Any]) -> list[dict[str, Any]]:
-    return [pole for pole in _power_poles(observation) if pole.get("electric_network_connected") is not False]
+    return [pole for pole in _power_poles(observation) if _entity_is_power_anchor(observation, pole)]
 
 
 def _nearest_power_pole_to_supply(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:
