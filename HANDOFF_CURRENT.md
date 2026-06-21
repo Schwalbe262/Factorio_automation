@@ -6,4 +6,4 @@
 - Tests: targeted planner/controller OK, `tests.test_planner tests.test_controller` 511 OK, full discover 1174 OK (one ResourceWarning only).
 - Remaining ops warnings: stale operator layout learning, implemented skills still listed in foundry queue, and large dirty `note.md`/`insight.md`.
 - Do not stage dirty `note.md`/`insight.md` wholesale; append-only journal entries were added separately.
-- Token sample pending; weekly quota unavailable.
+- Token sample `24,881,559`; weekly quota unavailable; Codex state DB token logger failed as malformed.
