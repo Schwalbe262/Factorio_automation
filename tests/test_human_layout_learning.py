@@ -161,6 +161,56 @@ class HumanLayoutLearningTests(unittest.TestCase):
         self.assertIsNone(event)
         self.assertFalse(human_layout_learning_trace_path(logs).exists())
 
+    def test_does_not_record_allow_nearby_build_with_factorio_position_adjustment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = root / "runtime"
+            logs = root / "logs"
+            before = observation_with_entities()
+            after = observation_with_entities(
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 226,
+                    "position": {"x": -34.0, "y": 25.0},
+                    "direction": 0,
+                    "inventories": {},
+                }
+            )
+
+            record_human_layout_observation(
+                runtime,
+                logs,
+                before,
+                objective="launch_rocket_program",
+                active_skill="bootstrap_power_pole_mall",
+                active_step=4,
+                source="test",
+            )
+            remember_agent_layout_action(
+                runtime,
+                {
+                    "type": "build",
+                    "name": "stone-furnace",
+                    "position": {"x": -38.5, "y": 26.5},
+                    "allow_nearby": True,
+                },
+                objective="launch_rocket_program",
+                active_skill="bootstrap_power_pole_mall",
+                active_step=4,
+            )
+            event = record_human_layout_observation(
+                runtime,
+                logs,
+                after,
+                objective="launch_rocket_program",
+                active_skill="bootstrap_power_pole_mall",
+                active_step=5,
+                source="test",
+            )
+
+        self.assertIsNone(event)
+        self.assertFalse(human_layout_learning_trace_path(logs).exists())
+
     def test_does_not_record_agent_connect_entities_as_human_intervention(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -296,6 +346,54 @@ class HumanLayoutLearningTests(unittest.TestCase):
                 objective="launch_rocket_program",
                 active_skill="research_automation",
                 active_step=4,
+                source="test",
+            )
+
+        self.assertIsNone(event)
+        self.assertFalse(human_layout_learning_trace_path(logs).exists())
+
+    def test_ignores_drill_mining_target_observation_flicker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = root / "runtime"
+            logs = root / "logs"
+            before = observation_with_entities(
+                {
+                    "name": "burner-mining-drill",
+                    "unit_number": 74,
+                    "position": {"x": 8, "y": -13},
+                    "direction": 4,
+                    "mining_target": "coal",
+                    "inventories": {},
+                },
+            )
+            after = observation_with_entities(
+                {
+                    "name": "burner-mining-drill",
+                    "unit_number": 74,
+                    "position": {"x": 8, "y": -13},
+                    "direction": 4,
+                    "mining_target": None,
+                    "inventories": {},
+                },
+            )
+
+            record_human_layout_observation(
+                runtime,
+                logs,
+                before,
+                objective="launch_rocket_program",
+                active_skill="bootstrap_power_pole_mall",
+                active_step=7,
+                source="test",
+            )
+            event = record_human_layout_observation(
+                runtime,
+                logs,
+                after,
+                objective="launch_rocket_program",
+                active_skill="bootstrap_power_pole_mall",
+                active_step=8,
                 source="test",
             )
 

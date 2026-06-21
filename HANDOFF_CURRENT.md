@@ -1,11 +1,10 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod server, Qwen/vLLM, dashboard, and autopilot are running.
-- Part154: relocation now repairs missing corridor `small-electric-pole` via `bootstrap_build_item_mall` before tearing down the old gear/belt mall.
-- Part154: virtual/server `move_to` with `status=arrived` skips real-player wait loops, preventing stale-observe movement stalls.
-- Part154: transport-belt mall target for boiler coal feed uses construction-available belts, not total belts hidden in remote/non-output inventories.
-- Live after restart: supervisor/autopilot PID `54416`; latest run-health tick 579769; vLLM service 12304 healthy; no warnings.
-- Live status: relocation completed enough to move on; belt mall/coal feed advanced, latest `connect_coal_fuel_feed` yielded for boiler inserter movement.
-- Learning: human layout learning is enabled; false `connect_entities` operator event was retracted as `retracted_agent_action`.
-- Validation: targeted tests, `tests.test_planner tests.test_controller tests.test_strategy tests.test_human_layout_learning tests.test_run_health`, and full `python -m unittest discover -s tests` passed (1109 tests; ResourceWarning only).
-- Token usage: fallback samples recorded through 14,540,705 absolute; Part154 delta about 524,036; weekly quota unavailable because Codex state DB is malformed.
-- Next: watch coal feed completion, then red science/labs, logistics research, electric mining drill, burner replacement, and main-belt migration.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; no-mod Factorio, Qwen/vLLM, dashboard, and autopilot are running.
+- Part155: human layout learning now treats `connect_entities` and `allow_nearby` Factorio-adjusted builds as deterministic agent actions.
+- Part155: drill `mining_target` is no longer part of layout snapshots, preventing resource/depletion observation flicker from becoming human-layout candidates.
+- Live after restart: supervisor/autopilot PID `73988`; latest run-health tick 766404; vLLM service 12304 healthy; warnings empty.
+- Live status: `bootstrap_power_pole_mall` active; researched automation/electronics/steam-power; key items include iron-plate 42, copper-plate 57, gears 150, belts 38, poles 16, coal 26.
+- Learning: false pending operator-layout events were retracted; real user layouts should remain as `pending_human_review` for later review/promotion.
+- Validation: `tests.test_human_layout_learning tests.test_run_health` passed (14 tests) and full `python -m unittest discover -s tests` passed (1111 tests; ResourceWarning only).
+- Token usage: fallback sample recorded at 15,115,394 absolute, delta 574,689 for this sample; weekly quota unavailable because Codex state DB is malformed.
+- Next: push Part155, then continue from power-pole mall toward e-circuit production, electric mining drills, burner replacement, red science/labs, and main-belt migration.

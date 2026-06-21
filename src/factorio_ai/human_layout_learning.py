@@ -159,8 +159,6 @@ def _entity_snapshot(entity: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     }
     if name.startswith("assembling-machine"):
         row["recipe"] = entity.get("recipe")
-    if name in {"burner-mining-drill", "electric-mining-drill"}:
-        row["mining_target"] = entity.get("mining_target")
     return key, row
 
 
@@ -210,12 +208,13 @@ def _action_explains_delta(action: dict[str, Any], delta: dict[str, Any]) -> boo
     removed = [item for item in delta.get("removed") or [] if isinstance(item, dict)]
     changed = [item for item in delta.get("changed") or [] if isinstance(item, dict)]
     if action_type == "build":
+        radius = 8.0 if action.get("allow_nearby") is True else 4.0
         return (
             len(added) == 1
             and not removed
             and not changed
             and added[0].get("name") == action.get("name")
-            and _positions_close(added[0].get("position"), action.get("position"), radius=4.0)
+            and _positions_close(added[0].get("position"), action.get("position"), radius=radius)
         )
     if action_type == "connect_entities":
         tiles = action.get("tiles") if isinstance(action.get("tiles"), list) else []
