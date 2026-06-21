@@ -8392,6 +8392,37 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.action["bootstrap_seed"])
         self.assertEqual(decision.metadata["seed_reason"], "gear_mall_iron_plate_seed")
 
+    def test_gear_belt_mall_builds_iron_input_line_before_repeating_gear_seed(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 8, "transport-belt": 8}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 920,
+                    "position": {"x": -8, "y": 2},
+                    "recipe": "iron-plate",
+                    "inventories": {"3": {"iron-plate": 20}},
+                },
+                *gear_belt_mall_entities(belt_recipe="transport-belt"),
+                {
+                    "name": "inserter",
+                    "unit_number": 930,
+                    "position": {"x": 4.0, "y": 2.0},
+                    "direction": 12,
+                    "inventories": {},
+                    "electric_network_connected": True,
+                },
+            ]
+        )
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertNotIn("bootstrap_seed", decision.action)
+        self.assertIn("iron-plate", decision.reason)
+
     def test_gear_belt_mall_topoffs_partial_iron_seed_with_missing_count(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"iron-plate": 8}

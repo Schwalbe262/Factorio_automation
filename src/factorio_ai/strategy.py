@@ -2198,6 +2198,8 @@ def reconcile_strategy_decision(
         and total_item_count(observation, "copper-plate") > 0
     )
     site_input_line_issue = _site_input_line_issue(observation) if site_input_guardrails_needed else None
+    if site_input_line_issue is not None and _site_input_line_issue_satisfied(observation, site_input_line_issue):
+        site_input_line_issue = None
     if site_input_line_issue is None and selected in {
         "plan_factory_site",
         "produce_electronic_circuit",
@@ -2731,6 +2733,8 @@ def _heuristic_strategy_impl(
     automation_logistics_issue = _first_automation_logistics_issue(layout_issues)
     missing_input_source_issue = _site_input_missing_source_issue(observation, layout_issues)
     site_input_line_issue = _site_input_line_issue(observation, layout_issues) or _executable_site_input_line_issue(observation)
+    if site_input_line_issue is not None and _site_input_line_issue_satisfied(observation, site_input_line_issue):
+        site_input_line_issue = None
     layout_build_item_shortage = _layout_unlocked_build_item_shortage(layout)
     gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
     critical_factory_power_issue = _critical_factory_power_issue(observation)
@@ -3759,6 +3763,8 @@ def _executable_layout_plan_fallback(
     expected_effect = ""
     if kind in {"incomplete_logistics_link", "manual_site_logistics_gap", "distant_related_sites", "manual_feed_factory_block"}:
         issue = _site_input_line_issue(observation)
+        if issue is not None and _site_input_line_issue_satisfied(observation, issue):
+            issue = None
         if issue is not None and _technology_researched(observation, "automation"):
             if _transport_belt_automation_ready(observation):
                 skill = "build_site_input_logistic_line"
@@ -3922,17 +3928,17 @@ def _site_input_line_issue(
     return issue
 
 
-def _executable_site_input_line_issue(
-    observation: dict[str, Any],
-    *,
-    item: str | None = None,
-) -> dict[str, Any] | None:
-    layout = _find_site_input_logistic_line_layout(observation, item=item)
+def _site_input_line_issue_satisfied(observation: dict[str, Any], site_input_line_issue: dict[str, Any]) -> bool:
+    input_item = _sanitize_site_input_target(site_input_line_issue.get("item"))
+    if not input_item:
+        return False
+    layout = _find_site_input_logistic_line_layout(observation, item=input_item)
     if not isinstance(layout, dict):
-        return None
-    route_item = str(layout.get("item") or item or "")
-    if not _sanitize_site_input_target(route_item):
-        return None
+        return False
+    return not _site_input_line_layout_needs_work(layout)
+
+
+def _site_input_line_layout_needs_work(layout: dict[str, Any]) -> bool:
     segments = layout.get("segments") if isinstance(layout.get("segments"), list) else []
     missing_segment = any(
         isinstance(segment, dict) and not isinstance(segment.get("entity"), dict)
@@ -3946,11 +3952,25 @@ def _executable_site_input_line_issue(
         )
         for key in ("source_inserter", "target_inserter")
     )
+    return bool(missing_segment or missing_endpoint)
+
+
+def _executable_site_input_line_issue(
+    observation: dict[str, Any],
+    *,
+    item: str | None = None,
+) -> dict[str, Any] | None:
+    layout = _find_site_input_logistic_line_layout(observation, item=item)
+    if not isinstance(layout, dict):
+        return None
+    route_item = str(layout.get("item") or item or "")
+    if not _sanitize_site_input_target(route_item):
+        return None
     endpoint_power_issue = any(
         isinstance(layout.get(key), dict) and _site_input_endpoint_needs_power(layout[key].get("entity"))
         for key in ("source_inserter", "target_inserter")
     )
-    if not missing_segment and not missing_endpoint:
+    if not _site_input_line_layout_needs_work(layout):
         return None
     source = layout.get("source") if isinstance(layout.get("source"), dict) else {}
     consumer = layout.get("consumer") if isinstance(layout.get("consumer"), dict) else {}

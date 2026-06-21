@@ -1,11 +1,9 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor PID `75296`, autopilot PID `59232`, scheduler vLLM service `12917`.
-- Part180 fixed site-input route recovery after endpoint repair: power poles are relocatable route blockers, not hard `no executable` blockers.
-- Part180 limits pre-logistics site-input to <=64 tile source-consumer spans and adds bounded mixed-axis detours for local routes.
-- Part180 site-input route scoring now prefers repairing mostly built belt lines over abandoning them for empty reroutes.
-- Tests: targeted site-input/circuit tests OK; `tests.test_planner` 414 OK; `tests.test_strategy` 161 OK; `tests.test_controller` 90 OK.
-- Saved live observation now returns `move near blocking small-electric-pole before extending site input logistics belt` instead of generic circuit iron-input refusal.
-- Live: server UP, researched 5, vLLM ready, recent LLM decision selected `build_site_input_logistic_line`; autopilot restarted to load new code.
-- Current stock observed by health: iron 37, copper 24, coal 24, belts 6; progress KPI stale stock may lag live observe.
-- Operator layout learning records traces/templates only, not live model weights; use observations/interventions to promote reusable layout rules.
-- Token sample `23,369,721`, weekly quota unavailable; do not stage dirty `note.md`/`insight.md` wholesale.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running, autopilot PID `25120`, scheduler vLLM service `12917`.
+- Part181 fixed stale completed site-input issues: strategy suppresses already-built repeated input routes before guardrail repair selection.
+- Part181 fixed gear/belt mall seed recovery: if an iron-plate line to the mall exists but is incomplete, build/repair that line before repeating iron seed.
+- Live validation: server UP, researched 5, vLLM ready; restarted autopilot and observed real site-input repairs complete with `stall=0`.
+- Current live still has legitimate remaining site-input work for another gear/circuit consumer; `build_site_input_logistic_line` is no longer the stale copper-only loop.
+- Tests: `tests.test_strategy tests.test_planner tests.test_controller` 667 OK; full discover log `runtime/unittest-discover-part181-final.log` was 1167 OK.
+- Health warnings remain: stale operator layout learning, implemented skills still listed in foundry queue, and noisy auto-appends in dirty `note.md`/`insight.md`.
+- Token sample `23,913,534`, weekly quota unavailable; do not stage dirty `note.md`/`insight.md` wholesale.

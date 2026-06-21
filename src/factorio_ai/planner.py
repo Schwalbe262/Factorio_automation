@@ -11752,6 +11752,9 @@ class GearBeltMallLogisticsSkill:
             and gear_assembler_plate_count < 2
         ):
             if inventory_count(observation, "iron-plate") > 0:
+                iron_line_decision = self._gear_mall_iron_input_line_decision(observation)
+                if iron_line_decision is not None:
+                    return iron_line_decision
                 position = _position(gear_assembler)
                 if distance(player, position) > 20:
                     return PlannerDecision({"type": "move_to", "position": position}, "move near gear assembler for one-time iron seed")
@@ -11794,11 +11797,17 @@ class GearBeltMallLogisticsSkill:
                     seed_reason="local_iron_plate_recovery_for_gear_mall_seed",
                     expected_followup="recovered plates are inserted into the gear assembler and belt output starts",
                 )
+            iron_line_decision = self._gear_mall_iron_input_line_decision(observation)
+            if iron_line_decision is not None:
+                return iron_line_decision
             return PlannerDecision(None, "gear mall logistics needs iron plates before gears can enter the belt mall")
 
         belt_assembler_plate_count = entity_item_count(belt_assembler, "iron-plate")
         if belt_assembler_plate_count < 2:
             if inventory_count(observation, "iron-plate") > 0:
+                iron_line_decision = self._gear_mall_iron_input_line_decision(observation)
+                if iron_line_decision is not None:
+                    return iron_line_decision
                 position = _position(belt_assembler)
                 if distance(player, position) > 20:
                     return PlannerDecision({"type": "move_to", "position": position}, "move near belt assembler for one-time iron seed")
@@ -11841,12 +11850,21 @@ class GearBeltMallLogisticsSkill:
                     seed_reason="local_iron_plate_recovery_for_belt_mall_seed",
                     expected_followup="recovered plates are inserted into the belt assembler and belt output starts",
                 )
+            iron_line_decision = self._gear_mall_iron_input_line_decision(observation)
+            if iron_line_decision is not None:
+                return iron_line_decision
             return PlannerDecision(None, "belt mall logistics needs an automated iron-plate input line")
 
         return PlannerDecision(
             {"type": "wait", "ticks": 600},
             f"wait for gear inserters and belt assembler to accumulate transport belts: {available_belts}/{self.target_count}",
         )
+
+    def _gear_mall_iron_input_line_decision(self, observation: dict[str, Any]) -> PlannerDecision | None:
+        if _find_iron_plate_logistic_line_to_gear_mall_layout(observation) is None:
+            return None
+        decision = IronPlateLogisticLineToGearMallSkill(max(20, self.target_count)).next_action(observation)
+        return None if decision.done else decision
 
     def _ensure_inventory_item(self, observation: dict[str, Any], item: str, quantity: int) -> PlannerDecision | None:
         if inventory_count(observation, item) >= quantity:

@@ -2858,6 +2858,74 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("executable site input route", result["blockers"])
         self.assertIn("site_input_executable=false", result["evidence"])
 
+    def test_reconcile_does_not_repair_already_completed_site_input_line(self):
+        issue = {
+            "kind": "manual_site_logistics_gap",
+            "item": "copper-plate",
+            "site_id": "site-input:copper-plate:stone-furnace:100->assembling-machine-1:101",
+            "severity": 90,
+            "detail": "copper-plate route was previously missing",
+            "recommendation": "build the repeated input route",
+        }
+        complete_layout = {
+            "item": "copper-plate",
+            "source": {"name": "stone-furnace", "unit_number": 100},
+            "consumer": {"name": "assembling-machine-1", "unit_number": 101},
+            "segments": [
+                {
+                    "position": {"x": 1.5, "y": 0.5},
+                    "direction": planner_module.EAST,
+                    "entity": {"name": "transport-belt", "direction": planner_module.EAST},
+                }
+            ],
+            "source_inserter": {
+                "position": {"x": 0.5, "y": 0.5},
+                "direction": planner_module.EAST,
+                "entity": {"name": "inserter", "direction": planner_module.EAST, "electric_network_connected": True},
+            },
+            "target_inserter": {
+                "position": {"x": 2.5, "y": 0.5},
+                "direction": planner_module.WEST,
+                "entity": {"name": "inserter", "direction": planner_module.WEST, "electric_network_connected": True},
+            },
+        }
+        observation = {
+            "inventory": {"transport-belt": 8, "copper-plate": 30},
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 200,
+                    "recipe": "transport-belt",
+                    "position": {"x": 4, "y": 0},
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"transport-belt": 8}},
+                }
+            ],
+            "research": {"technologies": {"automation": {"researched": True}, "logistics": {"researched": True}}},
+        }
+
+        with patch("factorio_ai.strategy._site_input_line_issue", return_value=issue), patch(
+            "factorio_ai.strategy._find_site_input_logistic_line_layout",
+            return_value=complete_layout,
+        ):
+            result = reconcile_strategy_decision(
+                {
+                    "selected_skill": "build_site_input_logistic_line",
+                    "priority": 90,
+                    "reason": "Retry stale route issue.",
+                    "evidence": [],
+                    "blockers": [],
+                    "expected_effect": "",
+                    "source": "llm",
+                },
+                "launch_rocket_program",
+                observation,
+            )
+
+        self.assertEqual(result["selected_skill"], "build_site_input_logistic_line")
+        self.assertNotIn("guardrail_adjusted", result)
+        self.assertNotIn("site_input_executable=false", result.get("evidence", []))
+
     def test_reconcile_refuels_copper_source_before_nonexecutable_site_input_expansion(self):
         entities = _distant_copper_source_and_science_consumer_entities()
         for entity in entities:
