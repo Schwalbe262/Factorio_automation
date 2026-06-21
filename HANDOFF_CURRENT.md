@@ -1,11 +1,11 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor/autopilot restarted with latest code, supervisor PID `40000`, autopilot PID `45420`, scheduler Qwen service `12755`.
-- Part166: protected active item-mall output buffers from obsolete cleanup; committed/pushed `f3ba568`.
-- Part167: fixed smelting line resource matching and incomplete parallel-line continuation; committed/pushed `5b6225c`.
-- Part168: generalized plate source recovery for copper site-input lines and prevents support iron completion from ending copper smelting.
-- Part168: site-input now fuels/clears plate source before belt collection, while production waits still happen only after the route is built.
-- Part168: automation-science mall feeds missing gear before topping copper batch when copper already covers one craft.
-- Validation: targeted regressions OK; `tests.test_planner tests.test_controller tests.test_strategy` passed 641; full `PYTHONPATH=src python -m unittest discover -s tests` passed 1141 with existing socket ResourceWarning.
-- Live validation: `electric-mining-drill` research advanced from 20% to ~27-28%; red science resumed; `run-health --no-observe` stall=0.
-- Current live: researched `4`, current research `electric-mining-drill`, automation science `1`, gears `132`, belts `26`; next blocker is gear/inserter infrastructure for science refill.
-- Operator layout learning traces exist but remain pending review, not auto-promoted into skills; weekly quota unavailable.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor/autopilot restarted with latest code, supervisor PID `75296`, autopilot PID `19640`, scheduler Qwen service `12755`.
+- Part166: protected active item-mall output buffers from obsolete cleanup; pushed `f3ba568`.
+- Part167: fixed smelting line resource matching and incomplete parallel-line continuation; pushed `5b6225c`.
+- Part168: generalized plate source recovery for copper site-input lines and science gear-before-copper top-up; pushed `3165be2`.
+- Part169: `CopperPlateSkill` now recovers an existing direct copper burner-drill/furnace cell before falling into belt-smelting/inserter dependencies.
+- Validation: targeted copper/smelting regressions OK; `tests.test_planner tests.test_controller tests.test_strategy` passed 642; full `PYTHONPATH=src python -m unittest discover -s tests` passed 1142 with existing socket ResourceWarning.
+- Live validation: `cannot obtain inserter for belt smelting line yet` broke; copper drill/furnace recovered; `electric-mining-drill` research advanced ~32% -> 35%; `run-health --no-observe` stall=0.
+- Current live: researched `4`, current research `electric-mining-drill`, automation science `1`, copper plate `22`, gears `134`, belts `26`, coal `36`.
+- Next blocker to watch: keep red-science feed stable, then complete `electric-mining-drill` and transition burner drills to electric miners.
+- Operator layout traces exist but remain pending review, not auto-promoted into skills; weekly quota unavailable.

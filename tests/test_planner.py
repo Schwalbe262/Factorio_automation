@@ -4378,6 +4378,52 @@ class PlannerTests(unittest.TestCase):
         self.assertIsNone(decision.action)
         self.assertIn("cannot obtain inserter for belt smelting line yet", decision.reason)
 
+    def test_copper_plate_skill_recovers_existing_direct_cell_before_belt_smelting(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 8.0, "y": 0.0}}
+        obs["inventory"] = {
+            "coal": 12,
+            "iron-plate": 30,
+            "iron-gear-wheel": 1,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "transport-belt": 2,
+        }
+        obs["craftable"] = {}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt"),
+                {
+                    "name": "burner-mining-drill",
+                    "unit_number": 960,
+                    "position": {"x": 8.0, "y": 0.0},
+                    "direction": planner_module.EAST,
+                    "status_name": "no_fuel",
+                    "status": 53,
+                    "mining_target": "copper-ore",
+                    "inventories": {},
+                    "burner": {"remaining_burning_fuel": 0},
+                },
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 961,
+                    "position": {"x": 10.0, "y": 0.0},
+                    "status_name": "no_ingredients",
+                    "status": 18,
+                    "inventories": {"1": {"coal": 4}},
+                },
+            ]
+        )
+
+        inventory_decision = CopperPlateSkill(target_count=5).next_action(obs, target_count=2, inventory_only=True)
+        regular_decision = CopperPlateSkill(target_count=5).next_action(obs)
+
+        for decision in (inventory_decision, regular_decision):
+            self.assertEqual(decision.action["type"], "insert")
+            self.assertEqual(decision.action["item"], "coal")
+            self.assertEqual(decision.action["unit_number"], 960)
+            self.assertIn("direct copper-plate smelting cell", decision.reason)
+
     def test_expand_iron_smelting_places_new_belt_when_below_capacity(self):
         obs = base_observation()
         obs["inventory"] = {

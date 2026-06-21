@@ -3070,6 +3070,22 @@ class CopperPlateSkill:
             if output_decision is not None:
                 return output_decision
 
+        if _find_direct_smelting_cell(observation, "copper-ore") is not None:
+            direct_decision = _direct_plate_smelting_decision(
+                observation,
+                target_count=min(target, DIRECT_SMELTING_CELL_TARGET_PLATES),
+                resource_name="copper-ore",
+                product_name="copper-plate",
+                support_skill=self.support_skill,
+                inventory_only=True,
+                allow_support_plate=True,
+            )
+            if direct_decision.done:
+                if copper_total >= target:
+                    return direct_decision
+            else:
+                return direct_decision
+
         if _belt_smelting_ready(observation):
             return BeltSmeltingLineSkill(
                 target_count=target,
