@@ -1,10 +1,10 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor PID `75296`, current autopilot PID `49792`, scheduler Qwen is active.
-- Part170: circuit automation now falls back to a powered sidecar site when `automation_sites` is absent/stale.
-- Part171: non-executable site-input routes now repair missing source prerequisites instead of reselecting the same route executor.
-- Part172: copper/iron expansion fuel failures now route through direct plate recovery before repeating `expand_*_smelting`.
-- Validation: `tests.test_planner tests.test_controller tests.test_strategy` passed 648; full `PYTHONPATH=src python -m unittest discover -s tests` passed 1148 with existing socket ResourceWarning.
-- Live validation: `expand_copper_smelting` fuel loop broke; copper plate reached 121; `build_site_input_logistic_line` ran OK; latest live skill `produce_copper_plate` reports target reached.
-- Current live: researched `5`, current research empty, key items include copper plate `121`, gears `149`, belts `25`, coal `19`, circuits `7`.
-- Next blocker to watch: stop over-selecting copper once route is built, resume red-science/electric-mining-drill path, then retire burner mining.
-- Operator layout traces are captured as pending/retracted review examples, not model-weight learning or auto-promoted skills yet; weekly quota unavailable.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor PID `75296`, current autopilot PID `32180`, scheduler Qwen is active.
+- Part173: stocked plate site-input guardrail now skips redundant `produce_copper_plate` and routes circuit copper gaps to `automate_electronic_circuit_line`.
+- Part174: scaled circuit automation ignores incidental hand-held cable, repairs missing plate input through site-input routes or smelting expansion instead of wait loops.
+- Part175: no-mod skill loops use full observes for site-input, circuit automation, and smelting expansion so resource selectors can see valid ore sites.
+- Validation: `tests.test_planner tests.test_controller tests.test_strategy` passed 652; full `PYTHONPATH=src python -m unittest discover -s tests` passed 1152 with existing socket ResourceWarning.
+- Live validation: copper loop broke; new circuit cycle ran 5 steps and moved into material/infrastructure work instead of `cannot find open iron-ore site`.
+- Current live: researched `5`, current research empty, key items include iron plate `44`, copper plate `121`, belts `27`, gears `147`, circuits `6`, coal `42`.
+- Next blocker to watch: starter stone drill/output wait, continue iron-source recovery, then resume electric-mining-drill/main-belt path.
+- Operator layout traces remain pending/retracted review examples; weekly quota unavailable; `note.md`/`insight.md` still contain preexisting generated dirty trace data.

@@ -10304,9 +10304,11 @@ def _plate_line_source_recovery_decision(
             },
             f"clear {incompatible} from {item_label} source furnace output before building endpoint inserters",
         )
+    source_output_count = entity_item_count(source, item)
     source_drill = _iron_plate_source_furnace_burner_drill(observation, source)
     if (
         isinstance(source_drill, dict)
+        and source_output_count <= 0
         and _entity_burner_fuel_count(source_drill) < 1
         and _entity_status_is(source_drill, "no_fuel", 53)
     ):
@@ -10325,7 +10327,7 @@ def _plate_line_source_recovery_decision(
             allow_bootstrap_seed=True,
         )
     if (
-        entity_item_count(source, item) <= 0
+        source_output_count <= 0
         and entity_item_count(source, resource_name) > 0
         and _entity_burner_fuel_count(source) < 1
         and _entity_status_is(source, "no_fuel", 52)
@@ -10344,7 +10346,7 @@ def _plate_line_source_recovery_decision(
             allow_bootstrap_seed=True,
         )
     if (
-        entity_item_count(source, item) <= 0
+        source_output_count <= 0
         and entity_item_count(source, resource_name) > 0
         and _entity_burner_fuel_count(source) > 0
     ):
@@ -11208,25 +11210,21 @@ class CircuitAutomationSkill:
             )
 
         if circuit_assembler and entity_item_count(circuit_assembler, "copper-cable") < 6 and inventory_count(observation, "copper-cable") > 0:
-            if scaling_mode:
+            if not scaling_mode:
+                circuit_pos = _position(circuit_assembler)
+                if distance(player, circuit_pos) > 20:
+                    return PlannerDecision({"type": "move_to", "position": circuit_pos}, "move near circuit assembler to seed copper cable")
                 return PlannerDecision(
-                    {"type": "wait", "ticks": 300},
-                    "wait for transfer inserter to move copper cable; refusing hand-seeded cable during scaled circuit automation",
+                    {
+                        "type": "insert",
+                        "item": "copper-cable",
+                        "count": min(12, inventory_count(observation, "copper-cable")),
+                        "unit_number": circuit_assembler.get("unit_number"),
+                        "name": "assembling-machine-1",
+                        "position": circuit_pos,
+                    },
+                    "seed circuit assembler with available copper cable",
                 )
-            circuit_pos = _position(circuit_assembler)
-            if distance(player, circuit_pos) > 20:
-                return PlannerDecision({"type": "move_to", "position": circuit_pos}, "move near circuit assembler to seed copper cable")
-            return PlannerDecision(
-                {
-                    "type": "insert",
-                    "item": "copper-cable",
-                    "count": min(12, inventory_count(observation, "copper-cable")),
-                    "unit_number": circuit_assembler.get("unit_number"),
-                    "name": "assembling-machine-1",
-                    "position": circuit_pos,
-                },
-                "seed circuit assembler with available copper cable",
-            )
 
         if circuit_assembler and entity_item_count(circuit_assembler, "iron-plate") < 4:
             if scaling_mode:
@@ -11311,6 +11309,17 @@ class CircuitAutomationSkill:
         if not _belt_smelting_ready(observation):
             decision = GearBeltMallLogisticsSkill(20).next_action(observation)
             if decision is not None:
+                return decision
+        if item in {"iron-plate", "copper-plate"}:
+            if not any(
+                isinstance(entity, dict) and _entity_can_supply_site_input_item(entity, item)
+                for entity in observation.get("entities") or []
+            ):
+                if item == "iron-plate":
+                    return ExpandIronSmeltingSkill(max(40, self.target_count)).next_action(observation)
+                return ExpandCopperSmeltingSkill(max(40, self.target_count)).next_action(observation)
+            decision = SiteInputLogisticLineSkill(max(40, self.target_count), item=item).next_action(observation)
+            if decision.action is not None or decision.done or "no executable repeated site input" not in decision.reason:
                 return decision
         return PlannerDecision(
             None,

@@ -10,6 +10,7 @@ from .knowledge import electric_mining_drill_dependency_milestones
 from .monitor import recent_damage_events, summarize_factory
 from .models import distance, entities_named, entity_item_count, inventory_count, player_position, total_item_count
 from .planner import (
+    SITE_GATE_INPUT_STOCK_FALLBACK,
     _boiler_has_belt_fuel_feed,
     _boiler_coal_feed_missing_belt_count,
     _direct_gear_transfer_blocked,
@@ -4031,11 +4032,52 @@ def _site_input_nonexecutable_repair_skill(
     item = str(site_input_line_issue.get("item") or "")
     if item == "iron-gear-wheel":
         return "build_gear_belt_mall_logistics"
+    stocked_consumer_repair = _stocked_site_input_consumer_repair_skill(
+        observation,
+        site_input_line_issue,
+        item,
+    )
+    if stocked_consumer_repair is not None:
+        return stocked_consumer_repair
     item_repair = _skill_for_bottleneck_item(item, observation)
     if item_repair is not None:
         return item_repair
     readiness = readiness or build_factory_readiness(observation)
     return readiness.repair_skill
+
+
+def _stocked_site_input_consumer_repair_skill(
+    observation: dict[str, Any],
+    site_input_line_issue: dict[str, Any],
+    item: str,
+) -> str | None:
+    if item not in {"iron-plate", "copper-plate"}:
+        return None
+    if not _site_input_plate_source_stock_ready(observation, item):
+        return None
+    text = " ".join(
+        str(site_input_line_issue.get(key) or "")
+        for key in ("site_id", "detail", "recommendation")
+    ).lower()
+    if "electronic-circuit" in text or "circuit_automation" in text:
+        if _technology_researched(observation, "automation"):
+            return "automate_electronic_circuit_line"
+        return "produce_electronic_circuit"
+    if "automation-science-pack" in text or "science" in text:
+        return "produce_automation_science_pack"
+    if "transport-belt" in text or "build_item_mall" in text:
+        return "build_gear_belt_mall_logistics"
+    if _find_site_input_logistic_line_layout(observation, item=item) is not None:
+        return "build_site_input_logistic_line"
+    return None
+
+
+def _site_input_plate_source_stock_ready(observation: dict[str, Any], item: str) -> bool:
+    if total_item_count(observation, item) >= SITE_GATE_INPUT_STOCK_FALLBACK:
+        return True
+    layout = _find_site_input_logistic_line_layout(observation, item=item)
+    source = layout.get("source") if isinstance(layout, dict) and isinstance(layout.get("source"), dict) else None
+    return bool(source is not None and entity_item_count(source, item) > 0)
 
 
 def _site_input_missing_source_issue(

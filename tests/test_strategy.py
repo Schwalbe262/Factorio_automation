@@ -2848,6 +2848,76 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("executable site input route", result["blockers"])
         self.assertIn("site_input_executable=false", result["evidence"])
 
+    def test_reconcile_repairs_circuit_consumer_instead_of_more_copper_when_source_stocked(self):
+        issue = {
+            "kind": "manual_site_logistics_gap",
+            "item": "copper-plate",
+            "site_id": "circuit_automation:group:electronic-circuit:-36.5,1.5",
+            "severity": 90,
+            "detail": "copper-plate must move to electronic-circuit assembly but no route is observed",
+            "recommendation": "repair the circuit automation consumer instead of producing more copper plates",
+        }
+        entities = [
+            {
+                "name": "stone-furnace",
+                "unit_number": 100,
+                "recipe": "iron-plate",
+                "position": {"x": 0, "y": 0},
+                "inventories": {"3": {"iron-plate": 30}},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 101,
+                "recipe": "iron-gear-wheel",
+                "position": {"x": 4, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {"1": {"iron-plate": 4}, "3": {"iron-gear-wheel": 4}},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 102,
+                "recipe": "transport-belt",
+                "position": {"x": 8, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {"1": {"iron-plate": 4, "iron-gear-wheel": 2}, "3": {"transport-belt": 8}},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 103,
+                "recipe": "copper-plate",
+                "position": {"x": 12, "y": 0},
+                "inventories": {"3": {"copper-plate": 30}},
+            },
+        ]
+
+        with patch("factorio_ai.strategy._site_input_line_issue", return_value=issue), patch(
+            "factorio_ai.strategy._executable_site_input_line_issue",
+            return_value=None,
+        ):
+            result = reconcile_strategy_decision(
+                {
+                    "selected_skill": "plan_factory_site",
+                    "priority": 80,
+                    "reason": "Improve circuit layout.",
+                    "evidence": [],
+                    "blockers": [],
+                    "expected_effect": "",
+                    "source": "llm",
+                },
+                "launch_rocket_program",
+                {
+                    "inventory": {"transport-belt": 8, "copper-plate": 30},
+                    "entities": entities,
+                    "resources": [{"name": "copper-ore", "position": {"x": 0, "y": 0}}],
+                    "research": {"technologies": {"automation": {"researched": True}}},
+                },
+            )
+
+        self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertIn("executable site input route", result["blockers"])
+        self.assertIn("site_input_executable=false", result["evidence"])
+
     def test_reconcile_routes_science_input_before_retrying_science(self):
         entities = _distant_copper_source_and_science_consumer_entities()
         entities.append(

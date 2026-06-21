@@ -2153,11 +2153,15 @@ class ControllerTests(unittest.TestCase):
             controller._modless = fake_modless
 
             controller._observe_for_skill_loop("build_site_input_logistic_line", 1)
+            controller._observe_for_skill_loop("automate_electronic_circuit_line", 1)
+            controller._observe_for_skill_loop("expand_iron_smelting", 1)
             controller._observe_for_skill_loop("produce_iron_plate", 1)
 
         self.assertEqual(fake_modless.calls[0]["include_planning_sites"], False)
         self.assertFalse(fake_modless.calls[0]["lightweight"])
-        self.assertTrue(fake_modless.calls[1]["lightweight"])
+        self.assertFalse(fake_modless.calls[1]["lightweight"])
+        self.assertFalse(fake_modless.calls[2]["lightweight"])
+        self.assertTrue(fake_modless.calls[3]["lightweight"])
 
     def test_no_mod_retries_planning_site_observe_only_when_site_candidate_is_needed(self):
         class FakeModless:
