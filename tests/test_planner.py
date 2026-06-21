@@ -11016,6 +11016,94 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(layout["segments"][-1]["direction"], planner_module.SOUTH)
         self.assertTrue(any(segment["direction"] == planner_module.EAST for segment in layout["segments"][2:-2]))
 
+    def test_site_input_logistic_line_offsets_negative_coordinate_furnace_endpoint_outside_footprint(self):
+        source = {
+            "name": "stone-furnace",
+            "unit_number": 950,
+            "position": {"x": 79, "y": -20},
+            "recipe": "iron-plate",
+            "inventories": {"3": {"iron-plate": 20}},
+        }
+        consumer = {
+            "name": "assembling-machine-1",
+            "unit_number": 952,
+            "position": {"x": 79, "y": -35},
+            "recipe": "iron-gear-wheel",
+            "electric_network_connected": True,
+            "status_name": "item_ingredient_shortage",
+            "inventories": {},
+        }
+
+        endpoint = planner_module._site_input_line_endpoint_candidates(source, consumer)[0]
+        source_inserter = planner_module._tile_center_position(endpoint["source_inserter"])
+        source_belt = planner_module._tile_center_position(endpoint["source_belt"])
+
+        self.assertEqual(source_inserter, {"x": 79.5, "y": -21.5})
+        self.assertEqual(source_belt, {"x": 79.5, "y": -22.5})
+        self.assertEqual(endpoint["source_direction"], planner_module.SOUTH)
+
+    def test_site_input_logistic_line_removes_belt_blocking_endpoint_inserter(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 1.5, "y": 0.5}}
+        obs["inventory"] = {"inserter": 1}
+        source = {
+            "name": "wooden-chest",
+            "unit_number": 950,
+            "position": {"x": 0.5, "y": 0.5},
+            "inventories": {"1": {"iron-gear-wheel": 20}},
+        }
+        consumer = {
+            "name": "assembling-machine-1",
+            "unit_number": 951,
+            "position": {"x": 8.0, "y": 0.5},
+            "recipe": "automation-science-pack",
+            "electric_network_connected": True,
+            "status_name": "item_ingredient_shortage",
+            "inventories": {},
+        }
+        layout = {
+            "item": "iron-gear-wheel",
+            "source": source,
+            "consumer": consumer,
+            "consumer_recipe": "automation-science-pack",
+            "source_inserter": {"position": {"x": 1.5, "y": 0.5}, "direction": planner_module.WEST, "entity": None},
+            "target_inserter": {
+                "position": {"x": 7.5, "y": 0.5},
+                "direction": planner_module.EAST,
+                "entity": {"name": "inserter", "unit_number": 970, "position": {"x": 7.5, "y": 0.5}, "direction": planner_module.EAST},
+            },
+            "segments": [
+                {
+                    "position": {"x": 2.5, "y": 0.5},
+                    "direction": planner_module.EAST,
+                    "entity": {"name": "transport-belt", "unit_number": 971, "position": {"x": 2.5, "y": 0.5}, "direction": planner_module.EAST},
+                }
+            ],
+        }
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt"),
+                source,
+                consumer,
+                {
+                    "name": "transport-belt",
+                    "unit_number": 972,
+                    "position": {"x": 1.5, "y": 0.5},
+                    "direction": planner_module.EAST,
+                    "inventories": {},
+                },
+                layout["target_inserter"]["entity"],
+                layout["segments"][0]["entity"],
+            ]
+        )
+
+        with patch("factorio_ai.planner._find_site_input_logistic_line_layout", return_value=layout):
+            decision = SiteInputLogisticLineSkill(20, item="iron-gear-wheel").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 972)
+        self.assertIn("blocking transport-belt", decision.reason)
+
     def test_site_input_logistic_line_repairs_misoriented_belt_before_missing_segment_when_belts_empty(self):
         obs = powered_automation_observation()
         obs["inventory"] = {}

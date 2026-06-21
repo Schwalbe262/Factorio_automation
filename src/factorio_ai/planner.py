@@ -9317,8 +9317,10 @@ def _site_input_endpoint_radius(entity: dict[str, Any]) -> float:
     name = str(entity.get("name") or "")
     if name in ASSEMBLER_ENTITY_NAMES:
         return 2.0
-    if name in {"stone-furnace", "steel-furnace", "electric-furnace"}:
-        return 1.0
+    if name in {"stone-furnace", "steel-furnace"}:
+        return 1.5
+    if name == "electric-furnace":
+        return 2.0
     return 1.0
 
 
@@ -12993,6 +12995,23 @@ class IronPlateLogisticLineToGearMallSkill:
                     {"type": "move_to", "position": _stand_position(position, offset=3.0)},
                     f"move near {label} position",
                 )
+            blocker = _site_input_endpoint_position_blocker(observation, position, layout)
+            if blocker is not None:
+                blocker_position = _position(blocker)
+                if distance(player, blocker_position) > 4.5:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": _stand_position(blocker_position, offset=1.5)},
+                        f"move within reach of blocking {blocker.get('name')} before placing {label}",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "unit_number": blocker.get("unit_number"),
+                        "name": blocker.get("name"),
+                        "position": blocker_position,
+                    },
+                    f"remove blocking {blocker.get('name')} before placing {label}",
+                )
             return PlannerDecision(
                 {
                     "type": "build",
@@ -13308,6 +13327,23 @@ class SiteInputLogisticLineSkill:
                     {"type": "move_to", "position": _stand_position(position, offset=3.0)},
                     f"move near {label} position",
                 )
+            blocker = _site_input_endpoint_position_blocker(observation, position, layout)
+            if blocker is not None:
+                blocker_position = _position(blocker)
+                if distance(player, blocker_position) > 4.5:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": _stand_position(blocker_position, offset=1.5)},
+                        f"move within reach of blocking {blocker.get('name')} before placing {label}",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "unit_number": blocker.get("unit_number"),
+                        "name": blocker.get("name"),
+                        "position": blocker_position,
+                    },
+                    f"remove blocking {blocker.get('name')} before placing {label}",
+                )
             return PlannerDecision(
                 {
                     "type": "build",
@@ -13327,6 +13363,46 @@ class SiteInputLogisticLineSkill:
             f"{layout['item']} site input logistics line is built with belts and endpoint inserters",
             done=True,
         )
+
+
+def _site_input_endpoint_position_blocker(
+    observation: dict[str, Any],
+    position: dict[str, float],
+    layout: dict[str, Any],
+) -> dict[str, Any] | None:
+    protected_units = {
+        entity.get("unit_number")
+        for entity in (layout.get("source"), layout.get("consumer"))
+        if isinstance(entity, dict) and entity.get("unit_number") is not None
+    }
+    blockers: list[dict[str, Any]] = []
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict) or not isinstance(entity.get("position"), dict):
+            continue
+        if entity.get("unit_number") in protected_units:
+            continue
+        name = str(entity.get("name") or "")
+        if name == "character":
+            continue
+        entity_position = _position(entity)
+        if name in {"transport-belt", "underground-belt", "splitter"} and distance(entity_position, position) <= 0.75:
+            blockers.append(entity)
+            continue
+        if name in {"inserter", "burner-inserter", "fast-inserter", "small-electric-pole", "wooden-chest", "iron-chest", "steel-chest"}:
+            if distance(entity_position, position) <= 0.55:
+                blockers.append(entity)
+            continue
+        if name in ASSEMBLER_ENTITY_NAMES | {"lab", "stone-furnace", "burner-mining-drill", "boiler", "steam-engine"}:
+            if _point_inside_machine(position, entity):
+                blockers.append(entity)
+            continue
+        entity_type = str(entity.get("type") or "")
+        if entity_type == "tree" and distance(entity_position, position) < 1.25:
+            blockers.append(entity)
+            continue
+        if (entity_type in {"simple-entity", "cliff"} or name.endswith("rock")) and distance(entity_position, position) < 1.75:
+            blockers.append(entity)
+    return _nearest_to(blockers, position) if blockers else None
 
 
 def _nearest_buildable_missing_site_input_segment(
