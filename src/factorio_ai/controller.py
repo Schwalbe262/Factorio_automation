@@ -3954,6 +3954,8 @@ class ModlessFactorioController(FactorioController):
         # Per-step skill observe: drop the radius-768 far scans and trim resources to the nearest
         # few per type (skills only act on nearby geometry + nearest resources). Full observes still
         # happen for strategy decisions and the planning-site retry path.
+        if goal == "build_site_input_logistic_line":
+            return self._observe_modless(include_planning_sites=False, lightweight=False)
         return self._observe_modless(include_planning_sites=False, lightweight=True)
 
     def _maybe_retry_skill_with_planning_sites(

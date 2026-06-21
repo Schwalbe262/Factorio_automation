@@ -9692,6 +9692,94 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["name"], "transport-belt")
         self.assertNotEqual(decision.action.get("item"), "copper-plate")
 
+    def test_site_input_logistic_line_builds_reachable_segment_before_walking_to_far_span(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 35.0, "y": 0.0}}
+        obs["inventory"] = {"transport-belt": 4}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt"),
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": 0.0, "y": 0.0},
+                    "recipe": "copper-plate",
+                    "inventories": {"3": {"copper-plate": 20}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 951,
+                    "position": {"x": 60.0, "y": 0.0},
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {},
+                },
+            ]
+        )
+        layout = {
+            "item": "copper-plate",
+            "source": obs["entities"][-2],
+            "consumer": obs["entities"][-1],
+            "source_inserter": {"position": {"x": 1.0, "y": 0.0}, "direction": 4, "entity": {"unit_number": 952}},
+            "target_inserter": {"position": {"x": 59.0, "y": 0.0}, "direction": 4, "entity": {"unit_number": 953}},
+            "segments": [
+                {"position": {"x": 0.0, "y": 0.0}, "direction": planner_module.EAST, "entity": None},
+                {"position": {"x": 35.0, "y": 0.0}, "direction": planner_module.EAST, "entity": None},
+            ],
+        }
+
+        with patch("factorio_ai.planner._find_site_input_logistic_line_layout", return_value=layout):
+            decision = SiteInputLogisticLineSkill(20, item="copper-plate").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["position"], {"x": 35.0, "y": 0.0})
+        self.assertIn("reachable copper-plate site input belt", decision.reason)
+
+    def test_site_input_logistic_line_moves_to_nearest_buildable_segment_not_route_first(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 0.0, "y": 0.0}}
+        obs["inventory"] = {"transport-belt": 4}
+        obs["entities"].extend(
+            [
+                mall_assembler(recipe="transport-belt"),
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": 0.0, "y": 0.0},
+                    "recipe": "copper-plate",
+                    "inventories": {"3": {"copper-plate": 20}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 951,
+                    "position": {"x": 100.0, "y": 0.0},
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {},
+                },
+            ]
+        )
+        layout = {
+            "item": "copper-plate",
+            "source": obs["entities"][-2],
+            "consumer": obs["entities"][-1],
+            "source_inserter": {"position": {"x": 1.0, "y": 0.0}, "direction": 4, "entity": {"unit_number": 952}},
+            "target_inserter": {"position": {"x": 99.0, "y": 0.0}, "direction": 4, "entity": {"unit_number": 953}},
+            "segments": [
+                {"position": {"x": 100.0, "y": 0.0}, "direction": planner_module.EAST, "entity": None},
+                {"position": {"x": 40.0, "y": 0.0}, "direction": planner_module.EAST, "entity": None},
+            ],
+        }
+
+        with patch("factorio_ai.planner._find_site_input_logistic_line_layout", return_value=layout):
+            decision = SiteInputLogisticLineSkill(20, item="copper-plate").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "move_to")
+        self.assertEqual(decision.action["position"], {"x": 43.0, "y": 0.0})
+        self.assertIn("nearest buildable site input logistics belt", decision.reason)
+
     def test_site_input_logistic_line_ignores_nearby_consumer_input_inventory_as_source(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"transport-belt": 4}

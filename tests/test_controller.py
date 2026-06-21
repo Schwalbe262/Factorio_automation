@@ -2137,6 +2137,28 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(observation["tick"], 1)
         self.assertEqual(fake_modless.calls[0]["include_planning_sites"], False)
 
+    def test_no_mod_site_input_skill_loop_uses_full_observe(self):
+        class FakeModless:
+            def __init__(self):
+                self.calls = []
+
+            def observe(self, **kwargs):
+                self.calls.append(kwargs)
+                return {"ok": True, "tick": 1, "power_sites": [], "lab_sites": [], "automation_sites": []}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = make_test_config(Path(temp_dir))
+            controller = ModlessFactorioController(cfg)
+            fake_modless = FakeModless()
+            controller._modless = fake_modless
+
+            controller._observe_for_skill_loop("build_site_input_logistic_line", 1)
+            controller._observe_for_skill_loop("produce_iron_plate", 1)
+
+        self.assertEqual(fake_modless.calls[0]["include_planning_sites"], False)
+        self.assertFalse(fake_modless.calls[0]["lightweight"])
+        self.assertTrue(fake_modless.calls[1]["lightweight"])
+
     def test_no_mod_retries_planning_site_observe_only_when_site_candidate_is_needed(self):
         class FakeModless:
             def __init__(self):

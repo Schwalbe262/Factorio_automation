@@ -2649,6 +2649,90 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("transport_belt_automation_ready=true", result["evidence"])
         self.assertIn("main_belt_preferred=true", result["evidence"])
 
+    def test_reconcile_routes_science_input_before_retrying_science(self):
+        entities = _distant_copper_source_and_science_consumer_entities()
+        entities.append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 300,
+                "recipe": "transport-belt",
+                "position": {"x": 20, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {"1": {"transport-belt": 8}},
+            }
+        )
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "produce_automation_science_pack",
+                "priority": 60,
+                "reason": "Retry red science.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {},
+                "entities": entities,
+                "resources": [{"name": "copper-ore", "position": {"x": 0, "y": 0}}],
+                "research": {
+                    "technologies": {
+                        "automation": {"researched": True},
+                        "logistics": {"researched": True},
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(result["selected_skill"], "build_site_input_logistic_line")
+        self.assertEqual(result["input_item"], "copper-plate")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "produce_automation_science_pack")
+        self.assertIn("site input logistic line", result["blockers"])
+
+    def test_reconcile_routes_science_input_before_more_copper_expansion(self):
+        entities = _distant_copper_source_and_science_consumer_entities()
+        entities.append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 300,
+                "recipe": "transport-belt",
+                "position": {"x": 20, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {"1": {"transport-belt": 8}},
+            }
+        )
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "expand_copper_smelting",
+                "priority": 60,
+                "reason": "More copper.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            {
+                "inventory": {},
+                "entities": entities,
+                "resources": [{"name": "copper-ore", "position": {"x": 0, "y": 0}}],
+                "research": {
+                    "technologies": {
+                        "automation": {"researched": True},
+                        "logistics": {"researched": True},
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(result["selected_skill"], "build_site_input_logistic_line")
+        self.assertEqual(result["input_item"], "copper-plate")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "expand_copper_smelting")
+        self.assertIn("site input logistic line", result["blockers"])
+
     def test_heuristic_builds_copper_source_before_missing_source_site_route(self):
         result = heuristic_strategy(
             "launch_rocket_program",

@@ -12748,6 +12748,12 @@ class SiteInputLogisticLineSkill:
                 },
                 "remove misoriented transport belt from the site input logistics line before spending scarce belts",
             )
+        nearest_buildable_segment = _nearest_buildable_missing_site_input_segment(
+            observation,
+            layout,
+            player,
+            protected_units=protected_units,
+        )
         for segment in layout["segments"]:
             if _site_input_segment_is_splitter(layout, segment):
                 continue
@@ -12838,11 +12844,23 @@ class SiteInputLogisticLineSkill:
                     None,
                     "site input logistics needs transport belts from the belt mall; refusing hand-crafted belts or item shuttle",
                 )
-            position = segment["position"]
+            target_segment = nearest_buildable_segment or segment
+            position = target_segment["position"]
             if distance(player, position) > 20:
                 return PlannerDecision(
                     {"type": "move_to", "position": _stand_position(position, offset=3.0)},
-                    "move near next site input logistics belt segment",
+                    "move near nearest buildable site input logistics belt segment",
+                )
+            if target_segment is not segment:
+                return PlannerDecision(
+                    {
+                        "type": "build",
+                        "name": "transport-belt",
+                        "position": position,
+                        "direction": target_segment["direction"],
+                        "allow_nearby": False,
+                    },
+                    f"extend reachable {layout['item']} site input belt segment before walking to another route span",
                 )
             return PlannerDecision(
                 {
@@ -12939,6 +12957,34 @@ class SiteInputLogisticLineSkill:
             f"{layout['item']} site input logistics line is built with belts and endpoint inserters",
             done=True,
         )
+
+
+def _nearest_buildable_missing_site_input_segment(
+    observation: dict[str, Any],
+    layout: dict[str, Any],
+    player: dict[str, float],
+    *,
+    protected_units: set[int],
+) -> dict[str, Any] | None:
+    best: tuple[float, dict[str, Any]] | None = None
+    for segment in layout.get("segments") or []:
+        if not isinstance(segment, dict) or _site_input_segment_is_splitter(layout, segment):
+            continue
+        if isinstance(segment.get("entity"), dict):
+            continue
+        position = segment.get("position") if isinstance(segment.get("position"), dict) else None
+        if position is None:
+            continue
+        if _belt_line_position_blocker(
+            observation,
+            position,
+            protected_unit_numbers=protected_units,
+        ) is not None:
+            continue
+        score = distance(player, position)
+        if best is None or score < best[0]:
+            best = (score, segment)
+    return best[1] if best is not None else None
 
 
 class BuildItemMallSkill:
