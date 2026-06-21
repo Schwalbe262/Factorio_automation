@@ -1,11 +1,10 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor/autopilot restarted with latest code, supervisor PID `75296`, autopilot PID `19640`, scheduler Qwen service `12755`.
-- Part166: protected active item-mall output buffers from obsolete cleanup; pushed `f3ba568`.
-- Part167: fixed smelting line resource matching and incomplete parallel-line continuation; pushed `5b6225c`.
-- Part168: generalized plate source recovery for copper site-input lines and science gear-before-copper top-up; pushed `3165be2`.
-- Part169: `CopperPlateSkill` now recovers an existing direct copper burner-drill/furnace cell before falling into belt-smelting/inserter dependencies.
-- Validation: targeted copper/smelting regressions OK; `tests.test_planner tests.test_controller tests.test_strategy` passed 642; full `PYTHONPATH=src python -m unittest discover -s tests` passed 1142 with existing socket ResourceWarning.
-- Live validation: `cannot obtain inserter for belt smelting line yet` broke; copper drill/furnace recovered; `electric-mining-drill` research advanced ~32% -> 35%; `run-health --no-observe` stall=0.
-- Current live: researched `4`, current research `electric-mining-drill`, automation science `1`, copper plate `22`, gears `134`, belts `26`, coal `36`.
-- Next blocker to watch: keep red-science feed stable, then complete `electric-mining-drill` and transition burner drills to electric miners.
-- Operator layout traces exist but remain pending review, not auto-promoted into skills; weekly quota unavailable.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor PID `75296`, current autopilot PID `49792`, scheduler Qwen is active.
+- Part170: circuit automation now falls back to a powered sidecar site when `automation_sites` is absent/stale.
+- Part171: non-executable site-input routes now repair missing source prerequisites instead of reselecting the same route executor.
+- Part172: copper/iron expansion fuel failures now route through direct plate recovery before repeating `expand_*_smelting`.
+- Validation: `tests.test_planner tests.test_controller tests.test_strategy` passed 648; full `PYTHONPATH=src python -m unittest discover -s tests` passed 1148 with existing socket ResourceWarning.
+- Live validation: `expand_copper_smelting` fuel loop broke; copper plate reached 121; `build_site_input_logistic_line` ran OK; latest live skill `produce_copper_plate` reports target reached.
+- Current live: researched `5`, current research empty, key items include copper plate `121`, gears `149`, belts `25`, coal `19`, circuits `7`.
+- Next blocker to watch: stop over-selecting copper once route is built, resume red-science/electric-mining-drill path, then retire burner mining.
+- Operator layout traces are captured as pending/retracted review examples, not model-weight learning or auto-promoted skills yet; weekly quota unavailable.

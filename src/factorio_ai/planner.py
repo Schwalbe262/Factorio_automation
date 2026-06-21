@@ -4793,7 +4793,7 @@ class _ExpandPlateSmeltingSkill:
         if low_fuel_layout is not None:
             decision = self._fuel_line_to_reserve(observation, player, low_fuel_layout)
             if decision is not None:
-                return decision
+                return self._direct_cell_recovery_before_fuel_failure(observation, decision)
 
         estimated_rate = _estimated_plate_rate(observation, self.product_name, self.resource_name)
         if estimated_rate >= self.target_rate_per_minute:
@@ -4868,7 +4868,7 @@ class _ExpandPlateSmeltingSkill:
 
         reserve_decision = self._fuel_line_to_reserve(observation, player, layout)
         if reserve_decision is not None:
-            return reserve_decision
+            return self._direct_cell_recovery_before_fuel_failure(observation, reserve_decision)
 
         return PlannerDecision(
             {"type": "wait", "ticks": 300},
@@ -4919,6 +4919,37 @@ class _ExpandPlateSmeltingSkill:
                     exclude_source_units=line_units,
                 )
         return None
+
+    def _direct_cell_recovery_before_fuel_failure(
+        self,
+        observation: dict[str, Any],
+        blocked: PlannerDecision,
+    ) -> PlannerDecision:
+        if blocked.action is not None or "fuel logistics" not in blocked.reason:
+            return blocked
+        if not _recoverable_direct_plate_cell_exists(observation, self.resource_name, self.product_name):
+            return blocked
+        target = inventory_count(observation, self.product_name) + DIRECT_SMELTING_CELL_TARGET_PLATES
+        if self.product_name == "copper-plate":
+            recovery = CopperPlateSkill(target_count=target).next_action(observation, target_count=target, inventory_only=True)
+        else:
+            recovery = IronPlateSkill(target_count=target).next_action(observation, target_count=target, inventory_only=True)
+        if recovery.action is None:
+            return blocked
+        metadata = dict(recovery.metadata)
+        metadata.update(
+            {
+                "expanded_smelting_recovery": True,
+                "blocked_reason": blocked.reason,
+                "product": self.product_name,
+            }
+        )
+        return PlannerDecision(
+            recovery.action,
+            f"{recovery.reason}; recover direct {self.product_name} cell before retrying expanded smelting fuel logistics",
+            done=False,
+            metadata=metadata,
+        )
 
 
 class ExpandIronSmeltingSkill(_ExpandPlateSmeltingSkill):
@@ -6021,6 +6052,23 @@ def _direct_smelting_fuel_unit_numbers(observation: dict[str, Any], resource_nam
 def _find_direct_smelting_cell(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
     cells = _direct_smelting_cells(observation, resource_name)
     return cells[0] if cells else None
+
+
+def _recoverable_direct_plate_cell_exists(
+    observation: dict[str, Any],
+    resource_name: str,
+    product_name: str,
+) -> bool:
+    for layout in _direct_smelting_cells(observation, resource_name):
+        furnace = layout.get("furnace")
+        if isinstance(furnace, dict) and entity_item_count(furnace, product_name) > 0:
+            return True
+        if _inventory_burner_fuel_count(observation) <= 0:
+            continue
+        for entity in (layout.get("drill"), furnace):
+            if isinstance(entity, dict) and _entity_burner_fuel_count(entity) < DIRECT_SMELTING_FUEL_RESERVE:
+                return True
+    return False
 
 
 def _select_direct_smelting_layout(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
@@ -14941,39 +14989,92 @@ def _find_circuit_automation_cell(observation: dict[str, Any]) -> dict[str, Any]
 
 def _select_circuit_automation_site(observation: dict[str, Any]) -> dict[str, Any] | None:
     sites = observation.get("automation_sites")
-    if not isinstance(sites, list):
+    candidates: list[dict[str, Any]] = []
+    if isinstance(sites, list):
+        for site in sites:
+            if not isinstance(site, dict):
+                continue
+            required = [
+                "pole_position",
+                "cable_assembler_position",
+                "circuit_assembler_position",
+                "transfer_inserter_position",
+            ]
+            if not all(isinstance(site.get(key), dict) for key in required):
+                continue
+            if not all(_within_starter_logistics_area(observation, _xy_position(site[key])) for key in required):
+                continue
+            candidates.append(
+                {
+                    "pole_position": _xy_position(site["pole_position"]),
+                    "cable_assembler_position": _xy_position(site["cable_assembler_position"]),
+                    "circuit_assembler_position": _xy_position(site["circuit_assembler_position"]),
+                    "transfer_inserter_position": _xy_position(site["transfer_inserter_position"]),
+                    "transfer_inserter_direction": _direction_or_default(site.get("transfer_inserter_direction"), EAST),
+                    "pole_unit_number": site.get("pole_unit_number"),
+                    "source_pole_unit_number": site.get("source_pole_unit_number"),
+                    "powered": site.get("powered"),
+                    "distance": site.get("distance"),
+                    "pole": None,
+                    "cable_assembler": None,
+                    "circuit_assembler": None,
+                    "transfer_inserter": None,
+                }
+            )
+    if not candidates:
+        return _select_circuit_automation_sidecar_site(observation)
+    candidates.sort(
+        key=lambda item: (
+            0 if item.get("powered") else 1,
+            0 if item.get("pole_unit_number") else 1,
+            float(item.get("distance") or 999999),
+        )
+    )
+    return candidates[0]
+
+
+def _select_circuit_automation_sidecar_site(observation: dict[str, Any]) -> dict[str, Any] | None:
+    anchors = _circuit_automation_sidecar_anchors(observation)
+    if not anchors:
         return None
     candidates: list[dict[str, Any]] = []
-    for site in sites:
-        if not isinstance(site, dict):
-            continue
-        required = [
-            "pole_position",
-            "cable_assembler_position",
-            "circuit_assembler_position",
-            "transfer_inserter_position",
-        ]
-        if not all(isinstance(site.get(key), dict) for key in required):
-            continue
-        if not all(_within_starter_logistics_area(observation, _xy_position(site[key])) for key in required):
-            continue
-        candidates.append(
-            {
-                "pole_position": _xy_position(site["pole_position"]),
-                "cable_assembler_position": _xy_position(site["cable_assembler_position"]),
-                "circuit_assembler_position": _xy_position(site["circuit_assembler_position"]),
-                "transfer_inserter_position": _xy_position(site["transfer_inserter_position"]),
-                "transfer_inserter_direction": _direction_or_default(site.get("transfer_inserter_direction"), EAST),
-                "pole_unit_number": site.get("pole_unit_number"),
-                "source_pole_unit_number": site.get("source_pole_unit_number"),
-                "powered": site.get("powered"),
-                "distance": site.get("distance"),
-                "pole": None,
-                "cable_assembler": None,
-                "circuit_assembler": None,
-                "transfer_inserter": None,
-            }
-        )
+    reach = _power_wire_reach("small-electric-pole")
+    player = player_position(observation)
+    for anchor in anchors:
+        anchor_position = anchor["anchor_position"]
+        source_pole = anchor["source_pole"]
+        source_position = _position(source_pole)
+        for cable_position in _circuit_automation_sidecar_cable_positions(anchor_position):
+            layout = _circuit_cell_layout_from_cable_position(cable_position)
+            if not _circuit_automation_layout_buildable(observation, layout):
+                continue
+            pole = _nearest_small_pole_supplying_positions(
+                observation,
+                [
+                    layout["cable_assembler_position"],
+                    layout["circuit_assembler_position"],
+                    layout["transfer_inserter_position"],
+                ],
+            )
+            if isinstance(pole, dict) and distance(_position(pole), source_position) <= reach:
+                pole_position = _position(pole)
+            else:
+                pole = None
+                pole_position = _select_circuit_automation_sidecar_pole_position(
+                    observation,
+                    layout,
+                    source_position,
+                    reach,
+                )
+                if pole_position is None:
+                    continue
+            layout["pole_position"] = pole_position
+            layout["pole"] = pole
+            layout["pole_unit_number"] = pole.get("unit_number") if isinstance(pole, dict) else None
+            layout["source_pole_unit_number"] = source_pole.get("unit_number")
+            layout["powered"] = bool(isinstance(pole, dict) and _entity_is_power_anchor(observation, pole))
+            layout["distance"] = distance(player, layout["cable_assembler_position"])
+            candidates.append(layout)
     if not candidates:
         return None
     candidates.sort(
@@ -14984,6 +15085,120 @@ def _select_circuit_automation_site(observation: dict[str, Any]) -> dict[str, An
         )
     )
     return candidates[0]
+
+
+def _circuit_automation_sidecar_anchors(observation: dict[str, Any]) -> list[dict[str, Any]]:
+    anchors: list[dict[str, Any]] = []
+    for assembler in entities_named(observation, "assembling-machine-1"):
+        if assembler.get("electric_network_connected") is not True:
+            continue
+        recipe = str(assembler.get("recipe") or "")
+        if recipe in {"copper-cable", "electronic-circuit"}:
+            continue
+        assembler_position = _position(assembler)
+        if not _within_starter_logistics_area(observation, assembler_position):
+            continue
+        source_pole = _nearest_small_pole_supplying_position(observation, assembler_position)
+        if source_pole is None:
+            source_pole = _nearest_to(
+                [pole for pole in entities_named(observation, "small-electric-pole") if distance(_position(pole), assembler_position) <= 7.5],
+                assembler_position,
+            )
+        if not isinstance(source_pole, dict):
+            continue
+        anchors.append(
+            {
+                "anchor_position": assembler_position,
+                "source_pole": source_pole,
+                "distance": float(assembler.get("distance") or distance(player_position(observation), assembler_position)),
+            }
+        )
+    anchors.sort(key=lambda item: float(item.get("distance") or 999999))
+    return anchors
+
+
+def _circuit_automation_sidecar_cable_positions(anchor_position: dict[str, float]) -> list[dict[str, float]]:
+    offsets: list[dict[str, float]] = []
+    for dy in (4.0, -4.0, 8.0, -8.0, 12.0, -12.0, 0.0, 16.0, -16.0):
+        for dx in (0.0, -4.0, 4.0, -8.0, 8.0, -12.0, 12.0, -16.0, 16.0):
+            offsets.append({"x": dx, "y": dy})
+    positions: list[dict[str, float]] = []
+    seen: set[tuple[float, float]] = set()
+    for offset in offsets:
+        position = {
+            "x": _round_entity_center(anchor_position["x"] + offset["x"]),
+            "y": _round_entity_center(anchor_position["y"] + offset["y"]),
+        }
+        key = _position_tuple(position)
+        if key in seen:
+            continue
+        seen.add(key)
+        positions.append(position)
+    return positions
+
+
+def _circuit_automation_layout_buildable(observation: dict[str, Any], layout: dict[str, Any]) -> bool:
+    required = [
+        "cable_assembler_position",
+        "circuit_assembler_position",
+        "transfer_inserter_position",
+    ]
+    if not all(_within_starter_logistics_area(observation, _xy_position(layout[key])) for key in required):
+        return False
+    if not _build_item_sidecar_position_clear(observation, layout["cable_assembler_position"]):
+        return False
+    if not _build_item_sidecar_position_clear(observation, layout["circuit_assembler_position"]):
+        return False
+    return _build_item_mall_output_position_clear(
+        observation,
+        layout["transfer_inserter_position"],
+        allowed_names={"inserter", "fast-inserter"},
+    )
+
+
+def _nearest_small_pole_supplying_positions(
+    observation: dict[str, Any],
+    positions: list[dict[str, float]],
+) -> dict[str, Any] | None:
+    candidates = [
+        pole
+        for pole in entities_named(observation, "small-electric-pole")
+        if all(_small_pole_supplies_position(_position(pole), position) for position in positions)
+    ]
+    return _nearest_to(candidates, positions[0]) if candidates else None
+
+
+def _select_circuit_automation_sidecar_pole_position(
+    observation: dict[str, Any],
+    layout: dict[str, Any],
+    source_position: dict[str, float],
+    reach: float,
+) -> dict[str, float] | None:
+    cable_position = layout["cable_assembler_position"]
+    candidates = [
+        {"x": cable_position["x"] + 2.0, "y": cable_position["y"] - 2.0},
+        {"x": cable_position["x"] + 2.0, "y": cable_position["y"] + 2.0},
+    ]
+    supply_positions = [
+        layout["cable_assembler_position"],
+        layout["circuit_assembler_position"],
+        layout["transfer_inserter_position"],
+    ]
+    valid: list[dict[str, float]] = []
+    for candidate in candidates:
+        candidate = {"x": _round_power_pole_center(candidate["x"]), "y": _round_power_pole_center(candidate["y"])}
+        if distance(candidate, source_position) > reach:
+            continue
+        if not all(_small_pole_supplies_position(candidate, position) for position in supply_positions):
+            continue
+        existing = _entity_near(observation, "small-electric-pole", candidate, radius=1.0)
+        if existing is None and not _build_item_sidecar_pole_position_clear(observation, candidate):
+            continue
+        valid.append(candidate)
+    if not valid:
+        return None
+    valid.sort(key=lambda item: distance(item, source_position))
+    return valid[0]
 
 
 def _circuit_cell_layout_from_cable_position(cable_position: dict[str, float]) -> dict[str, Any]:

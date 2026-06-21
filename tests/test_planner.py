@@ -4560,6 +4560,49 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["name"], "boiler")
         self.assertIn("surplus coal", decision.reason)
 
+    def test_expand_smelting_harvests_direct_cell_before_fuel_logistics_failure(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 22.0, "y": 0.0}}
+        obs["inventory"] = {"coal": 0}
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 4, "y": 0}, "distance": 18},
+            {"name": "coal", "position": {"x": 300, "y": 0}, "distance": 278},
+        ]
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, resource="copper-ore", product="copper-plate")
+        for entity in obs["entities"]:
+            if entity["name"] == "burner-inserter":
+                entity["inventories"] = {}
+            if entity["name"] == "stone-furnace":
+                entity["inventories"] = {"1": {"coal": 1}, "2": {"copper-ore": 1}}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "burner-mining-drill",
+                    "unit_number": 900,
+                    "position": {"x": 20.0, "y": 0.0},
+                    "direction": planner_module.EAST,
+                    "mining_target": "copper-ore",
+                    "status_name": "no_fuel",
+                    "inventories": {},
+                },
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 901,
+                    "position": {"x": 22.0, "y": 0.0},
+                    "status_name": "full_output",
+                    "inventories": {"1": {"coal": 1}, "2": {"copper-ore": 30}, "3": {"copper-plate": 80}},
+                },
+            ]
+        )
+
+        decision = ExpandCopperSmeltingSkill(target_rate_per_minute=18).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "copper-plate")
+        self.assertEqual(decision.action["unit_number"], 901)
+        self.assertTrue(decision.metadata["expanded_smelting_recovery"])
+        self.assertIn("recover direct copper-plate cell", decision.reason)
+
     def test_expand_smelting_does_not_ping_pong_fuel_inside_same_line(self):
         obs = base_observation()
         obs["inventory"] = {"coal": 0}
@@ -6040,6 +6083,33 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "set_recipe")
         self.assertEqual(decision.action["recipe"], "inserter")
         self.assertEqual(decision.action["unit_number"], 819)
+
+    def test_circuit_automation_builds_sidecar_when_automation_sites_missing(self):
+        obs = powered_automation_observation()
+        obs["automation_sites"] = {}
+        obs["inventory"] = {
+            "small-electric-pole": 1,
+            "assembling-machine-1": 2,
+            "inserter": 1,
+        }
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 819,
+                "position": {"x": 8.5, "y": 6.5},
+                "distance": 8,
+                "recipe": "transport-belt",
+                "electric_network_connected": True,
+                "inventories": {"1": {}},
+            }
+        )
+
+        decision = CircuitAutomationSkill().next_action(obs)
+
+        self.assertIsNotNone(decision.action)
+        self.assertNotIn("cannot find a powered or wireable site", decision.reason)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertIn(decision.action["name"], {"small-electric-pole", "assembling-machine-1"})
 
     def test_circuit_automation_places_cable_assembler_first(self):
         obs = powered_automation_observation()

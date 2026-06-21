@@ -1305,6 +1305,42 @@ def reconcile_strategy_decision(
             selected,
             gear_belt_mall_transfer_logistics_issue,
         )
+    if (
+        gear_belt_mall_transfer_logistics_issue is None
+        and readiness.failure_root == "gear_belt_logistics_incomplete"
+        and readiness.repair_skill == "build_gear_belt_mall_logistics"
+        and selected != "build_gear_belt_mall_logistics"
+        and selected in GEAR_BELT_MALL_TRANSFER_LOGISTICS_PREEMPT_SKILLS
+    ):
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = "build_gear_belt_mall_logistics"
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 93)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            f"LLM selected {selected}, but factory readiness reports gear/belt mall transfer logistics "
+            "is still incomplete; run the deterministic repair skill before a generic site-input route."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(
+            set(_string_list(decision.get("blockers")) + list(readiness.blocked_by) + ["gear/belt mall transfer logistics"])
+        )
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            "factory_readiness_failure_root=gear_belt_logistics_incomplete",
+            "factory_readiness_repair_skill=build_gear_belt_mall_logistics",
+            f"belt_mall_can_output={str(readiness.belt_mall_can_output).lower()}",
+            f"belt_line_buildable={str(readiness.belt_line_buildable).lower()}",
+        ]
+        adjusted["expected_effect"] = (
+            "Finish the gear-to-belt mall transfer so belt production is self-feeding before spending belts "
+            "on broader site input logistics."
+        )
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": "build_gear_belt_mall_logistics",
+            "reason": guardrail_reason,
+        }
+        return adjusted
     if _gear_belt_mall_relocation_in_progress(observation) and selected in GEAR_BELT_MALL_PARTIAL_RELOCATION_PREEMPT_SKILLS:
         return _partial_gear_belt_relocation_guardrail_adjustment(decision, selected)
     if (
@@ -1514,6 +1550,35 @@ def reconcile_strategy_decision(
         adjusted["guardrail_adjusted"] = {
             "from": selected,
             "to": "connect_coal_fuel_feed",
+            "reason": guardrail_reason,
+        }
+        return adjusted
+    smelting_fuel_blocker = _expanded_smelting_fuel_blocker(observation, selected)
+    if smelting_fuel_blocker is not None:
+        target_skill = "produce_copper_plate" if selected == "expand_copper_smelting" else "produce_iron_plate"
+        adjusted = dict(decision)
+        adjusted["selected_skill"] = target_skill
+        adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 85)
+        original_reason = str(decision.get("reason") or "").strip()
+        guardrail_reason = (
+            f"LLM selected {selected}, but an existing burner smelting cell is fuel-starved and no executable "
+            "coal-feed route is available for that expansion; recover the direct plate cell before adding more burners."
+        )
+        adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+        adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["smelting fuel logistics"]))
+        adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+            f"guardrail_adjusted_from={selected}",
+            f"fuel_starved_entity={smelting_fuel_blocker.get('entity')}",
+            f"fuel_starved_unit={smelting_fuel_blocker.get('unit')}",
+            f"resource={smelting_fuel_blocker.get('resource')}",
+            "coal_fuel_feed_route_needed=false",
+        ]
+        adjusted["expected_effect"] = (
+            "Refuel or recover the existing direct smelting cell without preserving the failed belt-expansion action."
+        )
+        adjusted["guardrail_adjusted"] = {
+            "from": selected,
+            "to": target_skill,
             "reason": guardrail_reason,
         }
         return adjusted
@@ -2161,11 +2226,15 @@ def reconcile_strategy_decision(
             "bootstrap_electric_mining_drill_mall",
         }
     ):
+        executable_site_input_issue = _site_input_line_executable_issue(observation, site_input_line_issue)
+        site_input_executable = executable_site_input_issue is not None
         target_skill = (
             "build_site_input_logistic_line"
-            if _transport_belt_automation_ready(observation)
+            if _transport_belt_automation_ready(observation) and site_input_executable
             else "build_gear_belt_mall_logistics"
         )
+        if not site_input_executable and _transport_belt_automation_ready(observation):
+            target_skill = _site_input_nonexecutable_repair_skill(observation, site_input_line_issue, readiness) or target_skill
         if selected != target_skill:
             adjusted = dict(decision)
             adjusted["selected_skill"] = target_skill
@@ -2174,12 +2243,21 @@ def reconcile_strategy_decision(
             guardrail_reason = (
                 f"LLM selected {selected}, but an existing factory consumer has a repeated input logistics gap; "
                 "do not cover it by player inventory shuttles."
+                if site_input_executable or not _transport_belt_automation_ready(observation)
+                else (
+                    f"LLM selected {selected}, but no executable site-input belt layout exists for "
+                    f"{site_input_line_issue.get('item')}; run {target_skill} before retrying the route executor."
+                )
             )
             adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
             blocker = (
                 "site input logistic line"
                 if target_skill == "build_site_input_logistic_line"
-                else "transport-belt automation before site input line"
+                else (
+                    "transport-belt automation before site input line"
+                    if not _transport_belt_automation_ready(observation)
+                    else "executable site input route"
+                )
             )
             adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + [blocker]))
             adjusted["evidence"] = _string_list(decision.get("evidence")) + [
@@ -2189,12 +2267,17 @@ def reconcile_strategy_decision(
                 f"site_id={site_input_line_issue.get('site_id')}",
                 f"transport_belt_automation_ready={str(_transport_belt_automation_ready(observation)).lower()}",
                 f"main_belt_preferred={str(target_skill == 'build_site_input_logistic_line').lower()}",
+                f"site_input_executable={str(site_input_executable).lower()}",
                 "hand_carry_seed_risk=true",
             ]
             adjusted["expected_effect"] = (
                 "Build or extend the missing repeated input route as an expandable main-belt/trunk corridor with endpoint inserters."
                 if target_skill == "build_site_input_logistic_line"
-                else "Automate transport-belt supply before spending belts on repeated site-to-site input routes."
+                else (
+                    "Automate transport-belt supply before spending belts on repeated site-to-site input routes."
+                    if not _transport_belt_automation_ready(observation)
+                    else "Repair the missing producer/source layout before retrying the site-to-site route executor."
+                )
             )
             adjusted["guardrail_adjusted"] = {
                 "from": selected,
@@ -2202,12 +2285,12 @@ def reconcile_strategy_decision(
                 "reason": guardrail_reason,
             }
             return (
-                _with_site_input_target(adjusted, site_input_line_issue)
+                _with_site_input_target(adjusted, executable_site_input_issue or site_input_line_issue)
                 if target_skill == "build_site_input_logistic_line"
                 else adjusted
             )
         if target_skill == "build_site_input_logistic_line":
-            return _with_site_input_target(dict(decision), site_input_line_issue)
+            return _with_site_input_target(dict(decision), executable_site_input_issue or site_input_line_issue)
     missing_input_source_issue = _site_input_missing_source_issue(observation) if site_input_guardrails_needed else None
     if (
         _technology_researched(observation, "automation")
@@ -3880,36 +3963,79 @@ def _site_input_line_strategy_decision(
     site_input_line_issue: dict[str, Any],
 ) -> dict[str, Any]:
     belt_ready = _transport_belt_automation_ready(observation)
-    target_skill = "build_site_input_logistic_line" if belt_ready else "build_gear_belt_mall_logistics"
+    executable_issue = _site_input_line_executable_issue(observation, site_input_line_issue)
+    site_input_executable = executable_issue is not None
+    target_skill = (
+        "build_site_input_logistic_line"
+        if belt_ready and site_input_executable
+        else "build_gear_belt_mall_logistics"
+    )
+    if belt_ready and not site_input_executable:
+        target_skill = _site_input_nonexecutable_repair_skill(observation, site_input_line_issue) or target_skill
     decision = StrategicDecision(
         selected_skill=target_skill,
         priority=90,
         reason=(
             "A repeated producer-to-consumer input flow is missing; extend a main-belt/trunk-style logistics "
             "route instead of letting the player carry items between factory sites."
-            if belt_ready
+            if belt_ready and site_input_executable
             else "A repeated producer-to-consumer input flow is missing, but transport-belt production is not ready; "
             "automate belts before building site-to-site routes."
+            if not belt_ready
+            else (
+                f"A repeated {site_input_line_issue.get('item')} input flow is missing, but no executable "
+                f"site-input route layout exists yet; run {target_skill} before retrying the route executor."
+            )
         ),
         evidence=[
             f"layout_kind={site_input_line_issue.get('kind')}",
             f"item={site_input_line_issue.get('item')}",
             f"site_id={site_input_line_issue.get('site_id')}",
             f"transport_belt_automation_ready={str(belt_ready).lower()}",
-            f"main_belt_preferred={str(belt_ready).lower()}",
+            f"main_belt_preferred={str(belt_ready and site_input_executable).lower()}",
+            f"site_input_executable={str(site_input_executable).lower()}",
         ],
         blockers=[
             "site input logistic line"
-            if belt_ready
-            else "transport-belt automation before site input line"
+            if target_skill == "build_site_input_logistic_line"
+            else (
+                "transport-belt automation before site input line"
+                if not belt_ready
+                else "executable site input route"
+            )
         ],
         expected_effect=(
             "Build or extend an expandable trunk belt with endpoint inserters for the repeated input."
-            if belt_ready
+            if target_skill == "build_site_input_logistic_line"
             else "Replenish automated construction belts before spending them on repeated site input lines."
+            if not belt_ready
+            else "Repair the missing producer/source layout before retrying the site-to-site route executor."
         ),
     ).to_dict()
-    return _with_site_input_target(decision, site_input_line_issue) if belt_ready else decision
+    return _with_site_input_target(decision, executable_issue or site_input_line_issue) if target_skill == "build_site_input_logistic_line" else decision
+
+
+def _site_input_line_executable_issue(
+    observation: dict[str, Any],
+    site_input_line_issue: dict[str, Any],
+) -> dict[str, Any] | None:
+    input_item = _sanitize_site_input_target(site_input_line_issue.get("item"))
+    return _executable_site_input_line_issue(observation, item=input_item)
+
+
+def _site_input_nonexecutable_repair_skill(
+    observation: dict[str, Any],
+    site_input_line_issue: dict[str, Any],
+    readiness: Any | None = None,
+) -> str | None:
+    item = str(site_input_line_issue.get("item") or "")
+    if item == "iron-gear-wheel":
+        return "build_gear_belt_mall_logistics"
+    item_repair = _skill_for_bottleneck_item(item, observation)
+    if item_repair is not None:
+        return item_repair
+    readiness = readiness or build_factory_readiness(observation)
+    return readiness.repair_skill
 
 
 def _site_input_missing_source_issue(
@@ -4132,6 +4258,8 @@ def _skill_for_bottleneck_item(item: str, observation: dict[str, Any]) -> str | 
         return "setup_stone_supply"
     if item in {"iron-plate", "iron-ore", "steel-plate"}:
         return _plate_smelting_skill("iron", observation)
+    if item == "iron-gear-wheel":
+        return "build_gear_belt_mall_logistics"
     if item in {"copper-plate", "copper-ore", "copper-cable"}:
         return _plate_smelting_skill("copper", observation)
     if item == "automation-science-pack":
@@ -4145,7 +4273,10 @@ def _skill_for_bottleneck_item(item: str, observation: dict[str, Any]) -> str | 
 
 def _plate_smelting_skill(kind: str, observation: dict[str, Any]) -> str:
     if _transport_belt_automation_ready(observation):
-        return "expand_copper_smelting" if kind == "copper" else "expand_iron_smelting"
+        expansion_skill = "expand_copper_smelting" if kind == "copper" else "expand_iron_smelting"
+        if _expanded_smelting_fuel_blocker(observation, expansion_skill) is not None:
+            return "produce_copper_plate" if kind == "copper" else "produce_iron_plate"
+        return expansion_skill
     if _technology_researched(observation, "automation"):
         return "build_gear_belt_mall_logistics"
     return "produce_copper_plate" if kind == "copper" else "produce_iron_plate"
@@ -4458,6 +4589,30 @@ def _coal_fuel_feed_needed(
         if length <= 32.0:
             return True
     return False
+
+
+def _expanded_smelting_fuel_blocker(observation: dict[str, Any], selected: str) -> dict[str, Any] | None:
+    resource = {
+        "expand_copper_smelting": "copper-ore",
+        "expand_iron_smelting": "iron-ore",
+        "build_belt_smelting_line": "iron-ore",
+    }.get(selected)
+    if resource is None:
+        return None
+    for drill in entities_named(observation, "burner-mining-drill"):
+        drill_resource = str(drill.get("mining_target") or drill.get("resource_name") or "")
+        if not drill_resource:
+            drill_resource = _nearest_resource_name(observation, drill) or ""
+        if drill_resource != resource:
+            continue
+        if _entity_burner_fuel_count(drill) > 0 and not _entity_status_name_in(drill, {"no_fuel"}):
+            continue
+        return {
+            "entity": "burner-mining-drill",
+            "unit": drill.get("unit_number"),
+            "resource": resource,
+        }
+    return None
 
 
 def _boiler_coal_feed_active(observation: dict[str, Any]) -> bool:
