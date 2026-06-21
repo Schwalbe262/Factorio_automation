@@ -4477,6 +4477,13 @@ class CoalFuelFeedSkill:
                     return decision
                 return PlannerDecision(None, "missing powered inserter for boiler coal feed; refusing burner inserter fallback")
             blocker = _build_position_blocker(observation, position, allowed_names={"burner-inserter", "inserter", "fast-inserter"})
+            if blocker is not None and isinstance(layout.get("boiler"), dict):
+                try:
+                    same_boiler = int(blocker.get("unit_number")) == int(layout["boiler"].get("unit_number"))
+                except (TypeError, ValueError):
+                    same_boiler = False
+                if same_boiler:
+                    blocker = None
             if blocker is not None:
                 blocker_position = _position(blocker)
                 if distance(player, blocker_position) > 8:
@@ -4565,6 +4572,28 @@ class CoalFuelFeedSkill:
                 "boiler coal fuel feed is active: belt and inserter are feeding the boiler fuel inventory",
                 done=True,
             )
+        if _boiler_feed_needs_power_bootstrap_seed(layout):
+            fuel_item, fuel_count = _select_inventory_burner_fuel(observation)
+            if fuel_count > 0 and isinstance(boiler, dict):
+                boiler_position = _position(boiler)
+                if distance(player, boiler_position) > 20:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": boiler_position},
+                        "move near boiler to seed the completed coal feed power loop",
+                    )
+                return _bootstrap_seed_decision(
+                    {
+                        "type": "insert",
+                        "item": fuel_item,
+                        "count": 1,
+                        "unit_number": boiler.get("unit_number"),
+                        "name": "boiler",
+                        "position": boiler_position,
+                    },
+                    "seed boiler once so the completed electric coal feed can start moving coal",
+                    seed_reason="boiler_coal_feed_power_seed",
+                    expected_followup="boiler coal feed inserter powered and boiler receives coal",
+                )
         return PlannerDecision(
             {"type": "wait", "ticks": 180},
             "wait for boiler coal feed inserter to move coal into the boiler",
@@ -4679,6 +4708,31 @@ def _boiler_feed_route_started(layout: dict[str, Any]) -> bool:
         return True
     target_inserter = layout.get("target_inserter")
     return isinstance(target_inserter, dict) and isinstance(target_inserter.get("entity"), dict)
+
+
+def _boiler_feed_route_built(layout: dict[str, Any]) -> bool:
+    segments = layout.get("segments") if isinstance(layout.get("segments"), list) else []
+    target_inserter = layout.get("target_inserter")
+    return (
+        bool(segments)
+        and all(isinstance(segment.get("entity"), dict) for segment in segments if isinstance(segment, dict))
+        and isinstance(target_inserter, dict)
+        and isinstance(target_inserter.get("entity"), dict)
+    )
+
+
+def _boiler_feed_needs_power_bootstrap_seed(layout: dict[str, Any]) -> bool:
+    boiler = layout.get("boiler")
+    target_inserter = layout.get("target_inserter")
+    inserter = target_inserter.get("entity") if isinstance(target_inserter, dict) else None
+    return (
+        isinstance(boiler, dict)
+        and _entity_burner_fuel_count(boiler) <= 0
+        and _boiler_feed_route_built(layout)
+        and isinstance(inserter, dict)
+        and str(inserter.get("name") or "") != "burner-inserter"
+        and _entity_no_power(inserter)
+    )
 
 
 class _ExpandPlateSmeltingSkill:
@@ -6725,7 +6779,13 @@ def _coal_boiler_existing_line_route_candidates(
     candidates: list[list[dict[str, Any]]] = []
     ranked_lanes = sorted(horizontal_lanes.items(), key=lambda item: (-len(item[1]), abs(item[0] - source_y)))[:3]
     for lane_y, lane_belts in ranked_lanes:
-        if len(lane_belts) < 6:
+        has_source_spur = _coal_boiler_lane_has_source_spur(
+            observation,
+            source_position,
+            _direction_or_default(source_belt.get("direction"), EAST),
+            lane_y,
+        )
+        if len(lane_belts) < 6 and not has_source_spur:
             continue
         join_belts = sorted(
             lane_belts,
@@ -6749,16 +6809,47 @@ def _coal_boiler_existing_line_route_candidates(
                     {"x": target_x, "y": target_y},
                 )
                 segments = _iron_plate_segments_from_waypoints(observation, waypoints, center_tiles=False)
-                if not _existing_belt_segments_match_generated_directions(segments):
-                    continue
-                candidates.append(_preserve_existing_belt_segment_directions(segments))
+                if _existing_belt_segments_match_generated_directions(segments):
+                    candidates.append(_preserve_existing_belt_segment_directions(segments))
+                else:
+                    candidates.append(segments)
                 accepted_join_count += 1
                 break
-            if accepted_join_count >= 1:
+            if accepted_join_count >= 2:
                 break
         if len(candidates) >= 3:
             break
     return candidates
+
+
+def _coal_boiler_lane_has_source_spur(
+    observation: dict[str, Any],
+    source_position: dict[str, float],
+    source_direction: int,
+    lane_y: float,
+) -> bool:
+    source_x = float(source_position["x"])
+    source_y = float(source_position["y"])
+    if abs(source_y - float(lane_y)) < 0.01:
+        return False
+    if int(source_direction) == WEST:
+        lead_x = source_x - 1.0
+    elif int(source_direction) == EAST:
+        lead_x = source_x + 1.0
+    else:
+        lead_x = source_x
+    vertical_direction = SOUTH if float(lane_y) > source_y else NORTH
+    for position, direction in _axis_route_positions(
+        [{"x": lead_x, "y": source_y}, {"x": lead_x, "y": float(lane_y)}]
+    ):
+        belt = _entity_at_build_position(observation, "transport-belt", position, radius=0.75)
+        if not isinstance(belt, dict):
+            return False
+        if _direction_or_default(belt.get("direction"), vertical_direction) != vertical_direction:
+            return False
+        if int(direction) != vertical_direction:
+            return False
+    return True
 
 
 def _coal_boiler_join_crosses_source_drill(
@@ -6770,7 +6861,7 @@ def _coal_boiler_join_crosses_source_drill(
     if not isinstance(source_drill, dict):
         return False
     drill_position = _position(source_drill)
-    if abs(float(join_x) - float(drill_position["x"])) > 1.5:
+    if abs(float(join_x) - float(drill_position["x"])) >= 1.5:
         return False
     lower_y = min(float(detour_y), float(lane_y))
     upper_y = max(float(detour_y), float(lane_y))
@@ -6779,6 +6870,8 @@ def _coal_boiler_join_crosses_source_drill(
 
 def _coal_boiler_source_detour_y_candidates(source_y: float, lane_y: float) -> list[float]:
     candidates: list[float] = []
+    if abs(float(source_y) - float(lane_y)) < 0.01:
+        candidates.append(round(float(lane_y), 3))
     for offset in (3.0, -3.0, 5.0, -5.0, 7.0, -7.0, 9.0, -9.0):
         candidates.append(round(float(source_y) + offset, 3))
     candidates.append(round(float(lane_y), 3))
@@ -6860,7 +6953,7 @@ def _coal_boiler_fuel_feed_route_score(
         entity = segment.get("entity")
         if isinstance(entity, dict):
             if _direction_or_default(entity.get("direction"), segment["direction"]) != int(segment["direction"]):
-                score += 250.0
+                score += 35.0
             else:
                 score -= 0.25
             continue
@@ -6915,8 +7008,8 @@ def _boiler_fuel_feed_endpoints(
 ) -> dict[str, Any]:
     boiler_position = _position(boiler)
     side = _scalable_boiler_feed_side(observation, source_position, boiler)
-    target_inserter = _offset_along_axis(boiler_position, side, 2.0)
-    target_belt = _tile_center_position(_offset_along_axis(boiler_position, side, 3.0))
+    target_inserter = _offset_along_axis(boiler_position, side, 1.0)
+    target_belt = _tile_center_position(_offset_along_axis(boiler_position, side, 2.0))
     return {
         "target_inserter": target_inserter,
         "target_belt": target_belt,
@@ -6941,8 +7034,8 @@ def _scalable_boiler_feed_side(
     ]
 
     def score(side: dict[str, float]) -> tuple[float, float]:
-        target_inserter = _offset_along_axis(boiler_position, side, 2.0)
-        target_belt = _tile_center_position(_offset_along_axis(boiler_position, side, 3.0))
+        target_inserter = _offset_along_axis(boiler_position, side, 1.0)
+        target_belt = _tile_center_position(_offset_along_axis(boiler_position, side, 2.0))
         value = distance(source_position, target_belt) * 0.01
         if _axis_vectors_equal(side, source_side):
             value -= 1.0
@@ -6952,6 +7045,14 @@ def _scalable_boiler_feed_side(
             value += 50.0
         if _entity_at_build_position(observation, "transport-belt", target_belt, radius=0.75) is not None:
             value -= 100.0
+        legacy_feed_belt = _entity_at_build_position(
+            observation,
+            "transport-belt",
+            _tile_center_position(_offset_along_axis(boiler_position, side, 3.0)),
+            radius=0.75,
+        )
+        if legacy_feed_belt is not None:
+            value -= 150.0
         if _inserter_near(observation, target_inserter, radius=0.75) is not None:
             value -= 75.0
         blocker = _belt_line_position_blocker(observation, target_belt, protected_unit_numbers={int(boiler.get("unit_number") or -1)})
@@ -8096,6 +8197,10 @@ def _entity_status_is(entity: dict[str, Any], status_name: str, status_code: int
         return int(entity.get("status")) == status_code
     except (TypeError, ValueError):
         return False
+
+
+def _entity_no_power(entity: dict[str, Any]) -> bool:
+    return _entity_status_is(entity, "no_power", 3) or _entity_status_is(entity, "no_power", 54)
 
 
 def _entity_status_name_in(entity: dict[str, Any], names: set[str]) -> bool:
@@ -9801,7 +9906,7 @@ def _belt_line_position_blocker(
     protected_unit_numbers: set[int] | None = None,
 ) -> dict[str, Any] | None:
     entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
-    large_entities = ASSEMBLER_ENTITY_NAMES | {"lab", "stone-furnace", "burner-mining-drill", "boiler", "steam-engine"}
+    large_entities = ASSEMBLER_ENTITY_NAMES | {"lab", "stone-furnace", "burner-mining-drill", "boiler", "steam-engine", "offshore-pump"}
     protected_unit_numbers = protected_unit_numbers or set()
     blockers: list[dict[str, Any]] = []
     for entity in entities:
