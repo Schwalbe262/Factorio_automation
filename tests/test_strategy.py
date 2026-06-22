@@ -1118,6 +1118,28 @@ class StrategyTests(unittest.TestCase):
         self.assertNotEqual(result["selected_skill"], "bootstrap_build_item_mall")
         self.assertNotIn("transport_belt_bootstrap_target=40", result["evidence"])
 
+        stale_remote_result = reconcile_strategy_decision(
+            {
+                "selected_skill": "bootstrap_build_item_mall",
+                "target_item": "transport-belt",
+                "target_count": missing + 4,
+                "priority": 93,
+                "reason": (
+                    "LLM selected plan_factory_site, but the boiler coal feed route still needs "
+                    f"{missing} transport belts and only 125 are available."
+                ),
+                "evidence": [],
+                "blockers": ["boiler coal feed construction belts"],
+                "expected_effect": "Buffer enough transport belts from the mall before rerunning the route executor.",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertNotEqual(stale_remote_result["selected_skill"], "bootstrap_build_item_mall")
+        self.assertIn("stale_remote_boiler_belt_bootstrap_recomputed=true", stale_remote_result["evidence"])
+
     def test_active_boiler_feed_suppresses_stale_belt_shortfall(self):
         observation = {
             "player": {"name": "server", "kind": "server", "character_valid": False, "position": {"x": 0, "y": 0}},

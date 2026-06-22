@@ -1240,6 +1240,17 @@ def reconcile_strategy_decision(
         decision["expected_effect"] = ""
         decision.pop("guardrail_adjusted", None)
         selected = "bootstrap_build_item_mall"
+    if _stale_remote_boiler_belt_bootstrap(decision, observation, boiler_feed_belt_shortfall):
+        decision = dict(decision)
+        decision["selected_skill"] = "plan_factory_site"
+        decision["reason"] = ""
+        decision["blockers"] = []
+        decision["evidence"] = ["stale_remote_boiler_belt_bootstrap_recomputed=true"]
+        decision["expected_effect"] = ""
+        decision.pop("target_item", None)
+        decision.pop("target_count", None)
+        decision.pop("guardrail_adjusted", None)
+        selected = "plan_factory_site"
     readiness_bootstrap_decision = _readiness_bootstrap_missing_mall_decision(readiness, observation)
     if readiness_bootstrap_decision is not None and selected != "bootstrap_build_item_mall":
         adjusted = dict(decision)
@@ -3593,6 +3604,33 @@ def _boiler_feed_belt_shortfall_issue(observation: dict[str, Any]) -> dict[str, 
         "available": available,
         "target_count": target_count,
     }
+
+
+def _stale_remote_boiler_belt_bootstrap(
+    decision: dict[str, Any],
+    observation: dict[str, Any],
+    local_issue: dict[str, int] | None,
+) -> bool:
+    if local_issue is not None:
+        return False
+    if str(decision.get("selected_skill") or "") != "bootstrap_build_item_mall":
+        return False
+    target_item = str(decision.get("target_item") or "transport-belt")
+    if target_item != "transport-belt":
+        return False
+    signature_parts = [
+        str(decision.get("reason") or ""),
+        str(decision.get("expected_effect") or ""),
+        " ".join(_string_list(decision.get("blockers"))),
+        " ".join(_string_list(decision.get("evidence"))),
+    ]
+    signature = " ".join(signature_parts)
+    if "boiler coal feed" not in signature and "boiler_feed_missing_transport_belts" not in signature:
+        return False
+    missing = _boiler_coal_feed_missing_belt_count(observation)
+    if missing <= 0:
+        return False
+    return total_item_count(observation, "transport-belt") >= _construction_belt_bootstrap_target(observation)
 
 
 def _boiler_feed_belt_shortfall_strategy_decision(issue: dict[str, int]) -> dict[str, Any]:
