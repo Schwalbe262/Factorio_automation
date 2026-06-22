@@ -2929,6 +2929,14 @@ class IronPlateSkill:
             inventory_only=inventory_only,
             allow_support_plate=False,
         )
+        belt_preference = _iron_belt_smelting_preference_after_direct_support(
+            observation,
+            direct_decision,
+            target_count=target,
+            inventory_only=inventory_only,
+        )
+        if belt_preference is not None:
+            return belt_preference
         belt_recovery = _iron_belt_smelting_recovery_after_blocked_direct_site(
             observation,
             direct_decision,
@@ -2996,6 +3004,50 @@ def _iron_belt_smelting_recovery_after_blocked_direct_site(
     return PlannerDecision(
         recovery.action,
         f"{recovery.reason}; direct iron-plate burner site is blocked, recovering via expanded belt smelting",
+        done=False,
+        metadata=metadata,
+    )
+
+
+def _iron_belt_smelting_preference_after_direct_support(
+    observation: dict[str, Any],
+    direct_decision: PlannerDecision,
+    *,
+    target_count: int,
+    inventory_only: bool,
+) -> PlannerDecision | None:
+    if inventory_only or direct_decision.action is None or direct_decision.done:
+        return None
+    if not _belt_smelting_ready(observation):
+        return None
+    support_reason = str(direct_decision.reason or "")
+    if not any(
+        marker in support_reason
+        for marker in (
+            "starter stone supply",
+            "direct smelting drill",
+            "direct smelting furnace",
+            "craft furnace for direct",
+            "craft gears for direct",
+        )
+    ):
+        return None
+    target_rate = max(37.0, min(90.0, float(target_count)))
+    expansion = ExpandIronSmeltingSkill(target_rate_per_minute=target_rate).next_action(observation)
+    if expansion.action is None:
+        return None
+    metadata = dict(expansion.metadata)
+    metadata.update(
+        {
+            "failure_root": "direct_iron_smelting_support_diverted",
+            "repair_skill": "expand_iron_smelting",
+            "blocked_reason": direct_decision.reason,
+            "target_rate_per_minute": target_rate,
+        }
+    )
+    return PlannerDecision(
+        expansion.action,
+        f"{expansion.reason}; prefer existing expanded belt smelting over new direct iron support after Automation",
         done=False,
         metadata=metadata,
     )
@@ -4940,6 +4992,10 @@ class _ExpandPlateSmeltingSkill:
 
     def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
         player = player_position(observation)
+        power_decision = self._line_power_decision(observation, player)
+        if power_decision is not None:
+            return power_decision
+
         low_fuel_layout = _find_low_fuel_belt_smelting_line(observation, self.resource_name)
         if low_fuel_layout is not None:
             decision = self._fuel_line_to_reserve(observation, player, low_fuel_layout)
@@ -5025,6 +5081,32 @@ class _ExpandPlateSmeltingSkill:
             {"type": "wait", "ticks": 300},
             f"wait for expanded {self.product_name} smelting line to start",
         )
+
+    def _line_power_decision(
+        self,
+        observation: dict[str, Any],
+        player: dict[str, float],
+    ) -> PlannerDecision | None:
+        for belt in entities_named(observation, "transport-belt"):
+            for layout in _belt_layouts_from_anchor(observation, belt):
+                if not _layout_matches_resource(layout, self.resource_name):
+                    continue
+                if not _layout_within_starter_area(observation, layout):
+                    continue
+                if not all(layout.get(key) is not None for key in ("belt1", "belt2", "inserter", "furnace", "drill")):
+                    continue
+                inserter = layout.get("inserter")
+                if not isinstance(inserter, dict):
+                    continue
+                decision = _logistics_line_powered_inserter_decision(
+                    observation,
+                    player,
+                    inserter,
+                    f"expanded {self.product_name} smelting input inserter",
+                )
+                if decision is not None:
+                    return decision
+        return None
 
     def _fuel_line_to_reserve(
         self,
@@ -5832,6 +5914,15 @@ def _direct_plate_smelting_decision(
                 return recovery
         return PlannerDecision(None, f"cannot find open {resource_name} site for direct burner-drill smelting cell")
 
+    nearby_fuel = _nearby_direct_smelting_fuel_collection_decision(
+        observation,
+        player,
+        product_name=product_name,
+        support_skill=support_skill,
+    )
+    if nearby_fuel is not None:
+        return nearby_fuel
+
     misplaced_drill = layout.get("misplaced_drill")
     if (
         not isinstance(misplaced_drill, dict)
@@ -6073,6 +6164,28 @@ def _ensure_direct_smelting_item(
     return None
 
 
+def _nearby_direct_smelting_fuel_collection_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    *,
+    product_name: str,
+    support_skill: IronPlateSkill,
+) -> PlannerDecision | None:
+    if _inventory_burner_fuel_count(observation) > 0:
+        return None
+    source = _nearest_surplus_fuel_source(observation, player)
+    if (
+        source is not None
+        and _surplus_fuel_source_is_logistic_output(source, observation)
+        and distance(player, _position(source)) <= 20
+    ):
+        return _take_surplus_fuel_source_decision(player, source, f"direct {product_name} smelting")
+    coal = nearest_resource(observation, "coal")
+    if coal is not None and distance(player, _position(coal)) <= 8:
+        return support_skill._mine_resource(player, coal, "coal", STARTER_FUEL_BATCH_COUNT)
+    return None
+
+
 def _recover_direct_smelting_drill_decision(
     observation: dict[str, Any],
     player: dict[str, float],
@@ -6269,11 +6382,15 @@ def _select_direct_smelting_layout(observation: dict[str, Any], resource_name: s
             layout["furnace"] = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=0.75)
             if isinstance(layout.get("drill"), dict) and isinstance(layout.get("furnace"), dict):
                 if not _burner_drill_output_touches_machine(layout["drill"], layout["furnace"]):
-                    layout["misplaced_furnace"] = layout["furnace"]
+                    if not _furnace_part_of_belt_smelting_layout(observation, layout["furnace"], resource_name):
+                        layout["misplaced_furnace"] = layout["furnace"]
                     layout["furnace"] = None
             if layout.get("furnace") is None:
                 near_furnace = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=2.5)
-                if isinstance(near_furnace, dict):
+                if (
+                    isinstance(near_furnace, dict)
+                    and not _furnace_part_of_belt_smelting_layout(observation, near_furnace, resource_name)
+                ):
                     layout["misplaced_furnace"] = near_furnace
             if not _direct_smelting_layout_blocked_by_factory_entities(layout, entities):
                 return layout
@@ -6302,11 +6419,15 @@ def _select_direct_smelting_expansion_layout(observation: dict[str, Any], resour
             if isinstance(layout.get("drill"), dict) and isinstance(layout.get("furnace"), dict):
                 if _burner_drill_output_touches_machine(layout["drill"], layout["furnace"]):
                     continue
-                layout["misplaced_furnace"] = layout["furnace"]
+                if not _furnace_part_of_belt_smelting_layout(observation, layout["furnace"], resource_name):
+                    layout["misplaced_furnace"] = layout["furnace"]
                 layout["furnace"] = None
             if layout.get("furnace") is None:
                 near_furnace = _entity_near(observation, "stone-furnace", layout["furnace_position"], radius=2.5)
-                if isinstance(near_furnace, dict):
+                if (
+                    isinstance(near_furnace, dict)
+                    and not _furnace_part_of_belt_smelting_layout(observation, near_furnace, resource_name)
+                ):
                     layout["misplaced_furnace"] = near_furnace
             if not _direct_smelting_layout_blocked_by_factory_entities(layout, entities):
                 return layout
@@ -6468,6 +6589,8 @@ def _recoverable_unpaired_direct_smelting_drill(
             continue
         if not _within_starter_logistics_area(observation, _position(drill)):
             continue
+        if _drill_part_of_belt_smelting_layout(observation, drill, resource_name):
+            continue
         layout = _direct_smelting_layout_from_existing_drill(observation, drill, resource_name)
         if isinstance(layout.get("furnace"), dict):
             continue
@@ -6510,6 +6633,58 @@ def _recoverable_temporary_burner_drill_for_direct_smelting(
         return None
     candidates.sort(key=lambda item: item[:4])
     return candidates[0][4]
+
+
+def _drill_part_of_belt_smelting_layout(
+    observation: dict[str, Any],
+    drill: dict[str, Any],
+    resource_name: str,
+) -> bool:
+    drill_unit = drill.get("unit_number")
+    drill_position = _position(drill)
+    for belt in entities_named(observation, "transport-belt"):
+        for layout in _belt_layouts_from_anchor(observation, belt):
+            if not _layout_matches_resource(layout, resource_name):
+                continue
+            if not _layout_within_starter_area(observation, layout):
+                continue
+            layout_drill = layout.get("drill")
+            if not isinstance(layout_drill, dict):
+                continue
+            same_unit = drill_unit is not None and layout_drill.get("unit_number") == drill_unit
+            same_position = distance(_position(layout_drill), drill_position) <= 0.75
+            if not (same_unit or same_position):
+                continue
+            line_score = sum(1 for key in ("belt1", "belt2", "inserter", "furnace") if isinstance(layout.get(key), dict))
+            if line_score >= 2:
+                return True
+    return False
+
+
+def _furnace_part_of_belt_smelting_layout(
+    observation: dict[str, Any],
+    furnace: dict[str, Any],
+    resource_name: str,
+) -> bool:
+    furnace_unit = furnace.get("unit_number")
+    furnace_position = _position(furnace)
+    for belt in entities_named(observation, "transport-belt"):
+        for layout in _belt_layouts_from_anchor(observation, belt):
+            if not _layout_matches_resource(layout, resource_name):
+                continue
+            if not _layout_within_starter_area(observation, layout):
+                continue
+            layout_furnace = layout.get("furnace")
+            if not isinstance(layout_furnace, dict):
+                continue
+            same_unit = furnace_unit is not None and layout_furnace.get("unit_number") == furnace_unit
+            same_position = distance(_position(layout_furnace), furnace_position) <= 0.75
+            if not (same_unit or same_position):
+                continue
+            line_score = sum(1 for key in ("belt1", "belt2", "inserter", "drill") if isinstance(layout.get(key), dict))
+            if line_score >= 2:
+                return True
+    return False
 
 
 def _direct_smelting_layout_from_drill_position(

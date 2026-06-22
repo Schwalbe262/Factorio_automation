@@ -4068,6 +4068,91 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 896)
         self.assertIn("recover incomplete direct iron-ore burner mining drill", decision.reason)
 
+    def test_iron_skill_does_not_recover_belt_smelting_drill_as_direct_cell(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 4, "y": 0}}
+        obs["inventory"] = {"coal": 30, "iron-plate": 4}
+        obs["resources"] = [
+            {"name": "iron-ore", "position": {"x": 4, "y": 0}, "distance": 0},
+            {"name": "coal", "position": {"x": 0, "y": 2}, "distance": 4},
+        ]
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500)
+        obs["entities"].append(mall_assembler(recipe="transport-belt"))
+
+        decision = IronPlateSkill(target_count=90).next_action(obs)
+
+        self.assertNotEqual(decision.action.get("type"), "mine")
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["unit_number"], 500)
+        self.assertIn("expanded iron-plate smelting", decision.reason)
+
+    def test_iron_skill_does_not_recover_belt_smelting_furnace_as_direct_cell(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 0, "y": 0}}
+        obs["inventory"] = {
+            "iron-plate": 4,
+            "coal": 30,
+            "small-electric-pole": 1,
+            "burner-mining-drill": 1,
+        }
+        obs["resources"] = [
+            {"name": "iron-ore", "position": {"x": 4, "y": 0}, "distance": 4},
+            {"name": "coal", "position": {"x": 0, "y": 2}, "distance": 2},
+        ]
+        obs["entities"] = complete_belt_smelting_entities(1, 0, 500, reserve_fuel=True)
+        obs["entities"].append(mall_assembler(recipe="transport-belt"))
+        for entity in obs["entities"]:
+            if entity["name"] == "burner-inserter":
+                entity["name"] = "inserter"
+                entity["electric_network_connected"] = False
+                entity["status_name"] = "no_power"
+                entity["status"] = 54
+                entity["inventories"] = {}
+
+        decision = IronPlateSkill(target_count=90).next_action(obs)
+
+        self.assertIsNotNone(decision.action)
+        self.assertNotEqual(decision.action.get("name"), "stone-furnace")
+        self.assertIn("expanded iron-plate smelting input inserter", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "direct_iron_smelting_site_blocked")
+
+    def test_iron_skill_mines_nearby_coal_before_misplaced_furnace_repair(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 0, "y": 0}}
+        obs["inventory"] = {
+            "stone-furnace": 1,
+            "burner-mining-drill": 1,
+        }
+        obs["resources"] = [
+            {"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0},
+            {"name": "iron-ore", "position": {"x": 4, "y": 0}, "distance": 4},
+        ]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 901,
+                "position": {"x": 4, "y": 0},
+                "direction": planner_module.EAST,
+                "distance": 4,
+                "mining_target": "iron-ore",
+                "inventories": {},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 902,
+                "position": {"x": 5, "y": 0},
+                "distance": 5,
+                "inventories": {},
+            },
+        ]
+
+        decision = IronPlateSkill(target_count=10).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "coal")
+        self.assertIn("mine coal", decision.reason)
+        self.assertNotIn("misplaced direct iron-plate furnace", decision.reason)
+
     def test_iron_skill_routes_blocked_direct_site_to_expand_smelting_after_belt_automation(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"iron-plate": 4}
@@ -4092,6 +4177,59 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("expanded belt smelting", decision.reason)
         self.assertEqual(decision.metadata["failure_root"], "direct_iron_smelting_site_blocked")
         self.assertEqual(decision.metadata["repair_skill"], "expand_iron_smelting")
+
+    def test_iron_skill_repairs_unpowered_expanded_smelting_after_direct_site_blocked(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 8.0, "y": 0.0}}
+        obs["inventory"] = {"iron-plate": 4, "small-electric-pole": 1, "coal": 30}
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, reserve_fuel=True)
+        obs["entities"].append(mall_assembler(recipe="transport-belt"))
+        for entity in obs["entities"]:
+            if entity["name"] == "burner-inserter":
+                entity["name"] = "inserter"
+                entity["electric_network_connected"] = False
+                entity["status_name"] = "no_power"
+                entity["status"] = 54
+                entity["inventories"] = {}
+        direct_blocked = planner_module.PlannerDecision(
+            None,
+            "cannot find open iron-ore site for direct burner-drill smelting cell",
+        )
+
+        with patch("factorio_ai.planner._direct_plate_smelting_decision", return_value=direct_blocked):
+            decision = IronPlateSkill(target_count=90).next_action(obs)
+
+        self.assertIsNotNone(decision.action)
+        self.assertNotEqual(decision.action["type"], "wait")
+        self.assertIn("expanded iron-plate smelting input inserter", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "direct_iron_smelting_site_blocked")
+        self.assertEqual(decision.metadata["repair_skill"], "expand_iron_smelting")
+
+    def test_iron_skill_prefers_expanded_smelting_power_over_direct_stone_support(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 8.0, "y": 0.0}}
+        obs["inventory"] = {"iron-plate": 4, "small-electric-pole": 1, "coal": 30}
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, reserve_fuel=True)
+        obs["entities"].append(mall_assembler(recipe="transport-belt"))
+        for entity in obs["entities"]:
+            if entity["name"] == "burner-inserter":
+                entity["name"] = "inserter"
+                entity["electric_network_connected"] = False
+                entity["status_name"] = "no_power"
+                entity["status"] = 54
+                entity["inventories"] = {}
+        direct_support = planner_module.PlannerDecision(
+            {"type": "move_to", "position": {"x": -20.0, "y": -84.0}},
+            "move near burner-mining-drill to fuel starter stone supply",
+        )
+
+        with patch("factorio_ai.planner._direct_plate_smelting_decision", return_value=direct_support):
+            decision = IronPlateSkill(target_count=90).next_action(obs)
+
+        self.assertIsNotNone(decision.action)
+        self.assertNotEqual(decision.action["position"], {"x": -20.0, "y": -84.0})
+        self.assertIn("expanded iron-plate smelting input inserter", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "direct_iron_smelting_support_diverted")
 
     def test_iron_skill_routes_expansion_fuel_logistics_to_coal_feed_repair(self):
         obs = powered_automation_observation()
@@ -4731,6 +4869,26 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "insert")
         self.assertEqual(decision.action["item"], "coal")
         self.assertEqual(decision.action["name"], "burner-inserter")
+
+    def test_expand_iron_smelting_powers_unpowered_line_inserter_before_waiting(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 8.0, "y": 0.0}}
+        obs["inventory"] = {"small-electric-pole": 1, "coal": 30}
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, reserve_fuel=True)
+        obs["entities"].append(mall_assembler(recipe="transport-belt"))
+        for entity in obs["entities"]:
+            if entity["name"] == "burner-inserter":
+                entity["name"] = "inserter"
+                entity["electric_network_connected"] = False
+                entity["status_name"] = "no_power"
+                entity["status"] = 54
+                entity["inventories"] = {}
+
+        decision = ExpandIronSmeltingSkill(target_rate_per_minute=90).next_action(obs)
+
+        self.assertIsNotNone(decision.action)
+        self.assertNotEqual(decision.action["type"], "wait")
+        self.assertIn("expanded iron-plate smelting input inserter", decision.reason)
 
     def test_expand_smelting_refuels_low_reserve_before_reporting_capacity_done(self):
         obs = base_observation()
