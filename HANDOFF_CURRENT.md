@@ -1,10 +1,10 @@
 # Current Handoff
-- Branch `chore/part130-unattended-qwen9-supervisor`; scheduler Qwen/vLLM service id `13039`.
-- Fresh no-mod map is running; supervisor UP; latest autopilot PID `69336`; Qwen/vLLM strategy path active.
-- Live state: researched=4, belt mall has gear+belt assemblers and ~49 transport belts buffered; boiler still needs automated fuel feed.
-- `IronPlateSkill` now preserves incomplete direct drill cells when a furnace can complete them, instead of mining the new drill back up.
-- `GearBeltMallLogisticsSkill` now relocates a remote gear/belt mall before attempting a long iron-plate input belt.
-- `CoalFuelFeedSkill` now converts unstarted overlong boiler belt-feed shortages into a bounded boiler bootstrap seed instead of failing.
-- Live validation: current coal feed decision is `move near boiler for one-time emergency power bootstrap fuel insert` with `repair_skill=bootstrap_boiler_power_seed`.
-- Validation: `tests.test_planner` 466 OK; `tests.test_strategy tests.test_controller` 263 OK; full discover previously timed out at 424s before result.
-- Dirty archives remain: `note.md`/`insight.md` have large append-only runtime changes; avoid staging wholesale.
+- Branch `chore/part130-unattended-qwen9-supervisor`; scheduler Qwen/vLLM service id `13039` is ready and used for strategy.
+- User requested a fresh-map reset; old save/state/log traces were archived under `runtime/reset-archives/20260623-*`.
+- Fresh no-mod map is running; supervisor UP; latest autopilot PID `60012`; dashboard/web and no-mod server are UP.
+- Live validation after reset: tick ~48089, researched=0, iron direct smelting recovered and working; total iron-plate ~18.
+- New fix: `IronPlateSkill` can reclaim the only starter coal drill after buffered coal exists, taking 20-30 coal first instead of failing on missing drill.
+- Current live skill: `research_automation` running after iron bootstrap; watch for power/lab/science prerequisites next.
+- Validation: new targeted planner tests OK; `tests.test_planner` 468 OK; `tests.test_strategy` 169 OK.
+- Token usage recorded: raw `33,271,010`, delta `317,683`; weekly quota unavailable/null.
+- Dirty archives remain: `note.md`/`insight.md` had large pre-existing append-only changes; avoid staging wholesale.

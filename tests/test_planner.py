@@ -4201,6 +4201,71 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 701)
         self.assertIn("recover incomplete direct iron-ore burner mining drill", decision.reason)
 
+    def test_iron_skill_takes_buffered_coal_before_reallocating_only_starter_coal_drill(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 2, "y": 1}}
+        obs["inventory"] = {"coal": 4, "stone-furnace": 1}
+        obs["resources"] = [
+            {"name": "iron-ore", "position": {"x": 10, "y": 0}, "distance": 8},
+            {"name": "coal", "position": {"x": 0, "y": 0}, "distance": 2},
+        ]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 801,
+                "position": {"x": 0, "y": 0},
+                "direction": planner_module.EAST,
+                "mining_target": "coal",
+                "inventories": {"1": {"coal": 20}},
+            },
+            {
+                "name": "wooden-chest",
+                "unit_number": 802,
+                "position": {"x": 1.5, "y": 0.5},
+                "inventories": {"1": {"coal": 30}},
+            },
+        ]
+
+        decision = IronPlateSkill(target_count=10).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["unit_number"], 802)
+        self.assertEqual(decision.action["count"], 26)
+        self.assertIn("buffered starter coal", decision.reason)
+
+    def test_iron_skill_reallocates_only_starter_coal_drill_after_fuel_buffer_exists(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 0, "y": 0}}
+        obs["inventory"] = {"coal": 30, "stone-furnace": 1}
+        obs["resources"] = [
+            {"name": "iron-ore", "position": {"x": 10, "y": 0}, "distance": 10},
+            {"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0},
+        ]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 803,
+                "position": {"x": 0, "y": 0},
+                "direction": planner_module.EAST,
+                "mining_target": "coal",
+                "inventories": {"1": {"coal": 20}},
+            },
+            {
+                "name": "wooden-chest",
+                "unit_number": 804,
+                "position": {"x": 1.5, "y": 0.5},
+                "inventories": {"1": {"coal": 12}},
+            },
+        ]
+
+        decision = IronPlateSkill(target_count=10).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertEqual(decision.action["unit_number"], 803)
+        self.assertIn("recover buffered starter coal drill", decision.reason)
+
     def test_direct_smelting_layout_keeps_furnace_touching_drill_output(self):
         cases = {
             "east": {"x": 10.0, "y": 0.0},

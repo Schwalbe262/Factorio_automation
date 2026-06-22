@@ -6645,6 +6645,13 @@ def _ensure_direct_smelting_item(
         )
         if recovery is not None:
             return recovery
+        recovery = _recover_starter_coal_drill_for_direct_iron_decision(
+            observation,
+            player,
+            product_name=product_name,
+        )
+        if recovery is not None:
+            return recovery
         if inventory_count(observation, "stone") < 5:
             decision = StoneSupplySkill(target_count=8).next_action(observation)
             if not decision.done:
@@ -6722,6 +6729,65 @@ def _recover_direct_smelting_drill_decision(
             "position": position,
         },
         f"recover {reason_prefix} {source_resource} burner mining drill for {product_name} production",
+    )
+
+
+def _recover_starter_coal_drill_for_direct_iron_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    *,
+    product_name: str,
+) -> PlannerDecision | None:
+    if product_name != "iron-plate":
+        return None
+    if inventory_count(observation, "burner-mining-drill") > 0 or craftable_count(observation, "burner-mining-drill") > 0:
+        return None
+    if _direct_smelting_cells(observation, "iron-ore"):
+        return None
+    layout = _find_coal_supply_layout(observation)
+    if not isinstance(layout, dict):
+        return None
+    drill = layout.get("drill")
+    if not isinstance(drill, dict):
+        return None
+    output_source = layout.get("output_chest") if isinstance(layout.get("output_chest"), dict) else layout.get("output_belt")
+    output_coal = entity_item_count(output_source, "coal") if isinstance(output_source, dict) else 0
+    inventory_fuel = _inventory_burner_fuel_count(observation)
+    # With only one starter drill, do not tear down coal until enough fuel is buffered outside the drill.
+    if _coal_supply_burner_drill_count(observation) <= 1 and inventory_fuel + output_coal < DIRECT_SMELTING_FUEL_RESERVE:
+        return None
+    if isinstance(output_source, dict) and output_coal > 0 and inventory_fuel < STARTER_FUEL_BATCH_COUNT:
+        source_position = _position(output_source)
+        if distance(player, source_position) > 20:
+            return PlannerDecision(
+                {"type": "move_to", "position": source_position},
+                "move near starter coal buffer before reallocating the coal drill to iron production",
+            )
+        return PlannerDecision(
+            {
+                "type": "take",
+                "item": "coal",
+                "count": min(STARTER_FUEL_BATCH_COUNT - inventory_fuel, output_coal),
+                "unit_number": output_source.get("unit_number"),
+                "name": output_source.get("name") or "wooden-chest",
+                "position": source_position,
+            },
+            "take buffered starter coal before reallocating the coal drill to iron production",
+        )
+    drill_position = _position(drill)
+    if distance(player, drill_position) > 8:
+        return PlannerDecision(
+            {"type": "move_to", "position": _stand_position(drill_position, offset=2.0)},
+            "move near starter coal drill before reallocating it to iron production",
+        )
+    return PlannerDecision(
+        {
+            "type": "mine",
+            "unit_number": drill.get("unit_number"),
+            "name": "burner-mining-drill",
+            "position": drill_position,
+        },
+        "recover buffered starter coal drill for direct iron-plate production",
     )
 
 
