@@ -14599,7 +14599,24 @@ class BuildItemMallSkill:
                 return PlannerDecision({"type": "wait", "ticks": 120}, "wait for power observation to settle")
             return decision
 
-        cell = _find_build_item_mall_cell(
+        preferred_sidecar_cell = None
+        if self.target_item == "iron-gear-wheel" and reference_position is not None:
+            sidecar_candidate = _select_build_item_mall_sidecar_from_existing_belt_cell(
+                observation,
+                self.target_item,
+                allow_existing_remote=allow_existing_remote,
+                reference_position=reference_position,
+            )
+            if (
+                isinstance(sidecar_candidate, dict)
+                and (
+                    isinstance(sidecar_candidate.get("assembler"), dict)
+                    or inventory_count(observation, "assembling-machine-1") > 0
+                )
+            ):
+                preferred_sidecar_cell = sidecar_candidate
+
+        cell = preferred_sidecar_cell or _find_build_item_mall_cell(
             observation,
             self.target_item,
             allow_existing_remote=allow_existing_remote,
@@ -14610,6 +14627,11 @@ class BuildItemMallSkill:
             allow_existing_remote=allow_existing_remote,
             reference_position=reference_position,
         ) or _select_build_item_mall_sidecar_from_existing_gear_cell(
+            observation,
+            self.target_item,
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position,
+        ) or _select_build_item_mall_sidecar_from_existing_belt_cell(
             observation,
             self.target_item,
             allow_existing_remote=allow_existing_remote,
@@ -14786,6 +14808,23 @@ class BuildItemMallSkill:
                     output_chest,
                     self.target_item,
                 )
+
+        if (
+            self.target_item == "transport-belt"
+            and reached_count >= target_count
+            and not _transport_belt_mall_has_paired_gear_assembler(observation, assembler)
+        ):
+            gear_decision = BuildItemMallSkill("iron-gear-wheel", max(4, min(20, target_count))).next_action(
+                observation,
+                allow_existing_remote=allow_existing_remote,
+                reference_position=assembler_position,
+            )
+            if not gear_decision.done:
+                return gear_decision
+            return PlannerDecision(
+                None,
+                "transport-belt mall output stock is buffered, but the paired iron-gear-wheel mall is missing",
+            )
 
         if _build_item_mall_cell_ready(cell, self.target_item) and reached_count >= target_count:
             return PlannerDecision(
@@ -17552,6 +17591,29 @@ def _transport_belt_mall_ready_for_route_scaleup(observation: dict[str, Any]) ->
     return bool(gear_belts)
 
 
+def _transport_belt_mall_has_paired_gear_assembler(
+    observation: dict[str, Any],
+    belt_assembler: dict[str, Any],
+) -> bool:
+    layout = _find_gear_belt_mall_logistics_layout(observation)
+    if not isinstance(layout, dict):
+        return False
+    layout_belt = layout.get("belt_assembler")
+    if not isinstance(layout_belt, dict):
+        return False
+    belt_unit = belt_assembler.get("unit_number")
+    layout_belt_unit = layout_belt.get("unit_number")
+    if belt_unit is not None and layout_belt_unit is not None and belt_unit != layout_belt_unit:
+        return False
+    gear_assembler = layout.get("gear_assembler")
+    return bool(
+        isinstance(gear_assembler, dict)
+        and str(gear_assembler.get("recipe") or "") == "iron-gear-wheel"
+        and gear_assembler.get("electric_network_connected") is not False
+        and not _entity_status_is(gear_assembler, "no_power", 3)
+    )
+
+
 def _build_item_mall_should_use_output_chest(target_item: str) -> bool:
     return target_item in USER_OUTPUT_MALL_ITEMS
 
@@ -17860,6 +17922,8 @@ def _select_build_item_mall_sidecar_from_existing_gear_cell(
         observation,
         gear_position,
         power_positions=power_positions,
+        allow_existing_remote=allow_existing_remote,
+        reference_position=reference_position or gear_position,
     )
     if assembler_position is None:
         return None
@@ -17875,6 +17939,8 @@ def _select_build_item_mall_sidecar_from_existing_gear_cell(
             observation,
             assembler_position,
             source_position=source_pole_position,
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position or gear_position,
         )
         if pole_position is None:
             return None
@@ -17896,6 +17962,105 @@ def _select_build_item_mall_sidecar_from_existing_gear_cell(
             "assembler": _entity_near(observation, "assembling-machine-1", assembler_position, radius=1.5),
         },
     )
+
+
+def _select_build_item_mall_sidecar_from_existing_belt_cell(
+    observation: dict[str, Any],
+    target_item: str,
+    *,
+    allow_existing_remote: bool = False,
+    reference_position: dict[str, float] | None = None,
+) -> dict[str, Any] | None:
+    if target_item != "iron-gear-wheel":
+        return None
+    candidates = [
+        item
+        for item in entities_named(observation, "assembling-machine-1")
+        if str(item.get("recipe") or "") == "transport-belt"
+        and item.get("electric_network_connected") is not False
+        and (reference_position is None or distance(_position(item), reference_position) <= 8.0)
+        and _within_allowed_factory_area(
+            observation,
+            _position(item),
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position,
+        )
+        and not _transport_belt_mall_has_paired_gear_assembler(observation, item)
+    ]
+    if not candidates:
+        return None
+    anchor = reference_position if reference_position is not None else player_position(observation)
+    candidates.sort(
+        key=lambda item: (
+            distance(_position(item), anchor),
+            float(_mall_candidate_unit_sort_value(item)),
+        )
+    )
+    for belt_assembler in candidates:
+        cell = _gear_mall_sidecar_cell_from_belt_assembler(
+            observation,
+            belt_assembler,
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position or _position(belt_assembler),
+        )
+        if cell is not None:
+            return cell
+    return None
+
+
+def _gear_mall_sidecar_cell_from_belt_assembler(
+    observation: dict[str, Any],
+    belt_assembler: dict[str, Any],
+    *,
+    allow_existing_remote: bool = False,
+    reference_position: dict[str, float] | None = None,
+) -> dict[str, Any] | None:
+    belt_position = _position(belt_assembler)
+    source_pole = _nearest_small_pole_supplying_position(observation, belt_position)
+    if source_pole is None:
+        source_pole = _nearest_to(entities_named(observation, "small-electric-pole"), belt_position)
+    source_pole_position = _position(source_pole) if isinstance(source_pole, dict) else None
+    power_positions = [source_pole_position] if source_pole_position is not None else []
+    gear_position = _select_gear_mall_sidecar_position(
+        observation,
+        belt_assembler,
+        power_positions=power_positions,
+        allow_existing_remote=allow_existing_remote,
+        reference_position=reference_position or belt_position,
+    )
+    if gear_position is None:
+        return None
+
+    pole_position = source_pole_position
+    pole = source_pole if isinstance(source_pole, dict) else None
+    pole_unit_number = pole.get("unit_number") if isinstance(pole, dict) else None
+    if pole_position is None or not _position_is_supplied_by_small_pole(
+        observation,
+        gear_position,
+        extra_power_positions=[pole_position],
+    ):
+        pole_position = _select_build_item_sidecar_supply_pole_position(
+            observation,
+            gear_position,
+            source_position=source_pole_position,
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position or belt_position,
+        )
+        if pole_position is None:
+            return None
+        pole = _entity_near(observation, "small-electric-pole", pole_position, radius=1.0)
+        pole_unit_number = pole.get("unit_number") if isinstance(pole, dict) else None
+
+    return {
+        "pole_position": pole_position,
+        "assembler_position": gear_position,
+        "pole_unit_number": pole_unit_number,
+        "source_pole_unit_number": source_pole.get("unit_number") if isinstance(source_pole, dict) else None,
+        "powered": bool(pole_unit_number),
+        "distance": distance(player_position(observation), gear_position),
+        "pole": pole,
+        "assembler": _entity_near(observation, "assembling-machine-1", gear_position, radius=1.5),
+    }
 
 
 def _transport_belt_mall_assembler_too_close_to_gear_mall(
@@ -17924,6 +18089,8 @@ def _select_transport_belt_mall_sidecar_position(
     gear_position: dict[str, float],
     *,
     power_positions: list[dict[str, float]] | None = None,
+    allow_existing_remote: bool = False,
+    reference_position: dict[str, float] | None = None,
 ) -> dict[str, float] | None:
     offsets = [
         {"x": GEAR_BELT_MALL_ASSEMBLER_SPACING, "y": 0.0},
@@ -17937,12 +18104,79 @@ def _select_transport_belt_mall_sidecar_position(
             "x": gear_position["x"] + offset["x"],
             "y": gear_position["y"] + offset["y"],
         }
-        if _build_item_sidecar_position_clear(observation, candidate):
-            candidates.append(candidate)
+        if not _build_item_sidecar_position_clear(
+            observation,
+            candidate,
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position or gear_position,
+        ):
+            continue
+        candidates.append(candidate)
     if not candidates:
         return None
     candidates.sort(key=lambda item: _build_item_sidecar_power_score(observation, item, power_positions=power_positions))
     return candidates[0]
+
+
+def _select_gear_mall_sidecar_position(
+    observation: dict[str, Any],
+    belt_assembler: dict[str, Any],
+    *,
+    power_positions: list[dict[str, float]] | None = None,
+    allow_existing_remote: bool = False,
+    reference_position: dict[str, float] | None = None,
+) -> dict[str, float] | None:
+    belt_position = _position(belt_assembler)
+    offsets = [
+        {"x": -GEAR_BELT_MALL_ASSEMBLER_SPACING, "y": 0.0},
+        {"x": GEAR_BELT_MALL_ASSEMBLER_SPACING, "y": 0.0},
+        {"x": 0.0, "y": GEAR_BELT_MALL_ASSEMBLER_SPACING},
+        {"x": 0.0, "y": -GEAR_BELT_MALL_ASSEMBLER_SPACING},
+    ]
+    candidates: list[dict[str, float]] = []
+    for offset in offsets:
+        candidate = {
+            "x": belt_position["x"] + offset["x"],
+            "y": belt_position["y"] + offset["y"],
+        }
+        existing_assembler = _reusable_sidecar_assembler_at_position(observation, candidate, "iron-gear-wheel")
+        if not isinstance(existing_assembler, dict) and not _build_item_sidecar_position_clear(
+            observation,
+            candidate,
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position or belt_position,
+        ):
+            continue
+        fake_gear_assembler = {
+            "name": "assembling-machine-1",
+            "position": candidate,
+            "recipe": "iron-gear-wheel",
+            "electric_network_connected": True,
+        }
+        layout = _gear_belt_mall_layout_for_pair(observation, fake_gear_assembler, belt_assembler)
+        if not isinstance(layout, dict) or not isinstance(layout.get("direct_gear_transfer_inserter"), dict):
+            continue
+        candidates.append(candidate)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: _build_item_sidecar_power_score(observation, item, power_positions=power_positions))
+    return candidates[0]
+
+
+def _reusable_sidecar_assembler_at_position(
+    observation: dict[str, Any],
+    position: dict[str, float],
+    target_recipe: str,
+) -> dict[str, Any] | None:
+    assembler = _entity_near(observation, "assembling-machine-1", position, radius=1.5)
+    if not isinstance(assembler, dict):
+        return None
+    if assembler.get("electric_network_connected") is False:
+        return None
+    recipe = str(assembler.get("recipe") or "")
+    if recipe not in {"", target_recipe}:
+        return None
+    return assembler
 
 
 def _select_build_item_sidecar_position(
@@ -17950,6 +18184,8 @@ def _select_build_item_sidecar_position(
     anchor_position: dict[str, float],
     *,
     power_positions: list[dict[str, float]] | None = None,
+    allow_existing_remote: bool = False,
+    reference_position: dict[str, float] | None = None,
 ) -> dict[str, float] | None:
     offsets = [
         {"x": -3.0, "y": 0.0},
@@ -17967,7 +18203,12 @@ def _select_build_item_sidecar_position(
             "x": anchor_position["x"] + offset["x"],
             "y": anchor_position["y"] + offset["y"],
         }
-        if _build_item_sidecar_position_clear(observation, candidate):
+        if _build_item_sidecar_position_clear(
+            observation,
+            candidate,
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position or anchor_position,
+        ):
             candidates.append(candidate)
     if not candidates:
         return None
@@ -17975,8 +18216,19 @@ def _select_build_item_sidecar_position(
     return candidates[0]
 
 
-def _build_item_sidecar_position_clear(observation: dict[str, Any], position: dict[str, float]) -> bool:
-    if not _within_starter_logistics_area(observation, position):
+def _build_item_sidecar_position_clear(
+    observation: dict[str, Any],
+    position: dict[str, float],
+    *,
+    allow_existing_remote: bool = False,
+    reference_position: dict[str, float] | None = None,
+) -> bool:
+    if not _within_allowed_factory_area(
+        observation,
+        position,
+        allow_existing_remote=allow_existing_remote,
+        reference_position=reference_position,
+    ):
         return False
     large_entities = ASSEMBLER_ENTITY_NAMES | {"lab", "stone-furnace", "burner-mining-drill", "boiler", "steam-engine"}
     entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
@@ -18003,6 +18255,8 @@ def _select_build_item_sidecar_supply_pole_position(
     assembler_position: dict[str, float],
     *,
     source_position: dict[str, float] | None = None,
+    allow_existing_remote: bool = False,
+    reference_position: dict[str, float] | None = None,
 ) -> dict[str, float] | None:
     existing = _nearest_small_pole_supplying_position(observation, assembler_position)
     if existing is not None:
@@ -18023,7 +18277,12 @@ def _select_build_item_sidecar_supply_pole_position(
             "x": assembler_position["x"] + offset["x"],
             "y": assembler_position["y"] + offset["y"],
         }
-        if _build_item_sidecar_pole_position_clear(observation, candidate):
+        if _build_item_sidecar_pole_position_clear(
+            observation,
+            candidate,
+            allow_existing_remote=allow_existing_remote,
+            reference_position=reference_position or assembler_position,
+        ):
             candidates.append(candidate)
     if not candidates:
         return None
@@ -18032,8 +18291,19 @@ def _select_build_item_sidecar_supply_pole_position(
     return candidates[0]
 
 
-def _build_item_sidecar_pole_position_clear(observation: dict[str, Any], position: dict[str, float]) -> bool:
-    if not _within_starter_logistics_area(observation, position):
+def _build_item_sidecar_pole_position_clear(
+    observation: dict[str, Any],
+    position: dict[str, float],
+    *,
+    allow_existing_remote: bool = False,
+    reference_position: dict[str, float] | None = None,
+) -> bool:
+    if not _within_allowed_factory_area(
+        observation,
+        position,
+        allow_existing_remote=allow_existing_remote,
+        reference_position=reference_position,
+    ):
         return False
     entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
     for entity in entities:

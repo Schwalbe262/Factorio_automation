@@ -3178,6 +3178,63 @@ class StallWatchdogTests(unittest.TestCase):
             )
             self.assertEqual(skill, "bootstrap_build_item_mall")
 
+    def test_stall_recovery_prefers_route_scale_mall_repair_over_coal_supply(self):
+        observation = {
+            "player": {"position": {"x": 0, "y": 0}, "character_valid": False},
+            "inventory": {"transport-belt": 2, "assembling-machine-1": 1, "small-electric-pole": 16},
+            "resources": [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}],
+            "entities": [
+                {
+                    "name": "burner-mining-drill",
+                    "unit_number": 20,
+                    "position": {"x": 0, "y": 0},
+                    "direction": 4,
+                    "mining_target": "coal",
+                    "inventories": {"1": {"coal": 3}},
+                },
+                {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+                {"name": "boiler", "unit_number": 30, "position": {"x": 150, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 100,
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 3.5, "y": 12.5},
+                    "electric_network_connected": True,
+                    "inventories": {"2": {"iron-gear-wheel": 22}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 101,
+                    "recipe": "transport-belt",
+                    "position": {"x": 4.5, "y": 8.5},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 300,
+                    "position": {"x": 6.5, "y": 8.5},
+                    "inventories": {"1": {"transport-belt": 125}},
+                },
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 400,
+                    "recipe": "iron-plate",
+                    "position": {"x": 8.5, "y": 8.5},
+                    "inventories": {"2": {"iron-plate": 24}},
+                },
+            ],
+            "research": {"technologies": {"automation": {"researched": True}}},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FactorioController(make_test_config(Path(tmp)))
+            skill = controller._stall_recovery_skill(
+                "launch_rocket_program",
+                observation,
+                ["bootstrap_build_item_mall"],
+            )
+            self.assertEqual(skill, "bootstrap_build_item_mall")
+
     def test_stall_recovery_repairs_dead_coal_supply_even_if_recent(self):
         observation = {
             "player": {"position": {"x": 80, "y": -20}},

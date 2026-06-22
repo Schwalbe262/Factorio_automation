@@ -1215,6 +1215,7 @@ def reconcile_strategy_decision(
     readiness = build_factory_readiness(observation)
     decision = _with_factory_readiness(decision, readiness)
     boiler_feed_belt_shortfall = _boiler_feed_belt_shortfall_issue(observation)
+    boiler_feed_route_scale_mall_issue = _boiler_feed_route_scale_mall_issue(observation)
     gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
     rocket_objective = _is_rocket_objective(objective)
     remote_guardrail = decision.get("guardrail_adjusted") if isinstance(decision.get("guardrail_adjusted"), dict) else {}
@@ -1283,6 +1284,15 @@ def reconcile_strategy_decision(
             "reason": guardrail_reason,
         }
         return adjusted
+    if (
+        boiler_feed_route_scale_mall_issue is not None
+        and selected in GEAR_BELT_MALL_TRANSFER_LOGISTICS_PREEMPT_SKILLS
+    ):
+        return _boiler_feed_route_scale_mall_guardrail_adjustment(
+            decision,
+            selected,
+            boiler_feed_route_scale_mall_issue,
+        )
     if boiler_feed_belt_shortfall is not None and selected in {
         "plan_factory_site",
         "connect_coal_fuel_feed",
@@ -2797,6 +2807,9 @@ def _heuristic_strategy_impl(
     gear_belt_mall_transfer_logistics_issue = _gear_belt_mall_transfer_logistics_issue(observation)
     if gear_belt_mall_transfer_logistics_issue is not None:
         return _gear_belt_mall_transfer_logistics_strategy_decision(gear_belt_mall_transfer_logistics_issue)
+    boiler_feed_route_scale_mall_issue = _boiler_feed_route_scale_mall_issue(observation)
+    if boiler_feed_route_scale_mall_issue is not None:
+        return _boiler_feed_route_scale_mall_strategy_decision(boiler_feed_route_scale_mall_issue)
 
     if _gear_mall_iron_plate_preempts_expansion(gear_mall_iron_plate_issue):
         return _gear_mall_iron_plate_strategy_decision(gear_mall_iron_plate_issue)
@@ -3633,6 +3646,69 @@ def _stale_remote_boiler_belt_bootstrap(
     return total_item_count(observation, "transport-belt") >= _construction_belt_bootstrap_target(observation)
 
 
+def _boiler_feed_route_scale_mall_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
+    missing = _boiler_coal_feed_missing_belt_count(observation)
+    if missing <= BOOTSTRAP_TRANSPORT_BELT_SEED_TARGET_CAP:
+        return None
+    available = total_item_count(observation, "transport-belt")
+    if available >= missing:
+        return None
+    if _transport_belt_mall_ready_for_route_scaleup(observation):
+        return None
+    if not _technology_researched(observation, "automation"):
+        return None
+    layout = _find_gear_belt_mall_logistics_layout(observation)
+    if not isinstance(layout, dict):
+        gear_assemblers = [
+            item
+            for item in entities_named(observation, "assembling-machine-1")
+            if str(item.get("recipe") or item.get("recipe_name") or "") == "iron-gear-wheel"
+            and item.get("electric_network_connected") is not False
+        ]
+        belt_assemblers = [
+            item
+            for item in entities_named(observation, "assembling-machine-1")
+            if str(item.get("recipe") or item.get("recipe_name") or "") == "transport-belt"
+            and item.get("electric_network_connected") is not False
+        ]
+        if not gear_assemblers or not belt_assemblers:
+            return None
+        belt_assembler = min(belt_assemblers, key=lambda item: distance(_position(item), player_position(observation)))
+        gear_assembler = min(gear_assemblers, key=lambda item: distance(_position(item), _position(belt_assembler)))
+        return {
+            "missing": missing,
+            "available": available,
+            "target_count": _construction_belt_bootstrap_target(observation),
+            "gear_unit": gear_assembler.get("unit_number"),
+            "belt_unit": belt_assembler.get("unit_number"),
+            "direct_transfer_ready": False,
+            "direct_transfer_blocked": False,
+            "missing_transfer_belts": None,
+            "gear_belt_logistics_pair_exists": False,
+            "repair_skill": "bootstrap_build_item_mall",
+        }
+    belt_assembler = layout.get("belt_assembler")
+    gear_assembler = layout.get("gear_assembler")
+    if not isinstance(belt_assembler, dict) or not isinstance(gear_assembler, dict):
+        return None
+    if str(belt_assembler.get("recipe") or belt_assembler.get("recipe_name") or "") != "transport-belt":
+        return None
+    direct_transfer = layout.get("direct_gear_transfer_inserter")
+    gear_belts = layout.get("gear_belts") if isinstance(layout.get("gear_belts"), list) else []
+    return {
+        "missing": missing,
+        "available": available,
+        "target_count": _construction_belt_bootstrap_target(observation),
+        "gear_unit": gear_assembler.get("unit_number"),
+        "belt_unit": belt_assembler.get("unit_number"),
+        "direct_transfer_ready": _mall_inserter_spec_ready(direct_transfer),
+        "direct_transfer_blocked": _direct_gear_transfer_blocked(layout),
+        "missing_transfer_belts": sum(1 for belt in gear_belts if not isinstance(belt.get("entity"), dict)),
+        "gear_belt_logistics_pair_exists": True,
+        "repair_skill": "build_gear_belt_mall_logistics",
+    }
+
+
 def _boiler_feed_belt_shortfall_strategy_decision(issue: dict[str, int]) -> dict[str, Any]:
     decision = StrategicDecision(
         selected_skill="bootstrap_build_item_mall",
@@ -3690,6 +3766,92 @@ def _boiler_feed_belt_shortfall_guardrail_adjustment(
         "reason": guardrail_reason,
     }
     return adjusted
+
+
+def _boiler_feed_route_scale_mall_guardrail_adjustment(
+    decision: dict[str, Any],
+    selected: str,
+    issue: dict[str, Any],
+) -> dict[str, Any]:
+    adjusted = dict(decision)
+    repair_skill = str(issue.get("repair_skill") or "build_gear_belt_mall_logistics")
+    adjusted["selected_skill"] = repair_skill
+    adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 94)
+    if repair_skill == "bootstrap_build_item_mall":
+        adjusted["target_item"] = "transport-belt"
+        adjusted["target_count"] = max(
+            _positive_int_or_none(decision.get("target_count")) or 0,
+            _positive_int_or_none(issue.get("target_count")) or BOOTSTRAP_TRANSPORT_BELT_SEED_TARGET_CAP,
+        )
+    original_reason = str(decision.get("reason") or "").strip()
+    if repair_skill == "bootstrap_build_item_mall":
+        guardrail_reason = (
+            f"LLM selected {selected}, but the boiler coal feed route still needs {issue['missing']} belts "
+            "and the gear/belt mall pair is not aligned for deterministic transfer; rebuild the paired starter mall "
+            "before extending the route."
+        )
+    else:
+        guardrail_reason = (
+            f"LLM selected {selected}, but the boiler coal feed route still needs {issue['missing']} belts "
+            "and the gear-to-belt mall transfer is not automated; finish that transfer before extending the route."
+        )
+    adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
+    adjusted["blockers"] = sorted(
+        set(_string_list(decision.get("blockers")) + ["gear/belt mall route-scale transfer"])
+    )
+    adjusted["evidence"] = _string_list(decision.get("evidence")) + _boiler_feed_route_scale_mall_evidence(
+        selected,
+        issue,
+    )
+    adjusted["expected_effect"] = (
+        "Rebuild the paired gear/belt mall cell so belt production can self-feed before the long boiler coal feed route."
+        if repair_skill == "bootstrap_build_item_mall"
+        else (
+            "Build the direct gear-to-belt transfer so the belt mall can scale output before a long boiler coal feed "
+            "route consumes the existing construction belt buffer."
+        )
+    )
+    adjusted["guardrail_adjusted"] = {
+        "from": selected,
+        "to": repair_skill,
+        "reason": guardrail_reason,
+    }
+    return adjusted
+
+
+def _boiler_feed_route_scale_mall_strategy_decision(issue: dict[str, Any]) -> dict[str, Any]:
+    repair_skill = str(issue.get("repair_skill") or "build_gear_belt_mall_logistics")
+    return StrategicDecision(
+        selected_skill=repair_skill,
+        priority=94,
+        reason=(
+            f"The boiler coal feed route still needs {issue['missing']} belts, but the gear-to-belt mall transfer "
+            "is not automated or the paired mall layout is missing; repair the mall before route-scale belt production."
+        ),
+        evidence=_boiler_feed_route_scale_mall_evidence("heuristic", issue)[1:],
+        blockers=["gear/belt mall route-scale transfer"],
+        expected_effect=(
+            "Repair the deterministic gear/belt mall path so belt production can self-feed before continuing the "
+            "long boiler feed route."
+        ),
+    ).to_dict()
+
+
+def _boiler_feed_route_scale_mall_evidence(selected: str, issue: dict[str, Any]) -> list[str]:
+    return [
+        f"guardrail_adjusted_from={selected}",
+        "boiler_feed_requires_route_scale_belt_mall=true",
+        f"boiler_feed_missing_transport_belts={issue.get('missing')}",
+        f"transport_belts_available={issue.get('available')}",
+        f"transport_belt_bootstrap_target={issue.get('target_count')}",
+        f"gear_assembler_unit={issue.get('gear_unit')}",
+        f"belt_assembler_unit={issue.get('belt_unit')}",
+        f"gear_belt_logistics_pair_exists={str(issue.get('gear_belt_logistics_pair_exists')).lower()}",
+        f"route_scale_repair_skill={issue.get('repair_skill')}",
+        f"direct_transfer_ready={str(issue.get('direct_transfer_ready')).lower()}",
+        f"direct_transfer_blocked={str(issue.get('direct_transfer_blocked')).lower()}",
+        f"missing_transfer_belts={issue.get('missing_transfer_belts')}",
+    ]
 
 
 def _with_factory_readiness(decision: dict[str, Any], readiness: FactoryReadiness) -> dict[str, Any]:

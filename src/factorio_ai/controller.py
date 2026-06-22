@@ -1717,6 +1717,13 @@ class FactorioController:
         except Exception:  # noqa: BLE001
             pass
         try:
+            route_scale_issue = strategy_mod._boiler_feed_route_scale_mall_issue(observation)
+            repair_skill = str(route_scale_issue.get("repair_skill") or "") if isinstance(route_scale_issue, dict) else ""
+            if repair_skill and self._skill_run_config(repair_skill) is not None:
+                return repair_skill
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             if (
                 strategy_mod._coal_supply_repair_needed(observation)
                 and self._skill_run_config("setup_coal_supply") is not None

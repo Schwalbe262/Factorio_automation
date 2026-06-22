@@ -8856,6 +8856,139 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["position"], {"x": 5.0, "y": 2.0})
         self.assertIn("output chest", decision.reason)
 
+    def test_build_item_mall_repairs_missing_gear_mall_even_when_belt_stock_reached(self):
+        obs = powered_automation_observation()
+        obs.pop("automation_sites", None)
+        obs["resources"] = []
+        obs["inventory"] = {"assembling-machine-1": 1, "transport-belt": 2}
+        belt_assembler = mall_assembler(recipe="transport-belt", inventory={})
+        belt_assembler["position"] = {"x": 6, "y": 2}
+        obs["entities"].append(belt_assembler)
+        obs["entities"].append(
+            {
+                "name": "small-electric-pole",
+                "unit_number": 979,
+                "position": {"x": 4, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
+        output_layout = planner_module._build_item_mall_output_layout(obs, belt_assembler["position"])
+        self.assertIsNotNone(output_layout)
+        obs["entities"].append(
+            {
+                "name": "wooden-chest",
+                "unit_number": 980,
+                "position": output_layout["output_chest_position"],
+                "inventories": {"1": {"transport-belt": 124}},
+            }
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertFalse(decision.done)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "assembling-machine-1")
+        self.assertEqual(decision.action["position"], {"x": 2, "y": 2})
+
+    def test_build_item_mall_repairs_unpaired_gear_mall_even_when_gear_stock_reached(self):
+        obs = powered_automation_observation()
+        obs.pop("automation_sites", None)
+        obs["resources"] = []
+        obs["inventory"] = {"assembling-machine-1": 1, "transport-belt": 2}
+        belt_assembler = mall_assembler(recipe="transport-belt", inventory={})
+        belt_assembler["position"] = {"x": 6, "y": 2}
+        obs["entities"].extend(
+            [
+                belt_assembler,
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 982,
+                    "position": {"x": 5, "y": 6},
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"iron-gear-wheel": 22}},
+                },
+                {
+                    "name": "small-electric-pole",
+                    "unit_number": 979,
+                    "position": {"x": 4, "y": 0},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+            ]
+        )
+        output_layout = planner_module._build_item_mall_output_layout(obs, belt_assembler["position"])
+        self.assertIsNotNone(output_layout)
+        obs["entities"].append(
+            {
+                "name": "wooden-chest",
+                "unit_number": 980,
+                "position": output_layout["output_chest_position"],
+                "inventories": {"1": {"transport-belt": 124}},
+            }
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertFalse(decision.done)
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "assembling-machine-1")
+        self.assertEqual(decision.action["position"], {"x": 2, "y": 2})
+
+    def test_build_item_mall_sets_recipe_on_existing_unassigned_gear_sidecar(self):
+        obs = powered_automation_observation()
+        obs.pop("automation_sites", None)
+        obs["resources"] = []
+        obs["inventory"] = {"transport-belt": 2}
+        belt_assembler = mall_assembler(recipe="transport-belt", inventory={})
+        belt_assembler["position"] = {"x": 6, "y": 2}
+        obs["entities"].extend(
+            [
+                belt_assembler,
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 982,
+                    "position": {"x": 5, "y": 6},
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"iron-gear-wheel": 22}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 984,
+                    "position": {"x": 2, "y": 2},
+                    "recipe": None,
+                    "electric_network_connected": True,
+                    "inventories": {"1": {}},
+                },
+                {
+                    "name": "small-electric-pole",
+                    "unit_number": 979,
+                    "position": {"x": 4, "y": 0},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+            ]
+        )
+        output_layout = planner_module._build_item_mall_output_layout(obs, belt_assembler["position"])
+        self.assertIsNotNone(output_layout)
+        obs["entities"].append(
+            {
+                "name": "wooden-chest",
+                "unit_number": 980,
+                "position": output_layout["output_chest_position"],
+                "inventories": {"1": {"transport-belt": 124}},
+            }
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertFalse(decision.done)
+        self.assertEqual(decision.action["type"], "set_recipe")
+        self.assertEqual(decision.action["recipe"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 984)
+
     def test_build_item_mall_places_output_inserter_to_chest_for_user_consumed_item(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"inserter": 1}
@@ -9299,6 +9432,23 @@ class PlannerTests(unittest.TestCase):
         obs["entities"].extend(
             [
                 mall_assembler(recipe="transport-belt", inventory={"iron-plate": 4, "iron-gear-wheel": 4}),
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 982,
+                    "position": {"x": -2, "y": 2},
+                    "distance": 2,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"iron-gear-wheel": 4}},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 983,
+                    "position": {"x": 0, "y": 2},
+                    "direction": planner_module.WEST,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
                 {"name": "wooden-chest", "unit_number": 980, "position": {"x": 5.0, "y": 2.0}, "inventories": {"1": {"transport-belt": 20}}},
                 {
                     "name": "inserter",

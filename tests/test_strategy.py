@@ -1115,8 +1115,10 @@ class StrategyTests(unittest.TestCase):
 
         self.assertGreater(missing, 40)
         self.assertLess(125, missing)
-        self.assertNotEqual(result["selected_skill"], "bootstrap_build_item_mall")
-        self.assertNotIn("transport_belt_bootstrap_target=40", result["evidence"])
+        self.assertEqual(result["selected_skill"], "build_gear_belt_mall_logistics")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertIn("boiler_feed_requires_route_scale_belt_mall=true", result["evidence"])
+        self.assertIn("direct_transfer_ready=false", result["evidence"])
 
         stale_remote_result = reconcile_strategy_decision(
             {
@@ -1137,8 +1139,110 @@ class StrategyTests(unittest.TestCase):
             observation,
         )
 
-        self.assertNotEqual(stale_remote_result["selected_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(stale_remote_result["selected_skill"], "build_gear_belt_mall_logistics")
         self.assertIn("stale_remote_boiler_belt_bootstrap_recomputed=true", stale_remote_result["evidence"])
+        self.assertIn("boiler_feed_requires_route_scale_belt_mall=true", stale_remote_result["evidence"])
+
+        direct_feed_result = reconcile_strategy_decision(
+            {
+                "selected_skill": "connect_coal_fuel_feed",
+                "priority": 93,
+                "reason": "Connect boiler fuel.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(direct_feed_result["selected_skill"], "build_gear_belt_mall_logistics")
+        self.assertEqual(direct_feed_result["guardrail_adjusted"]["from"], "connect_coal_fuel_feed")
+        self.assertIn("gear/belt mall route-scale transfer", direct_feed_result["blockers"])
+
+    def test_reconcile_keeps_bootstrap_for_unpaired_route_scale_belt_mall(self):
+        observation = {
+            "player": {"name": "server", "kind": "server", "character_valid": False, "position": {"x": 0, "y": 0}},
+            "inventory": {"transport-belt": 2, "assembling-machine-1": 1, "small-electric-pole": 16},
+            "resources": [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}],
+            "entities": [
+                {
+                    "name": "burner-mining-drill",
+                    "unit_number": 20,
+                    "position": {"x": 0, "y": 0},
+                    "direction": planner_module.EAST,
+                    "mining_target": "coal",
+                    "inventories": {"1": {"coal": 3}},
+                },
+                {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": planner_module.EAST, "inventories": {"1": {"coal": 1}}},
+                {"name": "boiler", "unit_number": 30, "position": {"x": 150, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 100,
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 3.5, "y": 12.5},
+                    "electric_network_connected": True,
+                    "inventories": {"2": {"iron-gear-wheel": 22}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 101,
+                    "recipe": "transport-belt",
+                    "position": {"x": 4.5, "y": 8.5},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 300,
+                    "position": {"x": 6.5, "y": 8.5},
+                    "inventories": {"1": {"transport-belt": 125}},
+                },
+            ],
+            "research": {"technologies": {"automation": {"researched": True}}},
+        }
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "bootstrap_build_item_mall",
+                "target_item": "transport-belt",
+                "target_count": planner_module._boiler_coal_feed_missing_belt_count(observation) + 4,
+                "priority": 93,
+                "reason": "Bootstrap route-scale belts.",
+                "evidence": [],
+                "blockers": ["boiler coal feed construction belts"],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertEqual(result["guardrail_adjusted"]["to"], "bootstrap_build_item_mall")
+        self.assertEqual(result["target_item"], "transport-belt")
+        self.assertIn("boiler_feed_requires_route_scale_belt_mall=true", result["evidence"])
+        self.assertIn("gear_belt_logistics_pair_exists=false", result["evidence"])
+        self.assertIn("route_scale_repair_skill=bootstrap_build_item_mall", result["evidence"])
+
+        direct_feed_result = reconcile_strategy_decision(
+            {
+                "selected_skill": "connect_coal_fuel_feed",
+                "priority": 93,
+                "reason": "Connect boiler fuel.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(direct_feed_result["selected_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(direct_feed_result["guardrail_adjusted"]["from"], "connect_coal_fuel_feed")
 
     def test_active_boiler_feed_suppresses_stale_belt_shortfall(self):
         observation = {
