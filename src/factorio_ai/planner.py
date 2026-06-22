@@ -4887,6 +4887,35 @@ class CoalFuelFeedSkill:
                     seed_reason="boiler_coal_feed_power_seed",
                     expected_followup="boiler coal feed inserter powered and boiler receives coal",
                 )
+            if isinstance(boiler, dict):
+                boiler_position = _position(boiler)
+                source = _nearest_bootstrap_fuel_source(
+                    observation,
+                    boiler_position,
+                    exclude_units={boiler.get("unit_number")},
+                )
+                if source is not None and distance(_position(source), boiler_position) <= STARTER_BOILER_FUEL_FEED_ROUTE_LIMIT:
+                    source_item, source_count = _select_bootstrap_fuel_item(source)
+                    if source_count > 0:
+                        source_position = _position(source)
+                        if distance(player, source_position) > 20:
+                            return PlannerDecision(
+                                {"type": "move_to", "position": source_position},
+                                "move near existing fuel source to seed the completed boiler coal feed power loop",
+                            )
+                        return _bootstrap_seed_decision(
+                            {
+                                "type": "take",
+                                "item": source_item,
+                                "count": 1,
+                                "unit_number": source.get("unit_number"),
+                                "name": source.get("name"),
+                                "position": source_position,
+                            },
+                            "take one fuel item to seed the completed boiler coal feed power loop",
+                            seed_reason="boiler_coal_feed_power_seed",
+                            expected_followup="collected fuel is inserted into boiler once, powering the boiler coal feed inserter",
+                        )
         return PlannerDecision(
             {"type": "wait", "ticks": 180},
             "wait for boiler coal feed inserter to move coal into the boiler",

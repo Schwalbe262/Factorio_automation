@@ -1834,6 +1834,54 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.action["bootstrap_seed"])
         self.assertEqual(decision.metadata["seed_reason"], "boiler_coal_feed_power_seed")
 
+    def test_coal_fuel_feed_takes_existing_fuel_before_power_seed_when_inventory_empty(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 0, "y": -3}
+        obs["inventory"] = {}
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 20,
+                "position": {"x": 0, "y": 0},
+                "direction": planner_module.EAST,
+                "mining_target": "coal",
+                "drop_position": {"x": 1.3, "y": 0.5},
+                "inventories": {"1": {"coal": 1}},
+            },
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": planner_module.EAST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 22, "position": {"x": 2.5, "y": 0.5}, "direction": planner_module.EAST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 23, "position": {"x": 3.5, "y": 0.5}, "direction": planner_module.EAST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 24, "position": {"x": 4.5, "y": 0.5}, "direction": planner_module.EAST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 26, "position": {"x": 5.5, "y": 0.5}, "direction": planner_module.EAST, "inventories": {}},
+            {"name": "transport-belt", "unit_number": 27, "position": {"x": 6.5, "y": 0.5}, "direction": planner_module.EAST, "inventories": {}},
+            {
+                "name": "inserter",
+                "unit_number": 25,
+                "position": {"x": 7.0, "y": 0.5},
+                "direction": planner_module.WEST,
+                "status_name": "no_power",
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+            {"name": "boiler", "unit_number": 30, "position": {"x": 8, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+            {
+                "name": "stone-furnace",
+                "unit_number": 40,
+                "position": {"x": 0, "y": -3},
+                "inventories": {"1": {"coal": 5}},
+            },
+        ]
+
+        decision = CoalFuelFeedSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["count"], 1)
+        self.assertEqual(decision.action["unit_number"], 40)
+        self.assertTrue(decision.action["bootstrap_seed"])
+        self.assertEqual(decision.metadata["seed_reason"], "boiler_coal_feed_power_seed")
+
     def test_factory_layout_flags_remote_manual_power_site(self):
         obs = base_observation()
         obs["base"] = {"spawn_position": {"x": 0, "y": 0}}
