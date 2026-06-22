@@ -3022,24 +3022,45 @@ def _existing_iron_belt_smelting_wait_after_blocked_expansion(
     *,
     target_count: int,
 ) -> PlannerDecision | None:
+    return _existing_belt_smelting_wait_after_blocked_expansion(
+        observation,
+        expansion,
+        resource_name="iron-ore",
+        product_name="iron-plate",
+        target_count=target_count,
+        failure_root="direct_iron_smelting_site_blocked",
+        repair_skill="expand_iron_smelting",
+    )
+
+
+def _existing_belt_smelting_wait_after_blocked_expansion(
+    observation: dict[str, Any],
+    expansion: PlannerDecision,
+    *,
+    resource_name: str,
+    product_name: str,
+    target_count: int,
+    failure_root: str,
+    repair_skill: str,
+) -> PlannerDecision | None:
     if expansion.action is not None or expansion.done:
         return None
-    if "cannot find open iron-ore site for another smelting line" not in str(expansion.reason or ""):
+    if f"cannot find open {resource_name} site for another smelting line" not in str(expansion.reason or ""):
         return None
-    active_line_count = _complete_belt_smelting_line_count(observation, "iron-ore")
-    estimated_rate = _estimated_plate_rate(observation, "iron-plate", "iron-ore")
+    active_line_count = _complete_belt_smelting_line_count(observation, resource_name)
+    estimated_rate = _estimated_plate_rate(observation, product_name, resource_name)
     if active_line_count <= 0 or estimated_rate <= 0:
         return None
     return PlannerDecision(
         {"type": "wait", "ticks": 300},
         (
-            "wait for existing expanded iron-plate smelting output; direct iron-plate burner site is "
-            "blocked and no additional iron-ore expansion site is open"
+            f"wait for existing expanded {product_name} smelting output; {product_name} expansion is "
+            f"blocked and no additional {resource_name} expansion site is open"
         ),
         done=False,
         metadata={
-            "failure_root": "direct_iron_smelting_site_blocked",
-            "repair_skill": "expand_iron_smelting",
+            "failure_root": failure_root,
+            "repair_skill": repair_skill,
             "blocked_reason": expansion.reason,
             "active_belt_smelting_lines": active_line_count,
             "estimated_rate_per_minute": estimated_rate,
@@ -3690,6 +3711,31 @@ class BeltSmeltingLineSkill:
             return PlannerDecision(None, "cannot obtain burner-mining-drill for belt smelting line yet")
 
         if item in {"transport-belt", "inserter", "burner-inserter"}:
+            if item in {"transport-belt", "inserter"}:
+                buffered_source = _nearest_local_item_seed_source(
+                    observation,
+                    item,
+                    target_position or player,
+                    max_distance=SITE_GATE_LOCAL_LOGISTICS_RADIUS,
+                )
+                if buffered_source is not None:
+                    buffered_position = _position(buffered_source)
+                    if distance(player, buffered_position) > 20:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": buffered_position},
+                            f"move near buffered {item} output for belt smelting line construction",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "take",
+                            "item": item,
+                            "count": 1,
+                            "unit_number": buffered_source.get("unit_number"),
+                            "name": buffered_source.get("name") or "wooden-chest",
+                            "position": buffered_position,
+                        },
+                        f"take buffered {item} output for belt smelting line construction",
+                    )
             if inventory_count(observation, "iron-gear-wheel") < 1:
                 decision = _ensure_iron_gears_without_post_automation_handcraft(
                     observation,
@@ -11084,6 +11130,8 @@ def _find_relocatable_inserter_for_iron_plate_line(
                 continue
             if any(distance(position, center) <= 3.5 for center in protected_centers):
                 continue
+            if _inserter_serves_any_machine(observation, entity):
+                continue
             candidates.append(entity)
     return _nearest_to(candidates, target_position)
 
@@ -11897,14 +11945,32 @@ class CircuitAutomationSkill:
                         expansion,
                         context="scaled circuit automation iron input",
                     )
-                    return repair or expansion
+                    wait_decision = _existing_belt_smelting_wait_after_blocked_expansion(
+                        observation,
+                        expansion,
+                        resource_name="iron-ore",
+                        product_name="iron-plate",
+                        target_count=self.target_count,
+                        failure_root="scaled_circuit_input_smelting_site_blocked",
+                        repair_skill="expand_iron_smelting",
+                    )
+                    return repair or wait_decision or expansion
                 expansion = ExpandCopperSmeltingSkill(max(40, self.target_count)).next_action(observation)
                 repair = _smelting_fuel_logistics_repair_decision(
                     observation,
                     expansion,
                     context="scaled circuit automation copper input",
                 )
-                return repair or expansion
+                wait_decision = _existing_belt_smelting_wait_after_blocked_expansion(
+                    observation,
+                    expansion,
+                    resource_name="copper-ore",
+                    product_name="copper-plate",
+                    target_count=self.target_count,
+                    failure_root="scaled_circuit_input_smelting_site_blocked",
+                    repair_skill="expand_copper_smelting",
+                )
+                return repair or wait_decision or expansion
             decision = SiteInputLogisticLineSkill(max(40, self.target_count), item=item).next_action(observation)
             if decision.action is not None or decision.done or "no executable repeated site input" not in decision.reason:
                 return decision

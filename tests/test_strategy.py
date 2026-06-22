@@ -1041,6 +1041,52 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("transport_belts_available=20", result["evidence"])
         self.assertIn(f"transport_belt_bootstrap_target={missing + 4}", result["evidence"])
 
+    def test_active_boiler_feed_suppresses_stale_belt_shortfall(self):
+        observation = {
+            "player": {"name": "server", "kind": "server", "character_valid": False, "position": {"x": 0, "y": 0}},
+            "inventory": {"transport-belt": 2},
+            "resources": [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}],
+            "entities": [
+                {
+                    "name": "burner-mining-drill",
+                    "unit_number": 20,
+                    "position": {"x": 0, "y": 0},
+                    "direction": planner_module.EAST,
+                    "mining_target": "coal",
+                    "inventories": {"1": {"coal": 3}},
+                },
+                {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": planner_module.EAST, "inventories": {"1": {"coal": 1}}},
+                {
+                    "name": "boiler",
+                    "unit_number": 30,
+                    "position": {"x": 50, "y": 0},
+                    "status_name": "working",
+                    "inventories": {"1": {"coal": 1}},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 31,
+                    "position": {"x": 50, "y": 2},
+                    "direction": planner_module.SOUTH,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {"name": "transport-belt", "unit_number": 32, "position": {"x": 50, "y": 3}, "direction": planner_module.NORTH, "inventories": {"1": {"coal": 1}}},
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 100,
+                    "recipe": "transport-belt",
+                    "position": {"x": 4.5, "y": 8.5},
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"transport-belt": 4}},
+                },
+            ],
+            "research": {"technologies": {"automation": {"researched": True}}},
+        }
+
+        self.assertIsNone(strategy_module._boiler_feed_belt_shortfall_issue(observation))
+        self.assertEqual(strategy_module._construction_belt_bootstrap_target(observation), 20)
+
     def test_rocket_goal_bootstraps_when_mall_assemblers_are_unpowered(self):
         observation = gear_belt_mall_needs_bootstrap_observation()
         observation["player"] = {"name": "server", "kind": "server", "position": {"x": 0, "y": 0}, "character_valid": False}

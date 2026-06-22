@@ -4818,6 +4818,42 @@ class PlannerTests(unittest.TestCase):
         self.assertIsNone(decision.action)
         self.assertIn("cannot obtain inserter for belt smelting line yet", decision.reason)
 
+    def test_belt_smelting_skill_takes_buffered_inserter_output_for_line_construction(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 20, "y": 0}}
+        obs["inventory"] = {
+            "coal": 12,
+            "iron-plate": 30,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "transport-belt": 2,
+        }
+        obs["resources"] = [{"name": "copper-ore", "position": {"x": 20, "y": 0}, "distance": 0}]
+        obs["craftable"] = {"inserter": 0, "iron-gear-wheel": 0}
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 992,
+                "position": {"x": 30.0, "y": 8.0},
+                "distance": 12,
+                "recipe": "inserter",
+                "electric_network_connected": True,
+                "inventories": {"3": {"inserter": 1}},
+            }
+        )
+
+        decision = BeltSmeltingLineSkill(
+            target_count=90,
+            resource_name="copper-ore",
+            product_name="copper-plate",
+            inventory_only=True,
+        ).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "inserter")
+        self.assertEqual(decision.action["unit_number"], 992)
+        self.assertIn("buffered inserter output", decision.reason)
+
     def test_belt_smelting_skill_relocates_existing_inserter_when_craft_needs_first_circuit(self):
         obs = powered_automation_observation()
         obs["player"] = {"position": {"x": 20.0, "y": 0.0}}
@@ -6815,6 +6851,39 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 990)
         self.assertIn("circuit automation bootstrap", decision.reason)
 
+    def test_circuit_automation_does_not_relocate_active_boiler_feed_inserter(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 10.0, "y": 12.0}}
+        obs["inventory"] = {"assembling-machine-1": 2}
+        obs["craftable"] = {"inserter": 0}
+        for entity in circuit_cell_entities():
+            if entity["name"] != "inserter":
+                obs["entities"].append(entity)
+        obs["entities"].extend(
+            [
+                {
+                    "name": "boiler",
+                    "unit_number": 989,
+                    "position": {"x": 10.0, "y": 10.0},
+                    "inventories": {"1": {"coal": 1}},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 990,
+                    "position": {"x": 10.0, "y": 12.0},
+                    "direction": planner_module.SOUTH,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = CircuitAutomationSkill().next_action(obs)
+
+        if decision.action is not None:
+            self.assertNotEqual(decision.action.get("unit_number"), 990)
+        self.assertNotIn("relocate existing inserter for circuit automation bootstrap", decision.reason)
+
     def test_circuit_automation_scaling_expands_iron_when_no_site_input_source_exists(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"iron-plate": 8, "transport-belt": 4}
@@ -6865,6 +6934,25 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("repairing coal fuel feed first", decision.reason)
         self.assertEqual(decision.metadata["failure_root"], "smelting_fuel_logistics")
         self.assertEqual(decision.metadata["repair_skill"], "connect_coal_fuel_feed")
+
+    def test_circuit_automation_scaling_waits_on_active_iron_smelting_when_no_more_site_is_open(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 4}
+        obs["entities"].extend(circuit_cell_entities(cable_inventory={"copper-cable": 40}))
+        obs["entities"].append(mall_assembler(recipe="transport-belt", inventory={"transport-belt": 8}))
+        obs["entities"].extend(complete_belt_smelting_entities(4, 0, 500, reserve_fuel=True))
+        expansion_blocked = planner_module.PlannerDecision(
+            None,
+            "cannot find open iron-ore site for another smelting line",
+        )
+
+        with patch("factorio_ai.planner.ExpandIronSmeltingSkill.next_action", return_value=expansion_blocked):
+            decision = CircuitAutomationSkill(target_count=50).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "wait")
+        self.assertIn("wait for existing expanded iron-plate smelting output", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "scaled_circuit_input_smelting_site_blocked")
+        self.assertEqual(decision.metadata["repair_skill"], "expand_iron_smelting")
 
     def test_circuit_automation_takes_output_from_circuit_assembler(self):
         obs = powered_automation_observation()

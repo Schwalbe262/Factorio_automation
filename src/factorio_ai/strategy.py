@@ -3562,6 +3562,8 @@ def _readiness_bootstrap_missing_mall_decision(
 
 
 def _construction_belt_bootstrap_target(observation: dict[str, Any]) -> int:
+    if _boiler_coal_feed_active(observation):
+        return 20
     missing_boiler_route_belts = _boiler_coal_feed_missing_belt_count(observation)
     if missing_boiler_route_belts <= 0:
         return 20
@@ -3569,6 +3571,8 @@ def _construction_belt_bootstrap_target(observation: dict[str, Any]) -> int:
 
 
 def _boiler_feed_belt_shortfall_issue(observation: dict[str, Any]) -> dict[str, int] | None:
+    if _boiler_coal_feed_active(observation):
+        return None
     missing = _boiler_coal_feed_missing_belt_count(observation)
     if missing <= 0:
         return None
