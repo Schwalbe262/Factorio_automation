@@ -1921,6 +1921,79 @@ class PlannerTests(unittest.TestCase):
         self.assertLessEqual(issue["parameters"]["distance_tiles"], 12.0)
         self.assertIn("placement cost", issue["recommendation"])
 
+    def test_factory_layout_flags_small_power_pole_clutter(self):
+        obs = base_observation()
+        obs["entities"] = [
+            {
+                "name": "small-electric-pole",
+                "unit_number": 910 + index,
+                "position": {"x": float(index % 4), "y": float(index // 4)},
+                "electric_network_connected": True,
+            }
+            for index in range(12)
+        ]
+
+        issues = factory_layout_issues(obs)
+        issue = next(item for item in issues if item["kind"] == "power_pole_clutter")
+
+        self.assertEqual(issue["item"], "electric-power")
+        self.assertEqual(issue["parameters"]["small_pole_count"], 12)
+        self.assertEqual(issue["parameters"]["cleanup_policy"], "validate_power_coverage_before_mining_poles")
+        self.assertIn("pole mesh", issue["detail"])
+
+    def test_factory_layout_flags_belt_crossing_without_underground(self):
+        obs = base_observation()
+        obs["research"]["technologies"]["logistics"] = {"researched": True, "enabled": True}
+        obs["entities"] = [
+            {"name": "transport-belt", "unit_number": 930, "position": {"x": -1, "y": 0}, "direction": planner_module.EAST},
+            {"name": "transport-belt", "unit_number": 931, "position": {"x": 1, "y": 0}, "direction": planner_module.EAST},
+            {"name": "transport-belt", "unit_number": 932, "position": {"x": 2, "y": 0}, "direction": planner_module.EAST},
+            {"name": "transport-belt", "unit_number": 933, "position": {"x": 0, "y": -1}, "direction": planner_module.SOUTH},
+            {"name": "transport-belt", "unit_number": 934, "position": {"x": 0, "y": 1}, "direction": planner_module.SOUTH},
+            {"name": "transport-belt", "unit_number": 935, "position": {"x": 0, "y": 2}, "direction": planner_module.SOUTH},
+        ]
+
+        issues = factory_layout_issues(obs)
+        issue = next(item for item in issues if item["kind"] == "belt_crossing_without_underground")
+
+        self.assertEqual(issue["item"], "transport-belt")
+        self.assertTrue(issue["parameters"]["underground_belt_available"])
+        self.assertEqual(issue["parameters"]["required_item"], "underground-belt")
+        self.assertIn("underground-belt", issue["recommendation"])
+
+    def test_factory_layout_recommends_main_bus_corridor_side(self):
+        obs = base_observation()
+        obs["research"]["technologies"]["logistics"] = {"researched": True, "enabled": True}
+        obs["resources"].append({"name": "iron-ore", "position": {"x": 10, "y": 12}, "distance": 12})
+        obs["entities"] = [
+            {
+                "name": "transport-belt",
+                "unit_number": 950 + index,
+                "position": {"x": float(index * 2), "y": 0.0},
+                "direction": planner_module.EAST,
+            }
+            for index in range(12)
+        ]
+        obs["entities"].extend(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 980 + index,
+                "recipe": "transport-belt",
+                "position": {"x": float(index * 4), "y": 4.0},
+                "electric_network_connected": True,
+            }
+            for index in range(4)
+        )
+
+        issues = factory_layout_issues(obs)
+        issue = next(item for item in issues if item["kind"] == "main_bus_corridor_candidate")
+
+        self.assertEqual(issue["item"], "factory_layout")
+        self.assertEqual(issue["parameters"]["axis"], "east_west")
+        self.assertEqual(issue["parameters"]["side"], "north")
+        self.assertEqual(issue["parameters"]["crossing_policy"], "underground_or_splitter_only")
+        self.assertIn("main bus corridor", issue["detail"])
+
     def test_factory_layout_flags_remote_starter_smelting_site(self):
         obs = base_observation()
         obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}

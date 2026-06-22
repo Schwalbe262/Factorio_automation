@@ -56,6 +56,7 @@ ASSEMBLER_ENTITY_NAMES = {"assembling-machine-1", "assembling-machine-2", "assem
 FURNACE_ENTITY_NAMES = {"stone-furnace", "steel-furnace", "electric-furnace"}
 _STARTER_ANCHOR_CACHE: dict[int, tuple[int, int, list[dict[str, float]]]] = {}
 POWER_CONNECTOR_NAMES = {"small-electric-pole", "medium-electric-pole", "big-electric-pole", "substation"}
+REGULAR_BELT_ENTITY_NAMES = {"transport-belt", "fast-transport-belt", "express-transport-belt", "turbo-transport-belt"}
 PROTECTED_RESOURCE_NAMES = {"iron-ore", "copper-ore", "coal", "stone", "uranium-ore"}
 PRESERVED_STARTER_ARTIFACT_KEYWORDS = ("crash", "wreck", "spaceship")
 SITE_GATE_INPUT_STOCK_FALLBACK = 20
@@ -306,6 +307,12 @@ def factory_layout_issues(observation: dict[str, Any]) -> list[dict[str, Any]]:
 
     for issue in _power_expansion_clearance_issues(sites):
         issues.append(issue)
+    issues.extend(_power_pole_clutter_issues(observation))
+    issues.extend(_belt_crossing_layout_issues(observation))
+
+    main_bus_issue = _main_bus_corridor_issue(observation)
+    if main_bus_issue is not None:
+        issues.append(main_bus_issue)
 
     gear_mall_compaction_issue = _gear_mall_plate_compaction_issue(observation)
     if gear_mall_compaction_issue is not None:
@@ -365,6 +372,280 @@ def _power_expansion_clearance_issues(sites: list[dict[str, Any]]) -> list[dict[
             }
         )
     return issues
+
+
+def _power_pole_clutter_issues(observation: dict[str, Any]) -> list[dict[str, Any]]:
+    poles = [
+        entity
+        for entity in observation.get("entities") or []
+        if isinstance(entity, dict)
+        and str(entity.get("name") or "") == "small-electric-pole"
+        and isinstance(entity.get("position"), dict)
+    ]
+    if len(poles) < 8:
+        return []
+
+    cluster_radius = 10.0
+    best_cluster: list[dict[str, Any]] = []
+    best_area = float("inf")
+    for seed in poles:
+        seed_position = _position(seed)
+        cluster = [pole for pole in poles if distance(seed_position, _position(pole)) <= cluster_radius]
+        footprint = _layout_footprint([_position(pole) for pole in cluster])
+        area = float(footprint.get("area") or 1.0)
+        if len(cluster) > len(best_cluster) or (len(cluster) == len(best_cluster) and area < best_area):
+            best_cluster = cluster
+            best_area = area
+
+    if len(best_cluster) < 8:
+        return []
+    footprint = _layout_footprint([_position(pole) for pole in best_cluster])
+    density = round(len(best_cluster) / max(float(footprint.get("area") or 1.0), 1.0), 3)
+    if len(best_cluster) < 12 and density < 0.05:
+        return []
+
+    center = _centroid([_position(pole) for pole in best_cluster]) or {"x": 0.0, "y": 0.0}
+    severity = min(86, 64 + len(best_cluster))
+    return [
+        {
+            "kind": "power_pole_clutter",
+            "severity": severity,
+            "site_id": "power:pole-clutter",
+            "item": "electric-power",
+            "position": center,
+            "detail": (
+                f"{len(best_cluster)} small electric poles are clustered within about {cluster_radius:.0f} tiles, "
+                f"creating a pole mesh instead of a readable power corridor"
+            ),
+            "recommendation": (
+                "reserve edge/corridor pole runs for the block and remove redundant small poles only after machine coverage "
+                "and wire connectivity remain valid"
+            ),
+            "parameters": {
+                "small_pole_count": len(best_cluster),
+                "cluster_radius_tiles": cluster_radius,
+                "cluster_density": density,
+                "footprint": footprint,
+                "cleanup_policy": "validate_power_coverage_before_mining_poles",
+            },
+        }
+    ]
+
+
+def _regular_belt_entities(observation: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        entity
+        for entity in observation.get("entities") or []
+        if isinstance(entity, dict)
+        and str(entity.get("name") or "") in REGULAR_BELT_ENTITY_NAMES
+        and isinstance(entity.get("position"), dict)
+    ]
+
+
+def _layout_bridge_entity_near(observation: dict[str, Any], position: dict[str, float]) -> bool:
+    bridge_names = {
+        "underground-belt",
+        "fast-underground-belt",
+        "express-underground-belt",
+        "turbo-underground-belt",
+        "splitter",
+        "fast-splitter",
+        "express-splitter",
+        "turbo-splitter",
+    }
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict) or str(entity.get("name") or "") not in bridge_names:
+            continue
+        if isinstance(entity.get("position"), dict) and distance(_position(entity), position) <= 1.5:
+            return True
+    return False
+
+
+def _belt_crossing_layout_issues(observation: dict[str, Any]) -> list[dict[str, Any]]:
+    belts = _regular_belt_entities(observation)
+    if len(belts) < 6:
+        return []
+    horizontal = [belt for belt in belts if _direction_axis(_direction_or_default(belt.get("direction"), EAST)) == "x"]
+    vertical = [belt for belt in belts if _direction_axis(_direction_or_default(belt.get("direction"), SOUTH)) == "y"]
+    if not horizontal or not vertical:
+        return []
+
+    crossing_positions: dict[tuple[float, float], dict[str, float]] = {}
+    for h_belt in horizontal:
+        h_pos = _position(h_belt)
+        for v_belt in vertical:
+            v_pos = _position(v_belt)
+            if abs(h_pos["x"] - v_pos["x"]) > 1.25 or abs(h_pos["y"] - v_pos["y"]) > 1.25:
+                continue
+            center = {
+                "x": round((h_pos["x"] + v_pos["x"]) / 2.0, 1),
+                "y": round((h_pos["y"] + v_pos["y"]) / 2.0, 1),
+            }
+            if _layout_bridge_entity_near(observation, center):
+                continue
+            crossing_positions[(center["x"], center["y"])] = center
+
+    if not crossing_positions:
+        return []
+    positions = list(crossing_positions.values())
+    logistics_ready = _logistics_researched_or_underground_unlocked(observation) or total_item_count(observation, "underground-belt") > 0
+    severity = 78 if logistics_ready else 66
+    if len(positions) >= 3:
+        severity += 4
+    example = positions[0]
+    return [
+        {
+            "kind": "belt_crossing_without_underground",
+            "severity": severity,
+            "site_id": "logistics:belt-crossing",
+            "item": "transport-belt",
+            "position": example,
+            "detail": f"{len(positions)} regular belt crossing/contact points are near perpendicular belt lanes without underground or splitter structure",
+            "recommendation": (
+                "use underground-belt bridges or splitter fanout at belt intersections; avoid weaving producer/consumer belts through each other "
+                "or across future main-bus lanes"
+            ),
+            "parameters": {
+                "crossing_count": len(positions),
+                "example_position": example,
+                "underground_belt_available": logistics_ready,
+                "required_item": "underground-belt" if logistics_ready else "logistics_research",
+            },
+        }
+    ]
+
+
+def _layout_production_entities(observation: dict[str, Any]) -> list[dict[str, Any]]:
+    production_names = (
+        ASSEMBLER_ENTITY_NAMES
+        | FURNACE_ENTITY_NAMES
+        | {"burner-mining-drill", "electric-mining-drill", "big-mining-drill", "lab", "boiler", "steam-engine"}
+        | REGULAR_BELT_ENTITY_NAMES
+    )
+    return [
+        entity
+        for entity in observation.get("entities") or []
+        if isinstance(entity, dict)
+        and str(entity.get("name") or "") in production_names
+        and isinstance(entity.get("position"), dict)
+    ]
+
+
+def _position_bounds(positions: list[dict[str, float]]) -> tuple[float, float, float, float] | None:
+    if not positions:
+        return None
+    xs = [float(position["x"]) for position in positions]
+    ys = [float(position["y"]) for position in positions]
+    return min(xs), max(xs), min(ys), max(ys)
+
+
+def _corridor_band_load(
+    points: list[dict[str, float]],
+    *,
+    axis: str,
+    coordinate: float,
+    span_min: float,
+    span_max: float,
+    band: float,
+) -> int:
+    load = 0
+    for point in points:
+        x = float(point.get("x") or 0.0)
+        y = float(point.get("y") or 0.0)
+        if axis == "east_west":
+            if span_min <= x <= span_max and abs(y - coordinate) <= band:
+                load += 1
+        elif span_min <= y <= span_max and abs(x - coordinate) <= band:
+            load += 1
+    return load
+
+
+def _main_bus_corridor_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
+    production_entities = _layout_production_entities(observation)
+    belts = _regular_belt_entities(observation)
+    if len(production_entities) < 10 or len(belts) < 12:
+        return None
+    positions = [_position(entity) for entity in production_entities]
+    bounds = _position_bounds(positions)
+    if bounds is None:
+        return None
+    min_x, max_x, min_y, max_y = bounds
+    footprint = _layout_footprint(positions)
+    width = float(footprint.get("width") or 0.0)
+    height = float(footprint.get("height") or 0.0)
+    if max(width, height) < 18.0:
+        return None
+
+    axis = "north_south" if height > width * 1.15 else "east_west"
+    reserve_width = 8.0
+    resource_points = [
+        _xy_position(resource["position"])
+        for resource in observation.get("resources") or []
+        if isinstance(resource, dict)
+        and str(resource.get("name") or "") in PROTECTED_RESOURCE_NAMES
+        and isinstance(resource.get("position"), dict)
+    ]
+    entity_points = [_position(entity) for entity in production_entities]
+    if axis == "east_west":
+        span_min = min_x - 8.0
+        span_max = max_x + 24.0
+        candidates = [
+            ("north", min_y - reserve_width),
+            ("south", max_y + reserve_width),
+        ]
+    else:
+        span_min = min_y - 8.0
+        span_max = max_y + 24.0
+        candidates = [
+            ("west", min_x - reserve_width),
+            ("east", max_x + reserve_width),
+        ]
+
+    scored: list[tuple[int, float, str, float]] = []
+    for side, coordinate in candidates:
+        entity_load = _corridor_band_load(entity_points, axis=axis, coordinate=coordinate, span_min=span_min, span_max=span_max, band=4.0)
+        resource_load = _corridor_band_load(resource_points, axis=axis, coordinate=coordinate, span_min=span_min, span_max=span_max, band=6.0)
+        scored.append((entity_load + resource_load * 3, abs(coordinate), side, coordinate))
+    scored.sort()
+    _score, _distance_from_origin, side, coordinate = scored[0]
+
+    if axis == "east_west":
+        centerline = {
+            "from": {"x": round(span_min, 1), "y": round(coordinate, 1)},
+            "to": {"x": round(span_max, 1), "y": round(coordinate, 1)},
+        }
+    else:
+        centerline = {
+            "from": {"x": round(coordinate, 1), "y": round(span_min, 1)},
+            "to": {"x": round(coordinate, 1), "y": round(span_max, 1)},
+        }
+
+    logistics_ready = _logistics_researched_or_underground_unlocked(observation) or total_item_count(observation, "splitter") > 0
+    severity = 76 if logistics_ready else 75
+    return {
+        "kind": "main_bus_corridor_candidate",
+        "severity": severity,
+        "site_id": "layout:main-bus-corridor",
+        "item": "factory_layout",
+        "position": _centroid(positions),
+        "detail": (
+            f"starter factory footprint is {width:.0f}x{height:.0f} tiles with {len(belts)} belts but no explicit main bus corridor reservation"
+        ),
+        "recommendation": (
+            f"reserve an {axis.replace('_', '-')} main bus corridor on the {side} side; feed smelting/input lanes into it, "
+            "place consumer blocks off one side, and cross it only with underground belts or planned splitter branches"
+        ),
+        "parameters": {
+            "axis": axis,
+            "side": side,
+            "centerline": centerline,
+            "reserve_width_tiles": reserve_width,
+            "belt_count": len(belts),
+            "production_entity_count": len(production_entities),
+            "footprint": footprint,
+            "crossing_policy": "underground_or_splitter_only",
+        },
+    }
 
 
 def _gear_mall_plate_compaction_issue(observation: dict[str, Any]) -> dict[str, Any] | None:
