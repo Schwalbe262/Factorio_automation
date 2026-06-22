@@ -1003,6 +1003,14 @@ class StrategyTests(unittest.TestCase):
                     "inventories": {},
                 },
                 {
+                    "name": "inserter",
+                    "unit_number": 102,
+                    "position": {"x": 2.5, "y": 8.5},
+                    "direction": planner_module.WEST,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
                     "name": "stone-furnace",
                     "unit_number": 200,
                     "recipe": "iron-plate",
@@ -1040,6 +1048,75 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["target_count"], missing + 4)
         self.assertIn("transport_belts_available=20", result["evidence"])
         self.assertIn(f"transport_belt_bootstrap_target={missing + 4}", result["evidence"])
+
+    def test_reconcile_does_not_reselect_capped_belt_bootstrap_without_mall_transfer(self):
+        observation = {
+            "player": {"name": "server", "kind": "server", "character_valid": False, "position": {"x": 0, "y": 0}},
+            "inventory": {"coal": 1},
+            "resources": [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}],
+            "entities": [
+                {
+                    "name": "burner-mining-drill",
+                    "unit_number": 20,
+                    "position": {"x": 0, "y": 0},
+                    "direction": planner_module.EAST,
+                    "mining_target": "coal",
+                    "inventories": {"1": {"coal": 3}},
+                },
+                {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": planner_module.EAST, "inventories": {"1": {"coal": 1}}},
+                {"name": "boiler", "unit_number": 30, "position": {"x": 150, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 100,
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 0.5, "y": 8.5},
+                    "electric_network_connected": True,
+                    "inventories": {"2": {"iron-gear-wheel": 1}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 101,
+                    "recipe": "transport-belt",
+                    "position": {"x": 4.5, "y": 8.5},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 200,
+                    "recipe": "iron-plate",
+                    "position": {"x": 8.5, "y": 8.5},
+                    "inventories": {"2": {"iron-plate": 24}},
+                },
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 300,
+                    "position": {"x": 6.5, "y": 8.5},
+                    "inventories": {"1": {"transport-belt": 125}},
+                },
+            ],
+            "research": {"technologies": {"automation": {"researched": True}}},
+        }
+        missing = planner_module._boiler_coal_feed_missing_belt_count(observation)
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "plan_factory_site",
+                "priority": 50,
+                "reason": "Improve layout.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertGreater(missing, 40)
+        self.assertLess(125, missing)
+        self.assertNotEqual(result["selected_skill"], "bootstrap_build_item_mall")
+        self.assertNotIn("transport_belt_bootstrap_target=40", result["evidence"])
 
     def test_active_boiler_feed_suppresses_stale_belt_shortfall(self):
         observation = {

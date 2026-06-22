@@ -3319,6 +3319,62 @@ class StallWatchdogTests(unittest.TestCase):
             skill = controller._stall_recovery_skill("launch_rocket_program", observation, [])
             self.assertEqual(skill, "automate_electronic_circuit_line")
 
+    def test_run_strategy_step_redirects_satisfied_bootstrap_mall_selection(self):
+        observation = {
+            "tick": 1,
+            "player": {"position": {"x": 0, "y": 0}},
+            "inventory": {"transport-belt": 125, "coal": 16, "iron-plate": 12},
+            "entities": [
+                {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 8}}},
+                {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+                {"name": "boiler", "unit_number": 30, "position": {"x": 150, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+                {"name": "stone-furnace", "unit_number": 40, "recipe": "iron-plate", "position": {"x": 4, "y": 0}, "inventories": {}},
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 981,
+                    "position": {"x": 0, "y": 4},
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+            ],
+            "resources": [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}],
+            "research": {"technologies": {"automation": {"researched": True}}},
+        }
+
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.ran_goal = None
+
+            def observe(self):
+                return observation
+
+            def strategy_decision(self, objective, require_llm=False, skip_remote=False):
+                return {
+                    "selected_skill": "bootstrap_build_item_mall",
+                    "target_item": "transport-belt",
+                    "target_count": 220,
+                    "priority": 60,
+                    "source": "llm",
+                }
+
+            def _stall_recovery_skill(self, objective, observation, recent_skills):
+                return "produce_iron_plate"
+
+            def _run_skill(self, **kwargs):
+                self.ran_goal = kwargs["goal"]
+                return RunSummary(True, "redirected", 1, 0, Path("test.jsonl"), kwargs["target_item"], 0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FakeController(make_test_config(Path(tmp)))
+            summary = controller.run_strategy_step("launch_rocket_program")
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(summary.selected_skill, "produce_iron_plate")
+        self.assertEqual(summary.strategy["source"], "autopilot_satisfied_redirect")
+        self.assertEqual(controller.ran_goal, "produce_iron_plate")
+
     def test_both_controllers_run_strategy_step_accept_override_skill(self):
         # run_autopilot_loop (base) always calls run_strategy_step(override_skill=...). Every subclass
         # override of run_strategy_step must accept it, or the no-mod autopilot raises TypeError every

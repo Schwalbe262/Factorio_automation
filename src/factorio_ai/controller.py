@@ -523,8 +523,16 @@ def _stall_recovery_candidate_satisfied(
     if skill_name == "setup_power":
         return _has_connected_power_generator(observation)
 
+    if skill_name == "bootstrap_build_item_mall":
+        target_item = str(config.get("target_item") or "")
+        target = _int_or_none(config.get("target"))
+        if not target_item or target is None:
+            return False
+        if target_item == "transport-belt":
+            target = BuildItemMallSkill(target_item, target)._effective_target_count(observation)
+        return total_item_count(observation, target_item) >= target
+
     if skill_name not in {
-        "bootstrap_build_item_mall",
         "build_gear_belt_mall_logistics",
         "produce_automation_science_pack",
         "produce_copper_plate",
@@ -1197,6 +1205,32 @@ class FactorioController:
                 "selected skill has no local runner; foundry will attempt to generate it",
                 max_steps=max_steps,
             )
+        if not override_skill:
+            try:
+                satisfaction_obs = self.observe()
+            except Exception:  # noqa: BLE001
+                satisfaction_obs = None
+            if satisfaction_obs is not None and _stall_recovery_candidate_satisfied(selected, satisfaction_obs, config):
+                replacement = self._stall_recovery_skill(objective, satisfaction_obs, [selected])
+                if replacement and replacement != selected:
+                    replacement_strategy = annotate_strategy_with_skill_status(
+                        {
+                            "selected_skill": replacement,
+                            "source": "autopilot_satisfied_redirect",
+                            "reason": f"'{selected}' is already satisfied; redirecting to {replacement}",
+                            "priority": max(0, min(100, (_int_or_none(strategy.get("priority")) or 50) + 5)),
+                            "blockers": [f"{selected} already satisfied"],
+                            "evidence": ["satisfied_skill_redirect"],
+                            "expected_effect": "Avoid re-running a completed deterministic skill and keep the factory progressing.",
+                            "original_selected_skill": selected,
+                        },
+                        runtime_dir=self.cfg.runtime_dir,
+                    )
+                    replacement_config = self._skill_run_config(replacement, max_steps=max_steps)
+                    if replacement_config is not None:
+                        selected = replacement
+                        strategy = replacement_strategy
+                        config = replacement_config
         self._clear_codex_wait_state(selected)
         run_config_keys = {
             "skill",

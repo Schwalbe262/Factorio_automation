@@ -10,6 +10,7 @@ from .knowledge import electric_mining_drill_dependency_milestones
 from .monitor import recent_damage_events, summarize_factory
 from .models import distance, entities_named, entity_item_count, inventory_count, player_position, total_item_count
 from .planner import (
+    BOOTSTRAP_TRANSPORT_BELT_SEED_TARGET_CAP,
     SITE_GATE_INPUT_STOCK_FALLBACK,
     _boiler_has_belt_fuel_feed,
     _boiler_coal_feed_missing_belt_count,
@@ -24,6 +25,7 @@ from .planner import (
     _gear_belt_mall_relocation_power_corridor_positions,
     _missing_power_corridor_positions,
     _transport_belt_output_chest,
+    _transport_belt_mall_ready_for_route_scaleup,
     factory_layout_issues,
     factory_layout_opportunities,
     factory_layout_simulation_candidates,
@@ -3567,6 +3569,8 @@ def _construction_belt_bootstrap_target(observation: dict[str, Any]) -> int:
     missing_boiler_route_belts = _boiler_coal_feed_missing_belt_count(observation)
     if missing_boiler_route_belts <= 0:
         return 20
+    if not _transport_belt_mall_ready_for_route_scaleup(observation):
+        return BOOTSTRAP_TRANSPORT_BELT_SEED_TARGET_CAP
     return max(20, missing_boiler_route_belts + 4)
 
 
@@ -3581,10 +3585,13 @@ def _boiler_feed_belt_shortfall_issue(observation: dict[str, Any]) -> dict[str, 
         return None
     if not _transport_belt_automation_ready(observation):
         return None
+    target_count = _construction_belt_bootstrap_target(observation)
+    if available >= target_count:
+        return None
     return {
         "missing": missing,
         "available": available,
-        "target_count": max(20, missing + 4),
+        "target_count": target_count,
     }
 
 
