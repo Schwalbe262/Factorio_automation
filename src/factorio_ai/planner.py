@@ -1307,6 +1307,14 @@ def _recipe_assembler_exists_for_layout(observation: dict[str, Any], recipe: str
     )
 
 
+def _inserter_mall_repair_available(observation: dict[str, Any]) -> bool:
+    return (
+        inventory_count(observation, "inserter") > 0
+        or craftable_count(observation, "inserter") > 0
+        or _recipe_assembler_exists_for_layout(observation, "inserter")
+    )
+
+
 def _entity_exists_for_layout(observation: dict[str, Any], name: str) -> bool:
     return _entity_count_for_layout(observation, name) > 0
 
@@ -11348,6 +11356,7 @@ def _logistics_line_inserter_material_decision(
         recipe = RECIPES.get(item)
         if recipe is None:
             continue
+        missing_unresolved = False
         for ingredient in ("iron-plate", "iron-gear-wheel", "electronic-circuit"):
             required = int(recipe.ingredients.get(ingredient) or 0)
             if required <= 0 or inventory_count(observation, ingredient) >= required:
@@ -11362,7 +11371,24 @@ def _logistics_line_inserter_material_decision(
             )
             if decision is not None:
                 return decision
+            missing_unresolved = True
             break
+        if missing_unresolved and item == "inserter" and _inserter_mall_repair_available(observation):
+            decision = BuildItemMallSkill("inserter", 4).next_action(
+                observation,
+                reference_position=layout.get("source_inserter", {}).get("position"),
+            )
+            if not decision.done:
+                metadata = dict(decision.metadata)
+                metadata.setdefault("failure_root", "logistics_endpoint_inserter_shortage")
+                metadata.setdefault("repair_skill", "bootstrap_build_item_mall")
+                metadata.setdefault("target_item", "inserter")
+                return PlannerDecision(
+                    decision.action,
+                    f"{decision.reason} for {label}",
+                    done=decision.done,
+                    metadata=metadata,
+                )
         else:
             craftable = craftable_count(observation, item)
             if craftable > 0:
@@ -12946,6 +12972,22 @@ class GearBeltMallLogisticsSkill:
                 decision = self._craft_bootstrap_inserter(observation, prefer_burner=prefer_burner, label=label)
                 if decision is not None:
                     return decision
+                if _inserter_mall_repair_available(observation):
+                    decision = BuildItemMallSkill("inserter", 4).next_action(
+                        observation,
+                        reference_position=spec["position"],
+                    )
+                    if not decision.done:
+                        metadata = dict(decision.metadata)
+                        metadata.setdefault("failure_root", "gear_belt_transfer_inserter_shortage")
+                        metadata.setdefault("repair_skill", "bootstrap_build_item_mall")
+                        metadata.setdefault("target_item", "inserter")
+                        return PlannerDecision(
+                            decision.action,
+                            f"{decision.reason} for {label}",
+                            done=decision.done,
+                            metadata=metadata,
+                        )
             return PlannerDecision(None, f"missing inserter for {label}")
         position = spec["position"]
         if distance(player, position) > 20:

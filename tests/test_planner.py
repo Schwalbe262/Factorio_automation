@@ -9338,6 +9338,31 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.action["bootstrap_seed"])
         self.assertEqual(decision.metadata["seed_reason"], "direct gear-to-belt transfer inserter_gear_seed")
 
+    def test_gear_belt_mall_repairs_missing_direct_transfer_inserter_via_inserter_mall(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 1, "copper-plate": 30, "transport-belt": 6}
+        obs["craftable"] = {"copper-cable": 15}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt", gear_inventory={"iron-gear-wheel": 4}))
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 990,
+                "position": {"x": 12, "y": 2},
+                "recipe": "inserter",
+                "electric_network_connected": True,
+                "inventories": {"1": {}},
+            }
+        )
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["recipe"], "copper-cable")
+        self.assertIn("direct gear-to-belt transfer inserter", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "gear_belt_transfer_inserter_shortage")
+        self.assertEqual(decision.metadata["repair_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(decision.metadata["target_item"], "inserter")
+
     def test_gear_belt_mall_places_direct_transfer_inserter_when_no_belts(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"inserter": 1}
@@ -11030,6 +11055,53 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["name"], "tree-01")
         self.assertIn("pole wood", decision.reason)
         self.assertIn("iron source output inserter", decision.reason)
+
+    def test_iron_plate_logistic_line_repairs_missing_endpoint_inserter_via_inserter_mall(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 1, "copper-plate": 30, "transport-belt": 20}
+        obs["craftable"] = {"copper-cable": 15}
+        obs["entities"].extend(gear_belt_mall_entities(belt_recipe="transport-belt"))
+        obs["entities"].extend(
+            [
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": -8, "y": 2},
+                    "recipe": "iron-plate",
+                    "inventories": {"3": {"iron-plate": 20}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 990,
+                    "position": {"x": 12, "y": 2},
+                    "recipe": "inserter",
+                    "electric_network_connected": True,
+                    "inventories": {"1": {}},
+                },
+            ]
+        )
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+        unit_number = 960
+        for segment in layout["segments"]:
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": unit_number,
+                    "position": segment["position"],
+                    "direction": segment["direction"],
+                    "inventories": {},
+                }
+            )
+            unit_number += 1
+
+        decision = IronPlateLogisticLineToGearMallSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["recipe"], "copper-cable")
+        self.assertIn("iron source output inserter", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "logistics_endpoint_inserter_shortage")
+        self.assertEqual(decision.metadata["repair_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(decision.metadata["target_item"], "inserter")
 
     def test_iron_plate_logistic_line_refuels_source_drill_before_endpoint_completion(self):
         obs = powered_automation_observation()
