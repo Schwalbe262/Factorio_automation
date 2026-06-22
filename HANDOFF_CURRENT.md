@@ -1,10 +1,10 @@
 # Current Handoff
 - Branch `chore/part130-unattended-qwen9-supervisor`; local Qwen path active via scheduler vLLM service id `13039`.
-- User requested a map reset; old save backed up to `runtime/vanilla/saves/backups/no-mod-rcon-before-reset-20260622-194734.zip`.
-- Fresh no-mod save created with `create-no-mod-save --overwrite`; server PID `32504`, dashboard PID `6104`, autopilot PID `68576`, GUI launch requested through Steam.
-- Fresh map health after restart: server UP, researched=3, automation research progress ~0.17, lab/science chain powered and consuming packs.
-- Fixes in this part: local seed source no longer steals assembler input materials; direct gear-transfer inserter is protected from relocation loops; starter stone output chest clears rock/tree blockers before build.
-- Validation: targeted planner tests OK; `tests.test_planner` 457 OK; direct live observe OK on fresh map.
-- Current concern: power/water is far from starter resources; continue monitoring early automation completion and avoid hand-driving.
+- Fresh no-mod map is running after reset; old save backup: `runtime/vanilla/saves/backups/no-mod-rcon-before-reset-20260622-194734.zip`.
+- Current supervisor UP; latest observed autopilot PID `32148`, dashboard/server remained under supervisor, Qwen decisions still show `src=llm`.
+- Fixed fresh-map coal readiness: empty/unfueled coal supply now maps to `starter_fuel_supply_starved -> setup_coal_supply`.
+- Fixed coal supply sequencing: fuel an empty-output coal drill before replacing its chest with a belt.
+- Fixed belt mall runaway: long boiler-route belt targets only scale after gear/belt transfer is automated; pre-automation belt bootstrap target caps at 40.
+- Live result: coal supply recovered; transport-belt mall stopped as target reached `125/40` instead of continuing toward route-scale `220`.
+- Validation: `tests.test_planner` 460 OK; `tests.test_controller` + `tests.test_factory_readiness` 101 OK; full discover 1221 OK before final cap, cap covered by planner tests.
 - Dirty archives remain: `note.md`/`insight.md` have large append-only changes; avoid staging wholesale.
-- Token usage sample: current thread `30,779,328` absolute; weekly quota unavailable.

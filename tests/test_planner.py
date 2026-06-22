@@ -655,6 +655,31 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 10)
         self.assertIn("before placing coal output belt", decision.reason)
 
+    def test_coal_supply_fuels_drill_before_replacing_empty_output_chest(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 6, "y": 0}
+        obs["inventory"] = {"transport-belt": 1, "coal": 12}
+        obs["resources"] = [{"name": "coal", "position": {"x": 6, "y": 0}, "distance": 6}]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 11,
+                "position": {"x": 6, "y": 0},
+                "direction": 4,
+                "mining_target": "coal",
+                "status_name": "no_fuel",
+                "inventories": {},
+            },
+            {"name": "wooden-chest", "unit_number": 10, "position": {"x": 7.5, "y": 0.5}, "inventories": {}},
+        ]
+
+        decision = CoalSupplySkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["unit_number"], 11)
+        self.assertIn("before output chest replacement", decision.reason)
+
     def test_fuel_burner_takes_coal_from_logistic_output_before_hand_mining(self):
         obs = base_observation()
         obs["inventory"] = {}
@@ -1331,6 +1356,22 @@ class PlannerTests(unittest.TestCase):
                 "electric_network_connected": True,
                 "inventories": {},
             },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 982,
+                "position": {"x": -4, "y": 4},
+                "recipe": "iron-gear-wheel",
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+            {
+                "name": "inserter",
+                "unit_number": 983,
+                "position": {"x": -2, "y": 4},
+                "direction": planner_module.WEST,
+                "electric_network_connected": True,
+                "inventories": {},
+            },
         ]
         obs["entities"].append(
             {
@@ -1346,6 +1387,54 @@ class PlannerTests(unittest.TestCase):
 
         self.assertGreater(planner_module.total_item_count(obs, "transport-belt"), missing)
         self.assertEqual(target, missing + 4)
+
+    def test_belt_mall_target_for_boiler_route_waits_for_automated_mall_input(self):
+        obs = base_observation()
+        obs["inventory"] = {"transport-belt": 2, "burner-inserter": 1, "coal": 16}
+        obs["research"]["technologies"]["automation"]["researched"] = True
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 8}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "boiler", "unit_number": 30, "position": {"x": 50, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 981,
+                "position": {"x": 0, "y": 4},
+                "recipe": "transport-belt",
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+        ]
+
+        missing = planner_module._boiler_coal_feed_missing_belt_count(obs)
+        target = BuildItemMallSkill("transport-belt", 20)._effective_target_count(obs)
+
+        self.assertGreater(missing, 20)
+        self.assertEqual(target, 20)
+
+    def test_belt_mall_target_caps_large_llm_target_before_automated_input(self):
+        obs = base_observation()
+        obs["inventory"] = {"transport-belt": 2, "burner-inserter": 1, "coal": 16}
+        obs["research"]["technologies"]["automation"]["researched"] = True
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 20, "position": {"x": 0, "y": 0}, "direction": 4, "inventories": {"1": {"coal": 8}}},
+            {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {"name": "boiler", "unit_number": 30, "position": {"x": 50, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 981,
+                "position": {"x": 0, "y": 4},
+                "recipe": "transport-belt",
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+        ]
+
+        target = BuildItemMallSkill("transport-belt", 100)._effective_target_count(obs)
+
+        self.assertEqual(target, planner_module.BOOTSTRAP_TRANSPORT_BELT_SEED_TARGET_CAP)
 
     def test_coal_fuel_feed_prefers_local_receiver_when_boiler_is_working(self):
         obs = base_observation()

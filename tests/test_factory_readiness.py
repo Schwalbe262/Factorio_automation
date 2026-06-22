@@ -144,6 +144,53 @@ class FactoryReadinessTests(unittest.TestCase):
         self.assertEqual(readiness.failure_root, "iron_plate_source_missing")
         self.assertEqual(readiness.repair_skill, "produce_iron_plate")
 
+    def test_empty_unfueled_coal_supply_preempts_mall_bootstrap(self):
+        obs = _powered_mall_observation()
+        obs["inventory"] = {}
+        obs["entities"].append(
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 40,
+                "position": {"x": 8, "y": 8},
+                "mining_target": "coal",
+                "status_name": "no_fuel",
+                "inventories": {},
+            }
+        )
+        for entity in obs["entities"]:
+            if entity.get("name") == "stone-furnace":
+                entity["inventories"] = {"1": {"coal": 20}, "2": {"iron-plate": 8}}
+        obs["entities"] = [entity for entity in obs["entities"] if entity.get("recipe") != "transport-belt"]
+
+        readiness = build_factory_readiness(obs)
+
+        self.assertFalse(readiness.details["coal_supply_ready"])
+        self.assertTrue(readiness.details["starter_fuel_starved"])
+        self.assertEqual(readiness.failure_root, "starter_fuel_supply_starved")
+        self.assertEqual(readiness.repair_skill, "setup_coal_supply")
+
+    def test_inventory_coal_stock_allows_mall_bootstrap_repair(self):
+        obs = _powered_mall_observation()
+        obs["inventory"] = {"coal": 12}
+        obs["entities"].append(
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 40,
+                "position": {"x": 8, "y": 8},
+                "mining_target": "coal",
+                "status_name": "no_fuel",
+                "inventories": {},
+            }
+        )
+        obs["entities"] = [entity for entity in obs["entities"] if entity.get("recipe") != "transport-belt"]
+
+        readiness = build_factory_readiness(obs)
+
+        self.assertTrue(readiness.details["coal_supply_ready"])
+        self.assertFalse(readiness.details["starter_fuel_starved"])
+        self.assertEqual(readiness.failure_root, "belt_mall_missing")
+        self.assertEqual(readiness.repair_skill, "bootstrap_build_item_mall")
+
 
 if __name__ == "__main__":
     unittest.main()

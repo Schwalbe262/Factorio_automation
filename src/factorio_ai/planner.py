@@ -41,6 +41,7 @@ DIRECT_SMELTING_CELL_TARGET_PLATES = 20
 DIRECT_SMELTING_MIN_PARALLEL_CELLS = 2
 DIRECT_SMELTING_MAX_PARALLEL_CELLS = 4
 STARTER_COAL_SUPPLY_DRILL_TARGET = 4
+BOOTSTRAP_TRANSPORT_BELT_SEED_TARGET_CAP = 40
 SMELTING_LINE_FUEL_RESERVE = {
     "drill": 20,
     "inserter": 4,
@@ -4292,6 +4293,19 @@ class CoalSupplySkill:
             position = layout["output_position"]
             chest = layout.get("output_chest")
             if isinstance(chest, dict):
+                if entity_item_count(chest, "coal") <= 0 and _entity_burner_fuel_count(drill) < DIRECT_SMELTING_FUEL_RESERVE:
+                    return _fuel_burner_line_entity(
+                        observation,
+                        player,
+                        drill,
+                        entity_name="burner-mining-drill",
+                        threshold=DIRECT_SMELTING_FUEL_RESERVE,
+                        insert_count=STARTER_FUEL_BATCH_COUNT,
+                        context="coal supply site before output chest replacement",
+                        support_skill=IronPlateSkill(target_count=20),
+                        far_fuel_reason="coal supply site is too far from available hand fuel before output chest replacement",
+                        prefer_coal_supply=False,
+                    )
                 chest_position = _position(chest)
                 if distance(player, chest_position) > 8:
                     return PlannerDecision(
@@ -14535,6 +14549,8 @@ class BuildItemMallSkill:
         available_belts = _available_boiler_feed_construction_belts(observation)
         if available_belts >= missing_boiler_route_belts:
             return self.target_count
+        if not _transport_belt_mall_ready_for_route_scaleup(observation):
+            return min(self.target_count, BOOTSTRAP_TRANSPORT_BELT_SEED_TARGET_CAP)
         return max(self.target_count, missing_boiler_route_belts + 4)
 
     def next_action(
@@ -17504,6 +17520,36 @@ def _transport_belt_automation_factory_output_ready(observation: dict[str, Any])
         for name in ASSEMBLER_ENTITY_NAMES
         for item in entities_named(observation, name)
     )
+
+
+def _transport_belt_mall_ready_for_route_scaleup(observation: dict[str, Any]) -> bool:
+    layout = _find_gear_belt_mall_logistics_layout(observation)
+    if not isinstance(layout, dict):
+        return False
+    belt_assembler = layout.get("belt_assembler")
+    if not isinstance(belt_assembler, dict) or str(belt_assembler.get("recipe") or "") != "transport-belt":
+        return False
+    direct = layout.get("direct_gear_transfer_inserter")
+    if isinstance(direct, dict):
+        inserter = direct.get("entity")
+        if (
+            isinstance(inserter, dict)
+            and _direction_or_default(inserter.get("direction"), int(direct["direction"])) == int(direct["direction"])
+            and inserter.get("electric_network_connected") is not False
+            and not _entity_status_is(inserter, "no_fuel", 53)
+        ):
+            return True
+    gear_belts = layout.get("gear_belts") if isinstance(layout.get("gear_belts"), list) else []
+    if gear_belts and not all(isinstance(segment, dict) and isinstance(segment.get("entity"), dict) for segment in gear_belts):
+        return False
+    for key in ("gear_output_inserter", "belt_input_inserter"):
+        spec = layout.get(key)
+        entity = spec.get("entity") if isinstance(spec, dict) else None
+        if not isinstance(entity, dict):
+            return False
+        if entity.get("electric_network_connected") is False or _entity_status_is(entity, "no_fuel", 53):
+            return False
+    return bool(gear_belts)
 
 
 def _build_item_mall_should_use_output_chest(target_item: str) -> bool:

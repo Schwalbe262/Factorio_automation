@@ -70,6 +70,7 @@ def build_factory_readiness(observation: dict[str, Any]) -> FactoryReadiness:
     belt_mall_has_output_source = belt_mall_has_output or _belt_mall_output_chest_exists(observation, belt_assemblers)
     belt_line_buildable = transport_belt_stock > 0
     coal_supply_ready = _coal_supply_ready(observation)
+    starter_fuel_starved = _starter_fuel_supply_starved(observation) and not coal_supply_ready
     boiler_needs_fuel = _boiler_needs_fuel(observation)
     boiler_feed_buildable = boiler_needs_fuel and coal_supply_ready and belt_line_buildable
     bootstrap_seed_allowed = (
@@ -85,7 +86,11 @@ def build_factory_readiness(observation: dict[str, Any]) -> FactoryReadiness:
     blocked_by: list[str] = []
     failure_root: str | None = None
     repair_skill: str | None = None
-    if automation_researched and not iron_sources:
+    if automation_researched and starter_fuel_starved:
+        failure_root = "starter_fuel_supply_starved"
+        repair_skill = "setup_coal_supply"
+        blocked_by.append("coal supply")
+    elif automation_researched and not iron_sources:
         failure_root = "iron_plate_source_missing"
         repair_skill = "produce_iron_plate"
         blocked_by.append("iron-plate source")
@@ -146,6 +151,7 @@ def build_factory_readiness(observation: dict[str, Any]) -> FactoryReadiness:
         "gear_belt_logistics_connection_ready": gear_belt_logistics_connection_ready,
         "belt_mall_output_source_ready": belt_mall_has_output_source,
         "coal_supply_ready": coal_supply_ready,
+        "starter_fuel_starved": starter_fuel_starved,
         "boiler_needs_fuel": boiler_needs_fuel,
         "belt_mall_can_output_reason": _belt_mall_output_reason(observation, gear_assemblers, belt_assemblers),
     }
@@ -405,14 +411,30 @@ def _direction_or_default(value: Any, fallback: int) -> int:
 
 
 def _coal_supply_ready(observation: dict[str, Any]) -> bool:
-    if total_item_count(observation, "coal") > 0:
+    if inventory_count(observation, "coal") >= 8:
         return True
     for entity in _entities(observation):
-        if str(entity.get("name") or "") not in {"burner-mining-drill", "electric-mining-drill"}:
+        name = str(entity.get("name") or "")
+        if name in {"wooden-chest", "iron-chest", "steel-chest", "transport-belt"} and entity_item_count(entity, "coal") > 0:
+            return True
+        if name not in {"burner-mining-drill", "electric-mining-drill"}:
             continue
         if str(entity.get("mining_target") or entity.get("resource_name") or "") != "coal":
             continue
-        if entity_item_count(entity, "coal") > 0 or _entity_powered(entity) or not _entity_status_name_is(entity, "no_fuel"):
+        if entity_item_count(entity, "coal") > 0:
+            return True
+        if name == "electric-mining-drill" and _entity_powered(entity):
+            return True
+        if name == "burner-mining-drill" and not _entity_status_name_is(entity, "no_fuel"):
+            return True
+    return False
+
+
+def _starter_fuel_supply_starved(observation: dict[str, Any]) -> bool:
+    for entity in _entities(observation):
+        if str(entity.get("name") or "") not in {"burner-mining-drill", "stone-furnace"}:
+            continue
+        if _entity_status_name_is(entity, "no_fuel"):
             return True
     return False
 
