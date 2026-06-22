@@ -84,6 +84,24 @@ class FactoryReadinessTests(unittest.TestCase):
         self.assertEqual(readiness.failure_root, "gear_belt_logistics_incomplete")
         self.assertEqual(readiness.repair_skill, "build_gear_belt_mall_logistics")
 
+    def test_sufficient_buffered_belts_allow_next_step_before_connection_cleanup(self):
+        obs = _powered_mall_observation()
+        obs["entities"].append(
+            {
+                "name": "wooden-chest",
+                "unit_number": 31,
+                "position": {"x": 20, "y": 20},
+                "inventories": {"1": {"transport-belt": 34}},
+            }
+        )
+
+        readiness = build_factory_readiness(obs)
+
+        self.assertTrue(readiness.belt_line_buildable)
+        self.assertFalse(readiness.gear_belt_logistics_connection_ready)
+        self.assertIsNone(readiness.failure_root)
+        self.assertIsNone(readiness.repair_skill)
+
     def test_direct_transfer_inserter_satisfies_gear_belt_connection(self):
         obs = _powered_mall_observation()
         obs["entities"].append(

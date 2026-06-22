@@ -120,6 +120,15 @@ _STALL_ROTATION_SKILLS = (
     "research_logistics",
     "plan_factory_site",
 )
+_AUTOPILOT_FAST_PATH_SKILLS = {
+    "setup_coal_supply",
+    "produce_automation_science_pack",
+    "research_electric_mining_drill",
+    "automate_electronic_circuit_line",
+    "bootstrap_electric_mining_drill_mall",
+}
+_AUTOPILOT_COAL_REPAIR_TARGET = 32
+_AUTOPILOT_ELECTRIC_DRILL_RESEARCH_SCIENCE_TARGET = 25
 
 
 def _failure_recovery_threshold() -> int:
@@ -1601,6 +1610,56 @@ class FactorioController:
             return None
         return skill
 
+    def _autopilot_prerequisite_override(self, observation: dict[str, Any]) -> dict[str, Any] | None:
+        """Fast path deterministic prerequisites that should not wait for another Qwen turn."""
+
+        try:
+            readiness = build_factory_readiness(observation)
+            repair_skill = readiness.repair_skill
+            if repair_skill and self._skill_run_config(repair_skill) is not None:
+                return {
+                    "skill": repair_skill,
+                    "reason": f"factory readiness reports {readiness.failure_root}; running {repair_skill}",
+                    "failure_root": readiness.failure_root,
+                    "source": "factory_readiness",
+                }
+        except Exception:  # noqa: BLE001 - best-effort fast path; normal strategy remains authoritative.
+            pass
+
+        try:
+            from . import strategy as strategy_mod
+
+            if (
+                strategy_mod._coal_supply_repair_needed(observation)
+                and self._skill_run_config("setup_coal_supply") is not None
+            ):
+                return {
+                    "skill": "setup_coal_supply",
+                    "target_count": _AUTOPILOT_COAL_REPAIR_TARGET,
+                    "reason": "starter fuel stock is below the coal supply repair floor",
+                    "failure_root": "starter_fuel_supply_starved",
+                    "source": "coal_supply_repair",
+                }
+
+            issue = strategy_mod._burner_drill_replacement_issue(observation)
+            skill = strategy_mod._electric_drill_dependency_active_skill(observation, issue)
+            if skill in _AUTOPILOT_FAST_PATH_SKILLS and self._skill_run_config(skill) is not None:
+                target_count = (
+                    _AUTOPILOT_ELECTRIC_DRILL_RESEARCH_SCIENCE_TARGET
+                    if skill == "produce_automation_science_pack"
+                    else None
+                )
+                return {
+                    "skill": skill,
+                    "target_count": target_count,
+                    "reason": f"electric-mining-drill dependency graph requires {skill}",
+                    "failure_root": "electric_mining_drill_dependency",
+                    "source": "technology_dependency",
+                }
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
     def _quarantine_generated_skill(self, skill_name: str, reason: str, *, signal: str) -> None:
         from . import skill_foundry
 
@@ -1860,6 +1919,9 @@ class FactorioController:
                     self._write_autopilot_heartbeat(objective, "cycle_start", cycle=completed + 1)
                     self._maybe_progress_codex_wait_layout(objective)
                     override_skill: str | None = None
+                    override_target_count: int | None = None
+                    override_target_item: str | None = None
+                    override_input_item: str | None = None
                     override_from_commit = False
                     recover_for_stall = stall_count >= stall_threshold
                     recover_for_failures = consecutive_failed_cycles >= failure_recovery_threshold
@@ -1924,6 +1986,25 @@ class FactorioController:
                                     "LLM strategy turn"
                                 ),
                             )
+                    if override_skill is None and require_llm:
+                        try:
+                            prerequisite_obs = self.observe()
+                            prerequisite_override = self._autopilot_prerequisite_override(prerequisite_obs)
+                        except Exception:  # noqa: BLE001
+                            prerequisite_override = None
+                        if isinstance(prerequisite_override, dict):
+                            prerequisite_skill = str(prerequisite_override.get("skill") or "")
+                            if prerequisite_skill:
+                                override_skill = prerequisite_skill
+                                override_target_count = _int_or_none(prerequisite_override.get("target_count"))
+                                override_target_item = _strategy_target_item(prerequisite_override)
+                                override_input_item = _strategy_site_input_item(prerequisite_override)
+                                self._write_autopilot_heartbeat(
+                                    objective,
+                                    "prerequisite_override",
+                                    cycle=completed + 1,
+                                    reason=str(prerequisite_override.get("reason") or f"running {prerequisite_skill}"),
+                                )
                     # After repeated failures, degrade this one cycle to the heuristic so a hung/erroring
                     # serving can't freeze progress (the agent otherwise sits frozen mid-action). An
                     # override_skill cycle already bypasses the LLM, so only degrade plain cycles.
@@ -1954,6 +2035,26 @@ class FactorioController:
                             step_target_count = committed_target_count
                         step_target_item = committed_target_item
                         step_input_item = committed_input_item
+                    if override_target_count is not None and step_target_count is None:
+                        step_target_count = override_target_count
+                    if override_target_item is not None:
+                        step_target_item = override_target_item
+                    if override_input_item is not None:
+                        step_input_item = override_input_item
+                    if override_skill is None:
+                        self._write_autopilot_heartbeat(
+                            objective,
+                            "strategy_decision",
+                            cycle=completed + 1,
+                            reason="requesting Qwen strategy decision",
+                        )
+                    else:
+                        self._write_autopilot_heartbeat(
+                            objective,
+                            "strategy_dispatch",
+                            cycle=completed + 1,
+                            reason=f"running deterministic skill {override_skill}",
+                        )
                     try:
                         last_step = self.run_strategy_step(
                             objective=objective,

@@ -9,6 +9,7 @@ from .models import distance, entity_item_count, inventory_count, total_item_cou
 ASSEMBLER_ENTITY_NAMES = {"assembling-machine-1", "assembling-machine-2", "assembling-machine-3"}
 FURNACE_ENTITY_NAMES = {"stone-furnace", "steel-furnace", "electric-furnace"}
 GEAR_BELT_MALL_ASSEMBLER_SPACING = 4.0
+GEAR_BELT_LOGISTICS_STOCK_BYPASS = 20
 NORTH = 0
 EAST = 4
 SOUTH = 8
@@ -106,6 +107,7 @@ def build_factory_readiness(observation: dict[str, Any]) -> FactoryReadiness:
         automation_researched
         and gear_belt_logistics_pair_exists
         and belt_line_buildable
+        and transport_belt_stock < GEAR_BELT_LOGISTICS_STOCK_BYPASS
         and not belt_mall_has_output_source
         and not gear_belt_logistics_connection_ready
     ):

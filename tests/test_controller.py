@@ -2502,6 +2502,100 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(heartbeat["cycle"], 1)
         self.assertEqual(heartbeat["objective"], "launch_rocket_program")
 
+    def test_autopilot_loop_marks_strategy_decision_while_waiting_for_llm(self):
+        class OneStepController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.seen_state = None
+
+            def observe(self):
+                raise RuntimeError("no live RCON in unit test")
+
+            def run_strategy_step(self, **kwargs):
+                heartbeat = json.loads((self.cfg.runtime_dir / "autopilot-heartbeat.json").read_text(encoding="utf-8"))
+                self.seen_state = heartbeat["state"]
+                return StrategyStepSummary(
+                    ok=True,
+                    reason="test cycle complete",
+                    objective=kwargs.get("objective", "launch_rocket_program"),
+                    selected_skill="produce_iron_plate",
+                    strategy={"selected_skill": "produce_iron_plate"},
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = make_test_config(Path(temp_dir))
+            controller = OneStepController(cfg)
+            controller.run_autopilot_loop(cycles=1, sleep_seconds=0, require_llm=True)
+
+        self.assertEqual(controller.seen_state, "strategy_decision")
+
+    def test_autopilot_loop_dispatches_electric_drill_dependency_without_llm(self):
+        observation = {"inventory": {}, "entities": [], "resources": [], "research": {"technologies": {}}}
+
+        class FastPathController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.calls = []
+
+            def observe(self):
+                return observation
+
+            def strategy_decision(self, *args, **kwargs):
+                raise AssertionError("Qwen strategy should not run for deterministic prerequisite fast-path")
+
+            def _run_skill(self, **kwargs):
+                self.calls.append(kwargs)
+                return RunSummary(True, "fast path ok", 1, 0, self.cfg.log_dir / "fast.jsonl", kwargs["target_item"])
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "factorio_ai.controller.build_factory_readiness",
+            return_value=SimpleNamespace(repair_skill=None, failure_root=None),
+        ), patch("factorio_ai.strategy._coal_supply_repair_needed", return_value=False), patch(
+            "factorio_ai.strategy._burner_drill_replacement_issue",
+            return_value={"burner_drill_count": 3},
+        ), patch(
+            "factorio_ai.strategy._electric_drill_dependency_active_skill",
+            return_value="produce_automation_science_pack",
+        ):
+            cfg = make_test_config(Path(temp_dir))
+            controller = FastPathController(cfg)
+            summary = controller.run_autopilot_loop(cycles=1, sleep_seconds=0, require_llm=True)
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(summary.last_step.selected_skill, "produce_automation_science_pack")
+        self.assertEqual(controller.calls[0]["goal"], "produce_automation_science_pack")
+        self.assertEqual(controller.calls[0]["target"], 25)
+
+    def test_autopilot_loop_dispatches_readiness_repair_without_llm(self):
+        observation = {"inventory": {}, "entities": [], "resources": [], "research": {"technologies": {}}}
+
+        class RepairController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.calls = []
+
+            def observe(self):
+                return observation
+
+            def strategy_decision(self, *args, **kwargs):
+                raise AssertionError("Qwen strategy should not run while a readiness repair is known")
+
+            def _run_skill(self, **kwargs):
+                self.calls.append(kwargs)
+                return RunSummary(True, "repair ok", 1, 0, self.cfg.log_dir / "repair.jsonl", kwargs["target_item"])
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "factorio_ai.controller.build_factory_readiness",
+            return_value=SimpleNamespace(repair_skill="setup_coal_supply", failure_root="starter_fuel_supply_starved"),
+        ):
+            cfg = make_test_config(Path(temp_dir))
+            controller = RepairController(cfg)
+            summary = controller.run_autopilot_loop(cycles=1, sleep_seconds=0, require_llm=True)
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(summary.last_step.selected_skill, "setup_coal_supply")
+        self.assertEqual(controller.calls[0]["goal"], "setup_coal_supply")
+
     def test_autopilot_heartbeat_clears_stale_live_skill_from_dead_pid(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             cfg = make_test_config(Path(temp_dir))
