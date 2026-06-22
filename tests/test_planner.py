@@ -2667,6 +2667,40 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 147)
         self.assertIn("transport-belt mall assembler", decision.reason)
 
+    def test_transport_belt_mall_does_not_ping_pong_between_partial_cells(self):
+        obs = powered_automation_observation()
+        obs["player"]["position"] = {"x": 2.0, "y": 2.0}
+        obs["inventory"] = {"iron-plate": 1, "iron-gear-wheel": 1}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 147,
+                    "recipe": "transport-belt",
+                    "position": {"x": 2.0, "y": 2.0},
+                    "distance": 200,
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"iron-gear-wheel": 1}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 148,
+                    "recipe": "transport-belt",
+                    "position": {"x": 24.0, "y": 2.0},
+                    "distance": 1,
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"iron-plate": 1}},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 2).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertEqual(decision.action["unit_number"], 147)
+        self.assertNotEqual(decision.action.get("type"), "move_to")
+
     def test_factory_layout_flags_production_on_resource_patch(self):
         obs = base_observation()
         obs["entities"] = [

@@ -16641,6 +16641,85 @@ def _entity_inventory_totals(entity: dict[str, Any]) -> dict[str, int]:
     return totals
 
 
+def _mall_candidate_unit_sort_value(entity: dict[str, Any]) -> int:
+    try:
+        return int(entity.get("unit_number") or 999999999)
+    except (TypeError, ValueError):
+        return 999999999
+
+
+def _build_item_mall_target_candidate_score(
+    observation: dict[str, Any],
+    target_item: str,
+    assembler: dict[str, Any],
+    *,
+    reference_position: dict[str, float] | None = None,
+) -> tuple[float, ...]:
+    position = _position(assembler)
+    recipe = RECIPES.get(target_item)
+    ingredient_progress = 0
+    missing_ingredients = 0
+    if recipe is not None:
+        for ingredient, amount in recipe.ingredients.items():
+            required = max(1, int(amount))
+            available = min(entity_item_count(assembler, ingredient), required)
+            ingredient_progress += available
+            if available < required:
+                missing_ingredients += 1
+
+    output_count = entity_item_count(assembler, target_item)
+    output_chest_count = 0
+    if _build_item_mall_should_use_output_chest(target_item):
+        output_layout = _build_item_mall_output_layout(observation, position)
+        output_chest = output_layout.get("output_chest") if isinstance(output_layout, dict) else None
+        output_chest_count = entity_item_count(output_chest, target_item) if isinstance(output_chest, dict) else 0
+
+    powered_penalty = 1 if assembler.get("electric_network_connected") is False else 0
+    unit = _mall_candidate_unit_sort_value(assembler)
+    if reference_position is not None:
+        return (
+            distance(position, reference_position),
+            powered_penalty,
+            missing_ingredients,
+            -float(output_count + output_chest_count),
+            -float(ingredient_progress),
+            float(unit),
+            float(position["x"]),
+            float(position["y"]),
+        )
+    return (
+        powered_penalty,
+        0 if output_count + output_chest_count > 0 else 1,
+        -float(output_count + output_chest_count),
+        missing_ingredients,
+        -float(ingredient_progress),
+        float(unit),
+        float(position["x"]),
+        float(position["y"]),
+    )
+
+
+def _build_item_mall_reuse_candidate_score(
+    observation: dict[str, Any],
+    assembler: dict[str, Any],
+    *,
+    reference_position: dict[str, float] | None = None,
+) -> tuple[float, ...]:
+    position = _position(assembler)
+    anchor = reference_position if reference_position is not None else player_position(observation)
+    try:
+        observed_distance = float(assembler.get("distance") or 999999)
+    except (TypeError, ValueError):
+        observed_distance = 999999.0
+    return (
+        distance(position, anchor),
+        observed_distance,
+        float(_mall_candidate_unit_sort_value(assembler)),
+        float(position["x"]),
+        float(position["y"]),
+    )
+
+
 def _find_build_item_mall_cell(
     observation: dict[str, Any],
     target_item: str,
@@ -16649,6 +16728,7 @@ def _find_build_item_mall_cell(
     reference_position: dict[str, float] | None = None,
 ) -> dict[str, Any] | None:
     assemblers = entities_named(observation, "assembling-machine-1")
+    candidate_mode = "target_recipe"
     candidates = [
         item
         for item in assemblers
@@ -16661,6 +16741,7 @@ def _find_build_item_mall_cell(
         )
     ]
     if not candidates:
+        candidate_mode = "reuse"
         candidates = [
             item
             for item in assemblers
@@ -16689,6 +16770,7 @@ def _find_build_item_mall_cell(
             item for item in retool_candidates if not _preserve_transport_belt_mall_assembler(observation, item)
         ]
     if not candidates and target_item == "assembling-machine-1" and inventory_count(observation, "assembling-machine-1") <= 0:
+        candidate_mode = "reuse"
         candidates = [
             item
             for item in assemblers
@@ -16702,6 +16784,7 @@ def _find_build_item_mall_cell(
             )
         ]
     if not candidates and target_item == "small-electric-pole" and inventory_count(observation, "assembling-machine-1") <= 0:
+        candidate_mode = "reuse"
         candidates = [
             item
             for item in assemblers
@@ -16715,6 +16798,7 @@ def _find_build_item_mall_cell(
             )
         ]
     if not candidates and target_item == "transport-belt" and inventory_count(observation, "assembling-machine-1") <= 0:
+        candidate_mode = "reuse"
         candidates = [
             item
             for item in assemblers
@@ -16727,7 +16811,25 @@ def _find_build_item_mall_cell(
         ]
     if not candidates:
         return None
-    assembler = min(candidates, key=lambda item: float(item.get("distance") or 999999))
+    if candidate_mode == "target_recipe":
+        assembler = min(
+            candidates,
+            key=lambda item: _build_item_mall_target_candidate_score(
+                observation,
+                target_item,
+                item,
+                reference_position=reference_position,
+            ),
+        )
+    else:
+        assembler = min(
+            candidates,
+            key=lambda item: _build_item_mall_reuse_candidate_score(
+                observation,
+                item,
+                reference_position=reference_position,
+            ),
+        )
     assembler_position = _position(assembler)
     pole = _nearest_to(entities_named(observation, "small-electric-pole"), assembler_position)
     pole_in_reach = pole is not None and distance(_position(pole), assembler_position) <= 7.5

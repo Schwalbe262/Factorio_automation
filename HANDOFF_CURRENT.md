@@ -1,10 +1,10 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running, autopilot PID `68548`, vLLM service heartbeat still `QuantTrio/Qwen3.6-27B-AWQ`.
-- Part187 fixed live iron loops: direct smelting now mines nearby coal before misplaced repairs, and direct recovery no longer tears down belt-smelting drills/furnaces.
-- Part187 expanded smelting fix: complete belt smelting lines repair unpowered input inserters before fuel/wait/capacity decisions.
-- Part187 priority fix: after Automation, `IronPlateSkill` prefers repairing existing expanded belt smelting over building new direct-smelting support items such as stone-furnace supply.
-- Live diagnostic after restart: `IronPlateSkill(90)` returns move to power corridor for `expanded iron-plate smelting input inserter` with `failure_root=direct_iron_smelting_support_diverted`.
-- Health: PID `68548` is alive but currently at `cycle_start` waiting on LLM strategy; last key stock iron-plate `75`, coal `95`, small-electric-pole `21`, transport-belt `0`.
-- Tests: targeted regressions OK; `tests.test_planner` 438 OK; core suite 709 OK; full discover 1195 OK with existing `controller.py:1277` ResourceWarning.
-- Token sample: `27,319,695` absolute, part delta `588,804`; weekly quota unavailable; recorded as `part187-smelting-loop-repair`.
-- Dirty archives: `note.md`/`insight.md` contain large pre-existing append-only changes; avoid staging wholesale.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running, autopilot PID `60896`, vLLM `QuantTrio/Qwen3.6-27B-AWQ`.
+- Part188 fixed `bootstrap_build_item_mall` ping-pong: existing target-recipe mall assemblers are selected by stable production progress/output/unit score instead of player-relative `distance`.
+- Live issue reproduced from `strategy-build-item-mall-20260622-042906.jsonl`: moved between `-38.5,9.5` iron-plate seed and `95.5,-12.5` gear seed without inserting.
+- Regression added: `test_transport_belt_mall_does_not_ping_pong_between_partial_cells`.
+- Tests: targeted mall regressions OK; `tests.test_planner` 439 OK; `tests.test_strategy` 165 OK; `tests.test_controller` 91 OK; full discover 1196 OK with existing `controller.py:1277` ResourceWarning.
+- Live direct observation after patch: belt assembler unit `100` at `-38.5,9.5` with 7 gears is selected; simulated arrival returns seed insert of 7 iron plates into unit `100`.
+- Health: server UP; autopilot is at `cycle_start` waiting on LLM, live skill heartbeat was stale from killed PID `58948` and cleared by PID `60896`.
+- Token sample for Part188: `27,710,039` absolute, part delta `390,344`; weekly quota unavailable.
+- Dirty archives: `note.md`/`insight.md` have large pre-existing append-only changes; avoid staging wholesale.
