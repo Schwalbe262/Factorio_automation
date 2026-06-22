@@ -327,6 +327,104 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(run.steps, 2)
         self.assertEqual(controller.last_action["type"], "move_to")
 
+    def test_run_skill_yields_direct_smelting_wait_below_generic_threshold(self):
+        observation = {
+            "tick": 1,
+            "inventory": {},
+            "entities": [],
+            "research": {"technologies": {}},
+            "player": {"kind": "server", "character_valid": False, "position": {"x": 0, "y": 0}},
+            "execution": {"mode": "virtual", "virtual": True},
+        }
+
+        class DirectSmeltingWaitSkill:
+            def next_action(self, _observation):
+                return PlannerDecision(
+                    {"type": "wait", "ticks": 120},
+                    "wait for direct copper-plate burner-drill smelting cell",
+                )
+
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.actions = []
+
+            def observe(self):
+                return observation
+
+            def act(self, action):
+                self.actions.append(action)
+                return {"ok": True, "action": "wait"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_test_config(Path(tmp))
+            controller = FakeController(cfg)
+            with patch("factorio_ai.controller.time.sleep", return_value=None) as sleep_mock:
+                run = controller._run_skill(
+                    DirectSmeltingWaitSkill(),
+                    target_item="copper-plate",
+                    target=1,
+                    goal="test_direct_smelting_wait",
+                    max_steps=5,
+                    log_prefix="test-direct-smelting-wait",
+                )
+
+        self.assertTrue(run.ok)
+        self.assertEqual(run.steps, 1)
+        self.assertEqual(len(controller.actions), 1)
+        self.assertIn("yielded for other work", run.reason)
+        sleep_mock.assert_called_with(0.2)
+
+    def test_run_skill_keeps_generic_120_tick_settle_wait_inside_skill(self):
+        observation = {
+            "tick": 1,
+            "inventory": {},
+            "entities": [],
+            "research": {"technologies": {}},
+            "player": {"kind": "server", "character_valid": False, "position": {"x": 0, "y": 0}},
+            "execution": {"mode": "virtual", "virtual": True},
+        }
+
+        class SettleWaitThenDoneSkill:
+            def __init__(self):
+                self.calls = 0
+
+            def next_action(self, _observation):
+                self.calls += 1
+                if self.calls == 1:
+                    return PlannerDecision({"type": "wait", "ticks": 120}, "settle after build")
+                return PlannerDecision(None, "done after settle", done=True)
+
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.actions = []
+
+            def observe(self):
+                return observation
+
+            def act(self, action):
+                self.actions.append(action)
+                return {"ok": True, "action": "wait"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_test_config(Path(tmp))
+            controller = FakeController(cfg)
+            with patch("factorio_ai.controller.time.sleep", return_value=None):
+                run = controller._run_skill(
+                    SettleWaitThenDoneSkill(),
+                    target_item="iron-plate",
+                    target=1,
+                    goal="test_settle_wait",
+                    max_steps=3,
+                    log_prefix="test-settle-wait",
+                )
+
+        self.assertTrue(run.ok)
+        self.assertEqual(run.steps, 2)
+        self.assertEqual(len(controller.actions), 1)
+        self.assertEqual(run.reason, "done after settle")
+
     def test_run_skill_stops_repeated_bootstrap_seed_without_followup(self):
         observation = {
             "tick": 1,

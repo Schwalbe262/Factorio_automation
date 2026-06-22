@@ -5395,6 +5395,44 @@ class PlannerTests(unittest.TestCase):
             self.assertEqual(decision.action["unit_number"], 960)
             self.assertIn("direct copper-plate smelting cell", decision.reason)
 
+    def test_copper_skill_skips_unpowered_belt_line_when_power_repair_needs_bootstrap_copper(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 8.0, "y": 0.0}}
+        obs["inventory"] = {
+            "coal": 12,
+            "wood": 1,
+            "iron-plate": 10,
+            "copper-cable": 1,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+        }
+        obs["craftable"] = {}
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 8, "y": 0}, "distance": 0},
+            {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 6},
+        ]
+        obs["entities"].append(mall_assembler(recipe="transport-belt"))
+        obs["entities"].extend(
+            complete_belt_smelting_entities(20, 0, 970, resource="copper-ore", product="copper-plate")
+        )
+        for entity in obs["entities"]:
+            if entity.get("unit_number") == 973:
+                entity["name"] = "inserter"
+                entity["electric_network_connected"] = False
+                entity["status_name"] = "no_power"
+                entity["status"] = 54
+                entity["inventories"] = {}
+            if entity.get("unit_number") == 974:
+                entity["inventories"] = {"2": {"copper-ore": 1}, "1": {"coal": 3}, "3": {}}
+
+        with patch.object(SetupPowerSkill, "_ensure_item_quantity", side_effect=AssertionError("recursive pole repair")):
+            decision = CopperPlateSkill(target_count=5).next_action(obs, inventory_only=True)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertEqual(decision.action["required_resource"], "copper-ore")
+        self.assertIn("direct copper-plate smelting", decision.reason)
+
     def test_expand_iron_smelting_places_new_belt_when_below_capacity(self):
         obs = base_observation()
         obs["inventory"] = {
@@ -6805,7 +6843,7 @@ class PlannerTests(unittest.TestCase):
         obs = powered_logistics_observation()
         obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
         obs["research"]["current"] = "logistics"
-        obs["inventory"] = {"coal": 10}
+        obs["inventory"] = {"coal": 10, "stone": 10}
         obs["power_sites"] = []
         for entity in obs["entities"]:
             if entity.get("name") in {"offshore-pump", "boiler", "steam-engine", "small-electric-pole", "lab"}:
@@ -7461,6 +7499,52 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "craft")
         self.assertEqual(decision.action["recipe"], "assembling-machine-1")
 
+    def test_direct_smelting_drill_gears_take_existing_iron_output_without_mall_recursion(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"coal": 10, "stone": 10}
+        obs["craftable"] = {}
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": 5.0, "y": 0.0},
+                "recipe": "iron-plate",
+                "inventories": {"3": {"iron-plate": 8}},
+            }
+        )
+
+        decision = planner_module._ensure_direct_smelting_item(
+            obs,
+            obs["player"]["position"],
+            "burner-mining-drill",
+            resource_name="copper-ore",
+            product_name="copper-plate",
+            support_skill=IronPlateSkill(),
+        )
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertEqual(decision.action["unit_number"], 950)
+
+    def test_direct_smelting_drill_gears_bootstrap_seed_after_automation_without_gear_mall(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"coal": 10, "stone": 10, "iron-plate": 6}
+        obs["craftable"] = {"iron-gear-wheel": 3}
+
+        decision = planner_module._ensure_direct_smelting_item(
+            obs,
+            obs["player"]["position"],
+            "burner-mining-drill",
+            resource_name="copper-ore",
+            product_name="copper-plate",
+            support_skill=IronPlateSkill(),
+        )
+
+        self.assertEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["recipe"], "iron-gear-wheel")
+        self.assertIs(decision.action["bootstrap_seed"], True)
+        self.assertEqual(decision.action["seed_reason"], "direct_smelting_drill_gear_seed")
+
     def test_build_item_mall_allows_one_time_gears_for_first_assembler_bootstrap(self):
         obs = powered_automation_observation()
         obs["inventory"] = {
@@ -7556,6 +7640,19 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "assembling-machine-1")
         self.assertEqual(decision.action["position"], {"x": 2.0, "y": 2.0})
+        self.assertIs(decision.action["allow_nearby"], False)
+
+    def test_build_item_mall_allows_nearby_assembler_placement_for_virtual_agent(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 0, "y": 0}, "kind": "server", "character_valid": False}
+        obs["execution"] = {"mode": "virtual", "virtual": True}
+        obs["inventory"] = {"assembling-machine-1": 1}
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "assembling-machine-1")
+        self.assertIs(decision.action["allow_nearby"], True)
 
     def test_build_item_mall_sets_recipe_on_existing_assembler(self):
         obs = powered_automation_observation()

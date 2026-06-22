@@ -3558,7 +3558,10 @@ class CopperPlateSkill:
             else:
                 return direct_decision
 
-        if _belt_smelting_ready(observation):
+        if (
+            _belt_smelting_ready(observation)
+            and not _copper_belt_smelting_power_repair_requires_copper_bootstrap(observation)
+        ):
             return BeltSmeltingLineSkill(
                 target_count=target,
                 resource_name="copper-ore",
@@ -6668,6 +6671,19 @@ def _ensure_direct_smelting_item(
             if not decision.done:
                 return decision
         if inventory_count(observation, "iron-gear-wheel") < 3:
+            if _gear_handcraft_automation_context_active(observation) and not _gear_producing_assembler_available(observation):
+                decision = _bootstrap_direct_smelting_drill_gears_decision(
+                    observation,
+                    player,
+                    3,
+                    product_name=product_name,
+                )
+                if decision is not None:
+                    return decision
+                return PlannerDecision(
+                    None,
+                    "missing iron gear wheels for direct smelting drill and no non-recursive bootstrap path is ready",
+                )
             decision = _ensure_iron_gears_without_post_automation_handcraft(
                 observation,
                 3,
@@ -6682,6 +6698,47 @@ def _ensure_direct_smelting_item(
         return support_skill.next_action(observation, target_count=20, inventory_only=True)
 
     return None
+
+
+def _bootstrap_direct_smelting_drill_gears_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    target_count: int,
+    *,
+    product_name: str,
+) -> PlannerDecision | None:
+    current_gears = inventory_count(observation, "iron-gear-wheel")
+    missing_gears = max(0, target_count - current_gears)
+    if missing_gears <= 0:
+        return None
+    required_iron = 2 * missing_gears
+    if inventory_count(observation, "iron-plate") < required_iron:
+        output = _take_existing_plate_output_decision(
+            observation,
+            resource_name="iron-ore",
+            product_name="iron-plate",
+        )
+        if output is not None:
+            return output
+        if _find_direct_smelting_cell(observation, "iron-ore") is not None:
+            return PlannerDecision(
+                {"type": "wait", "ticks": 120},
+                "wait for direct iron-plate burner-drill smelting cell",
+            )
+        return None
+    craft_count = min(missing_gears, craftable_count(observation, "iron-gear-wheel"))
+    if craft_count <= 0:
+        return None
+    return _bootstrap_seed_decision(
+        {
+            "type": "craft",
+            "recipe": "iron-gear-wheel",
+            "count": craft_count,
+        },
+        f"bootstrap-craft gears for direct {product_name} smelting drill infrastructure",
+        seed_reason="direct_smelting_drill_gear_seed",
+        expected_followup=f"burner mining drill can be crafted for direct {product_name} smelting",
+    )
 
 
 def _nearby_direct_smelting_fuel_collection_decision(
@@ -7363,6 +7420,29 @@ def _belt_smelting_ready(observation: dict[str, Any]) -> bool:
                 continue
             return True
     return False
+
+
+def _copper_belt_smelting_power_repair_requires_copper_bootstrap(
+    observation: dict[str, Any],
+) -> bool:
+    line = _find_belt_smelting_line(observation, "copper-ore")
+    if line is None:
+        return False
+    inserter = line.get("inserter")
+    if not isinstance(inserter, dict):
+        return False
+    if inserter.get("electric_network_connected") is not False and not _entity_no_power(inserter):
+        return False
+    inserter_position = _position(inserter)
+    if _nearest_connected_small_pole_supplying_position(observation, inserter_position) is not None:
+        return False
+    if _nearest_small_pole_supplying_position(observation, inserter_position) is not None:
+        return False
+    if inventory_count(observation, "small-electric-pole") > 0 or craftable_count(observation, "small-electric-pole") > 0:
+        return False
+    if inventory_count(observation, "copper-cable") >= 2 or inventory_count(observation, "copper-plate") > 0:
+        return False
+    return True
 
 
 def _find_stone_supply_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
@@ -14848,7 +14928,7 @@ class BuildItemMallSkill:
                     "type": "build",
                     "name": "assembling-machine-1",
                     "position": assembler_position,
-                    "allow_nearby": False,
+                    "allow_nearby": _is_virtual_agent(observation),
                 },
                 f"place assembler for {self.target_item} mall cell",
             )

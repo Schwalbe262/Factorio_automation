@@ -172,6 +172,23 @@ except (TypeError, ValueError):
     _WAIT_YIELD_TICKS = 180
 
 
+def _wait_action_should_yield(action: dict[str, Any], reason: str | None) -> bool:
+    if action.get("type") != "wait":
+        return False
+    try:
+        ticks = int(action.get("ticks") or 60)
+    except (TypeError, ValueError):
+        ticks = 60
+    if ticks >= _WAIT_YIELD_TICKS:
+        return True
+
+    # Direct burner-drill smelting is a producer wait. In early bootstrap it often returns 120 ticks,
+    # below the generic long-wait threshold, but staying inside the same skill serializes the run
+    # while iron/copper plates are cooking. Yield so the autopilot can do other bootstrap work.
+    text = str(reason or "").strip().lower()
+    return ticks >= 60 and text.startswith("wait for direct ") and " burner-drill smelting cell" in text
+
+
 def _llm_degrade_threshold() -> int:
     # After this many consecutive failed cycles (remote LLM hang/error, RecursionError, or a refusal
     # loop), run ONE cycle on the deterministic heuristic strategy so the factory keeps progressing
@@ -2970,7 +2987,7 @@ class FactorioController:
                         # then YIELD the cycle so the strategy can do other (factory-expanding) work
                         # meanwhile; the stall watchdog rotates skills if it keeps re-picking the
                         # waiting one. Short settle-waits keep their (capped) brief sleep.
-                        if ticks >= _WAIT_YIELD_TICKS:
+                        if _wait_action_should_yield(action, decision.reason):
                             time.sleep(0.2)
                             observation = self._observe_for_skill_loop(goal, step)
                             return finish(True, f"yielded for other work instead of idling: {decision.reason}", step, observation)
