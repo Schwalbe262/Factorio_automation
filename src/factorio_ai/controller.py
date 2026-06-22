@@ -1990,7 +1990,21 @@ class FactorioController:
                     # Commit to the skill only while it keeps making progress; otherwise drop the
                     # commitment so the next cycle re-strategizes via the LLM.
                     yielded_wait = str(last_step.reason or "").startswith("yielded for other work")
+                    yielded_site_input_item = (
+                        _site_input_item_from_wait_reason(last_step.reason) if yielded_wait else None
+                    )
                     if (
+                        commit_enabled
+                        and last_step.ok
+                        and yielded_wait
+                        and yielded_site_input_item is not None
+                    ):
+                        committed_skill = "build_site_input_logistic_line"
+                        committed_target_count = None
+                        committed_target_item = None
+                        committed_input_item = yielded_site_input_item
+                        commit_skips = 0
+                    elif (
                         commit_enabled
                         and last_step.ok
                         and yielded_wait
@@ -4588,6 +4602,31 @@ def _strategy_site_input_item(strategy: dict[str, Any]) -> str | None:
         "logistic-science-pack",
     }:
         return item
+    return None
+
+
+def _site_input_item_from_wait_reason(reason: str | None) -> str | None:
+    text = str(reason or "").strip().lower().replace("_", "-")
+    if "site input" not in text:
+        return None
+    for phrase, item in (
+        ("iron-gear-wheel", "iron-gear-wheel"),
+        ("iron gear wheel", "iron-gear-wheel"),
+        ("copper-cable", "copper-cable"),
+        ("copper cable", "copper-cable"),
+        ("electronic-circuit", "electronic-circuit"),
+        ("electronic circuit", "electronic-circuit"),
+        ("automation-science-pack", "automation-science-pack"),
+        ("automation science pack", "automation-science-pack"),
+        ("logistic-science-pack", "logistic-science-pack"),
+        ("logistic science pack", "logistic-science-pack"),
+        ("iron-plate", "iron-plate"),
+        ("iron plate", "iron-plate"),
+        ("copper-plate", "copper-plate"),
+        ("copper plate", "copper-plate"),
+    ):
+        if phrase in text:
+            return item
     return None
 
 

@@ -2874,6 +2874,54 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(controller.calls[2]["target_count"], 104)
         self.assertEqual(controller.calls[2]["target_item"], "transport-belt")
 
+    def test_autopilot_commit_routes_site_input_wait_yield_to_site_input_skill(self):
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.calls: list[dict[str, object]] = []
+
+            def observe(self):
+                return {
+                    "inventory": {"transport-belt": 6},
+                    "entities": [],
+                    "resources": [],
+                    "research": {"technologies": {"automation": {"researched": True}}},
+                }
+
+            def run_strategy_step(self, **kwargs):
+                self.calls.append(dict(kwargs))
+                selected = str(kwargs.get("override_skill") or "build_gear_belt_mall_logistics")
+                reason = (
+                    "yielded for other work instead of idling: wait for iron gear wheel site input logistics "
+                    "to feed inserter assembler"
+                    if selected == "build_gear_belt_mall_logistics"
+                    else "done"
+                )
+                return StrategyStepSummary(
+                    ok=True,
+                    reason=reason,
+                    objective=kwargs.get("objective", "launch_rocket_program"),
+                    selected_skill=selected,
+                    strategy={"selected_skill": selected},
+                    run=RunSummary(True, reason, 1, 0, self.cfg.log_dir / "stub.log", "transport-belt"),
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with patch.dict(
+                "os.environ",
+                {
+                    "FACTORIO_AI_AUTOPILOT_COMMIT_SKILL_ENABLED": "1",
+                    "FACTORIO_AI_AUTOPILOT_COMMIT_SKILL_MAX": "4",
+                },
+            ):
+                summary = controller.run_autopilot_loop(cycles=2, sleep_seconds=0)
+
+        self.assertTrue(summary.ok)
+        self.assertEqual(len(controller.calls), 2)
+        self.assertEqual(controller.calls[1]["override_skill"], "build_site_input_logistic_line")
+        self.assertEqual(controller.calls[1]["input_item"], "iron-gear-wheel")
+
     def test_modless_strategy_step_accepts_committed_target_metadata(self):
         captured: dict[str, object] = {}
 
