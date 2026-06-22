@@ -1991,6 +1991,52 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(decision.action["bootstrap_seed"])
         self.assertEqual(decision.metadata["seed_reason"], "boiler_coal_feed_power_seed")
 
+    def test_coal_fuel_feed_seeds_boiler_when_unstarted_route_needs_too_many_belts(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 150, "y": 0}
+        obs["inventory"] = {"coal": 30, "transport-belt": 5}
+        obs["research"]["technologies"]["automation"]["researched"] = True
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 150}]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 20,
+                "position": {"x": 0, "y": 0},
+                "direction": planner_module.EAST,
+                "mining_target": "coal",
+                "drop_position": {"x": 1.3, "y": 0.5},
+                "inventories": {"1": {"coal": 3}},
+            },
+            {
+                "name": "transport-belt",
+                "unit_number": 21,
+                "position": {"x": 1.5, "y": 0.5},
+                "direction": planner_module.EAST,
+                "inventories": {"1": {"coal": 1}},
+            },
+            {"name": "boiler", "unit_number": 30, "position": {"x": 150, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 981,
+                "position": {"x": 0, "y": 4},
+                "recipe": "transport-belt",
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+            {"name": "wooden-chest", "unit_number": 982, "position": {"x": 0, "y": 5}, "inventories": {"1": {"transport-belt": 20}}},
+        ]
+        layout = planner_module._coal_boiler_fuel_feed_layout(obs)
+
+        decision = CoalFuelFeedSkill()._next_boiler_feed_action(obs, obs["player"]["position"], layout)
+
+        self.assertGreater(planner_module._missing_boiler_feed_belt_count(layout), 100)
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["unit_number"], 30)
+        self.assertEqual(decision.action["name"], "boiler")
+        self.assertTrue(decision.action["bootstrap_seed"])
+        self.assertEqual(decision.metadata["seed_reason"], "boiler_coal_feed_route_shortage_seed")
+        self.assertEqual(decision.metadata["repair_skill"], "bootstrap_boiler_power_seed")
+
     def test_factory_layout_flags_remote_manual_power_site(self):
         obs = base_observation()
         obs["base"] = {"spawn_position": {"x": 0, "y": 0}}

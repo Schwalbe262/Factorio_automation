@@ -4826,10 +4826,12 @@ class CoalFuelFeedSkill:
             and not _transport_belt_assembler_exists(observation)
             and inventory_count(observation, "transport-belt") <= 0
         ):
-            return PlannerDecision(
+            blocked = PlannerDecision(
                 None,
                 "boiler coal feed needs automated transport-belt production or existing belt stock; refusing repeated boiler hand-fueling",
             )
+            emergency = _boiler_route_shortage_bootstrap_decision(observation, player, layout, blocked)
+            return emergency or blocked
 
         belt_assembler = _transport_belt_output_assembler(observation)
         available_belts = _available_boiler_feed_construction_belts(observation)
@@ -4838,7 +4840,7 @@ class CoalFuelFeedSkill:
             and _transport_belt_assembler_exists(observation)
             and available_belts < missing_belt_count
         ):
-            return PlannerDecision(
+            blocked = PlannerDecision(
                 None,
                 (
                     f"boiler coal feed needs {missing_belt_count} transport belts for the remaining route; "
@@ -4852,6 +4854,8 @@ class CoalFuelFeedSkill:
                     "available_transport_belts": available_belts,
                 },
             )
+            emergency = _boiler_route_shortage_bootstrap_decision(observation, player, layout, blocked)
+            return emergency or blocked
         if missing_belt_segments and inventory_count(observation, "transport-belt") <= 0:
             belt_chest = _transport_belt_output_chest(observation)
             if isinstance(belt_chest, dict) and entity_item_count(belt_chest, "transport-belt") > 0:
@@ -5319,6 +5323,53 @@ def _smelting_fuel_logistics_repair_decision(
             metadata=metadata,
         )
     return None
+
+
+def _boiler_route_shortage_bootstrap_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    layout: dict[str, Any],
+    blocked: PlannerDecision,
+) -> PlannerDecision | None:
+    boiler = layout.get("boiler")
+    if not isinstance(boiler, dict):
+        return None
+    if _boiler_feed_route_started(layout):
+        return None
+    if _entity_burner_fuel_count(boiler) > 0:
+        return None
+    emergency = _emergency_boiler_bootstrap_fuel_decision(observation, player, boiler, blocked)
+    if emergency is None:
+        return None
+    metadata = dict(blocked.metadata)
+    metadata.update(emergency.metadata)
+    if "repair_skill" in blocked.metadata:
+        metadata.setdefault("blocked_repair_skill", blocked.metadata.get("repair_skill"))
+    metadata.setdefault("failure_root", "boiler_feed_unbuildable")
+    metadata["repair_skill"] = "bootstrap_boiler_power_seed"
+    metadata.setdefault("blocked_reason", blocked.reason)
+    action = emergency.action
+    if isinstance(action, dict) and action.get("type") in {"insert", "take"}:
+        action = dict(action)
+        expected_followup = "boiler has temporary fuel while belt mall output grows enough to build the coal feed route"
+        action["bootstrap_seed"] = True
+        action["seed_reason"] = "boiler_coal_feed_route_shortage_seed"
+        action["expected_followup"] = expected_followup
+        action.setdefault("post_seed_wait_ticks", 180)
+        metadata.update(
+            {
+                "bootstrap_seed": True,
+                "seed_reason": "boiler_coal_feed_route_shortage_seed",
+                "expected_followup": expected_followup,
+                "post_seed_wait_ticks": action["post_seed_wait_ticks"],
+            }
+        )
+    return PlannerDecision(
+        action,
+        f"{emergency.reason}; {blocked.reason}",
+        done=emergency.done,
+        metadata=metadata,
+    )
 
 
 def _boiler_coal_feed_missing_belt_count(observation: dict[str, Any]) -> int:
@@ -8613,7 +8664,7 @@ def _emergency_boiler_bootstrap_fuel_decision(
     if not allow_without_critical_factory and not _critical_electric_factory_present_for_planner(observation):
         return None
     reason = str(blocked_feed_decision.reason or "")
-    if not any(token in reason for token in ("needs automated transport-belt production", "needs transport belts", "missing burner inserter")):
+    if not any(token in reason for token in ("needs automated transport-belt production", "transport belts", "missing burner inserter")):
         return None
 
     boiler_position = _position(boiler)
