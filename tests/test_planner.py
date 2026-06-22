@@ -4064,6 +4064,34 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["position"], {"x": 10.0, "y": 0.0})
         self.assertFalse(decision.action["allow_nearby"])
 
+    def test_iron_skill_keeps_incomplete_direct_drill_before_new_patch_candidate(self):
+        obs = base_observation()
+        obs["inventory"] = {"coal": 30, "stone-furnace": 1}
+        obs["resources"] = [
+            {"name": "iron-ore", "position": {"x": 4, "y": 0}, "distance": 4},
+            {"name": "iron-ore", "position": {"x": 12, "y": 0}, "distance": 12},
+            {"name": "iron-ore", "position": {"x": 12, "y": 1}, "distance": 13},
+            {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 2},
+        ]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 701,
+                "position": {"x": 4, "y": 0},
+                "direction": planner_module.EAST,
+                "distance": 4,
+                "mining_target": "iron-ore",
+                "inventories": {},
+            }
+        ]
+
+        decision = IronPlateSkill(target_count=10).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "stone-furnace")
+        self.assertEqual(decision.action["position"], {"x": 6.0, "y": 0.0})
+        self.assertIn("place furnace", decision.reason)
+
     def test_direct_smelting_drill_from_resource_tile_uses_entity_center(self):
         obs = base_observation()
         obs["player"] = {"position": {"x": 47, "y": 67}}
@@ -9717,6 +9745,54 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("direct gear-to-belt transfer inserter", decision.reason)
         self.assertTrue(decision.action["bootstrap_seed"])
         self.assertEqual(decision.metadata["seed_reason"], "direct gear-to-belt transfer inserter_gear_seed")
+
+    def test_gear_belt_mall_relocates_before_long_iron_input_line(self):
+        obs = powered_automation_observation()
+        obs["automation_sites"] = []
+        obs["inventory"] = {"small-electric-pole": 23}
+        obs["craftable"] = {}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 100,
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 0.5, "y": 0.5},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 101,
+                    "recipe": "transport-belt",
+                    "position": {"x": 4.5, "y": 0.5},
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"iron-gear-wheel": 3}},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 102,
+                    "position": {"x": 2.5, "y": 0.5},
+                    "direction": planner_module.WEST,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 200,
+                    "recipe": "iron-plate",
+                    "position": {"x": 153.0, "y": 0.5},
+                    "inventories": {"2": {"iron-plate": 24}},
+                },
+            ]
+        )
+
+        decision = GearBeltMallLogisticsSkill(216).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 100)
+        self.assertIn("relocate gear/belt mall before long iron-plate input line", decision.reason)
+        self.assertEqual(decision.metadata["repair_skill"], "relocate_gear_belt_mall_to_iron_source")
 
     def test_gear_belt_mall_repairs_missing_direct_transfer_inserter_via_inserter_mall(self):
         obs = powered_automation_observation()

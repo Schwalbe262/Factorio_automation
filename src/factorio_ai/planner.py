@@ -6767,6 +6767,36 @@ def _direct_smelting_cells(observation: dict[str, Any], resource_name: str) -> l
     return [layout for _distance, layout in candidates]
 
 
+def _incomplete_direct_smelting_layouts(observation: dict[str, Any], resource_name: str) -> list[dict[str, Any]]:
+    entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    candidates: list[tuple[float, dict[str, Any]]] = []
+    can_complete_furnace = (
+        inventory_count(observation, "stone-furnace") > 0
+        or craftable_count(observation, "stone-furnace") > 0
+    )
+    if not can_complete_furnace:
+        return []
+    for drill in entities_named(observation, "burner-mining-drill"):
+        drill_position = _position(drill)
+        target_resource = _entity_resource_name(observation, drill, radius=4.5)
+        if target_resource != resource_name:
+            continue
+        if _resource_name_near_position(observation, drill_position, radius=2.5) != resource_name:
+            continue
+        if not _within_starter_logistics_area(observation, drill_position):
+            continue
+        if _drill_part_of_belt_smelting_layout(observation, drill, resource_name):
+            continue
+        layout = _direct_smelting_layout_from_existing_drill(observation, drill, resource_name)
+        if isinstance(layout.get("furnace"), dict):
+            continue
+        if _direct_smelting_layout_blocked_by_factory_entities(layout, entities):
+            continue
+        candidates.append((float(drill.get("distance") or distance(player_position(observation), drill_position)), layout))
+    candidates.sort(key=lambda item: item[0])
+    return [layout for _distance, layout in candidates]
+
+
 def _find_low_fuel_direct_smelting_cell(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
     candidates: list[tuple[int, float, dict[str, Any]]] = []
     for layout in _direct_smelting_cells(observation, resource_name):
@@ -6818,6 +6848,9 @@ def _recoverable_direct_plate_cell_exists(
 
 def _select_direct_smelting_layout(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
     entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    incomplete = _incomplete_direct_smelting_layouts(observation, resource_name)
+    if incomplete:
+        return incomplete[0]
     for resource in _ranked_patch_drill_resources(observation, resource_name):
         drill_position = _direct_smelting_drill_center(_position(resource))
         for orientation in ("east", "west", "south", "north"):
@@ -6850,6 +6883,9 @@ def _select_direct_smelting_layout(observation: dict[str, Any], resource_name: s
 
 def _select_direct_smelting_expansion_layout(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
     entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+    incomplete = _incomplete_direct_smelting_layouts(observation, resource_name)
+    if incomplete:
+        return incomplete[0]
     for resource in _ranked_patch_drill_resources(observation, resource_name):
         drill_position = _direct_smelting_drill_center(_position(resource))
         for orientation in ("east", "west", "south", "north"):
@@ -12874,6 +12910,21 @@ class GearBeltMallLogisticsSkill:
         )
 
     def _gear_mall_iron_input_line_decision(self, observation: dict[str, Any]) -> PlannerDecision | None:
+        relocation_layout = _find_gear_belt_mall_relocation_layout(observation)
+        if isinstance(relocation_layout, dict):
+            relocation_decision = GearBeltMallRelocationSkill(max(20, self.target_count)).next_action(observation)
+            if not relocation_decision.done:
+                metadata = dict(relocation_decision.metadata)
+                metadata.setdefault("failure_root", "gear_mall_iron_source_too_far")
+                metadata.setdefault("repair_skill", "relocate_gear_belt_mall_to_iron_source")
+                metadata.setdefault("source_distance_tiles", relocation_layout.get("source_distance_tiles"))
+                metadata.setdefault("route_cost_preference", relocation_layout.get("route_cost_preference"))
+                return PlannerDecision(
+                    relocation_decision.action,
+                    f"relocate gear/belt mall before long iron-plate input line: {relocation_decision.reason}",
+                    done=relocation_decision.done,
+                    metadata=metadata,
+                )
         if _find_iron_plate_logistic_line_to_gear_mall_layout(observation) is None:
             return None
         decision = IronPlateLogisticLineToGearMallSkill(max(20, self.target_count)).next_action(observation)
