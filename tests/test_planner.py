@@ -4239,6 +4239,76 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.metadata["failure_root"], "direct_iron_smelting_site_blocked")
         self.assertEqual(decision.metadata["repair_skill"], "expand_iron_smelting")
 
+    def test_iron_skill_waits_on_active_expanded_smelting_when_no_more_iron_site_is_open(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 4, "coal": 30}
+        obs["resources"] = []
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, reserve_fuel=True)
+        obs["entities"].append(mall_assembler(recipe="transport-belt"))
+        direct_blocked = planner_module.PlannerDecision(
+            None,
+            "cannot find open iron-ore site for direct burner-drill smelting cell",
+        )
+
+        with patch("factorio_ai.planner._direct_plate_smelting_decision", return_value=direct_blocked):
+            decision = IronPlateSkill(target_count=90).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "wait")
+        self.assertIn("wait for existing expanded iron-plate smelting output", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "direct_iron_smelting_site_blocked")
+        self.assertEqual(decision.metadata["repair_skill"], "expand_iron_smelting")
+
+    def test_iron_skill_waits_on_active_expanded_smelting_instead_of_far_direct_coal_trip(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 4}
+        obs["resources"] = [{"name": "coal", "position": {"x": 80.0, "y": 0.0}, "distance": 80}]
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500, reserve_fuel=True)
+        obs["entities"].append(mall_assembler(recipe="transport-belt"))
+        direct_support = planner_module.PlannerDecision(
+            {"type": "move_to", "position": {"x": 80.0, "y": 0.0}, "tolerance": 7.5},
+            "move near coal",
+        )
+
+        with patch("factorio_ai.planner._direct_plate_smelting_decision", return_value=direct_support):
+            decision = IronPlateSkill(target_count=90).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "wait")
+        self.assertIn("existing expanded iron-plate smelting", decision.reason)
+        self.assertNotEqual(decision.action.get("position"), {"x": 80.0, "y": 0.0})
+
+    def test_iron_skill_repairs_fuel_logistics_instead_of_direct_coal_trip(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 4, "transport-belt": 4}
+        obs["entities"].append(mall_assembler(recipe="transport-belt"))
+        direct_support = planner_module.PlannerDecision(
+            {"type": "move_to", "position": {"x": 80.0, "y": 0.0}, "tolerance": 7.5},
+            "move near coal",
+        )
+        expansion_blocked = planner_module.PlannerDecision(
+            None,
+            "expanded iron-plate smelting needs fuel logistics before more walking refuels",
+        )
+        coal_feed = planner_module.PlannerDecision(
+            {
+                "type": "build",
+                "name": "transport-belt",
+                "position": {"x": 8.0, "y": 4.0},
+            },
+            "extend coal belt toward boiler without player coal shuttle",
+        )
+
+        with (
+            patch("factorio_ai.planner._direct_plate_smelting_decision", return_value=direct_support),
+            patch("factorio_ai.planner.ExpandIronSmeltingSkill.next_action", return_value=expansion_blocked),
+            patch("factorio_ai.planner.CoalFuelFeedSkill.next_action", return_value=coal_feed),
+        ):
+            decision = IronPlateSkill(target_count=90).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertIn("repairing coal fuel feed first", decision.reason)
+        self.assertNotEqual(decision.action.get("position"), {"x": 80.0, "y": 0.0})
+
     def test_iron_skill_prefers_expanded_smelting_power_over_direct_stone_support(self):
         obs = powered_automation_observation()
         obs["player"] = {"position": {"x": 8.0, "y": 0.0}}

@@ -13,8 +13,10 @@ from .planner import (
     SITE_GATE_INPUT_STOCK_FALLBACK,
     _boiler_has_belt_fuel_feed,
     _boiler_coal_feed_missing_belt_count,
+    _complete_belt_smelting_line_count,
     _direct_gear_transfer_blocked,
     _entity_burner_fuel_count,
+    _estimated_plate_rate,
     _find_gear_belt_mall_relocation_layout,
     _find_gear_belt_mall_logistics_layout,
     _find_iron_plate_logistic_line_to_gear_mall_layout,
@@ -4133,6 +4135,8 @@ def _site_input_plate_source_stock_ready(observation: dict[str, Any], item: str)
 def _circuit_iron_plate_recovery_needed(observation: dict[str, Any]) -> bool:
     if total_item_count(observation, "iron-plate") >= SMELTING_FUEL_RECOVERY_STOCK_TARGET:
         return False
+    if _active_expanded_plate_smelting_available(observation, "iron-ore"):
+        return False
     if not _starter_resource_available(observation, "iron-ore"):
         return False
     return any(
@@ -4717,10 +4721,13 @@ def _expanded_smelting_fuel_blocker(observation: dict[str, Any], selected: str) 
         "build_belt_smelting_line": "iron-ore",
     }.get(selected)
     if selected == "automate_electronic_circuit_line":
-        iron_blocker = _expanded_smelting_fuel_blocker_for_resource(observation, "iron-ore")
-        if iron_blocker is not None:
-            return iron_blocker
-        return _expanded_smelting_fuel_blocker_for_resource(observation, "copper-ore")
+        if not _active_expanded_plate_smelting_available(observation, "iron-ore"):
+            iron_blocker = _expanded_smelting_fuel_blocker_for_resource(observation, "iron-ore")
+            if iron_blocker is not None:
+                return iron_blocker
+        if not _active_expanded_plate_smelting_available(observation, "copper-ore"):
+            return _expanded_smelting_fuel_blocker_for_resource(observation, "copper-ore")
+        return None
     if resource is None:
         return None
     return _expanded_smelting_fuel_blocker_for_resource(observation, resource)
@@ -4753,6 +4760,14 @@ def _expanded_smelting_fuel_blocker_for_resource(
             "resource": resource,
         }
     return None
+
+
+def _active_expanded_plate_smelting_available(observation: dict[str, Any], resource: str) -> bool:
+    product = "copper-plate" if resource == "copper-ore" else "iron-plate"
+    return (
+        _complete_belt_smelting_line_count(observation, resource) > 0
+        and _estimated_plate_rate(observation, product, resource) > 0
+    )
 
 
 def _boiler_coal_feed_active(observation: dict[str, Any]) -> bool:

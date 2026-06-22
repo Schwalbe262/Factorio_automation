@@ -3301,6 +3301,74 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("smelting fuel logistics", result["blockers"])
         self.assertIn("site_input_repair_preempted_by_smelting_fuel_logistics=true", result["evidence"])
 
+    def test_reconcile_continues_circuit_site_input_when_active_iron_smelting_exists(self):
+        issue = {
+            "kind": "manual_site_logistics_gap",
+            "item": "copper-plate",
+            "site_id": "site-link:copper-plate:plate_smelting_line->circuit_automation:group:electronic-circuit",
+            "severity": 90,
+            "detail": "copper-plate must move to electronic-circuit assembly but no route is observed",
+            "recommendation": "repair the circuit automation consumer before retrying the site input route",
+        }
+        entities = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 687,
+                "position": {"x": 77, "y": -20},
+                "mining_target": "iron-ore",
+                "status_name": "no_fuel",
+                "inventories": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 300,
+                "recipe": "transport-belt",
+                "position": {"x": 20, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {"1": {"transport-belt": 8}},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 400,
+                "recipe": "electronic-circuit",
+                "position": {"x": 24, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+        ]
+
+        with (
+            patch("factorio_ai.strategy._site_input_line_issue", return_value=issue),
+            patch("factorio_ai.strategy._executable_site_input_line_issue", return_value=None),
+            patch(
+                "factorio_ai.strategy._active_expanded_plate_smelting_available",
+                side_effect=lambda _observation, resource: resource == "iron-ore",
+            ),
+        ):
+            result = reconcile_strategy_decision(
+                {
+                    "selected_skill": "plan_factory_site",
+                    "priority": 90,
+                    "reason": "Fix manual site logistics.",
+                    "evidence": [],
+                    "blockers": [],
+                    "expected_effect": "",
+                    "source": "llm",
+                },
+                "launch_rocket_program",
+                {
+                    "inventory": {"copper-plate": 121, "iron-plate": 33, "transport-belt": 8},
+                    "entities": entities,
+                    "resources": [{"name": "iron-ore", "position": {"x": 77, "y": -20}}],
+                    "research": {"technologies": {"automation": {"researched": True}, "logistics": {"researched": True}}},
+                },
+            )
+
+        self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertNotIn("smelting fuel logistics", result["blockers"])
+        self.assertNotIn("site_input_repair_preempted_by_smelting_fuel_logistics=true", result["evidence"])
+
     def test_reconcile_repairs_dead_coal_supply_before_site_input_loop(self):
         issue = {
             "kind": "manual_site_logistics_gap",

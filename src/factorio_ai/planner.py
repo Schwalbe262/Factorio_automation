@@ -2987,6 +2987,13 @@ def _iron_belt_smelting_recovery_after_blocked_direct_site(
     target_rate = max(37.0, min(90.0, float(target_count)))
     recovery = ExpandIronSmeltingSkill(target_rate_per_minute=target_rate).next_action(observation)
     if recovery.action is None:
+        wait_decision = _existing_iron_belt_smelting_wait_after_blocked_expansion(
+            observation,
+            recovery,
+            target_count=target_count,
+        )
+        if wait_decision is not None:
+            return wait_decision
         return _smelting_fuel_logistics_repair_decision(
             observation,
             recovery,
@@ -3006,6 +3013,38 @@ def _iron_belt_smelting_recovery_after_blocked_direct_site(
         f"{recovery.reason}; direct iron-plate burner site is blocked, recovering via expanded belt smelting",
         done=False,
         metadata=metadata,
+    )
+
+
+def _existing_iron_belt_smelting_wait_after_blocked_expansion(
+    observation: dict[str, Any],
+    expansion: PlannerDecision,
+    *,
+    target_count: int,
+) -> PlannerDecision | None:
+    if expansion.action is not None or expansion.done:
+        return None
+    if "cannot find open iron-ore site for another smelting line" not in str(expansion.reason or ""):
+        return None
+    active_line_count = _complete_belt_smelting_line_count(observation, "iron-ore")
+    estimated_rate = _estimated_plate_rate(observation, "iron-plate", "iron-ore")
+    if active_line_count <= 0 or estimated_rate <= 0:
+        return None
+    return PlannerDecision(
+        {"type": "wait", "ticks": 300},
+        (
+            "wait for existing expanded iron-plate smelting output; direct iron-plate burner site is "
+            "blocked and no additional iron-ore expansion site is open"
+        ),
+        done=False,
+        metadata={
+            "failure_root": "direct_iron_smelting_site_blocked",
+            "repair_skill": "expand_iron_smelting",
+            "blocked_reason": expansion.reason,
+            "active_belt_smelting_lines": active_line_count,
+            "estimated_rate_per_minute": estimated_rate,
+            "target_count": target_count,
+        },
     )
 
 
@@ -3029,13 +3068,27 @@ def _iron_belt_smelting_preference_after_direct_support(
             "direct smelting furnace",
             "craft furnace for direct",
             "craft gears for direct",
+            "move near coal",
+            "mine coal",
+            "recover surplus coal",
         )
     ):
         return None
     target_rate = max(37.0, min(90.0, float(target_count)))
     expansion = ExpandIronSmeltingSkill(target_rate_per_minute=target_rate).next_action(observation)
     if expansion.action is None:
-        return None
+        wait_decision = _existing_iron_belt_smelting_wait_after_blocked_expansion(
+            observation,
+            expansion,
+            target_count=target_count,
+        )
+        if wait_decision is not None:
+            return wait_decision
+        return _smelting_fuel_logistics_repair_decision(
+            observation,
+            expansion,
+            context="direct iron-plate support diversion",
+        )
     metadata = dict(expansion.metadata)
     metadata.update(
         {
