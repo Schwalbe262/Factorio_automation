@@ -562,6 +562,12 @@ if [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ] && [ -z "${{FACTORIO_AI_LLM_MODEL:-}}"
 fi
 if [ -n "${{FACTORIO_AI_HF_HOME:-}}" ]; then
   export HF_HOME="$FACTORIO_AI_HF_HOME"
+elif [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ]; then
+  export HF_HOME="$HOME/factorio-ai-models"
+fi
+if [ -n "${{HF_HOME:-}}" ]; then
+  export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"
+  mkdir -p "$HUGGINGFACE_HUB_CACHE"
 fi
 if [ -n "${{FACTORIO_AI_VLLM_CUDA_VISIBLE_DEVICES:-}}" ]; then
   export CUDA_VISIBLE_DEVICES="$FACTORIO_AI_VLLM_CUDA_VISIBLE_DEVICES"
@@ -714,6 +720,12 @@ if [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ] && [ -z "${{FACTORIO_AI_LLM_BASE_URL:-
 fi
 if [ -n "${{FACTORIO_AI_HF_HOME:-}}" ]; then
   export HF_HOME="$FACTORIO_AI_HF_HOME"
+elif [ -n "${{FACTORIO_AI_VLLM_MODEL:-}}" ]; then
+  export HF_HOME="$HOME/factorio-ai-models"
+fi
+if [ -n "${{HF_HOME:-}}" ]; then
+  export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"
+  mkdir -p "$HUGGINGFACE_HUB_CACHE"
 fi
 if [ -n "${{FACTORIO_AI_VLLM_CUDA_VISIBLE_DEVICES:-}}" ]; then
   export CUDA_VISIBLE_DEVICES="$FACTORIO_AI_VLLM_CUDA_VISIBLE_DEVICES"

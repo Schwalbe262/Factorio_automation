@@ -1,9 +1,9 @@
 # Current Handoff
-- Branch `chore/part130-unattended-qwen9-supervisor`; Qwen Slurm worker currently reports remote unavailable, heuristic fallback is active.
-- Fixed route-scale belt bootstrap loop: controller override sources are distinct, route-scale targets survive recovery, and bootstrap no longer hides prerequisite failures.
-- Fixed live blocker where `bootstrap_build_item_mall` repeated after refusing 148-tile iron-plate hand-carry; recovery now chooses `build_iron_plate_logistic_line_to_gear_mall` only for long buildable line failures.
-- Planner can build an iron-plate line from a powered gear assembler even when the gear/belt pair layout is not yet aligned; long fallback route uses a fast path.
-- Live validation: iron-line skill placed belts from the source corridor, then autopilot advanced to `produce_iron_plate`; current PID `66372`.
-- Validated `PYTHONPATH=src python -m unittest tests.test_planner tests.test_strategy tests.test_controller` (754 OK).
-- Slurm home cleanup already reduced `~/factorio-ai-worker` to ~65M; `factorio-ai-models` remains 21G current 27B AWQ cache.
+- Branch `chore/part130-unattended-qwen9-supervisor`; Qwen Slurm worker has remote availability issues, heuristic fallback may still appear.
+- Fixed route-scale belt bootstrap loop and long gear-mall iron-line hand-carry recovery; validated planner/strategy/controller earlier.
+- Current live autopilot PID `66372`; `run-health --no-observe` shows supervisor running, live skill `produce_iron_plate`, recovery root `iron_plate_source_missing`.
+- Remote disk cleanup on Slurm: `factorio-ai-worker` 37M, `slurm_scheduler` 2.5G, `factorio-ai-models` 21G, `~/.cache` 7.8G after removing stale scheduler task clones and duplicate default HF Qwen caches.
+- Slurm vLLM scripts now default `HF_HOME`/`HUGGINGFACE_HUB_CACHE` to `$HOME/factorio-ai-models` to avoid duplicate model downloads.
+- Validated `PYTHONPATH=src python -m unittest tests.test_remote_slurm` (75 OK); deployed updated worker code with `cleanup_and_deploy.ps1`.
+- Remaining structural live blocker from before cleanup: `produce_iron_plate` may oscillate between direct iron support and expanded smelting repair; inspect planner around `IronPlateSkill` next.
 - Dirty runtime-heavy `note.md`/`insight.md` exist; stage only intentional code/tests/handoff unless explicitly cleaning history.

@@ -662,6 +662,9 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertIn("export VLLM_USE_FLASHINFER_SAMPLER", command)
         self.assertIn("export CUDA_VISIBLE_DEVICES", command)
         self.assertIn("export HF_HOME", command)
+        self.assertIn('export HF_HOME="$HOME/factorio-ai-models"', command)
+        self.assertIn('export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"', command)
+        self.assertIn('mkdir -p "$HUGGINGFACE_HUB_CACHE"', command)
         self.assertIn("trap cleanup_vllm EXIT", command)
         self.assertIn('VLLM_PID="$!"', command)
         self.assertIn("exit 1", command)
@@ -2484,6 +2487,8 @@ class MultiVllmServiceTests(unittest.TestCase):
         self.assertIn("export FACTORIO_AI_VLLM_PORT=8003", cmd)
         self.assertIn("http://127.0.0.1:8003/v1", cmd)
         self.assertIn("vllm-service-8003.heartbeat.json", cmd)
+        self.assertIn('export HF_HOME="$HOME/factorio-ai-models"', cmd)
+        self.assertIn('export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"', cmd)
         self.assertNotIn("vllm-service-8000.heartbeat.json", cmd)
 
     def test_ensure_assigns_distinct_ports_when_scaling_from_zero(self):

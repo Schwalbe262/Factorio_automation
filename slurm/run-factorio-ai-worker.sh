@@ -58,7 +58,7 @@ if [[ -n "${FACTORIO_AI_VLLM_MODEL:-}" ]]; then
   if [[ -n "${FACTORIO_AI_HF_HOME:-}" ]]; then
     export HF_HOME="$FACTORIO_AI_HF_HOME"
   else
-    export HF_HOME="$ROOT/hf-cache"
+    export HF_HOME="$HOME/factorio-ai-models"
   fi
   export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"
   mkdir -p "$HUGGINGFACE_HUB_CACHE"

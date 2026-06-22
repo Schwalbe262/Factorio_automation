@@ -23,6 +23,22 @@ df -h ~ | tail -1
 '@
 $cleanup | ssh -i $key -o StrictHostKeyChecking=no $rh "bash -s"
 
+Write-Host "=== 2b/3 scheduler task clone cleanup (git_tasks/task-* >6h) ==="
+$schedulerCleanup = @'
+set -euo pipefail
+base="$HOME/slurm_scheduler/slurm_scheduler/git_tasks"
+[ -d "$base" ] || exit 0
+resolved="$(readlink -f "$base")"
+case "$resolved" in
+  /gpfs/home1/r1jae262/slurm_scheduler/slurm_scheduler/git_tasks|/home1/r1jae262/slurm_scheduler/slurm_scheduler/git_tasks) ;;
+  *) printf 'refusing unexpected path: %s\n' "$resolved"; exit 2 ;;
+esac
+du -sh "$base" 2>/dev/null || true
+find "$base" -mindepth 1 -maxdepth 1 -type d -name 'task-*' -mmin +360 -print0 | xargs -0 -r rm -rf --
+du -sh "$base" 2>/dev/null || true
+'@
+$schedulerCleanup | ssh -i $key -o StrictHostKeyChecking=no $rh "bash -s"
+
 Write-Host "=== 3/3 deploy (pushes the code-agent handler to the node) ==="
 $env:FACTORIO_AI_SLURM_ENABLED = "1"
 $env:FACTORIO_AI_SLURM_MODE = "scheduler"
@@ -30,5 +46,6 @@ $env:FACTORIO_AI_SLURM_SCHEDULER_URL = "http://100.112.168.31:8000"
 $env:FACTORIO_AI_SLURM_SCHEDULER_ACCOUNT = "r1jae262"
 $env:SUPERCOMPUTER_WORKER_SSH_KEY = $key
 $env:FACTORIO_AI_SLURM_REMOTE_DIR = "~/factorio-ai-worker"
+$env:FACTORIO_AI_HF_HOME = "/home1/r1jae262/factorio-ai-models"
 $env:PYTHONPATH = "src"
 python -m factorio_ai.cli slurm-deploy
