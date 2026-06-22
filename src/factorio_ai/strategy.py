@@ -4109,6 +4109,8 @@ def _stocked_site_input_consumer_repair_skill(
     ).lower()
     if "electronic-circuit" in text or "circuit_automation" in text:
         if _technology_researched(observation, "automation"):
+            if item == "copper-plate" and _circuit_iron_plate_recovery_needed(observation):
+                return "produce_iron_plate"
             return "automate_electronic_circuit_line"
         return "produce_electronic_circuit"
     if "automation-science-pack" in text or "science" in text:
@@ -4126,6 +4128,17 @@ def _site_input_plate_source_stock_ready(observation: dict[str, Any], item: str)
     layout = _find_site_input_logistic_line_layout(observation, item=item)
     source = layout.get("source") if isinstance(layout, dict) and isinstance(layout.get("source"), dict) else None
     return bool(source is not None and entity_item_count(source, item) > 0)
+
+
+def _circuit_iron_plate_recovery_needed(observation: dict[str, Any]) -> bool:
+    if total_item_count(observation, "iron-plate") >= SMELTING_FUEL_RECOVERY_STOCK_TARGET:
+        return False
+    if not _starter_resource_available(observation, "iron-ore"):
+        return False
+    return any(
+        _entity_on_resource(observation, drill, "iron-ore")
+        for drill in entities_named(observation, "burner-mining-drill")
+    )
 
 
 def _site_input_missing_source_issue(
