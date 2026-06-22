@@ -1683,6 +1683,14 @@ class FactorioController:
         except Exception:  # noqa: BLE001
             pass
         try:
+            if (
+                strategy_mod._coal_supply_repair_needed(observation)
+                and self._skill_run_config("setup_coal_supply") is not None
+            ):
+                return "setup_coal_supply"
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             from .planner import _find_gear_belt_mall_logistics_layout
 
             entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []

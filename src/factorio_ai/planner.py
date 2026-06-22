@@ -3390,6 +3390,17 @@ class BeltSmeltingLineSkill:
         if decision is not None:
             return decision
 
+        line_inserter = layout.get("inserter")
+        if isinstance(line_inserter, dict):
+            power_decision = _logistics_line_powered_inserter_decision(
+                observation,
+                player,
+                line_inserter,
+                f"{self.product_name} belt smelting input inserter",
+            )
+            if power_decision is not None:
+                return power_decision
+
         for entity_name, layout_key, item, threshold, count in _smelting_line_fuel_requirements(layout, reserve=False):
             entity = layout.get(layout_key)
             if entity and entity_item_count(entity, item) < threshold:
@@ -3444,7 +3455,13 @@ class BeltSmeltingLineSkill:
     ) -> PlannerDecision | None:
         need = _line_missing_item(observation, layout)
         if need:
-            decision = self._ensure_item(observation, player, need)
+            target_position = layout.get("inserter_position") if need == "inserter" else None
+            decision = self._ensure_item(
+                observation,
+                player,
+                need,
+                target_position=target_position if isinstance(target_position, dict) else None,
+            )
             if decision is not None:
                 return decision
 
@@ -3483,6 +3500,8 @@ class BeltSmeltingLineSkill:
         observation: dict[str, Any],
         player: dict[str, float],
         item: str,
+        *,
+        target_position: dict[str, float] | None = None,
     ) -> PlannerDecision | None:
         if item == "stone-furnace":
             if craftable_count(observation, "stone-furnace") > 0:
@@ -3541,6 +3560,28 @@ class BeltSmeltingLineSkill:
                     return decision
             if craftable_count(observation, item) > 0:
                 return PlannerDecision({"type": "craft", "recipe": item, "count": 1}, f"craft {item} for line")
+            if item == "inserter":
+                reusable = _find_relocatable_inserter_for_iron_plate_line(
+                    observation,
+                    target_position or player,
+                    allow_burner=False,
+                )
+                if reusable is not None:
+                    reusable_position = _position(reusable)
+                    if distance(player, reusable_position) > 4.5:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": _stand_position(reusable_position, offset=1.5)},
+                            "move within reach of reusable inserter for belt smelting line",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "mine",
+                            "unit_number": reusable.get("unit_number"),
+                            "name": reusable.get("name") or "inserter",
+                            "position": reusable_position,
+                        },
+                        "relocate existing inserter for belt smelting line instead of waiting for first electronic circuit",
+                    )
             decision = self.support_skill.next_action(observation, target_count=20, inventory_only=True)
             if not decision.done:
                 return decision
@@ -8713,6 +8754,88 @@ def _site_input_local_route_observed(
     return _direction_or_default(inserter.get("direction"), endpoints["target_direction"]) == int(endpoints["target_direction"])
 
 
+def _completed_site_input_logistics_observed(observation: dict[str, Any], item: str | None = None) -> str | None:
+    target_items = set(AUTOMATED_SITE_INPUT_ITEMS)
+    if item:
+        target_items &= {item}
+    if not target_items:
+        return None
+
+    observed: set[str] = set()
+    pending: set[str] = set()
+    for consumer in _site_input_consumer_entities(observation, target_items):
+        consumer_position = _position(consumer)
+        recipe_name = str(consumer.get("recipe") or consumer.get("recipe_name") or "")
+        recipe = RECIPES.get(recipe_name)
+        if recipe is None:
+            continue
+        for required_item in sorted(target_items & set(recipe.ingredients)):
+            source = _nearest_site_input_source(observation, required_item, consumer_position)
+            if source is None:
+                pending.add(required_item)
+                continue
+            if distance(_position(source), consumer_position) < 6.0:
+                continue
+            if _site_input_route_complete_for_pair(observation, required_item, source, consumer):
+                observed.add(required_item)
+            else:
+                pending.add(required_item)
+
+    if observed and not pending:
+        return sorted(observed)[0] if item is None else item
+    return None
+
+
+def _site_input_route_complete_for_pair(
+    observation: dict[str, Any],
+    item: str,
+    source: dict[str, Any],
+    consumer: dict[str, Any],
+) -> bool:
+    protected_units = {
+        int(entity.get("unit_number"))
+        for entity in (source, consumer)
+        if isinstance(entity, dict) and entity.get("unit_number") is not None
+    }
+    for endpoints in _site_input_line_endpoint_candidates(source, consumer):
+        source_inserter_position = _tile_center_position(endpoints["source_inserter"])
+        target_inserter_position = _tile_center_position(endpoints["target_inserter"])
+        source_inserter = _inserter_near(observation, source_inserter_position)
+        target_inserter = _inserter_near(observation, target_inserter_position)
+        if not _site_input_endpoint_inserter_ready(source_inserter, int(endpoints["source_direction"])):
+            continue
+        if not _site_input_endpoint_inserter_ready(target_inserter, int(endpoints["target_direction"])):
+            continue
+        segments = _site_input_line_segments(
+            observation,
+            endpoints,
+            avoid_positions={
+                _position_tuple(source_inserter_position),
+                _position_tuple(target_inserter_position),
+            },
+            protected_unit_numbers=protected_units,
+        )
+        if segments and all(_site_input_segment_complete(segment) for segment in segments):
+            return True
+    return False
+
+
+def _site_input_endpoint_inserter_ready(inserter: dict[str, Any] | None, direction: int) -> bool:
+    if not isinstance(inserter, dict):
+        return False
+    if _direction_or_default(inserter.get("direction"), direction) != direction:
+        return False
+    return str(inserter.get("name") or "") == "burner-inserter" or inserter.get("electric_network_connected") is not False
+
+
+def _site_input_segment_complete(segment: dict[str, Any]) -> bool:
+    existing = segment.get("entity") if isinstance(segment, dict) else None
+    if not isinstance(existing, dict) or str(existing.get("name") or "") != "transport-belt":
+        return False
+    planned_direction = _direction_or_default(segment.get("direction"), EAST)
+    return _direction_or_default(existing.get("direction"), planned_direction) == planned_direction
+
+
 def _site_input_logistics_started(layout: dict[str, Any]) -> bool:
     for key in ("source_inserter", "target_inserter", "splitter"):
         spec = layout.get(key)
@@ -11548,6 +11671,28 @@ class CircuitAutomationSkill:
 
         if item == "inserter":
             if bool(_technology_state(observation, "automation").get("researched")):
+                if craftable_count(observation, "inserter") <= 0:
+                    reusable = _find_relocatable_inserter_for_iron_plate_line(
+                        observation,
+                        reference_position or player,
+                        allow_burner=False,
+                    )
+                    if reusable is not None:
+                        reusable_position = _position(reusable)
+                        if distance(player, reusable_position) > 4.5:
+                            return PlannerDecision(
+                                {"type": "move_to", "position": _stand_position(reusable_position, offset=1.5)},
+                                "move within reach of reusable inserter for circuit automation bootstrap",
+                            )
+                        return PlannerDecision(
+                            {
+                                "type": "mine",
+                                "unit_number": reusable.get("unit_number"),
+                                "name": reusable.get("name") or "inserter",
+                                "position": reusable_position,
+                            },
+                            "relocate existing inserter for circuit automation bootstrap instead of waiting for first electronic circuit",
+                        )
                 decision = BuildItemMallSkill("inserter", max(quantity, 1)).next_action(observation)
                 if not decision.done:
                     return decision
@@ -13154,6 +13299,13 @@ class SiteInputLogisticLineSkill:
 
         layout = _find_site_input_logistic_line_layout(observation, item=self.item)
         if layout is None:
+            completed_item = _completed_site_input_logistics_observed(observation, self.item)
+            if completed_item:
+                return PlannerDecision(
+                    None,
+                    f"{completed_item} site input logistics line is already observed with belts and endpoint inserters",
+                    done=True,
+                )
             return PlannerDecision(None, "no executable repeated site input logistics route was found")
 
         belt_assembler = _transport_belt_output_assembler(observation)

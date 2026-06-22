@@ -4402,6 +4402,70 @@ class PlannerTests(unittest.TestCase):
         self.assertIsNone(decision.action)
         self.assertIn("cannot obtain inserter for belt smelting line yet", decision.reason)
 
+    def test_belt_smelting_skill_relocates_existing_inserter_when_craft_needs_first_circuit(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 20.0, "y": 0.0}}
+        obs["inventory"] = {
+            "coal": 12,
+            "iron-plate": 30,
+            "iron-gear-wheel": 1,
+            "burner-mining-drill": 1,
+            "stone-furnace": 1,
+            "transport-belt": 2,
+        }
+        obs["craftable"] = {"inserter": 0}
+        obs["resources"] = [{"name": "copper-ore", "position": {"x": 20, "y": 0}, "distance": 0}]
+        obs["entities"].append(
+            {
+                "name": "inserter",
+                "unit_number": 991,
+                "position": {"x": 20.0, "y": 3.0},
+                "direction": planner_module.EAST,
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
+
+        decision = BeltSmeltingLineSkill(
+            target_count=90,
+            resource_name="copper-ore",
+            product_name="copper-plate",
+            inventory_only=True,
+        ).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 991)
+        self.assertIn("relocate existing inserter for belt smelting line", decision.reason)
+
+    def test_belt_smelting_skill_powers_unpowered_input_inserter_before_waiting(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 8.0, "y": 0.0}}
+        obs["inventory"] = {"small-electric-pole": 1}
+        obs["entities"] = complete_belt_smelting_entities(
+            4,
+            0,
+            500,
+            resource="copper-ore",
+            product="copper-plate",
+        )
+        for entity in obs["entities"]:
+            if entity["name"] == "burner-inserter":
+                entity["name"] = "inserter"
+                entity["electric_network_connected"] = False
+                entity["status_name"] = "no_power"
+                entity["status"] = 54
+                entity["inventories"] = {}
+
+        decision = BeltSmeltingLineSkill(
+            target_count=90,
+            resource_name="copper-ore",
+            product_name="copper-plate",
+        ).next_action(obs)
+
+        self.assertIsNotNone(decision.action)
+        self.assertNotEqual(decision.action["type"], "wait")
+        self.assertIn("copper-plate belt smelting input inserter", decision.reason)
+
     def test_copper_plate_skill_recovers_existing_direct_cell_before_belt_smelting(self):
         obs = powered_automation_observation()
         obs["player"] = {"position": {"x": 8.0, "y": 0.0}}
@@ -6285,6 +6349,35 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "transport-belt")
         self.assertIn("iron-plate site input line", decision.reason)
+
+    def test_circuit_automation_relocates_existing_inserter_when_first_circuit_blocks_crafting(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": -12.0, "y": 0.0}}
+        obs["inventory"] = {
+            "assembling-machine-1": 2,
+            "small-electric-pole": 1,
+            "iron-plate": 8,
+            "iron-gear-wheel": 1,
+            "copper-plate": 8,
+            "copper-cable": 1,
+        }
+        obs["craftable"] = {"inserter": 0}
+        obs["entities"].append(
+            {
+                "name": "inserter",
+                "unit_number": 990,
+                "position": {"x": -12.0, "y": 0.0},
+                "direction": planner_module.EAST,
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
+
+        decision = CircuitAutomationSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 990)
+        self.assertIn("circuit automation bootstrap", decision.reason)
 
     def test_circuit_automation_scaling_expands_iron_when_no_site_input_source_exists(self):
         obs = powered_automation_observation()
@@ -10548,6 +10641,60 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["item"], "transport-belt")
         self.assertEqual(decision.action["unit_number"], 980)
         self.assertIn("buffered transport belts", decision.reason)
+
+    def test_site_input_logistic_line_done_when_completed_route_no_longer_has_layout_candidate(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        source = {
+            "name": "stone-furnace",
+            "unit_number": 950,
+            "position": {"x": -8, "y": 8},
+            "recipe": "copper-plate",
+            "inventories": {"3": {"copper-plate": 20}},
+        }
+        consumer = {
+            "name": "assembling-machine-1",
+            "unit_number": 951,
+            "position": {"x": 8, "y": 8},
+            "recipe": "automation-science-pack",
+            "electric_network_connected": True,
+            "status_name": "item_ingredient_shortage",
+            "inventories": {},
+        }
+        obs["entities"].extend([mall_assembler(recipe="transport-belt"), source, consumer])
+        layout = planner_module._find_site_input_logistic_line_layout(obs, item="copper-plate")
+        self.assertIsNotNone(layout)
+
+        next_unit = 970
+        for segment in layout["segments"]:
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": next_unit,
+                    "position": segment["position"],
+                    "direction": segment["direction"],
+                }
+            )
+            next_unit += 1
+        for endpoint_key in ("source_inserter", "target_inserter"):
+            spec = layout[endpoint_key]
+            obs["entities"].append(
+                {
+                    "name": "inserter",
+                    "unit_number": next_unit,
+                    "position": spec["position"],
+                    "direction": spec["direction"],
+                    "electric_network_connected": True,
+                }
+            )
+            next_unit += 1
+
+        self.assertIsNone(planner_module._find_site_input_logistic_line_layout(obs, item="copper-plate"))
+        decision = SiteInputLogisticLineSkill(20, item="copper-plate").next_action(obs)
+
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
+        self.assertIn("already observed", decision.reason)
 
     def test_site_input_logistic_line_places_belt_without_item_handcarry(self):
         obs = powered_automation_observation()

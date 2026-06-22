@@ -3130,6 +3130,49 @@ class StallWatchdogTests(unittest.TestCase):
             )
             self.assertEqual(skill, "bootstrap_build_item_mall")
 
+    def test_stall_recovery_repairs_dead_coal_supply_even_if_recent(self):
+        observation = {
+            "player": {"position": {"x": 80, "y": -20}},
+            "inventory": {"iron-plate": 50, "transport-belt": 8},
+            "entities": [
+                {
+                    "name": "burner-mining-drill",
+                    "unit_number": 20,
+                    "position": {"x": 4, "y": 0},
+                    "direction": 4,
+                    "mining_target": "coal",
+                    "status_name": "no_fuel",
+                    "inventories": {},
+                },
+                {"name": "transport-belt", "unit_number": 21, "position": {"x": 6, "y": 0}, "direction": 4, "inventories": {}},
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 22,
+                    "recipe": "iron-plate",
+                    "position": {"x": 76, "y": -24},
+                    "status_name": "no_ingredients",
+                    "inventories": {"2": {"iron-plate": 4}},
+                },
+            ],
+            "resources": [
+                {"name": "coal", "position": {"x": 4, "y": 0}, "distance": 4},
+                {"name": "iron-ore", "position": {"x": 76, "y": -23}, "distance": 80},
+            ],
+            "research": {"technologies": {"automation": {"researched": True}, "logistics": {"researched": True}}},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FactorioController(make_test_config(Path(tmp)))
+            with patch("factorio_ai.strategy._gear_mall_iron_plate_logistics_issue", return_value=None), patch(
+                "factorio_ai.controller.build_factory_readiness",
+                return_value=SimpleNamespace(repair_skill=None, failure_root=None),
+            ):
+                skill = controller._stall_recovery_skill(
+                    "launch_rocket_program",
+                    observation,
+                    ["automate_electronic_circuit_line", "setup_coal_supply"],
+                )
+            self.assertEqual(skill, "setup_coal_supply")
+
     def test_stall_recovery_keeps_root_repair_even_if_recently_tried(self):
         observation = {
             "player": {"position": {"x": 0, "y": 0}},

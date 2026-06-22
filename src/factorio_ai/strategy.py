@@ -1360,13 +1360,13 @@ def reconcile_strategy_decision(
         )
         if satisfied_adjustment is not None:
             return satisfied_adjustment
-    if selected in _COAL_DEPENDENT_SKILLS and _coal_supply_needed(observation):
+    if selected in COAL_SUPPLY_PREEMPT_SKILLS and _coal_supply_repair_needed(observation):
         adjusted = dict(decision)
         adjusted["selected_skill"] = "setup_coal_supply"
         adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 88)
         original_reason = str(decision.get("reason") or "").strip()
         guardrail_reason = (
-            f"LLM selected {selected}, but burner smelting or steam power still lacks an automated coal supply site."
+            f"LLM selected {selected}, but burner-backed production still lacks a live coal supply site."
         )
         adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
         adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["automated coal fuel supply"]))
@@ -1571,6 +1571,10 @@ def reconcile_strategy_decision(
         )
         adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
         adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + ["smelting fuel logistics"]))
+        adjusted["target_count"] = max(
+            _positive_int_or_none(decision.get("target_count")) or 0,
+            SMELTING_FUEL_RECOVERY_STOCK_TARGET,
+        )
         adjusted["evidence"] = _string_list(decision.get("evidence")) + [
             f"guardrail_adjusted_from={selected}",
             f"fuel_starved_entity={smelting_fuel_blocker.get('entity')}",
@@ -2276,6 +2280,10 @@ def reconcile_strategy_decision(
             blockers = [base_blocker]
             if target_skill in {"produce_iron_plate", "produce_copper_plate"}:
                 blockers.append("smelting fuel logistics")
+                adjusted["target_count"] = max(
+                    _positive_int_or_none(decision.get("target_count")) or 0,
+                    SMELTING_FUEL_RECOVERY_STOCK_TARGET,
+                )
             adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + blockers))
             adjusted["evidence"] = _string_list(decision.get("evidence")) + [
                 f"guardrail_adjusted_from={selected}",
@@ -4371,6 +4379,18 @@ _COAL_DEPENDENT_SKILLS = {
     "research_automation",
     "setup_power",
 }
+COAL_SUPPLY_PREEMPT_SKILLS = _COAL_DEPENDENT_SKILLS | {
+    "plan_factory_site",
+    "produce_electronic_circuit",
+    "automate_electronic_circuit_line",
+    "build_site_input_logistic_line",
+    "produce_automation_science_pack",
+    "research_logistics",
+    "research_electric_mining_drill",
+    "bootstrap_electric_mining_drill_mall",
+}
+COAL_SUPPLY_REPAIR_INVENTORY_FLOOR = 20
+SMELTING_FUEL_RECOVERY_STOCK_TARGET = 90
 
 # Early "stock" skills the LLM tends to re-pick even after their target is met (plates sit in the
 # furnace output so the count stays satisfied). When that happens, defer to the deterministic planner.
@@ -4384,6 +4404,10 @@ def _coal_supply_needed(observation: dict[str, Any]) -> bool:
     if _coal_supply_ready(observation):
         return False
     return _fuel_dependent_factory_exists(observation) or _coal_patch_is_near_player(observation)
+
+
+def _coal_supply_repair_needed(observation: dict[str, Any]) -> bool:
+    return _coal_supply_needed(observation) and inventory_count(observation, "coal") < COAL_SUPPLY_REPAIR_INVENTORY_FLOOR
 
 
 def _coal_supply_ready(observation: dict[str, Any]) -> bool:
@@ -4695,7 +4719,7 @@ def _smelting_fuel_recovery_skill(blocker: dict[str, Any]) -> str:
 
 def _smelting_fuel_recovery_stock_satisfied(observation: dict[str, Any], blocker: dict[str, Any]) -> bool:
     item = "copper-plate" if blocker.get("resource") == "copper-ore" else "iron-plate"
-    return total_item_count(observation, item) >= 90
+    return total_item_count(observation, item) >= SMELTING_FUEL_RECOVERY_STOCK_TARGET
 
 
 def _expanded_smelting_fuel_blocker_for_resource(
