@@ -4434,6 +4434,51 @@ class StrategyTests(unittest.TestCase):
             self.assertEqual(result["target_count"], 18)
             self.assertNotIn("boiler coal feed construction belts", result["blockers"])
 
+    def test_plan_site_drill_dependency_allows_boiler_belt_bootstrap(self):
+        observation = burner_drill_replacement_observation(electric_researched=True)
+        observation["research"]["technologies"]["logistics"] = {"researched": True}
+        belt_issue = {"missing": 224, "available": 144, "target_count": 228}
+        route_issue = {
+            "missing": 224,
+            "available": 144,
+            "target_count": 228,
+            "gear_unit": 107,
+            "belt_unit": 110,
+            "direct_transfer_ready": False,
+            "direct_transfer_blocked": False,
+            "missing_transfer_belts": None,
+            "gear_belt_logistics_pair_exists": False,
+            "repair_skill": "bootstrap_build_item_mall",
+        }
+
+        with (
+            patch("factorio_ai.strategy._electric_drill_dependency_active_skill", return_value="plan_factory_site"),
+            patch("factorio_ai.strategy._gear_mall_output_logistics_issue", return_value=None),
+            patch("factorio_ai.strategy._gear_belt_mall_transfer_logistics_issue", return_value=None),
+            patch("factorio_ai.strategy._boiler_feed_belt_shortfall_issue", return_value=belt_issue),
+            patch("factorio_ai.strategy._boiler_feed_route_scale_mall_issue", return_value=route_issue),
+        ):
+            heuristic = heuristic_strategy("launch_rocket_program", observation)
+            reconciled = reconcile_strategy_decision(
+                {
+                    "selected_skill": "setup_power",
+                    "priority": 94,
+                    "reason": "Repair unconnected consumers.",
+                    "evidence": [],
+                    "blockers": ["electric power network"],
+                    "expected_effect": "",
+                    "source": "llm",
+                },
+                "launch_rocket_program",
+                observation,
+            )
+
+        for result in (heuristic, reconciled):
+            self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
+            self.assertEqual(result["target_item"], "transport-belt")
+            self.assertEqual(result["target_count"], 228)
+            self.assertIn("boiler_feed_missing_transport_belts=224", result["evidence"])
+
     def test_boiler_fuel_guardrail_does_not_preempt_unbuildable_belt_route(self):
         observation = burner_drill_replacement_observation(electric_researched=True)
         observation["research"]["technologies"]["logistics"] = {"researched": True}

@@ -1169,20 +1169,28 @@ class FactorioController:
         input_item: str | None = None,
         max_steps: int | None = None,
         override_skill: str | None = None,
+        override_source: str | None = None,
+        override_reason: str | None = None,
         skip_remote_strategy: bool = False,
     ) -> StrategyStepSummary:
         if override_skill:
-            # Stall watchdog override: skip the LLM and force a specific deterministic skill to break
-            # a no-progress loop. Still annotated so a missing executor routes through the foundry.
+            # Override cycles skip the LLM and force a specific deterministic skill. Keep the source
+            # explicit so committed progress reuse is not mislabeled as stall recovery.
+            source = override_source or "autopilot_stall_recovery"
+            reason = override_reason or f"stall recovery: forced {override_skill} after repeated no-progress cycles"
             strategy = annotate_strategy_with_skill_status(
                 {
                     "selected_skill": override_skill,
-                    "source": "autopilot_stall_recovery",
-                    "reason": f"stall recovery: forced {override_skill} after repeated no-progress cycles",
+                    "source": source,
+                    "reason": reason,
                     "priority": 70,
                     "blockers": [],
-                    "evidence": ["autopilot_stall_recovery"],
-                    "expected_effect": "Break a no-progress loop by running a different deterministic skill.",
+                    "evidence": [source],
+                    "expected_effect": (
+                        "Reuse a deterministic skill that is still making measurable progress."
+                        if source == "autopilot_commit_skill"
+                        else "Break a no-progress loop by running a different deterministic skill."
+                    ),
                 },
                 runtime_dir=self.cfg.runtime_dir,
             )
@@ -1791,7 +1799,10 @@ class FactorioController:
         try:
             iron_issue = strategy_mod._gear_mall_iron_plate_logistics_issue(observation)
             if (
-                strategy_mod._gear_mall_source_fuel_blocker_preempts(iron_issue)
+                (
+                    strategy_mod._gear_mall_source_fuel_blocker_preempts(iron_issue)
+                    or strategy_mod._gear_mall_iron_plate_line_preempts_route_scale(iron_issue)
+                )
                 and self._skill_run_config("build_iron_plate_logistic_line_to_gear_mall") is not None
             ):
                 return "build_iron_plate_logistic_line_to_gear_mall"
@@ -1987,6 +1998,8 @@ class FactorioController:
                     override_target_count: int | None = None
                     override_target_item: str | None = None
                     override_input_item: str | None = None
+                    override_source: str | None = None
+                    override_reason: str | None = None
                     override_from_commit = False
                     recover_for_stall = stall_count >= stall_threshold
                     recover_for_failures = consecutive_failed_cycles >= failure_recovery_threshold
@@ -2013,11 +2026,13 @@ class FactorioController:
                                 if recover_for_stall
                                 else f"{consecutive_failed_cycles} consecutive failed cycles"
                             )
+                            override_source = "autopilot_stall_recovery"
+                            override_reason = f"{trigger}; forcing {override_skill}"
                             self._write_autopilot_heartbeat(
                                 objective,
                                 "stall_recovery",
                                 cycle=completed + 1,
-                                reason=f"{trigger}; forcing {override_skill}",
+                                reason=override_reason,
                             )
                             stall_count = 0
                             consecutive_failed_cycles = 0
@@ -2031,11 +2046,16 @@ class FactorioController:
                         override_skill = committed_skill
                         override_from_commit = True
                         commit_skips += 1
+                        override_source = "autopilot_commit_skill"
+                        override_reason = (
+                            f"reusing progressing skill '{committed_skill}' without re-strategizing "
+                            f"({commit_skips}/{commit_max})"
+                        )
                         self._write_autopilot_heartbeat(
                             objective,
                             "commit_skill",
                             cycle=completed + 1,
-                            reason=f"reusing progressing skill '{committed_skill}' without re-strategizing ({commit_skips}/{commit_max})",
+                            reason=override_reason,
                         )
                     elif override_skill is None:
                         # A fresh LLM strategy decision is about to run; reset the skip budget.
@@ -2047,14 +2067,16 @@ class FactorioController:
                             research_skill = None
                         if research_skill is not None:
                             override_skill = research_skill
+                            override_source = "autopilot_research_commit"
+                            override_reason = (
+                                f"continuing active research with '{research_skill}' without waiting for a fresh "
+                                "LLM strategy turn"
+                            )
                             self._write_autopilot_heartbeat(
                                 objective,
                                 "research_commit",
                                 cycle=completed + 1,
-                                reason=(
-                                    f"continuing active research with '{research_skill}' without waiting for a fresh "
-                                    "LLM strategy turn"
-                                ),
+                                reason=override_reason,
                             )
                     if override_skill is None and require_llm:
                         try:
@@ -2069,11 +2091,15 @@ class FactorioController:
                                 override_target_count = _int_or_none(prerequisite_override.get("target_count"))
                                 override_target_item = _strategy_target_item(prerequisite_override)
                                 override_input_item = _strategy_site_input_item(prerequisite_override)
+                                override_source = "autopilot_prerequisite_override"
+                                override_reason = str(
+                                    prerequisite_override.get("reason") or f"running {prerequisite_skill}"
+                                )
                                 self._write_autopilot_heartbeat(
                                     objective,
                                     "prerequisite_override",
                                     cycle=completed + 1,
-                                    reason=str(prerequisite_override.get("reason") or f"running {prerequisite_skill}"),
+                                    reason=override_reason,
                                 )
                     # After repeated failures, degrade this one cycle to the heuristic so a hung/erroring
                     # serving can't freeze progress (the agent otherwise sits frozen mid-action). An
@@ -2134,6 +2160,8 @@ class FactorioController:
                             input_item=step_input_item,
                             max_steps=max_steps,
                             override_skill=override_skill,
+                            override_source=override_source,
+                            override_reason=override_reason,
                             # A degraded cycle must NOT touch the hung remote (it would block on the
                             # full remote timeout); force the local heuristic path immediately.
                             skip_remote_strategy=degrade_to_heuristic,
@@ -4204,6 +4232,8 @@ class ModlessFactorioController(FactorioController):
         input_item: str | None = None,
         max_steps: int | None = None,
         override_skill: str | None = None,
+        override_source: str | None = None,
+        override_reason: str | None = None,
         skip_remote_strategy: bool = False,
     ) -> StrategyStepSummary:
         if _real_player_execution_required():
@@ -4267,6 +4297,8 @@ class ModlessFactorioController(FactorioController):
             input_item=input_item,
             max_steps=max_steps,
             override_skill=override_skill,
+            override_source=override_source,
+            override_reason=override_reason,
             skip_remote_strategy=skip_remote_strategy,
         )
 

@@ -1471,6 +1471,52 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(route_target, missing + 4)
         self.assertEqual(target, 100)
 
+    def test_iron_plate_gear_mall_line_falls_back_to_powered_gear_assembler(self):
+        obs = base_observation()
+        obs["inventory"] = {"transport-belt": 20, "inserter": 2}
+        obs["research"]["technologies"]["automation"]["researched"] = True
+        obs["entities"] = [
+            {
+                "name": "stone-furnace",
+                "unit_number": 105,
+                "position": {"x": 12, "y": 0},
+                "recipe": "iron-plate",
+                "inventories": {"3": {"iron-plate": 4}},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 107,
+                "position": {"x": 0, "y": 0},
+                "recipe": "iron-gear-wheel",
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+        ]
+
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+        decision = IronPlateLogisticLineToGearMallSkill().next_action(obs)
+
+        self.assertIsInstance(layout, dict)
+        self.assertEqual(layout["gear_assembler"]["unit_number"], 107)
+        self.assertIsNone(layout["belt_assembler"])
+        self.assertIsNotNone(decision.action)
+        self.assertNotIn("cannot find both", decision.reason)
+
+    def test_long_iron_plate_line_uses_fast_path_without_route_scoring(self):
+        obs = base_observation()
+
+        with patch("factorio_ai.planner._iron_plate_line_route_score") as route_score:
+            segments = planner_module._iron_plate_line_segments(
+                obs,
+                {"x": 120.5, "y": 0.5},
+                {"x": -30.5, "y": -40.5},
+                center_tiles=True,
+                fast_long_route=True,
+            )
+
+        route_score.assert_not_called()
+        self.assertGreater(len(segments), 100)
+
     def test_coal_fuel_feed_prefers_local_receiver_when_boiler_is_working(self):
         obs = base_observation()
         obs["inventory"] = {"transport-belt": 4, "burner-inserter": 1, "coal": 1, "stone-furnace": 1}

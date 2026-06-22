@@ -3064,6 +3064,7 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(summary.ok)
         self.assertEqual(len(controller.calls), 3)
         self.assertEqual(controller.calls[2]["override_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(controller.calls[2]["override_source"], "autopilot_commit_skill")
         self.assertEqual(controller.calls[2]["target_count"], 104)
         self.assertEqual(controller.calls[2]["target_item"], "transport-belt")
 
@@ -3113,6 +3114,7 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(summary.ok)
         self.assertEqual(len(controller.calls), 2)
         self.assertEqual(controller.calls[1]["override_skill"], "build_site_input_logistic_line")
+        self.assertEqual(controller.calls[1]["override_source"], "autopilot_commit_skill")
         self.assertEqual(controller.calls[1]["input_item"], "iron-gear-wheel")
 
     def test_modless_strategy_step_accepts_committed_target_metadata(self):
@@ -3483,6 +3485,34 @@ class StallWatchdogTests(unittest.TestCase):
         self.assertEqual(fields["target_item"], "transport-belt")
         self.assertEqual(fields["target_count"], missing + 4)
 
+    def test_stall_recovery_repairs_gear_mall_iron_line_before_more_belt_bootstrap(self):
+        observation = {
+            "inventory": {"transport-belt": 148},
+            "entities": [],
+            "resources": [],
+            "research": {"technologies": {"automation": {"researched": True}}},
+        }
+        iron_issue = {
+            "site_input_status": "route_needed",
+            "transport_belts_available": True,
+            "source_fuel_blocked": False,
+            "source_distance_tiles": 146.6,
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FactorioController(make_test_config(Path(tmp)))
+            with (
+                patch("factorio_ai.strategy._gear_mall_iron_plate_logistics_issue", return_value=iron_issue),
+                patch("factorio_ai.strategy._gear_mall_iron_plate_line_preempts_route_scale", return_value=True),
+            ):
+                skill = controller._stall_recovery_skill(
+                    "launch_rocket_program",
+                    observation,
+                    ["bootstrap_build_item_mall"],
+                )
+
+        self.assertEqual(skill, "build_iron_plate_logistic_line_to_gear_mall")
+
     def test_stall_recovery_repairs_dead_coal_supply_even_if_recent(self):
         observation = {
             "player": {"position": {"x": 80, "y": -20}},
@@ -3689,6 +3719,8 @@ class StallWatchdogTests(unittest.TestCase):
         for cls in (FactorioController, ModlessFactorioController):
             params = inspect.signature(cls.run_strategy_step).parameters
             self.assertIn("override_skill", params, msg=f"{cls.__name__}.run_strategy_step missing override_skill")
+            self.assertIn("override_source", params, msg=f"{cls.__name__}.run_strategy_step missing override_source")
+            self.assertIn("override_reason", params, msg=f"{cls.__name__}.run_strategy_step missing override_reason")
 
     def test_override_skill_bypasses_llm_strategy(self):
         observation = {"tick": 1, "inventory": {}, "entities": [], "resources": [], "research": {"technologies": {}}}
@@ -3711,6 +3743,36 @@ class StallWatchdogTests(unittest.TestCase):
                 summary = controller.run_strategy_step("launch_rocket_program", override_skill="setup_coal_supply")
             self.assertEqual(summary.selected_skill, "setup_coal_supply")
             self.assertEqual(summary.strategy.get("source"), "autopilot_stall_recovery")
+
+    def test_override_skill_records_explicit_source(self):
+        observation = {"tick": 1, "inventory": {}, "entities": [], "resources": [], "research": {"technologies": {}}}
+
+        class FakeController(FactorioController):
+            def observe(self):
+                return observation
+
+            def strategy_decision(self, objective, require_llm=False, skip_remote=False):
+                raise AssertionError("strategy_decision must not run when override_skill is set")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_test_config(Path(tmp))
+            controller = FakeController(cfg)
+            with patch.object(
+                controller,
+                "_run_skill",
+                return_value=RunSummary(True, "forced ok", 1, 5, cfg.log_dir / "x.log", "transport-belt"),
+            ):
+                summary = controller.run_strategy_step(
+                    "launch_rocket_program",
+                    override_skill="bootstrap_build_item_mall",
+                    override_source="autopilot_commit_skill",
+                    override_reason="reusing progressing skill",
+                )
+
+        self.assertEqual(summary.selected_skill, "bootstrap_build_item_mall")
+        self.assertEqual(summary.strategy.get("source"), "autopilot_commit_skill")
+        self.assertEqual(summary.strategy.get("reason"), "reusing progressing skill")
+        self.assertEqual(summary.strategy.get("evidence"), ["autopilot_commit_skill"])
 
 
 if __name__ == "__main__":

@@ -9408,23 +9408,42 @@ def _entity_status_name_in(entity: dict[str, Any], names: set[str]) -> bool:
 
 def _find_iron_plate_logistic_line_to_gear_mall_layout(observation: dict[str, Any]) -> dict[str, Any] | None:
     gear_layout = _find_gear_belt_mall_logistics_layout(observation)
-    if gear_layout is None:
-        return None
-    gear_assembler = gear_layout["gear_assembler"]
-    gear_position = _position(gear_assembler)
     sources = _iron_plate_source_furnaces(observation)
     if not sources:
         return None
+    if gear_layout is not None:
+        gear_assembler = gear_layout["gear_assembler"]
+        belt_assembler = gear_layout.get("belt_assembler")
+        avoid_positions = _gear_mall_output_avoid_positions(gear_layout)
+    else:
+        gear_candidates = [
+            entity
+            for entity in entities_named(observation, "assembling-machine-1")
+            + entities_named(observation, "assembling-machine-2")
+            + entities_named(observation, "assembling-machine-3")
+            if str(entity.get("recipe") or entity.get("recipe_name") or "") == "iron-gear-wheel"
+            and entity.get("electric_network_connected") is not False
+            and not _entity_no_power(entity)
+        ]
+        if not gear_candidates:
+            return None
+        gear_assembler = min(
+            gear_candidates,
+            key=lambda entity: min(distance(_position(entity), _position(source)) for source in sources),
+        )
+        belt_assembler = None
+        avoid_positions = set()
+    gear_position = _position(gear_assembler)
     source = min(sources, key=lambda item: distance(_position(item), gear_position))
     source_position = _position(source)
     source_belt_position = _tile_center_position({"x": source_position["x"] + 2.0, "y": source_position["y"]})
     source_inserter_position = _tile_center_position({"x": source_position["x"] + 1.0, "y": source_position["y"]})
-    avoid_positions = _gear_mall_output_avoid_positions(gear_layout)
     endpoints = _gear_mall_iron_input_endpoints(
         observation,
         source_belt_position,
         gear_assembler,
         avoid_positions=avoid_positions,
+        fast_long_route=gear_layout is None,
     )
     target_belt_position = endpoints["target_belt"]
     target_inserter_position = endpoints["target_inserter"]
@@ -9434,11 +9453,12 @@ def _find_iron_plate_logistic_line_to_gear_mall_layout(observation: dict[str, An
         target_belt_position,
         center_tiles=True,
         avoid_positions=avoid_positions,
+        fast_long_route=gear_layout is None,
     )
     return {
         "source": source,
         "gear_assembler": gear_assembler,
-        "belt_assembler": gear_layout.get("belt_assembler"),
+        "belt_assembler": belt_assembler,
         "segments": segments,
         "source_belt": source_belt_position,
         "target_belt": target_belt_position,
@@ -9473,6 +9493,7 @@ def _gear_mall_iron_input_endpoints(
     gear_assembler: dict[str, Any],
     *,
     avoid_positions: set[tuple[float, float]] | None = None,
+    fast_long_route: bool = False,
 ) -> dict[str, Any]:
     gear_position = _position(gear_assembler)
     avoid = set(avoid_positions or set())
@@ -9522,6 +9543,7 @@ def _gear_mall_iron_input_endpoints(
             candidate["target_belt"],
             center_tiles=True,
             avoid_positions=avoid,
+            fast_long_route=fast_long_route,
         )
         penalty += _iron_plate_line_route_score(observation, segments, avoid_positions=avoid)
         scored.append((penalty, candidate))
@@ -10675,6 +10697,9 @@ def _find_gear_belt_mall_relocation_layout(observation: dict[str, Any]) -> dict[
     gear_assembler = existing_layout.get("gear_assembler")
     belt_assembler = existing_layout.get("belt_assembler")
     if not isinstance(source, dict) or not isinstance(gear_assembler, dict) or not isinstance(belt_assembler, dict):
+        compact_layout = _find_compact_gear_belt_mall_relocation_layout(observation)
+        if compact_layout is not None:
+            return compact_layout
         return _find_partial_gear_belt_mall_relocation_layout(observation)
 
     source_position = _position(source)
@@ -10977,6 +11002,7 @@ def _iron_plate_line_segments(
     start_direction: int | None = None,
     end_direction: int | None = None,
     avoid_positions: set[tuple[float, float]] | None = None,
+    fast_long_route: bool = False,
 ) -> list[dict[str, Any]]:
     start_x = float(start["x"])
     start_y = float(start["y"])
@@ -10986,6 +11012,8 @@ def _iron_plate_line_segments(
         waypoint_candidates = [_role_aware_axis_line_waypoints(start, end, int(start_direction), int(end_direction))]
     else:
         waypoint_candidates = _iron_plate_line_waypoint_candidates(observation, start_x, start_y, end_x, end_y)
+    if fast_long_route and abs(start_x - end_x) + abs(start_y - end_y) >= 96.0 and waypoint_candidates:
+        return _iron_plate_segments_from_waypoints(observation, waypoint_candidates[0], center_tiles=center_tiles)
 
     scored: list[tuple[float, list[dict[str, Any]]]] = []
     avoid = set(avoid_positions or set())

@@ -1298,7 +1298,7 @@ def reconcile_strategy_decision(
         return adjusted
     if (
         boiler_feed_route_scale_mall_issue is not None
-        and electric_drill_upgrade_target is None
+        and _electric_drill_target_allows_boiler_feed_bootstrap(electric_drill_upgrade_target)
         and selected in GEAR_BELT_MALL_TRANSFER_LOGISTICS_PREEMPT_SKILLS
     ):
         return _boiler_feed_route_scale_mall_guardrail_adjustment(
@@ -1306,17 +1306,21 @@ def reconcile_strategy_decision(
             selected,
             boiler_feed_route_scale_mall_issue,
         )
-    if boiler_feed_belt_shortfall is not None and electric_drill_upgrade_target is None and selected in {
-        "plan_factory_site",
-        "connect_coal_fuel_feed",
-        "setup_power",
-        "setup_coal_supply",
-        "expand_copper_smelting",
-        "build_gear_belt_mall_logistics",
-        "build_iron_plate_logistic_line_to_gear_mall",
-        "bootstrap_build_item_mall",
-        "research_logistics",
-    }:
+    if (
+        boiler_feed_belt_shortfall is not None
+        and _electric_drill_target_allows_boiler_feed_bootstrap(electric_drill_upgrade_target)
+        and selected in {
+            "plan_factory_site",
+            "connect_coal_fuel_feed",
+            "setup_power",
+            "setup_coal_supply",
+            "expand_copper_smelting",
+            "build_gear_belt_mall_logistics",
+            "build_iron_plate_logistic_line_to_gear_mall",
+            "bootstrap_build_item_mall",
+            "research_logistics",
+        }
+    ):
         return _boiler_feed_belt_shortfall_guardrail_adjustment(
             decision,
             selected,
@@ -1878,18 +1882,18 @@ def reconcile_strategy_decision(
             and readiness.bootstrap_seed_allowed
         )
         and selected in {
-        "plan_factory_site",
-        "produce_electronic_circuit",
-        "automate_electronic_circuit_line",
-        "bootstrap_build_item_mall",
-        "bootstrap_power_pole_mall",
-        "build_iron_plate_logistic_line_to_gear_mall",
-        "relocate_gear_belt_mall_to_iron_source",
-        "research_logistics",
-        "research_electric_mining_drill",
-        "bootstrap_electric_mining_drill_mall",
-        "produce_automation_science_pack",
-        "build_site_input_logistic_line",
+            "plan_factory_site",
+            "produce_electronic_circuit",
+            "automate_electronic_circuit_line",
+            "bootstrap_build_item_mall",
+            "bootstrap_power_pole_mall",
+            "build_iron_plate_logistic_line_to_gear_mall",
+            "relocate_gear_belt_mall_to_iron_source",
+            "research_logistics",
+            "research_electric_mining_drill",
+            "bootstrap_electric_mining_drill_mall",
+            "produce_automation_science_pack",
+            "build_site_input_logistic_line",
         }
     ):
         adjusted = dict(decision)
@@ -2797,16 +2801,6 @@ def _heuristic_strategy_impl(
     bottlenecks = monitor.get("bottlenecks") if isinstance(monitor.get("bottlenecks"), list) else []
     power_issue = _first_power_issue(monitor)
     threats = make_threat_context(observation)
-    layout = make_layout_improvement_context(observation, selected_improvement_site=selected_improvement_site)
-    layout_issues = layout.get("issues") if isinstance(layout.get("issues"), list) else []
-    layout_opportunities = layout.get("opportunities") if isinstance(layout.get("opportunities"), list) else []
-    top_layout_item = _top_layout_item(layout_issues, layout_opportunities, observation)
-    automation_logistics_issue = _first_automation_logistics_issue(layout_issues)
-    missing_input_source_issue = _site_input_missing_source_issue(observation, layout_issues)
-    site_input_line_issue = _site_input_line_issue(observation, layout_issues) or _executable_site_input_line_issue(observation)
-    if site_input_line_issue is not None and _site_input_line_issue_satisfied(observation, site_input_line_issue):
-        site_input_line_issue = None
-    layout_build_item_shortage = _layout_unlocked_build_item_shortage(layout)
     gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
     critical_factory_power_issue = _critical_factory_power_issue(observation)
     gear_belt_mall_power_issue = _gear_belt_mall_power_issue(observation)
@@ -2846,7 +2840,10 @@ def _heuristic_strategy_impl(
     if gear_belt_mall_transfer_logistics_issue is not None:
         return _gear_belt_mall_transfer_logistics_strategy_decision(gear_belt_mall_transfer_logistics_issue)
     boiler_feed_route_scale_mall_issue = _boiler_feed_route_scale_mall_issue(observation)
-    if boiler_feed_route_scale_mall_issue is not None and electric_drill_upgrade_target is None:
+    if (
+        boiler_feed_route_scale_mall_issue is not None
+        and _electric_drill_target_allows_boiler_feed_bootstrap(electric_drill_upgrade_target)
+    ):
         return _boiler_feed_route_scale_mall_strategy_decision(boiler_feed_route_scale_mall_issue)
 
     if _gear_mall_iron_plate_preempts_expansion(gear_mall_iron_plate_issue):
@@ -2887,7 +2884,10 @@ def _heuristic_strategy_impl(
         ).to_dict()
 
     boiler_feed_belt_shortfall = _boiler_feed_belt_shortfall_issue(observation)
-    if boiler_feed_belt_shortfall is not None and electric_drill_upgrade_target is None:
+    if (
+        boiler_feed_belt_shortfall is not None
+        and _electric_drill_target_allows_boiler_feed_bootstrap(electric_drill_upgrade_target)
+    ):
         return _boiler_feed_belt_shortfall_strategy_decision(boiler_feed_belt_shortfall)
 
     if _coal_fuel_feed_needed(observation, objective, production_targets, monitor=monitor):
@@ -2917,6 +2917,17 @@ def _heuristic_strategy_impl(
                 blockers=["coal fuel feed route"],
                 expected_effect="Build belt/inserter fuel feed from the coal supply belt to the nearby burner consumer.",
             ).to_dict()
+
+    layout = make_layout_improvement_context(observation, selected_improvement_site=selected_improvement_site)
+    layout_issues = layout.get("issues") if isinstance(layout.get("issues"), list) else []
+    layout_opportunities = layout.get("opportunities") if isinstance(layout.get("opportunities"), list) else []
+    top_layout_item = _top_layout_item(layout_issues, layout_opportunities, observation)
+    automation_logistics_issue = _first_automation_logistics_issue(layout_issues)
+    missing_input_source_issue = _site_input_missing_source_issue(observation, layout_issues)
+    site_input_line_issue = _site_input_line_issue(observation, layout_issues) or _executable_site_input_line_issue(observation)
+    if site_input_line_issue is not None and _site_input_line_issue_satisfied(observation, site_input_line_issue):
+        site_input_line_issue = None
+    layout_build_item_shortage = _layout_unlocked_build_item_shortage(layout)
 
     relocation_power_pole_deficit = _gear_mall_relocation_power_pole_deficit(gear_mall_iron_plate_issue, observation)
     gear_mall_route_needs_compaction = _gear_mall_plate_route_needs_compaction(gear_mall_iron_plate_issue)
@@ -3634,6 +3645,10 @@ def _construction_belt_bootstrap_target(observation: dict[str, Any]) -> int:
     if _boiler_coal_feed_active(observation):
         return 20
     missing_boiler_route_belts = _boiler_coal_feed_missing_belt_count(observation)
+    return _construction_belt_bootstrap_target_from_missing(observation, missing_boiler_route_belts)
+
+
+def _construction_belt_bootstrap_target_from_missing(observation: dict[str, Any], missing_boiler_route_belts: int) -> int:
     if missing_boiler_route_belts <= 0:
         return 20
     if (
@@ -3642,6 +3657,10 @@ def _construction_belt_bootstrap_target(observation: dict[str, Any]) -> int:
     ):
         return BOOTSTRAP_TRANSPORT_BELT_SEED_TARGET_CAP
     return max(20, missing_boiler_route_belts + 4)
+
+
+def _electric_drill_target_allows_boiler_feed_bootstrap(target: str | None) -> bool:
+    return target is None or target == "plan_factory_site"
 
 
 def _boiler_feed_belt_shortfall_issue(observation: dict[str, Any]) -> dict[str, int] | None:
@@ -3655,7 +3674,7 @@ def _boiler_feed_belt_shortfall_issue(observation: dict[str, Any]) -> dict[str, 
         return None
     if not _transport_belt_automation_ready(observation):
         return None
-    target_count = _construction_belt_bootstrap_target(observation)
+    target_count = _construction_belt_bootstrap_target_from_missing(observation, missing)
     if available >= target_count:
         return None
     return {
@@ -3696,6 +3715,7 @@ def _boiler_feed_route_scale_mall_issue(observation: dict[str, Any]) -> dict[str
     missing = _boiler_coal_feed_missing_belt_count(observation)
     if missing <= BOOTSTRAP_TRANSPORT_BELT_SEED_TARGET_CAP:
         return None
+    target_count = _construction_belt_bootstrap_target_from_missing(observation, missing)
     available = total_item_count(observation, "transport-belt")
     if available >= missing:
         return None
@@ -3724,7 +3744,7 @@ def _boiler_feed_route_scale_mall_issue(observation: dict[str, Any]) -> dict[str
         return {
             "missing": missing,
             "available": available,
-            "target_count": _construction_belt_bootstrap_target(observation),
+            "target_count": target_count,
             "gear_unit": gear_assembler.get("unit_number"),
             "belt_unit": belt_assembler.get("unit_number"),
             "direct_transfer_ready": False,
@@ -3744,7 +3764,7 @@ def _boiler_feed_route_scale_mall_issue(observation: dict[str, Any]) -> dict[str
     return {
         "missing": missing,
         "available": available,
-        "target_count": _construction_belt_bootstrap_target(observation),
+        "target_count": target_count,
         "gear_unit": gear_assembler.get("unit_number"),
         "belt_unit": belt_assembler.get("unit_number"),
         "direct_transfer_ready": _mall_inserter_spec_ready(direct_transfer),
@@ -3864,7 +3884,7 @@ def _boiler_feed_route_scale_mall_guardrail_adjustment(
 
 def _boiler_feed_route_scale_mall_strategy_decision(issue: dict[str, Any]) -> dict[str, Any]:
     repair_skill = str(issue.get("repair_skill") or "build_gear_belt_mall_logistics")
-    return StrategicDecision(
+    decision = StrategicDecision(
         selected_skill=repair_skill,
         priority=94,
         reason=(
@@ -3878,6 +3898,10 @@ def _boiler_feed_route_scale_mall_strategy_decision(issue: dict[str, Any]) -> di
             "long boiler feed route."
         ),
     ).to_dict()
+    if repair_skill == "bootstrap_build_item_mall":
+        decision["target_item"] = "transport-belt"
+        decision["target_count"] = _positive_int_or_none(issue.get("target_count")) or BOOTSTRAP_TRANSPORT_BELT_SEED_TARGET_CAP
+    return decision
 
 
 def _boiler_feed_route_scale_mall_evidence(selected: str, issue: dict[str, Any]) -> list[str]:
@@ -5515,11 +5539,7 @@ def _gear_mall_iron_plate_guardrail_adjustment(
     issue: dict[str, Any],
 ) -> dict[str, Any]:
     adjusted = dict(decision)
-    target_skill = (
-        "build_iron_plate_logistic_line_to_gear_mall"
-        if issue.get("gear_belt_logistics_pair_exists") is not False
-        else "bootstrap_build_item_mall"
-    )
+    target_skill = _gear_mall_iron_plate_target_skill(issue)
     adjusted["selected_skill"] = target_skill
     adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 92)
     original_reason = str(decision.get("reason") or "").strip()
@@ -5539,6 +5559,7 @@ def _gear_mall_iron_plate_guardrail_adjustment(
         f"source_status={issue.get('source_status')}",
         f"source_fuel_blocked={str(issue.get('source_fuel_blocked')).lower()}",
         f"transport_belts_available_for_mall_logistics={str(issue.get('transport_belts_available')).lower()}",
+        f"gear_belt_logistics_pair_exists={str(issue.get('gear_belt_logistics_pair_exists')).lower()}",
         f"gear_mall_iron_route_missing_belts={issue.get('iron_route_missing_belts')}",
         f"site_input_status={issue.get('site_input_status', 'route_needed')}",
         "gear_handcraft_blocked=true",
@@ -5556,11 +5577,7 @@ def _gear_mall_iron_plate_guardrail_adjustment(
 
 
 def _gear_mall_iron_plate_strategy_decision(issue: dict[str, Any]) -> dict[str, Any]:
-    target_skill = (
-        "build_iron_plate_logistic_line_to_gear_mall"
-        if issue.get("gear_belt_logistics_pair_exists") is not False
-        else "bootstrap_build_item_mall"
-    )
+    target_skill = _gear_mall_iron_plate_target_skill(issue)
     return StrategicDecision(
         selected_skill=target_skill,
         priority=92,
@@ -5576,6 +5593,7 @@ def _gear_mall_iron_plate_strategy_decision(issue: dict[str, Any]) -> dict[str, 
             f"gear_assembler_status={issue.get('gear_assembler_status')}",
             f"source_status={issue.get('source_status')}",
             f"transport_belts_available_for_mall_logistics={str(issue.get('transport_belts_available')).lower()}",
+            f"gear_belt_logistics_pair_exists={str(issue.get('gear_belt_logistics_pair_exists')).lower()}",
             f"gear_mall_iron_route_missing_belts={issue.get('iron_route_missing_belts')}",
             f"site_input_status={issue.get('site_input_status', 'route_needed')}",
             "gear_handcraft_blocked=true",
@@ -5586,6 +5604,27 @@ def _gear_mall_iron_plate_strategy_decision(issue: dict[str, Any]) -> dict[str, 
             "manual plate transfers."
         ),
     ).to_dict()
+
+
+def _gear_mall_iron_plate_target_skill(issue: dict[str, Any]) -> str:
+    if issue.get("gear_belt_logistics_pair_exists") is not False:
+        return "build_iron_plate_logistic_line_to_gear_mall"
+    return "bootstrap_build_item_mall"
+
+
+def _gear_mall_iron_plate_line_preempts_route_scale(issue: dict[str, Any] | None) -> bool:
+    if not isinstance(issue, dict):
+        return False
+    try:
+        source_distance = float(issue.get("source_distance_tiles") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return (
+        source_distance >= 64.0
+        and issue.get("site_input_status") == "route_needed"
+        and bool(issue.get("transport_belts_available"))
+        and not bool(issue.get("source_fuel_blocked"))
+    )
 
 
 def _belt_mall_missing_before_relocation_adjustment(
