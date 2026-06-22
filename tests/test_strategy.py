@@ -705,6 +705,7 @@ class StrategyTests(unittest.TestCase):
         )
 
         self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
+        self.assertEqual(result["target_count"], 18)
         self.assertIn("electronic circuit production for electric mining drills", result["blockers"])
         self.assertIn("electric_drill_recipe_requires_electronic_circuit=3", result["evidence"])
 
@@ -4353,9 +4354,75 @@ class StrategyTests(unittest.TestCase):
         )
 
         self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
+        self.assertEqual(result["target_count"], 18)
         self.assertEqual(result["guardrail_adjusted"]["from"], "setup_stone_supply")
         self.assertIn("electronic circuit production for electric mining drills", result["blockers"])
         self.assertIn("burner_drills_bootstrap_only=true", result["evidence"])
+
+    def test_reconcile_caps_matching_circuit_line_target_for_electric_drill_dependency(self):
+        observation = burner_drill_replacement_observation(electric_researched=True)
+        observation["research"]["technologies"]["logistics"] = {"researched": True}
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "automate_electronic_circuit_line",
+                "target_count": 50,
+                "priority": 82,
+                "reason": "Build green circuits.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
+        self.assertEqual(result["target_count"], 18)
+        self.assertIn("electric_drill_dependency_target_count=18", result["evidence"])
+
+    def test_electric_drill_dependency_preempts_boiler_belt_stockpiling(self):
+        observation = burner_drill_replacement_observation(electric_researched=True)
+        observation["research"]["technologies"]["logistics"] = {"researched": True}
+        belt_issue = {"missing": 242, "available": 27, "target_count": 40}
+        route_issue = {
+            "missing": 242,
+            "available": 27,
+            "target_count": 40,
+            "gear_unit": 107,
+            "belt_unit": 110,
+            "direct_transfer_ready": False,
+            "direct_transfer_blocked": False,
+            "missing_transfer_belts": None,
+            "gear_belt_logistics_pair_exists": False,
+            "repair_skill": "bootstrap_build_item_mall",
+        }
+
+        with (
+            patch("factorio_ai.strategy._boiler_feed_belt_shortfall_issue", return_value=belt_issue),
+            patch("factorio_ai.strategy._boiler_feed_route_scale_mall_issue", return_value=route_issue),
+            patch("factorio_ai.strategy._power_or_fuel_recovery_target_before_electric_work", return_value=None),
+        ):
+            heuristic = heuristic_strategy("launch_rocket_program", observation)
+            reconciled = reconcile_strategy_decision(
+                {
+                    "selected_skill": "setup_stone_supply",
+                    "priority": 82,
+                    "reason": "Add more burner stone throughput.",
+                    "evidence": [],
+                    "blockers": [],
+                    "expected_effect": "",
+                    "source": "llm",
+                },
+                "launch_rocket_program",
+                observation,
+            )
+
+        for result in (heuristic, reconciled):
+            self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
+            self.assertEqual(result["target_count"], 18)
+            self.assertNotIn("boiler coal feed construction belts", result["blockers"])
 
     def test_reconcile_promotes_layout_planning_to_active_logistics_without_heuristic_hint(self):
         result = reconcile_strategy_decision(

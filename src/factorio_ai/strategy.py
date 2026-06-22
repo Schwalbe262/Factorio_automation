@@ -49,6 +49,8 @@ BUILD_ITEM_MALL_ITEMS = [
     "assembling-machine-1",
 ]
 GEAR_MALL_OUTPUT_LOGISTICS_STOCK_TARGET = 20
+ELECTRIC_MINING_DRILL_MALL_TARGET = 6
+ELECTRIC_MINING_DRILL_CIRCUIT_PREREQ_TARGET = 3 * ELECTRIC_MINING_DRILL_MALL_TARGET
 PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT = 128.0
 SMALL_POWER_POLE_REACH = 7.5
 GEAR_MALL_RELOCATION_FIXED_COST = 18.0
@@ -1027,6 +1029,14 @@ def _electric_drill_dependency_active_skill(
     return skill or None
 
 
+def _electric_drill_dependency_target_count(skill: str | None) -> int | None:
+    if skill == "automate_electronic_circuit_line":
+        return ELECTRIC_MINING_DRILL_CIRCUIT_PREREQ_TARGET
+    if skill == "bootstrap_electric_mining_drill_mall":
+        return ELECTRIC_MINING_DRILL_MALL_TARGET
+    return None
+
+
 def make_technology_dependency_context(observation: dict[str, Any]) -> dict[str, Any]:
     electric_drill_issue = _burner_drill_replacement_issue(observation)
     electric_milestones = _electric_drill_dependency_milestones(observation, electric_drill_issue)
@@ -1217,6 +1227,8 @@ def reconcile_strategy_decision(
     boiler_feed_belt_shortfall = _boiler_feed_belt_shortfall_issue(observation)
     boiler_feed_route_scale_mall_issue = _boiler_feed_route_scale_mall_issue(observation)
     gear_mall_iron_plate_issue = _gear_mall_iron_plate_logistics_issue(observation)
+    burner_drill_replacement_issue = _burner_drill_replacement_issue(observation)
+    electric_drill_upgrade_target = _electric_drill_dependency_active_skill(observation, burner_drill_replacement_issue)
     rocket_objective = _is_rocket_objective(objective)
     remote_guardrail = decision.get("guardrail_adjusted") if isinstance(decision.get("guardrail_adjusted"), dict) else {}
     if remote_guardrail.get("from") == "plan_factory_site" and selected == remote_guardrail.get("to"):
@@ -1286,6 +1298,7 @@ def reconcile_strategy_decision(
         return adjusted
     if (
         boiler_feed_route_scale_mall_issue is not None
+        and electric_drill_upgrade_target is None
         and selected in GEAR_BELT_MALL_TRANSFER_LOGISTICS_PREEMPT_SKILLS
     ):
         return _boiler_feed_route_scale_mall_guardrail_adjustment(
@@ -1293,7 +1306,7 @@ def reconcile_strategy_decision(
             selected,
             boiler_feed_route_scale_mall_issue,
         )
-    if boiler_feed_belt_shortfall is not None and selected in {
+    if boiler_feed_belt_shortfall is not None and electric_drill_upgrade_target is None and selected in {
         "plan_factory_site",
         "connect_coal_fuel_feed",
         "setup_power",
@@ -2459,6 +2472,14 @@ def reconcile_strategy_decision(
         "expand_copper_smelting",
     }:
         target_skill = _electric_drill_dependency_active_skill(observation, burner_drill_replacement_issue)
+        dependency_target_count = _electric_drill_dependency_target_count(target_skill)
+        if target_skill is not None and selected == target_skill and dependency_target_count is not None:
+            adjusted = dict(decision)
+            adjusted["target_count"] = dependency_target_count
+            adjusted["evidence"] = _string_list(decision.get("evidence")) + [
+                f"electric_drill_dependency_target_count={dependency_target_count}",
+            ]
+            decision = adjusted
         if target_skill is not None and selected != target_skill:
             power_recovery = _power_or_fuel_recovery_target_before_electric_work(
                 observation,
@@ -2478,10 +2499,17 @@ def reconcile_strategy_decision(
                 recovery_evidence = []
             adjusted = dict(decision)
             adjusted["selected_skill"] = target_skill
+            if dependency_target_count is not None:
+                adjusted["target_count"] = dependency_target_count
             adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 90)
             original_reason = str(decision.get("reason") or "").strip()
             adjusted["reason"] = f"{guardrail_reason} {original_reason}".strip()
             adjusted["blockers"] = sorted(set(_string_list(decision.get("blockers")) + blockers))
+            dependency_target_evidence = (
+                [f"electric_drill_dependency_target_count={dependency_target_count}"]
+                if dependency_target_count is not None
+                else []
+            )
             adjusted["evidence"] = _string_list(decision.get("evidence")) + [
                 f"guardrail_adjusted_from={selected}",
                 f"burner_mining_drill_count={burner_drill_replacement_issue.get('burner_drill_count')}",
@@ -2495,6 +2523,7 @@ def reconcile_strategy_decision(
                     f"{str(bool(burner_drill_replacement_issue.get('electric_drill_research_supply_ready'))).lower()}"
                 ),
                 "burner_drills_bootstrap_only=true",
+                *dependency_target_evidence,
                 *recovery_evidence,
             ]
             adjusted["expected_effect"] = expected_effect
@@ -2589,6 +2618,7 @@ def reconcile_strategy_decision(
     ):
         adjusted = dict(decision)
         adjusted["selected_skill"] = "research_logistics"
+        adjusted.pop("target_count", None)
         adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 91)
         original_reason = str(decision.get("reason") or "").strip()
         guardrail_reason = (
@@ -2620,6 +2650,7 @@ def reconcile_strategy_decision(
     ):
         adjusted = dict(decision)
         adjusted["selected_skill"] = "research_logistics"
+        adjusted.pop("target_count", None)
         adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 89)
         original_reason = str(decision.get("reason") or "").strip()
         guardrail_reason = (
@@ -2777,6 +2808,7 @@ def _heuristic_strategy_impl(
     readiness = build_factory_readiness(observation)
     gear_mall_output_logistics_issue = _gear_mall_output_logistics_issue(observation)
     burner_drill_replacement_issue = _burner_drill_replacement_issue(observation)
+    electric_drill_upgrade_target = _electric_drill_dependency_active_skill(observation, burner_drill_replacement_issue)
     if threats["danger_level"] in {"critical", "high"} and int(threats.get("armed_gun_turret_count") or 0) <= 0:
         nearest = threats.get("nearest_enemy") if isinstance(threats.get("nearest_enemy"), dict) else {}
         return StrategicDecision(
@@ -2808,7 +2840,7 @@ def _heuristic_strategy_impl(
     if gear_belt_mall_transfer_logistics_issue is not None:
         return _gear_belt_mall_transfer_logistics_strategy_decision(gear_belt_mall_transfer_logistics_issue)
     boiler_feed_route_scale_mall_issue = _boiler_feed_route_scale_mall_issue(observation)
-    if boiler_feed_route_scale_mall_issue is not None:
+    if boiler_feed_route_scale_mall_issue is not None and electric_drill_upgrade_target is None:
         return _boiler_feed_route_scale_mall_strategy_decision(boiler_feed_route_scale_mall_issue)
 
     if _gear_mall_iron_plate_preempts_expansion(gear_mall_iron_plate_issue):
@@ -2845,7 +2877,7 @@ def _heuristic_strategy_impl(
         ).to_dict()
 
     boiler_feed_belt_shortfall = _boiler_feed_belt_shortfall_issue(observation)
-    if boiler_feed_belt_shortfall is not None:
+    if boiler_feed_belt_shortfall is not None and electric_drill_upgrade_target is None:
         return _boiler_feed_belt_shortfall_strategy_decision(boiler_feed_belt_shortfall)
 
     if _coal_fuel_feed_needed(observation, objective, production_targets, monitor=monitor):
@@ -3109,7 +3141,6 @@ def _heuristic_strategy_impl(
     if automation_researched and site_input_line_issue is not None:
         return _site_input_line_strategy_decision(observation, site_input_line_issue)
 
-    electric_drill_upgrade_target = _electric_drill_dependency_active_skill(observation, burner_drill_replacement_issue)
     if electric_drill_upgrade_target == "produce_automation_science_pack":
         return StrategicDecision(
             selected_skill="produce_automation_science_pack",
@@ -3150,7 +3181,7 @@ def _heuristic_strategy_impl(
         ).to_dict()
 
     if electric_drill_upgrade_target == "automate_electronic_circuit_line":
-        return StrategicDecision(
+        decision = StrategicDecision(
             selected_skill="automate_electronic_circuit_line",
             priority=90,
             reason=(
@@ -3170,6 +3201,8 @@ def _heuristic_strategy_impl(
             blockers=["electronic circuit production for electric mining drills"],
             expected_effect="Build recurring electronic-circuit output so electric mining drills can be produced by assembler.",
         ).to_dict()
+        decision["target_count"] = ELECTRIC_MINING_DRILL_CIRCUIT_PREREQ_TARGET
+        return decision
 
     if electric_drill_upgrade_target == "bootstrap_electric_mining_drill_mall":
         return StrategicDecision(
@@ -3779,10 +3812,7 @@ def _boiler_feed_route_scale_mall_guardrail_adjustment(
     adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 94)
     if repair_skill == "bootstrap_build_item_mall":
         adjusted["target_item"] = "transport-belt"
-        adjusted["target_count"] = max(
-            _positive_int_or_none(decision.get("target_count")) or 0,
-            _positive_int_or_none(issue.get("target_count")) or BOOTSTRAP_TRANSPORT_BELT_SEED_TARGET_CAP,
-        )
+        adjusted["target_count"] = _positive_int_or_none(issue.get("target_count")) or BOOTSTRAP_TRANSPORT_BELT_SEED_TARGET_CAP
     original_reason = str(decision.get("reason") or "").strip()
     if repair_skill == "bootstrap_build_item_mall":
         guardrail_reason = (

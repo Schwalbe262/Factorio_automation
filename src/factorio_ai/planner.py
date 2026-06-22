@@ -12773,6 +12773,33 @@ class CircuitAutomationSkill:
 
         if item == "iron-gear-wheel":
             if _gear_handcraft_automation_context_active(observation):
+                target_position = reference_position or player
+                gear_chest = _nearest_buffered_chest_item_source(observation, "iron-gear-wheel", target_position)
+                gear_chest_count = entity_item_count(gear_chest, "iron-gear-wheel") if isinstance(gear_chest, dict) else 0
+                missing_gears = max(0, quantity - inventory_count(observation, "iron-gear-wheel"))
+                if (
+                    isinstance(gear_chest, dict)
+                    and gear_chest_count > 0
+                    and missing_gears > 0
+                    and distance(_position(gear_chest), target_position) <= 10.0
+                ):
+                    gear_chest_position = _position(gear_chest)
+                    if distance(player, gear_chest_position) > 20:
+                        return PlannerDecision(
+                            {"type": "move_to", "position": gear_chest_position},
+                            "move near chest-buffered gears for circuit automation bootstrap",
+                        )
+                    return PlannerDecision(
+                        {
+                            "type": "take",
+                            "item": "iron-gear-wheel",
+                            "count": min(gear_chest_count, missing_gears),
+                            "unit_number": gear_chest.get("unit_number"),
+                            "name": gear_chest.get("name") or "wooden-chest",
+                            "position": gear_chest_position,
+                        },
+                        "take chest-buffered gears for circuit automation bootstrap",
+                    )
                 decision = BuildItemMallSkill("iron-gear-wheel", max(quantity, 4)).next_action(
                     observation,
                     reference_position=reference_position,

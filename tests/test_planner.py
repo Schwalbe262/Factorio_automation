@@ -7087,6 +7087,31 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "wait")
         self.assertIn("refusing player collection of iron gear wheels", decision.reason)
 
+    def test_circuit_automation_takes_buffered_gears_for_assembler_bootstrap(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {
+            "electronic-circuit": 6,
+            "iron-plate": 18,
+            "inserter": 1,
+        }
+        obs["entities"].extend(gear_belt_mall_entities())
+        obs["entities"].append(
+            {
+                "name": "wooden-chest",
+                "unit_number": 939,
+                "position": {"x": 5, "y": 2},
+                "distance": 5,
+                "inventories": {"1": {"iron-gear-wheel": 12}},
+            }
+        )
+
+        decision = CircuitAutomationSkill(target_count=18).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 939)
+        self.assertIn("circuit automation bootstrap", decision.reason)
+
     def test_circuit_automation_uses_inserter_mall_instead_of_handcrafting_inserter(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"iron-plate": 8, "electronic-circuit": 2}
