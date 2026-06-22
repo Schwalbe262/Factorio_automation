@@ -14671,6 +14671,16 @@ class BuildItemMallSkill:
                     )
                     if not logistics_decision.done:
                         return logistics_decision
+                    source_recovery = self._gear_site_input_source_recovery_decision(
+                        observation,
+                        logistics_layout,
+                        target_count,
+                        allow_existing_remote=allow_existing_remote,
+                        reference_position=reference_position,
+                        consumer_label=f"{self.target_item} consumer",
+                    )
+                    if source_recovery is not None:
+                        return source_recovery
                     return PlannerDecision(
                         {"type": "wait", "ticks": 300},
                         f"wait for iron gear wheel site input logistics to feed {self.target_item} consumer",
@@ -14987,6 +14997,38 @@ class BuildItemMallSkill:
         if decision.action is None and "no executable repeated site input logistics route was found" in decision.reason:
             return None
         return decision
+
+    def _gear_site_input_source_recovery_decision(
+        self,
+        observation: dict[str, Any],
+        logistics_layout: dict[str, Any],
+        quantity: int,
+        *,
+        allow_existing_remote: bool,
+        reference_position: dict[str, float] | None,
+        consumer_label: str,
+    ) -> PlannerDecision | None:
+        source = logistics_layout.get("source") if isinstance(logistics_layout.get("source"), dict) else None
+        if source is None or entity_item_count(source, "iron-gear-wheel") > 0:
+            return None
+        source_position = _position(source)
+        decision = BuildItemMallSkill("iron-gear-wheel", max(quantity, 4)).next_action(
+            observation,
+            allow_existing_remote=allow_existing_remote,
+            reference_position=source_position if reference_position is not None else None,
+        )
+        if decision.done:
+            return None
+        metadata = dict(decision.metadata)
+        metadata.setdefault("failure_root", "site_input_source_starved")
+        metadata.setdefault("repair_skill", "bootstrap_build_item_mall")
+        metadata.setdefault("target_item", "iron-gear-wheel")
+        return PlannerDecision(
+            decision.action,
+            f"{decision.reason} before waiting for iron gear wheel site input logistics to feed {consumer_label}",
+            done=decision.done,
+            metadata=metadata,
+        )
 
     def _power_corridor_repair_decision(
         self,
@@ -15333,6 +15375,16 @@ class BuildItemMallSkill:
                             )
                             if not logistics_decision.done:
                                 return logistics_decision
+                            source_recovery = self._gear_site_input_source_recovery_decision(
+                                observation,
+                                logistics_layout,
+                                quantity,
+                                allow_existing_remote=allow_existing_remote,
+                                reference_position=reference_position,
+                                consumer_label=f"{self.target_item} assembler",
+                            )
+                            if source_recovery is not None:
+                                return source_recovery
                             return PlannerDecision(
                                 {"type": "wait", "ticks": 300},
                                 f"wait for iron gear wheel site input logistics to feed {self.target_item} assembler",

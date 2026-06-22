@@ -1,10 +1,11 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor gate ready, vLLM `QuantTrio/Qwen3.6-27B-AWQ` service id `13039`, autopilot PID `6388` still on pre-Part195 code until restarted.
-- Part194 `81068cc` routed endpoint/direct-transfer inserter shortages through `BuildItemMallSkill("inserter")` only when a regular inserter mall path exists.
-- Live Part194 effect: Qwen resumed after one transient `remote_unavailable`; gear/belt skill crafted circuits (`electronic-circuit` reached 7) instead of failing on missing inserter.
-- New live blocker: gear/belt skill now yields `wait for iron gear wheel site input logistics to feed inserter assembler`, but readiness guardrail can reselect gear/belt and starve that prerequisite.
-- Part195 local fix: autopilot commit graph parses site-input wait-yield reasons and commits the next cycle to `build_site_input_logistic_line` with the parsed `input_item`.
-- Validation Part195: new controller regression OK; `tests.test_controller` 92 OK; `tests.test_strategy tests.test_planner` 619 OK; full discover 1212 OK with existing `controller.py:1277` ResourceWarning.
-- Token samples: Part194 `30,045,167`; Part195 `30,264,676` absolute; weekly quota unavailable; direct sqlite usage record still blocked by malformed Codex state DB.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor gate ready, vLLM `QuantTrio/Qwen3.6-27B-AWQ` service id `13039`, autopilot PID `64764` still on pre-Part196 planner until restarted.
+- Part194 `81068cc` routed inserter shortages through inserter mall repair; live effect: circuits reached 7 instead of failing on missing inserter.
+- Part195 `32b3127` commits wait-yielded site-input prerequisites to `build_site_input_logistic_line(input_item=...)`; live effect: `iron-gear-wheel` site-input line completed.
+- New live blocker: completed gear site-input line still did not move gears because source gear assembler unit 424 had 0 gears/0 plates; downstream waited forever.
+- Part196 local fix: `BuildItemMallSkill` now treats completed gear site-input with empty source as `site_input_source_starved` and repairs `iron-gear-wheel` mall before waiting.
+- Live Part196 direct smoke: gear/belt now returns `insert iron-plate` into gear assembler unit 424 with repair `bootstrap_build_item_mall`, target `iron-gear-wheel`.
+- Validation Part196: new planner regression OK; `tests.test_planner` 453 OK; `tests.test_controller tests.test_strategy` 259 OK; full discover 1213 OK with existing `controller.py:1277` ResourceWarning.
+- Token samples: Part194 `30,045,167`; Part195 `30,264,676`; Part196 `30,371,260` absolute; weekly quota unavailable; Codex sqlite usage DB malformed.
 - Dirty archives: `note.md`/`insight.md` have large append-only changes; avoid staging wholesale unless doing a dedicated archive commit.
-- Next work: commit/push Part195, restart autopilot, then confirm the next cycle runs `build_site_input_logistic_line(input_item=iron-gear-wheel)` before returning to gear/belt logistics.
+- Next work: commit/push Part196, restart autopilot, then confirm it inserts plates into unit 424 and resumes inserter/gear-belt logistics.

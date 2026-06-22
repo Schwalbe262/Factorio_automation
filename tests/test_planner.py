@@ -8465,6 +8465,87 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 910)
         self.assertIn("insert iron-plate into iron-gear-wheel mall assembler", decision.reason)
 
+    def test_build_item_mall_recovers_empty_gear_site_input_source_before_waiting(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 10, "transport-belt": 10}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 910,
+                    "position": {"x": 2, "y": 2},
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"1": {}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 990,
+                    "position": {"x": 8, "y": 2},
+                    "recipe": "inserter",
+                    "electric_network_connected": True,
+                    "inventories": {"2": {"electronic-circuit": 4, "iron-plate": 3}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 989,
+                    "position": {"x": 12, "y": 2},
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"transport-belt": 8}},
+                },
+            ]
+        )
+        layout = planner_module._find_site_input_logistic_line_layout(obs, item="iron-gear-wheel")
+        self.assertIsNotNone(layout)
+        unit_number = 991
+        for segment in layout["segments"]:
+            belt = {
+                "name": "transport-belt",
+                "unit_number": unit_number,
+                "position": segment["position"],
+                "direction": segment["direction"],
+                "inventories": {},
+            }
+            segment["entity"] = belt
+            obs["entities"].append(belt)
+            unit_number += 1
+        source_inserter = {
+            "name": "inserter",
+            "unit_number": unit_number,
+            "position": layout["source_inserter"]["position"],
+            "direction": layout["source_inserter"]["direction"],
+            "electric_network_connected": True,
+            "inventories": {},
+        }
+        target_inserter = {
+            "name": "inserter",
+            "unit_number": unit_number + 1,
+            "position": layout["target_inserter"]["position"],
+            "direction": layout["target_inserter"]["direction"],
+            "electric_network_connected": True,
+            "inventories": {},
+        }
+        layout["source_inserter"]["entity"] = source_inserter
+        layout["target_inserter"]["entity"] = target_inserter
+        obs["entities"].extend(
+            [
+                source_inserter,
+                target_inserter,
+            ]
+        )
+
+        with patch("factorio_ai.planner._find_site_input_logistic_line_layout", return_value=layout):
+            decision = BuildItemMallSkill("inserter", 4).next_action(obs, reference_position=layout["consumer"]["position"])
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertEqual(decision.action["unit_number"], 910)
+        self.assertIn("before waiting for iron gear wheel site input logistics", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "site_input_source_starved")
+        self.assertEqual(decision.metadata["repair_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(decision.metadata["target_item"], "iron-gear-wheel")
+
     def test_build_item_mall_completes_first_assembler_before_more_gear_seed(self):
         obs = powered_automation_observation()
         obs["player"] = {"position": {"x": 2, "y": 2}, "character_valid": False}
