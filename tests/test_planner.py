@@ -11705,6 +11705,110 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.metadata["repair_skill"], "bootstrap_build_item_mall")
         self.assertEqual(decision.metadata["target_item"], "inserter")
 
+    def test_site_input_line_repairs_missing_inserter_from_factory_buffered_materials(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 4}
+        obs["craftable"] = {}
+        source = {
+            "name": "wooden-chest",
+            "unit_number": 980,
+            "position": {"x": 0.0, "y": 6.0},
+            "inventories": {},
+        }
+        consumer = {
+            "name": "assembling-machine-1",
+            "unit_number": 981,
+            "position": {"x": 6.0, "y": 6.0},
+            "recipe": "electronic-circuit",
+            "electric_network_connected": True,
+            "inventories": {},
+        }
+        belt = {
+            "name": "transport-belt",
+            "unit_number": 982,
+            "position": {"x": 2.0, "y": 6.0},
+            "direction": planner_module.EAST,
+            "inventories": {},
+        }
+        obs["entities"].extend(
+            [
+                source,
+                consumer,
+                belt,
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 983,
+                    "position": {"x": 10.0, "y": 6.0},
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 984,
+                    "position": {"x": 100.0, "y": 6.0},
+                    "inventories": {"1": {"iron-gear-wheel": 5}},
+                },
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 985,
+                    "position": {"x": 100.0, "y": 8.0},
+                    "inventories": {"1": {"electronic-circuit": 2}},
+                },
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 986,
+                    "position": {"x": 100.0, "y": 10.0},
+                    "inventories": {"1": {"iron-gear-wheel": 5}},
+                },
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 987,
+                    "position": {"x": 100.0, "y": 12.0},
+                    "inventories": {"1": {"electronic-circuit": 2}},
+                },
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 988,
+                    "position": {"x": -10.0, "y": 6.0},
+                    "recipe": "iron-plate",
+                    "inventories": {"2": {"iron-ore": 2}},
+                },
+            ]
+        )
+        layout = {
+            "item": "electronic-circuit",
+            "source": source,
+            "consumer": consumer,
+            "source_inserter": {
+                "position": {"x": 1.0, "y": 6.0},
+                "direction": planner_module.EAST,
+                "entity": None,
+            },
+            "target_inserter": {
+                "position": {"x": 4.0, "y": 6.0},
+                "direction": planner_module.EAST,
+                "entity": None,
+            },
+            "segments": [
+                {
+                    "position": {"x": 2.0, "y": 6.0},
+                    "direction": planner_module.EAST,
+                    "entity": belt,
+                }
+            ],
+        }
+
+        with patch("factorio_ai.planner._find_site_input_logistic_line_layout", return_value=layout):
+            decision = SiteInputLogisticLineSkill(12, item="electronic-circuit").next_action(obs)
+
+        self.assertIsNotNone(decision.action)
+        self.assertNotIn("refusing hand-crafted gear workaround", decision.reason)
+        self.assertIn("site source output inserter", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "logistics_endpoint_inserter_shortage")
+        self.assertEqual(decision.metadata["repair_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(decision.metadata["target_item"], "inserter")
+
     def test_iron_plate_logistic_line_refuels_source_drill_before_endpoint_completion(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"transport-belt": 20, "coal": 2}

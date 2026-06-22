@@ -1309,11 +1309,22 @@ def _recipe_assembler_exists_for_layout(observation: dict[str, Any], recipe: str
 
 
 def _inserter_mall_repair_available(observation: dict[str, Any]) -> bool:
-    return (
+    if (
         inventory_count(observation, "inserter") > 0
         or craftable_count(observation, "inserter") > 0
         or _recipe_assembler_exists_for_layout(observation, "inserter")
-    )
+    ):
+        return True
+    recipe = RECIPES.get("inserter")
+    if recipe is None:
+        return False
+    for item, count in recipe.ingredients.items():
+        if total_item_count(observation, item) >= int(count):
+            continue
+        if item == "iron-plate" and _iron_plate_source_furnaces(observation):
+            continue
+        return False
+    return True
 
 
 def _entity_exists_for_layout(observation: dict[str, Any], name: str) -> bool:
