@@ -4068,6 +4068,83 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 896)
         self.assertIn("recover incomplete direct iron-ore burner mining drill", decision.reason)
 
+    def test_iron_skill_routes_blocked_direct_site_to_expand_smelting_after_belt_automation(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 4}
+        obs["entities"].append(mall_assembler(recipe="transport-belt"))
+        direct_blocked = planner_module.PlannerDecision(
+            None,
+            "cannot find open iron-ore site for direct burner-drill smelting cell",
+        )
+        expansion = planner_module.PlannerDecision(
+            {"type": "craft", "recipe": "transport-belt", "count": 1},
+            "craft transport-belt for line",
+        )
+
+        with (
+            patch("factorio_ai.planner._direct_plate_smelting_decision", return_value=direct_blocked),
+            patch("factorio_ai.planner.ExpandIronSmeltingSkill.next_action", return_value=expansion),
+        ):
+            decision = IronPlateSkill(target_count=90).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["recipe"], "transport-belt")
+        self.assertIn("expanded belt smelting", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "direct_iron_smelting_site_blocked")
+        self.assertEqual(decision.metadata["repair_skill"], "expand_iron_smelting")
+
+    def test_iron_skill_routes_expansion_fuel_logistics_to_coal_feed_repair(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 4}
+        obs["entities"].append(mall_assembler(recipe="transport-belt"))
+        direct_blocked = planner_module.PlannerDecision(
+            None,
+            "cannot find open iron-ore site for direct burner-drill smelting cell",
+        )
+        expansion_blocked = planner_module.PlannerDecision(
+            None,
+            "expanded iron-plate smelting needs fuel logistics before more walking refuels",
+        )
+        coal_feed = planner_module.PlannerDecision(
+            {
+                "type": "build",
+                "name": "transport-belt",
+                "position": {"x": 8.0, "y": 4.0},
+            },
+            "extend coal belt toward boiler without player coal shuttle",
+        )
+
+        with (
+            patch("factorio_ai.planner._direct_plate_smelting_decision", return_value=direct_blocked),
+            patch("factorio_ai.planner.ExpandIronSmeltingSkill.next_action", return_value=expansion_blocked),
+            patch("factorio_ai.planner.CoalFuelFeedSkill.next_action", return_value=coal_feed),
+        ):
+            decision = IronPlateSkill(target_count=90).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertIn("repairing coal fuel feed first", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "smelting_fuel_logistics")
+        self.assertEqual(decision.metadata["repair_skill"], "connect_coal_fuel_feed")
+
+    def test_iron_skill_keeps_direct_blocked_failure_before_belt_automation(self):
+        obs = base_observation()
+        obs["inventory"] = {"iron-plate": 4}
+        direct_blocked = planner_module.PlannerDecision(
+            None,
+            "cannot find open iron-ore site for direct burner-drill smelting cell",
+        )
+
+        with (
+            patch("factorio_ai.planner._direct_plate_smelting_decision", return_value=direct_blocked),
+            patch("factorio_ai.planner.ExpandIronSmeltingSkill.next_action") as expand,
+        ):
+            decision = IronPlateSkill(target_count=90).next_action(obs)
+
+        self.assertIsNone(decision.action)
+        self.assertEqual(decision.reason, direct_blocked.reason)
+        expand.assert_not_called()
+
     def test_copper_skill_waits_for_direct_cell_instead_of_hand_mining_ore(self):
         obs = base_observation()
         obs["inventory"] = {"coal": 8}
@@ -6496,6 +6573,36 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "stone-furnace")
         self.assertIn("expand iron smelting", decision.reason)
+
+    def test_circuit_automation_scaling_repairs_coal_feed_when_iron_expansion_needs_fuel_logistics(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 8, "transport-belt": 4}
+        obs["entities"].extend(circuit_cell_entities(cable_inventory={"copper-cable": 40}))
+        obs["entities"].append(mall_assembler(recipe="transport-belt", inventory={"transport-belt": 8}))
+        expansion_blocked = planner_module.PlannerDecision(
+            None,
+            "expanded iron-plate smelting needs fuel logistics before more walking refuels",
+        )
+        coal_feed = planner_module.PlannerDecision(
+            {
+                "type": "build",
+                "name": "transport-belt",
+                "position": {"x": 8.0, "y": 4.0},
+            },
+            "extend coal belt toward boiler without player coal shuttle",
+        )
+
+        with (
+            patch("factorio_ai.planner.ExpandIronSmeltingSkill.next_action", return_value=expansion_blocked),
+            patch("factorio_ai.planner.CoalFuelFeedSkill.next_action", return_value=coal_feed),
+        ):
+            decision = CircuitAutomationSkill(target_count=50).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "transport-belt")
+        self.assertIn("repairing coal fuel feed first", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "smelting_fuel_logistics")
+        self.assertEqual(decision.metadata["repair_skill"], "connect_coal_fuel_feed")
 
     def test_circuit_automation_takes_output_from_circuit_assembler(self):
         obs = powered_automation_observation()

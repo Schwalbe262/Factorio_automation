@@ -436,6 +436,64 @@ class HumanLayoutLearningTests(unittest.TestCase):
         self.assertIsNone(event)
         self.assertFalse(human_layout_learning_trace_path(logs).exists())
 
+    def test_records_direct_transfer_layout_features_for_manual_gear_belt_site(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = root / "runtime"
+            logs = root / "logs"
+            before = observation_with_entities()
+            after = observation_with_entities(
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 40,
+                    "position": {"x": 0, "y": 0},
+                    "recipe": "iron-gear-wheel",
+                    "inventories": {},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 41,
+                    "position": {"x": 2, "y": 0},
+                    "direction": 4,
+                    "inventories": {},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 42,
+                    "position": {"x": 4, "y": 0},
+                    "recipe": "transport-belt",
+                    "inventories": {},
+                },
+            )
+
+            record_human_layout_observation(
+                runtime,
+                logs,
+                before,
+                objective="launch_rocket_program",
+                active_skill="bootstrap_build_item_mall",
+                active_step=10,
+                source="test",
+            )
+            event = record_human_layout_observation(
+                runtime,
+                logs,
+                after,
+                objective="launch_rocket_program",
+                active_skill="bootstrap_build_item_mall",
+                active_step=11,
+                source="test",
+            )
+
+        self.assertIsNotNone(event)
+        features = event["layout_features"]
+        self.assertEqual(features["cluster"]["dominant_axis"], "horizontal")
+        self.assertEqual(features["delta_recipes"]["iron-gear-wheel"], 1)
+        self.assertEqual(features["delta_recipes"]["transport-belt"], 1)
+        self.assertEqual(features["direct_transfers"][0]["pattern"], "direct_inserter_transfer")
+        self.assertIn("gear-to-belt direct insertion", event["skill_candidate"]["targets"])
+        self.assertIn("build_gear_belt_mall_logistics", event["skill_candidate"]["related_skills"])
+
 
 if __name__ == "__main__":
     unittest.main()

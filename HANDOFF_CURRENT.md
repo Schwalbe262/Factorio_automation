@@ -1,9 +1,10 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running with autopilot PID `59728`, vLLM service `12917`.
-- Part185 fixed direct iron smelting recovery: reachable unpaired iron burner drills are mined before fuel trips/null open-site failure, including after one drill is already in inventory.
-- Live verified: `strategy-iron-20260622-013933.jsonl` mined units `897` and `898`; current observe has no iron burner drills and inventory has `burner-mining-drill=2`, `coal=22`.
-- Remaining blocker: direct burner smelting cannot find an open iron site because the iron patch is occupied by existing belts/furnace/inserter; next repair should route to belt/electric smelting recovery instead of direct burner rebuild.
-- Current live skill: `bootstrap_build_item_mall`; health still warns about stale operator layout learning and implemented skills in foundry queue.
-- Tests: new targeted drill-recovery tests OK; `tests.test_planner` 428 OK; `tests.test_planner tests.test_strategy tests.test_controller` 684 OK; full discover 1184 OK with existing ResourceWarning.
-- Dirty archives: `note.md`/`insight.md` are pre-existing large append-only changes; do not stage wholesale.
-- Token sample recorded: `26,292,734` absolute, part delta `3,239,870`; weekly quota unavailable.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running, autopilot PID `42560`, vLLM service `12917`.
+- Part186 answered/operator learning setup: manual site diffs now record `layout_features` and `skill_candidate` for direct inserter transfers, linear belt routing, and parallel smelting/mining candidates.
+- Part186 planner fix: blocked direct iron burner sites route to `expand_iron_smelting`; expansion fuel-logistics failures route to `connect_coal_fuel_feed` repair metadata/actions when executable.
+- Live after restart: `produce_iron_plate` is running on new PID, reached step `44` without the previous immediate direct-site failure; current key stock still shows iron-plate `74`, coal `71`.
+- Live diagnostic before restart confirmed `IronPlateSkill(90)` returned `craft transport-belt` with `failure_root=direct_iron_smelting_site_blocked`.
+- Current health still reports stale retracted operator layout event and implemented skills in foundry queue; do not treat those queued implemented skills as new work.
+- Tests: `tests.test_planner tests.test_strategy tests.test_controller tests.test_human_layout_learning tests.test_run_health` 703 OK; full discover 1189 OK with existing ResourceWarning.
+- Token sample: `26,730,891` absolute, part delta `438,157`; weekly quota unavailable; Codex sqlite thread recorder failed with malformed DB so goal fallback was used.
+- Dirty archives: `note.md`/`insight.md` have large pre-existing append-only changes; avoid staging wholesale.

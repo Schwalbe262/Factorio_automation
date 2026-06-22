@@ -2920,7 +2920,7 @@ class IronPlateSkill:
         iron_total = inventory_count(observation, "iron-plate") if inventory_only else total_item_count(observation, "iron-plate")
         if iron_total >= target and not _direct_iron_drill_stranded(observation):
             return PlannerDecision(None, f"iron plate target reached: {iron_total}/{target}", done=True)
-        return _direct_plate_smelting_decision(
+        direct_decision = _direct_plate_smelting_decision(
             observation,
             target_count=target,
             resource_name="iron-ore",
@@ -2929,6 +2929,13 @@ class IronPlateSkill:
             inventory_only=inventory_only,
             allow_support_plate=False,
         )
+        belt_recovery = _iron_belt_smelting_recovery_after_blocked_direct_site(
+            observation,
+            direct_decision,
+            target_count=target,
+            inventory_only=inventory_only,
+        )
+        return belt_recovery or direct_decision
 
     def _mine_resource(
         self,
@@ -2954,6 +2961,44 @@ class IronPlateSkill:
             },
             f"mine {name}",
         )
+
+
+def _iron_belt_smelting_recovery_after_blocked_direct_site(
+    observation: dict[str, Any],
+    direct_decision: PlannerDecision,
+    *,
+    target_count: int,
+    inventory_only: bool,
+) -> PlannerDecision | None:
+    if inventory_only or direct_decision.action is not None or direct_decision.done:
+        return None
+    if "cannot find open iron-ore site for direct burner-drill smelting cell" not in direct_decision.reason:
+        return None
+    if not _belt_smelting_ready(observation):
+        return None
+    target_rate = max(37.0, min(90.0, float(target_count)))
+    recovery = ExpandIronSmeltingSkill(target_rate_per_minute=target_rate).next_action(observation)
+    if recovery.action is None:
+        return _smelting_fuel_logistics_repair_decision(
+            observation,
+            recovery,
+            context="direct iron-plate site fallback",
+        )
+    metadata = dict(recovery.metadata)
+    metadata.update(
+        {
+            "failure_root": "direct_iron_smelting_site_blocked",
+            "repair_skill": "expand_iron_smelting",
+            "blocked_reason": direct_decision.reason,
+            "target_rate_per_minute": target_rate,
+        }
+    )
+    return PlannerDecision(
+        recovery.action,
+        f"{recovery.reason}; direct iron-plate burner site is blocked, recovering via expanded belt smelting",
+        done=False,
+        metadata=metadata,
+    )
 
 
 class AutomationScienceSkill:
@@ -4738,6 +4783,41 @@ class CoalFuelFeedSkill:
             },
             f"route {len(tiles)} boiler coal feed belt segments in one connect_entities call",
         )
+
+
+def _smelting_fuel_logistics_repair_decision(
+    observation: dict[str, Any],
+    blocked: PlannerDecision,
+    *,
+    context: str,
+) -> PlannerDecision | None:
+    if blocked.action is not None or blocked.done or "fuel logistics" not in blocked.reason:
+        return None
+    repair = CoalFuelFeedSkill().next_action(observation)
+    metadata = dict(repair.metadata)
+    metadata.update(
+        {
+            "failure_root": "smelting_fuel_logistics",
+            "repair_skill": "connect_coal_fuel_feed",
+            "blocked_reason": blocked.reason,
+            "blocked_context": context,
+        }
+    )
+    if repair.action is not None:
+        return PlannerDecision(
+            repair.action,
+            f"{repair.reason}; {context} blocked by smelting fuel logistics, repairing coal fuel feed first",
+            done=False,
+            metadata=metadata,
+        )
+    if repair.done:
+        return PlannerDecision(
+            {"type": "wait", "ticks": 120},
+            f"coal fuel feed is ready; wait before retrying {context}",
+            done=False,
+            metadata=metadata,
+        )
+    return None
 
 
 def _boiler_coal_feed_missing_belt_count(observation: dict[str, Any]) -> int:
@@ -11583,8 +11663,20 @@ class CircuitAutomationSkill:
                 for entity in observation.get("entities") or []
             ):
                 if item == "iron-plate":
-                    return ExpandIronSmeltingSkill(max(40, self.target_count)).next_action(observation)
-                return ExpandCopperSmeltingSkill(max(40, self.target_count)).next_action(observation)
+                    expansion = ExpandIronSmeltingSkill(max(40, self.target_count)).next_action(observation)
+                    repair = _smelting_fuel_logistics_repair_decision(
+                        observation,
+                        expansion,
+                        context="scaled circuit automation iron input",
+                    )
+                    return repair or expansion
+                expansion = ExpandCopperSmeltingSkill(max(40, self.target_count)).next_action(observation)
+                repair = _smelting_fuel_logistics_repair_decision(
+                    observation,
+                    expansion,
+                    context="scaled circuit automation copper input",
+                )
+                return repair or expansion
             decision = SiteInputLogisticLineSkill(max(40, self.target_count), item=item).next_action(observation)
             if decision.action is not None or decision.done or "no executable repeated site input" not in decision.reason:
                 return decision
