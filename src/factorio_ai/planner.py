@@ -5278,6 +5278,8 @@ class _ExpandPlateSmeltingSkill:
                     support_skill=self.line_skill.support_skill,
                     far_fuel_reason=f"expanded {self.product_name} smelting needs fuel logistics before more walking refuels",
                     exclude_source_units=line_units,
+                    wait_for_existing_fuel=True,
+                    external_source_only_for_existing_fuel=True,
                 )
         return None
 
@@ -7995,6 +7997,7 @@ def _fuel_burner_line_entity(
     far_fuel_reason: str,
     exclude_source_units: set[Any] | None = None,
     wait_for_existing_fuel: bool = False,
+    external_source_only_for_existing_fuel: bool = False,
     prefer_coal_supply: bool = True,
     allow_bootstrap_seed: bool = False,
 ) -> PlannerDecision:
@@ -8030,10 +8033,14 @@ def _fuel_burner_line_entity(
                     seed = _bootstrap_fuel_seed_decision(observation, player, position, context, support_skill, desired_insert)
                     if seed is not None:
                         return seed
+                if external_source_only_for_existing_fuel:
+                    return PlannerDecision(None, far_fuel_reason)
                 return PlannerDecision(
                     {"type": "wait", "ticks": 240},
                     f"wait for established coal supply output before refueling {context}; refusing repeated hand-mining",
                 )
+            if external_source_only_for_existing_fuel:
+                return PlannerDecision(None, far_fuel_reason)
             if existing_fuel_item == "coal" and entity_name == "burner-mining-drill":
                 coal = _nearest_resource_to_position(observation, position, "coal")
                 if coal is not None and distance(position, _position(coal)) <= WALK_FUEL_LOGISTICS_LIMIT:

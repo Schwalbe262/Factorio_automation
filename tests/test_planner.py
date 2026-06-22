@@ -4417,6 +4417,28 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.metadata["failure_root"], "smelting_fuel_logistics")
         self.assertEqual(decision.metadata["repair_skill"], "connect_coal_fuel_feed")
 
+    def test_expand_iron_smelting_refuels_reserve_from_existing_source_when_fuel_remains(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 14, "y": 0}}
+        obs["inventory"] = {}
+        obs["entities"] = complete_belt_smelting_entities(4, 0, 500)
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 980,
+                "position": {"x": 14, "y": 0},
+                "inventories": {"1": {"coal": 20}},
+            }
+        )
+
+        decision = ExpandIronSmeltingSkill(target_rate_per_minute=90).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["unit_number"], 980)
+        self.assertIn("expanded iron-plate smelting reserve", decision.reason)
+        self.assertNotIn("fuel logistics", decision.reason)
+
     def test_iron_skill_keeps_direct_blocked_failure_before_belt_automation(self):
         obs = base_observation()
         obs["inventory"] = {"iron-plate": 4}

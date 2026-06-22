@@ -1,10 +1,10 @@
 # Current Handoff
-- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running, autopilot PID `60188`, vLLM `QuantTrio/Qwen3.6-27B-AWQ` service id `12917`.
-- Part191 fixed the completed electric boiler coal-feed power bootstrap loop: if the route is built, boiler is empty, and feed inserter has `no_power`, the skill can collect one fuel item from an existing source before the one-time `boiler_coal_feed_power_seed`.
-- The fix remains seed-scoped: it does not re-enable repeated boiler hand-fueling or burner-inserter boiler feeds.
-- Live after restart: Qwen selected `connect_coal_fuel_feed`; skill loop 9210 completed in 5 steps with `boiler coal fuel feed is active`.
-- Health after restart: entities 835, researched 5, progress stall 0, `seed_count=2`, coal 141, steam still 0 at sample time; next work should continue circuit automation/power follow-through.
-- Validation: targeted coal-feed regressions OK; `tests.test_planner` 446 OK; strategy/controller/run-health 263 OK; full discover 1205 OK with existing `controller.py:1277` ResourceWarning.
-- Local Qwen remains active through scheduler vLLM id `12917`; raw LLM rationale may still mention stale 86-belt boiler feed text, but deterministic guardrail/skill completed the feed.
-- Token sample: `29,052,655` absolute, `+182,110` since continuation start; weekly quota unavailable.
+- Branch: `chore/part130-unattended-qwen9-supervisor`; supervisor running, autopilot PID `60188` still needs restart to load Part192 code; vLLM `QuantTrio/Qwen3.6-27B-AWQ` service id `12917`.
+- Part192 fixed scaled circuit automation -> expanded iron smelting reserve refuel: when a burner line already contains coal but inventory is empty, reserve refuel may take from a real external surplus source instead of waiting forever.
+- The reserve path is source-gated: same-line/adjacent-line fuel is still protected, and no external source preserves the `smelting_fuel_logistics` blocker.
+- Live smoke on current RCON observe: `ExpandIronSmeltingSkill(90)` and `CircuitAutomationSkill(90)` now choose `move_to {x:4.0,y:-3.0}` for surplus fuel source instead of stateless wait.
+- Health: server UP tick 7033733, entities 835, researched 5, Qwen active, live skill `automate_electronic_circuit_line`, inventory sample iron=20 copper=92 stone=4, progress KPI still stale.
+- Validation: targeted 5 OK; `tests.test_planner` 447 OK; strategy/controller/run-health 263 OK; full discover 1206 OK with existing `controller.py:1277` ResourceWarning.
+- User layout feedback next: diagnose excessive small-pole clutter, crossed belts, and reserve a medium-term main-bus corridor using underground belts/splitters where available.
 - Dirty archives: `note.md`/`insight.md` have large append-only changes; avoid staging wholesale unless doing a dedicated archive commit.
+- Token sample: `29,401,082` absolute; weekly quota unavailable.
