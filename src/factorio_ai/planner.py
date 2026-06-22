@@ -3616,6 +3616,24 @@ class StoneSupplySkill:
             if chest_name is None:
                 return PlannerDecision(None, "missing output chest for starter stone supply")
             position = layout["output_position"]
+            blocker = _stone_supply_output_blocker(observation, position)
+            if blocker is not None:
+                blocker_position = _position(blocker)
+                if distance(player, blocker_position) > 8:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": _stand_position(blocker_position, offset=2.0)},
+                        f"move near blocking {blocker.get('name')} before placing starter stone output chest",
+                    )
+                return PlannerDecision(
+                    {
+                        "type": "mine",
+                        "name": blocker.get("name"),
+                        "position": blocker_position,
+                        "unit_number": blocker.get("unit_number"),
+                        "count": 1,
+                    },
+                    f"clear blocking {blocker.get('name')} before placing starter stone output chest",
+                )
             if distance(player, position) > 20 or distance(player, position) < 2.0:
                 return PlannerDecision(
                     {"type": "move_to", "position": _stand_position(position, offset=3.0)},
@@ -7242,6 +7260,23 @@ def _stone_supply_layout_blocked_by_factory_entities(layout: dict[str, Any], ent
             if any(distance(entity_pos, pos) < threshold for pos in footprint):
                 return True
     return False
+
+
+def _stone_supply_output_blocker(observation: dict[str, Any], position: dict[str, float]) -> dict[str, Any] | None:
+    blockers: list[dict[str, Any]] = []
+    for entity in observation.get("entities") or []:
+        if not isinstance(entity, dict) or not isinstance(entity.get("position"), dict):
+            continue
+        if _is_preserved_starter_artifact(observation, entity):
+            continue
+        name = str(entity.get("name") or "")
+        entity_type = str(entity.get("type") or "")
+        if entity_type not in {"tree", "simple-entity", "cliff"} and not name.endswith("rock"):
+            continue
+        threshold = 2.0 if name.endswith("rock") or entity_type in {"simple-entity", "cliff"} else 1.0
+        if distance(_position(entity), position) <= threshold:
+            blockers.append(entity)
+    return _nearest_to(blockers, position) if blockers else None
 
 
 def _stone_supply_missing_item(observation: dict[str, Any], layout: dict[str, Any]) -> str | None:
@@ -16653,12 +16688,13 @@ def _gear_belt_mall_layout_for_pair(
     direct_transfer = None
     if abs(horizontal_distance - GEAR_BELT_MALL_ASSEMBLER_SPACING) <= 0.25 and abs(belt_pos["y"] - gear_pos["y"]) <= 0.1:
         direct_position = {"x": gear_pos["x"] + direction_sign * 2.0, "y": gear_pos["y"]}
+        direct_entity = _inserter_near(observation, direct_position)
         if _mall_logistics_positions_clear(observation, belt_positions=[], inserter_positions=[direct_position]):
             direct_direction = WEST if direction_sign > 0 else EAST
             direct_transfer = {
                 "position": direct_position,
                 "direction": direct_direction,
-                "entity": _inserter_near(observation, direct_position),
+                "entity": direct_entity,
             }
 
     for vertical_sign, output_direction, input_direction in [(-1, SOUTH, NORTH), (1, NORTH, SOUTH)]:
@@ -16680,6 +16716,13 @@ def _gear_belt_mall_layout_for_pair(
             continue
         gear_output_entity = _inserter_near(observation, output_position)
         belt_input_entity = _inserter_near(observation, input_position)
+        protected_direct_units = {
+            direct_transfer["entity"].get("unit_number")
+            for direct_transfer in [direct_transfer]
+            if isinstance(direct_transfer, dict)
+            and isinstance(direct_transfer.get("entity"), dict)
+            and direct_transfer["entity"].get("unit_number") is not None
+        }
         protected_output_units = {
             gear_output_entity.get("unit_number")
             for gear_output_entity in [gear_output_entity]
@@ -16701,12 +16744,13 @@ def _gear_belt_mall_layout_for_pair(
                 "position": output_position,
                 "direction": output_direction,
                 "entity": gear_output_entity,
+                "exclude_reusable_unit_numbers": protected_direct_units,
             },
             "belt_input_inserter": {
                 "position": input_position,
                 "direction": input_direction,
                 "entity": belt_input_entity,
-                "exclude_reusable_unit_numbers": protected_output_units,
+                "exclude_reusable_unit_numbers": protected_output_units | protected_direct_units,
             },
             "direct_gear_transfer_inserter": direct_transfer,
         }
@@ -16997,7 +17041,10 @@ def _nearest_local_item_seed_source(
     for entity in entities:
         if not isinstance(entity, dict) or entity.get("unit_number") in excluded:
             continue
-        if str(entity.get("name") or "") not in allowed_names:
+        name = str(entity.get("name") or "")
+        if name not in allowed_names:
+            continue
+        if name.startswith("assembling-machine") and str(entity.get("recipe") or "") != item:
             continue
         if entity_item_count(entity, item) <= 0:
             continue

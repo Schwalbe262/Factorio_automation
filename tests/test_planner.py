@@ -988,6 +988,26 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["name"], "wooden-chest")
         self.assertEqual(decision.action["position"], {"x": 8.0, "y": 0.0})
 
+    def test_stone_supply_clears_output_chest_rock_before_building(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 8.0, "y": 0.0}
+        obs["inventory"] = {"wooden-chest": 1, "burner-mining-drill": 1, "coal": 8}
+        obs["resources"] = [{"name": "stone", "position": {"x": 6, "y": 0}, "distance": 6}]
+        obs["entities"] = [
+            {
+                "name": "big-rock",
+                "type": "simple-entity",
+                "unit_number": 90,
+                "position": {"x": 8.0, "y": 0.0},
+            },
+        ]
+
+        decision = StoneSupplySkill(target_count=8).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 90)
+        self.assertIn("starter stone output chest", decision.reason)
+
     def test_stone_supply_places_drill_after_chest(self):
         obs = base_observation()
         obs["inventory"] = {"burner-mining-drill": 1, "coal": 8}
@@ -1993,6 +2013,46 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(issue["parameters"]["side"], "north")
         self.assertEqual(issue["parameters"]["crossing_policy"], "underground_or_splitter_only")
         self.assertIn("main bus corridor", issue["detail"])
+
+    def test_local_seed_source_does_not_steal_assembler_input_materials(self):
+        obs = base_observation()
+        obs["entities"] = [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 970,
+                "recipe": "inserter",
+                "position": {"x": 1.0, "y": 0.0},
+                "inventories": {"2": {"iron-plate": 3}},
+                "electric_network_connected": True,
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 971,
+                "position": {"x": 3.0, "y": 0.0},
+                "inventories": {"3": {"iron-plate": 12}},
+            },
+        ]
+
+        source = planner_module._nearest_local_item_seed_source(obs, "iron-plate", {"x": 0.0, "y": 0.0})
+
+        self.assertEqual(source["unit_number"], 971)
+
+    def test_local_seed_source_allows_assembler_product_output(self):
+        obs = base_observation()
+        obs["entities"] = [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 972,
+                "recipe": "transport-belt",
+                "position": {"x": 1.0, "y": 0.0},
+                "inventories": {"3": {"transport-belt": 8}},
+                "electric_network_connected": True,
+            },
+        ]
+
+        source = planner_module._nearest_local_item_seed_source(obs, "transport-belt", {"x": 0.0, "y": 0.0})
+
+        self.assertEqual(source["unit_number"], 972)
 
     def test_factory_layout_flags_remote_starter_smelting_site(self):
         obs = base_observation()
@@ -9983,6 +10043,43 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 942)
         self.assertNotEqual(decision.action.get("recipe"), "iron-gear-wheel")
 
+    def test_gear_belt_mall_does_not_relocate_direct_transfer_inserter(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 8}
+        obs["craftable"] = {}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="transport-belt",
+                gear_inventory={"iron-gear-wheel": 4},
+            )
+        )
+        for index, x in enumerate((3, 4, 5), start=930):
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": index,
+                    "position": {"x": x, "y": -1},
+                    "direction": 4,
+                    "inventories": {},
+                }
+            )
+        obs["entities"].append(
+            {
+                "name": "inserter",
+                "unit_number": 940,
+                "position": {"x": 4, "y": 2},
+                "direction": planner_module.WEST,
+                "status_name": "waiting_for_source_items",
+                "inventories": {},
+                "electric_network_connected": True,
+            }
+        )
+
+        decision = GearBeltMallLogisticsSkill(20).next_action(obs)
+
+        self.assertIsNone(decision.action)
+        self.assertIn("missing inserter for gear mall output inserter", decision.reason)
+
     def test_gear_belt_mall_powers_relocated_input_inserter(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"small-electric-pole": 1, "iron-plate": 8}
@@ -10075,12 +10172,10 @@ class PlannerTests(unittest.TestCase):
                     "electric_network_connected": True,
                 },
                 {
-                    "name": "assembling-machine-1",
+                    "name": "wooden-chest",
                     "unit_number": 942,
                     "position": {"x": 0, "y": 5},
-                    "recipe": "electronic-circuit",
-                    "inventories": {"2": {"iron-plate": 4}},
-                    "electric_network_connected": True,
+                    "inventories": {"1": {"iron-plate": 4}},
                 },
                 {
                     "name": "stone-furnace",
