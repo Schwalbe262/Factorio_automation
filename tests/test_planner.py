@@ -3971,6 +3971,103 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("misplaced direct iron-plate mining drill", decision.reason)
         self.assertNotIn("wait for direct", decision.reason)
 
+    def test_iron_skill_recovers_nearby_unpaired_drill_before_far_refuel_trip(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 78, "y": -23}}
+        obs["inventory"] = {}
+        obs["resources"] = [
+            {"name": "iron-ore", "position": {"x": 4, "y": 0}, "distance": 77},
+            {"name": "iron-ore", "position": {"x": 76, "y": -23}, "distance": 2},
+            {"name": "coal", "position": {"x": 9.5, "y": -5.5}, "distance": 71},
+        ]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 891,
+                "position": {"x": 4, "y": 0},
+                "direction": planner_module.EAST,
+                "distance": 77,
+                "mining_target": "iron-ore",
+                "inventories": {"1": {"coal": 1}},
+            },
+            {
+                "name": "stone-furnace",
+                "unit_number": 892,
+                "position": {"x": 6, "y": 0},
+                "distance": 76,
+                "inventories": {"1": {"coal": 1}, "2": {"iron-ore": 1}},
+            },
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 896,
+                "position": {"x": 76, "y": -23},
+                "direction": planner_module.EAST,
+                "distance": 2,
+                "mining_target": "iron-ore",
+                "status_name": "waiting_for_space_in_destination",
+                "inventories": {"1": {"coal": 4}},
+            },
+        ]
+
+        decision = IronPlateSkill(target_count=90).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertEqual(decision.action["unit_number"], 896)
+        self.assertIn("recover incomplete direct iron-ore burner mining drill", decision.reason)
+        self.assertNotIn("move near coal", decision.reason)
+
+    def test_iron_skill_recovers_nearby_unpaired_drill_with_no_open_layout_before_refuel(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 78, "y": -23}}
+        obs["inventory"] = {}
+        obs["resources"] = [{"name": "coal", "position": {"x": 9.5, "y": -5.5}, "distance": 71}]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 891,
+                "position": {"x": 76, "y": -23},
+                "direction": planner_module.EAST,
+                "distance": 2,
+                "mining_target": "iron-ore",
+                "status_name": "waiting_for_space_in_destination",
+                "inventories": {"1": {"coal": 20}},
+            }
+        ]
+
+        decision = IronPlateSkill(target_count=90).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertEqual(decision.action["unit_number"], 891)
+        self.assertIn("recover incomplete direct iron-ore burner mining drill", decision.reason)
+        self.assertNotIn("move near coal", decision.reason)
+
+    def test_iron_skill_recovers_nearby_unpaired_drill_even_when_drill_inventory_exists(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 78, "y": -23}}
+        obs["inventory"] = {"burner-mining-drill": 1, "coal": 20}
+        obs["resources"] = [{"name": "coal", "position": {"x": 9.5, "y": -5.5}, "distance": 71}]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 896,
+                "position": {"x": 79, "y": -25},
+                "direction": planner_module.EAST,
+                "distance": 2,
+                "mining_target": "iron-ore",
+                "status_name": "waiting_for_space_in_destination",
+                "inventories": {"1": {"coal": 4}},
+            }
+        ]
+
+        decision = IronPlateSkill(target_count=90).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "burner-mining-drill")
+        self.assertEqual(decision.action["unit_number"], 896)
+        self.assertIn("recover incomplete direct iron-ore burner mining drill", decision.reason)
+
     def test_copper_skill_waits_for_direct_cell_instead_of_hand_mining_ore(self):
         obs = base_observation()
         obs["inventory"] = {"coal": 8}
