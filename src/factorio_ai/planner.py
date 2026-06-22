@@ -12773,33 +12773,17 @@ class CircuitAutomationSkill:
 
         if item == "iron-gear-wheel":
             if _gear_handcraft_automation_context_active(observation):
-                target_position = reference_position or player
-                gear_chest = _nearest_buffered_chest_item_source(observation, "iron-gear-wheel", target_position)
-                gear_chest_count = entity_item_count(gear_chest, "iron-gear-wheel") if isinstance(gear_chest, dict) else 0
-                missing_gears = max(0, quantity - inventory_count(observation, "iron-gear-wheel"))
-                if (
-                    isinstance(gear_chest, dict)
-                    and gear_chest_count > 0
-                    and missing_gears > 0
-                    and distance(_position(gear_chest), target_position) <= 10.0
-                ):
-                    gear_chest_position = _position(gear_chest)
-                    if distance(player, gear_chest_position) > 20:
-                        return PlannerDecision(
-                            {"type": "move_to", "position": gear_chest_position},
-                            "move near chest-buffered gears for circuit automation bootstrap",
-                        )
-                    return PlannerDecision(
-                        {
-                            "type": "take",
-                            "item": "iron-gear-wheel",
-                            "count": min(gear_chest_count, missing_gears),
-                            "unit_number": gear_chest.get("unit_number"),
-                            "name": gear_chest.get("name") or "wooden-chest",
-                            "position": gear_chest_position,
-                        },
-                        "take chest-buffered gears for circuit automation bootstrap",
-                    )
+                buffered_gears = _take_nearby_chest_buffered_item_decision(
+                    observation,
+                    player,
+                    "iron-gear-wheel",
+                    quantity,
+                    target_position=reference_position or player,
+                    max_distance=10.0,
+                    reason_detail="circuit automation bootstrap",
+                )
+                if buffered_gears is not None:
+                    return buffered_gears
                 decision = BuildItemMallSkill("iron-gear-wheel", max(quantity, 4)).next_action(
                     observation,
                     reference_position=reference_position,
@@ -15098,18 +15082,11 @@ class BuildItemMallSkill:
         if (
             self.target_item == "transport-belt"
             and reached_count >= target_count
-            and not _transport_belt_mall_has_paired_gear_assembler(observation, assembler)
         ):
-            gear_decision = BuildItemMallSkill("iron-gear-wheel", max(4, min(20, target_count))).next_action(
-                observation,
-                allow_existing_remote=allow_existing_remote,
-                reference_position=assembler_position,
-            )
-            if not gear_decision.done:
-                return gear_decision
             return PlannerDecision(
                 None,
-                "transport-belt mall output stock is buffered, but the paired iron-gear-wheel mall is missing",
+                f"transport-belt mall output stock target reached: {reached_count}/{target_count}; paired gear sidecar can be repaired later",
+                done=True,
             )
 
         if _build_item_mall_cell_ready(cell, self.target_item) and reached_count >= target_count:
@@ -15715,6 +15692,18 @@ class BuildItemMallSkill:
                     )
                     if decision is not None:
                         return decision
+                if self.target_item in {"assembling-machine-1", "inserter", "electric-mining-drill"}:
+                    buffered_gears = _take_nearby_chest_buffered_item_decision(
+                        observation,
+                        player,
+                        "iron-gear-wheel",
+                        quantity,
+                        target_position=reference_position or player,
+                        max_distance=10.0,
+                        reason_detail=f"{self.target_item} mall input",
+                    )
+                    if buffered_gears is not None:
+                        return buffered_gears
                 if allow_first_assembler_gear_bootstrap and _can_handcraft_first_assembler_gears(observation, quantity):
                     current_count = inventory_count(observation, "iron-gear-wheel")
                     return PlannerDecision(
@@ -15826,6 +15815,11 @@ class BuildItemMallSkill:
             )
 
         if item == "electronic-circuit":
+            if self.target_item == "electric-mining-drill":
+                decision = CircuitAutomationSkill(target_count=max(quantity, 18)).next_action(observation)
+                if not decision.done:
+                    return decision
+                return None
             decision = self.circuit_skill.next_action(observation)
             if not decision.done:
                 return decision
@@ -17411,6 +17405,44 @@ def _nearest_buffered_chest_item_source(
     return _nearest_to(candidates, target_position)
 
 
+def _take_nearby_chest_buffered_item_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    item: str,
+    quantity: int,
+    *,
+    target_position: dict[str, float],
+    max_distance: float,
+    reason_detail: str,
+) -> PlannerDecision | None:
+    missing = max(0, quantity - inventory_count(observation, item))
+    if missing <= 0:
+        return None
+    source = _nearest_buffered_chest_item_source(observation, item, target_position)
+    source_count = entity_item_count(source, item) if isinstance(source, dict) else 0
+    if not isinstance(source, dict) or source_count <= 0:
+        return None
+    source_position = _position(source)
+    if distance(source_position, target_position) > max_distance:
+        return None
+    if distance(player, source_position) > 20:
+        return PlannerDecision(
+            {"type": "move_to", "position": source_position},
+            f"move near chest-buffered {item} for {reason_detail}",
+        )
+    return PlannerDecision(
+        {
+            "type": "take",
+            "item": item,
+            "count": min(source_count, missing),
+            "unit_number": source.get("unit_number"),
+            "name": source.get("name") or "wooden-chest",
+            "position": source_position,
+        },
+        f"take chest-buffered {item} for {reason_detail}",
+    )
+
+
 def _find_relocatable_inserter_for_mall(
     observation: dict[str, Any],
     target_position: dict[str, float],
@@ -18264,7 +18296,7 @@ def _select_build_item_mall_sidecar_from_existing_belt_cell(
         for item in entities_named(observation, "assembling-machine-1")
         if str(item.get("recipe") or "") == "transport-belt"
         and item.get("electric_network_connected") is not False
-        and (reference_position is None or distance(_position(item), reference_position) <= 8.0)
+        and (reference_position is None or distance(_position(item), reference_position) <= 4.5)
         and _within_allowed_factory_area(
             observation,
             _position(item),

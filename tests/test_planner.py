@@ -7988,6 +7988,69 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "insert")
         self.assertIn(decision.action["item"], {"iron-gear-wheel", "iron-plate"})
 
+    def test_assembler_mall_takes_chest_buffered_gears_before_sidecar(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {
+            "assembling-machine-1": 1,
+            "electronic-circuit": 13,
+            "iron-plate": 24,
+        }
+        obs["entities"].append(mall_assembler(recipe="assembling-machine-1", inventory={"electronic-circuit": 6}))
+        obs["entities"].append(
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 902,
+                "position": {"x": -2.0, "y": 2.0},
+                "distance": 2,
+                "recipe": "transport-belt",
+                "electric_network_connected": True,
+                "inventories": {},
+            }
+        )
+        obs["entities"].append(
+            {
+                "name": "wooden-chest",
+                "unit_number": 903,
+                "position": {"x": 5.0, "y": 2.0},
+                "distance": 5,
+                "inventories": {"1": {"iron-gear-wheel": 20}},
+            }
+        )
+
+        decision = BuildItemMallSkill("assembling-machine-1", 2).next_action(
+            obs,
+            reference_position={"x": 6.0, "y": 2.0},
+        )
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 903)
+        self.assertIn("assembling-machine-1 mall input", decision.reason)
+
+    def test_electric_drill_mall_routes_missing_circuits_to_circuit_automation(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {}
+        circuit_repair = planner_module.PlannerDecision(
+            {
+                "type": "build",
+                "name": "small-electric-pole",
+                "position": {"x": 1.5, "y": -8.5},
+                "allow_nearby": False,
+            },
+            "build power corridor for expanded iron-plate smelting input inserter",
+        )
+
+        with patch("factorio_ai.planner.CircuitAutomationSkill.next_action", return_value=circuit_repair):
+            decision = BuildItemMallSkill("electric-mining-drill", 6)._ensure_item_quantity(
+                obs,
+                planner_module.player_position(obs),
+                "electronic-circuit",
+                18,
+            )
+
+        self.assertEqual(decision.action, circuit_repair.action)
+        self.assertEqual(decision.reason, circuit_repair.reason)
+
     def test_power_pole_mall_takes_existing_copper_output_before_refueling_cell(self):
         obs = powered_automation_observation()
         obs["player"] = {"position": {"x": 6, "y": 0}}
@@ -9117,7 +9180,7 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["position"], {"x": 5.0, "y": 2.0})
         self.assertIn("output chest", decision.reason)
 
-    def test_build_item_mall_repairs_missing_gear_mall_even_when_belt_stock_reached(self):
+    def test_build_item_mall_finishes_when_belt_stock_reached_without_gear_mall(self):
         obs = powered_automation_observation()
         obs.pop("automation_sites", None)
         obs["resources"] = []
@@ -9147,12 +9210,11 @@ class PlannerTests(unittest.TestCase):
 
         decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
 
-        self.assertFalse(decision.done)
-        self.assertEqual(decision.action["type"], "build")
-        self.assertEqual(decision.action["name"], "assembling-machine-1")
-        self.assertEqual(decision.action["position"], {"x": 2, "y": 2})
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
+        self.assertIn("paired gear sidecar can be repaired later", decision.reason)
 
-    def test_build_item_mall_repairs_unpaired_gear_mall_even_when_gear_stock_reached(self):
+    def test_build_item_mall_finishes_when_belt_stock_reached_before_pair_repair(self):
         obs = powered_automation_observation()
         obs.pop("automation_sites", None)
         obs["resources"] = []
@@ -9192,12 +9254,11 @@ class PlannerTests(unittest.TestCase):
 
         decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
 
-        self.assertFalse(decision.done)
-        self.assertEqual(decision.action["type"], "build")
-        self.assertEqual(decision.action["name"], "assembling-machine-1")
-        self.assertEqual(decision.action["position"], {"x": 2, "y": 2})
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
+        self.assertIn("paired gear sidecar can be repaired later", decision.reason)
 
-    def test_build_item_mall_sets_recipe_on_existing_unassigned_gear_sidecar(self):
+    def test_build_item_mall_finishes_when_belt_stock_reached_with_unassigned_sidecar(self):
         obs = powered_automation_observation()
         obs.pop("automation_sites", None)
         obs["resources"] = []
@@ -9245,10 +9306,9 @@ class PlannerTests(unittest.TestCase):
 
         decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
 
-        self.assertFalse(decision.done)
-        self.assertEqual(decision.action["type"], "set_recipe")
-        self.assertEqual(decision.action["recipe"], "iron-gear-wheel")
-        self.assertEqual(decision.action["unit_number"], 984)
+        self.assertTrue(decision.done)
+        self.assertIsNone(decision.action)
+        self.assertIn("paired gear sidecar can be repaired later", decision.reason)
 
     def test_build_item_mall_places_output_inserter_to_chest_for_user_consumed_item(self):
         obs = powered_automation_observation()
