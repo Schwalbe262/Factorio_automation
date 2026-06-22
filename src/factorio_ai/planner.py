@@ -14819,7 +14819,12 @@ class BuildItemMallSkill:
         available_belts = _available_boiler_feed_construction_belts(observation)
         if available_belts >= missing_boiler_route_belts:
             return self.target_count
-        if not _transport_belt_mall_ready_for_route_scaleup(observation):
+        route_scale_bootstrap_ready = (
+            _technology_researched_for_layout(observation, "automation")
+            and _recipe_assembler_exists_for_layout(observation, "iron-gear-wheel")
+            and _recipe_assembler_exists_for_layout(observation, "transport-belt")
+        )
+        if not route_scale_bootstrap_ready and not _transport_belt_mall_ready_for_route_scaleup(observation):
             return min(self.target_count, BOOTSTRAP_TRANSPORT_BELT_SEED_TARGET_CAP)
         return max(self.target_count, missing_boiler_route_belts + 4)
 

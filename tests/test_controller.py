@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from factorio_ai.config import AppConfig
+from factorio_ai import planner as planner_module
 from factorio_ai.controller import (
     FactorioController,
     ModlessFactorioController,
@@ -3426,6 +3427,61 @@ class StallWatchdogTests(unittest.TestCase):
                 ["bootstrap_build_item_mall"],
             )
             self.assertEqual(skill, "bootstrap_build_item_mall")
+
+    def test_stall_recovery_fields_preserve_route_scale_belt_target(self):
+        observation = {
+            "player": {"position": {"x": 0, "y": 0}, "character_valid": False},
+            "inventory": {"transport-belt": 2, "assembling-machine-1": 1, "small-electric-pole": 16},
+            "resources": [{"name": "coal", "position": {"x": 0, "y": 0}, "distance": 0}],
+            "entities": [
+                {
+                    "name": "burner-mining-drill",
+                    "unit_number": 20,
+                    "position": {"x": 0, "y": 0},
+                    "direction": 4,
+                    "mining_target": "coal",
+                    "inventories": {"1": {"coal": 3}},
+                },
+                {"name": "transport-belt", "unit_number": 21, "position": {"x": 1.5, "y": 0.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+                {"name": "boiler", "unit_number": 30, "position": {"x": 150, "y": 0}, "status_name": "no_fuel", "inventories": {}},
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 100,
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 3.5, "y": 12.5},
+                    "electric_network_connected": True,
+                    "inventories": {"2": {"iron-gear-wheel": 22}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 101,
+                    "recipe": "transport-belt",
+                    "position": {"x": 4.5, "y": 8.5},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "wooden-chest",
+                    "unit_number": 300,
+                    "position": {"x": 6.5, "y": 8.5},
+                    "inventories": {"1": {"transport-belt": 125}},
+                },
+            ],
+            "research": {"technologies": {"automation": {"researched": True}}},
+        }
+        missing = planner_module._boiler_coal_feed_missing_belt_count(observation)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = FactorioController(make_test_config(Path(tmp)))
+            fields = controller._stall_recovery_strategy_fields(
+                "launch_rocket_program",
+                observation,
+                "bootstrap_build_item_mall",
+            )
+
+        self.assertGreater(missing, 40)
+        self.assertEqual(fields["target_item"], "transport-belt")
+        self.assertEqual(fields["target_count"], missing + 4)
 
     def test_stall_recovery_repairs_dead_coal_supply_even_if_recent(self):
         observation = {

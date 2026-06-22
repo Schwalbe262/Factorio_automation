@@ -1141,8 +1141,9 @@ class StrategyTests(unittest.TestCase):
         )
 
         self.assertEqual(stale_remote_result["selected_skill"], "build_gear_belt_mall_logistics")
-        self.assertIn("stale_remote_boiler_belt_bootstrap_recomputed=true", stale_remote_result["evidence"])
+        self.assertEqual(stale_remote_result["guardrail_adjusted"]["from"], "bootstrap_build_item_mall")
         self.assertIn("boiler_feed_requires_route_scale_belt_mall=true", stale_remote_result["evidence"])
+        self.assertIn(f"transport_belt_bootstrap_target={missing + 4}", stale_remote_result["evidence"])
 
         direct_feed_result = reconcile_strategy_decision(
             {
@@ -1221,10 +1222,15 @@ class StrategyTests(unittest.TestCase):
         )
 
         self.assertEqual(result["selected_skill"], "bootstrap_build_item_mall")
-        self.assertEqual(result["guardrail_adjusted"]["from"], "plan_factory_site")
+        self.assertEqual(result["guardrail_adjusted"]["from"], "bootstrap_build_item_mall")
         self.assertEqual(result["guardrail_adjusted"]["to"], "bootstrap_build_item_mall")
         self.assertEqual(result["target_item"], "transport-belt")
+        self.assertEqual(result["target_count"], planner_module._boiler_coal_feed_missing_belt_count(observation) + 4)
         self.assertIn("boiler_feed_requires_route_scale_belt_mall=true", result["evidence"])
+        self.assertIn(
+            f"transport_belt_bootstrap_target={planner_module._boiler_coal_feed_missing_belt_count(observation) + 4}",
+            result["evidence"],
+        )
         self.assertIn("gear_belt_logistics_pair_exists=false", result["evidence"])
         self.assertIn("route_scale_repair_skill=bootstrap_build_item_mall", result["evidence"])
 
@@ -1244,6 +1250,10 @@ class StrategyTests(unittest.TestCase):
 
         self.assertEqual(direct_feed_result["selected_skill"], "bootstrap_build_item_mall")
         self.assertEqual(direct_feed_result["guardrail_adjusted"]["from"], "connect_coal_fuel_feed")
+        self.assertEqual(
+            direct_feed_result["target_count"],
+            planner_module._boiler_coal_feed_missing_belt_count(observation) + 4,
+        )
 
     def test_active_boiler_feed_suppresses_stale_belt_shortfall(self):
         observation = {
@@ -4423,6 +4433,33 @@ class StrategyTests(unittest.TestCase):
             self.assertEqual(result["selected_skill"], "automate_electronic_circuit_line")
             self.assertEqual(result["target_count"], 18)
             self.assertNotIn("boiler coal feed construction belts", result["blockers"])
+
+    def test_boiler_fuel_guardrail_does_not_preempt_unbuildable_belt_route(self):
+        observation = burner_drill_replacement_observation(electric_researched=True)
+        observation["research"]["technologies"]["logistics"] = {"researched": True}
+        belt_issue = {"missing": 225, "available": 35, "target_count": 229}
+
+        with (
+            patch("factorio_ai.strategy._boiler_feed_belt_shortfall_issue", return_value=belt_issue),
+            patch("factorio_ai.strategy._boiler_feed_route_scale_mall_issue", return_value=None),
+            patch("factorio_ai.strategy._boiler_coal_feed_should_preempt_power", return_value=True),
+        ):
+            result = reconcile_strategy_decision(
+                {
+                    "selected_skill": "plan_factory_site",
+                    "priority": 50,
+                    "reason": "Improve layout.",
+                    "evidence": [],
+                    "blockers": [],
+                    "expected_effect": "",
+                    "source": "llm",
+                },
+                "launch_rocket_program",
+                observation,
+            )
+
+        self.assertNotEqual(result["selected_skill"], "connect_coal_fuel_feed")
+        self.assertNotIn("boiler coal fuel feed", result["blockers"])
 
     def test_reconcile_promotes_layout_planning_to_active_logistics_without_heuristic_hint(self):
         result = reconcile_strategy_decision(

@@ -1252,7 +1252,23 @@ class FactorioController:
                         },
                         runtime_dir=self.cfg.runtime_dir,
                     )
-                    replacement_config = self._skill_run_config(replacement, max_steps=max_steps)
+                    replacement_fields = self._stall_recovery_strategy_fields(objective, satisfaction_obs, replacement)
+                    replacement_target_count = _int_or_none(replacement_fields.get("target_count"))
+                    replacement_target_item = _strategy_target_item(replacement_fields)
+                    replacement_input_item = _strategy_site_input_item(replacement_fields)
+                    if replacement_target_count is not None:
+                        replacement_strategy["target_count"] = replacement_target_count
+                    if replacement_target_item is not None:
+                        replacement_strategy["target_item"] = replacement_target_item
+                    if replacement_input_item is not None:
+                        replacement_strategy["input_item"] = replacement_input_item
+                    replacement_config = self._skill_run_config(
+                        replacement,
+                        target_count=replacement_target_count,
+                        target_item=replacement_target_item,
+                        input_item=replacement_input_item,
+                        max_steps=max_steps,
+                    )
                     if replacement_config is not None:
                         selected = replacement
                         strategy = replacement_strategy
@@ -1874,6 +1890,38 @@ class FactorioController:
             return False
         return True
 
+    def _stall_recovery_strategy_fields(
+        self,
+        objective: str,
+        observation: dict[str, Any],
+        skill_name: str,
+    ) -> dict[str, Any]:
+        """Recover target fields that a name-only stall override would otherwise drop."""
+
+        fields: dict[str, Any] = {}
+        try:
+            production_targets = load_targets(self.cfg.runtime_dir, objective).per_minute
+            planned = heuristic_strategy(objective, observation, production_targets)
+            selected = str(planned.get("selected_skill") or planned.get("selected_goal") or "")
+            if selected == skill_name:
+                for key in ("target_item", "target_count", "input_item"):
+                    if planned.get(key) is not None:
+                        fields[key] = planned[key]
+        except Exception:  # noqa: BLE001 - recovery still works with default skill targets.
+            pass
+
+        if skill_name == "bootstrap_build_item_mall":
+            try:
+                from . import strategy as strategy_mod
+
+                target = strategy_mod._construction_belt_bootstrap_target(observation)
+                if target > (_int_or_none(fields.get("target_count")) or 0):
+                    fields["target_count"] = target
+                    fields.setdefault("target_item", "transport-belt")
+            except Exception:  # noqa: BLE001
+                pass
+        return fields
+
     def run_autopilot_loop(
         self,
         objective: str = "launch_rocket_program",
@@ -1955,6 +2003,11 @@ class FactorioController:
                                 objective, stall_obs, recent_skills[-window:] or [last_selected]
                             )
                         if override_skill:
+                            if stall_obs is not None:
+                                fields = self._stall_recovery_strategy_fields(objective, stall_obs, override_skill)
+                                override_target_count = _int_or_none(fields.get("target_count"))
+                                override_target_item = _strategy_target_item(fields)
+                                override_input_item = _strategy_site_input_item(fields)
                             trigger = (
                                 f"no progress for {stall_count} cycles on '{last_selected}'"
                                 if recover_for_stall

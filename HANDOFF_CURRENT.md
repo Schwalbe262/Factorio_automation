@@ -1,10 +1,8 @@
 # Current Handoff
-- Branch `chore/part130-unattended-qwen9-supervisor`; Qwen/vLLM service id `13039` ready and supervisor running.
-- Fresh no-mod map is active; server UP, researched=5, live skill `automate_electronic_circuit_line`.
-- Slurm home cleanup reduced `~/factorio-ai-worker` from ~27G to 63M; `factorio-ai-models` remains 21G for current 27B AWQ cache.
-- `cleanup_and_deploy.ps1` now also prunes old nested scheduler strategy/layout task JSON under deployed `factorio-ai/.factorio-ai-scheduler-tasks`.
-- Strategy caps electric-drill prerequisite circuits at 18 and prevents boiler belt stockpiling from preempting active electric-drill dependency work.
-- Planner fixes: circuit/assembler bootstrap takes nearby chest-buffered gears, belt mall stops when stock target is reached, electric-drill mall routes missing circuits to circuit automation.
-- Validated `tests.test_strategy` 171 OK, relevant PlannerTests 94 OK, controller fake-automation regression OK.
-- Restarted autopilot PID `69496`; live reached electric-drill mall, then returned to belt bootstrap/strategy decision for long boiler route belts.
-- Dirty runtime-heavy `note.md`/`insight.md` exist; stage only intentional code/tests/handoff/token note unless explicitly cleaning history.
+- Branch `chore/part130-unattended-qwen9-supervisor`; server UP, researched=5, Qwen/vLLM service id `[13286]` ready, supervisor running.
+- Fixed long boiler coal-feed oscillation: strategy/controller/planner now preserve route-scale belt target instead of collapsing bootstrap mall to 20/40.
+- Boiler/fuel guardrails no longer force `connect_coal_fuel_feed` when belt route prerequisites are unbuildable; recovery keeps `bootstrap_build_item_mall target~227`.
+- Live validation: restarted autopilot PID `62532`; latest `bootstrap_build_item_mall` ran with `target=227` and increased transport belts `48 -> 56`.
+- Validated `tests.test_planner` 477 OK, `tests.test_strategy` 172 OK, `tests.test_controller` 100 OK.
+- Slurm home cleanup already reduced `~/factorio-ai-worker` to ~65M; `factorio-ai-models` remains 21G current 27B AWQ cache.
+- Dirty runtime-heavy `note.md`/`insight.md` exist; stage only intentional code/tests/handoff unless explicitly cleaning history.

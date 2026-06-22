@@ -1572,6 +1572,8 @@ def reconcile_strategy_decision(
         selected in _COAL_DEPENDENT_SKILLS
         and _coal_fuel_feed_needed(observation, objective, production_targets)
         and _transport_belt_automation_ready(observation)
+        and boiler_feed_belt_shortfall is None
+        and boiler_feed_route_scale_mall_issue is None
     ):
         adjusted = dict(decision)
         adjusted["selected_skill"] = "connect_coal_fuel_feed"
@@ -1640,7 +1642,11 @@ def reconcile_strategy_decision(
         "build_site_input_logistic_line",
         "research_electric_mining_drill",
         "produce_automation_science_pack",
-    } and _boiler_coal_feed_should_preempt_power(observation):
+    } and (
+        boiler_feed_belt_shortfall is None
+        and boiler_feed_route_scale_mall_issue is None
+        and _boiler_coal_feed_should_preempt_power(observation)
+    ):
         adjusted = dict(decision)
         adjusted["selected_skill"] = "connect_coal_fuel_feed"
         adjusted["priority"] = max(_bounded_int(decision.get("priority"), 50, 0, 100), 91)
@@ -2859,7 +2865,11 @@ def _heuristic_strategy_impl(
             expected_effect="Build and fuel a burner coal drill with an output belt so smelting and power can be refueled locally.",
         ).to_dict()
 
-    if _boiler_coal_feed_should_preempt_power(observation):
+    if (
+        _boiler_coal_feed_should_preempt_power(observation)
+        and _boiler_feed_belt_shortfall_issue(observation) is None
+        and _boiler_feed_route_scale_mall_issue(observation) is None
+    ):
         return StrategicDecision(
             selected_skill="connect_coal_fuel_feed",
             priority=91,
@@ -3626,7 +3636,10 @@ def _construction_belt_bootstrap_target(observation: dict[str, Any]) -> int:
     missing_boiler_route_belts = _boiler_coal_feed_missing_belt_count(observation)
     if missing_boiler_route_belts <= 0:
         return 20
-    if not _transport_belt_mall_ready_for_route_scaleup(observation):
+    if (
+        not _technology_researched(observation, "automation")
+        and not _transport_belt_mall_ready_for_route_scaleup(observation)
+    ):
         return BOOTSTRAP_TRANSPORT_BELT_SEED_TARGET_CAP
     return max(20, missing_boiler_route_belts + 4)
 
@@ -5242,7 +5255,11 @@ def _power_or_fuel_recovery_target_before_electric_work(
     objective: str,
     production_targets: dict[str, float] | None,
 ) -> dict[str, Any] | None:
-    if _boiler_coal_feed_should_preempt_power(observation):
+    if (
+        _boiler_coal_feed_should_preempt_power(observation)
+        and _boiler_feed_belt_shortfall_issue(observation) is None
+        and _boiler_feed_route_scale_mall_issue(observation) is None
+    ):
         return {
             "selected_skill": "connect_coal_fuel_feed",
             "blocker": "boiler coal fuel feed",
