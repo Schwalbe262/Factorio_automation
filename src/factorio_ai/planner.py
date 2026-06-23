@@ -3388,6 +3388,8 @@ def _iron_belt_smelting_preference_after_direct_support(
             "starter stone supply",
             "direct smelting drill",
             "direct smelting furnace",
+            "misplaced direct iron-plate mining drill",
+            "misplaced direct iron-plate furnace",
             "craft furnace for direct",
             "craft gears for direct",
             "move near coal",
@@ -11439,7 +11441,7 @@ def _logistics_line_power_corridor_decision(
                 "type": "build",
                 "name": "small-electric-pole",
                 "position": build_position,
-                "allow_nearby": False,
+                "allow_nearby": _power_corridor_build_allows_nearby(label),
             },
             f"build power corridor for {label}",
         )
@@ -11464,6 +11466,11 @@ def _logistics_line_power_corridor_decision(
             f"connect power corridor for {label}",
         )
     return PlannerDecision(None, f"{label} still lacks powered endpoint coverage after corridor check")
+
+
+def _power_corridor_build_allows_nearby(label: str) -> bool:
+    normalized = str(label or "").lower()
+    return "expanded " in normalized and "smelting input inserter" in normalized
 
 
 def _select_logistics_line_inserter_power_pole_position(

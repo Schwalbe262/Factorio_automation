@@ -2666,6 +2666,28 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 7102)
         self.assertIn("clear blocking stone-furnace", decision.reason)
 
+    def test_power_corridor_pole_build_allows_nearby_fallback(self):
+        obs = base_observation()
+        obs["player"]["position"] = {"x": 3.5, "y": -8.5}
+        obs["inventory"] = {"small-electric-pole": 1}
+        target = {"x": 1.5, "y": -8.5}
+
+        with (
+            patch("factorio_ai.planner._select_logistics_line_inserter_power_pole_position", return_value=target),
+            patch("factorio_ai.planner._small_power_corridor_positions_to_target", return_value=[target]),
+        ):
+            decision = planner_module._logistics_line_power_corridor_decision(
+                obs,
+                planner_module.player_position(obs),
+                {"x": 3.5, "y": -8.5},
+                "expanded iron-plate smelting input inserter",
+            )
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "small-electric-pole")
+        self.assertEqual(decision.action["position"], target)
+        self.assertTrue(decision.action["allow_nearby"])
+
     def test_gear_belt_mall_relocation_rebuilds_from_inventory_after_reaching_source(self):
         obs = long_gear_mall_relocation_observation()
         _add_existing_relocation_power_corridor(obs)
@@ -4823,6 +4845,30 @@ class PlannerTests(unittest.TestCase):
         self.assertIsNotNone(decision.action)
         self.assertNotEqual(decision.action["position"], {"x": -20.0, "y": -84.0})
         self.assertIn("expanded iron-plate smelting input inserter", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "direct_iron_smelting_support_diverted")
+
+    def test_iron_skill_does_not_ping_pong_misplaced_direct_furnace_against_expanded_smelting(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 4, "coal": 30, "small-electric-pole": 1}
+        obs["entities"].append(mall_assembler(recipe="transport-belt"))
+        direct_support = planner_module.PlannerDecision(
+            {"type": "move_to", "position": {"x": 84.0, "y": 39.0}},
+            "move near misplaced direct iron-plate furnace before rebuilding exact smelting cell",
+        )
+        expansion = planner_module.PlannerDecision(
+            {"type": "move_to", "position": {"x": 3.5, "y": -8.5}},
+            "move near power corridor for expanded iron-plate smelting input inserter",
+        )
+
+        with (
+            patch("factorio_ai.planner._direct_plate_smelting_decision", return_value=direct_support),
+            patch("factorio_ai.planner.ExpandIronSmeltingSkill.next_action", return_value=expansion),
+        ):
+            decision = IronPlateSkill(target_count=90).next_action(obs)
+
+        self.assertEqual(decision.action["position"], {"x": 3.5, "y": -8.5})
+        self.assertNotEqual(decision.action["position"], {"x": 84.0, "y": 39.0})
+        self.assertIn("prefer existing expanded belt smelting", decision.reason)
         self.assertEqual(decision.metadata["failure_root"], "direct_iron_smelting_support_diverted")
 
     def test_iron_skill_routes_expansion_fuel_logistics_to_coal_feed_repair(self):
