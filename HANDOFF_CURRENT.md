@@ -2,7 +2,7 @@
 - Branch `chore/part130-unattended-qwen9-supervisor`; last code commit/push `40ae0c7 Speed first electric drill bootstrap`.
 - User asked to pause current repair track and pivot to a new direction; do not continue copper-logistics fix unless re-requested.
 - Map saved via `no-mod-server-save` after health tick `1239419`; no-mod server left running (`start-no-mod-server` wrapper PID `55268` before pause).
-- Autopilot was stopped; no `run-no-mod-autopilot` process remained immediately after stop.
+- Autopilot and `run_factorio_no_mod_unattended_llm.ps1` launcher were stopped; no `run-no-mod-autopilot` process remained after final check.
 - Server/version: Steam Factorio `2.0.77`, RCON was UP; vLLM service `13329` was ready.
 - Live before pause: researched=5, current research `logistics` at ~0.15, `electric-mining-drill=0`.
 - Last active skill before pause: `setup_coal_supply` stopped OK (`coal supply site is active...`); earlier risk was copper-plate hand-carry refusal for `research_logistics`.
