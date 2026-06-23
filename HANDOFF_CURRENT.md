@@ -1,10 +1,11 @@
 # Current Handoff
 - Branch `chore/part130-unattended-qwen9-supervisor`; dual-track builder architecture, no-mod remains primary.
-- Part 1 pushed as `88826f9`: `build_block` substrate, `BuilderResult`, builder registry, no-mod Lua dispatch.
-- Part 2 complete locally: `direct_feed_smelter_set` and `coal_bootstrap_cluster` no-mod builders implemented.
-- Direct-feed supports 2-4 iron/copper burner-drill -> furnace cells and clamps fuel batch to 20-30.
-- Coal cluster builds 1-4 coal drills with dedicated chest/belt output and protected teardown candidates.
-- Validation: 30 targeted tests OK; 835 selected regression tests OK; full unittest discover passed 1314 tests.
-- Full test emitted one existing socket `ResourceWarning` in controller tests; no failures.
+- Part 1 pushed `88826f9`; Part 2 pushed `c177abe`.
+- Live no-mod test ran on existing map, not reset; server save succeeded after test.
+- Live fix: resource tile `.5` positions now normalize to burner drill centers before builder placement.
+- Live fix: builder supply failures now report `missing_item` instead of blank reasons.
+- Live result: `direct_feed_smelter_set` completed 2 iron cells, placed 4 entities, inserted 48 fuel.
+- Live result: `coal_bootstrap_cluster` placed 1 drill/chest, rerun reused both and inserted 24 fuel.
+- Validation after fix: 30 targeted tests OK; 835 selected regression tests OK.
 - Token usage: unavailable because Codex state sqlite DB is malformed; weekly quota unavailable.
 - Next: Part 3 steam bank, dedicated coal feed, circuit prerequisites, electric mining drill transition.

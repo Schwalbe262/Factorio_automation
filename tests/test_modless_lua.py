@@ -316,6 +316,7 @@ class ModlessLuaTests(unittest.TestCase):
 
         self.assertIn("target_count = clamp_int(params.count, 4, 2, 4)", body)
         self.assertIn("fuel_batch = clamp_int(params.fuel_count or params.fuel_batch, 24, 20, 30)", body)
+        self.assertIn("builder_drill_center(resource_position)", command)
         self.assertIn('"burner-mining-drill"', body)
         self.assertIn('"stone-furnace"', body)
         self.assertIn("resource_name ~= \"iron-ore\" and resource_name ~= \"copper-ore\"", body)
@@ -336,6 +337,7 @@ class ModlessLuaTests(unittest.TestCase):
 
         self.assertIn("target_count = clamp_int(params.count, 2, 1, 4)", body)
         self.assertIn("fuel_batch = clamp_int(params.fuel_count or params.fuel_batch, 24, 20, 30)", body)
+        self.assertIn("builder_drill_center(resource_position)", command)
         self.assertIn('builder_resource_candidates("coal"', body)
         self.assertIn('"transport-belt"', body)
         self.assertIn('"wooden-chest"', body)

@@ -1676,6 +1676,12 @@ local function builder_resource_candidates(resource_name, center, radius, limit)
   end)
   return resources
 end
+local function builder_drill_center(resource_position)
+  return {
+    x = round(math.floor((resource_position.x or resource_position[1]) + 0.5)),
+    y = round(math.floor((resource_position.y or resource_position[2]) + 0.5))
+  }
+end
 local function burner_drill_output_position_from(position, direction)
   local integer_center = math.abs(position.x - math.floor(position.x + 0.5)) < 0.01 and math.abs(position.y - math.floor(position.y + 0.5)) < 0.01
   if integer_center then
@@ -1689,7 +1695,7 @@ local function burner_drill_output_position_from(position, direction)
 end
 local function direct_feed_layout(resource_position, orientation)
   local dx, dy, drill_direction = builder_orientation_spec(orientation)
-  local drill_position = { x = resource_position.x, y = resource_position.y }
+  local drill_position = builder_drill_center(resource_position)
   local output_position = burner_drill_output_position_from(drill_position, drill_direction)
   return {
     orientation = orientation,
@@ -1700,7 +1706,7 @@ local function direct_feed_layout(resource_position, orientation)
 end
 local function coal_cluster_layout(resource_position, orientation)
   local dx, dy, drill_direction, belt_direction = builder_orientation_spec(orientation)
-  local drill_position = { x = resource_position.x, y = resource_position.y }
+  local drill_position = builder_drill_center(resource_position)
   return {
     orientation = orientation,
     drill_position = drill_position,
@@ -1859,7 +1865,11 @@ build_direct_feed_smelter_set = function()
       if not used[key] then
         local drill_ok, drill_reason = builder_can_place_entity("burner-mining-drill", layout.drill_position, layout.drill_direction, resource_name)
         local furnace_ok, furnace_reason = builder_can_place_entity("stone-furnace", layout.furnace_position, defines.direction.north, nil)
-        if drill_ok and furnace_ok and builder_can_supply_item(inventory, "burner-mining-drill", existing_built_entity(agent.surface, agent.force, "burner-mining-drill", layout.drill_position) and 0 or 1) and builder_can_supply_item(inventory, "stone-furnace", existing_built_entity(agent.surface, agent.force, "stone-furnace", layout.furnace_position) and 0 or 1) then
+        local drill_needed = existing_built_entity(agent.surface, agent.force, "burner-mining-drill", layout.drill_position) and 0 or 1
+        local furnace_needed = existing_built_entity(agent.surface, agent.force, "stone-furnace", layout.furnace_position) and 0 or 1
+        local drill_supply_ok = builder_can_supply_item(inventory, "burner-mining-drill", drill_needed)
+        local furnace_supply_ok = builder_can_supply_item(inventory, "stone-furnace", furnace_needed)
+        if drill_ok and furnace_ok and drill_supply_ok and furnace_supply_ok then
           local drill = builder_place_entity(inventory, "burner-mining-drill", layout.drill_position, layout.drill_direction, resource_name, counters, outputs, failures, crafted)
           local furnace = builder_place_entity(inventory, "stone-furnace", layout.furnace_position, defines.direction.north, nil, counters, outputs, failures, crafted)
           if drill and furnace then
@@ -1880,7 +1890,9 @@ build_direct_feed_smelter_set = function()
           end
         else
           counters.failed = counters.failed + 1
-          table.insert(failures, { position = position_table(layout.drill_position), reason = drill_reason ~= "" and drill_reason or furnace_reason })
+          local reason = drill_reason ~= "" and drill_reason or furnace_reason
+          if reason == "" and (not drill_supply_ok or not furnace_supply_ok) then reason = "missing_item" end
+          table.insert(failures, { position = position_table(layout.drill_position), reason = reason })
         end
       end
     end
@@ -1931,7 +1943,9 @@ build_coal_bootstrap_cluster = function()
         local output_ok, output_reason = builder_can_place_entity(output_name, layout.output_position, output_direction, nil)
         local drill_needed = existing_built_entity(agent.surface, agent.force, "burner-mining-drill", layout.drill_position) and 0 or 1
         local output_needed = existing_built_entity(agent.surface, agent.force, output_name, layout.output_position) and 0 or 1
-        if drill_ok and output_ok and builder_can_supply_item(inventory, "burner-mining-drill", drill_needed) and builder_can_supply_item(inventory, output_name, output_needed) then
+        local drill_supply_ok = builder_can_supply_item(inventory, "burner-mining-drill", drill_needed)
+        local output_supply_ok = builder_can_supply_item(inventory, output_name, output_needed)
+        if drill_ok and output_ok and drill_supply_ok and output_supply_ok then
           local drill = builder_place_entity(inventory, "burner-mining-drill", layout.drill_position, layout.drill_direction, "coal", counters, outputs, failures, crafted)
           local output = builder_place_entity(inventory, output_name, layout.output_position, output_direction, nil, counters, outputs, failures, crafted)
           if drill and output then
@@ -1951,7 +1965,9 @@ build_coal_bootstrap_cluster = function()
           end
         else
           counters.failed = counters.failed + 1
-          table.insert(failures, { position = position_table(layout.drill_position), reason = drill_reason ~= "" and drill_reason or output_reason })
+          local reason = drill_reason ~= "" and drill_reason or output_reason
+          if reason == "" and (not drill_supply_ok or not output_supply_ok) then reason = "missing_item" end
+          table.insert(failures, { position = position_table(layout.drill_position), reason = reason })
         end
       end
     end
