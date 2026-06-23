@@ -16,6 +16,7 @@ from factorio_ai.controller import (
     ModlessFactorioController,
     RunSummary,
     StrategyStepSummary,
+    _bootstrap_seed_followup_repair,
     _boiler_handfuel_prerequisite_repair,
     _guard_post_automation_handcraft,
     _guard_unpowered_connect_power_radius,
@@ -687,6 +688,103 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(run.seed_count, 2)
         self.assertEqual(run.reason, "follow-up observed")
 
+    def test_run_skill_allows_repeated_bootstrap_seed_after_followup_entity_increases(self):
+        observations = [
+            {
+                "tick": 1,
+                "inventory": {"iron-plate": 6},
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "unit_number": 20,
+                        "recipe": "transport-belt",
+                        "position": {"x": 0, "y": 0},
+                        "electric_network_connected": True,
+                    }
+                ],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
+            {
+                "tick": 2,
+                "inventory": {"iron-plate": 3},
+                "entities": [
+                    {
+                        "name": "assembling-machine-1",
+                        "unit_number": 20,
+                        "recipe": "transport-belt",
+                        "position": {"x": 0, "y": 0},
+                        "electric_network_connected": True,
+                    },
+                    {"name": "transport-belt", "unit_number": 21, "position": {"x": 1, "y": 0}},
+                ],
+                "research": {"technologies": {"automation": {"researched": True}}},
+            },
+            {
+                "tick": 3,
+                "inventory": {},
+                "entities": [
+                    {"name": "transport-belt", "unit_number": 21, "position": {"x": 1, "y": 0}},
+                    {"name": "transport-belt", "unit_number": 22, "position": {"x": 2, "y": 0}},
+                ],
+                "research": {"technologies": {"automation": {"researched": True}}},
+                "done": True,
+            },
+        ]
+
+        class RepeatingBeltSeedSkill:
+            def next_action(self, observation):
+                if observation.get("done"):
+                    return PlannerDecision(None, "belt entities increased", done=True)
+                return PlannerDecision(
+                    {
+                        "type": "insert",
+                        "item": "iron-plate",
+                        "count": 3,
+                        "unit_number": 20,
+                        "name": "assembling-machine-1",
+                        "position": {"x": 0, "y": 0},
+                        "bootstrap_seed": True,
+                        "seed_reason": "transport-belt_mall_buffered_gear_plate_seed",
+                        "expected_followup": "transport-belt assembler produces output",
+                    },
+                    "seed belt assembler",
+                    metadata={
+                        "bootstrap_seed": True,
+                        "seed_reason": "transport-belt_mall_buffered_gear_plate_seed",
+                        "expected_followup": "transport-belt assembler produces output",
+                    },
+                )
+
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.observe_calls = 0
+
+            def observe(self):
+                item = observations[min(self.observe_calls, len(observations) - 1)]
+                self.observe_calls += 1
+                return item
+
+            def act(self, _action):
+                return {"ok": True}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_test_config(Path(tmp))
+            controller = FakeController(cfg)
+            with patch("factorio_ai.controller.time.sleep", return_value=None):
+                run = controller._run_skill(
+                    RepeatingBeltSeedSkill(),
+                    target_item="transport-belt",
+                    target=2,
+                    goal="test_belt_seed_entities",
+                    max_steps=3,
+                    log_prefix="test-belt-seed-entities",
+                )
+
+        self.assertTrue(run.ok)
+        self.assertEqual(run.seed_count, 2)
+        self.assertEqual(run.reason, "belt entities increased")
+
     def test_run_skill_blocks_repeated_emergency_boiler_seed_across_runs(self):
         observation = {
             "tick": 1,
@@ -767,12 +865,26 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(len(controller.actions), 1)
         self.assertIn("emergency_boiler_fuel:30", history["seeds"])
 
-    def test_boiler_handfuel_repair_targets_belt_mall_when_route_belts_missing(self):
+    def test_boiler_handfuel_repair_targets_coal_feed_after_emergency_seed_used(self):
         observation = {"inventory": {"transport-belt": 0}, "entities": []}
 
         with patch("factorio_ai.controller._boiler_coal_feed_missing_belt_count", return_value=37):
             repair = _boiler_handfuel_prerequisite_repair(
                 "one-time emergency boiler bootstrap already attempted; run connect_coal_fuel_feed instead of repeated boiler hand-fueling",
+                observation,
+            )
+
+        self.assertEqual(repair["skill"], "connect_coal_fuel_feed")
+        self.assertIsNone(repair["target_item"])
+        self.assertIsNone(repair["target_count"])
+
+    def test_boiler_handfuel_repair_targets_belt_mall_when_coal_feed_needs_belts(self):
+        observation = {"inventory": {"transport-belt": 0}, "entities": []}
+
+        with patch("factorio_ai.controller._boiler_coal_feed_missing_belt_count", return_value=37):
+            repair = _boiler_handfuel_prerequisite_repair(
+                "boiler coal feed needs automated transport-belt production or existing belt stock; "
+                "refusing repeated boiler hand-fueling",
                 observation,
             )
 
@@ -789,6 +901,16 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(repair["skill"], "bootstrap_build_item_mall")
         self.assertEqual(repair["target_item"], "inserter")
         self.assertEqual(repair["target_count"], 5)
+
+    def test_bootstrap_seed_followup_repair_targets_gear_belt_logistics(self):
+        repair = _bootstrap_seed_followup_repair(
+            "bootstrap seed already attempted without expected follow-up: transport-belt_mall_buffered_gear_plate_seed",
+            {"inventory": {"transport-belt": 3}},
+        )
+
+        self.assertEqual(repair["skill"], "build_gear_belt_mall_logistics")
+        self.assertIsNone(repair["target_item"])
+        self.assertEqual(repair["target_count"], 20)
 
     def test_one_time_boiler_seed_history_ignores_prior_map_tick(self):
         action = {
@@ -818,6 +940,145 @@ class ControllerTests(unittest.TestCase):
 
             self.assertFalse(_one_time_seed_already_used(runtime, action, {"tick": 10}))
             self.assertTrue(_one_time_seed_already_used(runtime, action, {"tick": 2500}))
+
+    def test_one_time_boiler_seed_history_allows_repeat_after_feed_route_progress(self):
+        action = {
+            "type": "insert",
+            "item": "coal",
+            "count": 5,
+            "unit_number": 30,
+            "name": "boiler",
+            "position": {"x": 8, "y": 0},
+            "emergency_bootstrap": True,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            (runtime / "bootstrap-seed-history.json").write_text(
+                json.dumps(
+                    {
+                        "seeds": {
+                            "emergency_boiler_fuel:30": {
+                                "tick": 100,
+                                "boiler_feed_missing_belts": 12,
+                                "action": {"unit_number": 30, "name": "boiler"},
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("factorio_ai.controller._boiler_coal_feed_missing_belt_count", return_value=12):
+                self.assertTrue(_one_time_seed_already_used(runtime, action, {"tick": 200}))
+            with patch("factorio_ai.controller._boiler_coal_feed_missing_belt_count", return_value=11):
+                self.assertFalse(_one_time_seed_already_used(runtime, action, {"tick": 200}))
+
+    def test_one_time_boiler_seed_history_allows_larger_buffer_upgrade(self):
+        action = {
+            "type": "insert",
+            "item": "coal",
+            "count": 20,
+            "unit_number": 30,
+            "name": "boiler",
+            "position": {"x": 8, "y": 0},
+            "emergency_bootstrap": True,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            (runtime / "bootstrap-seed-history.json").write_text(
+                json.dumps(
+                    {
+                        "seeds": {
+                            "emergency_boiler_fuel:30": {
+                                "tick": 100,
+                                "boiler_feed_missing_belts": 12,
+                                "action": {"unit_number": 30, "name": "boiler", "count": 5},
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("factorio_ai.controller._boiler_coal_feed_missing_belt_count", return_value=12):
+                self.assertFalse(_one_time_seed_already_used(runtime, action, {"tick": 200}))
+
+    def test_one_time_boiler_seed_history_allows_repeat_after_research_progress(self):
+        action = {
+            "type": "insert",
+            "item": "coal",
+            "count": 20,
+            "unit_number": 30,
+            "name": "boiler",
+            "position": {"x": 8, "y": 0},
+            "emergency_bootstrap": True,
+        }
+        observation = {
+            "tick": 200,
+            "research": {
+                "current": "electric-mining-drill",
+                "progress": 0.40,
+                "technologies": {
+                    "automation": {"researched": True},
+                    "electric-mining-drill": {"researched": False},
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            (runtime / "bootstrap-seed-history.json").write_text(
+                json.dumps(
+                    {
+                        "seeds": {
+                            "emergency_boiler_fuel:30": {
+                                "tick": 100,
+                                "boiler_feed_missing_belts": 12,
+                                "research_progress_marker": {
+                                    "researched": 1,
+                                    "current_research": "electric-mining-drill",
+                                    "research_progress": 0.40,
+                                },
+                                "action": {"unit_number": 30, "name": "boiler", "count": 20},
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("factorio_ai.controller._boiler_coal_feed_missing_belt_count", return_value=12):
+                self.assertTrue(_one_time_seed_already_used(runtime, action, observation))
+                observation["research"]["progress"] = 0.46
+                self.assertFalse(_one_time_seed_already_used(runtime, action, observation))
+
+    def test_one_time_boiler_seed_history_migrates_old_record_when_feed_route_needs_belts(self):
+        action = {
+            "type": "insert",
+            "item": "coal",
+            "count": 5,
+            "unit_number": 30,
+            "name": "boiler",
+            "position": {"x": 8, "y": 0},
+            "emergency_bootstrap": True,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            (runtime / "bootstrap-seed-history.json").write_text(
+                json.dumps(
+                    {
+                        "seeds": {
+                            "emergency_boiler_fuel:30": {
+                                "tick": 100,
+                                "action": {"unit_number": 30, "name": "boiler"},
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("factorio_ai.controller._boiler_coal_feed_missing_belt_count", return_value=15):
+                self.assertFalse(_one_time_seed_already_used(runtime, action, {"tick": 200}))
 
     def test_strategy_decision_records_and_strips_llm_io_traces(self):
         class FakeController(FactorioController):
@@ -1182,7 +1443,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(state["reason"], "autopilot_start")
         self.assertEqual(state["action"], "renewal_not_needed")
 
-    def test_background_layout_work_submits_simulation_task_during_active_skill(self):
+    def test_background_layout_work_skips_remote_submit_during_active_skill_by_default(self):
         observation = {
             "tick": 1,
             "inventory": {},
@@ -1209,6 +1470,52 @@ class ControllerTests(unittest.TestCase):
                         "FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS": "0",
                         "FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "queue",
                     },
+                    clear=False,
+                ),
+                patch.object(controller, "_maybe_ensure_slurm_worker") as ensure_worker,
+                patch("factorio_ai.remote_slurm.submit_task") as submit_task,
+            ):
+                controller._maybe_progress_background_layout_work(
+                    observation,
+                    "launch_rocket_program",
+                    "bootstrap_build_item_mall",
+                    4,
+                )
+            log_path = cfg.log_dir / "layout-improvement-background.jsonl"
+
+        ensure_worker.assert_not_called()
+        submit_task.assert_not_called()
+        self.assertFalse(log_path.exists())
+
+    def test_background_layout_work_submits_simulation_task_during_active_skill_when_enabled(self):
+        observation = {
+            "tick": 1,
+            "inventory": {},
+            "entities": [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 10,
+                    "recipe": "electronic-circuit",
+                    "position": {"x": 0, "y": 0},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                }
+            ],
+            "resources": [],
+            "research": {"technologies": {}},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = replace(make_test_config(Path(temp_dir)), slurm_enabled=True)
+            controller = FactorioController(cfg)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS": "0",
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "queue",
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_DURING_ACTIVE_SKILL": "1",
+                    },
+                    clear=False,
                 ),
                 patch("factorio_ai.remote_slurm.submit_task", return_value="layout-task.json") as submit_task,
             ):
@@ -1264,7 +1571,9 @@ class ControllerTests(unittest.TestCase):
                     {
                         "FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS": "0",
                         "FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "scheduler",
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_DURING_ACTIVE_SKILL": "1",
                     },
+                    clear=False,
                 ),
                 patch.object(controller, "_maybe_ensure_slurm_worker"),
                 patch("factorio_ai.remote_slurm.layout_improvement_status", return_value=status),
@@ -1327,7 +1636,9 @@ class ControllerTests(unittest.TestCase):
                     {
                         "FACTORIO_AI_BACKGROUND_LAYOUT_INTERVAL_SECONDS": "0",
                         "FACTORIO_AI_BACKGROUND_LAYOUT_MODE": "scheduler",
+                        "FACTORIO_AI_BACKGROUND_LAYOUT_DURING_ACTIVE_SKILL": "1",
                     },
+                    clear=False,
                 ),
                 patch.object(controller, "_maybe_ensure_slurm_worker"),
                 patch("factorio_ai.remote_slurm.layout_improvement_status", return_value=status),
@@ -3341,6 +3652,180 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(controller.calls[1]["override_source"], "autopilot_commit_skill")
         self.assertEqual(controller.calls[1]["target_item"], "inserter")
         self.assertEqual(controller.calls[1]["target_count"], 4)
+
+    def test_autopilot_commit_routes_used_boiler_seed_failure_to_coal_feed(self):
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.calls: list[dict[str, object]] = []
+
+            def observe(self):
+                return {
+                    "inventory": {"transport-belt": 0, "coal": 190},
+                    "entities": [],
+                    "resources": [],
+                    "research": {"technologies": {"automation": {"researched": True}}},
+                }
+
+            def run_strategy_step(self, **kwargs):
+                self.calls.append(dict(kwargs))
+                selected = str(kwargs.get("override_skill") or "setup_power")
+                if selected == "setup_power":
+                    reason = (
+                        "one-time emergency boiler bootstrap already attempted; run "
+                        "connect_coal_fuel_feed instead of repeated boiler hand-fueling"
+                    )
+                    return StrategyStepSummary(
+                        ok=False,
+                        reason=reason,
+                        objective=kwargs.get("objective", "launch_rocket_program"),
+                        selected_skill=selected,
+                        strategy={"selected_skill": selected},
+                        run=RunSummary(False, reason, 1, 0, self.cfg.log_dir / "stub.log", "steam"),
+                    )
+                return StrategyStepSummary(
+                    ok=True,
+                    reason="done",
+                    objective=kwargs.get("objective", "launch_rocket_program"),
+                    selected_skill=selected,
+                    strategy={"selected_skill": selected},
+                    run=RunSummary(True, "done", 1, 0, self.cfg.log_dir / "stub.log", "steam"),
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with patch.dict(
+                "os.environ",
+                {
+                    "FACTORIO_AI_AUTOPILOT_COMMIT_SKILL_ENABLED": "1",
+                    "FACTORIO_AI_AUTOPILOT_COMMIT_SKILL_MAX": "4",
+                },
+            ):
+                summary = controller.run_autopilot_loop(cycles=2, sleep_seconds=0)
+
+        self.assertFalse(summary.ok)
+        self.assertEqual(len(controller.calls), 2)
+        self.assertEqual(controller.calls[1]["override_skill"], "connect_coal_fuel_feed")
+        self.assertEqual(controller.calls[1]["override_source"], "autopilot_commit_skill")
+        self.assertIsNone(controller.calls[1]["target_item"])
+        self.assertIsNone(controller.calls[1]["target_count"])
+
+    def test_autopilot_commit_routes_coal_feed_belt_failure_to_belt_mall(self):
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.calls: list[dict[str, object]] = []
+
+            def observe(self):
+                return {
+                    "inventory": {"transport-belt": 0, "coal": 190},
+                    "entities": [],
+                    "resources": [],
+                    "research": {"technologies": {"automation": {"researched": True}}},
+                }
+
+            def run_strategy_step(self, **kwargs):
+                self.calls.append(dict(kwargs))
+                selected = str(kwargs.get("override_skill") or "connect_coal_fuel_feed")
+                if selected == "connect_coal_fuel_feed":
+                    reason = (
+                        "boiler coal feed needs automated transport-belt production or existing belt stock; "
+                        "refusing repeated boiler hand-fueling"
+                    )
+                    return StrategyStepSummary(
+                        ok=False,
+                        reason=reason,
+                        objective=kwargs.get("objective", "launch_rocket_program"),
+                        selected_skill=selected,
+                        strategy={"selected_skill": selected},
+                        run=RunSummary(False, reason, 1, 0, self.cfg.log_dir / "stub.log", "steam"),
+                    )
+                return StrategyStepSummary(
+                    ok=True,
+                    reason="done",
+                    objective=kwargs.get("objective", "launch_rocket_program"),
+                    selected_skill=selected,
+                    strategy={"selected_skill": selected},
+                    run=RunSummary(True, "done", 1, 0, self.cfg.log_dir / "stub.log", "steam"),
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "FACTORIO_AI_AUTOPILOT_COMMIT_SKILL_ENABLED": "1",
+                        "FACTORIO_AI_AUTOPILOT_COMMIT_SKILL_MAX": "4",
+                    },
+                ),
+                patch("factorio_ai.controller._boiler_coal_feed_missing_belt_count", return_value=37),
+            ):
+                summary = controller.run_autopilot_loop(cycles=2, sleep_seconds=0)
+
+        self.assertFalse(summary.ok)
+        self.assertEqual(len(controller.calls), 2)
+        self.assertEqual(controller.calls[1]["override_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(controller.calls[1]["override_source"], "autopilot_commit_skill")
+        self.assertEqual(controller.calls[1]["target_item"], "transport-belt")
+        self.assertEqual(controller.calls[1]["target_count"], 41)
+
+    def test_autopilot_commit_routes_belt_mall_seed_failure_to_gear_belt_logistics(self):
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.calls: list[dict[str, object]] = []
+
+            def observe(self):
+                return {
+                    "inventory": {"transport-belt": 0, "inserter": 8},
+                    "entities": [],
+                    "resources": [],
+                    "research": {"technologies": {"automation": {"researched": True}}},
+                }
+
+            def run_strategy_step(self, **kwargs):
+                self.calls.append(dict(kwargs))
+                selected = str(kwargs.get("override_skill") or "bootstrap_build_item_mall")
+                if selected == "bootstrap_build_item_mall":
+                    reason = (
+                        "bootstrap seed already attempted without expected follow-up: "
+                        "transport-belt_mall_buffered_gear_plate_seed"
+                    )
+                    return StrategyStepSummary(
+                        ok=False,
+                        reason=reason,
+                        objective=kwargs.get("objective", "launch_rocket_program"),
+                        selected_skill=selected,
+                        strategy={"selected_skill": selected},
+                        run=RunSummary(False, reason, 63, 0, self.cfg.log_dir / "stub.log", "transport-belt"),
+                    )
+                return StrategyStepSummary(
+                    ok=True,
+                    reason="done",
+                    objective=kwargs.get("objective", "launch_rocket_program"),
+                    selected_skill=selected,
+                    strategy={"selected_skill": selected},
+                    run=RunSummary(True, "done", 1, 0, self.cfg.log_dir / "stub.log", "transport-belt"),
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with patch.dict(
+                "os.environ",
+                {
+                    "FACTORIO_AI_AUTOPILOT_COMMIT_SKILL_ENABLED": "1",
+                    "FACTORIO_AI_AUTOPILOT_COMMIT_SKILL_MAX": "4",
+                },
+            ):
+                summary = controller.run_autopilot_loop(cycles=2, sleep_seconds=0)
+
+        self.assertFalse(summary.ok)
+        self.assertEqual(len(controller.calls), 2)
+        self.assertEqual(controller.calls[1]["override_skill"], "build_gear_belt_mall_logistics")
+        self.assertEqual(controller.calls[1]["override_source"], "autopilot_commit_skill")
+        self.assertEqual(controller.calls[1]["target_count"], 20)
+        self.assertIsNone(controller.calls[1]["target_item"])
 
     def test_autopilot_commit_routes_long_site_input_handcarry_failure_to_logistics_research(self):
         class FakeController(FactorioController):

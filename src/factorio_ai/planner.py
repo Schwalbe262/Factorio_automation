@@ -33,7 +33,7 @@ STARTER_SITE_RADIUS = 192.0
 STARTER_POWER_SITE_RADIUS = 160.0
 STARTER_ENTITY_CLUSTER_RADIUS = 224.0
 STARTER_BOILER_FUEL_FEED_ROUTE_LIMIT = 192.0
-EMERGENCY_BOILER_BOOTSTRAP_FUEL_INSERT = 5
+EMERGENCY_BOILER_BOOTSTRAP_FUEL_INSERT = 20
 STEAM_POWER_BOILER_FUEL_RESERVE = 10
 STARTER_FUEL_BATCH_COUNT = 30
 DIRECT_SMELTING_FUEL_RESERVE = 20
@@ -5231,7 +5231,7 @@ class CoalFuelFeedSkill:
     ) -> PlannerDecision | None:
         """Collapse the routed coal-feed belt into a single ``connect_entities`` action when every
         remaining segment is clean and in reach. Returns ``None`` (defer to the per-tile loop) if
-        any belt is misoriented, blocked, out of reach, or if belt stock is insufficient — so all
+        any belt is misoriented, blocked, out of reach, or if belt stock is insufficient ??so all
         the existing mine/clear/move recovery paths stay authoritative."""
 
         buildable: list[dict[str, Any]] = []
@@ -9626,6 +9626,8 @@ def _find_site_input_logistic_line_layout(
     observation: dict[str, Any],
     *,
     item: str | None = None,
+    consumer_reference_position: dict[str, float] | None = None,
+    consumer_max_distance: float | None = None,
 ) -> dict[str, Any] | None:
     target_items = {
         "iron-plate",
@@ -9657,6 +9659,12 @@ def _find_site_input_logistic_line_layout(
     candidates: list[dict[str, Any]] = []
     for consumer in _site_input_consumer_entities(observation, target_items):
         consumer_position = _position(consumer)
+        if (
+            consumer_reference_position is not None
+            and consumer_max_distance is not None
+            and distance(consumer_position, consumer_reference_position) > consumer_max_distance
+        ):
+            continue
         recipe = str(consumer.get("recipe") or consumer.get("recipe_name") or "")
         recipe_obj = RECIPES.get(recipe)
         if recipe_obj is None:
@@ -14570,9 +14578,20 @@ class IronPlateLogisticLineToGearMallSkill:
 class SiteInputLogisticLineSkill:
     """Build a belt route for a repeated producer-to-consumer factory input."""
 
-    def __init__(self, target_segments: int = 40, item: str | None = None) -> None:
+    def __init__(
+        self,
+        target_segments: int = 40,
+        item: str | None = None,
+        *,
+        consumer_reference_position: dict[str, float] | None = None,
+        consumer_max_distance: float | None = None,
+        require_usable_belts_before_route_search: bool = False,
+    ) -> None:
         self.target_segments = target_segments
         self.item = item
+        self.consumer_reference_position = consumer_reference_position
+        self.consumer_max_distance = consumer_max_distance
+        self.require_usable_belts_before_route_search = require_usable_belts_before_route_search
         self.research_skill = ResearchAutomationSkill()
 
     def next_action(self, observation: dict[str, Any]) -> PlannerDecision:
@@ -14588,8 +14607,27 @@ class SiteInputLogisticLineSkill:
                 None,
                 "site input logistics need automated transport-belt production before building repeated site-to-site routes",
             )
+        if (
+            self.require_usable_belts_before_route_search
+            and not _site_input_route_belt_stock_ready(observation)
+            and not _completed_site_input_logistics_observed(observation, self.item)
+        ):
+            return PlannerDecision(
+                None,
+                "site input logistics need usable transport belts from the belt mall before route search",
+                metadata={
+                    "failure_root": "belt_line_unbuildable",
+                    "repair_skill": "bootstrap_build_item_mall",
+                    "target_item": "transport-belt",
+                },
+            )
 
-        layout = _find_site_input_logistic_line_layout(observation, item=self.item)
+        layout = _find_site_input_logistic_line_layout(
+            observation,
+            item=self.item,
+            consumer_reference_position=self.consumer_reference_position,
+            consumer_max_distance=self.consumer_max_distance,
+        )
         if layout is None:
             completed_item = _completed_site_input_logistics_observed(observation, self.item)
             if completed_item:
@@ -15028,12 +15066,6 @@ class BuildItemMallSkill:
     def _effective_target_count(self, observation: dict[str, Any]) -> int:
         if self.target_item != "transport-belt":
             return self.target_count
-        missing_boiler_route_belts = _boiler_coal_feed_missing_belt_count(observation)
-        if missing_boiler_route_belts <= 0:
-            return self.target_count
-        available_belts = _available_boiler_feed_construction_belts(observation)
-        if available_belts >= missing_boiler_route_belts:
-            return self.target_count
         route_scale_bootstrap_ready = (
             _technology_researched_for_layout(observation, "automation")
             and _recipe_assembler_exists_for_layout(observation, "iron-gear-wheel")
@@ -15041,6 +15073,14 @@ class BuildItemMallSkill:
         )
         if not route_scale_bootstrap_ready and not _transport_belt_mall_ready_for_route_scaleup(observation):
             return min(self.target_count, BOOTSTRAP_TRANSPORT_BELT_SEED_TARGET_CAP)
+        if self.target_count > BOOTSTRAP_TRANSPORT_BELT_SEED_TARGET_CAP:
+            return self.target_count
+        missing_boiler_route_belts = _boiler_coal_feed_missing_belt_count(observation)
+        if missing_boiler_route_belts <= 0:
+            return self.target_count
+        available_belts = _available_boiler_feed_construction_belts(observation)
+        if available_belts >= missing_boiler_route_belts:
+            return self.target_count
         return max(self.target_count, missing_boiler_route_belts + 4)
 
     def next_action(
@@ -15246,28 +15286,46 @@ class BuildItemMallSkill:
         if output_count > 0:
             block_player_collection = _block_player_mall_output_collection_after_automation(observation, self.target_item)
             if block_player_collection and reference_position is not None:
-                logistics_layout = _find_site_input_logistic_line_layout(observation, item="iron-gear-wheel")
+                logistics_layout = _find_site_input_logistic_line_layout(
+                    observation,
+                    item="iron-gear-wheel",
+                    consumer_reference_position=reference_position,
+                    consumer_max_distance=4.5,
+                )
                 consumer = logistics_layout.get("consumer") if isinstance(logistics_layout, dict) else None
                 if isinstance(consumer, dict) and distance(_position(consumer), reference_position) <= 4.5:
-                    logistics_decision = SiteInputLogisticLineSkill(max(12, target_count), item="iron-gear-wheel").next_action(
-                        observation
-                    )
+                    logistics_decision = SiteInputLogisticLineSkill(
+                        max(12, target_count),
+                        item="iron-gear-wheel",
+                        consumer_reference_position=reference_position,
+                        consumer_max_distance=4.5,
+                        require_usable_belts_before_route_search=True,
+                    ).next_action(observation)
                     if not logistics_decision.done:
-                        return logistics_decision
-                    source_recovery = self._gear_site_input_source_recovery_decision(
-                        observation,
-                        logistics_layout,
-                        target_count,
-                        allow_existing_remote=allow_existing_remote,
-                        reference_position=reference_position,
-                        consumer_label=f"{self.target_item} consumer",
-                    )
-                    if source_recovery is not None:
-                        return source_recovery
-                    return PlannerDecision(
-                        {"type": "wait", "ticks": 300},
-                        f"wait for iron gear wheel site input logistics to feed {self.target_item} consumer",
-                    )
+                        if (
+                            logistics_decision.action is None
+                            and "need usable transport belts from the belt mall" in logistics_decision.reason
+                        ):
+                            logistics_decision = None
+                        else:
+                            return logistics_decision
+                    if logistics_decision is None:
+                        pass
+                    else:
+                        source_recovery = self._gear_site_input_source_recovery_decision(
+                            observation,
+                            logistics_layout,
+                            target_count,
+                            allow_existing_remote=allow_existing_remote,
+                            reference_position=reference_position,
+                            consumer_label=f"{self.target_item} consumer",
+                        )
+                        if source_recovery is not None:
+                            return source_recovery
+                        return PlannerDecision(
+                            {"type": "wait", "ticks": 300},
+                            f"wait for iron gear wheel site input logistics to feed {self.target_item} consumer",
+                        )
             if _build_item_mall_should_use_output_chest(self.target_item):
                 if not _build_item_mall_output_buffer_ready(cell, observation):
                     decision = self._ensure_output_buffer(observation, player, cell)
@@ -15496,9 +15554,13 @@ class BuildItemMallSkill:
                             },
                             "take chest-buffered iron gears for automation-science-pack mall input",
                         )
-                allow_output_gears = (
-                    ingredient == "iron-gear-wheel"
-                    and self.target_item == "transport-belt"
+                allow_output_gears = ingredient == "iron-gear-wheel" and (
+                    self.target_item == "transport-belt"
+                    or (
+                        self.target_item == "automation-science-pack"
+                        and reference_position is not None
+                        and total_item_count(observation, "transport-belt") < max(12, needed_in_assembler)
+                    )
                 )
                 decision = self._ensure_item_quantity(
                     observation,
@@ -15563,10 +15625,7 @@ class BuildItemMallSkill:
             return relocation_decision
         decision = IronPlateLogisticLineToGearMallSkill(max(20, target_segments)).next_action(observation)
         if decision.done:
-            return PlannerDecision(
-                {"type": "wait", "ticks": 300},
-                "wait for started gear mall iron-plate logistics to feed gears before another belt mall seed",
-            )
+            return None
         if decision.action is None and "needs transport belts from the belt mall" in decision.reason:
             return None
         if decision.action is None and "cannot find both an iron-plate source furnace" in decision.reason:
@@ -15582,7 +15641,12 @@ class BuildItemMallSkill:
         reference_position: dict[str, float],
         target_segments: int,
     ) -> PlannerDecision | None:
-        layout = _find_site_input_logistic_line_layout(observation, item=item)
+        layout = _find_site_input_logistic_line_layout(
+            observation,
+            item=item,
+            consumer_reference_position=reference_position,
+            consumer_max_distance=8.0,
+        )
         if layout is None or not _site_input_logistics_started(layout):
             return None
         consumer = layout.get("consumer")
@@ -15592,13 +15656,18 @@ class BuildItemMallSkill:
             return None
         if distance(_position(consumer), reference_position) > 8.0:
             return None
-        decision = SiteInputLogisticLineSkill(max(12, target_segments), item=item).next_action(observation)
+        decision = SiteInputLogisticLineSkill(
+            max(12, target_segments),
+            item=item,
+            consumer_reference_position=reference_position,
+            consumer_max_distance=8.0,
+            require_usable_belts_before_route_search=True,
+        ).next_action(observation)
         if decision.done:
-            return PlannerDecision(
-                {"type": "wait", "ticks": 300},
-                f"wait for started {item} site input logistics to feed {consumer_recipe} before another bootstrap seed",
-            )
+            return None
         if decision.action is None and "needs transport belts from the belt mall" in decision.reason:
+            return None
+        if decision.action is None and "need usable transport belts from the belt mall" in decision.reason:
             return None
         if decision.action is None and "no executable repeated site input logistics route was found" in decision.reason:
             return None
@@ -15887,6 +15956,43 @@ class BuildItemMallSkill:
         allow_assembler_output_gears: bool = False,
         exclude_assembler_output_units: set[Any] | None = None,
     ) -> PlannerDecision | None:
+        if item == "iron-plate" and self.target_item == "transport-belt":
+            belt_cell = _find_build_item_mall_cell(
+                observation,
+                "transport-belt",
+                allow_existing_remote=allow_existing_remote,
+                reference_position=reference_position,
+            )
+            belt_assembler = belt_cell.get("assembler") if isinstance(belt_cell, dict) else None
+            belt_assembler_plate_count = (
+                entity_item_count(belt_assembler, "iron-plate") if isinstance(belt_assembler, dict) else 0
+            )
+            if (
+                isinstance(belt_assembler, dict)
+                and str(belt_assembler.get("recipe") or "") == "transport-belt"
+                and entity_item_count(belt_assembler, "iron-gear-wheel") > 0
+                and belt_assembler_plate_count < 2
+                and inventory_count(observation, "iron-plate") > 0
+            ):
+                position = _position(belt_assembler)
+                if distance(player, position) > 20:
+                    return PlannerDecision(
+                        {"type": "move_to", "position": position},
+                        "move near belt assembler for one-time iron seed",
+                    )
+                return _bootstrap_seed_decision(
+                    {
+                        "type": "insert",
+                        "item": "iron-plate",
+                        "count": min(max(1, 2 - belt_assembler_plate_count), inventory_count(observation, "iron-plate")),
+                        "unit_number": belt_assembler.get("unit_number"),
+                        "name": "assembling-machine-1",
+                        "position": position,
+                    },
+                    "insert iron-plate into transport-belt mall assembler to consume buffered gears",
+                    seed_reason="belt_mall_iron_plate_seed",
+                    expected_followup="transport-belt assembler consumes buffered gears and produces belts",
+                )
         if inventory_count(observation, item) >= quantity:
             return None
 
@@ -15974,13 +16080,24 @@ class BuildItemMallSkill:
                     )
                 if self.target_item != "iron-gear-wheel":
                     skip_gear_site_input_until_belts_recover = (
-                        self.target_item == "transport-belt"
-                        and total_item_count(observation, "transport-belt") <= 0
+                        (
+                            self.target_item == "transport-belt"
+                            and total_item_count(observation, "transport-belt") <= 0
+                        )
+                        or (
+                            self.target_item == "automation-science-pack"
+                            and total_item_count(observation, "transport-belt") < max(12, quantity)
+                        )
                     )
                     logistics_layout = (
                         None
                         if skip_gear_site_input_until_belts_recover
-                        else _find_site_input_logistic_line_layout(observation, item="iron-gear-wheel")
+                        else _find_site_input_logistic_line_layout(
+                            observation,
+                            item="iron-gear-wheel",
+                            consumer_reference_position=reference_position,
+                            consumer_max_distance=4.5 if reference_position is not None else None,
+                        )
                     )
                     if logistics_layout is not None:
                         consumer = logistics_layout.get("consumer")
@@ -15988,32 +16105,51 @@ class BuildItemMallSkill:
                             reference_position is None
                             or (isinstance(consumer, dict) and distance(_position(consumer), reference_position) <= 4.5)
                         ):
-                            logistics_decision = SiteInputLogisticLineSkill(max(12, quantity), item="iron-gear-wheel").next_action(
-                                observation
-                            )
+                            logistics_decision = SiteInputLogisticLineSkill(
+                                max(12, quantity),
+                                item="iron-gear-wheel",
+                                consumer_reference_position=reference_position,
+                                consumer_max_distance=4.5 if reference_position is not None else None,
+                                require_usable_belts_before_route_search=True,
+                            ).next_action(observation)
                             if not logistics_decision.done:
-                                return logistics_decision
-                            source_recovery = self._gear_site_input_source_recovery_decision(
-                                observation,
-                                logistics_layout,
-                                quantity,
-                                allow_existing_remote=allow_existing_remote,
-                                reference_position=reference_position,
-                                consumer_label=f"{self.target_item} assembler",
-                            )
-                            if source_recovery is not None:
-                                return source_recovery
-                            return PlannerDecision(
-                                {"type": "wait", "ticks": 300},
-                                f"wait for iron gear wheel site input logistics to feed {self.target_item} assembler",
-                            )
+                                if (
+                                    logistics_decision.action is None
+                                    and "need usable transport belts from the belt mall" in logistics_decision.reason
+                                ):
+                                    logistics_decision = None
+                                else:
+                                    return logistics_decision
+                            if logistics_decision is None:
+                                pass
+                            else:
+                                source_recovery = self._gear_site_input_source_recovery_decision(
+                                    observation,
+                                    logistics_layout,
+                                    quantity,
+                                    allow_existing_remote=allow_existing_remote,
+                                    reference_position=reference_position,
+                                    consumer_label=f"{self.target_item} assembler",
+                                )
+                                if source_recovery is not None:
+                                    return source_recovery
+                                return PlannerDecision(
+                                    {"type": "wait", "ticks": 300},
+                                    f"wait for iron gear wheel site input logistics to feed {self.target_item} assembler",
+                                )
                     decision = BuildItemMallSkill("iron-gear-wheel", max(quantity, 4)).next_action(
                         observation,
                         allow_existing_remote=allow_existing_remote,
                         reference_position=reference_position,
                     )
                     if not decision.done:
-                        return decision
+                        if (
+                            decision.action is None
+                            and "need usable transport belts from the belt mall" in decision.reason
+                        ):
+                            pass
+                        else:
+                            return decision
                     # The gear mall cannot produce gears right now (done) and no gear logistic line
                     # exists. A walking player would wait for the mall, but that DEADLOCKS the whole
                     # factory for the VIRTUAL agent (observed live 2026-06-19: belt mall "cannot obtain
@@ -16084,16 +16220,34 @@ class BuildItemMallSkill:
                 and total_item_count(observation, "transport-belt") <= 0
             )
             if reference_position is not None and not skip_site_input_until_belts_recover:
-                logistics_layout = _find_site_input_logistic_line_layout(observation, item="iron-plate")
+                logistics_layout = _find_site_input_logistic_line_layout(
+                    observation,
+                    item="iron-plate",
+                    consumer_reference_position=reference_position,
+                    consumer_max_distance=4.5,
+                )
                 consumer = logistics_layout.get("consumer") if isinstance(logistics_layout, dict) else None
                 if isinstance(consumer, dict) and distance(_position(consumer), reference_position) <= 4.5:
-                    logistics_decision = SiteInputLogisticLineSkill(max(12, quantity), item="iron-plate").next_action(observation)
+                    logistics_decision = SiteInputLogisticLineSkill(
+                        max(12, quantity),
+                        item="iron-plate",
+                        consumer_reference_position=reference_position,
+                        consumer_max_distance=4.5,
+                        require_usable_belts_before_route_search=True,
+                    ).next_action(observation)
                     if not logistics_decision.done:
-                        return logistics_decision
-                    return PlannerDecision(
-                        {"type": "wait", "ticks": 300},
-                        f"wait for iron plate site input logistics to feed {self.target_item} assembler",
-                    )
+                        if (
+                            logistics_decision.action is None
+                            and "need usable transport belts from the belt mall" in logistics_decision.reason
+                        ):
+                            logistics_decision = None
+                        else:
+                            return logistics_decision
+                    if logistics_decision is not None:
+                        return PlannerDecision(
+                            {"type": "wait", "ticks": 300},
+                            f"wait for iron plate site input logistics to feed {self.target_item} assembler",
+                        )
             decision = self.iron_skill.next_action(observation, target_count=quantity, inventory_only=True)
             if not decision.done:
                 return decision
@@ -16101,16 +16255,34 @@ class BuildItemMallSkill:
 
         if item == "copper-plate":
             if reference_position is not None:
-                logistics_layout = _find_site_input_logistic_line_layout(observation, item="copper-plate")
+                logistics_layout = _find_site_input_logistic_line_layout(
+                    observation,
+                    item="copper-plate",
+                    consumer_reference_position=reference_position,
+                    consumer_max_distance=4.5,
+                )
                 consumer = logistics_layout.get("consumer") if isinstance(logistics_layout, dict) else None
                 if isinstance(consumer, dict) and distance(_position(consumer), reference_position) <= 4.5:
-                    logistics_decision = SiteInputLogisticLineSkill(max(12, quantity), item="copper-plate").next_action(observation)
+                    logistics_decision = SiteInputLogisticLineSkill(
+                        max(12, quantity),
+                        item="copper-plate",
+                        consumer_reference_position=reference_position,
+                        consumer_max_distance=4.5,
+                        require_usable_belts_before_route_search=True,
+                    ).next_action(observation)
                     if not logistics_decision.done:
-                        return logistics_decision
-                    return PlannerDecision(
-                        {"type": "wait", "ticks": 300},
-                        f"wait for copper plate site input logistics to feed {self.target_item} assembler",
-                    )
+                        if (
+                            logistics_decision.action is None
+                            and "need usable transport belts from the belt mall" in logistics_decision.reason
+                        ):
+                            logistics_decision = None
+                        else:
+                            return logistics_decision
+                    if logistics_decision is not None:
+                        return PlannerDecision(
+                            {"type": "wait", "ticks": 300},
+                            f"wait for copper plate site input logistics to feed {self.target_item} assembler",
+                        )
             decision = self.copper_skill.next_action(observation, target_count=quantity, inventory_only=True)
             if not decision.done:
                 return decision
@@ -16239,7 +16411,7 @@ class BuildItemMallSkill:
         reference_position: dict[str, float] | None = None,
     ) -> PlannerDecision | None:
         """No assembler exists yet, so the post-Automation 'gears must come from an assembler' rule
-        cannot be satisfied — nothing can produce them. Break the chicken-and-egg deadlock by
+        cannot be satisfied ??nothing can produce them. Break the chicken-and-egg deadlock by
         bootstrapping just enough gears to build the FIRST assembler (5 for assembling-machine-1):
         smelt more iron-plate if the reserve is short, then one-time craft the gears. This is the only
         way to get the first GEAR-producing assembler (true in both virtual/RCON mode, where 'craft'
@@ -16251,7 +16423,7 @@ class BuildItemMallSkill:
         target = 5  # one assembling-machine-1 worth of gears (enough to build the first gear assembler)
         need = target - inventory_count(observation, "iron-gear-wheel")
         if need <= 0:
-            return None  # enough gears to build the first assembler — let the mall build it
+            return None  # enough gears to build the first assembler ??let the mall build it
         iron_reserve = 2 * need + 9  # 2 iron-plate per gear + the assembler's own 9 iron-plate
         if inventory_count(observation, "iron-plate") < iron_reserve:
             return self._ensure_item_quantity(
@@ -16260,7 +16432,7 @@ class BuildItemMallSkill:
             )
         craftable = craftable_count(observation, "iron-gear-wheel")
         if craftable <= 0:
-            # iron-plate present but not craftable yet (e.g. still in furnaces) — keep smelting.
+            # iron-plate present but not craftable yet (e.g. still in furnaces) ??keep smelting.
             return self._ensure_item_quantity(
                 observation, player, "iron-plate", iron_reserve,
                 allow_existing_remote=allow_existing_remote, reference_position=reference_position,
@@ -18118,6 +18290,14 @@ def _transport_belt_automation_output_ready(observation: dict[str, Any]) -> bool
     if inventory_count(observation, "transport-belt") > 0:
         return True
     return _transport_belt_automation_factory_output_ready(observation)
+
+
+def _site_input_route_belt_stock_ready(observation: dict[str, Any]) -> bool:
+    if inventory_count(observation, "transport-belt") > 0:
+        return True
+    if _transport_belt_automation_factory_output_ready(observation):
+        return True
+    return isinstance(_nearest_buffered_chest_item_source(observation, "transport-belt", player_position(observation)), dict)
 
 
 def _transport_belt_automation_factory_output_ready(observation: dict[str, Any]) -> bool:

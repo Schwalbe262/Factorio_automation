@@ -782,6 +782,16 @@ def _bootstrap_seed_followup_item(action: dict[str, Any] | None) -> str | None:
     return None
 
 
+def _bootstrap_seed_followup_progress(observation: dict[str, Any], followup_item: str | None) -> int | None:
+    if not followup_item:
+        return None
+    total = total_item_count(observation, followup_item)
+    entities = observation.get("entities")
+    if isinstance(entities, list):
+        total += sum(1 for entity in entities if isinstance(entity, dict) and entity.get("name") == followup_item)
+    return total
+
+
 def _position_key(position: Any) -> str:
     if not isinstance(position, dict):
         return "unknown"
@@ -831,7 +841,61 @@ def _one_time_seed_already_used(
         used_tick = _int_or_none(entry.get("tick"))
         if current_tick is not None and used_tick is not None and current_tick < used_tick:
             return False
+        if key.startswith("emergency_boiler_fuel:"):
+            action_count = _int_or_none(action.get("count") if isinstance(action, dict) else None)
+            recorded_action = entry.get("action") if isinstance(entry.get("action"), dict) else {}
+            recorded_count = _int_or_none(recorded_action.get("count"))
+            if action_count is not None and recorded_count is not None and action_count > recorded_count:
+                return False
+            try:
+                current_missing_belts = max(0, int(_boiler_coal_feed_missing_belt_count(observation)))
+            except Exception:  # noqa: BLE001
+                current_missing_belts = None
+            recorded_missing_belts = _int_or_none(entry.get("boiler_feed_missing_belts"))
+            if current_missing_belts is not None:
+                if recorded_missing_belts is None and current_missing_belts > 0:
+                    return False
+                if recorded_missing_belts is not None and current_missing_belts < recorded_missing_belts:
+                    return False
+            if _emergency_boiler_seed_progress_advanced(entry, observation):
+                return False
     return True
+
+
+def _emergency_boiler_seed_progress_marker(observation: dict[str, Any]) -> dict[str, Any]:
+    research = observation.get("research") if isinstance(observation.get("research"), dict) else {}
+    techs = research.get("technologies") if isinstance(research.get("technologies"), dict) else {}
+    researched = sum(1 for tech in techs.values() if isinstance(tech, dict) and tech.get("researched"))
+    progress = research.get("research_progress")
+    if progress is None:
+        progress = research.get("progress")
+    try:
+        progress_value = round(float(progress or 0.0), 3)
+    except (TypeError, ValueError):
+        progress_value = 0.0
+    return {
+        "researched": researched,
+        "current_research": str(research.get("current_research") or research.get("current") or ""),
+        "research_progress": progress_value,
+    }
+
+
+def _emergency_boiler_seed_progress_advanced(entry: dict[str, Any], observation: dict[str, Any]) -> bool:
+    current = _emergency_boiler_seed_progress_marker(observation)
+    recorded = entry.get("research_progress_marker") if isinstance(entry.get("research_progress_marker"), dict) else None
+    if recorded is None:
+        return bool(current["current_research"]) and float(current["research_progress"]) >= 0.05
+    recorded_researched = _int_or_none(recorded.get("researched"))
+    if recorded_researched is not None and int(current["researched"]) > recorded_researched:
+        return True
+    if str(recorded.get("current_research") or "") != str(current["current_research"] or ""):
+        return False
+    try:
+        recorded_progress = float(recorded.get("research_progress") or 0.0)
+        current_progress = float(current.get("research_progress") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return current_progress >= recorded_progress + 0.05
 
 
 def _record_one_time_seed_use(
@@ -865,6 +929,12 @@ def _record_one_time_seed_use(
             "position": action.get("position") if isinstance(action, dict) else None,
         },
     }
+    if key.startswith("emergency_boiler_fuel:"):
+        try:
+            seeds[key]["boiler_feed_missing_belts"] = max(0, int(_boiler_coal_feed_missing_belt_count(observation)))
+        except Exception:  # noqa: BLE001
+            pass
+        seeds[key]["research_progress_marker"] = _emergency_boiler_seed_progress_marker(observation)
     history["updated_at"] = datetime.now(timezone.utc).isoformat()
     history["seeds"] = seeds
     try:
@@ -2398,6 +2468,10 @@ class FactorioController:
                         last_step.reason,
                         progress_obs if isinstance(progress_obs, dict) else {},
                     )
+                    bootstrap_seed_repair = _bootstrap_seed_followup_repair(
+                        last_step.reason,
+                        progress_obs if isinstance(progress_obs, dict) else {},
+                    )
                     if (
                         commit_enabled
                         and not last_step.ok
@@ -2423,6 +2497,19 @@ class FactorioController:
                             str(missing_inserter_repair.get("target_item") or "") or None
                         )
                         committed_input_item = str(missing_inserter_repair.get("input_item") or "") or None
+                        commit_skips = 0
+                    elif (
+                        commit_enabled
+                        and not last_step.ok
+                        and isinstance(bootstrap_seed_repair, dict)
+                        and self._skill_run_config(str(bootstrap_seed_repair.get("skill") or "")) is not None
+                    ):
+                        committed_skill = str(bootstrap_seed_repair.get("skill") or "")
+                        committed_target_count = _int_or_none(bootstrap_seed_repair.get("target_count"))
+                        committed_target_item = (
+                            str(bootstrap_seed_repair.get("target_item") or "") or None
+                        )
+                        committed_input_item = str(bootstrap_seed_repair.get("input_item") or "") or None
                         commit_skips = 0
                     elif (
                         commit_enabled
@@ -3229,7 +3316,7 @@ class FactorioController:
                     if seed_key is not None and seed_key in attempted_bootstrap_seeds:
                         followup_item, previous_count = attempted_bootstrap_seeds[seed_key]
                         current_count = (
-                            total_item_count(observation, followup_item)
+                            _bootstrap_seed_followup_progress(observation, followup_item)
                             if followup_item and previous_count is not None
                             else None
                         )
@@ -3267,7 +3354,7 @@ class FactorioController:
                     )
                     if seed_key is not None:
                         followup_item = _bootstrap_seed_followup_item(action)
-                        followup_count = total_item_count(observation, followup_item) if followup_item else None
+                        followup_count = _bootstrap_seed_followup_progress(observation, followup_item)
                         attempted_bootstrap_seeds[seed_key] = (followup_item, followup_count)
                         bootstrap_seed_count += 1
                     if action.get("type") == "wait":
@@ -3921,6 +4008,13 @@ class FactorioController:
             active_step,
             source="background_layout_observe",
         )
+        if (
+            not force_poll
+            and active_step > 0
+            and os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_DURING_ACTIVE_SKILL", "0").lower()
+            not in {"1", "true", "yes", "on"}
+        ):
+            return
         if not self.cfg.slurm_enabled or active_skill == "plan_factory_site":
             return
         if os.getenv("FACTORIO_AI_BACKGROUND_LAYOUT_ENABLED", "1").lower() in {"0", "false", "no", "off"}:
@@ -5106,6 +5200,7 @@ def _boiler_handfuel_prerequisite_repair(reason: str | None, observation: dict[s
             "emergency boiler bootstrap already attempted",
             "repeated boiler hand-fueling",
             "repeated boiler hand fueling",
+            "needs automated transport-belt production",
         )
     ):
         return None
@@ -5113,8 +5208,7 @@ def _boiler_handfuel_prerequisite_repair(reason: str | None, observation: dict[s
         missing_belts = max(0, int(_boiler_coal_feed_missing_belt_count(observation)))
     except Exception:  # noqa: BLE001
         missing_belts = 0
-    available_belts = total_item_count(observation, "transport-belt")
-    if "transport-belt" in text or missing_belts > available_belts:
+    if "needs automated transport-belt production" in text or "transport-belt" in text:
         return {
             "skill": "bootstrap_build_item_mall",
             "target_item": "transport-belt",
@@ -5142,6 +5236,21 @@ def _missing_inserter_prerequisite_repair(reason: str | None, observation: dict[
         "target_count": max(4, existing + 4),
         "input_item": None,
     }
+
+
+def _bootstrap_seed_followup_repair(reason: str | None, observation: dict[str, Any]) -> dict[str, Any] | None:
+    text = str(reason or "").strip().lower()
+    if "bootstrap seed already attempted without expected follow-up" not in text:
+        return None
+    if "transport-belt_mall_buffered_gear_plate_seed" in text:
+        existing = total_item_count(observation, "transport-belt")
+        return {
+            "skill": "build_gear_belt_mall_logistics",
+            "target_item": None,
+            "target_count": max(20, existing + 12),
+            "input_item": None,
+        }
+    return None
 
 
 def _max_steps(value: int | None, default: int) -> int:

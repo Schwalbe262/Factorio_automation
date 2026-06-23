@@ -6614,7 +6614,8 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "take")
         self.assertEqual(decision.action["item"], "coal")
         self.assertEqual(decision.action["unit_number"], 620)
-        self.assertLessEqual(decision.action["count"], 5)
+        self.assertGreater(decision.action["count"], 0)
+        self.assertLessEqual(decision.action["count"], 20)
         self.assertTrue(decision.action["emergency_bootstrap"])
         self.assertIn("one-time emergency boiler bootstrap", decision.reason)
 
@@ -6682,6 +6683,70 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["count"], 5)
         self.assertTrue(decision.action["emergency_bootstrap"])
         self.assertIn("one-time emergency boiler fuel bootstrap", decision.reason)
+
+    def test_setup_power_skill_buffers_twenty_carried_coal_for_emergency_boiler_seed(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 12.5, "y": 10.0}}
+        obs["inventory"] = {"coal": 30}
+        obs["resources"] = [{"name": "coal", "position": {"x": 0, "y": 9.5}, "distance": 0}]
+        obs["entities"] = [
+            {"name": "burner-mining-drill", "unit_number": 620, "position": {"x": 0, "y": 9.5}, "direction": 4, "inventories": {"1": {"coal": 4}}},
+            {"name": "transport-belt", "unit_number": 621, "position": {"x": 2, "y": 9.5}, "direction": 4, "inventories": {"1": {"coal": 1}}},
+            {
+                "name": "offshore-pump",
+                "unit_number": 601,
+                "position": {"x": 10.5, "y": 10.5},
+                "direction": 12,
+                "distance": 2,
+                "inventories": {},
+                "fluids": {"1": {"name": "water", "amount": 100}},
+            },
+            {
+                "name": "boiler",
+                "unit_number": 602,
+                "position": {"x": 12.5, "y": 11},
+                "direction": 8,
+                "status_name": "no_fuel",
+                "distance": 0,
+                "inventories": {},
+                "fluids": {"1": {"name": "water", "amount": 200}},
+            },
+            {
+                "name": "steam-engine",
+                "unit_number": 603,
+                "position": {"x": 12.5, "y": 14.5},
+                "direction": 8,
+                "status": 5,
+                "distance": 4,
+                "inventories": {},
+                "fluids": {},
+            },
+            {
+                "name": "small-electric-pole",
+                "unit_number": 604,
+                "position": {"x": 10.5, "y": 14.5},
+                "direction": 0,
+                "distance": 4,
+                "inventories": {},
+                "fluids": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 605,
+                "recipe": "small-electric-pole",
+                "position": {"x": 11, "y": 7},
+                "status_name": "no_power",
+                "inventories": {},
+            },
+        ]
+
+        decision = SetupPowerSkill().next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "coal")
+        self.assertEqual(decision.action["unit_number"], 602)
+        self.assertEqual(decision.action["count"], 20)
+        self.assertTrue(decision.action["emergency_bootstrap"])
 
     def test_build_item_mall_allows_one_time_boiler_seed_for_starter_belt_mall(self):
         obs = base_observation()
@@ -7148,6 +7213,35 @@ class PlannerTests(unittest.TestCase):
 
         self.assertEqual(decision.action["type"], "insert")
         self.assertEqual(decision.action["item"], "automation-science-pack")
+
+    def test_research_electric_mining_drill_refills_science_from_gear_output_without_route_search(self):
+        obs = powered_logistics_observation()
+        obs["player"]["position"] = {"x": 2, "y": 2}
+        obs["research"]["current"] = "electric-mining-drill"
+        obs["research"]["technologies"]["electric-mining-drill"] = {
+            "researched": False,
+            "enabled": True,
+            "research_unit_count": 25,
+            "ingredients": {"automation-science-pack": 1},
+        }
+        obs["inventory"] = {"transport-belt": 6, "copper-plate": 4}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="automation-science-pack",
+                gear_inventory={"iron-gear-wheel": 3},
+                belt_inventory={"copper-plate": 4},
+            )
+        )
+
+        with patch(
+            "factorio_ai.planner._find_site_input_logistic_line_layout",
+            side_effect=AssertionError("science refill should not route-search while gear output is available"),
+        ):
+            decision = ResearchTechnologySkill("electric-mining-drill").next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 910)
 
     def test_research_logistics_produces_red_science_when_missing(self):
         obs = powered_logistics_observation()
@@ -8648,6 +8742,53 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["underground_type"], "input")
         self.assertIn("crosses another belt line", decision.reason)
 
+    def test_site_input_logistics_skips_route_search_until_belts_are_usable(self):
+        obs = base_observation()
+        obs["inventory"] = {}
+        obs["research"]["technologies"]["automation"]["researched"] = True
+        obs["entities"] = [
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 10,
+                "recipe": "transport-belt",
+                "position": {"x": 0, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 11,
+                "recipe": "iron-gear-wheel",
+                "position": {"x": -8, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+            {
+                "name": "assembling-machine-1",
+                "unit_number": 12,
+                "recipe": "automation-science-pack",
+                "position": {"x": 8, "y": 0},
+                "electric_network_connected": True,
+                "inventories": {},
+            },
+        ]
+
+        with patch(
+            "factorio_ai.planner._find_site_input_logistic_line_layout",
+            side_effect=AssertionError("route search should be skipped without usable belts"),
+        ):
+            decision = SiteInputLogisticLineSkill(
+                20,
+                item="iron-gear-wheel",
+                require_usable_belts_before_route_search=True,
+            ).next_action(obs)
+
+        self.assertIsNone(decision.action)
+        self.assertFalse(decision.done)
+        self.assertIn("usable transport belts", decision.reason)
+        self.assertEqual(decision.metadata["repair_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(decision.metadata["target_item"], "transport-belt")
+
     def test_site_input_logistics_places_splitter_for_one_source_two_consumers_after_logistics(self):
         obs = powered_automation_observation()
         obs["player"] = {"position": {"x": -4.0, "y": 0.5}}
@@ -8706,6 +8847,77 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "splitter")
         self.assertIn("fan out", decision.reason)
+
+    def test_site_input_layout_filters_consumers_by_reference_position(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 20, "inserter": 4}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 960,
+                    "position": {"x": -8.0, "y": 0.0},
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"iron-gear-wheel": 8}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 961,
+                    "position": {"x": 8.0, "y": 0.0},
+                    "recipe": "automation-science-pack",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {"2": {}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 962,
+                    "position": {"x": 8.0, "y": 8.0},
+                    "recipe": "inserter",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {"2": {}},
+                },
+            ]
+        )
+
+        layout = planner_module._find_site_input_logistic_line_layout(
+            obs,
+            item="iron-gear-wheel",
+            consumer_reference_position={"x": 8.0, "y": 0.0},
+            consumer_max_distance=4.5,
+        )
+
+        self.assertIsNotNone(layout)
+        self.assertEqual(layout["consumer"]["unit_number"], 961)
+
+    def test_transport_belt_mall_explicit_large_target_skips_route_scale_recount(self):
+        obs = powered_automation_observation()
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 970,
+                    "position": {"x": 0.0, "y": 0.0},
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 971,
+                    "position": {"x": 4.0, "y": 0.0},
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                },
+            ]
+        )
+
+        with patch("factorio_ai.planner._boiler_coal_feed_missing_belt_count") as missing_belts:
+            target = BuildItemMallSkill("transport-belt", 227)._effective_target_count(obs)
+
+        self.assertEqual(target, 227)
+        missing_belts.assert_not_called()
 
     def test_site_input_logistics_crafts_splitter_before_second_fanout_branch(self):
         obs = powered_automation_observation()
@@ -12657,6 +12869,57 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 911)
         self.assertTrue(decision.action["bootstrap_seed"])
         self.assertIn("buffered gears", decision.reason)
+
+    def test_transport_belt_mall_seeds_plate_after_iron_line_done_without_wait_loop(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 6, "y": 2}, "character_valid": False}
+        obs["inventory"] = {"iron-plate": 10}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="transport-belt",
+                belt_inventory={"iron-gear-wheel": 5},
+            )
+        )
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 2},
+                "recipe": "iron-plate",
+                "inventories": {"3": {"iron-plate": 20}},
+            }
+        )
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+        self.assertIsNotNone(layout)
+        for index, segment in enumerate(layout["segments"]):
+            obs["entities"].append(
+                {
+                    "name": "transport-belt",
+                    "unit_number": 980 + index,
+                    "position": segment["position"],
+                    "direction": segment["direction"],
+                    "inventories": {},
+                }
+            )
+        for index, spec in enumerate([layout["source_inserter"], layout["target_inserter"]]):
+            obs["entities"].append(
+                {
+                    "name": "inserter",
+                    "unit_number": 1040 + index,
+                    "position": spec["position"],
+                    "direction": spec["direction"],
+                    "electric_network_connected": True,
+                    "inventories": {},
+                }
+            )
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertEqual(decision.action["unit_number"], 911)
+        self.assertTrue(decision.action["bootstrap_seed"])
+        self.assertNotIn("wait for started", decision.reason)
 
     def test_site_input_logistic_line_takes_belts_from_belt_mall_output(self):
         obs = powered_automation_observation()
