@@ -5,5 +5,5 @@
 - Planner fix: when started iron/site-input logistics run out of belts, `BuildItemMallSkill("transport-belt")` falls back to one-time iron-plate seed into the buffered belt assembler instead of returning action=null.
 - Validation: `PYTHONPATH=src python -m unittest tests.test_remote_slurm tests.test_planner` -> 567 OK; py_compile and diff check OK.
 - Live check: current `runtime/latest-observe.json` with new planner returns actionable `move near tree for pole wood`, not the old belt-shortage null failure.
-- Slurm service: stale vLLM task `13326` canceled; fresh 27B service task `13327` queued, not ready yet.
+- Slurm service: stale vLLM task `13326` canceled; fresh 27B service task `13327` is running but heartbeat remains `starting`/stale, so Qwen is not ready yet.
 - Token recording: Codex DB malformed; fallback sample `40885851`, delta `1164388`, weekly quota unavailable.
