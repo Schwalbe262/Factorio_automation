@@ -1,10 +1,11 @@
 # Current Handoff
-- Branch `chore/part130-unattended-qwen9-supervisor`; keep huge runtime `note.md`/`insight.md` unstaged unless intentionally journaling.
-- Slurm disk: `~/factorio-ai-worker` is 25M after deploy cleanup; `~/factorio-ai-models` is 21G active `QuantTrio/Qwen3.6-27B-AWQ` cache.
-- vLLM fix: service and direct fallback now default `VLLM_USE_FLASHINFER_SAMPLER=0` because cluster compute nodes lack nvcc for FlashInfer JIT.
-- `reset_serving.ps1` now launches one 27B AWQ service with `--max-model-len 16384 --gpu-memory-utilization 0.90 --quantization awq --enforce-eager`.
-- Validation: `PYTHONPATH=src python -m unittest tests.test_remote_slurm` -> 77 OK; py_compile and diff check OK.
-- Deploy/reset done: vLLM service task `13329` is running on a6000, heartbeat `ready`, `slurm-llm-status` reports `llm_ready=true`.
-- Live health: Factorio server UP, supervisor gate `ready`, autopilot pid `[16936]`, live skill `bootstrap_build_item_mall` advanced from step 4 to step 10.
-- Remaining watch items: foundry still shows stale implemented-skill queue; operator layout learning has pending human review trace.
-- Token recording: latest Codex sample `41389093`; project DB may still make weekly quota unavailable.
+- Branch `chore/part130-unattended-qwen9-supervisor`; keep huge runtime `note.md`/`insight.md` unstaged.
+- Slurm/Qwen: vLLM task `13329` still running/ready on a6000; `slurm-llm-status` previously `llm_ready=true`.
+- Fixed planner loop: `BuildItemMallSkill("transport-belt")` now shares the long iron-line relocation guard instead of extending/seeding a 100+ tile line.
+- Added regression tests for started long iron input lines and post-recovery relocation continuation so generic mall placement cannot rebuild the same remote cell.
+- Validation: `PYTHONPATH=src python -m unittest tests.test_planner` -> 492 OK; py_compile and diff check OK.
+- Live applied by restarting autopilot; current PID `59668`, server UP, supervisor gate ready, stall=0.
+- Live result: mall moved near iron source (`x=91.5,y=34.5`), output inserter/chest path built, then next skill advanced to `bootstrap_electric_mining_drill_mall`.
+- Progress snapshot: researched=5, logistics research 0.05, transport-belt=8, small-electric-pole=7, seed_count=1.
+- Remaining watch: foundry stale queue and pending operator-layout review still shown by run-health.
+- Token sample `41837054`; weekly quota unavailable while Codex sqlite DB remains malformed.

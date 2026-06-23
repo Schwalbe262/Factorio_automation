@@ -9907,6 +9907,97 @@ class PlannerTests(unittest.TestCase):
         self.assertNotEqual(decision.action.get("bootstrap_seed"), True)
         self.assertIn("iron-plate belt logistics", decision.reason)
 
+    def test_build_item_mall_relocates_started_gear_mall_before_long_iron_line(self):
+        obs = powered_automation_observation()
+        obs["automation_sites"] = []
+        obs["player"] = {"position": {"x": 4.0, "y": 0.0}, "character_valid": False}
+        obs["inventory"] = {"iron-plate": 4, "small-electric-pole": 23}
+        obs["craftable"] = {}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 100,
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 0.5, "y": 0.5},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 101,
+                    "recipe": "transport-belt",
+                    "position": {"x": 4.5, "y": 0.5},
+                    "electric_network_connected": True,
+                    "inventories": {"1": {"iron-gear-wheel": 3}},
+                },
+                {
+                    "name": "inserter",
+                    "unit_number": 102,
+                    "position": {"x": 2.5, "y": 0.5},
+                    "direction": planner_module.WEST,
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 200,
+                    "recipe": "iron-plate",
+                    "position": {"x": 153.0, "y": 0.5},
+                    "inventories": {"2": {"iron-plate": 24}},
+                },
+                {
+                    "name": "transport-belt",
+                    "unit_number": 201,
+                    "position": {"x": 149.0, "y": 0.5},
+                    "direction": planner_module.WEST,
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 216).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 100)
+        self.assertIn("relocate gear/belt mall before long iron-plate input line", decision.reason)
+        self.assertEqual(decision.metadata["repair_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertNotEqual(decision.action.get("bootstrap_seed"), True)
+
+    def test_build_item_mall_continues_relocation_after_belt_assembler_recovered(self):
+        obs = powered_automation_observation()
+        obs["automation_sites"] = []
+        obs["player"] = {"position": {"x": 0.5, "y": 0.0}, "character_valid": False}
+        obs["inventory"] = {"assembling-machine-1": 1, "iron-plate": 4, "small-electric-pole": 23}
+        obs["craftable"] = {}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 100,
+                    "recipe": "iron-gear-wheel",
+                    "position": {"x": 0.5, "y": 0.5},
+                    "electric_network_connected": True,
+                    "inventories": {},
+                },
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 200,
+                    "recipe": "iron-plate",
+                    "position": {"x": 153.0, "y": 0.5},
+                    "inventories": {"2": {"iron-plate": 24}},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 216).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["unit_number"], 100)
+        self.assertIn("relocate gear/belt mall before long iron-plate input line", decision.reason)
+        self.assertEqual(decision.metadata["repair_skill"], "relocate_gear_belt_mall_to_iron_source")
+        self.assertNotIn("place assembler for transport-belt mall cell", decision.reason)
+
     def test_build_item_mall_does_not_count_remote_or_consumer_gears_as_local_prerequisite(self):
         obs = base_observation()
         obs["inventory"] = {}

@@ -12978,6 +12978,29 @@ class CircuitAutomationSkill:
         return PlannerDecision(None, f"missing {item} and no circuit automation prerequisite path is implemented")
 
 
+def _gear_belt_mall_relocation_before_long_iron_line_decision(
+    observation: dict[str, Any],
+    target_count: int,
+) -> PlannerDecision | None:
+    relocation_layout = _find_gear_belt_mall_relocation_layout(observation)
+    if not isinstance(relocation_layout, dict):
+        return None
+    relocation_decision = GearBeltMallRelocationSkill(max(20, target_count)).next_action(observation)
+    if relocation_decision.done:
+        return None
+    metadata = dict(relocation_decision.metadata)
+    metadata.setdefault("failure_root", "gear_mall_iron_source_too_far")
+    metadata.setdefault("repair_skill", "relocate_gear_belt_mall_to_iron_source")
+    metadata.setdefault("source_distance_tiles", relocation_layout.get("source_distance_tiles"))
+    metadata.setdefault("route_cost_preference", relocation_layout.get("route_cost_preference"))
+    return PlannerDecision(
+        relocation_decision.action,
+        f"relocate gear/belt mall before long iron-plate input line: {relocation_decision.reason}",
+        done=relocation_decision.done,
+        metadata=metadata,
+    )
+
+
 class GearBeltMallLogisticsSkill:
     """Build a short gear-to-belt mall link without player gear transfer."""
 
@@ -13253,21 +13276,9 @@ class GearBeltMallLogisticsSkill:
         )
 
     def _gear_mall_iron_input_line_decision(self, observation: dict[str, Any]) -> PlannerDecision | None:
-        relocation_layout = _find_gear_belt_mall_relocation_layout(observation)
-        if isinstance(relocation_layout, dict):
-            relocation_decision = GearBeltMallRelocationSkill(max(20, self.target_count)).next_action(observation)
-            if not relocation_decision.done:
-                metadata = dict(relocation_decision.metadata)
-                metadata.setdefault("failure_root", "gear_mall_iron_source_too_far")
-                metadata.setdefault("repair_skill", "relocate_gear_belt_mall_to_iron_source")
-                metadata.setdefault("source_distance_tiles", relocation_layout.get("source_distance_tiles"))
-                metadata.setdefault("route_cost_preference", relocation_layout.get("route_cost_preference"))
-                return PlannerDecision(
-                    relocation_decision.action,
-                    f"relocate gear/belt mall before long iron-plate input line: {relocation_decision.reason}",
-                    done=relocation_decision.done,
-                    metadata=metadata,
-                )
+        relocation_decision = _gear_belt_mall_relocation_before_long_iron_line_decision(observation, self.target_count)
+        if relocation_decision is not None:
+            return relocation_decision
         if _find_iron_plate_logistic_line_to_gear_mall_layout(observation) is None:
             return None
         decision = IronPlateLogisticLineToGearMallSkill(max(20, self.target_count)).next_action(observation)
@@ -15031,6 +15042,14 @@ class BuildItemMallSkill:
                 return PlannerDecision({"type": "wait", "ticks": 120}, "wait for power observation to settle")
             return decision
 
+        if self.target_item == "transport-belt" and reference_position is None:
+            relocation_decision = _gear_belt_mall_relocation_before_long_iron_line_decision(
+                observation,
+                max(20, target_count),
+            )
+            if relocation_decision is not None:
+                return relocation_decision
+
         preferred_sidecar_cell = None
         if self.target_item == "iron-gear-wheel" and reference_position is not None:
             sidecar_candidate = _select_build_item_mall_sidecar_from_existing_belt_cell(
@@ -15277,6 +15296,12 @@ class BuildItemMallSkill:
             and entity_item_count(assembler, "iron-plate") <= 0
             and inventory_count(observation, "iron-plate") > 0
         ):
+            relocation_decision = _gear_belt_mall_relocation_before_long_iron_line_decision(
+                observation,
+                max(20, target_count),
+            )
+            if relocation_decision is not None:
+                return relocation_decision
             gear_mall_line_decision = self._started_gear_mall_iron_input_decision(
                 observation,
                 reference_position=assembler_position,
@@ -15486,6 +15511,9 @@ class BuildItemMallSkill:
         started = started or isinstance(layout.get("target_inserter", {}).get("entity"), dict)
         if not started:
             return None
+        relocation_decision = _gear_belt_mall_relocation_before_long_iron_line_decision(observation, target_segments)
+        if relocation_decision is not None:
+            return relocation_decision
         decision = IronPlateLogisticLineToGearMallSkill(max(20, target_segments)).next_action(observation)
         if decision.done:
             return PlannerDecision(
