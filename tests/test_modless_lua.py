@@ -255,6 +255,51 @@ class ModlessLuaTests(unittest.TestCase):
         with self.assertRaises(Exception):
             build_modless_action_command({"type": "connect_entities", "name": "transport-belt", "tiles": []})
 
+    def test_build_block_action_is_allowlisted_and_dispatches_common_builder_result(self):
+        command = build_modless_action_command(
+            {
+                "type": "build_block",
+                "builder": "direct_feed_smelter_set",
+                "params": {"resource": "iron-ore", "count": 4},
+                "mode": "no_mod",
+            }
+        )
+
+        self.assertTrue(command.startswith("/silent-command"))
+        self.assertIn("local supported_block_builder_names", command)
+        self.assertIn('["direct_feed_smelter_set"] = true', command)
+        self.assertIn("local function builder_result", command)
+        self.assertIn("local function action_block_build", command)
+        self.assertIn('elseif action.type == "build_block" then', command)
+        self.assertIn("reply_action(action_block_build())", command)
+        for field in ("placed", "reused", "failed", "outputs", "warnings", "failure_root", "repair_skill", "diagnostics"):
+            self.assertIn(field, command)
+        self.assertIn("builder_not_implemented", command)
+        self.assertIn("diagnose_factory", command)
+
+    def test_build_block_factory_map_and_diagnose_are_read_only_handlers(self):
+        factory_map = build_modless_action_command({"type": "build_block", "builder": "factory_map"})
+        diagnose = build_modless_action_command({"type": "build_block", "builder": "diagnose_factory"})
+
+        self.assertIn('builder == "factory_map"', factory_map)
+        self.assertIn("collect_block_diagnostics", factory_map)
+        self.assertIn("entity_counts", factory_map)
+        self.assertIn('builder == "diagnose_factory"', diagnose)
+        self.assertIn("first_diagnostic_failure_root", diagnose)
+        self.assertIn("diagnostic_repair_for_root", diagnose)
+
+    def test_build_block_action_validation_rejects_unsupported_builder_mode_and_params(self):
+        with self.assertRaises(ValueError):
+            build_modless_action_command({"type": "build_block", "builder": "rocket_silo_direct_create"})
+        with self.assertRaises(ValueError):
+            build_modless_action_command(
+                {"type": "build_block", "builder": "direct_feed_smelter_set", "mode": "experimental_mod"}
+            )
+        with self.assertRaises(ValueError):
+            build_modless_action_command(
+                {"type": "build_block", "builder": "direct_feed_smelter_set", "params": []}
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

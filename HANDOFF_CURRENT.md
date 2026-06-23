@@ -1,11 +1,9 @@
 # Current Handoff
-- Branch `chore/part130-unattended-qwen9-supervisor`; last code commit/push `40ae0c7 Speed first electric drill bootstrap`.
-- User asked to pause current repair track and pivot to a new direction; do not continue copper-logistics fix unless re-requested.
-- Map saved via `no-mod-server-save` after health tick `1239419`; no-mod server left running (`start-no-mod-server` wrapper PID `55268` before pause).
-- Autopilot and `run_factorio_no_mod_unattended_llm.ps1` launcher were stopped; no `run-no-mod-autopilot` process remained after final check.
-- Server/version: Steam Factorio `2.0.77`, RCON was UP; vLLM service `13329` was ready.
-- Live before pause: researched=5, current research `logistics` at ~0.15, `electric-mining-drill=0`.
-- Last active skill before pause: `setup_coal_supply` stopped OK (`coal supply site is active...`); earlier risk was copper-plate hand-carry refusal for `research_logistics`.
-- Dirty files expected: `note.md` and `insight.md` auto journals only unless new work starts.
-- Last validation from code part: full `PYTHONPATH=src python -m unittest discover -s tests -q` passed 1305 tests.
-- Token usage record unavailable due malformed Codex sqlite DB; weekly quota unavailable.
+- Branch `chore/part130-unattended-qwen9-supervisor`; pivot is dual-track builder architecture with no-mod as primary path.
+- Part 1 complete: added `build_block` substrate, `BuilderResult`, builder registry, no-mod validation, and Lua dispatch.
+- Supported names: direct feed smelter, coal cluster, steam bank, mining/smelter/bus/assembly/labs, factory map, diagnose, repair.
+- Lua `factory_map`/`diagnose_factory` are read-only diagnostics; concrete placement builders return `builder_not_implemented`.
+- Validation: 28 targeted tests OK; 833 selected regression tests OK; full unittest discover passed 1312 tests.
+- Full test emitted one existing socket `ResourceWarning` in controller tests; no failures.
+- Token usage: unavailable because Codex state sqlite DB is malformed; weekly quota unavailable.
+- Next: Part 2 implement `direct_feed_smelter_set`, `coal_bootstrap_cluster`, fuel batching, and obsolete teardown markers.

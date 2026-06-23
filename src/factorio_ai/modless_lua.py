@@ -4,6 +4,7 @@ import json
 from textwrap import dedent
 from typing import Any
 
+from .block_builders import SUPPORTED_BLOCK_BUILDERS, validate_build_block_action
 from .config import AppConfig
 from .rcon import FactorioRconClient, parse_json_response
 
@@ -11,6 +12,7 @@ from .rcon import FactorioRconClient, parse_json_response
 OBSERVE_RADIUS = 768
 ALLOWED_ACTION_TYPES = {
     "build",
+    "build_block",
     "chart",
     "connect_entities",
     "connect_power",
@@ -117,6 +119,8 @@ def build_modless_action_command(action: dict[str, Any], *, player_name: str = "
         + ")\nlocal default_player_name = "
         + _lua_string(player_name)
         + "\n"
+        + _BLOCK_BUILDER_ALLOWLIST_LUA
+        + "\n"
         + _ACTION_LUA
     )
     return _silent_command(lua)
@@ -139,6 +143,8 @@ def _validate_action(action: dict[str, Any]) -> None:
     elif action_type == "place_fluid_connected":
         if not isinstance(action.get("name"), str) or not action.get("name"):
             raise ValueError("place_fluid_connected requires a non-empty name")
+    elif action_type == "build_block":
+        validate_build_block_action(action)
 
 
 def _lua_string(value: str) -> str:
@@ -152,6 +158,15 @@ def _silent_command(lua: str) -> str:
 
 def _compact_lua(lua: str) -> str:
     return " ".join(line.strip() for line in dedent(lua).splitlines() if line.strip())
+
+
+_BLOCK_BUILDER_ALLOWLIST_LUA = (
+    "local supported_block_builder_names = { "
+    + ", ".join(f'"{builder}"' for builder in SUPPORTED_BLOCK_BUILDERS)
+    + " }\nlocal supported_block_builders = { "
+    + ", ".join(f'["{builder}"] = true' for builder in SUPPORTED_BLOCK_BUILDERS)
+    + " }"
+)
 
 
 _COMMON_LUA = f"""
@@ -1204,9 +1219,157 @@ local function action_marker_detail(result)
   if action.item then return tostring(action.item) end
   if action.recipe then return tostring(action.recipe) end
   if action.technology then return tostring(action.technology) end
+  if action.builder then return tostring(action.builder) end
   if result and result.reason then return tostring(result.reason) end
   if result and result.status then return tostring(result.status) end
   return ""
+end
+local function copy_builder_extra(result, extra)
+  if type(extra) ~= "table" then return result end
+  for key, value in pairs(extra) do
+    if key ~= "action" and key ~= "ok" and key ~= "mode" and key ~= "builder" then
+      result[key] = value
+    end
+  end
+  return result
+end
+local function builder_result(builder, ok_value, extra)
+  local result = {
+    action = "build_block",
+    ok = ok_value == true,
+    mode = "modless-rcon-lua",
+    builder = builder,
+    placed = 0,
+    reused = 0,
+    failed = 0,
+    outputs = {},
+    warnings = {},
+    failure_root = "",
+    repair_skill = "",
+    diagnostics = {}
+  }
+  return copy_builder_extra(result, extra)
+end
+local function block_builder_params()
+  if type(action.params) == "table" then return action.params end
+  return {}
+end
+local function collect_block_diagnostics()
+  local params = block_builder_params()
+  local radius = tonumber(params.radius or action.radius or 96) or 96
+  radius = math.max(16, math.min(radius, OBSERVE_RADIUS))
+  local limit = tonumber(params.limit or 240) or 240
+  limit = math.max(1, math.min(limit, 1000))
+  local entities = agent.surface.find_entities_filtered({
+    position = agent.position,
+    radius = radius,
+    force = agent.force,
+    limit = limit,
+  })
+  local entity_counts = {}
+  local status_counts = {}
+  local blockers = {}
+  for _, entity in pairs(entities) do
+    if entity.valid then
+      entity_counts[entity.name] = (entity_counts[entity.name] or 0) + 1
+      local status = entity_status_name(entity)
+      if status then
+        status_counts[status] = (status_counts[status] or 0) + 1
+        if status == "no_power" or status == "no_fuel" or status == "no_ingredients" or status == "no_input_fluid" then
+          blockers[status] = (blockers[status] or 0) + 1
+        end
+      end
+    end
+  end
+  return {
+    radius = radius,
+    limit = limit,
+    entity_count = #entities,
+    entity_counts = entity_counts,
+    status_counts = status_counts,
+    blockers = blockers,
+    agent_position = position_table(agent.position),
+    tick = game.tick
+  }
+end
+local function diagnostic_repair_for_root(root)
+  if root == "no_power" then return "connect_power" end
+  if root == "no_fuel" then return "connect_coal_fuel_feed" end
+  if root == "no_ingredients" then return "build_site_input_logistic_line" end
+  if root == "no_input_fluid" then return "setup_power" end
+  return ""
+end
+local function first_diagnostic_failure_root(diagnostics)
+  local blockers = diagnostics.blockers or {}
+  local ordered = { "no_power", "no_fuel", "no_ingredients", "no_input_fluid" }
+  for _, root in pairs(ordered) do
+    if (blockers[root] or 0) > 0 then return root end
+  end
+  return ""
+end
+local function action_block_build()
+  local builder = tostring(action.builder or "")
+  if not supported_block_builders[builder] then
+    return builder_result(builder, false, {
+      failed = 1,
+      failure_root = "unsupported_builder",
+      repair_skill = "diagnose_factory",
+      warnings = { "unsupported block builder" },
+      diagnostics = { supported_builders = supported_block_builder_names }
+    })
+  end
+  local mode = tostring(action.mode or "no_mod")
+  if mode ~= "no_mod" then
+    return builder_result(builder, false, {
+      failed = 1,
+      failure_root = "unsupported_builder_mode",
+      repair_skill = "diagnose_factory",
+      warnings = { "modless Lua build_block only supports no_mod mode" },
+      diagnostics = { mode = mode }
+    })
+  end
+  if builder == "factory_map" then
+    local diagnostics = collect_block_diagnostics()
+    return builder_result(builder, true, {
+      outputs = {
+        entity_counts = diagnostics.entity_counts,
+        status_counts = diagnostics.status_counts,
+        blockers = diagnostics.blockers
+      },
+      diagnostics = diagnostics
+    })
+  end
+  if builder == "diagnose_factory" then
+    local diagnostics = collect_block_diagnostics()
+    local root = first_diagnostic_failure_root(diagnostics)
+    return builder_result(builder, root == "", {
+      failed = root == "" and 0 or 1,
+      failure_root = root,
+      repair_skill = diagnostic_repair_for_root(root),
+      diagnostics = diagnostics
+    })
+  end
+  if builder == "repair_factory" then
+    local params = block_builder_params()
+    local root = tostring(params.failure_root or "")
+    local repair_skill = tostring(params.repair_skill or diagnostic_repair_for_root(root) or "")
+    if repair_skill == "" then repair_skill = "diagnose_factory" end
+    if root == "" then root = "repair_requires_failure_root" end
+    return builder_result(builder, false, {
+      failed = 1,
+      failure_root = root,
+      repair_skill = repair_skill,
+      warnings = { "repair_factory selected a root repair skill; concrete repair dispatch is not implemented in build_block substrate" },
+      diagnostics = { params = params }
+    })
+  end
+  return builder_result(builder, false, {
+    failed = 1,
+    failure_root = "builder_not_implemented",
+    repair_skill = "diagnose_factory",
+    warnings = { "builder substrate is available; concrete no-mod builder is not implemented yet" },
+    diagnostics = { mode = mode, params = block_builder_params() }
+  })
 end
 local function reply_action(result)
   result = result or err("action returned no result")
@@ -1788,6 +1951,8 @@ elseif action.type == "craft" then
   reply_action(action_craft())
 elseif action.type == "build" then
   reply_action(action_build())
+elseif action.type == "build_block" then
+  reply_action(action_block_build())
 elseif action.type == "insert" then
   reply_action(action_insert())
 elseif action.type == "take" then
