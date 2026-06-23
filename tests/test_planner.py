@@ -8466,6 +8466,40 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action, circuit_repair.action)
         self.assertEqual(decision.reason, circuit_repair.reason)
 
+    def test_electric_drill_mall_takes_gear_assembler_output_for_first_drill(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"iron-plate": 10}
+        obs["craftable"] = {}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 920,
+                    "position": {"x": 6.0, "y": 2.0},
+                    "distance": 6,
+                    "recipe": "electric-mining-drill",
+                    "electric_network_connected": True,
+                    "inventories": {"2": {"electronic-circuit": 3}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 921,
+                    "position": {"x": 2.0, "y": 2.0},
+                    "distance": 2,
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"iron-gear-wheel": 5}},
+                },
+            ]
+        )
+
+        decision = BuildItemMallSkill("electric-mining-drill", 1).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "take")
+        self.assertEqual(decision.action["item"], "iron-gear-wheel")
+        self.assertEqual(decision.action["unit_number"], 921)
+        self.assertIn("assembler-produced gears", decision.reason)
+
     def test_power_pole_mall_takes_existing_copper_output_before_refueling_cell(self):
         obs = powered_automation_observation()
         obs["player"] = {"position": {"x": 6, "y": 0}}

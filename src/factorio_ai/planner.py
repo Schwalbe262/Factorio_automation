@@ -15556,6 +15556,7 @@ class BuildItemMallSkill:
                         )
                 allow_output_gears = ingredient == "iron-gear-wheel" and (
                     self.target_item == "transport-belt"
+                    or self.target_item == "electric-mining-drill"
                     or (
                         self.target_item == "automation-science-pack"
                         and reference_position is not None

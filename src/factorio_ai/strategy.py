@@ -51,6 +51,7 @@ BUILD_ITEM_MALL_ITEMS = [
 GEAR_MALL_OUTPUT_LOGISTICS_STOCK_TARGET = 20
 ELECTRIC_MINING_DRILL_MALL_TARGET = 6
 ELECTRIC_MINING_DRILL_CIRCUIT_PREREQ_TARGET = 3 * ELECTRIC_MINING_DRILL_MALL_TARGET
+ELECTRIC_MINING_DRILL_FIRST_TARGET = 1
 PRE_RAIL_GEAR_MALL_PLATE_DISTANCE_LIMIT = 128.0
 SMALL_POWER_POLE_REACH = 7.5
 GEAR_MALL_RELOCATION_FIXED_COST = 18.0
@@ -987,7 +988,7 @@ def _electric_drill_dependency_milestones(
             or _technology_researched(observation, "electric-mining-drill")
         ),
         "electric-mining-drill technology": _technology_researched(observation, "electric-mining-drill"),
-        "electronic-circuit automation": _circuit_automation_ready(observation),
+        "electronic-circuit automation": _electric_drill_circuit_supply_ready(observation),
     }
     drill_automated = bool(
         issue.get("electric_mining_drill_automated")
@@ -1029,10 +1030,12 @@ def _electric_drill_dependency_active_skill(
     return skill or None
 
 
-def _electric_drill_dependency_target_count(skill: str | None) -> int | None:
+def _electric_drill_dependency_target_count(skill: str | None, observation: dict[str, Any] | None = None) -> int | None:
     if skill == "automate_electronic_circuit_line":
         return ELECTRIC_MINING_DRILL_CIRCUIT_PREREQ_TARGET
     if skill == "bootstrap_electric_mining_drill_mall":
+        if observation is not None and not _circuit_automation_ready(observation):
+            return ELECTRIC_MINING_DRILL_FIRST_TARGET
         return ELECTRIC_MINING_DRILL_MALL_TARGET
     return None
 
@@ -2482,7 +2485,7 @@ def reconcile_strategy_decision(
         "expand_copper_smelting",
     }:
         target_skill = _electric_drill_dependency_active_skill(observation, burner_drill_replacement_issue)
-        dependency_target_count = _electric_drill_dependency_target_count(target_skill)
+        dependency_target_count = _electric_drill_dependency_target_count(target_skill, observation)
         if target_skill is not None and selected == target_skill and dependency_target_count is not None:
             adjusted = dict(decision)
             adjusted["target_count"] = dependency_target_count
@@ -3226,7 +3229,11 @@ def _heuristic_strategy_impl(
         return decision
 
     if electric_drill_upgrade_target == "bootstrap_electric_mining_drill_mall":
-        return StrategicDecision(
+        drill_target_count = _electric_drill_dependency_target_count(
+            electric_drill_upgrade_target,
+            observation,
+        ) or ELECTRIC_MINING_DRILL_MALL_TARGET
+        decision = StrategicDecision(
             selected_skill="bootstrap_electric_mining_drill_mall",
             priority=89,
             reason=(
@@ -3238,10 +3245,15 @@ def _heuristic_strategy_impl(
                 f"electric_mining_drill_stock={burner_drill_replacement_issue.get('electric_mining_drill_stock')}",
                 "electric_mining_drill_researched=true",
                 "electric_mining_drill_automated=false",
+                f"electronic_circuit_total={burner_drill_replacement_issue.get('electronic_circuit_total')}",
+                f"electronic_circuit_automated={str(bool(burner_drill_replacement_issue.get('electronic_circuit_automated'))).lower()}",
+                f"electric_drill_mall_target_count={drill_target_count}",
             ],
             blockers=["electric mining drill mall"],
             expected_effect="Produce electric mining drills by assembler so burner miners can be replaced without hand-crafting.",
         ).to_dict()
+        decision["target_count"] = drill_target_count
+        return decision
 
     if electric_drill_upgrade_target == "plan_factory_site":
         return StrategicDecision(
@@ -6667,6 +6679,12 @@ def _circuit_automation_ready(observation: dict[str, Any]) -> bool:
         if entity.get("recipe") == "electronic-circuit":
             has_circuit = True
     return has_cable and has_circuit
+
+
+def _electric_drill_circuit_supply_ready(observation: dict[str, Any]) -> bool:
+    if _circuit_automation_ready(observation):
+        return True
+    return total_item_count(observation, "electronic-circuit") >= 3
 
 
 def _entity_centroid(observation: dict[str, Any]) -> dict[str, float] | None:

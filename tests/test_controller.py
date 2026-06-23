@@ -3279,7 +3279,7 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(circuit_line_config["max_steps"], 555)
             default_circuit_config = controller._skill_run_config("automate_electronic_circuit_line")
             self.assertIsNotNone(default_circuit_config)
-            self.assertEqual(default_circuit_config["target"], 50)
+            self.assertEqual(default_circuit_config["target"], 18)
             logistics_config = controller._skill_run_config("research_logistics", max_steps=666)
             self.assertIsNotNone(logistics_config)
             self.assertEqual(logistics_config["goal"], "research_logistics")

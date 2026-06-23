@@ -719,6 +719,17 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("electric mining drill mall", result["blockers"])
         self.assertIn("electric_mining_drill_researched=true", result["evidence"])
 
+    def test_rocket_goal_builds_first_electric_drill_from_stocked_circuits(self):
+        observation = burner_drill_replacement_observation(electric_researched=True)
+        observation["inventory"]["electronic-circuit"] = 3
+
+        result = heuristic_strategy("launch_rocket_program", observation)
+
+        self.assertEqual(result["selected_skill"], "bootstrap_electric_mining_drill_mall")
+        self.assertEqual(result["target_count"], 1)
+        self.assertIn("electronic_circuit_automated=false", result["evidence"])
+        self.assertIn("electric_drill_mall_target_count=1", result["evidence"])
+
     def test_rocket_goal_requests_circuit_line_after_early_red_science_research(self):
         result = heuristic_strategy(
             "launch_rocket_program",
@@ -4207,6 +4218,30 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["guardrail_adjusted"]["from"], "research_logistics")
         self.assertIn("electronic circuit production for electric mining drills", result["blockers"])
         self.assertIn("electronic_circuit_automated=false", result["evidence"])
+
+    def test_reconcile_uses_stocked_circuits_for_first_electric_drill(self):
+        observation = burner_drill_replacement_observation(electric_researched=True)
+        observation["inventory"]["electronic-circuit"] = 3
+
+        result = reconcile_strategy_decision(
+            {
+                "selected_skill": "automate_electronic_circuit_line",
+                "target_count": 50,
+                "priority": 82,
+                "reason": "Build more green circuits.",
+                "evidence": [],
+                "blockers": [],
+                "expected_effect": "",
+                "source": "llm",
+            },
+            "launch_rocket_program",
+            observation,
+        )
+
+        self.assertEqual(result["selected_skill"], "bootstrap_electric_mining_drill_mall")
+        self.assertEqual(result["target_count"], 1)
+        self.assertEqual(result["guardrail_adjusted"]["from"], "automate_electronic_circuit_line")
+        self.assertIn("electric_drill_dependency_target_count=1", result["evidence"])
 
     def test_reconcile_repairs_power_before_electric_drill_circuit_dependency_after_belt_mall_done(self):
         observation = burner_drill_replacement_observation(electric_researched=True)

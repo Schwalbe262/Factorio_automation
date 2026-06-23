@@ -135,6 +135,7 @@ _AUTOPILOT_FAST_PATH_SKILLS = {
 }
 _AUTOPILOT_COAL_REPAIR_TARGET = 32
 _AUTOPILOT_ELECTRIC_DRILL_RESEARCH_SCIENCE_TARGET = 25
+_AUTOPILOT_ELECTRIC_DRILL_CIRCUIT_TARGET = 18
 
 
 def _failure_recovery_threshold() -> int:
@@ -1914,6 +1915,9 @@ class FactorioController:
                     if skill == "produce_automation_science_pack"
                     else None
                 )
+                dependency_target_count = strategy_mod._electric_drill_dependency_target_count(skill, observation)
+                if dependency_target_count is not None:
+                    target_count = dependency_target_count
                 return {
                     "skill": skill,
                     "target_count": target_count,
@@ -3054,7 +3058,7 @@ class FactorioController:
                 "log_prefix": "strategy-automation-research",
             }
         if skill_name == "automate_electronic_circuit_line":
-            target = target_count or 50
+            target = target_count or _AUTOPILOT_ELECTRIC_DRILL_CIRCUIT_TARGET
             return {
                 "skill": CircuitAutomationSkill(target),
                 "target_item": "electronic-circuit",
