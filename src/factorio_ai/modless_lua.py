@@ -1685,22 +1685,25 @@ end
 local function burner_drill_output_position_from(position, direction)
   local integer_center = math.abs(position.x - math.floor(position.x + 0.5)) < 0.01 and math.abs(position.y - math.floor(position.y + 0.5)) < 0.01
   if integer_center then
-    if direction == defines.direction.west then return { x = round(position.x - 1.5), y = round(position.y + 0.5) } end
-    if direction == defines.direction.south then return { x = round(position.x + 0.5), y = round(position.y + 1.5) } end
-    if direction == defines.direction.north then return { x = round(position.x + 0.5), y = round(position.y - 1.5) } end
-    return { x = round(position.x + 1.5), y = round(position.y + 0.5) }
+    if direction == defines.direction.west then return { x = round(position.x - 1.5), y = round(position.y - 0.5) } end
+    if direction == defines.direction.south then return { x = round(position.x - 0.5), y = round(position.y + 1.5) } end
+    if direction == defines.direction.north then return { x = round(position.x - 0.5), y = round(position.y - 1.5) } end
+    return { x = round(position.x + 1.5), y = round(position.y - 0.5) }
   end
   local dx, dy = builder_orientation_spec(direction == defines.direction.west and "west" or direction == defines.direction.south and "south" or direction == defines.direction.north and "north" or "east")
   return { x = round(position.x + 2 * dx), y = round(position.y + 2 * dy) }
 end
+local function direct_feed_furnace_position(drill_position, orientation)
+  local dx, dy = builder_orientation_spec(orientation)
+  return { x = round(drill_position.x + 2 * dx), y = round(drill_position.y + 2 * dy) }
+end
 local function direct_feed_layout(resource_position, orientation)
-  local dx, dy, drill_direction = builder_orientation_spec(orientation)
+  local _dx, _dy, drill_direction = builder_orientation_spec(orientation)
   local drill_position = builder_drill_center(resource_position)
-  local output_position = burner_drill_output_position_from(drill_position, drill_direction)
   return {
     orientation = orientation,
     drill_position = drill_position,
-    furnace_position = { x = round(output_position.x + dx), y = round(output_position.y + dy) },
+    furnace_position = direct_feed_furnace_position(drill_position, orientation),
     drill_direction = drill_direction,
   }
 end
@@ -1710,7 +1713,7 @@ local function coal_cluster_layout(resource_position, orientation)
   return {
     orientation = orientation,
     drill_position = drill_position,
-    output_position = { x = round(drill_position.x + 2 * dx), y = round(drill_position.y + 2 * dy) },
+    output_position = burner_drill_output_position_from(drill_position, drill_direction),
     drill_direction = drill_direction,
     belt_direction = belt_direction,
   }
@@ -1739,7 +1742,11 @@ local function builder_ensure_item(inventory, name, count, crafted)
   return inventory.get_item_count(name) >= count
 end
 local function builder_can_place_entity(name, position, direction, required_resource)
-  if existing_built_entity(agent.surface, agent.force, name, position) then return true, "reused" end
+  local existing = existing_built_entity(agent.surface, agent.force, name, position)
+  if existing then
+    if direction and existing.direction and existing.direction ~= direction then return false, "direction_mismatch" end
+    return true, "reused"
+  end
   local request = { name = name }
   if required_resource then
     request.required_resource = required_resource
@@ -1753,6 +1760,11 @@ end
 local function builder_place_entity(inventory, name, position, direction, required_resource, counters, outputs, failures, crafted)
   local existing = existing_built_entity(agent.surface, agent.force, name, position)
   if existing then
+    if direction and existing.direction and existing.direction ~= direction then
+      counters.failed = counters.failed + 1
+      table.insert(failures, { name = name, position = position_table(position), reason = "direction_mismatch" })
+      return nil
+    end
     counters.reused = counters.reused + 1
     table.insert(outputs.reused_entities, { name = existing.name, unit_number = existing.unit_number, position = position_table(existing.position) })
     return existing
