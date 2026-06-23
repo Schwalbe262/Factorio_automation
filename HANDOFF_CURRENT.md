@@ -1,11 +1,11 @@
 # Current Handoff
-- Branch `chore/part130-unattended-qwen9-supervisor`; keep huge runtime `note.md`/`insight.md` unstaged.
-- Slurm/Qwen: vLLM task `13329` still running/ready on a6000; `slurm-llm-status` previously `llm_ready=true`.
-- Fixed planner loop: `BuildItemMallSkill("transport-belt")` now shares the long iron-line relocation guard instead of extending/seeding a 100+ tile line.
-- Added regression tests for started long iron input lines and post-recovery relocation continuation so generic mall placement cannot rebuild the same remote cell.
+- Branch `chore/part130-unattended-qwen9-supervisor`; code commit `191ecbc` pushed; leave huge `note.md`/`insight.md` unstaged.
+- Slurm/Qwen: vLLM task `13329` running/ready on a6000; supervisor gate ready.
+- Planner fix: transport-belt mall bootstrap now prioritizes gear/belt mall relocation before a long iron-plate input line or repeated remote-cell rebuild.
 - Validation: `PYTHONPATH=src python -m unittest tests.test_planner` -> 492 OK; py_compile and diff check OK.
-- Live applied by restarting autopilot; current PID `59668`, server UP, supervisor gate ready, stall=0.
-- Live result: mall moved near iron source (`x=91.5,y=34.5`), output inserter/chest path built, then next skill advanced to `bootstrap_electric_mining_drill_mall`.
-- Progress snapshot: researched=5, logistics research 0.05, transport-belt=8, small-electric-pole=7, seed_count=1.
-- Remaining watch: foundry stale queue and pending operator-layout review still shown by run-health.
-- Token sample `41837054`; weekly quota unavailable while Codex sqlite DB remains malformed.
+- Live applied by restarting autopilot; current PID `59668`, server UP.
+- Live result: old long-line path stopped, mall relocated near iron source around `x=91.5,y=34.5`; gear/belt skill completed enough to advance.
+- Current live skill: `bootstrap_electric_mining_drill_mall`; latest progress stall=0, transport-belt=12, small-electric-pole=7, seed_count=7.
+- Watch next: electric mining drill mall was previously waiting on blocked iron expansion/no open iron-ore site; verify it progresses or route to `expand_iron_smelting`.
+- Known debt: gear/belt relocation still used several bootstrap plate seeds before advancing; tighten seed policy later if it recurs.
+- Token sample `41895719`; weekly quota unavailable while Codex sqlite DB remains malformed.
