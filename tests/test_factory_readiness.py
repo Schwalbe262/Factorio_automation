@@ -162,6 +162,38 @@ class FactoryReadinessTests(unittest.TestCase):
         self.assertEqual(readiness.failure_root, "iron_plate_source_missing")
         self.assertEqual(readiness.repair_skill, "produce_iron_plate")
 
+    def test_dead_steam_power_preempts_missing_iron_source(self):
+        obs = _powered_mall_observation()
+        obs["inventory"] = {"transport-belt": 20, "coal": 20}
+        obs["entities"] = [entity for entity in obs["entities"] if entity.get("name") != "stone-furnace"]
+        obs["entities"].extend(
+            [
+                {
+                    "name": "boiler",
+                    "unit_number": 50,
+                    "position": {"x": -2, "y": 0},
+                    "status_name": "no_fuel",
+                    "inventories": {},
+                },
+                {
+                    "name": "steam-engine",
+                    "unit_number": 51,
+                    "position": {"x": -4, "y": 0},
+                    "electric_network_connected": True,
+                    "electric_network_id": 1,
+                    "status_name": "no_input_fluid",
+                    "inventories": {},
+                },
+            ]
+        )
+
+        readiness = build_factory_readiness(obs)
+
+        self.assertFalse(readiness.iron_plate_source_ready)
+        self.assertTrue(readiness.details["steam_power_unavailable"])
+        self.assertEqual(readiness.failure_root, "steam_power_unavailable")
+        self.assertEqual(readiness.repair_skill, "setup_power")
+
     def test_empty_unfueled_coal_supply_preempts_mall_bootstrap(self):
         obs = _powered_mall_observation()
         obs["inventory"] = {}

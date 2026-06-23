@@ -3283,7 +3283,7 @@ def _iron_belt_smelting_recovery_after_blocked_direct_site(
         return None
     if "cannot find open iron-ore site for direct burner-drill smelting cell" not in direct_decision.reason:
         return None
-    if not _belt_smelting_ready(observation):
+    if not _iron_belt_smelting_repair_ready(observation):
         return None
     target_rate = max(37.0, min(90.0, float(target_count)))
     recovery = ExpandIronSmeltingSkill(target_rate_per_minute=target_rate).next_action(observation)
@@ -3379,13 +3379,14 @@ def _iron_belt_smelting_preference_after_direct_support(
 ) -> PlannerDecision | None:
     if inventory_only or direct_decision.action is None or direct_decision.done:
         return None
-    if not _belt_smelting_ready(observation):
+    if not _iron_belt_smelting_repair_ready(observation):
         return None
     support_reason = str(direct_decision.reason or "")
     if not any(
         marker in support_reason
         for marker in (
             "starter stone supply",
+            "stone output chest",
             "direct smelting drill",
             "direct smelting furnace",
             "misplaced direct iron-plate mining drill",
@@ -3428,6 +3429,10 @@ def _iron_belt_smelting_preference_after_direct_support(
         done=False,
         metadata=metadata,
     )
+
+
+def _iron_belt_smelting_repair_ready(observation: dict[str, Any]) -> bool:
+    return _belt_smelting_ready(observation) or _find_belt_smelting_line(observation, "iron-ore") is not None
 
 
 class AutomationScienceSkill:
@@ -5070,6 +5075,9 @@ class CoalFuelFeedSkill:
                 inserter,
                 "boiler coal feed",
             )
+            bootstrap_seed = _boiler_feed_power_bootstrap_seed_decision(observation, player, layout)
+            if bootstrap_seed is not None:
+                return bootstrap_seed
             if power_repair is not None:
                 return power_repair
         else:
@@ -5206,57 +5214,9 @@ class CoalFuelFeedSkill:
                 "boiler coal fuel feed is active: belt and inserter are feeding the boiler fuel inventory",
                 done=True,
             )
-        if _boiler_feed_needs_power_bootstrap_seed(layout):
-            fuel_item, fuel_count = _select_inventory_burner_fuel(observation)
-            if fuel_count > 0 and isinstance(boiler, dict):
-                boiler_position = _position(boiler)
-                if distance(player, boiler_position) > 20:
-                    return PlannerDecision(
-                        {"type": "move_to", "position": boiler_position},
-                        "move near boiler to seed the completed coal feed power loop",
-                    )
-                return _bootstrap_seed_decision(
-                    {
-                        "type": "insert",
-                        "item": fuel_item,
-                        "count": 1,
-                        "unit_number": boiler.get("unit_number"),
-                        "name": "boiler",
-                        "position": boiler_position,
-                    },
-                    "seed boiler once so the completed electric coal feed can start moving coal",
-                    seed_reason="boiler_coal_feed_power_seed",
-                    expected_followup="boiler coal feed inserter powered and boiler receives coal",
-                )
-            if isinstance(boiler, dict):
-                boiler_position = _position(boiler)
-                source = _nearest_bootstrap_fuel_source(
-                    observation,
-                    boiler_position,
-                    exclude_units={boiler.get("unit_number")},
-                )
-                if source is not None and distance(_position(source), boiler_position) <= STARTER_BOILER_FUEL_FEED_ROUTE_LIMIT:
-                    source_item, source_count = _select_bootstrap_fuel_item(source)
-                    if source_count > 0:
-                        source_position = _position(source)
-                        if distance(player, source_position) > 20:
-                            return PlannerDecision(
-                                {"type": "move_to", "position": source_position},
-                                "move near existing fuel source to seed the completed boiler coal feed power loop",
-                            )
-                        return _bootstrap_seed_decision(
-                            {
-                                "type": "take",
-                                "item": source_item,
-                                "count": 1,
-                                "unit_number": source.get("unit_number"),
-                                "name": source.get("name"),
-                                "position": source_position,
-                            },
-                            "take one fuel item to seed the completed boiler coal feed power loop",
-                            seed_reason="boiler_coal_feed_power_seed",
-                            expected_followup="collected fuel is inserted into boiler once, powering the boiler coal feed inserter",
-                        )
+        bootstrap_seed = _boiler_feed_power_bootstrap_seed_decision(observation, player, layout)
+        if bootstrap_seed is not None:
+            return bootstrap_seed
         return PlannerDecision(
             {"type": "wait", "ticks": 180},
             "wait for boiler coal feed inserter to move coal into the boiler",
@@ -5490,6 +5450,68 @@ def _boiler_feed_needs_power_bootstrap_seed(layout: dict[str, Any]) -> bool:
         and isinstance(inserter, dict)
         and str(inserter.get("name") or "") != "burner-inserter"
         and _entity_no_power(inserter)
+    )
+
+
+def _boiler_feed_power_bootstrap_seed_decision(
+    observation: dict[str, Any],
+    player: dict[str, float],
+    layout: dict[str, Any],
+) -> PlannerDecision | None:
+    if not _boiler_feed_needs_power_bootstrap_seed(layout):
+        return None
+    boiler = layout.get("boiler")
+    if not isinstance(boiler, dict):
+        return None
+    boiler_position = _position(boiler)
+    fuel_item, fuel_count = _select_inventory_burner_fuel(observation)
+    if fuel_count > 0:
+        if distance(player, boiler_position) > 20:
+            return PlannerDecision(
+                {"type": "move_to", "position": boiler_position},
+                "move near boiler to seed the completed coal feed power loop",
+            )
+        return _bootstrap_seed_decision(
+            {
+                "type": "insert",
+                "item": fuel_item,
+                "count": 1,
+                "unit_number": boiler.get("unit_number"),
+                "name": "boiler",
+                "position": boiler_position,
+            },
+            "seed boiler once so the completed electric coal feed can start moving coal",
+            seed_reason="boiler_coal_feed_power_seed",
+            expected_followup="boiler coal feed inserter powered and boiler receives coal",
+        )
+    source = _nearest_bootstrap_fuel_source(
+        observation,
+        boiler_position,
+        exclude_units={boiler.get("unit_number")},
+    )
+    if source is None or distance(_position(source), boiler_position) > STARTER_BOILER_FUEL_FEED_ROUTE_LIMIT:
+        return None
+    source_item, source_count = _select_bootstrap_fuel_item(source)
+    if source_count <= 0:
+        return None
+    source_position = _position(source)
+    if distance(player, source_position) > 20:
+        return PlannerDecision(
+            {"type": "move_to", "position": source_position},
+            "move near existing fuel source to seed the completed boiler coal feed power loop",
+        )
+    return _bootstrap_seed_decision(
+        {
+            "type": "take",
+            "item": source_item,
+            "count": 1,
+            "unit_number": source.get("unit_number"),
+            "name": source.get("name"),
+            "position": source_position,
+        },
+        "take one fuel item to seed the completed boiler coal feed power loop",
+        seed_reason="boiler_coal_feed_power_seed",
+        expected_followup="collected fuel is inserted into boiler once, powering the boiler coal feed inserter",
     )
 
 
@@ -11348,12 +11370,14 @@ def _logistics_line_powered_inserter_decision(
     inserter: dict[str, Any],
     label: str,
 ) -> PlannerDecision | None:
-    if str(inserter.get("name") or "") == "burner-inserter" or inserter.get("electric_network_connected") is not False:
+    if str(inserter.get("name") or "") == "burner-inserter":
+        return None
+    if inserter.get("electric_network_connected") is not False and not _entity_no_power(inserter):
         return None
     position = _position(inserter)
     existing = _nearest_connected_small_pole_supplying_position(observation, position)
-    if existing is None:
-        existing = _nearest_small_pole_supplying_position(observation, position)
+    if existing is not None and (_entity_no_power(inserter) or existing.get("electric_network_connected") is False):
+        existing = None
     if existing is not None:
         pole_position = _position(existing)
         if distance(player, pole_position) > 20:
@@ -11366,6 +11390,21 @@ def _logistics_line_powered_inserter_decision(
                 "position": pole_position,
             },
             f"connect supply pole for {label}",
+        )
+    isolated_existing = _nearest_small_pole_supplying_position(observation, position)
+    if isolated_existing is not None:
+        pole_position = _position(isolated_existing)
+        if distance(player, pole_position) > 20:
+            return PlannerDecision({"type": "move_to", "position": pole_position}, f"move near isolated supply pole for {label}")
+        return PlannerDecision(
+            {
+                "type": "connect_power",
+                "unit_number": isolated_existing.get("unit_number"),
+                "name": isolated_existing.get("name") or "small-electric-pole",
+                "position": pole_position,
+                "radius": 32,
+            },
+            f"connect isolated supply pole for {label}",
         )
 
     if inventory_count(observation, "small-electric-pole") <= 0:
@@ -13397,13 +13436,14 @@ class GearBeltMallLogisticsSkill:
         inserter = spec.get("entity")
         if not isinstance(inserter, dict) or inserter.get("name") == "burner-inserter":
             return None
-        if inserter.get("electric_network_connected") is not False:
+        if inserter.get("electric_network_connected") is not False and not _entity_no_power(inserter):
             return None
 
         position = _position(inserter)
         existing = _nearest_connected_small_pole_supplying_position(observation, position)
-        if existing is None:
-            existing = _nearest_small_pole_supplying_position(observation, position)
+        if existing is not None:
+            if _entity_no_power(inserter) or existing.get("electric_network_connected") is False:
+                existing = None
         if existing is not None:
             pole_position = _position(existing)
             if distance(player, pole_position) > 20:
@@ -13416,6 +13456,21 @@ class GearBeltMallLogisticsSkill:
                     "position": pole_position,
                 },
                 f"connect supply pole for {label}",
+            )
+        isolated_existing = _nearest_small_pole_supplying_position(observation, position)
+        if isolated_existing is not None:
+            pole_position = _position(isolated_existing)
+            if distance(player, pole_position) > 20:
+                return PlannerDecision({"type": "move_to", "position": pole_position}, f"move near isolated supply pole for {label}")
+            return PlannerDecision(
+                {
+                    "type": "connect_power",
+                    "unit_number": isolated_existing.get("unit_number"),
+                    "name": "small-electric-pole",
+                    "position": pole_position,
+                    "radius": 32,
+                },
+                f"connect isolated supply pole for {label}",
             )
 
         if inventory_count(observation, "small-electric-pole") <= 0:

@@ -375,6 +375,31 @@ local function entity_electric_network_id(entity)
   if ok then return network_id end
   return nil
 end
+local function entity_status_name(entity)
+  if not entity or not entity.valid then return nil end
+  local ok, status = pcall(function() return entity.status end)
+  if not ok or not status then return nil end
+  for name, value in pairs(defines.entity_status) do
+    if value == status then return name end
+  end
+  return nil
+end
+local function network_has_working_power_source(surface, force, network_id)
+  if not network_id then return false end
+  local sources = surface.find_entities_filtered({{
+    name = {{"steam-engine", "steam-turbine", "solar-panel", "accumulator"}},
+    force = force,
+  }})
+  for _, source in pairs(sources) do
+    if source.valid and entity_electric_network_id(source) == network_id and entity_connected_to_electric_network(source) == true then
+      local status = entity_status_name(source)
+      if status == "working" or status == "low_power" or source.name == "solar-panel" or source.name == "accumulator" then
+        return true
+      end
+    end
+  end
+  return false
+end
 local function force_spawn_position(surface, force)
   local ok, spawn = pcall(function() return force.get_spawn_position(surface) end)
   if ok and spawn then
@@ -1647,11 +1672,22 @@ local function action_connect_power()
     force = agent.force,
   })
   local preferred_source_network_id = tonumber(action.source_network_id)
+  local target_network_id = entity_electric_network_id(target)
+  local target_connected = entity_connected_to_electric_network(target)
+  local target_network_powered = network_has_working_power_source(agent.surface, agent.force, target_network_id)
   table.sort(candidates, function(a, b)
     if preferred_source_network_id then
       local a_preferred = entity_electric_network_id(a) == preferred_source_network_id
       local b_preferred = entity_electric_network_id(b) == preferred_source_network_id
       if a_preferred ~= b_preferred then return a_preferred end
+    end
+    local a_connected = entity_connected_to_electric_network(a) == true
+    local b_connected = entity_connected_to_electric_network(b) == true
+    if a_connected ~= b_connected then return a_connected end
+    if (not preferred_source_network_id) and target_connected ~= true and target_network_id and not target_network_powered then
+      local a_same_unpowered = entity_electric_network_id(a) == target_network_id
+      local b_same_unpowered = entity_electric_network_id(b) == target_network_id
+      if a_same_unpowered ~= b_same_unpowered then return not a_same_unpowered end
     end
     local a_count = connector_connection_count(entity_wire_connector(a))
     local b_count = connector_connection_count(entity_wire_connector(b))
@@ -1660,19 +1696,22 @@ local function action_connect_power()
   end)
   for _, source in pairs(candidates) do
     if source.valid and source ~= target then
-      local source_connector = entity_wire_connector(source)
-      if source_connector and connectors_can_reach(target_connector, source_connector) then
-        if connectors_connected(target_connector, source_connector) then
-          return ok({ action = "connect_power", status = "already_connected", target_unit_number = target.unit_number, source_unit_number = source.unit_number })
-        end
-        local connected_ok, connected = pcall(function() return target_connector.connect_to(source_connector, false, defines.wire_origin.player) end)
-        if connected_ok and (connected == true or connectors_connected(target_connector, source_connector)) then
-          return ok({ action = "connect_power", status = "connected", target_unit_number = target.unit_number, source_unit_number = source.unit_number })
+      local same_unpowered_network = (not preferred_source_network_id) and target_connected ~= true and target_network_id and not target_network_powered and entity_electric_network_id(source) == target_network_id
+      if not same_unpowered_network then
+        local source_connector = entity_wire_connector(source)
+        if source_connector and connectors_can_reach(target_connector, source_connector) then
+          if connectors_connected(target_connector, source_connector) then
+            return ok({ action = "connect_power", status = "already_connected", target_unit_number = target.unit_number, source_unit_number = source.unit_number })
+          end
+          local connected_ok, connected = pcall(function() return target_connector.connect_to(source_connector, false, defines.wire_origin.player) end)
+          if connected_ok and (connected == true or connectors_connected(target_connector, source_connector)) then
+            return ok({ action = "connect_power", status = "connected", target_unit_number = target.unit_number, source_unit_number = source.unit_number })
+          end
         end
       end
     end
   end
-  if connector_connection_count(target_connector) > 0 then
+  if connector_connection_count(target_connector) > 0 and entity_connected_to_electric_network(target) == true then
     return ok({ action = "connect_power", status = "already_connected", target_unit_number = target.unit_number })
   end
   return err("no reachable electric pole found for connect_power", { target = target.name, target_unit_number = target.unit_number })

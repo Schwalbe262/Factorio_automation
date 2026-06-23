@@ -17,6 +17,7 @@ from factorio_ai.controller import (
     RunSummary,
     StrategyStepSummary,
     _guard_post_automation_handcraft,
+    _guard_unpowered_connect_power_radius,
     _move_detour_action,
     _stale_take_response,
     _virtual_move_response_arrived,
@@ -96,6 +97,41 @@ class ControllerTests(unittest.TestCase):
 
         self.assertEqual(guarded.action, {"type": "wait", "ticks": 120})
         self.assertIn("blocked direct iron-gear-wheel handcraft", guarded.reason)
+
+    def test_guard_adds_radius_for_unpowered_supply_pole_connect(self):
+        observation = {
+            "entities": [
+                {
+                    "name": "inserter",
+                    "unit_number": 153,
+                    "position": {"x": 74.5, "y": 41.5},
+                    "electric_network_connected": True,
+                    "electric_network_id": 1,
+                    "status_name": "no_power",
+                },
+                {
+                    "name": "small-electric-pole",
+                    "unit_number": 261,
+                    "position": {"x": 72.5, "y": 43.5},
+                    "electric_network_connected": False,
+                    "electric_network_id": 1,
+                },
+            ],
+        }
+        decision = PlannerDecision(
+            action={
+                "type": "connect_power",
+                "unit_number": 261,
+                "name": "small-electric-pole",
+                "position": {"x": 72.5, "y": 43.5},
+            },
+            reason="connect supply pole for expanded iron-plate smelting input inserter",
+        )
+
+        guarded = _guard_unpowered_connect_power_radius(observation, decision)
+
+        self.assertEqual(guarded.action["radius"], 32)
+        self.assertIn("connect isolated supply pole", guarded.reason)
 
     def test_guard_allows_gear_handcraft_for_virtual_server_agent(self):
         # The virtual RCON server agent (character_valid=False / kind server) teleports and hand-craft

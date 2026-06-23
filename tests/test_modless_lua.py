@@ -162,6 +162,9 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn("defines.wire_connector_id.pole_copper", command)
         self.assertIn("preferred_source_network_id", command)
         self.assertIn("entity_electric_network_id", command)
+        self.assertIn("same_unpowered_network", command)
+        self.assertIn("network_has_working_power_source", command)
+        self.assertIn("not target_network_powered", command)
         self.assertIn("connect_to", command)
 
     def test_action_updates_agent_marker(self):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import copy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
@@ -64,6 +65,9 @@ from .planner import (
     SiteInputLogisticLineSkill,
     StoneSupplySkill,
     StarterDefenseSkill,
+    _entity_no_power,
+    _position,
+    _small_pole_supplies_position,
 )
 from .rcon import FactorioRconClient
 from .site_selection import load_selected_improvement_site
@@ -689,6 +693,43 @@ def _guard_post_automation_handcraft(observation: dict[str, Any], decision: Plan
         return PlannerDecision(
             {"type": "wait", "ticks": 120},
             _gear_handcraft_guard_reason(observation, action),
+        )
+    return decision
+
+
+def _guard_unpowered_connect_power_radius(observation: dict[str, Any], decision: PlannerDecision) -> PlannerDecision:
+    action = decision.action
+    if not isinstance(action, dict) or action.get("type") != "connect_power" or action.get("radius") is not None:
+        return decision
+    if "connect supply pole for" not in decision.reason:
+        return decision
+    target_unit = action.get("unit_number")
+    entities = [entity for entity in observation.get("entities") or [] if isinstance(entity, dict)]
+    target_pole = next(
+        (
+            entity
+            for entity in entities
+            if entity.get("unit_number") == target_unit and str(entity.get("name") or "") == "small-electric-pole"
+        ),
+        None,
+    )
+    if target_pole is None:
+        return decision
+    pole_position = _position(target_pole)
+    for entity in entities:
+        if str(entity.get("name") or "") not in {"inserter", "fast-inserter", "long-handed-inserter"}:
+            continue
+        if entity.get("electric_network_connected") is not False and not _entity_no_power(entity):
+            continue
+        if not _small_pole_supplies_position(pole_position, _position(entity)):
+            continue
+        normalized = dict(action)
+        normalized["radius"] = 32
+        return PlannerDecision(
+            normalized,
+            decision.reason.replace("connect supply pole for", "connect isolated supply pole for", 1),
+            done=decision.done,
+            metadata=dict(decision.metadata),
         )
     return decision
 
@@ -3011,9 +3052,11 @@ class FactorioController:
                     if initial_item_count is None:
                         initial_item_count = total_item_count(observation, target_item)
                     self._maybe_progress_background_layout_work(observation, objective, goal, step)
+                    guard_observation = copy.deepcopy(observation)
                     decision = skill.next_action(observation)
                     observation, decision = self._maybe_retry_skill_with_planning_sites(skill, observation, decision)
-                    decision = _guard_post_automation_handcraft(observation, decision)
+                    decision = _guard_post_automation_handcraft(guard_observation, decision)
+                    decision = _guard_unpowered_connect_power_radius(guard_observation, decision)
                     self._write_log(log_file, step, observation, decision, None)
                     if decision.done:
                         self._maybe_progress_background_layout_work(observation, objective, goal, step, force_poll=True)

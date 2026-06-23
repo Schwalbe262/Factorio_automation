@@ -21,7 +21,7 @@ $ErrorActionPreference = "Continue"
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $repoRoot
 
-$env:PYTHONPATH = "src"
+$env:PYTHONPATH = Join-Path $repoRoot "src"
 $env:FACTORIO_AI_SLURM_ENABLED = "1"
 $env:FACTORIO_AI_SLURM_MODE = "scheduler"
 $env:FACTORIO_AI_SLURM_SCHEDULER_URL = "http://100.112.168.31:8000"

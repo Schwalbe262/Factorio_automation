@@ -73,6 +73,7 @@ def build_factory_readiness(observation: dict[str, Any]) -> FactoryReadiness:
     coal_supply_ready = _coal_supply_ready(observation)
     starter_fuel_starved = _starter_fuel_supply_starved(observation) and not coal_supply_ready
     boiler_needs_fuel = _boiler_needs_fuel(observation)
+    steam_power_unavailable = _steam_power_unavailable(observation)
     boiler_feed_buildable = boiler_needs_fuel and coal_supply_ready and belt_line_buildable
     bootstrap_seed_allowed = (
         automation_researched
@@ -87,7 +88,11 @@ def build_factory_readiness(observation: dict[str, Any]) -> FactoryReadiness:
     blocked_by: list[str] = []
     failure_root: str | None = None
     repair_skill: str | None = None
-    if automation_researched and starter_fuel_starved:
+    if automation_researched and steam_power_unavailable:
+        failure_root = "steam_power_unavailable"
+        repair_skill = "setup_power"
+        blocked_by.append("steam power")
+    elif automation_researched and starter_fuel_starved:
         failure_root = "starter_fuel_supply_starved"
         repair_skill = "setup_coal_supply"
         blocked_by.append("coal supply")
@@ -155,6 +160,7 @@ def build_factory_readiness(observation: dict[str, Any]) -> FactoryReadiness:
         "coal_supply_ready": coal_supply_ready,
         "starter_fuel_starved": starter_fuel_starved,
         "boiler_needs_fuel": boiler_needs_fuel,
+        "steam_power_unavailable": steam_power_unavailable,
         "belt_mall_can_output_reason": _belt_mall_output_reason(observation, gear_assemblers, belt_assemblers),
     }
     return FactoryReadiness(
@@ -446,6 +452,26 @@ def _boiler_needs_fuel(observation: dict[str, Any]) -> bool:
         if str(entity.get("name") or "") == "boiler" and _entity_status_name_is(entity, "no_fuel"):
             return True
     return False
+
+
+def _steam_power_unavailable(observation: dict[str, Any]) -> bool:
+    steam_engines = [entity for entity in _entities(observation) if str(entity.get("name") or "") == "steam-engine"]
+    if not steam_engines:
+        return False
+    for entity in steam_engines:
+        if entity.get("electric_network_connected") is False:
+            continue
+        status = str(entity.get("status_name") or "")
+        if status in {"working", "low_power"}:
+            return False
+        try:
+            if int(entity.get("status")) in {1, 2}:
+                return False
+        except (TypeError, ValueError):
+            pass
+    if _boiler_needs_fuel(observation):
+        return True
+    return any(_entity_status_name_is(entity, "no_input_fluid") or _entity_status_name_is(entity, "no_power") for entity in steam_engines)
 
 
 def _entity_status_name_is(entity: dict[str, Any], status_name: str) -> bool:
