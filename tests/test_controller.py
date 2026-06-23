@@ -16,9 +16,11 @@ from factorio_ai.controller import (
     ModlessFactorioController,
     RunSummary,
     StrategyStepSummary,
+    _boiler_handfuel_prerequisite_repair,
     _guard_post_automation_handcraft,
     _guard_unpowered_connect_power_radius,
     _move_detour_action,
+    _one_time_seed_already_used,
     _stale_take_response,
     _virtual_move_response_arrived,
 )
@@ -683,6 +685,128 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(run.ok)
         self.assertEqual(run.seed_count, 2)
         self.assertEqual(run.reason, "follow-up observed")
+
+    def test_run_skill_blocks_repeated_emergency_boiler_seed_across_runs(self):
+        observation = {
+            "tick": 1,
+            "inventory": {"coal": 5},
+            "entities": [
+                {
+                    "name": "boiler",
+                    "unit_number": 30,
+                    "position": {"x": 8, "y": 0},
+                    "status_name": "no_fuel",
+                    "inventories": {},
+                }
+            ],
+            "research": {"technologies": {"automation": {"researched": True}}},
+        }
+        emergency_action = {
+            "type": "insert",
+            "item": "coal",
+            "count": 3,
+            "unit_number": 30,
+            "name": "boiler",
+            "position": {"x": 8, "y": 0},
+            "emergency_bootstrap": True,
+        }
+
+        class BoilerSeedThenDoneSkill:
+            def __init__(self):
+                self.calls = 0
+
+            def next_action(self, _observation):
+                self.calls += 1
+                if self.calls == 1:
+                    return PlannerDecision(emergency_action, "one-time emergency boiler fuel bootstrap")
+                return PlannerDecision(None, "done", done=True)
+
+        class BoilerSeedAgainSkill:
+            def next_action(self, _observation):
+                return PlannerDecision(emergency_action, "one-time emergency boiler fuel bootstrap")
+
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.actions = []
+
+            def observe(self):
+                return observation
+
+            def act(self, action):
+                self.actions.append(action)
+                return {"ok": True}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_test_config(Path(tmp))
+            controller = FakeController(cfg)
+            with patch("factorio_ai.controller.time.sleep", return_value=None):
+                first = controller._run_skill(
+                    BoilerSeedThenDoneSkill(),
+                    target_item="transport-belt",
+                    target=1,
+                    goal="first_boiler_seed",
+                    max_steps=2,
+                    log_prefix="test-boiler-seed-first",
+                )
+                second = controller._run_skill(
+                    BoilerSeedAgainSkill(),
+                    target_item="transport-belt",
+                    target=1,
+                    goal="second_boiler_seed",
+                    max_steps=1,
+                    log_prefix="test-boiler-seed-second",
+                )
+            history = json.loads((cfg.runtime_dir / "bootstrap-seed-history.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(first.ok)
+        self.assertEqual(first.seed_count, 1)
+        self.assertFalse(second.ok)
+        self.assertIn("connect_coal_fuel_feed", second.reason)
+        self.assertEqual(len(controller.actions), 1)
+        self.assertIn("emergency_boiler_fuel:30", history["seeds"])
+
+    def test_boiler_handfuel_repair_targets_belt_mall_when_route_belts_missing(self):
+        observation = {"inventory": {"transport-belt": 0}, "entities": []}
+
+        with patch("factorio_ai.controller._boiler_coal_feed_missing_belt_count", return_value=37):
+            repair = _boiler_handfuel_prerequisite_repair(
+                "one-time emergency boiler bootstrap already attempted; run connect_coal_fuel_feed instead of repeated boiler hand-fueling",
+                observation,
+            )
+
+        self.assertEqual(repair["skill"], "bootstrap_build_item_mall")
+        self.assertEqual(repair["target_item"], "transport-belt")
+        self.assertEqual(repair["target_count"], 41)
+
+    def test_one_time_boiler_seed_history_ignores_prior_map_tick(self):
+        action = {
+            "type": "insert",
+            "item": "coal",
+            "count": 5,
+            "unit_number": 30,
+            "name": "boiler",
+            "position": {"x": 8, "y": 0},
+            "emergency_bootstrap": True,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            (runtime / "bootstrap-seed-history.json").write_text(
+                json.dumps(
+                    {
+                        "seeds": {
+                            "emergency_boiler_fuel:30": {
+                                "tick": 2000,
+                                "action": {"unit_number": 30, "name": "boiler"},
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertFalse(_one_time_seed_already_used(runtime, action, {"tick": 10}))
+            self.assertTrue(_one_time_seed_already_used(runtime, action, {"tick": 2500}))
 
     def test_strategy_decision_records_and_strips_llm_io_traces(self):
         class FakeController(FactorioController):

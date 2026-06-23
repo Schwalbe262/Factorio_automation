@@ -66,6 +66,7 @@ from .planner import (
     SiteInputLogisticLineSkill,
     StoneSupplySkill,
     StarterDefenseSkill,
+    _boiler_coal_feed_missing_belt_count,
     _entity_no_power,
     _position,
     _small_pole_supplies_position,
@@ -736,7 +737,19 @@ def _guard_unpowered_connect_power_radius(observation: dict[str, Any], decision:
 
 
 def _bootstrap_seed_action_key(action: dict[str, Any] | None) -> tuple[Any, ...] | None:
-    if not isinstance(action, dict) or action.get("bootstrap_seed") is not True:
+    if not isinstance(action, dict):
+        return None
+    if (
+        action.get("emergency_bootstrap") is True
+        and action.get("type") == "insert"
+        and str(action.get("name") or "") == "boiler"
+    ):
+        return (
+            "emergency_boiler_fuel",
+            action.get("unit_number") or _position_key(action.get("position")),
+            "boiler",
+        )
+    if action.get("bootstrap_seed") is not True:
         return None
     return (
         action.get("type"),
@@ -748,7 +761,11 @@ def _bootstrap_seed_action_key(action: dict[str, Any] | None) -> tuple[Any, ...]
 
 
 def _bootstrap_seed_followup_item(action: dict[str, Any] | None) -> str | None:
-    if not isinstance(action, dict) or action.get("bootstrap_seed") is not True:
+    if not isinstance(action, dict):
+        return None
+    if action.get("emergency_bootstrap") is True and str(action.get("name") or "") == "boiler":
+        return None
+    if action.get("bootstrap_seed") is not True:
         return None
     text = " ".join(
         str(action.get(key) or "")
@@ -763,6 +780,101 @@ def _bootstrap_seed_followup_item(action: dict[str, Any] | None) -> str | None:
     if "iron-gear-wheel" in text or "gear" in text:
         return "iron-gear-wheel"
     return None
+
+
+def _position_key(position: Any) -> str:
+    if not isinstance(position, dict):
+        return "unknown"
+    try:
+        x = round(float(position.get("x") or 0.0), 2)
+        y = round(float(position.get("y") or 0.0), 2)
+    except (TypeError, ValueError):
+        return "unknown"
+    return f"{x:g},{y:g}"
+
+
+def _persistent_one_time_seed_key(action: dict[str, Any] | None) -> str | None:
+    if not isinstance(action, dict):
+        return None
+    if (
+        action.get("emergency_bootstrap") is True
+        and action.get("type") == "insert"
+        and str(action.get("name") or "") == "boiler"
+    ):
+        return f"emergency_boiler_fuel:{action.get('unit_number') or _position_key(action.get('position'))}"
+    return None
+
+
+def _bootstrap_seed_history_path(runtime_dir: Path) -> Path:
+    return runtime_dir / "bootstrap-seed-history.json"
+
+
+def _load_bootstrap_seed_history(runtime_dir: Path) -> dict[str, Any]:
+    data = _read_json_file(_bootstrap_seed_history_path(runtime_dir))
+    return data if isinstance(data, dict) else {}
+
+
+def _one_time_seed_already_used(
+    runtime_dir: Path,
+    action: dict[str, Any] | None,
+    observation: dict[str, Any],
+) -> bool:
+    key = _persistent_one_time_seed_key(action)
+    if key is None:
+        return False
+    seeds = _load_bootstrap_seed_history(runtime_dir).get("seeds")
+    if not isinstance(seeds, dict) or key not in seeds:
+        return False
+    entry = seeds.get(key)
+    if isinstance(entry, dict):
+        current_tick = _int_or_none(observation.get("tick"))
+        used_tick = _int_or_none(entry.get("tick"))
+        if current_tick is not None and used_tick is not None and current_tick < used_tick:
+            return False
+    return True
+
+
+def _record_one_time_seed_use(
+    runtime_dir: Path,
+    action: dict[str, Any] | None,
+    *,
+    objective: str,
+    goal: str,
+    step: int,
+    observation: dict[str, Any],
+) -> None:
+    key = _persistent_one_time_seed_key(action)
+    if key is None:
+        return
+    history = _load_bootstrap_seed_history(runtime_dir)
+    seeds = history.get("seeds")
+    if not isinstance(seeds, dict):
+        seeds = {}
+    seeds[key] = {
+        "used_at": datetime.now(timezone.utc).isoformat(),
+        "objective": objective,
+        "skill": goal,
+        "step": step,
+        "tick": observation.get("tick"),
+        "action": {
+            "type": action.get("type") if isinstance(action, dict) else None,
+            "item": action.get("item") if isinstance(action, dict) else None,
+            "count": action.get("count") if isinstance(action, dict) else None,
+            "name": action.get("name") if isinstance(action, dict) else None,
+            "unit_number": action.get("unit_number") if isinstance(action, dict) else None,
+            "position": action.get("position") if isinstance(action, dict) else None,
+        },
+    }
+    history["updated_at"] = datetime.now(timezone.utc).isoformat()
+    history["seeds"] = seeds
+    try:
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        _bootstrap_seed_history_path(runtime_dir).write_text(
+            json.dumps(history, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
 
 
 def _record_and_strip_llm_io_traces(log_dir: Path, result: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -2278,7 +2390,24 @@ class FactorioController:
                         last_step.reason,
                         progress_obs if isinstance(progress_obs, dict) else {},
                     )
+                    boiler_handfuel_repair = _boiler_handfuel_prerequisite_repair(
+                        last_step.reason,
+                        progress_obs if isinstance(progress_obs, dict) else {},
+                    )
                     if (
+                        commit_enabled
+                        and not last_step.ok
+                        and isinstance(boiler_handfuel_repair, dict)
+                        and self._skill_run_config(str(boiler_handfuel_repair.get("skill") or "")) is not None
+                    ):
+                        committed_skill = str(boiler_handfuel_repair.get("skill") or "")
+                        committed_target_count = _int_or_none(boiler_handfuel_repair.get("target_count"))
+                        committed_target_item = (
+                            str(boiler_handfuel_repair.get("target_item") or "") or None
+                        )
+                        committed_input_item = str(boiler_handfuel_repair.get("input_item") or "") or None
+                        commit_skips = 0
+                    elif (
                         commit_enabled
                         and site_input_repair_item is not None
                         and ((last_step.ok and yielded_wait) or not last_step.ok)
@@ -3070,6 +3199,16 @@ class FactorioController:
 
                     action = self._maybe_apply_remote_hint(observation, decision, goal)
                     seed_key = _bootstrap_seed_action_key(action)
+                    if _one_time_seed_already_used(self.cfg.runtime_dir, action, observation):
+                        return finish(
+                            False,
+                            (
+                                "one-time emergency boiler bootstrap already attempted; run "
+                                "connect_coal_fuel_feed instead of repeated boiler hand-fueling"
+                            ),
+                            step,
+                            observation,
+                        )
                     if seed_key is not None and seed_key in attempted_bootstrap_seeds:
                         followup_item, previous_count = attempted_bootstrap_seeds[seed_key]
                         current_count = (
@@ -3100,6 +3239,14 @@ class FactorioController:
                         objective=objective,
                         active_skill=goal,
                         active_step=step,
+                    )
+                    _record_one_time_seed_use(
+                        self.cfg.runtime_dir,
+                        action,
+                        objective=objective,
+                        goal=goal,
+                        step=step,
+                        observation=observation,
                     )
                     if seed_key is not None:
                         followup_item = _bootstrap_seed_followup_item(action)
@@ -4932,6 +5079,37 @@ def _site_input_prerequisite_repair_skill(reason: str | None, observation: dict[
     if "needs logistics research" in text or "research logistics" in text:
         return "research_logistics"
     return None
+
+
+def _boiler_handfuel_prerequisite_repair(reason: str | None, observation: dict[str, Any]) -> dict[str, Any] | None:
+    text = str(reason or "").strip().lower()
+    if not any(
+        marker in text
+        for marker in (
+            "emergency boiler bootstrap already attempted",
+            "repeated boiler hand-fueling",
+            "repeated boiler hand fueling",
+        )
+    ):
+        return None
+    try:
+        missing_belts = max(0, int(_boiler_coal_feed_missing_belt_count(observation)))
+    except Exception:  # noqa: BLE001
+        missing_belts = 0
+    available_belts = total_item_count(observation, "transport-belt")
+    if "transport-belt" in text or missing_belts > available_belts:
+        return {
+            "skill": "bootstrap_build_item_mall",
+            "target_item": "transport-belt",
+            "target_count": max(20, missing_belts + 4),
+            "input_item": None,
+        }
+    return {
+        "skill": "connect_coal_fuel_feed",
+        "target_item": None,
+        "target_count": None,
+        "input_item": None,
+    }
 
 
 def _max_steps(value: int | None, default: int) -> int:

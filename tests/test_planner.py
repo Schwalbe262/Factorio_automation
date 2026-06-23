@@ -2666,6 +2666,32 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 7102)
         self.assertIn("clear blocking stone-furnace", decision.reason)
 
+    def test_gear_belt_mall_relocation_clears_nearby_rock_power_corridor_blocker(self):
+        obs = long_gear_mall_relocation_observation()
+        obs["inventory"] = {"small-electric-pole": 23, "assembling-machine-1": 2}
+        obs["entities"] = [
+            entity for entity in obs["entities"] if entity.get("unit_number") not in {100, 101}
+        ]
+        layout = planner_module._find_gear_belt_mall_relocation_layout(obs)
+        positions = planner_module._gear_belt_mall_relocation_power_corridor_positions(obs, layout)
+        blocked_position = positions[0]
+        obs["player"]["position"] = blocked_position
+        obs["entities"].append(
+            {
+                "name": "big-rock",
+                "type": "simple-entity",
+                "position": {"x": blocked_position["x"] + 1.4, "y": blocked_position["y"]},
+                "inventories": {},
+            }
+        )
+
+        with patch("factorio_ai.planner._select_power_corridor_build_position", return_value=blocked_position):
+            decision = GearBeltMallRelocationSkill(20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "mine")
+        self.assertEqual(decision.action["name"], "big-rock")
+        self.assertIn("clear blocking big-rock", decision.reason)
+
     def test_power_corridor_pole_build_allows_nearby_fallback(self):
         obs = base_observation()
         obs["player"]["position"] = {"x": 3.5, "y": -8.5}
@@ -4014,7 +4040,7 @@ class PlannerTests(unittest.TestCase):
         decision = IronPlateSkill(target_count=10).next_action(obs)
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "stone-furnace")
-        self.assertEqual(decision.action["position"], {"x": 102.0, "y": 0.0})
+        self.assertEqual(decision.action["position"], {"x": 102.5, "y": 0.5})
 
     def test_iron_skill_ignores_remote_furnace_output_before_rail(self):
         obs = base_observation()
@@ -4210,8 +4236,24 @@ class PlannerTests(unittest.TestCase):
         decision = CopperPlateSkill(target_count=5).next_action(obs)
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "stone-furnace")
-        self.assertEqual(decision.action["position"], {"x": 10.0, "y": 0.0})
+        self.assertEqual(decision.action["position"], {"x": 10.5, "y": 0.5})
         self.assertFalse(decision.action["allow_nearby"])
+
+    def test_copper_skill_uses_remote_patch_when_no_starter_copper_exists(self):
+        obs = base_observation()
+        obs["base"] = {"spawn_position": {"x": 0, "y": 0}, "anchor_position": {"x": 0, "y": 0}}
+        obs["player"] = {"position": {"x": 0, "y": 0}}
+        obs["inventory"] = {"coal": 8, "burner-mining-drill": 1, "stone-furnace": 1}
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 260.5, "y": 0.5}, "distance": 260},
+            {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 2},
+        ]
+
+        decision = CopperPlateSkill(target_count=5).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "move_to")
+        self.assertGreater(decision.action["position"]["x"], 250)
+        self.assertIn("move near copper ore", decision.reason)
 
     def test_iron_skill_keeps_incomplete_direct_drill_before_new_patch_candidate(self):
         obs = base_observation()
@@ -4238,7 +4280,7 @@ class PlannerTests(unittest.TestCase):
 
         self.assertEqual(decision.action["type"], "build")
         self.assertEqual(decision.action["name"], "stone-furnace")
-        self.assertEqual(decision.action["position"], {"x": 6.0, "y": 0.0})
+        self.assertEqual(decision.action["position"], {"x": 6.5, "y": 0.5})
         self.assertIn("place furnace", decision.reason)
 
     def test_direct_smelting_drill_from_resource_tile_uses_entity_center(self):
@@ -4303,6 +4345,38 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["type"], "mine")
         self.assertEqual(decision.action["unit_number"], 701)
         self.assertIn("recover incomplete direct iron-ore burner mining drill", decision.reason)
+
+    def test_direct_smelting_recovery_completes_open_drill_before_mining_it(self):
+        obs = base_observation()
+        obs["player"] = {"position": {"x": 8, "y": 0}}
+        obs["inventory"] = {"coal": 8, "stone-furnace": 1}
+        obs["resources"] = [
+            {"name": "copper-ore", "position": {"x": 8, "y": 0}, "distance": 0},
+            {"name": "coal", "position": {"x": 2, "y": 0}, "distance": 6},
+        ]
+        obs["entities"] = [
+            {
+                "name": "burner-mining-drill",
+                "unit_number": 706,
+                "position": {"x": 8, "y": 0},
+                "direction": planner_module.EAST,
+                "distance": 0,
+                "mining_target": "copper-ore",
+                "inventories": {},
+            },
+        ]
+
+        decision = planner_module._recover_direct_smelting_drill_decision(
+            obs,
+            {"x": 8, "y": 0},
+            resource_name="copper-ore",
+            product_name="copper-plate",
+        )
+
+        self.assertEqual(decision.action["type"], "build")
+        self.assertEqual(decision.action["name"], "stone-furnace")
+        self.assertEqual(decision.action["position"], {"x": 10.5, "y": 0.5})
+        self.assertIn("complete direct copper-plate", decision.reason)
 
     def test_iron_skill_takes_buffered_coal_before_reallocating_only_starter_coal_drill(self):
         obs = base_observation()
@@ -4371,10 +4445,10 @@ class PlannerTests(unittest.TestCase):
 
     def test_direct_smelting_layout_keeps_furnace_touching_drill_output(self):
         cases = {
-            "east": {"x": 10.0, "y": 0.0},
-            "west": {"x": 6.0, "y": 0.0},
-            "south": {"x": 8.0, "y": 2.0},
-            "north": {"x": 8.0, "y": -2.0},
+            "east": {"x": 10.5, "y": 0.5},
+            "west": {"x": 5.5, "y": 0.5},
+            "south": {"x": 8.5, "y": 2.5},
+            "north": {"x": 8.5, "y": -2.5},
         }
         for orientation, expected in cases.items():
             with self.subTest(orientation=orientation):
@@ -4471,7 +4545,7 @@ class PlannerTests(unittest.TestCase):
             {
                 "name": "stone-furnace",
                 "unit_number": 702,
-                "position": {"x": 11, "y": 0},
+                "position": {"x": 12, "y": 0},
                 "distance": 11,
                 "inventories": {"1": {"coal": 3}},
             },

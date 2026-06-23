@@ -6423,7 +6423,11 @@ def _direct_plate_smelting_decision(
     layout = (
         _find_low_fuel_direct_smelting_cell(observation, resource_name)
         or (direct_cells[0] if direct_cells else None)
-        or _select_direct_smelting_layout(observation, resource_name)
+        or _select_direct_smelting_layout(
+            observation,
+            resource_name,
+            allow_remote_if_no_starter=resource_name == "copper-ore",
+        )
     )
     if layout is None:
         recovery = _recover_direct_smelting_drill_decision(
@@ -6803,6 +6807,33 @@ def _recover_direct_smelting_drill_decision(
         temporary = recoverable_drill is not None
     if recoverable_drill is None:
         return None
+    if (
+        not temporary
+        and (
+            inventory_count(observation, "stone-furnace") > 0
+            or craftable_count(observation, "stone-furnace") > 0
+        )
+    ):
+        layout = _direct_smelting_layout_from_existing_drill(observation, recoverable_drill, resource_name)
+        entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
+        if layout.get("furnace") is None and not _direct_smelting_layout_blocked_by_factory_entities(layout, entities):
+            furnace_position = layout["furnace_position"]
+            if distance(player, furnace_position) > 20:
+                if require_reachable:
+                    return None
+                return PlannerDecision(
+                    {"type": "move_to", "position": _stand_position(furnace_position)},
+                    f"move near incomplete direct {product_name} furnace position before recovering drill",
+                )
+            return PlannerDecision(
+                {
+                    "type": "build",
+                    "name": "stone-furnace",
+                    "position": furnace_position,
+                    "allow_nearby": False,
+                },
+                f"complete direct {product_name} burner-drill cell before recovering drill",
+            )
     position = _position(recoverable_drill)
     if distance(player, position) > 8:
         if require_reachable:
@@ -7055,12 +7086,21 @@ def _recoverable_direct_plate_cell_exists(
     return False
 
 
-def _select_direct_smelting_layout(observation: dict[str, Any], resource_name: str) -> dict[str, Any] | None:
+def _select_direct_smelting_layout(
+    observation: dict[str, Any],
+    resource_name: str,
+    *,
+    allow_remote_if_no_starter: bool = False,
+) -> dict[str, Any] | None:
     entities = observation.get("entities") if isinstance(observation.get("entities"), list) else []
     incomplete = _incomplete_direct_smelting_layouts(observation, resource_name)
     if incomplete:
         return incomplete[0]
-    for resource in _ranked_patch_drill_resources(observation, resource_name):
+    for resource in _ranked_patch_drill_resources(
+        observation,
+        resource_name,
+        allow_remote_if_no_starter=allow_remote_if_no_starter,
+    ):
         drill_position = _direct_smelting_drill_center(_position(resource))
         for orientation in ("east", "west", "south", "north"):
             layout = _direct_smelting_layout_from_drill_position(drill_position, resource_name=resource_name, orientation=orientation)
@@ -7389,9 +7429,11 @@ def _direct_smelting_layout_from_drill_position(
     orientation: str = "east",
 ) -> dict[str, Any]:
     dx, dy, drill_direction, _belt_direction, _inserter_direction = _smelting_orientation(orientation)
+    output_position = _burner_drill_output_position({"position": drill_position, "direction": drill_direction})
+    furnace_position = {"x": output_position["x"] + dx, "y": output_position["y"] + dy}
     return {
         "drill_position": drill_position,
-        "furnace_position": {"x": drill_position["x"] + 2 * dx, "y": drill_position["y"] + 2 * dy},
+        "furnace_position": furnace_position,
         "orientation": orientation,
         "resource_name": resource_name,
         "drill_direction": drill_direction,
@@ -9160,7 +9202,12 @@ def _select_belt_smelting_layout(observation: dict[str, Any], resource_name: str
     return None
 
 
-def _ranked_patch_drill_resources(observation: dict[str, Any], resource_name: str) -> list[dict[str, Any]]:
+def _ranked_patch_drill_resources(
+    observation: dict[str, Any],
+    resource_name: str,
+    *,
+    allow_remote_if_no_starter: bool = False,
+) -> list[dict[str, Any]]:
     resources = observation.get("resources")
     if not isinstance(resources, list):
         return []
@@ -9180,7 +9227,7 @@ def _ranked_patch_drill_resources(observation: dict[str, Any], resource_name: st
     ]
     if starter_candidates:
         candidates = starter_candidates
-    elif _base_anchor_position(observation) is not None:
+    elif _base_anchor_position(observation) is not None and not allow_remote_if_no_starter:
         return []
 
     existing_drills = [
@@ -14201,7 +14248,7 @@ def _power_corridor_position_blocker(
             return entity
         entity_type = str(entity.get("type") or "")
         name = str(entity.get("name") or "")
-        if (entity_type in {"simple-entity", "tree", "cliff"} or name.endswith("rock")) and distance(_position(entity), position) <= 1.25:
+        if (entity_type in {"simple-entity", "tree", "cliff"} or name.endswith("rock")) and distance(_position(entity), position) <= 1.75:
             return entity
     return None
 

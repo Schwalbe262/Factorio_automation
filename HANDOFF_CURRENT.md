@@ -1,11 +1,10 @@
 # Current Handoff
-- Branch `chore/part130-unattended-qwen9-supervisor`; code commit `191ecbc` pushed; leave huge `note.md`/`insight.md` unstaged.
-- Slurm/Qwen: vLLM task `13329` running/ready on a6000; worker dir 28M, active Qwen model cache 21G, remote pip cache pruned 4.1G->1K.
-- Planner fix: transport-belt mall bootstrap now prioritizes gear/belt mall relocation before a long iron-plate input line or repeated remote-cell rebuild.
-- Validation: `PYTHONPATH=src python -m unittest tests.test_planner` -> 492 OK; py_compile and diff check OK.
-- Live applied by restarting autopilot; current PID `59668`, server UP.
-- Live result: old long-line path stopped, mall relocated near iron source around `x=91.5,y=34.5`; gear/belt skill completed enough to advance.
-- Current live skill: `bootstrap_electric_mining_drill_mall` step 9; latest progress stall=0, transport-belt=12, small-electric-pole=7, seed_count=9.
-- Watch next: electric mining drill mall was previously waiting on blocked iron expansion/no open iron-ore site; verify it progresses or route to `expand_iron_smelting`.
-- Known debt: gear/belt relocation still used several bootstrap plate seeds before advancing; tighten seed policy later if it recurs.
-- Token sample `42178407`; weekly quota unavailable while Codex sqlite DB remains malformed.
+- Branch `chore/part130-unattended-qwen9-supervisor`; latest part covers boiler seed guards, direct smelting recovery, and live mall relocation unblock; keep huge `note.md`/`insight.md` dirty unless intentionally curating journals.
+- Slurm/Qwen: scheduler vLLM task `13329` ready on a6000; remote disk now `factorio-ai-worker` 38M, model cache 21G, pip cache 1K.
+- Controller fix: one-time emergency boiler hand-fuel is persisted in `bootstrap-seed-history.json`; repeats route to belt mall/coal feed repair instead of hand-carry loops.
+- Planner fix: direct smelting furnace uses actual burner-drill output tile; open incomplete drills are completed with a furnace before being mined; copper can use remote patch when no starter copper exists.
+- Planner fix: gear/belt relocation power corridor now treats nearby rocks/trees/cliffs as pole blockers, clearing them instead of repeating `cannot place entity`.
+- Validation: `tests.test_planner` 495 OK, `tests.test_controller` 108 OK, full discover 1282 OK before final rock-blocker patch, py_compile and changed-file diff check OK.
+- Live reset/restart applied; current autopilot PID `65328`, server UP, researched=4, copper/electronic-circuit available, transport-belt mall produced first belt and is no longer stuck on the rock-blocked pole.
+- Watch next: belt mall still low throughput (`transport-belt` about 1-2); continue toward electric-mining-drill via circuits and replace burner-era cells once electric drills are buildable.
+- Token sample recorded: 42,799,057 absolute, delta 620,650; weekly quota unavailable while Codex sqlite DB is malformed.
