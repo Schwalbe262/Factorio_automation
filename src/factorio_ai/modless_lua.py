@@ -1307,6 +1307,8 @@ local function first_diagnostic_failure_root(diagnostics)
   end
   return ""
 end
+local build_direct_feed_smelter_set = nil
+local build_coal_bootstrap_cluster = nil
 local function action_block_build()
   local builder = tostring(action.builder or "")
   if not supported_block_builders[builder] then
@@ -1348,6 +1350,12 @@ local function action_block_build()
       repair_skill = diagnostic_repair_for_root(root),
       diagnostics = diagnostics
     })
+  end
+  if builder == "direct_feed_smelter_set" then
+    return build_direct_feed_smelter_set()
+  end
+  if builder == "coal_bootstrap_cluster" then
+    return build_coal_bootstrap_cluster()
   end
   if builder == "repair_factory" then
     local params = block_builder_params()
@@ -1623,6 +1631,343 @@ local function action_craft()
   local started = player.begin_crafting({ count = math.min(count, craftable), recipe = action.recipe })
   if started <= 0 then return err("craft did not start", { recipe = action.recipe }) end
   return ok({ action = "craft", recipe = action.recipe, started = started })
+end
+local function clamp_int(value, default_value, min_value, max_value)
+  local number = tonumber(value)
+  if not number then number = default_value end
+  number = math.floor(number)
+  if number < min_value then number = min_value end
+  if number > max_value then number = max_value end
+  return number
+end
+local function builder_orientation_spec(orientation)
+  if orientation == "west" then return -1, 0, defines.direction.west, defines.direction.west end
+  if orientation == "south" then return 0, 1, defines.direction.south, defines.direction.south end
+  if orientation == "north" then return 0, -1, defines.direction.north, defines.direction.north end
+  return 1, 0, defines.direction.east, defines.direction.east
+end
+local function builder_orientations(preferred)
+  if preferred == "north" or preferred == "south" or preferred == "east" or preferred == "west" then
+    return { preferred }
+  end
+  return { "east", "south", "west", "north" }
+end
+local function position_key(position)
+  return tostring(round(position.x)) .. ":" .. tostring(round(position.y))
+end
+local function builder_resource_candidates(resource_name, center, radius, limit)
+  local found = agent.surface.find_entities_filtered({
+    position = center,
+    radius = radius,
+    type = "resource",
+    name = resource_name,
+    limit = limit,
+  })
+  local resources = {}
+  for _, resource in pairs(found) do
+    if resource.valid and (not resource.amount or resource.amount > 0) then table.insert(resources, resource) end
+  end
+  table.sort(resources, function(a, b)
+    local da = distance(center, a.position)
+    local db = distance(center, b.position)
+    if math.abs(da - db) > 0.001 then return da < db end
+    if math.abs(a.position.x - b.position.x) > 0.001 then return a.position.x < b.position.x end
+    return a.position.y < b.position.y
+  end)
+  return resources
+end
+local function burner_drill_output_position_from(position, direction)
+  local integer_center = math.abs(position.x - math.floor(position.x + 0.5)) < 0.01 and math.abs(position.y - math.floor(position.y + 0.5)) < 0.01
+  if integer_center then
+    if direction == defines.direction.west then return { x = round(position.x - 1.5), y = round(position.y + 0.5) } end
+    if direction == defines.direction.south then return { x = round(position.x + 0.5), y = round(position.y + 1.5) } end
+    if direction == defines.direction.north then return { x = round(position.x + 0.5), y = round(position.y - 1.5) } end
+    return { x = round(position.x + 1.5), y = round(position.y + 0.5) }
+  end
+  local dx, dy = builder_orientation_spec(direction == defines.direction.west and "west" or direction == defines.direction.south and "south" or direction == defines.direction.north and "north" or "east")
+  return { x = round(position.x + 2 * dx), y = round(position.y + 2 * dy) }
+end
+local function direct_feed_layout(resource_position, orientation)
+  local dx, dy, drill_direction = builder_orientation_spec(orientation)
+  local drill_position = { x = resource_position.x, y = resource_position.y }
+  local output_position = burner_drill_output_position_from(drill_position, drill_direction)
+  return {
+    orientation = orientation,
+    drill_position = drill_position,
+    furnace_position = { x = round(output_position.x + dx), y = round(output_position.y + dy) },
+    drill_direction = drill_direction,
+  }
+end
+local function coal_cluster_layout(resource_position, orientation)
+  local dx, dy, drill_direction, belt_direction = builder_orientation_spec(orientation)
+  local drill_position = { x = resource_position.x, y = resource_position.y }
+  return {
+    orientation = orientation,
+    drill_position = drill_position,
+    output_position = { x = round(drill_position.x + 2 * dx), y = round(drill_position.y + 2 * dy) },
+    drill_direction = drill_direction,
+    belt_direction = belt_direction,
+  }
+end
+local function virtual_craftable_count(recipe_name)
+  if agent.kind ~= "server" then return 0 end
+  local recipe = VIRTUAL_RECIPES[recipe_name]
+  if not recipe then return 0 end
+  local inventory = main_inventory(agent)
+  if not inventory or not inventory.valid then return 0 end
+  local possible = 100
+  for ingredient, ingredient_count in pairs(recipe.ingredients) do
+    possible = math.min(possible, math.floor(inventory.get_item_count(ingredient) / ingredient_count))
+  end
+  return math.max(0, possible)
+end
+local function builder_can_supply_item(inventory, name, count)
+  return inventory.get_item_count(name) + virtual_craftable_count(name) >= count
+end
+local function builder_ensure_item(inventory, name, count, crafted)
+  if inventory.get_item_count(name) >= count then return true end
+  if agent.kind ~= "server" then return false end
+  local needed = count - inventory.get_item_count(name)
+  local made = virtual_craft(name, needed)
+  if made > 0 then crafted[name] = (crafted[name] or 0) + made end
+  return inventory.get_item_count(name) >= count
+end
+local function builder_can_place_entity(name, position, direction, required_resource)
+  if existing_built_entity(agent.surface, agent.force, name, position) then return true, "reused" end
+  local request = { name = name }
+  if required_resource then
+    request.required_resource = required_resource
+    request.required_resource_radius = 3
+  end
+  if not build_candidate_valid(agent.surface, agent.force, request, position, direction or defines.direction.north) then
+    return false, "cannot_place"
+  end
+  return true, ""
+end
+local function builder_place_entity(inventory, name, position, direction, required_resource, counters, outputs, failures, crafted)
+  local existing = existing_built_entity(agent.surface, agent.force, name, position)
+  if existing then
+    counters.reused = counters.reused + 1
+    table.insert(outputs.reused_entities, { name = existing.name, unit_number = existing.unit_number, position = position_table(existing.position) })
+    return existing
+  end
+  if not builder_ensure_item(inventory, name, 1, crafted) then
+    counters.failed = counters.failed + 1
+    table.insert(failures, { name = name, position = position_table(position), reason = "missing_item" })
+    return nil
+  end
+  local request = { name = name }
+  if required_resource then
+    request.required_resource = required_resource
+    request.required_resource_radius = 3
+  end
+  local entity_direction = direction or defines.direction.north
+  if not build_candidate_valid(agent.surface, agent.force, request, position, entity_direction) then
+    counters.failed = counters.failed + 1
+    table.insert(failures, { name = name, position = position_table(position), reason = "cannot_place" })
+    return nil
+  end
+  inventory.remove({ name = name, count = 1 })
+  local entity = agent.surface.create_entity({ name = name, position = position, direction = entity_direction, force = agent.force })
+  if not entity then
+    inventory.insert({ name = name, count = 1 })
+    counters.failed = counters.failed + 1
+    table.insert(failures, { name = name, position = position_table(position), reason = "create_failed" })
+    return nil
+  end
+  counters.placed = counters.placed + 1
+  table.insert(outputs.placed_entities, { name = entity.name, unit_number = entity.unit_number, position = position_table(entity.position) })
+  return entity
+end
+local function builder_seed_fuel(inventory, entity, fuel_item, count)
+  if not entity or not entity.valid or count <= 0 then return 0 end
+  local available = inventory.get_item_count(fuel_item)
+  if available <= 0 then return 0 end
+  local inserted = entity.insert({ name = fuel_item, count = math.min(count, available) })
+  if inserted and inserted > 0 then
+    inventory.remove({ name = fuel_item, count = inserted })
+    return inserted
+  end
+  return 0
+end
+local function entity_has_any_inventory(entity)
+  if not entity or not entity.valid then return false end
+  for _, inventory_id in pairs(defines.inventory) do
+    local ok, inventory = pcall(function() return entity.get_inventory(inventory_id) end)
+    if ok and inventory and inventory.valid and not inventory.is_empty() then return true end
+  end
+  return false
+end
+local function builder_protected_units(outputs)
+  local protected = {}
+  for _, entity in pairs(outputs.placed_entities or {}) do
+    if entity.unit_number then protected[entity.unit_number] = true end
+  end
+  for _, entity in pairs(outputs.reused_entities or {}) do
+    if entity.unit_number then protected[entity.unit_number] = true end
+  end
+  return protected
+end
+local function builder_obsolete_teardown_candidates(center, radius, protected_units)
+  protected_units = protected_units or {}
+  local candidates = {}
+  local found = agent.surface.find_entities_filtered({
+    position = center,
+    radius = radius or 48,
+    force = agent.force,
+    name = { "wooden-chest", "iron-chest", "burner-inserter" },
+    limit = 64,
+  })
+  for _, entity in pairs(found) do
+    if entity.valid and not protected_units[entity.unit_number] and not entity_has_any_inventory(entity) then
+      table.insert(candidates, { name = entity.name, unit_number = entity.unit_number, position = position_table(entity.position) })
+    end
+  end
+  return candidates
+end
+local function builder_failure_root(failures, fallback)
+  for _, failure in pairs(failures) do
+    if failure.reason == "missing_item" then return "missing_starter_items" end
+    if failure.reason == "cannot_place" then return "starter_site_blocked" end
+  end
+  return fallback
+end
+build_direct_feed_smelter_set = function()
+  local params = block_builder_params()
+  local resource_name = tostring(params.resource or params.resource_name or "iron-ore")
+  if resource_name ~= "iron-ore" and resource_name ~= "copper-ore" then
+    return builder_result("direct_feed_smelter_set", false, { failed = 1, failure_root = "unsupported_resource", repair_skill = "diagnose_factory", diagnostics = { resource = resource_name } })
+  end
+  local target_count = clamp_int(params.count, 4, 2, 4)
+  local fuel_batch = clamp_int(params.fuel_count or params.fuel_batch, 24, 20, 30)
+  local center = normalize_position(params.near or params.position) or agent.position
+  local radius = clamp_int(params.radius, 96, 16, OBSERVE_RADIUS)
+  local inventory = main_inventory(agent)
+  if not inventory or not inventory.valid then return builder_result("direct_feed_smelter_set", false, { failed = 1, failure_root = "inventory_unavailable", repair_skill = "diagnose_factory" }) end
+  local counters = { placed = 0, reused = 0, failed = 0, fuel_inserted = 0, seed_count = 0 }
+  local outputs = { cells = {}, placed_entities = {}, reused_entities = {}, obsolete_teardown_candidates = {} }
+  local failures = {}
+  local crafted = {}
+  local used = {}
+  local resources = builder_resource_candidates(resource_name, center, radius, target_count * 24)
+  for _, resource in pairs(resources) do
+    if #outputs.cells >= target_count then break end
+    for _, orientation in pairs(builder_orientations(params.orientation)) do
+      if #outputs.cells >= target_count then break end
+      local layout = direct_feed_layout(resource.position, orientation)
+      local key = position_key(layout.drill_position)
+      if not used[key] then
+        local drill_ok, drill_reason = builder_can_place_entity("burner-mining-drill", layout.drill_position, layout.drill_direction, resource_name)
+        local furnace_ok, furnace_reason = builder_can_place_entity("stone-furnace", layout.furnace_position, defines.direction.north, nil)
+        if drill_ok and furnace_ok and builder_can_supply_item(inventory, "burner-mining-drill", existing_built_entity(agent.surface, agent.force, "burner-mining-drill", layout.drill_position) and 0 or 1) and builder_can_supply_item(inventory, "stone-furnace", existing_built_entity(agent.surface, agent.force, "stone-furnace", layout.furnace_position) and 0 or 1) then
+          local drill = builder_place_entity(inventory, "burner-mining-drill", layout.drill_position, layout.drill_direction, resource_name, counters, outputs, failures, crafted)
+          local furnace = builder_place_entity(inventory, "stone-furnace", layout.furnace_position, defines.direction.north, nil, counters, outputs, failures, crafted)
+          if drill and furnace then
+            used[key] = true
+            local drill_fuel = builder_seed_fuel(inventory, drill, tostring(params.fuel_item or "coal"), math.floor(fuel_batch / 2))
+            local furnace_fuel = builder_seed_fuel(inventory, furnace, tostring(params.fuel_item or "coal"), fuel_batch - drill_fuel)
+            counters.fuel_inserted = counters.fuel_inserted + drill_fuel + furnace_fuel
+            if drill_fuel + furnace_fuel > 0 then counters.seed_count = counters.seed_count + 1 end
+            table.insert(outputs.cells, {
+              resource = resource_name,
+              orientation = orientation,
+              drill_unit_number = drill.unit_number,
+              furnace_unit_number = furnace.unit_number,
+              drill_position = position_table(drill.position),
+              furnace_position = position_table(furnace.position),
+              fuel_inserted = drill_fuel + furnace_fuel
+            })
+          end
+        else
+          counters.failed = counters.failed + 1
+          table.insert(failures, { position = position_table(layout.drill_position), reason = drill_reason ~= "" and drill_reason or furnace_reason })
+        end
+      end
+    end
+  end
+  outputs.obsolete_teardown_candidates = builder_obsolete_teardown_candidates(center, radius, builder_protected_units(outputs))
+  local complete = #outputs.cells >= target_count
+  local root = complete and "" or builder_failure_root(failures, "direct_feed_smelter_incomplete")
+  return builder_result("direct_feed_smelter_set", complete, {
+    placed = counters.placed,
+    reused = counters.reused,
+    failed = complete and counters.failed or math.max(1, counters.failed),
+    outputs = outputs,
+    failure_root = root,
+    repair_skill = complete and "" or "direct_feed_smelter_set",
+    diagnostics = { target_count = target_count, completed_cells = #outputs.cells, fuel_batch = fuel_batch, fuel_inserted = counters.fuel_inserted, seed_count = counters.seed_count, crafted = crafted, failures = failures }
+  })
+end
+build_coal_bootstrap_cluster = function()
+  local params = block_builder_params()
+  local target_count = clamp_int(params.count, 2, 1, 4)
+  local fuel_batch = clamp_int(params.fuel_count or params.fuel_batch, 24, 20, 30)
+  local center = normalize_position(params.near or params.position) or agent.position
+  local radius = clamp_int(params.radius, 96, 16, OBSERVE_RADIUS)
+  local inventory = main_inventory(agent)
+  if not inventory or not inventory.valid then return builder_result("coal_bootstrap_cluster", false, { failed = 1, failure_root = "inventory_unavailable", repair_skill = "diagnose_factory" }) end
+  local output_name = tostring(params.output or "")
+  if output_name == "" then
+    output_name = inventory.get_item_count("transport-belt") > 0 and "transport-belt" or "wooden-chest"
+  end
+  if output_name ~= "transport-belt" and output_name ~= "wooden-chest" and output_name ~= "iron-chest" then
+    return builder_result("coal_bootstrap_cluster", false, { failed = 1, failure_root = "unsupported_output", repair_skill = "diagnose_factory", diagnostics = { output = output_name } })
+  end
+  local counters = { placed = 0, reused = 0, failed = 0, fuel_inserted = 0, seed_count = 0 }
+  local outputs = { clusters = {}, placed_entities = {}, reused_entities = {}, obsolete_teardown_candidates = {} }
+  local failures = {}
+  local crafted = {}
+  local used = {}
+  local resources = builder_resource_candidates("coal", center, radius, target_count * 24)
+  for _, resource in pairs(resources) do
+    if #outputs.clusters >= target_count then break end
+    for _, orientation in pairs(builder_orientations(params.orientation)) do
+      if #outputs.clusters >= target_count then break end
+      local layout = coal_cluster_layout(resource.position, orientation)
+      local key = position_key(layout.drill_position)
+      if not used[key] then
+        local drill_ok, drill_reason = builder_can_place_entity("burner-mining-drill", layout.drill_position, layout.drill_direction, "coal")
+        local output_direction = output_name == "transport-belt" and layout.belt_direction or defines.direction.north
+        local output_ok, output_reason = builder_can_place_entity(output_name, layout.output_position, output_direction, nil)
+        local drill_needed = existing_built_entity(agent.surface, agent.force, "burner-mining-drill", layout.drill_position) and 0 or 1
+        local output_needed = existing_built_entity(agent.surface, agent.force, output_name, layout.output_position) and 0 or 1
+        if drill_ok and output_ok and builder_can_supply_item(inventory, "burner-mining-drill", drill_needed) and builder_can_supply_item(inventory, output_name, output_needed) then
+          local drill = builder_place_entity(inventory, "burner-mining-drill", layout.drill_position, layout.drill_direction, "coal", counters, outputs, failures, crafted)
+          local output = builder_place_entity(inventory, output_name, layout.output_position, output_direction, nil, counters, outputs, failures, crafted)
+          if drill and output then
+            used[key] = true
+            local fuel_inserted = builder_seed_fuel(inventory, drill, tostring(params.fuel_item or "coal"), fuel_batch)
+            counters.fuel_inserted = counters.fuel_inserted + fuel_inserted
+            if fuel_inserted > 0 then counters.seed_count = counters.seed_count + 1 end
+            table.insert(outputs.clusters, {
+              orientation = orientation,
+              drill_unit_number = drill.unit_number,
+              output_unit_number = output.unit_number,
+              output_name = output.name,
+              drill_position = position_table(drill.position),
+              output_position = position_table(output.position),
+              fuel_inserted = fuel_inserted
+            })
+          end
+        else
+          counters.failed = counters.failed + 1
+          table.insert(failures, { position = position_table(layout.drill_position), reason = drill_reason ~= "" and drill_reason or output_reason })
+        end
+      end
+    end
+  end
+  outputs.obsolete_teardown_candidates = builder_obsolete_teardown_candidates(center, radius, builder_protected_units(outputs))
+  local complete = #outputs.clusters >= target_count
+  local root = complete and "" or builder_failure_root(failures, "coal_bootstrap_incomplete")
+  return builder_result("coal_bootstrap_cluster", complete, {
+    placed = counters.placed,
+    reused = counters.reused,
+    failed = complete and counters.failed or math.max(1, counters.failed),
+    outputs = outputs,
+    failure_root = root,
+    repair_skill = complete and "" or "coal_bootstrap_cluster",
+    diagnostics = { target_count = target_count, completed_clusters = #outputs.clusters, output_name = output_name, fuel_batch = fuel_batch, fuel_inserted = counters.fuel_inserted, seed_count = counters.seed_count, crafted = crafted, failures = failures }
+  })
 end
 local function action_build()
   if type(action.name) ~= "string" then return err("build requires entity/item name") end

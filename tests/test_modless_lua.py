@@ -300,6 +300,50 @@ class ModlessLuaTests(unittest.TestCase):
                 {"type": "build_block", "builder": "direct_feed_smelter_set", "params": []}
             )
 
+    def test_direct_feed_smelter_builder_places_two_to_four_cells_with_fuel_batch(self):
+        command = build_modless_action_command(
+            {
+                "type": "build_block",
+                "builder": "direct_feed_smelter_set",
+                "params": {"resource": "iron-ore", "count": 4, "fuel_batch": 24},
+            }
+        )
+        body = command[
+            command.index("build_direct_feed_smelter_set = function") : command.index(
+                "build_coal_bootstrap_cluster = function"
+            )
+        ]
+
+        self.assertIn("target_count = clamp_int(params.count, 4, 2, 4)", body)
+        self.assertIn("fuel_batch = clamp_int(params.fuel_count or params.fuel_batch, 24, 20, 30)", body)
+        self.assertIn('"burner-mining-drill"', body)
+        self.assertIn('"stone-furnace"', body)
+        self.assertIn("resource_name ~= \"iron-ore\" and resource_name ~= \"copper-ore\"", body)
+        self.assertIn("builder_seed_fuel", body)
+        self.assertIn("obsolete_teardown_candidates", body)
+        self.assertIn("direct_feed_smelter_incomplete", body)
+        self.assertNotIn('"burner-inserter"', body)
+
+    def test_coal_bootstrap_cluster_builder_uses_dedicated_output_and_protected_teardown(self):
+        command = build_modless_action_command(
+            {
+                "type": "build_block",
+                "builder": "coal_bootstrap_cluster",
+                "params": {"count": 2, "fuel_count": 30, "output": "wooden-chest"},
+            }
+        )
+        body = command[command.index("build_coal_bootstrap_cluster = function") : command.index("local function action_build")]
+
+        self.assertIn("target_count = clamp_int(params.count, 2, 1, 4)", body)
+        self.assertIn("fuel_batch = clamp_int(params.fuel_count or params.fuel_batch, 24, 20, 30)", body)
+        self.assertIn('builder_resource_candidates("coal"', body)
+        self.assertIn('"transport-belt"', body)
+        self.assertIn('"wooden-chest"', body)
+        self.assertIn("output_name ~= \"transport-belt\" and output_name ~= \"wooden-chest\"", body)
+        self.assertIn("builder_seed_fuel", body)
+        self.assertIn("builder_protected_units(outputs)", body)
+        self.assertIn("coal_bootstrap_incomplete", body)
+
 
 if __name__ == "__main__":
     unittest.main()

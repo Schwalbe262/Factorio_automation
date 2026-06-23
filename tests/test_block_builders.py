@@ -53,14 +53,16 @@ class BlockBuilderContractTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validate_build_block_action(action)
 
-    def test_capabilities_mark_only_read_only_no_mod_builders_implemented_for_substrate(self):
+    def test_capabilities_mark_no_mod_builders_implemented_by_part(self):
         capabilities = block_builder_capabilities()
         by_name = {item["builder"]: item for item in capabilities}
 
         self.assertEqual(set(by_name), set(SUPPORTED_BLOCK_BUILDERS))
+        self.assertTrue(by_name["direct_feed_smelter_set"]["implemented"])
+        self.assertTrue(by_name["coal_bootstrap_cluster"]["implemented"])
         self.assertTrue(by_name["factory_map"]["implemented"])
         self.assertTrue(by_name["diagnose_factory"]["implemented"])
-        self.assertFalse(by_name["direct_feed_smelter_set"]["implemented"])
+        self.assertFalse(by_name["steam_bank"]["implemented"])
 
 
 if __name__ == "__main__":

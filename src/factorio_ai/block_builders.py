@@ -20,7 +20,9 @@ SUPPORTED_BLOCK_BUILDERS: tuple[str, ...] = (
 )
 SUPPORTED_BLOCK_BUILDER_SET = frozenset(SUPPORTED_BLOCK_BUILDERS)
 SUPPORTED_BUILD_BLOCK_MODES = frozenset({"no_mod"})
-IMPLEMENTED_NO_MOD_BUILDERS = frozenset({"factory_map", "diagnose_factory"})
+IMPLEMENTED_NO_MOD_BUILDERS = frozenset(
+    {"direct_feed_smelter_set", "coal_bootstrap_cluster", "factory_map", "diagnose_factory"}
+)
 
 
 @dataclass(frozen=True)
