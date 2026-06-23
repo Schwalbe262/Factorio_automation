@@ -9615,6 +9615,8 @@ def _find_site_input_logistic_line_layout(
         if recipe_obj is None:
             continue
         for required_item in sorted(target_items & set(recipe_obj.ingredients)):
+            if _skip_site_input_required_item(recipe, required_item):
+                continue
             if entity_item_count(consumer, required_item) > 0 and not _entity_status_name_in(
                 consumer,
                 {"item_ingredient_shortage", "missing_required_fluid"},
@@ -9729,6 +9731,48 @@ def _find_site_input_logistic_line_layout(
     return candidates[0]
 
 
+def _long_site_input_route_needs_logistics_research(
+    observation: dict[str, Any],
+    *,
+    item: str | None = None,
+) -> dict[str, Any] | None:
+    if _logistics_researched_or_underground_unlocked(observation):
+        return None
+    target_items = set(AUTOMATED_SITE_INPUT_ITEMS)
+    if item:
+        target_items &= {item}
+    if not target_items:
+        return None
+
+    candidates: list[dict[str, Any]] = []
+    for consumer in _site_input_consumer_entities(observation, target_items):
+        recipe_name = str(consumer.get("recipe") or consumer.get("recipe_name") or "")
+        recipe = RECIPES.get(recipe_name)
+        if recipe is None:
+            continue
+        for required_item in sorted(target_items & set(recipe.ingredients)):
+            if _skip_site_input_required_item(recipe_name, required_item):
+                continue
+            source = _nearest_site_input_source(observation, required_item, _position(consumer))
+            if source is None:
+                continue
+            route_distance = distance(_position(source), _position(consumer))
+            if route_distance <= 64.0:
+                continue
+            candidates.append(
+                {
+                    "item": required_item,
+                    "distance": round(route_distance, 1),
+                    "source": source,
+                    "consumer": consumer,
+                }
+            )
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: float(row.get("distance") or 0.0), reverse=True)
+    return candidates[0]
+
+
 def _site_input_consumer_entities(observation: dict[str, Any], target_items: set[str]) -> list[dict[str, Any]]:
     consumers: list[dict[str, Any]] = []
     for entity in observation.get("entities") or []:
@@ -9742,10 +9786,12 @@ def _site_input_consumer_entities(observation: dict[str, Any], target_items: set
         recipe = RECIPES.get(recipe_name)
         if recipe is None or not (set(recipe.ingredients) & target_items):
             continue
-        if recipe_name == "transport-belt":
-            continue
         consumers.append(entity)
     return consumers
+
+
+def _skip_site_input_required_item(recipe_name: str, required_item: str) -> bool:
+    return recipe_name == "transport-belt" and required_item == "iron-gear-wheel"
 
 
 def _nearest_site_input_source(
@@ -9818,6 +9864,8 @@ def _completed_site_input_logistics_observed(observation: dict[str, Any], item: 
         if recipe is None:
             continue
         for required_item in sorted(target_items & set(recipe.ingredients)):
+            if _skip_site_input_required_item(recipe_name, required_item):
+                continue
             source = _nearest_site_input_source(observation, required_item, consumer_position)
             if source is None:
                 pending.add(required_item)
@@ -10192,6 +10240,8 @@ def _site_input_source_fanout_consumer_count(
         recipe_name = str(consumer.get("recipe") or consumer.get("recipe_name") or "")
         recipe = RECIPES.get(recipe_name)
         if recipe is None or item not in recipe.ingredients:
+            continue
+        if _skip_site_input_required_item(recipe_name, item):
             continue
         if entity_item_count(consumer, item) > 0 and not _entity_status_name_in(
             consumer,
@@ -14490,6 +14540,23 @@ class SiteInputLogisticLineSkill:
                     f"{completed_item} site input logistics line is already observed with belts and endpoint inserters",
                     done=True,
                 )
+            long_route = _long_site_input_route_needs_logistics_research(observation, item=self.item)
+            if isinstance(long_route, dict):
+                route_item = str(long_route.get("item") or self.item or "site input")
+                route_distance = float(long_route.get("distance") or 0.0)
+                return PlannerDecision(
+                    None,
+                    (
+                        f"{route_item} site input route is {route_distance:g} tiles; needs logistics research "
+                        "before building long producer-to-consumer belt lines"
+                    ),
+                    metadata={
+                        "failure_root": "site_input_requires_logistics_research",
+                        "repair_skill": "research_logistics",
+                        "input_item": route_item,
+                        "source_distance": route_distance,
+                    },
+                )
             return PlannerDecision(None, "no executable repeated site input logistics route was found")
 
         belt_assembler = _transport_belt_output_assembler(observation)
@@ -15026,6 +15093,18 @@ class BuildItemMallSkill:
 
         assembler = cell.get("assembler")
         if assembler is None:
+            if inventory_count(observation, "assembling-machine-1") <= 0:
+                decision = self._ensure_item_quantity(
+                    observation,
+                    player,
+                    "assembling-machine-1",
+                    1,
+                    allow_existing_remote=allow_existing_remote,
+                    reference_position=cell.get("assembler_position") if isinstance(cell.get("assembler_position"), dict) else reference_position,
+                )
+                if decision is not None:
+                    return decision
+                return PlannerDecision(None, "cannot obtain assembling-machine-1 before placing build item mall assembler")
             assembler_position = cell["assembler_position"]
             if distance(player, assembler_position) > 20:
                 return PlannerDecision({"type": "move_to", "position": _stand_position(assembler_position)}, "move near planned mall assembler")
@@ -18897,6 +18976,13 @@ def _manual_site_input_logistics_blocker(
             f"{consumer_label} needs a {item} logistic line from {source.site_id} "
             f"({source_distance:.0f} tiles); refusing repeated hand-carry between distant sites"
         ),
+        metadata={
+            "failure_root": "site_input_logistics_required",
+            "repair_skill": "build_site_input_logistic_line",
+            "input_item": item,
+            "source_site_id": source.site_id,
+            "source_distance": round(source_distance, 3),
+        },
     )
 
 

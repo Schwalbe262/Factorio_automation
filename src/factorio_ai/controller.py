@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import threading
@@ -2232,6 +2233,7 @@ class FactorioController:
                         failure_root = readiness.failure_root
                         repair_skill = readiness.repair_skill
                     except Exception:  # noqa: BLE001
+                        progress_obs = None
                         fingerprint = None
                         progress_key = None
                         failure_root = None
@@ -2271,19 +2273,20 @@ class FactorioController:
                     # Commit to the skill only while it keeps making progress; otherwise drop the
                     # commitment so the next cycle re-strategizes via the LLM.
                     yielded_wait = str(last_step.reason or "").startswith("yielded for other work")
-                    yielded_site_input_item = (
-                        _site_input_item_from_wait_reason(last_step.reason) if yielded_wait else None
+                    site_input_repair_item = _site_input_item_from_wait_reason(last_step.reason)
+                    site_input_prerequisite_skill = _site_input_prerequisite_repair_skill(
+                        last_step.reason,
+                        progress_obs if isinstance(progress_obs, dict) else {},
                     )
                     if (
                         commit_enabled
-                        and last_step.ok
-                        and yielded_wait
-                        and yielded_site_input_item is not None
+                        and site_input_repair_item is not None
+                        and ((last_step.ok and yielded_wait) or not last_step.ok)
                     ):
-                        committed_skill = "build_site_input_logistic_line"
+                        committed_skill = site_input_prerequisite_skill or "build_site_input_logistic_line"
                         committed_target_count = None
                         committed_target_item = None
-                        committed_input_item = yielded_site_input_item
+                        committed_input_item = None if site_input_prerequisite_skill else site_input_repair_item
                         commit_skips = 0
                     elif (
                         commit_enabled
@@ -4894,7 +4897,7 @@ def _strategy_site_input_item(strategy: dict[str, Any]) -> str | None:
 
 def _site_input_item_from_wait_reason(reason: str | None) -> str | None:
     text = str(reason or "").strip().lower().replace("_", "-")
-    if "site input" not in text:
+    if not any(marker in text for marker in ("site input", "logistic line", "refusing repeated hand-carry")):
         return None
     for phrase, item in (
         ("iron-gear-wheel", "iron-gear-wheel"),
@@ -4914,6 +4917,20 @@ def _site_input_item_from_wait_reason(reason: str | None) -> str | None:
     ):
         if phrase in text:
             return item
+    return None
+
+
+def _site_input_prerequisite_repair_skill(reason: str | None, observation: dict[str, Any]) -> str | None:
+    if _site_input_item_from_wait_reason(reason) is None:
+        return None
+    if _technology_researched_in_observation(observation, "logistics"):
+        return None
+    text = str(reason or "").lower()
+    distances = [float(match) for match in re.findall(r"(\d+(?:\.\d+)?)\s*tiles", text)]
+    if any(value > 64.0 for value in distances):
+        return "research_logistics"
+    if "needs logistics research" in text or "research logistics" in text:
+        return "research_logistics"
     return None
 
 

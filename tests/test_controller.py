@@ -3153,6 +3153,125 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(controller.calls[1]["override_source"], "autopilot_commit_skill")
         self.assertEqual(controller.calls[1]["input_item"], "iron-gear-wheel")
 
+    def test_autopilot_commit_routes_long_site_input_handcarry_failure_to_logistics_research(self):
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.calls: list[dict[str, object]] = []
+
+            def observe(self):
+                return {
+                    "inventory": {"transport-belt": 142},
+                    "entities": [],
+                    "resources": [],
+                    "research": {"technologies": {"automation": {"researched": True}}},
+                }
+
+            def run_strategy_step(self, **kwargs):
+                self.calls.append(dict(kwargs))
+                selected = str(kwargs.get("override_skill") or "bootstrap_build_item_mall")
+                if selected == "bootstrap_build_item_mall":
+                    reason = (
+                        "transport-belt mall assembler needs a iron-plate logistic line from "
+                        "entity-source:iron-plate:stone-furnace:126 (140 tiles); refusing repeated "
+                        "hand-carry between distant sites"
+                    )
+                    return StrategyStepSummary(
+                        ok=False,
+                        reason=reason,
+                        objective=kwargs.get("objective", "launch_rocket_program"),
+                        selected_skill=selected,
+                        strategy={"selected_skill": selected},
+                        run=RunSummary(False, reason, 3, 142, self.cfg.log_dir / "stub.log", "transport-belt"),
+                    )
+                return StrategyStepSummary(
+                    ok=True,
+                    reason="done",
+                    objective=kwargs.get("objective", "launch_rocket_program"),
+                    selected_skill=selected,
+                    strategy={"selected_skill": selected},
+                    run=RunSummary(True, "done", 1, 0, self.cfg.log_dir / "stub.log", "transport-belt"),
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with patch.dict(
+                "os.environ",
+                {
+                    "FACTORIO_AI_AUTOPILOT_COMMIT_SKILL_ENABLED": "1",
+                    "FACTORIO_AI_AUTOPILOT_COMMIT_SKILL_MAX": "4",
+                },
+            ):
+                summary = controller.run_autopilot_loop(cycles=2, sleep_seconds=0)
+
+        self.assertFalse(summary.ok)
+        self.assertEqual(len(controller.calls), 2)
+        self.assertEqual(controller.calls[1]["override_skill"], "research_logistics")
+        self.assertEqual(controller.calls[1]["override_source"], "autopilot_commit_skill")
+        self.assertIsNone(controller.calls[1]["input_item"])
+
+    def test_autopilot_commit_routes_logistics_ready_handcarry_failure_to_site_input_skill(self):
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.calls: list[dict[str, object]] = []
+
+            def observe(self):
+                return {
+                    "inventory": {"transport-belt": 142},
+                    "entities": [],
+                    "resources": [],
+                    "research": {
+                        "technologies": {
+                            "automation": {"researched": True},
+                            "logistics": {"researched": True},
+                        }
+                    },
+                }
+
+            def run_strategy_step(self, **kwargs):
+                self.calls.append(dict(kwargs))
+                selected = str(kwargs.get("override_skill") or "bootstrap_build_item_mall")
+                if selected == "bootstrap_build_item_mall":
+                    reason = (
+                        "transport-belt mall assembler needs a iron-plate logistic line from "
+                        "entity-source:iron-plate:stone-furnace:126 (140 tiles); refusing repeated "
+                        "hand-carry between distant sites"
+                    )
+                    return StrategyStepSummary(
+                        ok=False,
+                        reason=reason,
+                        objective=kwargs.get("objective", "launch_rocket_program"),
+                        selected_skill=selected,
+                        strategy={"selected_skill": selected},
+                        run=RunSummary(False, reason, 3, 142, self.cfg.log_dir / "stub.log", "transport-belt"),
+                    )
+                return StrategyStepSummary(
+                    ok=True,
+                    reason="done",
+                    objective=kwargs.get("objective", "launch_rocket_program"),
+                    selected_skill=selected,
+                    strategy={"selected_skill": selected},
+                    run=RunSummary(True, "done", 1, 0, self.cfg.log_dir / "stub.log", "transport-belt"),
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with patch.dict(
+                "os.environ",
+                {
+                    "FACTORIO_AI_AUTOPILOT_COMMIT_SKILL_ENABLED": "1",
+                    "FACTORIO_AI_AUTOPILOT_COMMIT_SKILL_MAX": "4",
+                },
+            ):
+                summary = controller.run_autopilot_loop(cycles=2, sleep_seconds=0)
+
+        self.assertFalse(summary.ok)
+        self.assertEqual(len(controller.calls), 2)
+        self.assertEqual(controller.calls[1]["override_skill"], "build_site_input_logistic_line")
+        self.assertEqual(controller.calls[1]["override_source"], "autopilot_commit_skill")
+        self.assertEqual(controller.calls[1]["input_item"], "iron-plate")
+
     def test_modless_strategy_step_accepts_committed_target_metadata(self):
         captured: dict[str, object] = {}
 

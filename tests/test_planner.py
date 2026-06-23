@@ -9304,6 +9304,23 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["unit_number"], 901)
         self.assertNotIn("target reached", decision.reason)
 
+    def test_build_item_mall_rechecks_assembler_inventory_before_building(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 2, "y": 2}, "character_valid": False}
+        obs["inventory"] = {
+            "electronic-circuit": 3,
+            "iron-gear-wheel": 5,
+            "iron-plate": 9,
+        }
+        obs["craftable"] = {"assembling-machine-1": 1}
+
+        with patch("factorio_ai.planner._missing_build_item_mall_item", return_value=None):
+            decision = BuildItemMallSkill("automation-science-pack", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "craft")
+        self.assertEqual(decision.action["recipe"], "assembling-machine-1")
+        self.assertIn("craft assembling-machine-1", decision.reason)
+
     def test_build_item_mall_repurposes_existing_assembler_for_gears_before_handcrafting(self):
         obs = powered_automation_observation()
         obs["inventory"] = {"iron-plate": 10, "electronic-circuit": 7}
@@ -9337,6 +9354,9 @@ class PlannerTests(unittest.TestCase):
         self.assertIsNone(decision.action)
         self.assertIn("logistic line", decision.reason)
         self.assertIn("refusing repeated hand-carry", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "site_input_logistics_required")
+        self.assertEqual(decision.metadata["repair_skill"], "build_site_input_logistic_line")
+        self.assertEqual(decision.metadata["input_item"], "copper-plate")
 
     def test_build_item_mall_blocks_remote_iron_plate_prerequisite_hand_carry(self):
         obs = powered_automation_observation()
@@ -9373,6 +9393,9 @@ class PlannerTests(unittest.TestCase):
         self.assertIsNone(decision.action)
         self.assertIn("iron-plate logistic line", decision.reason)
         self.assertIn("refusing repeated hand-carry", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "site_input_logistics_required")
+        self.assertEqual(decision.metadata["repair_skill"], "build_site_input_logistic_line")
+        self.assertEqual(decision.metadata["input_item"], "iron-plate")
 
     def test_build_item_mall_virtual_agent_handcarries_when_belt_line_unbuildable(self):
         # Live deadlock regression (2026-06-19, autopilot cycle 130-133): the virtual RCON agent
@@ -13715,6 +13738,97 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(decision.action["item"], "iron-gear-wheel")
         self.assertEqual(decision.action["unit_number"], 990)
         self.assertIn("site consumer input inserter", decision.reason)
+
+    def test_site_input_layout_routes_iron_plate_to_transport_belt_assembler(self):
+        obs = powered_automation_observation()
+        obs["research"]["technologies"]["logistics"] = {"researched": True}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": -8, "y": 8},
+                    "recipe": "iron-plate",
+                    "inventories": {"3": {"iron-plate": 20}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 951,
+                    "position": {"x": 8, "y": 8},
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {},
+                },
+            ]
+        )
+
+        layout = planner_module._find_site_input_logistic_line_layout(obs, item="iron-plate")
+
+        self.assertIsNotNone(layout)
+        self.assertEqual(layout["item"], "iron-plate")
+        self.assertEqual(layout["consumer"]["unit_number"], 951)
+
+    def test_site_input_layout_does_not_route_gears_into_transport_belt_assembler(self):
+        obs = powered_automation_observation()
+        obs["research"]["technologies"]["logistics"] = {"researched": True}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 950,
+                    "position": {"x": -8, "y": 8},
+                    "recipe": "iron-gear-wheel",
+                    "electric_network_connected": True,
+                    "inventories": {"3": {"iron-gear-wheel": 20}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 951,
+                    "position": {"x": 8, "y": 8},
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {},
+                },
+            ]
+        )
+
+        layout = planner_module._find_site_input_logistic_line_layout(obs, item="iron-gear-wheel")
+
+        self.assertIsNone(layout)
+
+    def test_site_input_logistic_line_reports_logistics_research_for_long_route(self):
+        obs = powered_automation_observation()
+        obs["inventory"] = {"transport-belt": 120, "inserter": 2}
+        obs["entities"].extend(
+            [
+                {
+                    "name": "stone-furnace",
+                    "unit_number": 950,
+                    "position": {"x": -80, "y": 8},
+                    "recipe": "iron-plate",
+                    "inventories": {"3": {"iron-plate": 20}},
+                },
+                {
+                    "name": "assembling-machine-1",
+                    "unit_number": 951,
+                    "position": {"x": 8, "y": 8},
+                    "recipe": "transport-belt",
+                    "electric_network_connected": True,
+                    "status_name": "item_ingredient_shortage",
+                    "inventories": {},
+                },
+            ]
+        )
+
+        decision = SiteInputLogisticLineSkill(20, item="iron-plate").next_action(obs)
+
+        self.assertIsNone(decision.action)
+        self.assertIn("needs logistics research", decision.reason)
+        self.assertEqual(decision.metadata["failure_root"], "site_input_requires_logistics_research")
+        self.assertEqual(decision.metadata["repair_skill"], "research_logistics")
+        self.assertEqual(decision.metadata["input_item"], "iron-plate")
 
     def test_site_input_logistic_line_refuses_without_belt_automation(self):
         obs = powered_automation_observation()
