@@ -5,7 +5,7 @@
 - Validation: `PYTHONPATH=src python -m unittest tests.test_planner` -> 492 OK; py_compile and diff check OK.
 - Live applied by restarting autopilot; current PID `59668`, server UP.
 - Live result: old long-line path stopped, mall relocated near iron source around `x=91.5,y=34.5`; gear/belt skill completed enough to advance.
-- Current live skill: `bootstrap_electric_mining_drill_mall`; latest progress stall=0, transport-belt=12, small-electric-pole=7, seed_count=7.
+- Current live skill: `bootstrap_electric_mining_drill_mall` step 9; latest progress stall=0, transport-belt=12, small-electric-pole=7, seed_count=9.
 - Watch next: electric mining drill mall was previously waiting on blocked iron expansion/no open iron-ore site; verify it progresses or route to `expand_iron_smelting`.
 - Known debt: gear/belt relocation still used several bootstrap plate seeds before advancing; tighten seed policy later if it recurs.
 - Token sample `41895719`; weekly quota unavailable while Codex sqlite DB remains malformed.
