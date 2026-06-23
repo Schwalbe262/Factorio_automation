@@ -15492,6 +15492,8 @@ class BuildItemMallSkill:
                 {"type": "wait", "ticks": 300},
                 "wait for started gear mall iron-plate logistics to feed gears before another belt mall seed",
             )
+        if decision.action is None and "needs transport belts from the belt mall" in decision.reason:
+            return None
         if decision.action is None and "cannot find both an iron-plate source furnace" in decision.reason:
             return None
         return decision
@@ -15521,6 +15523,8 @@ class BuildItemMallSkill:
                 {"type": "wait", "ticks": 300},
                 f"wait for started {item} site input logistics to feed {consumer_recipe} before another bootstrap seed",
             )
+        if decision.action is None and "needs transport belts from the belt mall" in decision.reason:
+            return None
         if decision.action is None and "no executable repeated site input logistics route was found" in decision.reason:
             return None
         return decision

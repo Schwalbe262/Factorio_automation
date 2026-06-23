@@ -12453,6 +12453,46 @@ class PlannerTests(unittest.TestCase):
         self.assertIsNone(decision.action)
         self.assertIn("refusing gear handcraft", decision.reason)
 
+    def test_transport_belt_mall_seeds_plate_when_started_iron_line_runs_out_of_belts(self):
+        obs = powered_automation_observation()
+        obs["player"] = {"position": {"x": 6, "y": 2}, "character_valid": False}
+        obs["inventory"] = {"iron-plate": 10}
+        obs["entities"].extend(
+            gear_belt_mall_entities(
+                belt_recipe="transport-belt",
+                belt_inventory={"iron-gear-wheel": 5},
+            )
+        )
+        obs["entities"].append(
+            {
+                "name": "stone-furnace",
+                "unit_number": 950,
+                "position": {"x": -8, "y": 2},
+                "recipe": "iron-plate",
+                "inventories": {"3": {"iron-plate": 20}},
+            }
+        )
+        layout = planner_module._find_iron_plate_logistic_line_to_gear_mall_layout(obs)
+        self.assertIsNotNone(layout)
+        first_segment = layout["segments"][0]
+        obs["entities"].append(
+            {
+                "name": "transport-belt",
+                "unit_number": 980,
+                "position": first_segment["position"],
+                "direction": first_segment["direction"],
+                "inventories": {},
+            }
+        )
+
+        decision = BuildItemMallSkill("transport-belt", 20).next_action(obs)
+
+        self.assertEqual(decision.action["type"], "insert")
+        self.assertEqual(decision.action["item"], "iron-plate")
+        self.assertEqual(decision.action["unit_number"], 911)
+        self.assertTrue(decision.action["bootstrap_seed"])
+        self.assertIn("buffered gears", decision.reason)
+
     def test_site_input_logistic_line_takes_belts_from_belt_mall_output(self):
         obs = powered_automation_observation()
         obs["inventory"] = {}

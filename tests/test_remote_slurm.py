@@ -1,7 +1,10 @@
 import json
 import os
 import subprocess
+import tarfile
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from factorio_ai.remote_slurm import (
@@ -32,6 +35,74 @@ from factorio_ai.strategy import make_strategy_payload, skill_catalog_payload
 
 
 class RemoteSlurmTests(unittest.TestCase):
+    def test_deploy_precleanup_includes_nested_runtime_dirs(self):
+        from factorio_ai import remote_slurm
+
+        cfg = RemoteSlurmConfig(
+            enabled=True,
+            ssh_path="ssh",
+            scp_path="scp",
+            host="example",
+            user="user",
+            port=22,
+            key_path="key",
+            remote_dir="~/factorio-ai-worker",
+            job_name="factorio-ai-worker",
+            conda_env="factorio-ai",
+            partition="gpu",
+            cpus_per_task=8,
+            gpus_per_node=1,
+            gres="gpu:1",
+            time_limit="24:00:00",
+            setup_timeout_seconds=60,
+            task_timeout_seconds=30,
+        )
+        with (
+            patch("factorio_ai.remote_slurm.resolve_remote_dir", return_value="/remote/factorio-ai-worker"),
+            patch("factorio_ai.remote_slurm._create_archive"),
+            patch("factorio_ai.remote_slurm._run_scp"),
+            patch("factorio_ai.remote_slurm._run_remote", side_effect=["", "/remote/factorio-ai-worker"]) as run_remote,
+        ):
+            result = remote_slurm.deploy(cfg)
+
+        self.assertTrue(result["ok"])
+        cleanup_script = run_remote.call_args_list[0].args[0]
+        self.assertIn('find "$REMOTE_DIR" -maxdepth 1 -type f', cleanup_script)
+        self.assertIn('"$REMOTE_DIR/factorio-ai/logs"', cleanup_script)
+        self.assertIn('"$REMOTE_DIR/factorio-ai/.factorio-ai-scheduler-tasks"', cleanup_script)
+        self.assertIn("-mindepth 1 -maxdepth 1 -type d", cleanup_script)
+        self.assertIn("strategy-*.json", cleanup_script)
+
+    def test_create_archive_excludes_runtime_journals_and_task_dirs(self):
+        from factorio_ai import remote_slurm
+
+        with tempfile.TemporaryDirectory() as repo_tmp, tempfile.TemporaryDirectory() as out_tmp:
+            root = Path(repo_tmp)
+            (root / "src" / "factorio_ai").mkdir(parents=True)
+            (root / "src" / "factorio_ai" / "remote_slurm.py").write_text("x = 1\n", encoding="utf-8")
+            (root / "note.md").write_text("large execution journal\n", encoding="utf-8")
+            (root / "insight.md").write_text("large insight journal\n", encoding="utf-8")
+            (root / "logs").mkdir()
+            (root / "logs" / "worker.log").write_text("log\n", encoding="utf-8")
+            (root / "runtime").mkdir()
+            (root / "runtime" / "state.json").write_text("{}\n", encoding="utf-8")
+            (root / ".factorio-ai-scheduler-tasks").mkdir()
+            (root / ".factorio-ai-scheduler-tasks" / "strategy.json").write_text("{}\n", encoding="utf-8")
+
+            archive_path = Path(out_tmp) / "factorio-ai.tar.gz"
+            with patch("factorio_ai.remote_slurm.REPO_ROOT", root):
+                remote_slurm._create_archive(archive_path)
+
+            with tarfile.open(archive_path, "r:gz") as archive:
+                names = set(archive.getnames())
+
+        self.assertIn("factorio-ai/src/factorio_ai/remote_slurm.py", names)
+        self.assertNotIn("factorio-ai/note.md", names)
+        self.assertNotIn("factorio-ai/insight.md", names)
+        self.assertFalse(any(name.startswith("factorio-ai/logs/") for name in names))
+        self.assertFalse(any(name.startswith("factorio-ai/runtime/") for name in names))
+        self.assertFalse(any(name.startswith("factorio-ai/.factorio-ai-scheduler-tasks/") for name in names))
+
     def test_llm_status_remediation_explains_required_env(self):
         cfg = RemoteSlurmConfig(
             enabled=True,

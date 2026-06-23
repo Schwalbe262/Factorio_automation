@@ -1,10 +1,9 @@
 # Current Handoff
-- Branch `chore/part130-unattended-qwen9-supervisor`; supervisor running, latest live autopilot PID `55260`.
-- Fixed long site-input loop: distant mall input hand-carry failures now commit to `research_logistics` when logistics is not researched and route distance exceeds 64 tiles.
-- Fixed site-input planner: transport-belt assemblers may receive `iron-plate` logistics, but `iron-gear-wheel` into belt assemblers remains direct-transfer only.
-- Fixed mall build guard: before placing a new mall assembler, `BuildItemMallSkill` rechecks `assembling-machine-1` inventory and crafts/recovers prerequisites instead of issuing a doomed build.
-- Validation: `PYTHONPATH=src python -m unittest tests.test_controller tests.test_planner` (594 OK); py_compile OK.
-- Live validation: PID `55260` is placing iron-plate logistics belts toward the gear mall, replacing the prior bootstrap/site-input ping-pong.
-- Token recording: Codex thread DB malformed; fallback `record-token-usage` sample logged `39721463`, delta `1794450`, weekly quota unavailable.
-- Slurm disk note: worker dir was already reduced to ~53M; `factorio-ai-models` ~21G is the active Qwen model cache.
-- Dirty runtime-heavy `note.md`/`insight.md` may exist; stage only intentional files.
+- Branch `chore/part130-unattended-qwen9-supervisor`; code/handoff changes should be staged without huge runtime `note.md`/`insight.md`.
+- Slurm disk fixed: deploy archive excludes `note.md`/`insight.md` and prunes root/nested task/log dirs; remote `~/factorio-ai-worker` is ~8.5M after deploy.
+- `~/factorio-ai-models` is still ~21G because it is the active `QuantTrio/Qwen3.6-27B-AWQ` cache; delete only if switching away from 27B.
+- Planner fix: when started iron/site-input logistics run out of belts, `BuildItemMallSkill("transport-belt")` falls back to one-time iron-plate seed into the buffered belt assembler instead of returning action=null.
+- Validation: `PYTHONPATH=src python -m unittest tests.test_remote_slurm tests.test_planner` -> 567 OK; py_compile and diff check OK.
+- Live check: current `runtime/latest-observe.json` with new planner returns actionable `move near tree for pole wood`, not the old belt-shortage null failure.
+- Slurm service: stale vLLM task `13326` canceled; fresh 27B service task `13327` queued, not ready yet.
+- Token recording: Codex DB malformed; fallback sample `40885851`, delta `1164388`, weekly quota unavailable.

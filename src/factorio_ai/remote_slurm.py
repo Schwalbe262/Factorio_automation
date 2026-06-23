@@ -70,6 +70,23 @@ GPU_ENV_VARS = (
     "SLURM_STEP_GPUS",
     "SLURM_GPUS_ON_NODE",
 )
+REMOTE_TASK_CLEANUP_PATTERNS = (
+    ".planner-*.tmp",
+    ".strategy-*.tmp",
+    ".codeagent-*.tmp",
+    ".foundry-*.tmp",
+    ".layout-improvement-*.tmp",
+    ".strategy-model-benchmark-*.tmp",
+    "planner-*.json",
+    "strategy-*.json",
+    "codeagent-*.json",
+    "foundry-*.json",
+    "layout-improvement-*.json",
+)
+DEPLOY_EXCLUDED_FILES = {
+    "note.md",
+    "insight.md",
+}
 
 
 class RemoteSlurmError(RuntimeError):
@@ -1354,11 +1371,25 @@ def deploy(cfg: RemoteSlurmConfig | None = None) -> dict[str, Any]:
     # deploy archive pile up and fill /home. Drop the stale archive and logs older than 60 min (recent
     # / in-flight task logs are kept). Best-effort: never let a cleanup hiccup abort the deploy.
     try:
-        rd = shlex.quote(remote_dir)
+        find_terms = " -o ".join(f"-name {shlex.quote(pattern)}" for pattern in REMOTE_TASK_CLEANUP_PATTERNS)
         _run_remote(
-            f'rm -f {rd}/factorio-ai.tar.gz 2>/dev/null || true; '
-            f'find {rd}/logs -type f -mmin +60 -delete 2>/dev/null || true; '
-            f'rm -rf {rd}/results/* {rd}/failed/* 2>/dev/null || true',
+            f"""set -euo pipefail
+REMOTE_DIR={json.dumps(remote_dir)}
+rm -f "$REMOTE_DIR/factorio-ai.tar.gz" 2>/dev/null || true
+find "$REMOTE_DIR" -maxdepth 1 -type f \\( {find_terms} \\) -mmin +60 -delete 2>/dev/null || true
+for LOG_DIR in "$REMOTE_DIR/logs" "$REMOTE_DIR/factorio-ai/logs"; do
+  if [[ -d "$LOG_DIR" ]]; then
+    find "$LOG_DIR" -type f -mmin +60 -delete 2>/dev/null || true
+  fi
+done
+for TASK_DIR in "$REMOTE_DIR/.factorio-ai-scheduler-tasks" "$REMOTE_DIR/factorio-ai/.factorio-ai-scheduler-tasks"; do
+  if [[ -d "$TASK_DIR" ]]; then
+    find "$TASK_DIR" -maxdepth 1 -type f \\( {find_terms} \\) -mmin +60 -delete 2>/dev/null || true
+    find "$TASK_DIR" -mindepth 1 -maxdepth 1 -type d -mmin +60 -exec rm -rf {{}} + 2>/dev/null || true
+  fi
+done
+rm -rf "$REMOTE_DIR/results/"* "$REMOTE_DIR/failed/"* 2>/dev/null || true
+""",
             cfg,
             timeout=120,
         )
@@ -3051,21 +3082,6 @@ rm -f "$TASK_PATH" "$RESULT_PATH"
     return result
 
 
-_REMOTE_TASK_CLEANUP_PATTERNS = (
-    ".planner-*.tmp",
-    ".strategy-*.tmp",
-    ".codeagent-*.tmp",
-    ".foundry-*.tmp",
-    ".layout-improvement-*.tmp",
-    ".strategy-model-benchmark-*.tmp",
-    "planner-*.json",
-    "strategy-*.json",
-    "codeagent-*.json",
-    "foundry-*.json",
-    "layout-improvement-*.json",
-)
-
-
 def _task_upload_retryable(exc: Exception) -> bool:
     message = str(exc).lower()
     retryable_markers = (
@@ -3084,7 +3100,7 @@ def _cleanup_task_upload_dir(remote_dir: str, cfg: RemoteSlurmConfig, *, remote_
         max_age_minutes = max(5, _int_env("FACTORIO_AI_SLURM_ATTACHED_TASK_CLEANUP_MINUTES", 60, 1))
     except (TypeError, ValueError):
         max_age_minutes = 60
-    find_terms = " -o ".join(f"-name {shlex.quote(pattern)}" for pattern in _REMOTE_TASK_CLEANUP_PATTERNS)
+    find_terms = " -o ".join(f"-name {shlex.quote(pattern)}" for pattern in REMOTE_TASK_CLEANUP_PATTERNS)
     _run_remote(
         f"""set -euo pipefail
 DIR={json.dumps(remote_dir)}
@@ -3312,6 +3328,8 @@ def _create_archive(target: Path) -> None:
         for path in REPO_ROOT.rglob("*"):
             rel = path.relative_to(REPO_ROOT)
             if any(part in skip_parts for part in rel.parts):
+                continue
+            if rel.name in DEPLOY_EXCLUDED_FILES:
                 continue
             if path.is_file():
                 archive.add(path, arcname=str(Path("factorio-ai") / rel))
