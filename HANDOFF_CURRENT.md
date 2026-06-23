@@ -1,6 +1,6 @@
 # Current Handoff
 - Branch `chore/part130-unattended-qwen9-supervisor`; code commit `191ecbc` pushed; leave huge `note.md`/`insight.md` unstaged.
-- Slurm/Qwen: vLLM task `13329` running/ready on a6000; supervisor gate ready.
+- Slurm/Qwen: vLLM task `13329` running/ready on a6000; worker dir 28M, active Qwen model cache 21G, remote pip cache pruned 4.1G->1K.
 - Planner fix: transport-belt mall bootstrap now prioritizes gear/belt mall relocation before a long iron-plate input line or repeated remote-cell rebuild.
 - Validation: `PYTHONPATH=src python -m unittest tests.test_planner` -> 492 OK; py_compile and diff check OK.
 - Live applied by restarting autopilot; current PID `59668`, server UP.
@@ -8,4 +8,4 @@
 - Current live skill: `bootstrap_electric_mining_drill_mall` step 9; latest progress stall=0, transport-belt=12, small-electric-pole=7, seed_count=9.
 - Watch next: electric mining drill mall was previously waiting on blocked iron expansion/no open iron-ore site; verify it progresses or route to `expand_iron_smelting`.
 - Known debt: gear/belt relocation still used several bootstrap plate seeds before advancing; tighten seed policy later if it recurs.
-- Token sample `41895719`; weekly quota unavailable while Codex sqlite DB remains malformed.
+- Token sample `42178407`; weekly quota unavailable while Codex sqlite DB remains malformed.
