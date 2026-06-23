@@ -4,7 +4,24 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from factorio_ai import cli as cli_module
-from factorio_ai.cli import _observer_player_control_problem
+from factorio_ai.cli import _config_with_port_overrides, _observer_player_control_problem
+from factorio_ai.config import AppConfig
+
+
+def make_config() -> AppConfig:
+    return AppConfig(
+        factorio_exe=Path("factorio.exe"),
+        runtime_dir=Path("runtime"),
+        mod_runtime_dir=Path("runtime/mods"),
+        save_path=Path("runtime/saves/test.zip"),
+        rcon_host="127.0.0.1",
+        rcon_port=27015,
+        rcon_password="factorio-ai",
+        server_port=34197,
+        log_dir=Path("logs"),
+        agent_player_name="AI",
+        slurm_enabled=False,
+    )
 
 
 class CliTests(unittest.TestCase):
@@ -111,6 +128,20 @@ class CliTests(unittest.TestCase):
                 locals_in_main,
                 msg=f"'{shared}' must stay the module-level import, not a local inside main()",
             )
+
+    def test_no_mod_server_port_overrides_are_applied_without_mutating_config(self):
+        cfg = make_config()
+
+        updated = _config_with_port_overrides(cfg, SimpleNamespace(server_port=34200, rcon_port=27016))
+
+        self.assertEqual(cfg.server_port, 34197)
+        self.assertEqual(cfg.rcon_port, 27015)
+        self.assertEqual(updated.server_port, 34200)
+        self.assertEqual(updated.rcon_port, 27016)
+
+    def test_invalid_port_override_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            _config_with_port_overrides(make_config(), SimpleNamespace(server_port=70000, rcon_port=None))
 
 
 if __name__ == "__main__":

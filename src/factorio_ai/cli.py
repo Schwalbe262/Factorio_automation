@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -67,6 +68,23 @@ def _guard_observer_player_control(cfg: Any, command: str) -> None:
     raise SystemExit(1)
 
 
+def _valid_port(value: int, *, name: str) -> int:
+    if value < 1 or value > 65535:
+        raise SystemExit(f"{name} must be between 1 and 65535")
+    return value
+
+
+def _config_with_port_overrides(cfg: Any, args: argparse.Namespace) -> Any:
+    overrides: dict[str, int] = {}
+    server_port = getattr(args, "server_port", None)
+    rcon_port = getattr(args, "rcon_port", None)
+    if server_port is not None:
+        overrides["server_port"] = _valid_port(int(server_port), name="--server-port")
+    if rcon_port is not None:
+        overrides["rcon_port"] = _valid_port(int(rcon_port), name="--rcon-port")
+    return replace(cfg, **overrides) if overrides else cfg
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Factorio AI autoplayer")
     parser.add_argument("--config", help="Path to config.json")
@@ -91,6 +109,8 @@ def main(argv: list[str] | None = None) -> None:
         help="Start a vanilla-compatible local/LAN server with RCON Lua enabled but no custom mod",
     )
     start_no_mod_server_parser.add_argument("--no-wait-rcon", action="store_true")
+    start_no_mod_server_parser.add_argument("--server-port", type=int, help="Override the Factorio multiplayer UDP port")
+    start_no_mod_server_parser.add_argument("--rcon-port", type=int, help="Override the RCON TCP port")
 
     subparsers.add_parser(
         "no-mod-server-save",
@@ -104,6 +124,7 @@ def main(argv: list[str] | None = None) -> None:
     no_mod_gui_parser.add_argument("--window-size", default="1600x900")
     no_mod_gui_parser.add_argument("--no-connect", action="store_true")
     no_mod_gui_parser.add_argument("--confirm-timeout", type=float, default=20.0)
+    no_mod_gui_parser.add_argument("--server-port", type=int, help="Connect the GUI client to this multiplayer UDP port")
 
     launch_gui_parser = subparsers.add_parser("launch-gui", help="Launch a GUI Factorio client and connect to the local server")
     launch_gui_parser.add_argument("--window-size", default="1600x900")
@@ -625,6 +646,7 @@ def main(argv: list[str] | None = None) -> None:
 
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
+    cfg = _config_with_port_overrides(cfg, args)
 
     if args.command == "install-mod":
         path = install_mod(cfg)
