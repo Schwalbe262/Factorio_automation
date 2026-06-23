@@ -19,6 +19,7 @@ from factorio_ai.controller import (
     _boiler_handfuel_prerequisite_repair,
     _guard_post_automation_handcraft,
     _guard_unpowered_connect_power_radius,
+    _missing_inserter_prerequisite_repair,
     _move_detour_action,
     _one_time_seed_already_used,
     _stale_take_response,
@@ -778,6 +779,16 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(repair["skill"], "bootstrap_build_item_mall")
         self.assertEqual(repair["target_item"], "transport-belt")
         self.assertEqual(repair["target_count"], 41)
+
+    def test_missing_inserter_repair_targets_inserter_mall(self):
+        repair = _missing_inserter_prerequisite_repair(
+            "missing inserter for iron source output inserter; refusing hand-crafted iron gears",
+            {"inventory": {"inserter": 1}},
+        )
+
+        self.assertEqual(repair["skill"], "bootstrap_build_item_mall")
+        self.assertEqual(repair["target_item"], "inserter")
+        self.assertEqual(repair["target_count"], 5)
 
     def test_one_time_boiler_seed_history_ignores_prior_map_tick(self):
         action = {
@@ -3276,6 +3287,60 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(controller.calls[1]["override_skill"], "build_site_input_logistic_line")
         self.assertEqual(controller.calls[1]["override_source"], "autopilot_commit_skill")
         self.assertEqual(controller.calls[1]["input_item"], "iron-gear-wheel")
+
+    def test_autopilot_commit_routes_missing_inserter_failure_to_inserter_mall(self):
+        class FakeController(FactorioController):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.calls: list[dict[str, object]] = []
+
+            def observe(self):
+                return {
+                    "inventory": {"transport-belt": 5, "inserter": 0},
+                    "entities": [],
+                    "resources": [],
+                    "research": {"technologies": {"automation": {"researched": True}}},
+                }
+
+            def run_strategy_step(self, **kwargs):
+                self.calls.append(dict(kwargs))
+                selected = str(kwargs.get("override_skill") or "build_gear_belt_mall_logistics")
+                if selected == "build_gear_belt_mall_logistics":
+                    reason = "missing inserter for iron source output inserter; refusing hand-crafted iron gears"
+                    return StrategyStepSummary(
+                        ok=False,
+                        reason=reason,
+                        objective=kwargs.get("objective", "launch_rocket_program"),
+                        selected_skill=selected,
+                        strategy={"selected_skill": selected},
+                        run=RunSummary(False, reason, 1, 0, self.cfg.log_dir / "stub.log", "transport-belt"),
+                    )
+                return StrategyStepSummary(
+                    ok=True,
+                    reason="done",
+                    objective=kwargs.get("objective", "launch_rocket_program"),
+                    selected_skill=selected,
+                    strategy={"selected_skill": selected},
+                    run=RunSummary(True, "done", 1, 0, self.cfg.log_dir / "stub.log", "inserter"),
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = FakeController(make_test_config(Path(temp_dir)))
+            with patch.dict(
+                "os.environ",
+                {
+                    "FACTORIO_AI_AUTOPILOT_COMMIT_SKILL_ENABLED": "1",
+                    "FACTORIO_AI_AUTOPILOT_COMMIT_SKILL_MAX": "4",
+                },
+            ):
+                summary = controller.run_autopilot_loop(cycles=2, sleep_seconds=0)
+
+        self.assertFalse(summary.ok)
+        self.assertEqual(len(controller.calls), 2)
+        self.assertEqual(controller.calls[1]["override_skill"], "bootstrap_build_item_mall")
+        self.assertEqual(controller.calls[1]["override_source"], "autopilot_commit_skill")
+        self.assertEqual(controller.calls[1]["target_item"], "inserter")
+        self.assertEqual(controller.calls[1]["target_count"], 4)
 
     def test_autopilot_commit_routes_long_site_input_handcarry_failure_to_logistics_research(self):
         class FakeController(FactorioController):

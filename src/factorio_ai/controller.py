@@ -2394,6 +2394,10 @@ class FactorioController:
                         last_step.reason,
                         progress_obs if isinstance(progress_obs, dict) else {},
                     )
+                    missing_inserter_repair = _missing_inserter_prerequisite_repair(
+                        last_step.reason,
+                        progress_obs if isinstance(progress_obs, dict) else {},
+                    )
                     if (
                         commit_enabled
                         and not last_step.ok
@@ -2406,6 +2410,19 @@ class FactorioController:
                             str(boiler_handfuel_repair.get("target_item") or "") or None
                         )
                         committed_input_item = str(boiler_handfuel_repair.get("input_item") or "") or None
+                        commit_skips = 0
+                    elif (
+                        commit_enabled
+                        and not last_step.ok
+                        and isinstance(missing_inserter_repair, dict)
+                        and self._skill_run_config(str(missing_inserter_repair.get("skill") or "")) is not None
+                    ):
+                        committed_skill = str(missing_inserter_repair.get("skill") or "")
+                        committed_target_count = _int_or_none(missing_inserter_repair.get("target_count"))
+                        committed_target_item = (
+                            str(missing_inserter_repair.get("target_item") or "") or None
+                        )
+                        committed_input_item = str(missing_inserter_repair.get("input_item") or "") or None
                         commit_skips = 0
                     elif (
                         commit_enabled
@@ -5108,6 +5125,21 @@ def _boiler_handfuel_prerequisite_repair(reason: str | None, observation: dict[s
         "skill": "connect_coal_fuel_feed",
         "target_item": None,
         "target_count": None,
+        "input_item": None,
+    }
+
+
+def _missing_inserter_prerequisite_repair(reason: str | None, observation: dict[str, Any]) -> dict[str, Any] | None:
+    text = str(reason or "").strip().lower()
+    if "missing inserter for" not in text:
+        return None
+    if "refusing hand-crafted iron gears" not in text and "refusing hand-crafted gear workaround" not in text:
+        return None
+    existing = total_item_count(observation, "inserter")
+    return {
+        "skill": "bootstrap_build_item_mall",
+        "target_item": "inserter",
+        "target_count": max(4, existing + 4),
         "input_item": None,
     }
 
