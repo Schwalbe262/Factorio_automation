@@ -40,7 +40,11 @@ class RunHealthTests(unittest.TestCase):
                         "stuck": True,
                         "failure_root": "belt_line_unbuildable",
                         "repair_skill": "build_gear_belt_mall_logistics",
+                        "block_builder": "feed_smelter_block",
+                        "diagnose_stalled": 3,
+                        "repair_actions": 2,
                         "seed_count": 2,
+                        "obsolete_teardown_count": 1,
                         "updated_at": "2026-06-16T20:00:00+00:00",
                     }
                 ),
@@ -84,6 +88,7 @@ class RunHealthTests(unittest.TestCase):
         self.assertEqual(summary["live_skill"]["skill"], "research_logistics")
         self.assertIn("registered", summary["generated_skills"])
         self.assertEqual(summary["progress"]["failure_root"], "belt_line_unbuildable")
+        self.assertEqual(summary["progress"]["block_builder"], "feed_smelter_block")
         self.assertIn("connect_coal_fuel_feed", summary["generated_skills"]["stale_implemented_queue"])
         self.assertTrue(any(item["kind"] == "failure_root_loop" for item in summary["warnings"]))
         self.assertTrue(any(item["kind"] == "implemented_skill_stuck_in_foundry_queue" for item in summary["warnings"]))
@@ -95,6 +100,8 @@ class RunHealthTests(unittest.TestCase):
         self.assertIn("research_logistics", text)
         self.assertIn("foundry", text)
         self.assertIn("failure_root=belt_line_unbuildable", text)
+        self.assertIn("builder=feed_smelter_block", text)
+        self.assertIn("obsolete_teardown=1", text)
         self.assertIn("stale implemented queue", text)
         self.assertIn("operator layout learning", text)
 

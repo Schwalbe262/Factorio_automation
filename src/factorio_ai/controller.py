@@ -1991,6 +1991,10 @@ class FactorioController:
         failure_root: str | None = None,
         repair_skill: str | None = None,
         seed_count: int = 0,
+        block_builder: str | None = None,
+        diagnose_stalled: int | None = None,
+        repair_actions: int | None = None,
+        obsolete_teardown_count: int | None = None,
     ) -> None:
         """Persist a readable progress KPI each cycle so an operator (and run-health) can SEE
         whether the run is actually advancing or stuck -- the watchdog already acts on it."""
@@ -2007,6 +2011,10 @@ class FactorioController:
                 "failure_root": failure_root,
                 "repair_skill": repair_skill,
                 "seed_count": seed_count,
+                "block_builder": block_builder,
+                "diagnose_stalled": diagnose_stalled,
+                "repair_actions": repair_actions,
+                "obsolete_teardown_count": obsolete_teardown_count,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
             self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)

@@ -336,7 +336,11 @@ def gather_run_health(cfg: AppConfig, *, observe: bool = True) -> dict[str, Any]
             "stuck": progress_kpi.get("stuck"),
             "failure_root": progress_kpi.get("failure_root"),
             "repair_skill": progress_kpi.get("repair_skill"),
+            "block_builder": progress_kpi.get("block_builder"),
+            "diagnose_stalled": progress_kpi.get("diagnose_stalled"),
+            "repair_actions": progress_kpi.get("repair_actions"),
             "seed_count": progress_kpi.get("seed_count"),
+            "obsolete_teardown_count": progress_kpi.get("obsolete_teardown_count"),
             "key_items": progress_kpi.get("key_items"),
             "age_seconds": progress_age,
         },
@@ -419,10 +423,16 @@ def format_run_health(summary: dict[str, Any]) -> str:
             f"progress : researched={pr.get('researched')} research={pr.get('current_research')}"
             f"({pr.get('research_progress')}) stall={pr.get('stall_count')}{stuck} age={_fmt_age(pr.get('age_seconds'))}"
         )
-        if pr.get("failure_root") or pr.get("repair_skill") or pr.get("seed_count"):
+        if pr.get("failure_root") or pr.get("repair_skill") or pr.get("seed_count") or pr.get("block_builder"):
             lines.append(
-                "  recovery: failure_root={r} repair_skill={s} seed_count={c}".format(
-                    r=pr.get("failure_root"), s=pr.get("repair_skill"), c=pr.get("seed_count")
+                "  recovery: builder={b} failure_root={r} repair_skill={s} seed_count={c} stalled={d} repair_actions={a} obsolete_teardown={o}".format(
+                    b=pr.get("block_builder"),
+                    r=pr.get("failure_root"),
+                    s=pr.get("repair_skill"),
+                    c=pr.get("seed_count"),
+                    d=pr.get("diagnose_stalled"),
+                    a=pr.get("repair_actions"),
+                    o=pr.get("obsolete_teardown_count"),
                 )
             )
         if isinstance(pr.get("key_items"), dict) and pr.get("key_items"):

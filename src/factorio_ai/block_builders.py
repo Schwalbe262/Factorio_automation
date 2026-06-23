@@ -17,12 +17,59 @@ SUPPORTED_BLOCK_BUILDERS: tuple[str, ...] = (
     "factory_map",
     "diagnose_factory",
     "repair_factory",
+    "trace_belt_flow",
+    "validate_route_policy",
 )
 SUPPORTED_BLOCK_BUILDER_SET = frozenset(SUPPORTED_BLOCK_BUILDERS)
 SUPPORTED_BUILD_BLOCK_MODES = frozenset({"no_mod"})
 IMPLEMENTED_NO_MOD_BUILDERS = frozenset(
-    {"direct_feed_smelter_set", "coal_bootstrap_cluster", "factory_map", "diagnose_factory"}
+    {
+        "direct_feed_smelter_set",
+        "coal_bootstrap_cluster",
+        "factory_map",
+        "diagnose_factory",
+        "trace_belt_flow",
+        "validate_route_policy",
+    }
 )
+
+BUILDER_CONTRACTS: dict[str, dict[str, Any]] = {
+    "steam_bank": {
+        "completion": "generating_engines_verified",
+        "repair_skill": "setup_power",
+        "requires": ["water_port", "dedicated_coal_feed"],
+    },
+    "mining_array": {
+        "completion": "collector_belt_flow_verified",
+        "repair_skill": "setup_power",
+        "requires": ["energized_grid", "resource_patch"],
+    },
+    "smelter_block": {
+        "completion": "diagnose_then_plate_output_flow",
+        "repair_skill": "feed_smelter_block",
+        "requires": ["ore_feed", "dedicated_coal_feed", "energized_grid"],
+    },
+    "feed_smelter_block": {
+        "completion": "ore_and_coal_lane_flow_verified",
+        "repair_skill": "trace_belt_flow",
+        "requires": ["ore_source_belt", "dedicated_coal_source_belt", "open_staging_corridor"],
+    },
+    "main_bus": {
+        "completion": "lane_terminals_preserved",
+        "repair_skill": "validate_route_policy",
+        "requires": ["clear_corridor", "material_sources"],
+    },
+    "assembly_line": {
+        "completion": "recipe_inputs_and_output_flow_verified",
+        "repair_skill": "build_site_input_logistic_line",
+        "requires": ["recipe_unlocked", "item_sources", "energized_grid"],
+    },
+    "labs_row": {
+        "completion": "science_pack_flow_verified",
+        "repair_skill": "build_site_input_logistic_line",
+        "requires": ["lab_unlocked", "science_pack_sources", "energized_grid"],
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -88,6 +135,7 @@ def block_builder_capabilities(*, mode: str = "no_mod") -> list[dict[str, Any]]:
             "builder": builder,
             "mode": mode,
             "implemented": builder in IMPLEMENTED_NO_MOD_BUILDERS,
+            "contract": BUILDER_CONTRACTS.get(builder, {}),
         }
         for builder in SUPPORTED_BLOCK_BUILDERS
     ]

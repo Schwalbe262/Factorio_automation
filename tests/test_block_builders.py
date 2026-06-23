@@ -62,7 +62,12 @@ class BlockBuilderContractTests(unittest.TestCase):
         self.assertTrue(by_name["coal_bootstrap_cluster"]["implemented"])
         self.assertTrue(by_name["factory_map"]["implemented"])
         self.assertTrue(by_name["diagnose_factory"]["implemented"])
+        self.assertTrue(by_name["trace_belt_flow"]["implemented"])
+        self.assertTrue(by_name["validate_route_policy"]["implemented"])
         self.assertFalse(by_name["steam_bank"]["implemented"])
+        self.assertEqual(by_name["steam_bank"]["contract"]["completion"], "generating_engines_verified")
+        self.assertIn("dedicated_coal_feed", by_name["steam_bank"]["contract"]["requires"])
+        self.assertEqual(by_name["feed_smelter_block"]["contract"]["repair_skill"], "trace_belt_flow")
 
 
 if __name__ == "__main__":

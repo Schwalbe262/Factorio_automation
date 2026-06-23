@@ -284,9 +284,41 @@ class ModlessLuaTests(unittest.TestCase):
         self.assertIn('builder == "factory_map"', factory_map)
         self.assertIn("collect_block_diagnostics", factory_map)
         self.assertIn("entity_counts", factory_map)
+        self.assertIn("render_factory_map", factory_map)
+        self.assertIn("diagnostics.factory_map", diagnose)
         self.assertIn('builder == "diagnose_factory"', diagnose)
         self.assertIn("first_diagnostic_failure_root", diagnose)
         self.assertIn("diagnostic_repair_for_root", diagnose)
+
+    def test_build_block_reference_learnings_are_exposed_as_read_only_contracts(self):
+        trace = build_modless_action_command(
+            {
+                "type": "build_block",
+                "builder": "trace_belt_flow",
+                "params": {"from": {"x": 0, "y": 0}, "to": {"x": 4, "y": 0}, "item": "coal"},
+            }
+        )
+        policy = build_modless_action_command(
+            {
+                "type": "build_block",
+                "builder": "validate_route_policy",
+                "params": {"tiles": [{"x": 1, "y": 1}], "direction": "east"},
+            }
+        )
+        steam = build_modless_action_command({"type": "build_block", "builder": "steam_bank"})
+        feed = build_modless_action_command({"type": "build_block", "builder": "feed_smelter_block"})
+
+        self.assertIn('builder == "trace_belt_flow"', trace)
+        self.assertIn("action_trace_belt_flow", trace)
+        self.assertIn("item_not_seen_on_flow", trace)
+        self.assertIn('builder == "validate_route_policy"', policy)
+        self.assertIn("existing_belt_reorientation", policy)
+        self.assertIn("foreign_belt_input", policy)
+        self.assertIn("pending_builder_contract", steam)
+        self.assertIn("engines_generating", steam)
+        self.assertIn("seed_only_forbidden", steam)
+        self.assertIn("ore_lane_flow", feed)
+        self.assertIn("same_side_crossing_guard", feed)
 
     def test_build_block_action_validation_rejects_unsupported_builder_mode_and_params(self):
         with self.assertRaises(ValueError):

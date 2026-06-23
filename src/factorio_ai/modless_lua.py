@@ -1269,6 +1269,7 @@ local function collect_block_diagnostics()
   local entity_counts = {}
   local status_counts = {}
   local blockers = {}
+  local issues = {}
   for _, entity in pairs(entities) do
     if entity.valid then
       entity_counts[entity.name] = (entity_counts[entity.name] or 0) + 1
@@ -1277,6 +1278,9 @@ local function collect_block_diagnostics()
         status_counts[status] = (status_counts[status] or 0) + 1
         if status == "no_power" or status == "no_fuel" or status == "no_ingredients" or status == "no_input_fluid" then
           blockers[status] = (blockers[status] or 0) + 1
+          if #issues < 40 then
+            table.insert(issues, { name = entity.name, status = status, position = position_table(entity.position), unit_number = entity.unit_number })
+          end
         end
       end
     end
@@ -1288,9 +1292,253 @@ local function collect_block_diagnostics()
     entity_counts = entity_counts,
     status_counts = status_counts,
     blockers = blockers,
+    issues = issues,
     agent_position = position_table(agent.position),
     tick = game.tick
   }
+end
+local BELT_ENTITY_NAMES = { "transport-belt", "fast-transport-belt", "express-transport-belt", "underground-belt", "fast-underground-belt", "express-underground-belt", "splitter", "fast-splitter", "express-splitter" }
+local BELT_ENTITY_NAME_SET = { ["transport-belt"] = true, ["fast-transport-belt"] = true, ["express-transport-belt"] = true, ["underground-belt"] = true, ["fast-underground-belt"] = true, ["express-underground-belt"] = true, splitter = true, ["fast-splitter"] = true, ["express-splitter"] = true }
+local function belt_delta(direction)
+  if direction == defines.direction.west then return -1, 0 end
+  if direction == defines.direction.south then return 0, 1 end
+  if direction == defines.direction.north then return 0, -1 end
+  return 1, 0
+end
+local function belt_direction_char(direction)
+  if direction == defines.direction.west then return "<" end
+  if direction == defines.direction.south then return "v" end
+  if direction == defines.direction.north then return "^" end
+  return ">"
+end
+local function block_position_param(params, prefix)
+  local direct = params[prefix]
+  local normalized = normalize_position(direct)
+  if normalized then return normalized end
+  local x = params[prefix .. "_x"] or params[prefix .. "X"]
+  local y = params[prefix .. "_y"] or params[prefix .. "Y"]
+  if type(x) == "number" and type(y) == "number" then return { x = x, y = y } end
+  return nil
+end
+local function belt_entity_at(position)
+  if not position then return nil end
+  local found = agent.surface.find_entities_filtered({ position = position, radius = 0.65, name = BELT_ENTITY_NAMES, force = agent.force, limit = 12 })
+  local best = nil
+  local best_distance = nil
+  for _, entity in pairs(found) do
+    if entity.valid then
+      local d = distance(position, entity.position)
+      if not best or d < best_distance then
+        best = entity
+        best_distance = d
+      end
+    end
+  end
+  return best
+end
+local function belt_contents_snapshot(entity, item_name)
+  local result = { total = 0, lines = {}, item = item_name or "" }
+  if not entity or not entity.valid then return result end
+  for i = 1, 2 do
+    local ok, line = pcall(function() return entity.get_transport_line(i) end)
+    if ok and line then
+      local ok_contents, contents = pcall(function() return line.get_contents() end)
+      if ok_contents and contents then
+        local line_total = 0
+        for name, count in pairs(contents) do
+          if type(count) == "number" then
+            line_total = line_total + count
+            if item_name == nil or item_name == "" or name == item_name then result.total = result.total + count end
+          elseif type(count) == "table" and count.name and count.count then
+            line_total = line_total + count.count
+            if item_name == nil or item_name == "" or count.name == item_name then result.total = result.total + count.count end
+          end
+        end
+        result.lines[tostring(i)] = { total = line_total, contents = contents }
+      end
+    end
+  end
+  return result
+end
+local function factory_map_char(entity)
+  if not entity or not entity.valid then return "?" end
+  if BELT_ENTITY_NAME_SET[entity.name] then return belt_direction_char(entity.direction) end
+  if entity.name == "burner-mining-drill" or entity.name == "electric-mining-drill" then return "M" end
+  if entity.name == "stone-furnace" or entity.name == "steel-furnace" or entity.name == "electric-furnace" then return "F" end
+  if entity.name == "assembling-machine-1" or entity.name == "assembling-machine-2" or entity.name == "assembling-machine-3" then return "A" end
+  if entity.name == "lab" then return "L" end
+  if entity.name == "boiler" then return "B" end
+  if entity.name == "steam-engine" or entity.name == "steam-turbine" then return "E" end
+  if entity.name == "offshore-pump" or entity.name == "pump" then return "P" end
+  if entity.type == "inserter" then return "i" end
+  if entity.type == "electric-pole" then return "p" end
+  if entity.type == "container" or entity.name == "wooden-chest" or entity.name == "iron-chest" or entity.name == "steel-chest" then return "C" end
+  if entity.type == "pipe" or entity.name == "pipe" or entity.name == "pipe-to-ground" then return "|" end
+  return "#"
+end
+local function render_factory_map(params, diagnostics)
+  local center = block_position_param(params, "center") or block_position_param(params, "position") or block_position_param(params, "near") or agent.position
+  local width = math.floor(tonumber(params.width or params.w or 32) or 32)
+  local height = math.floor(tonumber(params.height or params.h or 24) or 24)
+  if width < 8 then width = 8 end
+  if width > 64 then width = 64 end
+  if height < 8 then height = 8 end
+  if height > 64 then height = 64 end
+  local x0 = math.floor((center.x or center[1]) - width / 2)
+  local y0 = math.floor((center.y or center[2]) - height / 2)
+  local grid = {}
+  for y = 1, height do
+    grid[y] = {}
+    for x = 1, width do grid[y][x] = "." end
+  end
+  local found = agent.surface.find_entities_filtered({ area = { { x0, y0 }, { x0 + width, y0 + height } }, force = agent.force, limit = 1200 })
+  for _, entity in pairs(found) do
+    if entity.valid then
+      local gx = math.floor((entity.position.x or 0) - x0 + 1)
+      local gy = math.floor((entity.position.y or 0) - y0 + 1)
+      if gx >= 1 and gx <= width and gy >= 1 and gy <= height then grid[gy][gx] = factory_map_char(entity) end
+    end
+  end
+  local rows = {}
+  for y = 1, height do rows[y] = table.concat(grid[y], "") end
+  return {
+    origin = { x = x0, y = y0 },
+    width = width,
+    height = height,
+    rows = rows,
+    legend = { belt = "^>v<", miner = "M", furnace = "F", assembler = "A", lab = "L", boiler = "B", engine = "E", inserter = "i", pole = "p", chest = "C", pipe = "|" },
+    issues = diagnostics and diagnostics.issues or {}
+  }
+end
+local function action_trace_belt_flow()
+  local params = block_builder_params()
+  local source = block_position_param(params, "from") or block_position_param(params, "source")
+  local dest = block_position_param(params, "to") or block_position_param(params, "dest") or block_position_param(params, "target")
+  local item_name = tostring(params.item or "")
+  if not source or not dest then
+    return builder_result("trace_belt_flow", false, { failed = 1, failure_root = "trace_requires_endpoints", repair_skill = "factory_map", warnings = { "trace_belt_flow requires from/source and to/dest positions" } })
+  end
+  local max_steps = math.floor(tonumber(params.max_steps or 256) or 256)
+  if max_steps < 8 then max_steps = 8 end
+  if max_steps > 1024 then max_steps = 1024 end
+  local path = {}
+  local visited = {}
+  local current = belt_entity_at(source)
+  if not current then
+    return builder_result("trace_belt_flow", false, {
+      failed = 1,
+      failure_root = "source_belt_missing",
+      repair_skill = "validate_route_policy",
+      diagnostics = { source = position_table(source), dest = position_table(dest), item = item_name }
+    })
+  end
+  local reached = false
+  local break_reason = ""
+  local break_position = nil
+  local item_seen = 0
+  for step = 1, max_steps do
+    if not current or not current.valid then break_reason = "belt_invalid"; break end
+    local key = tostring(round(current.position.x)) .. ":" .. tostring(round(current.position.y))
+    if visited[key] then break_reason = "belt_loop"; break_position = position_table(current.position); break end
+    visited[key] = true
+    local contents = belt_contents_snapshot(current, item_name)
+    item_seen = item_seen + (contents.total or 0)
+    table.insert(path, { name = current.name, position = position_table(current.position), direction = planner_direction(current.direction), contents = contents })
+    if distance(current.position, dest) <= 0.8 then reached = true; break end
+    if current.type ~= "transport-belt" then
+      break_reason = "unsupported_belt_type"
+      break_position = position_table(current.position)
+      break
+    end
+    local dx, dy = belt_delta(current.direction)
+    local next_position = { x = current.position.x + dx, y = current.position.y + dy }
+    local next_belt = belt_entity_at(next_position)
+    if not next_belt then
+      break_reason = "belt_flow_break"
+      break_position = position_table(next_position)
+      break
+    end
+    current = next_belt
+  end
+  if not reached and break_reason == "" then break_reason = "trace_step_limit" end
+  local item_required = item_name ~= ""
+  local item_ok = (not item_required) or item_seen > 0
+  local ok_value = reached and item_ok
+  local root = ok_value and "" or (reached and "item_not_seen_on_flow" or break_reason)
+  return builder_result("trace_belt_flow", ok_value, {
+    failed = ok_value and 0 or 1,
+    failure_root = root,
+    repair_skill = ok_value and "" or "factory_map",
+    outputs = { reached = reached, item_seen = item_seen, path_length = #path, break_position = break_position },
+    diagnostics = { source = position_table(source), dest = position_table(dest), item = item_name, path = path, break_reason = break_reason, break_position = break_position }
+  })
+end
+local function belt_points_to(entity, position)
+  if not entity or not entity.valid then return false end
+  local dx, dy = belt_delta(entity.direction)
+  local target = { x = entity.position.x + dx, y = entity.position.y + dy }
+  return math.abs(target.x - position.x) <= 0.35 and math.abs(target.y - position.y) <= 0.35
+end
+local function action_validate_route_policy()
+  local params = block_builder_params()
+  local tiles = params.tiles or {}
+  local hazards = {}
+  local checked = 0
+  local requested_direction = nil
+  if params.direction then requested_direction = factorio_direction(params.direction) end
+  for _, raw in pairs(tiles) do
+    local position = normalize_position(raw)
+    if position then
+      checked = checked + 1
+      local existing = agent.surface.find_entities_filtered({ position = position, radius = 0.45, force = agent.force, limit = 8 })
+      for _, entity in pairs(existing) do
+        if entity.valid then
+          if BELT_ENTITY_NAME_SET[entity.name] then
+            if requested_direction and entity.direction ~= requested_direction then
+              table.insert(hazards, { kind = "existing_belt_reorientation", name = entity.name, position = position_table(entity.position), existing_direction = planner_direction(entity.direction), requested_direction = planner_direction(requested_direction) })
+            else
+              table.insert(hazards, { kind = "existing_belt_occupied", name = entity.name, position = position_table(entity.position), direction = planner_direction(entity.direction) })
+            end
+          elseif entity.name ~= "character" then
+            table.insert(hazards, { kind = "blocked_by_entity", name = entity.name, position = position_table(entity.position) })
+          end
+        end
+      end
+      local neighbors = agent.surface.find_entities_filtered({ position = position, radius = 1.3, name = BELT_ENTITY_NAMES, force = agent.force, limit = 16 })
+      for _, neighbor in pairs(neighbors) do
+        if neighbor.valid and distance(neighbor.position, position) > 0.35 and belt_points_to(neighbor, position) then
+          table.insert(hazards, { kind = "foreign_belt_input", name = neighbor.name, from = position_table(neighbor.position), into = position_table(position), direction = planner_direction(neighbor.direction) })
+        end
+      end
+    end
+  end
+  local ok_value = #hazards == 0
+  return builder_result("validate_route_policy", ok_value, {
+    failed = ok_value and 0 or #hazards,
+    failure_root = ok_value and "" or "route_policy_violation",
+    repair_skill = ok_value and "" or "factory_map",
+    outputs = { checked_tiles = checked, hazards = hazards },
+    diagnostics = { checked_tiles = checked, hazards = hazards, policy = "do_not_reorient_existing_belts_or_accept_foreign_side_loads" }
+  })
+end
+local function pending_builder_contract(builder)
+  local contracts = {
+    steam_bank = { failure_root = "steam_bank_requires_honest_flow_checks", repair_skill = "setup_power", checks = { "water_connected", "coal_flow_verified", "engines_generating", "seed_only_forbidden" } },
+    mining_array = { failure_root = "mining_array_requires_energized_grid", repair_skill = "setup_power", checks = { "resource_patch_pure", "collector_belt_terminal", "energized_grid" } },
+    smelter_block = { failure_root = "smelter_block_requires_feed_contract", repair_skill = "feed_smelter_block", checks = { "two_lane_input", "plate_output_flow", "diagnose_clean" } },
+    feed_smelter_block = { failure_root = "feed_smelter_requires_lane_flow", repair_skill = "trace_belt_flow", checks = { "open_staging", "ore_lane_flow", "coal_lane_flow", "same_side_crossing_guard" } },
+    main_bus = { failure_root = "main_bus_requires_route_policy", repair_skill = "validate_route_policy", checks = { "clear_corridor", "no_existing_belt_reorientation", "lane_terminals" } },
+    assembly_line = { failure_root = "assembly_line_requires_item_flow", repair_skill = "build_site_input_logistic_line", checks = { "recipe_unlocked", "input_flow", "output_flow", "energized_grid" } },
+    labs_row = { failure_root = "labs_row_requires_science_flow", repair_skill = "build_site_input_logistic_line", checks = { "science_pack_flow", "lab_power", "research_selectable" } }
+  }
+  local contract = contracts[builder] or { failure_root = "builder_not_implemented", repair_skill = "diagnose_factory", checks = {} }
+  return builder_result(builder, false, {
+    failed = 1,
+    failure_root = contract.failure_root,
+    repair_skill = contract.repair_skill,
+    warnings = { "builder contract is enforced but concrete no-mod placement is not implemented yet" },
+    diagnostics = { contract = contract, params = block_builder_params() }
+  })
 end
 local function diagnostic_repair_for_root(root)
   if root == "no_power" then return "connect_power" end
@@ -1332,11 +1580,14 @@ local function action_block_build()
   end
   if builder == "factory_map" then
     local diagnostics = collect_block_diagnostics()
+    local map = render_factory_map(block_builder_params(), diagnostics)
+    diagnostics.factory_map = map
     return builder_result(builder, true, {
       outputs = {
         entity_counts = diagnostics.entity_counts,
         status_counts = diagnostics.status_counts,
-        blockers = diagnostics.blockers
+        blockers = diagnostics.blockers,
+        factory_map = map
       },
       diagnostics = diagnostics
     })
@@ -1344,12 +1595,19 @@ local function action_block_build()
   if builder == "diagnose_factory" then
     local diagnostics = collect_block_diagnostics()
     local root = first_diagnostic_failure_root(diagnostics)
+    if root ~= "" then diagnostics.factory_map = render_factory_map(block_builder_params(), diagnostics) end
     return builder_result(builder, root == "", {
       failed = root == "" and 0 or 1,
       failure_root = root,
       repair_skill = diagnostic_repair_for_root(root),
       diagnostics = diagnostics
     })
+  end
+  if builder == "trace_belt_flow" then
+    return action_trace_belt_flow()
+  end
+  if builder == "validate_route_policy" then
+    return action_validate_route_policy()
   end
   if builder == "direct_feed_smelter_set" then
     return build_direct_feed_smelter_set()
@@ -1370,6 +1628,15 @@ local function action_block_build()
       warnings = { "repair_factory selected a root repair skill; concrete repair dispatch is not implemented in build_block substrate" },
       diagnostics = { params = params }
     })
+  end
+  if builder == "steam_bank"
+      or builder == "mining_array"
+      or builder == "smelter_block"
+      or builder == "feed_smelter_block"
+      or builder == "main_bus"
+      or builder == "assembly_line"
+      or builder == "labs_row" then
+    return pending_builder_contract(builder)
   end
   return builder_result(builder, false, {
     failed = 1,
