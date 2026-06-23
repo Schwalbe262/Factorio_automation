@@ -589,9 +589,10 @@ fi
 if [ -n "${{FACTORIO_AI_VLLM_CUDA_VISIBLE_DEVICES:-}}" ]; then
   export CUDA_VISIBLE_DEVICES="$FACTORIO_AI_VLLM_CUDA_VISIBLE_DEVICES"
 fi
-if [ -n "${{FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER:-}}" ]; then
-  export VLLM_USE_FLASHINFER_SAMPLER="$FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER"
-fi
+# This cluster's vLLM env has FlashInfer installed but no nvcc on compute nodes; leaving the sampler
+# enabled makes service startup JIT-compile FlashInfer sampling ops and fail before the endpoint is
+# ready. Default off unless the launcher explicitly opts back in on a node with CUDA toolkit.
+export VLLM_USE_FLASHINFER_SAMPLER="${{FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER:-0}}"
 # Tensor-parallel (multi-GPU) on this cluster hung at startup with empty logs -- the classic
 # fork-after-CUDA deadlock in vLLM's worker spawn. spawn avoids it; harmless for single-GPU.
 # Unbuffered so startup/NCCL errors flush to the log immediately instead of being lost on hang.
@@ -747,9 +748,7 @@ fi
 if [ -n "${{FACTORIO_AI_VLLM_CUDA_VISIBLE_DEVICES:-}}" ]; then
   export CUDA_VISIBLE_DEVICES="$FACTORIO_AI_VLLM_CUDA_VISIBLE_DEVICES"
 fi
-if [ -n "${{FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER:-}}" ]; then
-  export VLLM_USE_FLASHINFER_SAMPLER="$FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER"
-fi
+export VLLM_USE_FLASHINFER_SAMPLER="${{FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER:-0}}"
 # Tensor-parallel (multi-GPU) on this cluster hung at startup with empty logs -- the classic
 # fork-after-CUDA deadlock in vLLM's worker spawn. spawn avoids it; harmless for single-GPU.
 # Unbuffered so startup/NCCL errors flush to the log immediately instead of being lost on hang.

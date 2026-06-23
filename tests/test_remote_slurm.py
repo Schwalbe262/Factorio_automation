@@ -730,7 +730,10 @@ class RemoteSlurmTests(unittest.TestCase):
         self.assertIn("vllm endpoint not ready before FACTORIO_AI_VLLM_STARTUP_SECONDS", command)
         self.assertIn("VLLM_LOG_BASE=logs/vllm-scheduler-layout-test", command)
         self.assertIn("$VLLM_LOG_BASE.err", command)
-        self.assertIn("export VLLM_USE_FLASHINFER_SAMPLER", command)
+        self.assertIn(
+            'export VLLM_USE_FLASHINFER_SAMPLER="${FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER:-0}"',
+            command,
+        )
         self.assertIn("export CUDA_VISIBLE_DEVICES", command)
         self.assertIn("export HF_HOME", command)
         self.assertIn('export HF_HOME="$HOME/factorio-ai-models"', command)
@@ -2560,6 +2563,10 @@ class MultiVllmServiceTests(unittest.TestCase):
         self.assertIn("vllm-service-8003.heartbeat.json", cmd)
         self.assertIn('export HF_HOME="$HOME/factorio-ai-models"', cmd)
         self.assertIn('export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"', cmd)
+        self.assertIn(
+            'export VLLM_USE_FLASHINFER_SAMPLER="${FACTORIO_AI_VLLM_USE_FLASHINFER_SAMPLER:-0}"',
+            cmd,
+        )
         self.assertNotIn("vllm-service-8000.heartbeat.json", cmd)
 
     def test_ensure_assigns_distinct_ports_when_scaling_from_zero(self):
