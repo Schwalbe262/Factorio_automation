@@ -1,11 +1,11 @@
 # Current Handoff
-- Branch `chore/part130-unattended-qwen9-supervisor`; latest part restarted no-mod server after Factorio update/version mismatch.
-- Version: Steam/server Factorio is `2.0.77` (official stable); server PID `55904`, wrapper PID `55268`, RCON UP.
-- Live: autopilot PID `68372`, vLLM service `13329`; current factory still has `electric-mining-drill=0`.
-- Fixes: electric-drill dependency accepts 3 stocked circuits as enough to build the first drill mall target `1`.
-- Fixes: default circuit-line target lowered `50 -> 18`; dependency fast-path/reconcile now pass target counts consistently.
-- Fixes: electric-drill mall can take assembler-produced gear output for first-drill input instead of forcing site-input belts.
-- Live result: drill assembler exists with 3 circuits; power/coal feed repair currently preempts final drill completion.
-- Validation: `tests.test_planner` 502 OK; `tests.test_strategy tests.test_controller` 296 OK; full `unittest discover -s tests` 1305 OK.
-- Watch next: recover boiler coal/transport-belt route, then let `bootstrap_electric_mining_drill_mall` resume and complete first drill.
-- Token usage: record failed due malformed Codex sqlite DB; weekly quota unavailable.
+- Branch `chore/part130-unattended-qwen9-supervisor`; last code commit/push `40ae0c7 Speed first electric drill bootstrap`.
+- User asked to pause current repair track and pivot to a new direction; do not continue copper-logistics fix unless re-requested.
+- Map saved via `no-mod-server-save` after health tick `1239419`; no-mod server left running (`start-no-mod-server` wrapper PID `55268` before pause).
+- Autopilot was stopped; no `run-no-mod-autopilot` process remained immediately after stop.
+- Server/version: Steam Factorio `2.0.77`, RCON was UP; vLLM service `13329` was ready.
+- Live before pause: researched=5, current research `logistics` at ~0.15, `electric-mining-drill=0`.
+- Last active skill before pause: `setup_coal_supply` stopped OK (`coal supply site is active...`); earlier risk was copper-plate hand-carry refusal for `research_logistics`.
+- Dirty files expected: `note.md` and `insight.md` auto journals only unless new work starts.
+- Last validation from code part: full `PYTHONPATH=src python -m unittest discover -s tests -q` passed 1305 tests.
+- Token usage record unavailable due malformed Codex sqlite DB; weekly quota unavailable.
