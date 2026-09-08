@@ -41,6 +41,9 @@ def _find(observation: dict, entity: dict) -> dict | None:
 
 
 def _direction_matches(name: str, actual: int, planned: int) -> bool:
+    # This square turret's facing does not change its ammunition intake geometry.
+    if name == "gun-turret":
+        return True
     # These generators have two_direction_only in the real prototype: the game
     # normalizes south to north and west to east without changing fluid geometry.
     if name in {"steam-engine", "steam-turbine"}:
@@ -309,6 +312,7 @@ for _,x in ipairs(specs) do
  local old=target(x.position,x.name)
  if old then
   local mismatch=x.direction and old.direction~=x.direction
+  if x.name=="gun-turret" and old.force==f then mismatch=false end
   if x.name=="steam-engine" or x.name=="steam-turbine" then mismatch=x.direction and old.direction%8~=x.direction%8 end
   if mismatch and not x.recipe and x.name~="pipe" and x.name~="small-electric-pole" then
    blocked[#blocked+1]={name=x.name,position=x.position,reason="existing_direction_mismatch"}

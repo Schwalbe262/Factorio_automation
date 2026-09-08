@@ -207,9 +207,12 @@ class Armaments:
         if (previous is None and existing is not None and existing.get("key") == key
                 and key not in self.factory.state.get("links", {}) and not self._intake_hardware_present(obs, existing)):
             # Recover a crash after register_plan saved, before the armaments
-            # record saved. Only a current, exact deterministic candidate owns it.
+            # record saved. Turret aim can rotate without changing the intake;
+            # compare a copy while preserving every other field and saved plan.
+            entities = [{**e, "direction": turret.get("direction", 0)} if e["name"] == "gun-turret" else e
+                        for e in existing["entities"]]
             for candidate in islice(self._intake_candidates(turret), MAX_INTAKE_CANDIDATES):
-                if all(candidate.get(field) == existing.get(field) for field in ("entities", "ports")):
+                if candidate.get("entities") == entities and candidate.get("ports") == existing.get("ports"):
                     previous = row["plan"] = existing
                     self._save()
                     break

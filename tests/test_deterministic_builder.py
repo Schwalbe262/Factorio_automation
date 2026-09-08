@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_ai.deterministic_builder import FactoryBuilder, plan_observed
 from factorio_ai.deterministic_state import request_stop
 from factorio_ai.factory_templates import build_template
 
@@ -297,6 +297,27 @@ class BuilderTests(unittest.TestCase):
                 self.obs["entities"][0]["direction"] = (actual + 4) % 8
                 result = self.builder.ensure_plan(self.obs, {"ok": True, "entities": [entity]})
                 self.assertEqual(result["status"], "blocked")
+
+    def test_changed_turret_facing_preserves_completed_intake_and_other_direction_guards(self):
+        turret = {"name": "gun-turret", "position": {"x": -71, "y": 12}, "direction": 0}
+        arm = {"name": "inserter", "position": {"x": -71.5, "y": 10.5}, "direction": 0}
+        belt = {"name": "transport-belt", "position": {"x": -71.5, "y": 9.5}, "direction": 4}
+        plan = {"ok": True, "entities": [turret, arm, belt]}
+        original = json.dumps(plan, sort_keys=True)
+        for facing in (0, 4, 8, 12):
+            with self.subTest(facing=facing):
+                self.obs["entities"] = [{**turret, "direction": facing, "unit_number": 3818}, arm, belt]
+                self.assertTrue(plan_observed(self.obs, plan))
+                self.assertEqual(self.builder.ensure_plan(self.obs, plan)["status"], "succeeded")
+        for index in (1, 2):
+            with self.subTest(changed_intake=index):
+                self.obs["entities"] = [{**turret, "direction": 12}, arm, belt]
+                self.obs["entities"][index] = {**self.obs["entities"][index], "direction": 8}
+                self.assertFalse(plan_observed(self.obs, plan))
+                self.assertEqual(self.builder.ensure_plan(self.obs, plan)["status"], "blocked")
+        self.assertEqual(json.dumps(plan, sort_keys=True), original)
+        self.bootstrap.ensure_item.assert_not_called()
+        self.game.query.assert_not_called()
 
     def test_character_build_defers_live_reach_to_navigator(self):
         self.game.backend = "character"

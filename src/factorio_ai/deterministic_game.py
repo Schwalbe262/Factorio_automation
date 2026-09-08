@@ -417,7 +417,8 @@ local existing=target(x.position,x.name)
 if existing then
  local desired=x.direction or 0
  local axis_only=x.name=="steam-engine" or x.name=="steam-turbine"
- if existing.direction~=desired and not (axis_only and existing.direction%8==desired%8) then return failure("existing_direction_mismatch") end
+ if existing.direction~=desired and not (x.name=="gun-turret" and existing.force==f)
+  and not (axis_only and existing.direction%8==desired%8) then return failure("existing_direction_mismatch") end
  return success{status="succeeded",reused=true,unit_number=existing.unit_number}
 end
 local proto=prototypes.entity[x.name]

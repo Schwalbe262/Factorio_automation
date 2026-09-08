@@ -226,6 +226,54 @@ class ArmamentsRetryTests(unittest.TestCase):
         self.assertIn(self.key, self.factory.state["links"])
         self.assert_seed_identity_preserved()
 
+    def test_real_generator_adopts_rotated_turret_orphan_without_rewriting_saved_geometry(self):
+        orphan = self.factory.register_plan(self.key, self.first, self.obs)
+        self.turret["direction"] = 12
+        self.reload()
+        def connect(obs, source, consumer, key):
+            saved = json.loads(self.armaments.path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["turrets"][self.armaments._key(self.turret)]["plan"], orphan)
+            return self.emit_paid_link(obs, source, consumer, key)
+        self.factory.connect_input.side_effect = connect
+        self.assertEqual(self.call().get("type"), "build")
+        self.factory.connect_input.assert_called_once()
+        self.assertEqual(self.row["plan"], orphan)
+        self.assertEqual(orphan["entities"][0]["direction"], 0)
+        self.assertEqual(self.turret["direction"], 12)
+        self.reload()
+        self.assertEqual(self.row["plan"], orphan)
+        self.assertIn(self.key, self.factory.state["links"])
+        self.assert_seed_identity_preserved()
+
+    def test_rotated_orphan_still_rejects_changed_hardware_ports_world_and_unit(self):
+        self.factory.register_plan(self.key, self.first, self.obs)
+        self.turret["direction"] = 12
+        for mismatch in ("transport-belt", "inserter", "port", "turret-position", "world", "unit"):
+            with self.subTest(mismatch=mismatch):
+                candidate = deepcopy(self.first)
+                candidate["entities"][0]["direction"] = 12
+                if mismatch in ("transport-belt", "inserter"):
+                    entity = next(e for e in candidate["entities"] if e["name"] == mismatch)
+                    entity["direction"] = (entity["direction"] + 4) % 16
+                elif mismatch == "port":
+                    candidate["ports"][0]["facing"] = (candidate["ports"][0]["facing"] + 4) % 16
+                elif mismatch == "turret-position":
+                    candidate["entities"][0]["position"]["x"] += 1
+                elif mismatch == "world":
+                    self.obs["world_id"] = "other-world"
+                else:
+                    self.turret["unit_number"] = 999
+                before = deepcopy((self.armaments.state, self.factory.state))
+                saved = (self.armaments.path.read_bytes(), self.factory.path.read_bytes())
+                self.armaments._intake_candidates = Mock(return_value=iter([candidate]))
+                self.factory.connect_input.reset_mock()
+                self.assertEqual(self.call()["status"], "blocked")
+                self.assertNotIn("plan", self.row)
+                self.assertEqual((self.armaments.state, self.factory.state), before)
+                self.assertEqual((self.armaments.path.read_bytes(), self.factory.path.read_bytes()), saved)
+                self.factory.connect_input.assert_not_called()
+                self.obs["world_id"], self.turret["unit_number"] = "one", 5
+
     def test_unprovable_orphan_preserves_foreign_reservation_partial_hardware_and_links(self):
         orphan = self.factory.register_plan(self.key, self.first, self.obs)
         original_obs = deepcopy(self.obs)
