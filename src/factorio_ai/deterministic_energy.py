@@ -189,10 +189,20 @@ return {ok=true,network_id=network,demand_kw=demand,consumers=consumers,feeds=fe
                                               - drill_kw - inserter_kw)
             transit = {str(row["unit_number"]): row for index in sources
                        for path in routes[index].values() for row in path}
-            overhead = sum(inserter_kw for row in transit.values() if row["name"] == "burner-inserter")
-            # Bank intake arms are included in the observed paths, as are any
-            # additional crossing arms. Reserve their full maximum consumption.
-            budget = {key: max(0, row["coal_per_minute"] * fuel_joules / 60000 - overhead)
+            # A transit edge only carries fuel for burners downstream of it.
+            # Union all observed path suffixes: reserve each possible downstream
+            # burner once, including the edge itself, without charging other banks.
+            downstream = {key: set() for key in transit}
+            for source in sources:
+                for path in routes[source].values():
+                    burners = set()
+                    for row in reversed(path):
+                        key = str(row["unit_number"])
+                        if row["name"] == "burner-inserter":
+                            burners.add(key)
+                        downstream[key].update(burners)
+            budget = {key: max(0, row["coal_per_minute"] * fuel_joules / 60000
+                               - len(downstream[key]) * inserter_kw)
                       for key, row in transit.items()}
             for arm, row in transit.items():
                 if row["name"] != "burner-inserter":
