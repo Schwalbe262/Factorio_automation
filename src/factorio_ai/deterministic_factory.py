@@ -748,8 +748,15 @@ return {ok=true,obstacles=obstacles}
                 if key in self.state["blocks"]:
                     break
             if key not in self.state["blocks"]:
-                return _report("blocked", "no clear automatic burner fuel intake", burner=burner)
+                from .deterministic_fuel_intake import reserve_adjacent_fuel_intake
+                if not reserve_adjacent_fuel_intake(self, obs, burner, coal_port, key):
+                    return _report("blocked", "no clear automatic burner fuel intake", burner=burner)
         plan = self.state["blocks"][key]
+        if plan.get("adjacent_fuel_intake"):
+            from .deterministic_fuel_intake import validate_adjacent_fuel_intake
+            invalid = validate_adjacent_fuel_intake(self, obs, burner, coal_port, key)
+            if invalid is not None:
+                return invalid
         result = self.builder.ensure_plan(obs, plan)
         if not _ready(result):
             return result
@@ -1210,9 +1217,18 @@ return {ok=true,sites=best}
 ''')
         if not survey.get("ok"):
             return {"ok": False, "reason": "electric mining site survey failed", "error": survey.get("reason")}
+        occupied = self.builder._occupied_by_plan(self._reserved())
+        clearances = self._port_clearances()
         for site in survey.get("sites", []):
             plan = self._electric_source_plan(item, site["x"], site["y"])
-            if self.builder._occupied_by_plan(plan["entities"]) & self.builder._occupied_by_plan(self._reserved()):
+            if self.builder._occupied_by_plan(plan["entities"]) & (occupied | clearances):
+                continue
+            approaches = set()
+            for port in plan["ports"]:
+                dx, dy = DIRECTIONS[port["facing"]]
+                sign = -1 if port["direction"] == "input" else 1
+                approaches.add((port["position"]["x"] + dx * sign, port["position"]["y"] + dy * sign))
+            if approaches & (occupied | clearances):
                 continue
             if not self.builder.can_place(plan["entities"]).get("ok"):
                 continue
@@ -1365,6 +1381,175 @@ return {ok=true,checked=#rows,existing=found}
         self._save()
         return None
 
+    def _consumer_drop_bridge_route(self, obs: dict, source: dict, consumer: dict,
+                                    reserved: list[dict], *, start_direction: int | None) -> dict:
+        """Feed an enclosed owned input using the live long-arm drop geometry."""
+        destination, facing = consumer["position"], consumer.get("facing")
+        actual = next((e for e in obs.get("entities", []) if e.get("name") == "transport-belt"
+                       and e.get("position") == destination and e.get("direction") == facing), None)
+        owned = any(consumer in plan.get("ports", []) and any(e.get("name") == "transport-belt"
+                    and e.get("position") == destination and e.get("direction") == facing
+                    for e in plan.get("entities", [])) for plan in self.state["blocks"].values())
+        if (not owned or actual is None or type(actual.get("unit_number")) is not int or actual["unit_number"] < 1
+                or facing not in DIRECTIONS or consumer.get("kind") != "item" or consumer.get("direction") != "input"
+                or not obs.get("world_id") or obs["world_id"] != self.state.get("world_id")):
+            return {"ok": False, "reason": "long-arm destination is not an observed owned input belt"}
+        payload = json.dumps(json.dumps({"position": destination, "facing": facing, "item": consumer["item"],
+            "unit": actual["unit_number"], "world": obs["world_id"]}, separators=(",", ":")))
+        survey = self.game.query('''
+--[[ owned_consumer_long_arm_drop: observation and live prototype geometry only. ]]
+local x=helpers.json_to_table(''' + payload + ''');local belt=target(x.position,"transport-belt")
+if not d or d.world_id~=x.world or not belt or belt.force~=f or belt.unit_number~=x.unit or belt.direction~=x.facing
+ then return {ok=false,reason="long-arm input belt identity changed"} end
+for lane=1,2 do for _,row in pairs(belt.get_transport_line(lane).get_contents()) do
+ if row.name~=x.item and row.count>0 then return {ok=false,reason="long-arm input belt carries another material"} end
+end end
+local recipe=f.recipes["long-handed-inserter"];local proto=prototypes.entity["long-handed-inserter"]
+if not recipe or not recipe.enabled then return {ok=false,reason="long inserter recipe is locked"} end
+local function rotate(v,direction)
+ local px,py=v.x or v[1],v.y or v[2]
+ if direction==4 then return -py,px elseif direction==8 then return -px,-py elseif direction==12 then return py,-px end
+ return px,py
+end
+local networks={};for _,e in pairs(s.find_entities_filtered{force=f,type="generator"}) do
+ if e.energy>0 and e.electric_network_id then networks[e.electric_network_id]=true end
+end
+local poles={};for _,e in pairs(s.find_entities_filtered{force=f,name="small-electric-pole"}) do
+ if networks[e.electric_network_id] then poles[#poles+1]=e end
+end
+table.sort(poles,function(a,b) return a.unit_number<b.unit_number end)
+local rows={};local box=belt.bounding_box;local pickup_box=prototypes.entity["transport-belt"].collision_box
+for _,direction in ipairs{0,4,8,12} do
+ local px,py=rotate(proto.inserter_pickup_position,direction)
+ local dx,dy=rotate(proto.inserter_drop_position,direction)
+ local arm={name="long-handed-inserter",position={x=x.position.x-math.floor(dx+.5),y=x.position.y-math.floor(dy+.5)},direction=direction}
+ local drop={x=arm.position.x+dx,y=arm.position.y+dy}
+ local point={x=arm.position.x+px,y=arm.position.y+py}
+ local pickup={x=math.floor(point.x)+.5,y=math.floor(point.y)+.5}
+ local vx,vy=rotate({0,-1},direction)
+ if px*vx+py*vy>0 and math.abs(px*vy-py*vx)<0.000001
+  and drop.x>box.left_top.x and drop.x<box.right_bottom.x and drop.y>box.left_top.y and drop.y<box.right_bottom.y
+  and point.x>pickup.x+pickup_box.left_top.x and point.x<pickup.x+pickup_box.right_bottom.x
+  and point.y>pickup.y+pickup_box.left_top.y and point.y<pickup.y+pickup_box.right_bottom.y
+  and s.can_place_entity{name=arm.name,position=arm.position,direction=direction,force=f} then
+  local covered={};for _,pole in ipairs(poles) do
+   local reach=pole.prototype.get_supply_area_distance(pole.quality)
+   if math.abs(arm.position.x-pole.position.x)<=reach and math.abs(arm.position.y-pole.position.y)<=reach then
+    covered[#covered+1]={name=pole.name,position=pos(pole.position),direction=pole.direction,unit_number=pole.unit_number}
+   end
+  end
+  rows[#rows+1]={arm=arm,pickup=pickup,pickup_position=point,drop_position=drop,poles=covered}
+ end
+end
+return {ok=true,candidates=rows,new_pole_reach=prototypes.entity["small-electric-pole"].get_supply_area_distance("normal")}
+''')
+        if not survey.get("ok"):
+            return survey
+        clearances = self._port_clearances()
+        if start_direction in DIRECTIONS:
+            dx, dy = DIRECTIONS[start_direction]
+            clearances.discard((source["x"] + dx, source["y"] + dy))
+        reserved = reserved + [{"name": "port-clearance", "position": {"x": x, "y": y}}
+                               for x, y in clearances]
+        foreign = [e for plan in self.state["links"].values()
+                   if any((plan.get(field) or {}).get("item") not in (None, consumer["item"])
+                          for field in ("source_port", "consumer_port")) for e in plan.get("entities", [])
+                   if e["name"] == "transport-belt"]
+        foreign_footprint = self.builder._occupied_by_plan(foreign)
+        best = None
+        for option in sorted(survey.get("candidates", []), key=lambda row: (_distance(source, row["pickup"]), row["arm"]["direction"]))[:4]:
+            arm, pickup = option["arm"], option["pickup"]
+            flow = (arm["direction"] + 8) % 16
+            pickup_facing = start_direction if pickup == source and start_direction in DIRECTIONS else flow
+            pickup_belt = {"name": "transport-belt", "position": pickup, "direction": pickup_facing}
+            final_belt = {"name": "transport-belt", "position": destination, "direction": facing}
+            equipment = [pickup_belt, arm, final_belt]
+            existing_poles = option.get("poles") or []
+            poles = existing_poles[:3] or self._intake_poles(arm["position"], equipment)[:8]
+            for power in poles:
+                pole = {key: power[key] for key in ("name", "position", "direction")}
+                if not existing_poles and max(abs(pole["position"][axis] - arm["position"][axis]) for axis in ("x", "y")) > float(survey.get("new_pole_reach", 0)):
+                    continue
+                allowed = [final_belt] + ([pole] if existing_poles else []) + ([pickup_belt] if pickup == source else [])
+                limited = [e for e in reserved if not any(e["name"] == expected["name"] and e["position"] == expected["position"]
+                           and e.get("direction", 0) == expected["direction"] for expected in allowed)]
+                trial = equipment + [pole]
+                if self.builder._occupied_by_plan(trial) & (self.builder._occupied_by_plan(limited) | foreign_footprint):
+                    continue
+                if not self.builder.can_place(trial).get("ok"):
+                    continue
+                route = self._material_route(source, pickup, reserved + trial, allow_bridge=False,
+                    start_direction=start_direction, end_direction=pickup_facing)
+                if not route.get("ok"):
+                    continue
+                entities = [{"name": "transport-belt", **segment} for segment in route["segments"]] + [arm, pole, final_belt]
+                if not self.builder.can_place(entities).get("ok"):
+                    continue
+                score = (len(entities) - bool(existing_poles), len(entities))
+                if best is None or score < best[0]:
+                    best = (score, {**route, "segments": entities, "flow_verified": False,
+                        "consumer_drop": {"unit_number": actual["unit_number"], "pickup_position": option["pickup_position"],
+                                          "drop_position": option["drop_position"], "pole_unit_number": power.get("unit_number")}})
+                break
+        return best[1] if best else {"ok": False, "reason": "no clear powered long-arm drop into owned input belt"}
+
+    def _consumer_material_route(self, obs: dict, source: dict, consumer: dict,
+                                 reserved: list[dict], *, start_direction: int | None) -> dict:
+        """A verified input belt may accept a side feed without being rotated."""
+        destination, facing = consumer["position"], consumer.get("facing")
+        if facing not in DIRECTIONS:
+            return self._material_route(source, destination, reserved, start_direction=start_direction)
+        dx, dy = DIRECTIONS[facing]
+        approach = (destination["x"] - dx, destination["y"] - dy)
+        result = {"ok": False, "reason": "consumer belt approach is occupied"}
+        if approach == (source["x"], source["y"]) or approach not in self.builder._occupied_by_plan(reserved):
+            result = self._material_route(source, destination, reserved,
+                                          start_direction=start_direction, end_direction=facing)
+            if result.get("ok") or result.get("reason") not in {"no route within bounds", "route search budget exhausted"}:
+                return result
+        if not any(consumer in plan.get("ports", []) and any(
+                e.get("name") == "transport-belt" and e.get("position") == destination
+                and e.get("direction") == facing for e in plan.get("entities", []))
+                for plan in self.state["blocks"].values()):
+            return result
+        actual = next((e for e in obs.get("entities", []) if e.get("name") == "transport-belt"
+                       and e.get("position") == destination and e.get("direction") == facing), None)
+        if actual is None or not actual.get("unit_number") or not obs.get("world_id"):
+            return result
+        payload = json.dumps(json.dumps({"position": destination, "facing": facing, "item": consumer["item"],
+            "unit": actual["unit_number"], "world_id": obs["world_id"]}, separators=(",", ":")))
+        proof = self.game.query('''
+local x=helpers.json_to_table(''' + payload + ''');local e=target(x.position,"transport-belt")
+if not d or d.world_id~=x.world_id or not e or e.force~=f or e.unit_number~=x.unit or e.direction~=x.facing
+ then return {ok=false,reason="input belt identity changed"} end
+for lane=1,2 do for _,row in pairs(e.get_transport_line(lane).get_contents()) do
+ if row.name~=x.item then return {ok=false,reason="input belt carries another material"} end
+end end
+return {ok=true,input_belt_verified=true}
+''')
+        if not proof.get("ok") or not proof.get("input_belt_verified"):
+            return {"ok": False, "reason": proof.get("reason", "input belt identity was not verified")}
+        front = {"name": "port-clearance", "position": {"x": destination["x"] + dx, "y": destination["y"] + dy}}
+        route = self._material_route(source, destination, reserved + [front], allow_bridge=False,
+                                     start_direction=start_direction)
+        if not route.get("ok"):
+            if route.get("reason") in {"no route within bounds", "route search budget exhausted"}:
+                return self._consumer_drop_bridge_route(obs, source, consumer, reserved,
+                                                        start_direction=start_direction)
+            return route
+        segments = deepcopy(route["segments"])
+        if len(segments) < 2 or segments[-1]["position"] != destination:
+            return {"ok": False, "reason": "side feed has no adjacent terminal belt"}
+        previous = segments[-2]["position"]
+        offset = (previous["x"] - destination["x"], previous["y"] - destination["y"])
+        if offset not in {(-dx, -dy), (-dy, dx), (dy, -dx)}:
+            return {"ok": False, "reason": "side feed would oppose the input belt"}
+        segments[-1]["direction"] = facing
+        entities = [{"name": "transport-belt", **segment} for segment in segments]
+        if not self.builder.can_place(entities).get("ok"):
+            return {"ok": False, "reason": "side feed placement changed"}
+        return {**route, "segments": entities, "side_feed": True}
+
     def connect_input(self, obs: dict, source_port: dict, consumer_port: dict, link_key: str) -> dict:
         self._sync(obs)
         if source_port.get("item") != consumer_port.get("item") or source_port.get("kind") != consumer_port.get("kind"):
@@ -1376,26 +1561,22 @@ return {ok=true,checked=#rows,existing=found}
             return recovery
         if link_key not in self.state["links"]:
             source = source_port["position"]
-            if consumer_port.get("facing") in DIRECTIONS:
-                dx, dy = DIRECTIONS[consumer_port["facing"]]
-                approach = (consumer_port["position"]["x"] - dx, consumer_port["position"]["y"] - dy)
-                if approach != (source["x"], source["y"]) and approach in self.builder._occupied_by_plan(self._reserved()):
-                    return _report("blocked", "consumer belt approach is occupied by another reserved entity", link=link_key,
-                                   approach={"x": approach[0], "y": approach[1]})
-            reused = [p for p in self.state["links"].values() if p.get("source_port") == source_port]
+            reused = [(key, p) for key, p in self.state["links"].items() if p.get("source_port") == source_port]
             tap_entities = []
+            upstream_tap = None
             start_direction = source_port.get("facing")
             route = None
             if reused:
                 # Independent inserter side-taps distribute one belt to multiple
                 # consumers before splitter research, preserving the original route.
-                candidate_belts = [e for p in reused for e in p["entities"] if e["name"] == "transport-belt"]
+                candidate_belts = [(key, e) for key, p in reused for e in p["entities"] if e["name"] == "transport-belt"]
                 # Extend the existing network nearest the new consumer. Always
                 # branching next to the original source needlessly crosses its
                 # earlier supply corridors and can trap distant consumers.
-                candidate_belts.sort(key=lambda e: (_distance(e["position"], consumer_port["position"]), _distance(e["position"], source)))
+                candidate_belts.sort(key=lambda row: (_distance(row[1]["position"], consumer_port["position"]),
+                                                      _distance(row[1]["position"], source)))
                 reserved = self.builder._occupied_by_plan(self._reserved())
-                for belt in candidate_belts[:64]:
+                for parent_key, belt in candidate_belts[:64]:
                     for side in ((belt.get("direction", 0) + 4) % 16, (belt.get("direction", 0) + 12) % 16):
                         dx, dy = DIRECTIONS[side]
                         bp = belt["position"]
@@ -1406,26 +1587,33 @@ return {ok=true,checked=#rows,existing=found}
                         if self.builder._occupied_by_plan(trial) & reserved:
                             continue
                         if self.builder.can_place(trial).get("ok"):
-                            attempt = self._material_route(new_belt["position"], consumer_port["position"], self._reserved() + trial,
-                                                           start_direction=side, end_direction=consumer_port.get("facing"))
+                            attempt = self._consumer_material_route(obs, new_belt["position"], consumer_port, self._reserved() + trial,
+                                                                    start_direction=side)
                             if attempt.get("ok"):
                                 tap_entities, source, start_direction, route = trial, new_belt["position"], side, attempt
+                                upstream_tap = {"link_key": parent_key, "belt": deepcopy(belt)}
                                 break
                     if tap_entities:
                         break
                 if not tap_entities:
                     return _report("blocked", "no clear inserter distribution tap from producer belt", link=link_key)
             if route is None:
-                route = self._material_route(source, consumer_port["position"], self._reserved() + tap_entities,
-                                             start_direction=start_direction, end_direction=consumer_port.get("facing"))
+                route = self._consumer_material_route(obs, source, consumer_port, self._reserved() + tap_entities,
+                                                      start_direction=start_direction)
             if not route.get("ok"):
                 return _report("blocked", "material route is obstructed", link=link_key, query_error=route.get("reason"))
             entities = tap_entities + [{"name": "transport-belt", **segment} for segment in route["segments"]]
             unique = {(e["name"], e["position"]["x"], e["position"]["y"]): e for e in entities}
             plan = _plan(list(unique.values()), source_port=source_port, consumer_port=consumer_port)
+            if upstream_tap is not None:
+                plan["upstream_tap"] = upstream_tap
             self.state["links"][link_key] = plan
             self._save()
         plan = self.state["links"][link_key]
+        from .deterministic_input_links import ensure_input_dependencies
+        dependency = ensure_input_dependencies(self, obs, source_port, link_key)
+        if not _ready(dependency):
+            return dependency
         result = self.builder.ensure_plan(obs, plan)
         if not _ready(result):
             return result
