@@ -82,7 +82,8 @@ class FactoryTests(unittest.TestCase):
 
     def automatic_sources(self):
         self.seed_lab()
-        self.obs["technologies"] = {"automation": True}
+        self.obs["technologies"] = {"automation": True, "electric-mining-drill": True}
+        self.factory._ensure_startup_iron = Mock(return_value=ready())
         self.factory.ensure_product = Mock(side_effect=lambda obs, item: ready(ports=[port(item)]))
         self.factory.connect_input = Mock(return_value=ready())
 
@@ -467,6 +468,44 @@ class FactoryTests(unittest.TestCase):
         self.bootstrap.discover_cell.return_value = current
         return original, current, deepcopy(first["evidence"]["ports"])
 
+    def test_incomplete_source_resumes_one_normal_cell_action_preserving_existing_bus(self):
+        original, current, _ = self.source_relocation_fixture()
+        current["complete"] = False
+        self.factory.state["automated_burners"] = [self.factory._entity_key(original["drill"])]
+        preserved = deepcopy(self.factory.state)
+        for action in ({"type": "craft", "recipe": "wooden-chest", "count": 1},
+                       {"type": "build", **current["drill"]}):
+            with self.subTest(action=action["type"]):
+                self.bootstrap._ensure_cell.reset_mock()
+                self.bootstrap._ensure_cell.return_value = action
+                self.assertEqual(self.factory._source_endpoint(self.obs, "coal"), action)
+                self.bootstrap._ensure_cell.assert_called_once_with(self.obs, "coal", "wooden-chest")
+                self.assertEqual(self.factory.state, preserved)
+        self.factory._fuel_burner.assert_not_called()
+
+    def test_incomplete_source_helper_completion_requires_fresh_observation(self):
+        cell = self.coal_cell()
+        cell["complete"] = False
+        self.bootstrap.discover_cell.return_value = cell
+        for local_result in (None, ready()):
+            with self.subTest(local_result=local_result):
+                self.bootstrap._ensure_cell.return_value = local_result
+                result = self.factory._source_endpoint(self.obs, "coal")
+                self.assertEqual(result["status"], "waiting")
+                self.assertNotIn("ports", result["evidence"])
+                self.assertEqual(self.factory.state["blocks"], {})
+
+    def test_source_discovery_and_cell_build_failures_preserve_actual_reason(self):
+        self.bootstrap.discover_cell.return_value = {"ok": False, "reason": "RCON survey timed out"}
+        result = self.factory._source_endpoint(self.obs, "coal")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["evidence"]["query_error"], "RCON survey timed out")
+        self.bootstrap._ensure_cell.assert_not_called()
+        self.bootstrap.discover_cell.return_value = {"ok": True, "complete": False}
+        failure = {"status": "blocked", "reason": "no_clear_direct_mining_cell_site", "evidence": {"resource": "coal"}}
+        self.bootstrap._ensure_cell.return_value = failure
+        self.assertEqual(self.factory._source_endpoint(self.obs, "coal"), failure)
+
     def test_relocated_source_merges_into_stable_bus_and_fuels_current_drill(self):
         original, current, old_ports = self.source_relocation_fixture()
         original_entities = deepcopy(self.factory.state["blocks"]["source:coal"]["entities"])
@@ -581,6 +620,150 @@ class FactoryTests(unittest.TestCase):
         self.assertEqual(result, action)
         self.assertEqual(refill["entities"][0]["position"], original["receiver"]["position"])
         self.factory._merge_output.assert_not_called()
+
+    def electric_bridge_fixture(self):
+        self.seed_lab()
+        self.catalog.technologies["electric-mining-drill"] = {"name": "electric-mining-drill", "unit_count": 25,
+            "unit_energy": 600, "ingredients": [{"name": "automation-science-pack", "amount": 1, "type": "item"}],
+            "prerequisites": ["automation-science-pack"]}
+        self.catalog.recipes["automation-science-pack"] = {"name": "automation-science-pack",
+            "products": [{"name": "automation-science-pack", "amount": 1}],
+            "ingredients": [{"name": "copper-plate", "amount": 1}, {"name": "iron-gear-wheel", "amount": 1}]}
+        self.obs["technologies"] = {"automation": True, "automation-science-pack": True}
+        self.obs.update(research="electric-mining-drill", research_progress=0)
+        self.obs["production"]["automation-science-pack"] = {"produced": 10, "consumed": 10}
+        self.bootstrap.ensure_item.side_effect = lambda obs, item, count: {"type": "craft", "recipe": item, "count": count}
+
+    def test_electric_bridge_streams_at_most_five_and_debits_before_execution(self):
+        self.electric_bridge_fixture()
+        for expected in (5, 10, 15, 20, 25):
+            action = self.factory.bootstrap_electric_mining(self.obs)
+            self.assertEqual((action["type"], action["count"]), ("craft", 5))
+            saved = DeterministicFactory(self.game, self.bootstrap, self.builder, self.catalog)
+            self.assertEqual(saved.state["startup_research"]["electric-mining-drill"]["issued"], expected)
+        exhausted = self.factory.bootstrap_electric_mining(self.obs)
+        self.assertTrue(exhausted["evidence"]["automatic_science_required"])
+        self.assertEqual(self.bootstrap.ensure_item.call_count, 5)
+
+    def test_electric_bridge_credits_current_progress_held_lab_and_queued_packs(self):
+        self.electric_bridge_fixture()
+        self.obs["research_progress"] = .4
+        self.obs["inventory"]["automation-science-pack"] = 3
+        self.obs["entities"][0]["inventory"]["automation-science-pack"] = 2
+        self.obs["crafting_queue"] = [{"recipe": "automation-science-pack", "count": 1}]
+        action = self.factory.bootstrap_electric_mining(self.obs)
+        self.assertEqual((action["type"], action["count"], action["inventory"]), ("insert", 3, "lab_input"))
+        budget = self.factory.state["startup_research"]["electric-mining-drill"]
+        self.assertEqual(budget["allowance"], 9)
+        self.assertEqual(budget["issued"], 0)
+        self.bootstrap.ensure_item.assert_not_called()
+
+    def test_initial_queued_science_completion_is_not_charged_again(self):
+        self.electric_bridge_fixture()
+        self.obs["research"] = None
+        self.obs["crafting_queue"] = [{"recipe": "automation-science-pack", "count": 5}]
+        self.assertEqual(self.factory.bootstrap_electric_mining(self.obs)["type"], "research")
+        self.obs.update(research="electric-mining-drill", crafting_queue=[])
+        self.obs["production"]["automation-science-pack"]["produced"] = 15
+        for expected in (5, 10, 15, 20):
+            self.assertEqual(self.factory.bootstrap_electric_mining(self.obs)["count"], 5)
+            self.assertEqual(self.factory.state["startup_research"]["electric-mining-drill"]["issued"], expected)
+        budget = self.factory.state["startup_research"]["electric-mining-drill"]
+        self.assertEqual((budget["allowance"], budget["external_produced"]), (20, 0))
+        self.assertTrue(self.factory.bootstrap_electric_mining(self.obs)["evidence"]["automatic_science_required"])
+
+    def test_own_science_completion_does_not_double_debit_but_external_production_does(self):
+        self.electric_bridge_fixture()
+        self.factory.bootstrap_electric_mining(self.obs)
+        self.obs["production"]["automation-science-pack"]["produced"] = 20  # 5 issued + 5 automatic.
+        self.factory.bootstrap_electric_mining(self.obs)
+        budget = self.factory.state["startup_research"]["electric-mining-drill"]
+        self.assertEqual((budget["issued"], budget["external_produced"]), (10, 5))
+        self.factory.bootstrap_electric_mining(self.obs)
+        self.factory.bootstrap_electric_mining(self.obs)
+        self.assertTrue(self.factory.bootstrap_electric_mining(self.obs)["evidence"]["automatic_science_required"])
+        self.assertEqual(budget["issued"], 20)
+
+    def test_restart_rollback_and_catalog_refresh_never_renew_startup_allowance(self):
+        self.electric_bridge_fixture()
+        for _ in range(5):
+            self.factory.bootstrap_electric_mining(self.obs)
+        self.factory = DeterministicFactory(self.game, self.bootstrap, self.builder, self.catalog)
+        self.factory._ensure_lab = Mock(return_value=ready())
+        self.assertTrue(self.factory.bootstrap_electric_mining(self.obs)["evidence"]["automatic_science_required"])
+        self.obs["tick"] = 10
+        self.assertTrue(self.factory.bootstrap_electric_mining(self.obs)["evidence"]["automatic_science_required"])
+        self.factory._fingerprint = "catalog-b"
+        self.assertTrue(self.factory.bootstrap_electric_mining(self.obs)["evidence"]["automatic_science_required"])
+        self.assertEqual(self.factory.state["startup_research"]["electric-mining-drill"]["issued"], 25)
+        self.assertEqual(self.bootstrap.ensure_item.call_count, 5)
+        self.obs["world_id"] = "new-world"
+        self.assertEqual(self.factory.bootstrap_electric_mining(self.obs)["count"], 5)
+        self.assertEqual(self.factory.state["startup_research"]["electric-mining-drill"]["issued"], 5)
+
+    def test_oversized_bootstrap_craft_is_rejected_without_debit_or_execution(self):
+        self.electric_bridge_fixture()
+        self.bootstrap.ensure_item.side_effect = None
+        self.bootstrap.ensure_item.return_value = {"type": "craft", "recipe": "automation-science-pack", "count": 6}
+        self.assertEqual(self.factory.bootstrap_electric_mining(self.obs)["status"], "blocked")
+        self.assertEqual(self.factory.state["startup_research"]["electric-mining-drill"]["issued"], 0)
+
+    def test_unsupported_electric_research_never_gets_an_invented_science_budget(self):
+        self.electric_bridge_fixture()
+        technology = self.catalog.technologies["electric-mining-drill"]
+        for field, value in (("unit_count", 26), ("unit_count", 0), ("unit_count", float("nan")),
+                             ("unit_count", True), ("unit_energy", 0),
+                             ("ingredients", [{"name": "logistic-science-pack", "amount": 1}])):
+            with self.subTest(field=field, value=value):
+                before = deepcopy(technology[field])
+                technology[field] = value
+                self.assertEqual(self.factory.bootstrap_electric_mining(self.obs)["status"], "blocked")
+                self.assertEqual(self.factory.state.get("startup_research"), {})
+                technology[field] = before
+        self.bootstrap.ensure_item.assert_not_called()
+
+    def test_electric_bridge_precedes_mall_creation_and_requires_actual_force_flag(self):
+        self.electric_bridge_fixture()
+        self.factory.ensure_product = Mock()
+        action = self.factory.next_action(self.obs)
+        self.assertEqual((action["type"], action["count"]), ("craft", 5))
+        self.factory.ensure_product.assert_not_called()
+        self.obs["research_progress"] = 1
+        self.assertIsNotNone(self.factory.bootstrap_electric_mining(self.obs))
+        self.obs["technologies"]["electric-mining-drill"] = True
+        self.assertIsNone(self.factory.bootstrap_electric_mining(self.obs))
+
+    def test_finished_bridge_science_is_excluded_from_automatic_flow_evidence(self):
+        self.electric_bridge_fixture()
+        self.factory.state["flow_samples"]["automation-science-pack"] = {"produced": 10, "consumed": 10}
+        self.factory.bootstrap_electric_mining(self.obs)
+        self.obs["production"]["automation-science-pack"] = {"produced": 35, "consumed": 35}
+        self.obs["technologies"]["electric-mining-drill"] = True
+        self.factory.bootstrap_electric_mining(self.obs)
+        self.assertFalse(self.factory.flow_evidence(self.obs)["automation-science-pack"]["production_and_consumption_verified"])
+
+    def test_early_electric_iron_capacity_precedes_mall_and_propagates_construction(self):
+        self.electric_bridge_fixture()
+        self.obs["technologies"]["electric-mining-drill"] = True
+        self.obs["enabled_recipes"]["electric-mining-drill"] = True
+        action = {"type": "build", "name": "electric-mining-drill", "position": {"x": 8.5, "y": 8.5}}
+        self.factory.ensure_product = Mock(return_value=action)
+        self.assertEqual(self.factory.next_action(self.obs), action)
+        self.factory.ensure_product.assert_called_once_with(self.obs, "iron-plate", rate_per_minute=60)
+        self.bootstrap.ensure_item.assert_not_called()
+
+    def test_mall_follows_ready_early_iron_capacity_without_more_hand_science(self):
+        self.electric_bridge_fixture()
+        self.obs["technologies"]["electric-mining-drill"] = True
+        self.obs["enabled_recipes"]["electric-mining-drill"] = True
+        action = {"type": "build", "name": "assembling-machine-1"}
+        self.factory.ensure_product = Mock(side_effect=[ready(nominal_capacity_per_minute=71.25), action])
+        self.assertEqual(self.factory.next_action(self.obs), action)
+        self.assertEqual(self.factory.ensure_product.call_args_list[0].kwargs, {"rate_per_minute": 60})
+        self.assertEqual(self.factory.ensure_product.call_args_list[1].args[1], "transport-belt")
+        self.assertEqual(self.factory.state["startup_iron_capacity"]["nominal_capacity_per_minute"], 71.25)
+        self.assertFalse(self.factory.state["startup_iron_capacity"]["flow_verified"])
+        self.bootstrap.ensure_item.assert_not_called()
 
 
 if __name__ == "__main__":

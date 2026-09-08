@@ -21,6 +21,12 @@ def _report(status: str, reason: str, **evidence: Any) -> dict[str, Any]:
     return {"status": status, "reason": reason, "evidence": evidence}
 
 
+def power_flow_ready(evidence: dict[str, Any]) -> bool:
+    return bool(evidence.get("ok") and evidence.get("water", 0) > 0 and evidence.get("steam", 0) > 0
+                and evidence.get("boiler_fuel", 0) > 0 and evidence.get("drill_fuel", 0) > 0
+                and evidence.get("coal_on_belts", 0) > 0 and evidence.get("connected_engines") == 2)
+
+
 def _position(x: float, y: float) -> dict[str, float]:
     return {"x": round(x, 3), "y": round(y, 3)}
 
@@ -40,6 +46,20 @@ def _direction_matches(name: str, actual: int, planned: int) -> bool:
     if name in {"steam-engine", "steam-turbine"}:
         return actual % 8 == planned % 8
     return actual == planned
+
+
+def plan_observed(observation: dict, plan: dict) -> bool:
+    """Check integrity without issuing construction, recipe, or fuel actions."""
+    if not plan.get("ok") or not plan.get("entities"):
+        return False
+    for entity in plan["entities"]:
+        found = _find(observation, entity)
+        if found is None or (entity.get("recipe") and found.get("recipe") != entity["recipe"]):
+            return False
+        if (entity["name"] not in {"pipe", "small-electric-pole", "wooden-chest"}
+                and not _direction_matches(entity["name"], found.get("direction", 0), entity.get("direction", 0))):
+            return False
+    return True
 
 
 def _rotate(x: float, y: float, direction: int) -> tuple[float, float]:
@@ -496,9 +516,7 @@ return success{boiler_fuel=fuel(boiler),drill_fuel=fuel(drill),water=fluid(boile
         evidence = self.power_evidence(power, coal)
         if not evidence.get("ok"):
             return _report("blocked", "power evidence query failed", diagnostics=evidence)
-        ready = (evidence.get("ok") and evidence.get("water", 0) > 0 and evidence.get("steam", 0) > 0
-                 and evidence.get("boiler_fuel", 0) > 0 and evidence.get("drill_fuel", 0) > 0
-                 and evidence.get("coal_on_belts", 0) > 0 and evidence.get("connected_engines") == 2)
+        ready = power_flow_ready(evidence)
         if not ready:
             self.state.pop("power_sample_tick", None)
             self._save()

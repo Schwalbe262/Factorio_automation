@@ -46,8 +46,12 @@ class DeterministicFactory:
         if not world:
             raise ValueError("production observation requires world_id")
         if self.state.get("world_id") != world or self.state.get("catalog_fingerprint") != self._fingerprint:
+            # Construction plans depend on prototypes; an issued startup
+            # science allowance belongs to the world and cannot be renewed by
+            # re-exporting the catalog or loading an older save.
+            startup = deepcopy(self.state.get("startup_research", {})) if self.state.get("world_id") == world else {}
             self.state = {"schema_version": 1, "world_id": world, "catalog_fingerprint": self._fingerprint,
-                          "blocks": {}, "links": {}, "power_links": {}, "flow_samples": {}}
+                          "blocks": {}, "links": {}, "power_links": {}, "flow_samples": {}, "startup_research": startup}
             self._save()
         tick = int(observation.get("tick") or 0)
         previous_tick = self.state.get("last_tick", 0)
@@ -55,6 +59,8 @@ class DeterministicFactory:
             self.state["flow_samples"] = {}
             self.state.pop("bootstrap_science", None)
             self.state["automated_burners"] = []
+            for budget in self.state.get("startup_research", {}).values():
+                budget.pop("completion_tick", None)
         self.state["last_tick"] = tick
         if tick != previous_tick:
             self._save()
@@ -271,8 +277,17 @@ return {ok=true,blocked=blocked}
                      "coal": ("coal", "wooden-chest"), "stone": ("stone", "wooden-chest")}
         resource, receiver = resources[item]
         cell = self.bootstrap.discover_cell(resource, receiver)
-        if not cell.get("ok") or not cell.get("complete"):
-            return _report("blocked", "operating raw-material source is missing", item=item, resource=resource)
+        if not cell.get("ok"):
+            return _report("blocked", "raw-material source discovery failed", item=item, resource=resource,
+                           query_error=cell.get("reason", "cell_site_query_failed"))
+        if not cell.get("complete"):
+            # A drill can exhaust after the supervisor's bootstrap observation.
+            # Resume ordinary cell construction without changing the established
+            # bus or granting ownership before its replacement is connected.
+            result = self.bootstrap._ensure_cell(observation, resource, receiver)
+            if result is not None and not _ready(result):
+                return result
+            return _report("waiting", "waiting for replacement raw-material cell observation", item=item, resource=resource)
         primary_key = "source:" + item
         key = primary_key
         primary = self.state["blocks"].get(primary_key)
@@ -1172,10 +1187,135 @@ return {ok=true,speed=prototypes.entity.lab.get_researching_speed(),
         return _report("waiting", "initial Automation research consumes its bounded science batch",
                        research_progress=obs.get("research_progress", 0))
 
+    def bootstrap_electric_mining(self, obs: dict) -> dict | None:
+        """A finite, streamed research bridge before financing the full mall.
+
+        The ledger debits science crafts before they leave this method. It is
+        retained across restart, save rollback and catalog changes in this world.
+        Missing packets after that finite budget must come from automatic
+        production, never another handcraft allowance.
+        """
+        self._sync(obs)
+        name, item = "electric-mining-drill", "automation-science-pack"
+        if (obs.get("technologies") or {}).get(name):
+            budget = self.state.get("startup_research", {}).get(name)
+            if budget is not None and "completion_tick" not in budget:
+                production = (obs.get("production") or {}).get(item, {})
+                self.state["flow_samples"][item] = {"produced": int(production.get("produced", 0)),
+                                                     "consumed": int(production.get("consumed", 0))}
+                budget["completion_tick"] = int(obs.get("tick") or 0)
+                self._save()
+            return None
+        if not (obs.get("technologies") or {}).get("automation"):
+            return _report("waiting", "initial Automation research precedes the electric mining bridge")
+        technology = self.catalog.technologies.get(name) or {}
+        recipe = self.catalog.recipe_for_product(item)
+        try:
+            units = float(technology["unit_count"])
+            duration = float(technology["unit_energy"])
+            ingredients = technology["ingredients"]
+            prerequisites = technology["prerequisites"]
+            products = recipe["products"] if recipe else []
+            valid = (not isinstance(technology["unit_count"], bool) and math.isfinite(units) and units.is_integer() and 0 < units <= 25
+                     and math.isfinite(duration) and duration > 0 and not technology.get("research_trigger")
+                     and isinstance(prerequisites, list) and all(isinstance(p, str) for p in prerequisites)
+                     and len(ingredients) == 1 and ingredients[0]["name"] == item
+                     and ingredients[0].get("type", "item") == "item" and float(ingredients[0]["amount"]) == 1
+                     and len(products) == 1 and products[0]["name"] == item
+                     and products[0].get("type", "item") == "item" and float(products[0]["amount"]) == 1
+                     and float(products[0].get("probability", 1)) == 1)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            valid = False
+        if not valid:
+            return _report("blocked", "unsupported electric mining startup research data", technology=name, maximum_handcraft_packs=25)
+        if any(not (obs.get("technologies") or {}).get(parent) for parent in prerequisites):
+            return _report("blocked", "electric mining research prerequisite is not observed", prerequisites=prerequisites)
+        progress = float(obs.get("research_progress") or 0) if obs.get("research") == name else 0.0
+        if not math.isfinite(progress) or not 0 <= progress <= 1:
+            return _report("blocked", "invalid live startup research progress", technology=name)
+        labs = [e for e in obs.get("entities", []) if e.get("name") == "lab"]
+        held = int((obs.get("inventory") or {}).get(item, 0))
+        lab_stock = sum(int((e.get("inventory") or {}).get(item, 0)) for e in labs)
+        queued = sum(int(row.get("count", 0)) for row in obs.get("crafting_queue") or []
+                     if row.get("recipe") == recipe["name"])
+        remaining_units = math.ceil(units * (1 - progress) - 1e-9)
+        current_produced = int(((obs.get("production") or {}).get(item) or {}).get("produced", 0))
+        budgets = self.state.setdefault("startup_research", {})
+        if name not in budgets:
+            budgets[name] = {"required_packs": int(units), "recipe": recipe["name"],
+                             "allowance": max(0, remaining_units - held - lab_stock - queued), "issued": 0,
+                             "baseline_produced": current_produced, "produced_high_water": current_produced,
+                             "pending_issued": 0, "initial_queue_pending": queued, "external_produced": 0,
+                             "credited_held": held, "credited_lab": lab_stock, "credited_queue": queued,
+                             "initial_progress": progress}
+            self._save()
+        budget = budgets[name]
+        if budget["required_packs"] != int(units) or budget["recipe"] != recipe["name"]:
+            return _report("blocked", "startup research requirements changed after allowance was issued", technology=name)
+        if current_produced > budget["produced_high_water"]:
+            delta = current_produced - budget["produced_high_water"]
+            initial = min(delta, budget["initial_queue_pending"])
+            budget["initial_queue_pending"] -= initial
+            delta -= initial
+            issued = min(delta, budget["pending_issued"])
+            budget["pending_issued"] -= issued
+            budget["external_produced"] += delta - issued
+            budget["produced_high_water"] = current_produced
+            self._save()
+        produced = max(0, budget["produced_high_water"] - budget["baseline_produced"] - budget["credited_queue"])
+        unused = max(0, budget["allowance"] - budget["issued"] - budget["external_produced"])
+        evidence = {"technology": name, "allowance": budget["allowance"], "issued": budget["issued"],
+                    "produced_credit": produced, "remaining_allowance": unused, "research_progress": progress}
+        result = self._ensure_lab(obs)
+        if not _ready(result):
+            return result
+        if not labs:
+            return _report("waiting", "waiting for an observed laboratory for startup science", **evidence)
+        if obs.get("research") != name:
+            return {"type": "research", "technology": name, "reason": "unlock electric raw production before constructing the full mall"}
+        if held and remaining_units > lab_stock and labs:
+            return {"type": "insert", "name": "lab", "position": labs[0]["position"], "item": item,
+                    "count": min(5, held, remaining_units - lab_stock), "inventory": "lab_input",
+                    "reason": "stream finite startup science into natural electric mining research"}
+        needed = max(0, remaining_units - held - lab_stock - queued)
+        if needed and unused:
+            chunk = min(5, unused, needed)
+            action = self.bootstrap.ensure_item(obs, item, chunk)
+            if action.get("type") == "craft" and action.get("recipe") == recipe["name"]:
+                count = action.get("count")
+                if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= chunk:
+                    return _report("blocked", "startup science craft exceeds its finite chunk allowance", **evidence)
+                budget["issued"] += count
+                budget["pending_issued"] += count
+                self._save()
+            if not _ready(action):
+                return action
+        automatic_required = unused == 0 and needed > 0 and held + lab_stock + queued == 0
+        return _report("waiting", "finite startup science awaits observed electric mining research",
+                       **evidence, automatic_science_required=automatic_required)
+
+    def _ensure_startup_iron(self, obs: dict) -> dict:
+        if not (obs.get("enabled_recipes") or {}).get("electric-mining-drill"):
+            return _report("blocked", "researched electric mining recipe is not enabled")
+        result = self.ensure_product(obs, "iron-plate", rate_per_minute=60)
+        if _ready(result):
+            self.state["startup_iron_capacity"] = {"requested_rate_per_minute": 60,
+                "nominal_capacity_per_minute": result.get("evidence", {}).get("nominal_capacity_per_minute"),
+                "observed_tick": obs.get("tick"), "flow_verified": False}
+            self._save()
+        return result
+
     def next_action(self, obs: dict) -> dict:
         self._sync(obs)
         if not (obs.get("technologies") or {}).get("automation"):
             return self._bootstrap_automation(obs)
+        startup = self.bootstrap_electric_mining(obs)
+        if startup is not None and not startup.get("evidence", {}).get("automatic_science_required"):
+            return startup
+        if startup is None:
+            capacity = self._ensure_startup_iron(obs)
+            if not _ready(capacity):
+                return capacity
         for item in self.graph.for_first_rocket()["bom"]["science_packs"]:
             production = (obs.get("production") or {}).get(item, {})
             if item not in self.state["flow_samples"]:
@@ -1195,6 +1335,8 @@ return {ok=true,speed=prototypes.entity.lab.get_researching_speed(),
             next_research = {"technology": "logistics", "kind": "research"}
         done = {name for name, researched in (obs.get("technologies") or {}).items() if researched}
         priorities = self.priority_research + self.state.get("capability_research", [])
+        if startup is not None:
+            priorities = ["electric-mining-drill", *priorities]
         if "electric-mining-drill" in self.catalog.technologies:
             priorities = priorities + ["electric-mining-drill"]
         for requested in priorities:

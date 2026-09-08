@@ -94,6 +94,30 @@ class SupervisorLifecycleTests(unittest.TestCase):
             self.assertEqual(result["cycles"], 1)
             self.assertEqual(persisted["reason"], "invalid_plan")
 
+    def test_explicit_resume_has_bounded_retry_window_without_fabricating_progress(self):
+        with TemporaryDirectory() as root:
+            previous, _, _ = self.run_sequence(root, [observation()], ["production"])
+            game = fake_game(root)
+            game.observe.side_effect = [observation(100100), observation(136001)]
+            supervisor = module.DeterministicSupervisor(game)
+            def prepare():
+                supervisor.catalog = fake_catalog()
+                supervisor.state = previous.state
+                return observation(100000)
+            def choose(obs, until):
+                supervisor.stage = "production"
+                return {"status": "waiting", "reason": "fixture work"}
+            with patch.object(supervisor, "prepare", side_effect=prepare), \
+                 patch.object(supervisor, "next_action", side_effect=choose), \
+                 patch("factorio_ai.deterministic_character.ensure_crafting_player", return_value={"status": "ready"}), \
+                 patch.object(module.time, "sleep"), patch.object(module.time, "monotonic", return_value=0):
+                result = supervisor.run(cycles=3, interval=0)
+            self.assertEqual(result["cycles"], 3)
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(result["reason"], "no objective progress for ten game minutes")
+            self.assertEqual(supervisor.state.tasks["objective"].last_progress_tick, 0)
+            self.assertEqual(result["evidence"]["attempt_started_tick"], 100000)
+
     def run_sequence(self, root, observations, stages, choices=None):
         game = fake_game(root)
         supervisor = module.DeterministicSupervisor(game)
@@ -255,6 +279,52 @@ class SupervisorLifecycleTests(unittest.TestCase):
             self.assertEqual(supervisor.next_action(observation(), "rocket")["type"], "research")
             supervisor.builder.ensure_power.assert_called_once()
             self.assertEqual(supervisor.stage, "production")
+
+    def startup_power(self, supervisor):
+        boiler = {"name": "boiler", "position": {"x": 0, "y": 0}, "direction": 0}
+        belt = {"name": "transport-belt", "position": {"x": 1.5, "y": .5}, "direction": 4}
+        supervisor.builder.state = {"power_verified_once": True,
+            "power_plan": {"ok": True, "entities": [boiler]}, "coal_plan": {"ok": True, "entities": [belt]}}
+        supervisor.builder.power_evidence.return_value = {"ok": True, "water": 1, "steam": 1,
+            "boiler_fuel": 1, "drill_fuel": 1, "coal_on_belts": 1, "connected_engines": 2}
+        return observation(technologies={"automation": True}, entities=[dict(boiler), dict(belt)])
+
+    def test_healthy_startup_research_precedes_elective_energy_construction(self):
+        with TemporaryDirectory() as root:
+            supervisor = self.production_supervisor(root)
+            obs = self.startup_power(supervisor)
+            bridge = {"type": "craft", "recipe": "automation-science-pack", "count": 5,
+                      "evidence": {"automatic_science_required": True}}
+            supervisor.factory.bootstrap_electric_mining.return_value = bridge
+            self.assertEqual(supervisor.next_action(obs, "rocket"), bridge)
+            supervisor.energy.next_action.assert_not_called()
+            supervisor.builder.ensure_power.assert_not_called()
+
+    def test_cold_startup_still_repairs_energy_before_research(self):
+        for problem in ("cold", "missing_belt", "reversed_belt", "failed_query"):
+            with self.subTest(problem=problem), TemporaryDirectory() as root:
+                supervisor = self.production_supervisor(root)
+                obs = self.startup_power(supervisor)
+                if problem == "cold": supervisor.builder.power_evidence.return_value["boiler_fuel"] = 0
+                elif problem == "missing_belt": obs["entities"].pop()
+                elif problem == "reversed_belt": obs["entities"][-1]["direction"] = 12
+                else: supervisor.builder.power_evidence.return_value = {"ok": False}
+                repair = {"type": "build", "name": "transport-belt"}
+                supervisor.energy.next_action.return_value = repair
+                self.assertEqual(supervisor.next_action(obs, "rocket"), repair)
+                supervisor.factory.bootstrap_electric_mining.assert_not_called()
+
+    def test_exhausted_science_bridge_yields_to_automatic_factory_work(self):
+        with TemporaryDirectory() as root:
+            supervisor = self.production_supervisor(root)
+            obs = self.startup_power(supervisor)
+            supervisor.factory.bootstrap_electric_mining.return_value = {"status": "waiting",
+                "evidence": {"automatic_science_required": True}}
+            supervisor.armaments.next_action.return_value = None
+            result = supervisor.next_action(obs, "rocket")
+            self.assertEqual(result["type"], "research")
+            supervisor.energy.next_action.assert_called_once()
+            supervisor.factory.next_action.assert_called_once()
 
     def test_initial_power_sample_does_not_start_expansion_before_verified_flow(self):
         with TemporaryDirectory() as root:

@@ -34,6 +34,7 @@ class DeterministicSupervisor:
         self.armaments: Any = None
         self.rocket: Any = None
         self.navigator: Any = None
+        self.attempt_started_tick: int | None = None
 
     def connect_character(self) -> dict[str, Any]:
         from .deterministic_character import ensure_crafting_player
@@ -119,6 +120,21 @@ class DeterministicSupervisor:
             return result
         if until == "bootstrap":
             return result
+        # A healthy starter can research faster mining before funding expansion
+        # for idle planned machines. Read current flow without issuing/discarding
+        # a repair or seed action; cold supplies still enter energy recovery below.
+        tech = observation.get("technologies", {})
+        if (until == "rocket" and self.factory is not None and self.builder.state.get("power_verified_once")
+                and tech.get("automation") and not tech.get("electric-mining-drill")
+                and self.builder.state.get("power_plan") and self.builder.state.get("coal_plan")):
+            from .deterministic_builder import plan_observed, power_flow_ready
+            current = self.builder.power_evidence(self.builder.state["power_plan"], self.builder.state["coal_plan"])
+            if (power_flow_ready(current) and all(plan_observed(observation, self.builder.state[key])
+                    for key in ("power_plan", "coal_plan"))):
+                bridge = self.factory.bootstrap_electric_mining(observation)
+                if bridge and (bridge.get("type") or not bridge.get("evidence", {}).get("automatic_science_required")):
+                    self.stage = "production"
+                    return bridge
         # Repair established coal supply before starter verification can wait on
         # it. A saved controller also survives a cold restart or rollback after
         # the builder invalidates its transient flow proof; it reobserves assets.
@@ -170,12 +186,14 @@ class DeterministicSupervisor:
             "technologies": sorted(observation.get("technologies", {})),
             "entities": observation.get("entities", []), "last_action": self.last_action,
             "crafting_client": self.client_status,
+            "attempt_started_tick": self.attempt_started_tick,
             "model_calls": 0, "server_address": f"127.0.0.1:{self.game.cfg.server_port}"})
 
     def run(self, *, cycles: int = 0, until: str = "rocket", interval: float = 0.5) -> dict[str, Any]:
         if cycles < 0 or until not in {"bootstrap", "power", "rocket"}:
             raise ValueError("invalid cycle limit or milestone")
         with RunLock(self.root / "owner.lock"):
+            self.attempt_started_tick = None
             clear_stop(self.root / "stop.json")
             observation: dict[str, Any] = {}
             last_save = last_print = time.monotonic()
@@ -183,6 +201,7 @@ class DeterministicSupervisor:
             iteration = 0
             try:
                 observation = self.prepare()
+                self.attempt_started_tick = int(observation["tick"])
                 while not cycles or iteration < cycles:
                     if stop_requested(self.root / "stop.json"):
                         result = TaskResult(TaskStatus.WAITING, "operator_stop_requested")
@@ -236,8 +255,14 @@ class DeterministicSupervisor:
                     overall_progress = {stage: task.progress_key for stage, task in self.state.tasks.items()
                                         if stage != "objective"}
                     self.state.record_task("objective", result, tick=observation["tick"], progress=overall_progress)
-                    if self.state.is_stalled("objective", tick=observation["tick"], max_stall_ticks=60*60*10):
-                        result = TaskResult(TaskStatus.BLOCKED, "no objective progress for ten game minutes")
+                    # An explicit resume gets one finite retry window after code
+                    # repairs. Keep the old gameplay-progress evidence unchanged.
+                    stall_limit = 60 * 60 * 10
+                    if (observation["tick"] - self.attempt_started_tick >= stall_limit
+                            and self.state.is_stalled("objective", tick=observation["tick"], max_stall_ticks=stall_limit)):
+                        result = TaskResult(TaskStatus.BLOCKED, "no objective progress for ten game minutes",
+                            {"attempt_started_tick": self.attempt_started_tick,
+                             "last_progress_tick": self.state.tasks["objective"].last_progress_tick})
                         break
                     if now-last_save >= 30:
                         self.game.save()
