@@ -44,6 +44,10 @@ class DeterministicFactory:
         self._power_observation: dict | None = None
         self._power_context: tuple | None = None
         self._power_grids: dict[tuple, dict] = {}
+        self._product_observation: dict | None = None
+        self._product_context: tuple | None = None
+        self._product_results: dict[tuple, dict] = {}
+        self._product_revision = 0
 
     def _sync(self, observation: dict) -> None:
         world = observation.get("world_id")
@@ -75,7 +79,12 @@ class DeterministicFactory:
             self._save()
 
     def _save(self) -> None:
+        self._invalidate_product_results()
         _atomic_json(self.path, self.state)
+
+    def _invalidate_product_results(self) -> None:
+        self._product_revision += 1
+        self._product_results.clear()
 
     def _reserved(self, *, exclude: str | None = None) -> list[dict]:
         entities = []
@@ -798,6 +807,28 @@ return {ok=true,obstacles=obstacles}
         self._sync(obs)
         if item in _stack:
             return _report("blocked", "production dependency cycle", item=item)
+        context = (obs.get("world_id"), obs.get("tick"), self._fingerprint,
+                   id(self.catalog), self.catalog.fingerprint, id(self.graph),
+                   id(self.builder), id(self.bootstrap), id(self.fluids))
+        if self._product_observation is not obs or self._product_context != context:
+            self._product_observation, self._product_context = obs, context
+            self._invalidate_product_results()
+        # Repeated recursive dependencies can share completed checks within one
+        # observation. A save can establish ownership or alter a reserved route,
+        # so neither that evaluation nor any earlier result remains reusable.
+        # Exact ancestor stacks also preserve dependency-cycle detection.
+        key = (item, rate_per_minute, _stack)
+        if key in self._product_results:
+            return deepcopy(self._product_results[key])
+        revision = self._product_revision
+        result = self._ensure_product(obs, item, _stack, rate_per_minute=rate_per_minute)
+        if _ready(result) and self._product_revision == revision:
+            self._product_results[key] = deepcopy(result)
+            return deepcopy(result)
+        return result
+
+    def _ensure_product(self, obs: dict, item: str, _stack: tuple[str, ...], *,
+                        rate_per_minute: float | None) -> dict:
         if item in {"iron-plate", "copper-plate", "coal", "stone"}:
             result = self._source_endpoint(obs, item)
             if _ready(result) and rate_per_minute is not None:
@@ -812,6 +843,9 @@ return {ok=true,obstacles=obstacles}
                 result["reason"] = "production recipe is locked and has no catalog research unlock"
             return result
         if any(row.get("type", "item") == "fluid" for row in recipe["ingredients"] + recipe["products"]):
+            # The fluid driver owns separate mutable state. Its success and all
+            # enclosing product evaluations must retain their original checks.
+            self._invalidate_product_results()
             if self.fluids is None:
                 return _report("blocked", "fluid production driver is required", item=item)
             return self.fluids.ensure_source(obs, item, rate_per_minute=rate_per_minute) if rate_per_minute is not None else self.fluids.ensure_source(obs, item)
