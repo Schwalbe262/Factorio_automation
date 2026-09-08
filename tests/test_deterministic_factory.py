@@ -362,6 +362,82 @@ class FactoryTests(unittest.TestCase):
         self.factory.ensure_power_connection.return_value = ready()
         self.assertEqual(self.factory._merge_output(self.obs, source, destination, "merge")["status"], "succeeded")
 
+    def upstream_merge_fixture(self):
+        source = port("iron-plate", -1.5, -1.5, facing=8)
+        destination = port("iron-plate", .5, .5)
+        tail = [{"name": "transport-belt", "position": {"x": x, "y": .5}, "direction": 4}
+                for x in (-1.5, -.5, .5)]
+        self.factory.state["blocks"]["source:iron-plate"] = {
+            "ok": True, "entities": tail, "ports": [destination]}
+        self.obs["entities"] = [deepcopy(tail[-1])]
+        def route(start, end, *args, **kwargs):
+            if end != tail[0]["position"]:
+                return {"ok": False, "reason": "no route within bounds"}
+            return {"ok": True, "segments": [
+                {"position": deepcopy(source["position"]), "direction": 8},
+                {"position": {"x": -1.5, "y": -.5}, "direction": 8},
+                {"position": deepcopy(end), "direction": 8}]}
+        self.factory._material_route = Mock(side_effect=route)
+        return source, destination, tail
+
+    def test_capacity_merge_builds_reserved_upstream_suffix_and_preserves_original_bus(self):
+        source, destination, tail = self.upstream_merge_fixture()
+        original = deepcopy(self.factory.state["blocks"])
+        result = self.factory._merge_output(self.obs, source, destination, "merge")
+        self.assertEqual(result["status"], "succeeded")
+        plan = self.factory.state["links"]["merge"]
+        self.assertEqual(plan["entities"][-3:], tail)
+        self.assertEqual(plan["consumer_port"], destination)
+        self.assertEqual(plan["upstream_tail"]["key"], "source:iron-plate")
+        self.assertEqual(self.factory.state["blocks"], original)
+        self.builder.can_place.assert_called_once_with(plan["entities"])
+        self.builder.ensure_plan.assert_called_once_with(self.obs, plan)
+
+    def test_capacity_merge_reuses_only_same_item_link_tails_ending_at_original_bus(self):
+        source, destination, tail = self.upstream_merge_fixture()
+        self.factory.state["blocks"] = {}
+        for name, origin, end in (("upstream", source, destination),
+                                 ("consumer", destination, port("iron-plate", 5.5)),
+                                 ("foreign", port("coal", -2.5), destination)):
+            self.factory.state["links"][name] = {"ok": True, "entities": deepcopy(tail),
+                "source_port": origin, "consumer_port": end}
+        # A foreign reservation on the same directed tiles must not be shared.
+        self.assertEqual(self.factory._upstream_output_tails(self.obs, destination), [])
+        del self.factory.state["links"]["foreign"]
+        candidates = self.factory._upstream_output_tails(self.obs, destination)
+        self.assertTrue(candidates)
+        self.assertEqual({candidate["key"] for candidate in candidates}, {"upstream"})
+
+    def test_capacity_merge_rejects_changed_live_bus_facing_or_foreign_contents(self):
+        source, destination, tail = self.upstream_merge_fixture()
+        for changed in ({"direction": 12}, {"belt_inventory": {"copper-plate": 1}}):
+            with self.subTest(changed=changed):
+                self.obs["entities"] = [{**deepcopy(tail[-1]), **changed}]
+                self.assertEqual(self.factory._upstream_output_tails(self.obs, destination), [])
+
+    def test_capacity_merge_rejects_disconnected_or_cyclic_reserved_tail(self):
+        source, destination, tail = self.upstream_merge_fixture()
+        self.factory.state["blocks"] = {}
+        self.factory.state["links"]["upstream"] = {"ok": True, "source_port": source,
+            "consumer_port": destination, "entities": deepcopy(tail)}
+        for direction in (0, 12):
+            self.factory.state["links"]["upstream"]["entities"][1]["direction"] = direction
+            self.assertEqual(self.factory._upstream_output_tails(self.obs, destination), [])
+
+    def test_capacity_merge_fails_closed_when_fresh_route_placement_is_obstructed(self):
+        source, destination, _ = self.upstream_merge_fixture()
+        self.builder.can_place.return_value = {"ok": False, "reason": "existing_direction_mismatch"}
+        result = self.factory._merge_output(self.obs, source, destination, "merge")
+        self.assertEqual(result["status"], "blocked")
+        self.assertNotIn("merge", self.factory.state["links"])
+        self.builder.ensure_plan.assert_not_called()
+
+    def test_capacity_merge_rejects_reserved_tail_facing_bus_head_on(self):
+        _, destination, tail = self.upstream_merge_fixture()
+        destination["facing"] = tail[-1]["direction"] = 12
+        self.obs["entities"] = [deepcopy(tail[-1])]
+        self.assertEqual(self.factory._upstream_output_tails(self.obs, destination), [])
+
     def laboratory_capacity_fixture(self, duration=600):
         self.automatic_sources()
         self.factory.graph.science_rate_per_minute = 30

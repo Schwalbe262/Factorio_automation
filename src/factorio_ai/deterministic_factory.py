@@ -862,6 +862,103 @@ return {ok=true,obstacles=obstacles}
                        recipe=recipe["name"], input_handcarry=False, machines_constructed=desired_count,
                        requested_rate_per_minute=rate_per_minute)
 
+    def _upstream_output_tails(self, obs: dict, bus_port: dict) -> list[dict]:
+        """Keep only owned same-item belt tails that reach the original bus.
+
+        Missing reserved belts remain paid construction dependencies. Observed
+        belts must retain their facing; consumer branches are never endpoints.
+        """
+        end = bus_port["position"]["x"], bus_port["position"]["y"]
+        candidates, seen_tails = [], set()
+        observed = {(e["position"]["x"], e["position"]["y"]): e
+                    for e in obs.get("entities", []) if e["name"] == "transport-belt"}
+        reserved = self._reserved()
+        foreign = [e for plan in self.state["links"].values()
+                   if any((plan.get(field) or {}).get("item") not in (None, bus_port["item"])
+                          for field in ("source_port", "consumer_port"))
+                   for e in plan.get("entities", [])]
+        foreign_footprint = self.builder._occupied_by_plan(foreign)
+        for category in ("blocks", "links"):
+            for key, plan in self.state[category].items():
+                if category == "blocks":
+                    if bus_port not in plan.get("ports", []):
+                        continue
+                elif (plan.get("consumer_port") != bus_port
+                      or (plan.get("source_port") or {}).get("item") != bus_port["item"]):
+                    continue
+                belts, contradictory = {}, False
+                for entity in plan.get("entities", []):
+                    if entity["name"] != "transport-belt":
+                        continue
+                    point = entity["position"]["x"], entity["position"]["y"]
+                    if point in belts and belts[point].get("direction") != entity.get("direction"):
+                        contradictory = True
+                        break
+                    belts[point] = entity
+                if contradictory:
+                    continue
+                for start, entity in belts.items():
+                    if start == end:
+                        continue
+                    point, visited, tail = start, set(), []
+                    while point in belts and point not in visited and len(tail) < 256:
+                        visited.add(point)
+                        belt = belts[point]
+                        delta = DIRECTIONS.get(belt.get("direction"))
+                        actual = observed.get(point)
+                        if (delta is None or (actual and (actual.get("direction") != belt["direction"]
+                                or any(item != bus_port["item"] and count > 0
+                                       for item, count in actual.get("belt_inventory", {}).items())))):
+                            break
+                        tail.append(belt)
+                        if point == end:
+                            if belt["direction"] != bus_port["facing"]:
+                                break
+                            signature = tuple((b["position"]["x"], b["position"]["y"], b["direction"]) for b in tail)
+                            if signature in seen_tails:
+                                break
+                            matching = set(signature)
+                            other = [e for e in reserved if (e["name"] != "transport-belt"
+                                or (e["position"]["x"], e["position"]["y"], e.get("direction")) not in matching)]
+                            if self.builder._occupied_by_plan(tail) & (self.builder._occupied_by_plan(other) | foreign_footprint):
+                                break
+                            seen_tails.add(signature)
+                            candidates.append({"entities": deepcopy(tail), "category": category, "key": key,
+                                "port": {**bus_port, "position": deepcopy(entity["position"]), "facing": entity["direction"]}})
+                            break
+                        following = point[0] + delta[0], point[1] + delta[1]
+                        if following in belts and belts[following].get("direction") == (belt["direction"] + 8) % 16:
+                            break
+                        point = following
+        return candidates
+
+    def _route_upstream_output(self, obs: dict, source_port: dict, bus_port: dict) -> dict:
+        tails = self._upstream_output_tails(obs, bus_port)
+        tails.sort(key=lambda tail: (_distance(source_port["position"], tail["port"]["position"])
+                                    + len(tail["entities"]), len(tail["entities"]), tail["key"]))
+        # Bound recovery work even when a large factory has many old outputs.
+        tails = tails[:16]
+        reserved = self._reserved()
+        for allow_bridge in (False, True):
+            for tail in tails:
+                destination = tail["port"]
+                dx, dy = DIRECTIONS[destination["facing"]]
+                front = {"name": "port-clearance", "position": {"x": destination["position"]["x"] + dx,
+                                                                "y": destination["position"]["y"] + dy}}
+                route = self._material_route(source_port["position"], destination["position"], reserved + [front],
+                    allow_bridge=allow_bridge, start_direction=source_port.get("facing"))
+                if not route.get("ok"):
+                    continue
+                # The copied suffix provides every missing construction step;
+                # a current placement check rejects changed entities/terrain.
+                segments = route["segments"][:-1] + tail["entities"]
+                entities = [{"name": "transport-belt", **segment} for segment in segments]
+                if not self.builder.can_place(entities).get("ok"):
+                    continue
+                return {**route, "segments": entities, "upstream_tail": {
+                    "category": tail["category"], "key": tail["key"], "entry_port": destination}}
+        return {"ok": False, "reason": "no reachable owned upstream output tail"}
+
     def _merge_output(self, obs: dict, source_port: dict, bus_port: dict, key: str) -> dict:
         """Join same-item capacity outputs while retaining the existing bus facing."""
         if source_port.get("item") != bus_port.get("item"):
@@ -872,12 +969,16 @@ return {ok=true,obstacles=obstacles}
                                                                          "y": bus_port["position"]["y"] + dy}}
             route = self._material_route(source_port["position"], bus_port["position"], self._reserved() + [forbidden_front],
                                          start_direction=source_port.get("facing"))
+            if not route.get("ok") and route.get("reason") in {"no route within bounds", "route search budget exhausted"}:
+                route = self._route_upstream_output(obs, source_port, bus_port)
             if not route.get("ok"):
                 return _report("blocked", "capacity output cannot reach its material bus", link=key, query_error=route.get("reason"))
             segments = route["segments"]
             segments[-1]["direction"] = bus_port["facing"]
             self.state["links"][key] = _plan([{"name": "transport-belt", **segment} for segment in segments],
                                               source_port=source_port, consumer_port=bus_port)
+            if route.get("upstream_tail"):
+                self.state["links"][key]["upstream_tail"] = route["upstream_tail"]
             self._save()
         plan = self.state["links"][key]
         result = self.builder.ensure_plan(obs, plan)
