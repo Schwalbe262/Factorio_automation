@@ -115,6 +115,7 @@ class Armaments:
 
     def _intake_geometry(self, turret: dict) -> Iterator[dict]:
         from .deterministic_intake_order import reusable_poles
+        from .deterministic_intake_receiver import receiver_identity
         center = turret["position"]
         key = "armaments:" + self._key(turret)
         reserved = self.factory._reserved(exclude=key)
@@ -148,9 +149,8 @@ class Armaments:
                     entities = [*equipment, pole]
                     if self.builder._occupied_by_plan(entities) & obstacles:
                         continue
-                    plan = {"ok": True, "entities": [
-                        {"name": "gun-turret", "position": center, "direction": turret.get("direction", 0), "_width": 2, "_height": 2},
-                        *entities], "ports": [{"kind": "item", "item": "firearm-magazine", "direction": "input",
+                    plan = {"ok": True, "entities": entities, "existing_receiver": receiver_identity(self, turret),
+                            "ports": [{"kind": "item", "item": "firearm-magazine", "direction": "input",
                                                 "position": belts[-1]["position"], "facing": (outward + 8) % 16}]}
                     yield plan
 
@@ -204,15 +204,23 @@ class Armaments:
             return _report("blocked", "ammunition intake world or turret identity changed")
         previous = row.get("plan")
         existing = self.factory.state.get("blocks", {}).get(key)
+        from .deterministic_intake_receiver import receiver_identity, support_entities, verify_receiver
+        proof_plan = previous or existing
+        support_only = proof_plan is not None and not any(e["name"] == "gun-turret" for e in proof_plan["entities"])
+        if ((previous is None or support_only or "existing_receiver" in (proof_plan or {}))
+                and not verify_receiver(self, obs, turret, proof_plan if support_only or "existing_receiver" in (proof_plan or {}) else None)):
+            return _report("blocked", "existing ammunition receiver identity or intake geometry changed")
         if (previous is None and existing is not None and existing.get("key") == key
                 and key not in self.factory.state.get("links", {}) and not self._intake_hardware_present(obs, existing)):
             # Recover a crash after register_plan saved, before the armaments
             # record saved. Turret aim can rotate without changing the intake;
             # compare a copy while preserving every other field and saved plan.
-            entities = [{**e, "direction": turret.get("direction", 0)} if e["name"] == "gun-turret" else e
-                        for e in existing["entities"]]
+            entities = support_entities(existing, turret)
             for candidate in islice(self._intake_candidates(turret), MAX_INTAKE_CANDIDATES):
-                if candidate.get("entities") == entities and candidate.get("ports") == existing.get("ports"):
+                if (candidate.get("entities") == entities and candidate.get("ports") == existing.get("ports")
+                        and candidate.get("existing_receiver") == receiver_identity(self, turret)
+                        and (existing.get("existing_receiver") == receiver_identity(self, turret)
+                             or any(e["name"] == "gun-turret" for e in existing["entities"]))):
                     previous = row["plan"] = existing
                     self._save()
                     break

@@ -19,7 +19,7 @@ class ArmamentsTests(unittest.TestCase):
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=Path(self.temp.name)), backend="assisted",
-                                    query=Mock(return_value={"ok": True, "blocked": []}))
+                                    query=Mock(return_value={"ok": True, "blocked": [], "receiver_verified": True, "tick": 100}))
         recipe = {"name": "firearm-magazine", "ingredients": [{"name": "iron-plate", "amount": 4}],
                   "products": [{"name": "firearm-magazine", "amount": 1}]}
         self.catalog = SimpleNamespace(fingerprint="prototype-a", entities={}, technologies={}, recipes={"firearm-magazine": recipe},
@@ -90,9 +90,12 @@ class ArmamentsTests(unittest.TestCase):
         self.assertEqual(result["type"], "build")
         self.factory.ensure_product.assert_called_once_with(self.obs, "iron-plate", rate_per_minute=76)
 
-    def test_intake_plan_uses_normal_entities_and_reserves_turret_and_belt_port(self):
+    def test_intake_plan_reserves_support_hardware_and_tracks_existing_receiver(self):
         candidate = next(self.armaments._intake_candidates(self.turret))
-        self.assertEqual({e["name"] for e in candidate["entities"]}, {"gun-turret", "inserter", "transport-belt", "small-electric-pole"})
+        self.assertEqual({e["name"] for e in candidate["entities"]}, {"inserter", "transport-belt", "small-electric-pole"})
+        self.assertEqual(len(candidate["entities"]), 4)
+        self.assertEqual(candidate["existing_receiver"], {"name": "gun-turret", "position": {"x": 0, "y": 0},
+                         "unit_number": 5, "world_id": "one", "catalog_fingerprint": "prototype-a"})
         port = candidate["ports"][0]
         self.assertEqual((port["item"], port["direction"]), ("firearm-magazine", "input"))
         arm = next(e for e in candidate["entities"] if e["name"] == "inserter")

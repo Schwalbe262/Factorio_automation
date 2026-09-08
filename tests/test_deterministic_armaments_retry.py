@@ -227,7 +227,11 @@ class ArmamentsRetryTests(unittest.TestCase):
         self.assert_seed_identity_preserved()
 
     def test_real_generator_adopts_rotated_turret_orphan_without_rewriting_saved_geometry(self):
-        orphan = self.factory.register_plan(self.key, self.first, self.obs)
+        legacy = deepcopy(self.first)
+        legacy.pop("existing_receiver")
+        legacy["entities"].insert(0, {"name": "gun-turret", "position": deepcopy(self.turret["position"]),
+                                      "direction": 0, "_width": 2, "_height": 2})
+        orphan = self.factory.register_plan(self.key, legacy, self.obs)
         self.turret["direction"] = 12
         self.reload()
         def connect(obs, source, consumer, key):
@@ -251,14 +255,13 @@ class ArmamentsRetryTests(unittest.TestCase):
         for mismatch in ("transport-belt", "inserter", "port", "turret-position", "world", "unit"):
             with self.subTest(mismatch=mismatch):
                 candidate = deepcopy(self.first)
-                candidate["entities"][0]["direction"] = 12
                 if mismatch in ("transport-belt", "inserter"):
                     entity = next(e for e in candidate["entities"] if e["name"] == mismatch)
                     entity["direction"] = (entity["direction"] + 4) % 16
                 elif mismatch == "port":
                     candidate["ports"][0]["facing"] = (candidate["ports"][0]["facing"] + 4) % 16
                 elif mismatch == "turret-position":
-                    candidate["entities"][0]["position"]["x"] += 1
+                    candidate["existing_receiver"]["position"]["x"] += 1
                 elif mismatch == "world":
                     self.obs["world_id"] = "other-world"
                 else:
