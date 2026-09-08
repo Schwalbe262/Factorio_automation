@@ -25,7 +25,7 @@ class FactoryTests(unittest.TestCase):
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=Path(self.temp.name)),
-                                    query=Mock(return_value={"ok": True, "covered": 0, "blocked": []}))
+                                    query=Mock(return_value={"ok": True, "covered": 0, "blocked": [], "clear": list(range(1, 25))}))
         self.bootstrap = Mock()
         self.catalog = SimpleNamespace(fingerprint="catalog-a", recipes={}, entities={}, technologies={
             "automation": {"name": "automation", "ingredients": [{"name": "automation-science-pack", "amount": 1}],
@@ -660,7 +660,7 @@ class FactoryTests(unittest.TestCase):
         self.automatic_sources()
         self.factory.graph.science_rate_per_minute = 30
         self.game.query.side_effect = lambda body: ({"ok": True, "speed": 1, "bonus": 0, "drain": 100}
-            if "get_researching_speed" in body else {"ok": True, "covered": 0})
+            if "get_researching_speed" in body else {"ok": True, "covered": 0, "clear": list(range(1, 25))})
         return {"unit_energy": duration, "ingredients": [{"name": "automation-science-pack", "amount": 1}]}
 
     def test_laboratory_capacity_uses_ticks_and_supplies_every_added_lab(self):

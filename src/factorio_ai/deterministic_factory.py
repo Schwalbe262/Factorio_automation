@@ -156,7 +156,10 @@ class DeterministicFactory:
         if reference is None:
             producers = [e for e in obs.get("entities", []) if e.get("name") == "stone-furnace"]
             reference = producers[0]["position"] if producers else obs.get("position", {"x": 0, "y": 0})
-        occupied = self.builder._occupied_by_plan(self._reserved()) | self._port_clearances()
+        from .deterministic_layout import production_plan, reserved_aisles, reserve_production_site
+        occupied = self.builder._occupied_by_plan(self._reserved()) | self._port_clearances() | reserved_aisles(self)
+        if production_plan(self, plan_at_origin):
+            return reserve_production_site(self, plan_at_origin, key, reference, occupied)
         offsets = [(x, y) for radius in (8, 16, 24, 32, 48, 64)
                    for x in range(-radius, radius + 1, 8) for y in range(-radius, radius + 1, 8)
                    if max(abs(x), abs(y)) == radius]
