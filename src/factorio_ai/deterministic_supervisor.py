@@ -265,6 +265,9 @@ class DeterministicSupervisor:
                         result = TaskResult(TaskStatus.FAILED, observation.get("reason", "observation_failed"))
                         break
                     self.state.reconcile(observation["world_id"], self.catalog.fingerprint, observation["tick"])
+                    # A resumed planner may spend time routing before its first
+                    # action. Replace the previous run's terminal display now.
+                    self.write_status(observation, TaskResult(TaskStatus.RUNNING, "planning_next_action"), iteration)
                     pending = self.navigator.pending_action() if self.navigator is not None else None
                     choice = pending or self.next_action(observation, until)
                     if "type" in choice:
