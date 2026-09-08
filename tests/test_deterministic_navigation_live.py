@@ -4,6 +4,7 @@ Set FACTORIO_CHARACTER_INPUT_LIVE_TEST=1 with character-navigation-qa running.
 The Lua objects are local mocks; these tests do not move or modify world entities.
 """
 
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +23,76 @@ class CharacterInputLuaTests(unittest.TestCase):
         cls.game = DeterministicGame(run_config(
             runtime=Path("runtime/deterministic/character-navigation-qa"),
             server_port=34216, rcon_port=27031), backend="character")
+
+    def build_navigator(self, actor, *, build_distance=10, existing=False, reachable=False):
+        """Execute navigation Lua with local actors and mocked mutations only."""
+        def query(body):
+            fixture = '''
+local d={};local f={}
+local a={position=helpers.json_to_table(''' + json.dumps(json.dumps(actor)) + '''),
+ build_distance=''' + str(build_distance) + ''',can_reach_entity=function() return ''' + str(reachable).lower() + ''' end}
+a.bounding_box={left_top={x=a.position.x-.2,y=a.position.y-.2},
+ right_bottom={x=a.position.x+.2,y=a.position.y+.2}}
+local function target() return ''' + ('{type="mining-drill"}' if existing else 'nil') + ''' end
+local s={can_place_entity=function(spec)
+ return spec.name=="character" or math.abs(a.position.x)>2 or math.abs(a.position.y)>2
+end}
+'''
+            return self.game.query(fixture + body)
+
+        game = SimpleNamespace(backend="character", query=query,
+                               act=Mock(return_value={"ok": True, "status": "succeeded"}))
+        navigator = CharacterNavigator(game)
+        navigator.pending_action = Mock(return_value=None)
+        navigator._input = Mock(return_value={"ok": True, "status": "running"})
+        return navigator, game
+
+    def test_new_build_uses_actual_reach_including_shorter_than_four_tiles(self):
+        for distance, reach, allowed in ((6, 10, True), (10, 10, True), (10.1, 10, False), (3, 2, False)):
+            with self.subTest(distance=distance, reach=reach):
+                navigator, game = self.build_navigator({"x": distance, "y": 0}, build_distance=reach)
+                action = {"type": "build", "name": "electric-mining-drill", "position": {"x": 0, "y": 0}}
+                navigator.execute(action, {})
+                if allowed:
+                    game.act.assert_called_once_with(action)
+                    navigator._input.assert_not_called()
+                else:
+                    game.act.assert_not_called()
+                    navigator._input.assert_called_once_with({"type": "move", "position": action["position"]})
+
+    def test_footprint_escape_then_belt_drift_does_not_approach_build_center_again(self):
+        actor = {"x": 0, "y": 0}
+        navigator, game = self.build_navigator(actor)
+        action = {"type": "build", "name": "electric-mining-drill", "position": {"x": 0, "y": 0}}
+        navigator.execute(action, {})
+        game.act.assert_not_called()
+        escape = navigator._input.call_args.args[0]
+        self.assertEqual(escape["type"], "move")
+        self.assertGreater(escape["position"]["x"], 2)
+        # Belts can displace the stopped actor before the next observation.
+        actor["x"] = 6.173
+        navigator._input.reset_mock()
+        navigator.execute(action, {})
+        navigator._input.assert_not_called()
+        game.act.assert_called_once_with(action)
+
+    def test_actual_build_reach_does_not_relax_existing_entity_interactions(self):
+        for kind in ("build", "take", "insert", "mine", "recipe"):
+            with self.subTest(kind=kind):
+                navigator, game = self.build_navigator({"x": 6, "y": 0}, existing=True, reachable=False)
+                action = {"type": kind, "name": "electric-mining-drill", "position": {"x": 0, "y": 0}}
+                navigator.execute(action, {})
+                game.act.assert_not_called()
+                navigator._input.assert_called_once_with({"type": "move", "position": action["position"]})
+
+    def test_actual_build_reach_does_not_relax_absent_nonbuild_targets(self):
+        for kind in ("take", "insert", "mine", "recipe"):
+            with self.subTest(kind=kind):
+                navigator, game = self.build_navigator({"x": 6, "y": 0})
+                action = {"type": kind, "name": "electric-mining-drill", "position": {"x": 0, "y": 0}}
+                navigator.execute(action, {})
+                game.act.assert_not_called()
+                navigator._input.assert_called_once_with({"type": "move", "position": action["position"]})
 
     def test_ground_pickup_walks_inside_pickup_radius_even_when_entity_is_reachable(self):
         for distance in (2.0, 1.0):

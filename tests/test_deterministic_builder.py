@@ -207,11 +207,23 @@ class BuilderTests(unittest.TestCase):
                 result = self.builder.ensure_plan(self.obs, {"ok": True, "entities": [entity]})
                 self.assertEqual(result["status"], "blocked")
 
-    def test_character_mode_moves_before_out_of_reach_construction(self):
+    def test_character_build_defers_live_reach_to_navigator(self):
         self.game.backend = "character"
         self.obs["inventory"] = {"pipe": 1}
-        plan = {"ok": True, "entities": [{"name": "pipe", "position": {"x": 50.5, "y": .5}}]}
-        self.assertEqual(self.builder.ensure_plan(self.obs, plan)["type"], "move")
+        for distance in (6.5, 50.5):
+            with self.subTest(distance=distance):
+                entity = {"name": "pipe", "position": {"x": distance, "y": .5}}
+                result = self.builder.ensure_plan(self.obs, {"ok": True, "entities": [entity]})
+                self.assertEqual((result["type"], result["position"]), ("build", entity["position"]))
+
+    def test_character_recipe_keeps_existing_entity_approach(self):
+        self.game.backend = "character"
+        entity = {"name": "assembling-machine-1", "position": {"x": 6.5, "y": .5},
+                  "recipe": "iron-gear-wheel"}
+        self.obs["entities"] = [{**entity, "recipe": None}]
+        self.obs["enabled_recipes"] = {"iron-gear-wheel": True}
+        result = self.builder.ensure_plan(self.obs, {"ok": True, "entities": [entity]})
+        self.assertEqual((result["type"], result["position"]), ("move", entity["position"]))
 
     def test_only_own_character_obstruction_delegates_to_navigator_sidestep(self):
         self.game.backend = "character"

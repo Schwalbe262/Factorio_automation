@@ -185,9 +185,9 @@ return {ok=true,only_actor=own_actor and not other and terrain}
                 if recovery is not None:
                     return recovery
                 return _report("blocked", "reserved block placement is obstructed", blockers=placement.get("blocked"), entity=entity)
-            move = self._move(observation, entity["position"])
-            if move:
-                return move
+            # New character builds use the navigator's live build reach. A
+            # fixed approach radius can send an actor back into the footprint
+            # after belts carry it away from the chosen standing position.
             if self.game.backend == "assisted" and entity["name"] in BUILD_BATCH_NAMES:
                 batch = self._affordable_builds(observation, entities[index:])
                 if len(batch) > 1:
