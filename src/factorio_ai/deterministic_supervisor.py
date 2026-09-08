@@ -163,6 +163,10 @@ class DeterministicSupervisor:
         self.stage = "production"
         self.prepare_production()
         self.factory.priority_research = self.defense.requirements(observation).get("research", [])
+        from .deterministic_ready_research import ready_research
+        research = ready_research(self.factory, observation)
+        if research is not None:
+            return research
         armaments = self.armaments.next_action(observation)
         if armaments and (armaments.get("type") or armaments.get("status") in {"blocked", "failed"}):
             self.stage = "armaments"
