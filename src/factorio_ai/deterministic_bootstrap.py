@@ -108,6 +108,98 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
             self._recipes[item] = recipe
         return recipe
 
+    def _handcraft_collection_targets(self, observation: dict[str, Any], item: str,
+                                     count: int) -> dict[str, int] | None:
+        """Reserve shared inventory for one batch before collecting its raw inputs.
+
+        Unsupported recipe trees decline this optimization. The ordinary recipe
+        path remains authoritative, including machine-only ingredient handling.
+        """
+        initial = dict(observation.get("inventory") or {})
+        stock = dict(initial)
+        deficits: dict[str, int] = {}
+        leaf_order: list[str] = []
+        output_reserved: dict[str, int] = {}
+        enabled = observation.get("enabled_recipes") or {}
+        visits = 0
+
+        def require(name: str, amount: int, path: tuple[str, ...]) -> bool:
+            nonlocal visits
+            raw = name in {"iron-plate", "copper-plate", "coal", "stone", "wood"}
+            if raw and name not in leaf_order:
+                leaf_order.append(name)
+            held = min(int(stock.get(name, 0)), amount)
+            stock[name] = int(stock.get(name, 0)) - held
+            amount -= held
+            if amount <= 0:
+                return True
+            if raw:
+                deficits[name] = deficits.get(name, 0) + amount
+                return True
+            reserved = output_reserved.get(name, 0)
+            produced = self._take_output(observation, name, amount + reserved)
+            available = max(0, int(produced["count"]) - reserved) if produced else 0
+            if available:
+                available = min(available, amount)
+                output_reserved[name] = reserved + available
+                deficits[name] = deficits.get(name, 0) + available
+                if name not in leaf_order:
+                    leaf_order.append(name)
+                amount -= available
+                if amount <= 0:
+                    return True
+            visits += 1
+            if name in path or len(path) >= 32 or visits > 128 or name in {"iron-ore", "copper-ore"}:
+                return False
+            recipe = self._recipe(name)
+            if (not recipe.get("ok") or not recipe.get("handcraftable")
+                    or not enabled.get(recipe["name"])):
+                return False
+            products = recipe.get("products", [])
+            ingredients = recipe.get("ingredients", [])
+            for row in products + ingredients:
+                quantity = float(row.get("amount") or 0)
+                if (row.get("type", "item") != "item" or not math.isfinite(quantity)
+                        or quantity <= 0 or row.get("probability", 1) not in {None, 1}):
+                    return False
+            if any(not float(row["amount"]).is_integer() for row in products):
+                return False
+            output = sum(float(row["amount"]) for row in products if row["name"] == name)
+            if output <= 0:
+                return False
+            runs = math.ceil(amount / output)
+            for ingredient in ingredients:
+                if not require(ingredient["name"], math.ceil(float(ingredient["amount"]) * runs), (*path, name)):
+                    return False
+            for product in products:
+                stock[product["name"]] = stock.get(product["name"], 0) + int(float(product["amount"]) * runs)
+            stock[name] -= amount
+            return True
+
+        if not require(item, count, ()):
+            return None
+        return {name: int(initial.get(name, 0)) + deficits[name] for name in leaf_order if name in deficits}
+
+    def _collect_handcraft_batch(self, observation: dict[str, Any], item: str,
+                                count: int) -> dict[str, Any] | None:
+        targets = self._handcraft_collection_targets(observation, item, count)
+        for material, required in (targets or {}).items():
+            missing = required - self._count(observation, material)
+            if missing <= 0:
+                continue
+            collect = self._take_output(observation, material, missing)
+            if collect is not None:
+                return collect
+            if material in {"coal", "stone"}:
+                cells = self._existing_cells(material)
+                if not cells.get("ok"):
+                    return _report("blocked", "cannot verify automated raw-material supply", item=material,
+                                   query_error=cells.get("reason"))
+                if cells.get("cells"):
+                    return _report("waiting", f"waiting for automated {material} output")
+            return self.ensure_item(observation, material, required, (item,))
+        return None
+
     def ensure_item(self, observation: dict[str, Any], item: str, count: int,
                     _stack: tuple[str, ...] = ()) -> dict[str, Any]:
         """Return one material-acquisition/crafting action, or an explicit report."""
@@ -141,6 +233,10 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
         if output <= 0:
             return _report("blocked", "recipe has no deterministic item output", item=item)
         runs = math.ceil((count - have) / output)
+        if not _stack and getattr(self.game, "backend", None) == "character":
+            collect = self._collect_handcraft_batch(observation, item, count)
+            if collect is not None:
+                return collect
         for ingredient in recipe["ingredients"]:
             if ingredient.get("type", "item") != "item":
                 return _report("blocked", "handcraft recipe requires fluid", item=item)
@@ -278,6 +374,21 @@ return {ok=true,cells=cells}
                         "receiver": {"name": receiver_name, "position": receiver}}
         return self.game.query('''
 local resource=''' + json.dumps(resource) + ''';local receiver_name=''' + json.dumps(receiver_name) + '''
+local strict=''' + ("true" if getattr(self.game, "backend", None) == "character" else "false") + '''
+local function can_plan(name,p)
+ local spec={name=name,position=p,direction=0,force=f}
+ if s.can_place_entity(spec) then return true end
+ if not strict then return false end
+ local b=prototypes.entity[name].collision_box
+ local area={{p.x+b.left_top.x,p.y+b.left_top.y},{p.x+b.right_bottom.x,p.y+b.right_bottom.y}}
+ local own_actor=false
+ for _,e in pairs(s.find_entities_filtered{area=area}) do
+  if e==a then own_actor=true elseif e.type~="resource" then return false end
+ end
+ if not own_actor then return false end
+ spec.build_check_type=defines.build_check_type.script;spec.forced=false
+ return s.can_place_entity(spec)
+end
 local seen={};local best=nil;local best_score=-math.huge
 for _,ore in pairs(s.find_entities_filtered{position={0,0},radius=384,name=resource}) do
  local x=math.floor(ore.position.x+0.5);local y=math.floor(ore.position.y+0.5)
@@ -287,8 +398,8 @@ for _,ore in pairs(s.find_entities_filtered{position={0,0},radius=384,name=resou
   local p={x=x,y=y};local receiver={x=x,y=y-2}
   if receiver_name=="wooden-chest" then receiver={x=x-0.5,y=y-1.5} end
   local old_receiver=target(receiver,receiver_name)
-  if s.can_place_entity{name="burner-mining-drill",position=p,direction=0,force=f}
-   and (old_receiver or s.can_place_entity{name=receiver_name,position=receiver,direction=0,force=f}) then
+  if can_plan("burner-mining-drill",p)
+   and (old_receiver or can_plan(receiver_name,receiver)) then
    local richness=0;local tiles=0;local mixed=false
    for _,r in pairs(s.find_entities_filtered{area={{x-1,y-1},{x+1,y+1}},type="resource"}) do
     if r.name==resource then richness=richness+r.amount;tiles=tiles+1 else mixed=true end

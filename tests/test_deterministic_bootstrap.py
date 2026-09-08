@@ -166,5 +166,131 @@ class DeterministicBootstrapTests(unittest.TestCase):
         self.assertEqual(obs, before)
 
 
+class StrictHandcraftBatchTests(unittest.TestCase):
+    def setUp(self):
+        self.game = Mock(backend="character")
+        self.driver = DeterministicBootstrap(self.game)
+        self.driver._recipes = {
+            "inserter": recipe("inserter", {"iron-gear-wheel": 1, "electronic-circuit": 1, "iron-plate": 1}),
+            "iron-gear-wheel": recipe("iron-gear-wheel", {"iron-plate": 2}),
+            "electronic-circuit": recipe("electronic-circuit", {"copper-cable": 3, "iron-plate": 1}),
+            "copper-cable": recipe("copper-cable", {"copper-plate": 1}, output=2),
+            "transport-belt": recipe("transport-belt", {"iron-gear-wheel": 1, "iron-plate": 1}, output=2),
+        }
+
+    def obs(self, **fields):
+        fields.setdefault("enabled_recipes", {name: True for name in self.driver._recipes})
+        return observation(**fields)
+
+    def test_shared_iron_and_cable_batches_are_reserved_once(self):
+        targets = self.driver._handcraft_collection_targets(self.obs(), "inserter", 2)
+        self.assertEqual(targets, {"iron-plate": 8, "copper-plate": 3})
+
+    def test_existing_intermediates_and_raw_inventory_are_not_double_counted(self):
+        obs = self.obs(inventory={"iron-gear-wheel": 1, "electronic-circuit": 1,
+                                  "copper-cable": 1, "iron-plate": 2})
+        original = deepcopy(obs)
+        self.assertEqual(self.driver._handcraft_collection_targets(obs, "inserter", 2),
+                         {"iron-plate": 5, "copper-plate": 1})
+        self.assertEqual(obs, original)
+
+    def test_odd_target_respects_real_multiyield_batches_and_current_target_stock(self):
+        self.assertEqual(self.driver._handcraft_collection_targets(
+            self.obs(inventory={"transport-belt": 1}), "transport-belt", 4), {"iron-plate": 6})
+        self.assertEqual(self.driver._handcraft_collection_targets(
+            self.obs(inventory={"transport-belt": 4}), "transport-belt", 4), {})
+
+    def test_collects_shared_plate_requirement_in_one_bounded_visit(self):
+        obs = self.obs(inventory={"iron-plate": 2}, entities=[entity("stone-furnace", {"iron-plate": 100})])
+        action = self.driver.ensure_item(obs, "inserter", 2)
+        self.assertEqual((action["type"], action["item"], action["count"]), ("take", "iron-plate", 6))
+
+    def test_partial_output_and_fifty_item_transfer_cap_preserve_remaining_deficit(self):
+        for have, available, expected in [(0, 5, 5), (5, 100, 3)]:
+            with self.subTest(have=have):
+                obs = self.obs(inventory={"iron-plate": have}, entities=[entity("stone-furnace", {"iron-plate": available})])
+                self.assertEqual(self.driver.ensure_item(obs, "inserter", 2)["count"], expected)
+        for have, expected in [(20, 50), (70, 10)]:
+            obs = self.obs(inventory={"iron-plate": have}, entities=[entity("stone-furnace", {"iron-plate": 200})])
+            self.assertEqual(self.driver.ensure_item(obs, "inserter", 20)["count"], expected)
+
+    def test_fully_stocked_batch_keeps_existing_intermediate_engine_crafting(self):
+        action = self.driver.ensure_item(self.obs(inventory={"iron-plate": 8, "copper-plate": 3}), "inserter", 2)
+        self.assertEqual((action["type"], action["recipe"], action["count"]), ("craft", "iron-gear-wheel", 2))
+
+    def test_existing_produced_intermediates_are_collected_before_unneeded_raw_inputs(self):
+        obs = self.obs(entities=[entity("wooden-chest", {"iron-gear-wheel": 2})])
+        self.assertEqual(self.driver._handcraft_collection_targets(obs, "inserter", 2),
+                         {"iron-gear-wheel": 2, "copper-plate": 3, "iron-plate": 4})
+        action = self.driver.ensure_item(obs, "inserter", 2)
+        self.assertEqual((action["type"], action["item"], action["count"]), ("take", "iron-gear-wheel", 2))
+
+    def test_external_intermediate_stock_is_not_reserved_twice_across_branches(self):
+        self.driver._recipes["electronic-circuit"] = recipe("electronic-circuit", {"iron-gear-wheel": 1, "copper-plate": 1})
+        obs = self.obs(entities=[entity("wooden-chest", {"iron-gear-wheel": 2})])
+        self.assertEqual(self.driver._handcraft_collection_targets(obs, "inserter", 2),
+                         {"iron-gear-wheel": 2, "iron-plate": 6, "copper-plate": 2})
+
+    def test_locked_descendant_declines_before_any_speculative_collection(self):
+        obs = self.obs(enabled_recipes={"inserter": True, "iron-gear-wheel": True})
+        with patch.object(self.driver, "_take_output", return_value=None):
+            self.assertIsNone(self.driver._collect_handcraft_batch(obs, "inserter", 2))
+        self.game.act.assert_not_called()
+
+    def test_unsupported_trees_decline_without_new_recipe_or_mining_actions(self):
+        original = deepcopy(self.driver._recipes)
+        for case in ("cycle", "fluid", "stochastic", "machine", "ore", "fractional_output"):
+            with self.subTest(case=case):
+                self.driver._recipes = deepcopy(original)
+                gear = self.driver._recipes["iron-gear-wheel"]
+                if case == "cycle":
+                    gear["ingredients"] = [{"name": "inserter", "type": "item", "amount": 1}]
+                elif case == "fluid":
+                    gear["ingredients"][0]["type"] = "fluid"
+                elif case == "stochastic":
+                    gear["products"][0]["probability"] = .5
+                elif case == "machine":
+                    gear["handcraftable"] = False
+                elif case == "fractional_output":
+                    gear["products"][0]["amount"] = .5
+                else:
+                    gear["ingredients"][0]["name"] = "iron-ore"
+                self.assertIsNone(self.driver._handcraft_collection_targets(self.obs(), "inserter", 2))
+        self.game.act.assert_not_called()
+
+    def test_assisted_and_nested_requests_keep_original_ingredient_acquisition(self):
+        obs = self.obs(entities=[entity("stone-furnace", {"iron-plate": 100})])
+        self.game.backend = "assisted"
+        self.assertEqual(self.driver.ensure_item(obs, "inserter", 2)["count"], 4)
+        self.game.backend = "character"
+        self.assertEqual(self.driver.ensure_item(obs, "inserter", 2, ("other-target",))["count"], 4)
+
+    def test_busy_engine_queue_never_prefetches_consumed_materials(self):
+        obs = self.obs(crafting_queue=[{"recipe": "inserter", "count": 2}])
+        with patch.object(self.driver, "_collect_handcraft_batch") as collect:
+            self.assertEqual(self.driver.ensure_item(obs, "inserter", 2)["status"], "waiting")
+        collect.assert_not_called()
+
+    def test_established_raw_cells_never_enable_new_manual_collection(self):
+        for material in ("stone", "coal"):
+            with self.subTest(material=material):
+                self.driver._recipes["fixture"] = recipe("fixture", {material: 10})
+                self.game.query.return_value = {"ok": True, "cells": [{"fuel": 0, "burning": False}]}
+                with patch.object(self.driver, "_raw_material") as manual:
+                    result = self.driver.ensure_item(self.obs(), "fixture", 2)
+                self.assertEqual(result["status"], "waiting")
+                manual.assert_not_called()
+
+    def test_pre_cell_stone_gathering_and_whole_tree_mining_stay_bounded(self):
+        self.driver._recipes["fixture"] = recipe("fixture", {"stone": 10})
+        self.game.query.return_value = {"ok": True, "cells": []}
+        action = self.driver.ensure_item(self.obs(), "fixture", 3)
+        self.assertEqual((action["type"], action["name"], action["count"]), ("mine", "stone", 30))
+        self.driver._recipes["fixture"] = recipe("fixture", {"wood": 3})
+        self.game.query.return_value = {"ok": True, "name": "tree-01", "position": {"x": 9, "y": 2}}
+        action = self.driver.ensure_item(self.obs(), "fixture", 2)
+        self.assertEqual((action["type"], action["name"], action["count"]), ("mine", "tree-01", 1))
+
+
 if __name__ == "__main__":
     unittest.main()

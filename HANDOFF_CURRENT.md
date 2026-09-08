@@ -4,7 +4,7 @@
 - Main adapter-smoke UDP34210/RCON27025: Automation and electric mining naturally researched, 35 red consumed; autonomous rocket NOT achieved.
 - FactoryAutomaton defaults hidden; watch shortcut shows existing owned client, --hide-window hides it. User requested main GUI visible.
 - Dashboard http://127.0.0.1:18890; watch_factorio_deterministic.bat shows owned main GUI. Worker stopped tick720636: relocated coal receiver cannot reconnect.
-- Strict character-navigation-qa seed101 UDP34216/RCON27031: real steam generation; natural Automation consumed 10 carried red packs, belt science next.
+- Strict character-navigation-qa seed101 UDP34216/RCON27031: Automation/electric mining naturally researched; worker99271 building energy, hidden client44256.
 - Isolated seeded fixtures prove fluid recipes, two real launches/platforms and belt crossing. Factory flow fixture had explicit prerequisite flags.
-- Startup25red budget, early iron-capacity gate and exhausted-cell fallback validated; next fix general coal relocation. Strict batching/navigation review pending.
+- Startup25red, early iron-capacity gate, source fallback and strict batching/navigation validated; next repair main coal relocation and prove automatic science.
 - Preserve pre-existing dirty insight.md; do not stage. Checkpoint reader-lock retries, strict input leases and milestone success guards are covered.

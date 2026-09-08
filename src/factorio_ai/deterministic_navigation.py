@@ -87,8 +87,11 @@ if not _G.factorio_ai_character_input_version then
    local dx=waypoint.position.x-actor.position.x;local dy=waypoint.position.y-actor.position.y
    local angle=math.atan2(dy,dx)
    actor.walking_state={walking=true,direction=(math.floor(angle/(math.pi/4)+0.5)*2+4)%16}
-   if not motion.last_position or (motion.last_position.x-actor.position.x)^2+(motion.last_position.y-actor.position.y)^2>0.04 then
-    motion.last_position={x=actor.position.x,y=actor.position.y};motion.last_progress_tick=event.tick
+   local distance=dx*dx+dy*dy
+   if motion.progress_waypoint~=motion.next_waypoint then
+    motion.progress_waypoint=motion.next_waypoint;motion.best_waypoint_distance=distance;motion.last_progress_tick=event.tick
+   elseif distance<(motion.best_waypoint_distance or math.huge)-0.01 then
+    motion.best_waypoint_distance=distance;motion.last_progress_tick=event.tick
    elseif event.tick-motion.last_progress_tick>300 then
     actor.walking_state={walking=false};motion.status="blocked";motion.reason="character_path_stalled"
    end
@@ -153,7 +156,7 @@ if x.type=="move" then
  motion.status="waiting"
  motion.request_id=s.request_path{bounding_box=a.prototype.collision_box,collision_mask=a.prototype.collision_mask,
   start=a.position,goal=goal,force=f,radius=0.3,can_open_gates=true,entity_to_ignore=a,
-  pathfind_flags={allow_destroy_friendly_entities=false}}
+  pathfind_flags={allow_destroy_friendly_entities=false,allow_paths_through_own_entities=false,cache=false}}
 else
  local entity=target(x.position,x.name)
  if not entity then motion.status="succeeded";return success{status="succeeded"} end
