@@ -334,10 +334,10 @@ class StrictHandcraftBatchTests(unittest.TestCase):
                 self.assertIsNone(self.driver._handcraft_collection_targets(self.obs(), "inserter", 2))
         self.game.act.assert_not_called()
 
-    def test_assisted_and_nested_requests_keep_original_ingredient_acquisition(self):
+    def test_assisted_collects_shared_batch_while_nested_requests_keep_local_needs(self):
         obs = self.obs(entities=[entity("stone-furnace", {"iron-plate": 100})])
         self.game.backend = "assisted"
-        self.assertEqual(self.driver.ensure_item(obs, "inserter", 2)["count"], 4)
+        self.assertEqual(self.driver.ensure_item(obs, "inserter", 2)["count"], 8)
         self.game.backend = "character"
         self.assertEqual(self.driver.ensure_item(obs, "inserter", 2, ("other-target",))["count"], 4)
 

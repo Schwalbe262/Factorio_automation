@@ -240,7 +240,7 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
             # the requested count is still only the final recipe's missing runs.
             return {"type": "craft", "recipe": recipe["name"], "count": runs,
                     "reason": f"engine craft {item} with normal prerequisite queue"}
-        if not _stack and getattr(self.game, "backend", None) == "character":
+        if not _stack:
             collect = self._collect_handcraft_batch(observation, item, count)
             if collect is not None:
                 return collect

@@ -94,6 +94,63 @@ class SupervisorLifecycleTests(unittest.TestCase):
             self.assertEqual(result["cycles"], 1)
             self.assertEqual(persisted["reason"], "invalid_plan")
 
+    def test_short_craft_finishes_before_next_dependency_walk(self):
+        with TemporaryDirectory() as root:
+            game = fake_game(root)
+            supervisor = module.DeterministicSupervisor(game)
+            busy = observation(30, crafting_queue=[{"recipe": "inserter", "count": 1}])
+            finished = observation(60, inventory={"inserter": 1})
+            game.observe.side_effect = [busy, finished, finished]
+            with patch.object(supervisor, "prepare", side_effect=lambda: self.prepared(supervisor, observation())), \
+                 patch.object(supervisor, "next_action", side_effect=[
+                     {"type": "craft", "recipe": "inserter", "count": 1},
+                     {"status": "waiting", "reason": "next construction"}]) as choose, \
+                 patch("factorio_ai.deterministic_character.ensure_crafting_player", return_value={"status": "ready"}), \
+                 patch.object(module.time, "sleep"):
+                supervisor.run(cycles=2, interval=0)
+            self.assertIs(choose.call_args_list[1].args[0], finished)
+            self.assertEqual([c.args[0]["type"] for c in game.act.call_args_list], ["craft", "stop"])
+
+    def test_long_craft_returns_to_normal_maintenance_after_bounded_grace(self):
+        with TemporaryDirectory() as root:
+            game = fake_game(root)
+            busy = observation(30, crafting_queue=[{"recipe": "rocket-silo", "count": 1}])
+            game.observe.return_value = busy
+            supervisor = module.DeterministicSupervisor(game)
+            with patch.object(module.time, "sleep"), patch.object(module.time, "monotonic", return_value=0):
+                self.assertIs(supervisor._observe_short_craft(busy), busy)
+            self.assertLessEqual(game.observe.call_count, 4)
+            game.act.assert_not_called()
+
+    def test_craft_grace_preserves_failed_or_changed_world_observation(self):
+        for changed in ({"ok": False, "reason": "agent_dead"}, observation(0, world_id="different")):
+            with self.subTest(changed=changed), TemporaryDirectory() as root:
+                game = fake_game(root)
+                game.observe.return_value = changed
+                supervisor = module.DeterministicSupervisor(game)
+                with patch.object(module.time, "sleep"):
+                    result = supervisor._observe_short_craft(observation(30, crafting_queue=[{"count": 1}]))
+                self.assertIs(result, changed)
+                game.observe.assert_called_once()
+
+    def test_stop_request_bypasses_craft_grace(self):
+        with TemporaryDirectory() as root:
+            game = fake_game(root)
+            supervisor = module.DeterministicSupervisor(game)
+            busy = observation(30, crafting_queue=[{"count": 1}])
+            request_stop(Path(root) / "stop.json")
+            self.assertIs(supervisor._observe_short_craft(busy), busy)
+            game.observe.assert_not_called()
+
+    def test_stop_arriving_during_craft_grace_prevents_an_extra_read(self):
+        with TemporaryDirectory() as root:
+            game = fake_game(root)
+            supervisor = module.DeterministicSupervisor(game)
+            busy = observation(30, crafting_queue=[{"count": 1}])
+            with patch.object(module.time, "sleep", side_effect=lambda _: request_stop(Path(root) / "stop.json")):
+                self.assertIs(supervisor._observe_short_craft(busy), busy)
+            game.observe.assert_not_called()
+
     def test_explicit_resume_has_bounded_retry_window_without_fabricating_progress(self):
         with TemporaryDirectory() as root:
             previous, _, _ = self.run_sequence(root, [observation()], ["production"])

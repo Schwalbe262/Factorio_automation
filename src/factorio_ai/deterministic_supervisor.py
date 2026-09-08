@@ -189,6 +189,26 @@ class DeterministicSupervisor:
             "attempt_started_tick": self.attempt_started_tick,
             "model_calls": 0, "server_address": f"127.0.0.1:{self.game.cfg.server_port}"})
 
+    def _observe_short_craft(self, observation: dict[str, Any]) -> dict[str, Any]:
+        """Refresh a just-started engine craft before expensive factory planning.
+
+        A short craft can finish while the dependency walk still sees its old
+        busy queue. Bound this grace period so maintenance is never held behind
+        a long craft; the engine retains all material and timing authority.
+        """
+        world = observation.get("world_id")
+        deadline = time.monotonic() + 2
+        for _ in range(4):
+            if (not observation.get("ok") or not observation.get("crafting_queue")
+                    or observation.get("world_id") != world or time.monotonic() >= deadline
+                    or stop_requested(self.root / "stop.json")):
+                break
+            time.sleep(.25)
+            if time.monotonic() >= deadline or stop_requested(self.root / "stop.json"):
+                break
+            observation = self.game.observe()
+        return observation
+
     def run(self, *, cycles: int = 0, until: str = "rocket", interval: float = 0.5) -> dict[str, Any]:
         if cycles < 0 or until not in {"bootstrap", "power", "rocket"}:
             raise ValueError("invalid cycle limit or milestone")
@@ -269,6 +289,8 @@ class DeterministicSupervisor:
                         last_save = now
                     time.sleep(interval)
                     observation = self.game.observe()
+                    if choice.get("type") == "craft":
+                        observation = self._observe_short_craft(observation)
                 else:
                     result = TaskResult(TaskStatus.WAITING, "cycle_limit_reached")
             except KeyboardInterrupt:
