@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from factorio_ai.deterministic_builder import FactoryBuilder
 from factorio_ai.deterministic_factory import DeterministicFactory
@@ -43,9 +43,69 @@ class ConsumerDropBridgeTests(unittest.TestCase):
 
     def test_ordinary_drop_does_not_enable_upstream_crossing_search(self):
         self.factory._material_route = Mock(wraps=self.factory._material_route)
-        self.assertTrue(self.route()["ok"])
+        self.assertTrue(self.factory._consumer_drop_bridge_route(
+            self.obs, self.source, self.consumer, self.factory._reserved(), start_direction=4)["ok"])
         self.assertTrue(all(not call.kwargs["allow_bridge"]
                             for call in self.factory._material_route.call_args_list))
+
+    def continuation(self):
+        canonical = {**deepcopy(self.consumer), "position": {"x": 6.5, "y": 1.5}, "facing": 0}
+        entry = {**deepcopy(canonical), "position": deepcopy(self.belt["position"])}
+        self.belt["direction"] = 0
+        self.obs["entities"][0]["direction"] = 0
+        self.factory.state["blocks"]["consumer"]["ports"] = [canonical]
+        self.factory.state["blocks"]["consumer"]["entities"].append(
+            {"name": "transport-belt", "position": canonical["position"], "direction": 0})
+        self.factory._material_route = Mock(return_value={"ok": True, "segments": [
+            {"position": self.source, "direction": 4},
+            {"position": self.option["pickup"], "direction": 0}]})
+        return canonical, {"owner_key": "consumer", "entry_port": entry}, {
+            "ok": True, "entry_port": entry, "canonical_approach": self.option["arm"]["position"]}
+
+    def test_verified_continuation_relaxes_only_its_terminal_arm_clearance(self):
+        canonical, record, proof = self.continuation()
+        allowed = {"name": "port-clearance", "position": deepcopy(proof["canonical_approach"])}
+        other = {"name": "port-clearance", "position": {"x": 1.5, "y": 1.5}}
+        reserved = self.factory._reserved() + [allowed, other]
+        with patch("factorio_ai.deterministic_consumer_entry.validate_consumer_entry", return_value=proof) as verify:
+            result = self.factory._consumer_drop_bridge_route(self.obs, self.source, canonical,
+                reserved, start_direction=4, allow_upstream_bridge=True, consumer_entry=record)
+        self.assertTrue(result["ok"], result)
+        verify.assert_called_once_with(self.factory, self.obs, canonical, record)
+        self.assertEqual(result["consumer_entry"], record)
+        self.assertEqual(result["segments"][-1]["position"], record["entry_port"]["position"])
+        routed_reserved = self.factory._material_route.call_args.args[2]
+        self.assertNotIn(allowed, routed_reserved)
+        self.assertIn(other, routed_reserved)
+        self.assertIn(allowed, reserved)
+
+    def test_continuation_does_not_relax_physical_arm_collision_or_other_arm_position(self):
+        canonical, record, proof = self.continuation()
+        original = deepcopy(self.option)
+        with patch("factorio_ai.deterministic_consumer_entry.validate_consumer_entry", return_value=proof):
+            for mode in ("physical", "different_arm"):
+                with self.subTest(mode=mode):
+                    self.option = deepcopy(original)
+                    reserved = self.factory._reserved()
+                    if mode == "physical":
+                        reserved.append({"name": "transport-belt", "position": proof["canonical_approach"], "direction": 4})
+                    else:
+                        self.option["arm"]["position"] = {"x": 7.5, "y": 2.5}
+                    result = self.factory._consumer_drop_bridge_route(self.obs, self.source, canonical,
+                        reserved, start_direction=4, consumer_entry=record)
+                    self.assertFalse(result["ok"])
+        self.factory._material_route.assert_not_called()
+        self.builder.can_place.assert_not_called()
+
+    def test_failed_continuation_validation_does_not_query_or_plan_a_drop(self):
+        canonical, record, _ = self.continuation()
+        failure = {"ok": False, "reason": "continuation carries another material"}
+        with patch("factorio_ai.deterministic_consumer_entry.validate_consumer_entry", return_value=failure):
+            result = self.factory._consumer_drop_bridge_route(self.obs, self.source, canonical,
+                self.factory._reserved(), start_direction=4, consumer_entry=record)
+        self.assertIs(result, failure)
+        self.game.query.assert_not_called()
+        self.factory._material_route.assert_not_called()
 
     def test_explicit_upstream_crossing_is_bounded_across_drop_options_and_poles(self):
         self.option["poles"] = [self.pole] * 3

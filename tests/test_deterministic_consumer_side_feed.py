@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from factorio_ai.deterministic_builder import FactoryBuilder
 from factorio_ai.deterministic_factory import DeterministicFactory
@@ -53,7 +53,53 @@ class ConsumerSideFeedTests(unittest.TestCase):
         self.assertFalse(self.route()["ok"])
         self.builder.can_place.assert_not_called()
 
+    def test_nonrouting_failure_does_not_enable_drop_fallback(self):
+        self.factory._consumer_drop_bridge_route = Mock()
+        for reason in ("RCON disconnected", "route endpoint is occupied"):
+            with self.subTest(reason=reason):
+                failure = {"ok": False, "reason": reason}
+                self.factory._material_route = Mock(return_value=failure)
+                self.assertIs(self.route(), failure)
+        self.factory._consumer_drop_bridge_route.assert_not_called()
+
+    def test_verified_enclosed_input_explicitly_allows_upstream_crossing(self):
+        result = {"ok": True, "segments": [deepcopy(self.belt)], "flow_verified": False}
+        self.factory._consumer_drop_bridge_route = Mock(return_value=result)
+        for reason in ("no route within bounds", "route search budget exhausted"):
+            with self.subTest(reason=reason):
+                self.factory._material_route = Mock(return_value={"ok": False, "reason": reason})
+                self.factory._consumer_drop_bridge_route.reset_mock()
+                self.assertIs(self.route(), result)
+                self.factory._consumer_drop_bridge_route.assert_called_once_with(
+                    self.obs, self.source, self.consumer, self.factory._reserved(),
+                    start_direction=4, allow_upstream_bridge=True)
+
+    def test_enclosed_input_tries_only_its_one_forward_owned_continuation(self):
+        self.factory._material_route = Mock(return_value={"ok": False, "reason": "no route within bounds"})
+        result = {"ok": True, "segments": []}
+        self.factory._consumer_drop_bridge_route = Mock(side_effect=[
+            {"ok": False, "reason": "no clear powered long-arm drop into owned input belt"}, result])
+        canonical = deepcopy(self.consumer)
+        self.assertIs(self.route(), result)
+        self.assertEqual(self.consumer, canonical)
+        calls = self.factory._consumer_drop_bridge_route.call_args_list
+        self.assertEqual(len(calls), 2)
+        entry = deepcopy(canonical)
+        entry["position"] = {"x": canonical["position"]["x"] - 1, "y": canonical["position"]["y"]}
+        self.assertEqual(calls[1].kwargs, {"start_direction": 4, "allow_upstream_bridge": True,
+            "consumer_entry": {"owner_key": "consumer", "entry_port": entry}})
+
+    def test_live_drop_identity_or_material_failure_does_not_authorize_continuation(self):
+        self.factory._material_route = Mock(return_value={"ok": False, "reason": "no route within bounds"})
+        for reason in ("long-arm input belt identity changed", "long-arm input belt carries another material"):
+            with self.subTest(reason=reason):
+                failure = {"ok": False, "reason": reason}
+                self.factory._consumer_drop_bridge_route = Mock(return_value=failure)
+                self.assertIs(self.route(), failure)
+                self.factory._consumer_drop_bridge_route.assert_called_once()
+
     def test_missing_or_reoriented_observed_belt_cannot_be_side_fed(self):
+        self.factory._consumer_drop_bridge_route = Mock()
         for mode in ["missing", "reoriented", "no_identity"]:
             with self.subTest(mode=mode):
                 self.obs["entities"] = [] if mode == "missing" else [deepcopy(self.belt)]
@@ -63,24 +109,31 @@ class ConsumerSideFeedTests(unittest.TestCase):
                     self.obs["entities"][0].pop("unit_number")
                 self.assertFalse(self.route()["ok"])
         self.game.query.assert_not_called()
+        self.factory._consumer_drop_bridge_route.assert_not_called()
 
     def test_changed_identity_and_foreign_material_fail_closed(self):
+        self.factory._consumer_drop_bridge_route = Mock()
         for reason in ["input belt identity changed", "input belt carries another material"]:
             with self.subTest(reason=reason):
                 self.game.query.side_effect = None
                 self.game.query.return_value = {"ok": False, "reason": reason}
                 self.assertEqual(self.route(), {"ok": False, "reason": reason})
         self.builder.can_place.assert_not_called()
+        self.factory._consumer_drop_bridge_route.assert_not_called()
 
     def test_unowned_input_declaration_does_not_authorize_side_feed(self):
+        self.factory._consumer_drop_bridge_route = Mock()
         self.factory.state["blocks"]["consumer"]["ports"] = []
         self.assertFalse(self.route()["ok"])
         self.game.query.assert_not_called()
+        self.factory._consumer_drop_bridge_route.assert_not_called()
 
     def test_port_declaration_without_its_reserved_belt_cannot_adopt_a_live_belt(self):
+        self.factory._consumer_drop_bridge_route = Mock()
         self.factory.state["blocks"]["consumer"]["entities"] = [self.lab]
         self.assertFalse(self.route()["ok"])
         self.game.query.assert_not_called()
+        self.factory._consumer_drop_bridge_route.assert_not_called()
 
     def test_straight_input_preserves_fast_path(self):
         self.factory.state["blocks"]["consumer"]["entities"] = [self.belt]
@@ -98,6 +151,25 @@ class ConsumerSideFeedTests(unittest.TestCase):
         self.assertEqual(plan["entities"][-1]["direction"], 12)
         self.builder.ensure_plan.assert_called_once_with(self.obs, plan)
         self.assertFalse(result["evidence"]["flow_verified"])
+
+    def test_connection_persists_actual_entry_without_changing_canonical_consumer(self):
+        source = {"kind": "item", "item": "coal", "direction": "output",
+                  "position": self.source, "facing": 4}
+        entry = {**deepcopy(self.consumer), "position": {"x": 5.5, "y": .5}}
+        provenance = {"owner_key": "consumer", "entry_port": entry}
+        canonical = deepcopy(self.consumer)
+        self.factory._consumer_material_route = Mock(return_value={"ok": True,
+            "segments": [{"name": "transport-belt", "position": self.source, "direction": 4},
+                         {"name": "transport-belt", "position": entry["position"], "direction": 12}],
+            "consumer_entry": provenance})
+        with patch("factorio_ai.deterministic_input_links.ensure_input_dependencies", return_value={"status": "succeeded"}):
+            result = self.factory.connect_input(self.obs, source, self.consumer, "coal-consumer")
+        self.assertEqual(result["status"], "succeeded")
+        restored = DeterministicFactory(self.game, Mock(), self.builder, self.catalog)
+        saved = restored.state["links"]["coal-consumer"]
+        self.assertEqual(saved["consumer_port"], canonical)
+        self.assertEqual(saved["consumer_entry"], provenance)
+        self.assertEqual(self.consumer, canonical)
 
     def capacity_sites(self):
         self.game.query.side_effect = None

@@ -1438,12 +1438,22 @@ return {ok=true,checked=#rows,existing=found}
     def _consumer_drop_bridge_route(self, obs: dict, source: dict, consumer: dict,
                                     reserved: list[dict], *, start_direction: int | None,
                                     owned_plan_key: str | None = None,
-                                    allow_upstream_bridge: bool = False) -> dict:
+                                    allow_upstream_bridge: bool = False,
+                                    consumer_entry: dict | None = None) -> dict:
         """Feed an enclosed owned input using the live long-arm drop geometry."""
+        canonical_approach = None
+        if consumer_entry is not None:
+            from .deterministic_consumer_entry import validate_consumer_entry
+            if owned_plan_key is not None:
+                return {"ok": False, "reason": "input continuation cannot override an output owner"}
+            proof = validate_consumer_entry(self, obs, consumer, consumer_entry)
+            if not proof.get("ok"):
+                return proof
+            consumer, canonical_approach = proof["entry_port"], proof["canonical_approach"]
         destination, facing = consumer["position"], consumer.get("facing")
         actual = next((e for e in obs.get("entities", []) if e.get("name") == "transport-belt"
                        and e.get("position") == destination and e.get("direction") == facing), None)
-        owned = any(consumer in plan.get("ports", []) and any(e.get("name") == "transport-belt"
+        owned = canonical_approach is not None or any(consumer in plan.get("ports", []) and any(e.get("name") == "transport-belt"
                     and e.get("position") == destination and e.get("direction") == facing
                     for e in plan.get("entities", [])) for plan in self.state["blocks"].values())
         if owned_plan_key is not None:
@@ -1513,6 +1523,12 @@ return {ok=true,candidates=rows,new_pole_reach=prototypes.entity["small-electric
         if not survey.get("ok"):
             return survey
         clearances = self._port_clearances()
+        if canonical_approach is not None:
+            # This exact arm replaces the canonical belt approach only after
+            # its one-forward continuation and machine intake were verified.
+            clearances.discard((canonical_approach["x"], canonical_approach["y"]))
+            reserved = [e for e in reserved if not (e["name"] == "port-clearance"
+                        and e["position"] == canonical_approach)]
         if start_direction in DIRECTIONS:
             dx, dy = DIRECTIONS[start_direction]
             clearances.discard((source["x"] + dx, source["y"] + dy))
@@ -1527,6 +1543,8 @@ return {ok=true,candidates=rows,new_pole_reach=prototypes.entity["small-electric
         upstream_bridge_attempted = False
         for option in sorted(survey.get("candidates", []), key=lambda row: (_distance(source, row["pickup"]), row["arm"]["direction"]))[:4]:
             arm, pickup = option["arm"], option["pickup"]
+            if canonical_approach is not None and arm["position"] != canonical_approach:
+                continue
             flow = (arm["direction"] + 8) % 16
             pickup_facing = start_direction if pickup == source and start_direction in DIRECTIONS else flow
             pickup_belt = {"name": "transport-belt", "position": pickup, "direction": pickup_facing}
@@ -1546,7 +1564,7 @@ return {ok=true,candidates=rows,new_pole_reach=prototypes.entity["small-electric
                     continue
                 if not self.builder.can_place(trial).get("ok"):
                     continue
-                # A merge may need an upstream crossing as well as this drop.
+                # An input may need an upstream crossing as well as this drop.
                 # Spend at most one generic routing attempt across all options
                 # and poles; that planner uses only direct belt legs internally.
                 use_bridge = allow_upstream_bridge and not upstream_bridge_attempted
@@ -1563,6 +1581,8 @@ return {ok=true,candidates=rows,new_pole_reach=prototypes.entity["small-electric
                     best = (score, {**route, "segments": entities, "flow_verified": False,
                         "consumer_drop": {"unit_number": actual["unit_number"], "pickup_position": option["pickup_position"],
                                           "drop_position": option["drop_position"], "pole_unit_number": power.get("unit_number")}})
+                    if consumer_entry is not None:
+                        best[1]["consumer_entry"] = deepcopy(consumer_entry)
                 break
         return best[1] if best else {"ok": False, "reason": "no clear powered long-arm drop into owned input belt"}
 
@@ -1607,8 +1627,18 @@ return {ok=true,input_belt_verified=true}
                                      start_direction=start_direction)
         if not route.get("ok"):
             if route.get("reason") in {"no route within bounds", "route search budget exhausted"}:
+                drop = self._consumer_drop_bridge_route(obs, source, consumer, reserved,
+                    start_direction=start_direction, allow_upstream_bridge=True)
+                if drop.get("ok") or drop.get("reason") != "no clear powered long-arm drop into owned input belt":
+                    return drop
+                owners = [key for key, plan in self.state["blocks"].items() if consumer in plan.get("ports", [])]
+                if len(owners) != 1:
+                    return drop
+                entry = deepcopy(consumer)
+                entry["position"] = {"x": destination["x"] + dx, "y": destination["y"] + dy}
                 return self._consumer_drop_bridge_route(obs, source, consumer, reserved,
-                                                        start_direction=start_direction)
+                    start_direction=start_direction, allow_upstream_bridge=True,
+                    consumer_entry={"owner_key": owners[0], "entry_port": entry})
             return route
         segments = deepcopy(route["segments"])
         if len(segments) < 2 or segments[-1]["position"] != destination:
@@ -1678,6 +1708,8 @@ return {ok=true,input_belt_verified=true}
             entities = tap_entities + [{"name": "transport-belt", **segment} for segment in route["segments"]]
             unique = {(e["name"], e["position"]["x"], e["position"]["y"]): e for e in entities}
             plan = _plan(list(unique.values()), source_port=source_port, consumer_port=consumer_port)
+            if route.get("consumer_entry") is not None:
+                plan["consumer_entry"] = deepcopy(route["consumer_entry"])
             if upstream_tap is not None:
                 plan["upstream_tap"] = upstream_tap
             self.state["links"][link_key] = plan

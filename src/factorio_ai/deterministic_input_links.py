@@ -144,7 +144,7 @@ def ensure_input_dependencies(factory, obs: dict, source_port: dict, link_key: s
     proof. The caller still constructs and powers its own downstream plan.
     """
     links = factory.state.get("links", {})
-    jobs, recovered, visiting = [], {}, set()
+    jobs, recovered, visiting, entry_proofs = [], {}, set(), {}
 
     def prepare(key: str, target: tuple, *, root: bool = False) -> None:
         if key in visiting:
@@ -154,6 +154,15 @@ def ensure_input_dependencies(factory, obs: dict, source_port: dict, link_key: s
         plan = links.get(key)
         if not isinstance(plan, dict) or not _compatible(plan, source_port):
             raise ValueError("input tap dependency has incompatible or missing material ports")
+        if "consumer_entry" in plan:
+            if key not in entry_proofs:
+                from .deterministic_consumer_entry import validate_consumer_entry
+                proof = validate_consumer_entry(factory, obs, plan["consumer_port"], plan["consumer_entry"])
+                if not proof.get("ok"):
+                    raise ValueError(proof.get("reason", "owned consumer entry is invalid"))
+                entry_proofs[key] = proof["entry_port"]
+            if root:
+                target = _point(entry_proofs[key])
         visiting.add(key)
         belts, edges, inlets = _geometry(plan)
         provenance = plan.get("upstream_tap")
@@ -163,6 +172,8 @@ def ensure_input_dependencies(factory, obs: dict, source_port: dict, link_key: s
         if root and provenance is None and not inlets:
             if source_belt is None:
                 raise ValueError("input route has neither its canonical source nor an external tap")
+            if key in entry_proofs and _path(belts, edges, _point(source_port), target) is None:
+                raise ValueError("input route does not physically reach its owned consumer entry")
             visiting.remove(key)
             return  # Direct links retain their existing construction workflow.
 
