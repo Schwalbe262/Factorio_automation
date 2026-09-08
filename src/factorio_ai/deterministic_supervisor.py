@@ -102,6 +102,13 @@ class DeterministicSupervisor:
             self.defense.automatic_ammo = self.armaments.manages_turret
 
     def next_action(self, observation: dict[str, Any], until: str) -> dict[str, Any]:
+        scope = getattr(type(self.bootstrap), "cell_survey_scope", None)
+        if scope is None:
+            return self._plan_action(observation, until)
+        with scope(self.bootstrap):
+            return self._plan_action(observation, until)
+
+    def _plan_action(self, observation: dict[str, Any], until: str) -> dict[str, Any]:
         self.stage = "bootstrap"
         if self.builder is None:
             from .deterministic_builder import FactoryBuilder

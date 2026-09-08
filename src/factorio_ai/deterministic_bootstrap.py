@@ -6,6 +6,8 @@ recipes and the character's engine crafting queue.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from copy import deepcopy
 import json
 import math
 from typing import Any
@@ -27,6 +29,21 @@ class DeterministicBootstrap:
         self._recipes: dict[str, dict[str, Any]] = {}
         self._world_id: str | None = None
         self.construction_buffers: dict[str, dict[str, Any]] = {}
+        self._cell_surveys: dict[str, dict[str, Any]] | None = None
+
+    @contextmanager
+    def cell_survey_scope(self):
+        """Reuse successful surveys only until this planning invocation exits."""
+        previous = self._cell_surveys
+        self._cell_surveys = {}
+        try:
+            yield
+        finally:
+            self._cell_surveys = previous
+            if previous is not None:
+                # A nested invocation may use a new observation. Resume the
+                # outer scope with fresh surveys, never its earlier snapshot.
+                previous.clear()
 
     def next_action(self, observation: dict[str, Any]) -> dict[str, Any]:
         if not observation.get("ok", True):
@@ -357,7 +374,10 @@ return best and {ok=true,name=best.name,position=pos(best.position)} or {ok=fals
                 "reason": f"bootstrap {item} until drill supply is operating"}
 
     def _existing_cells(self, resource: str) -> dict[str, Any]:
-        return self.game.query('''
+        cache = self._cell_surveys
+        if cache is not None and resource in cache:
+            return deepcopy(cache[resource])
+        result = self.game.query('''
 local resource=''' + json.dumps(resource) + '''
 local cells={}
 for _,e in pairs(s.find_entities_filtered{force=f,type="mining-drill"}) do
@@ -394,6 +414,9 @@ for _,e in pairs(s.find_entities_filtered{force=f,type="mining-drill"}) do
 end
 return {ok=true,cells=cells}
 ''')
+        if cache is not None and result.get("ok") is True:
+            cache[resource] = deepcopy(result)
+        return result
 
     def discover_cell(self, resource: str, receiver_name: str,
                       *, preferred_receiver: dict[str, Any] | None = None) -> dict[str, Any]:
