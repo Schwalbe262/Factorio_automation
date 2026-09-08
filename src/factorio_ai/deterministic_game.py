@@ -27,6 +27,41 @@ BUILD_BATCH_LIMIT = 32
 BUILD_BATCH_NAMES = frozenset({"transport-belt", "small-electric-pole"})
 
 
+RECOVER_EQUIPPED_AMMO_LUA = r'''
+if not d or d.world_id~=x.expected_actor_world_id or a.unit_number~=x.expected_actor_unit_number
+ or a.force~=f then return failure("equipped_ammo_actor_identity_changed") end
+local proto=prototypes.item[x.item]
+if x.item~="firearm-magazine" or not proto or proto.type~="ammo" or not proto.magazine_size or proto.magazine_size<=0
+ or type(x.count)~="number" or x.count~=math.floor(x.count) or x.count<1 or x.count>math.min(100,proto.stack_size)
+ then return failure("invalid_equipped_ammo_request") end
+local ammo=a.get_inventory(defines.inventory.character_ammo)
+if not ammo or not ammo.valid or type(x.slot)~="number" or x.slot~=math.floor(x.slot) or x.slot<1 or x.slot>#ammo
+ then return failure("equipped_ammo_slot_missing") end
+local source=ammo[x.slot]
+if not source.valid_for_read or source.name~=x.item or source.quality.name~="normal" or source.ammo~=proto.magazine_size
+ then return failure("equipped_ammo_stack_changed") end
+if not inv or not inv.valid then return failure("character_main_inventory_missing") end
+local amount=math.min(x.count,source.count,inv.get_insertable_count{name=x.item,quality="normal"})
+if amount<1 then return success{status="waiting",reason="character_main_inventory_full",moved=0} end
+local inserted=inv.insert{name=x.item,quality="normal",count=amount}
+--[[ Only complete normal magazines are split. Preserve every other slot and
+ subtract exactly the quantity the main inventory accepted in this command. ]]
+source.count=source.count-inserted
+return success{status=inserted>0 and "succeeded" or "waiting",moved=inserted,
+ source_inventory="character_ammo",destination_inventory="character_main"}
+'''
+
+
+def validate_equipped_ammo_recovery(action: dict[str, Any]) -> None:
+    if action.get("type") != "recover_equipped_ammo":
+        return
+    if (action.get("item") != "firearm-magazine"
+            or not isinstance(action.get("expected_actor_world_id"), str) or not action["expected_actor_world_id"]
+            or any(type(action.get(key)) is not int or action[key] < 1 for key in ("slot", "count", "expected_actor_unit_number"))
+            or action["count"] > 100 or "position" in action):
+        raise ValueError("equipped ammo recovery requires a bounded slot, item, world and actor identity")
+
+
 def validate_mine_guard(action: dict[str, Any]) -> None:
     identity = {"expected_entity_unit", "expected_entity_world_id"}
     if identity.intersection(action):
@@ -230,6 +265,12 @@ return success{world_id=storage.deterministic_player.world_id,position=pos(actor
     def observe(self, radius: float = 384) -> dict[str, Any]:
         observation = self.query('''
 if not a or not a.valid then return failure("agent_dead") end
+local equipped=a.get_inventory(defines.inventory.character_ammo);local recoverable={}
+if equipped and equipped.valid then for i=1,#equipped do local stack=equipped[i]
+ if stack.valid_for_read and stack.name=="firearm-magazine" and stack.prototype.type=="ammo" and stack.quality.name=="normal"
+  and stack.prototype.magazine_size>0 and stack.ammo==stack.prototype.magazine_size then
+  recoverable[#recoverable+1]={slot=i,item=stack.name,count=stack.count} end
+end end
 local rows={}
 for _,e in pairs(s.find_entities_filtered{force=f}) do
  if e.valid and e.type~="character" then
@@ -287,6 +328,7 @@ for _,name in ipairs({'iron-plate','copper-plate','coal','automation-science-pac
 end
 local current=f.current_research
 return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.position),inventory=contents(a.get_main_inventory()),
+ actor_unit_number=a.unit_number,equipped_ammo=contents(equipped),recoverable_equipped_ammo=recoverable,
  crafting_queue=a.crafting_queue,entities=rows,resources=resources,technologies=techs,enabled_recipes=enabled,
  research=current and current.name or nil,research_progress=f.research_progress,production=production,rockets_launched=f.rockets_launched,
  enemies=s.count_entities_filtered{position={0,0},radius=128,force="enemy",type={"unit","unit-spawner"}}}
@@ -298,6 +340,7 @@ return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.
 
     def act(self, action: dict[str, Any]) -> dict[str, Any]:
         validate_mine_guard(action)
+        validate_equipped_ammo_recovery(action)
         if "count" in action and (isinstance(action["count"], bool)
                 or not isinstance(action["count"], int) or action["count"] < 1):
             raise ValueError("action count must be a positive integer")
@@ -311,7 +354,9 @@ return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.
         body += 'if not a or not a.valid then return failure("agent_dead") end; '
         body += 'local inv=a.get_main_inventory(); '
         kind = action.get("type")
-        if kind == "craft":
+        if kind == "recover_equipped_ammo":
+            body += RECOVER_EQUIPPED_AMMO_LUA
+        elif kind == "craft":
             body += '''
 local recipe=f.recipes[x.recipe]
 if not recipe or not recipe.enabled then return failure("recipe_locked") end
@@ -399,9 +444,10 @@ if not e then return failure("target_missing") end
             if kind == "insert":
                 body += '''
 local n=math.min(x.count or 1,inv.get_item_count(x.item))
+if n<=0 then return success{status="waiting",moved=0} end
 local dest=x.inventory and e.get_inventory(defines.inventory[x.inventory]) or nil
 local inserted=dest and dest.insert{name=x.item,count=n} or e.insert{name=x.item,count=n}
-inv.remove{name=x.item,count=inserted}
+if inserted>0 then inv.remove{name=x.item,count=inserted} end
 return success{status=inserted>0 and "succeeded" or "waiting",moved=inserted}
 '''
             else:
@@ -424,10 +470,13 @@ if e.type=="item-entity" then
  return success{status=moved>0 and "succeeded" or "waiting",moved=moved,quality=quality}
 end
 local n=math.min(x.count or 1,inv.get_insertable_count(x.item))
+if n<=0 then return success{status="waiting",moved=0} end
 if e.type=="transport-belt" then
  local first=e.get_transport_line(1);local second=e.get_transport_line(2)
  local available=first.get_item_count(x.item)+second.get_item_count(x.item)
+ if available<=0 then return success{status="waiting",moved=0} end
  local inserted=inv.insert{name=x.item,count=math.min(n,available)}
+ if inserted<=0 then return success{status="waiting",moved=0} end
  local removed=first.remove_item{name=x.item,count=inserted}
  if removed<inserted then removed=removed+second.remove_item{name=x.item,count=inserted-removed} end
  if removed<inserted then inv.remove{name=x.item,count=inserted-removed} end
@@ -438,6 +487,7 @@ if x.inventory then source=e.get_inventory(defines.inventory[x.inventory]) end
 if not source then source=e.get_inventory(defines.inventory.chest) end
 if not source then return failure("no_output_inventory") end
 local removed=source.remove{name=x.item,count=n}
+if removed<=0 then return success{status="waiting",moved=0} end
 local inserted=inv.insert{name=x.item,count=removed}
 if inserted<removed then source.insert{name=x.item,count=removed-inserted} end
 return success{status=inserted>0 and "succeeded" or "waiting",moved=inserted}

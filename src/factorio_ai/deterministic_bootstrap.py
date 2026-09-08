@@ -207,6 +207,22 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
         have = self._count(observation, item)
         if have >= count:
             return _report("succeeded", "required inventory available", item=item, count=have)
+        if item == "firearm-magazine":
+            # Engine crafting can put magazines in the equipped ammunition slot.
+            # Recover an observed full normal stack before paying for more; the
+            # adapter rechecks identity, metadata and space before moving it.
+            for stack in observation.get("recoverable_equipped_ammo") or []:
+                if (stack.get("item") != item or type(stack.get("slot")) is not int or stack["slot"] < 1
+                        or type(stack.get("count")) is not int or stack["count"] < 1):
+                    continue
+                unit = observation.get("actor_unit_number")
+                world = observation.get("world_id")
+                if type(unit) is not int or unit < 1 or not isinstance(world, str) or not world:
+                    return _report("blocked", "equipped ammunition recovery requires the observed actor identity")
+                return {"type": "recover_equipped_ammo", "item": item, "slot": stack["slot"],
+                        "count": min(count - have, stack["count"], 100),
+                        "expected_actor_world_id": world, "expected_actor_unit_number": unit,
+                        "reason": "recover normally crafted equipped ammunition for production defense"}
         collect = self._take_output(observation, item, count - have)
         if collect is not None:
             return collect
