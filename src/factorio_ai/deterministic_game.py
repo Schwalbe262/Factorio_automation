@@ -22,6 +22,8 @@ from .factorio import (build_create_no_mod_save_command,
     build_start_no_mod_server_command, no_mod_save_path, wait_for_rcon)
 from .rcon import FactorioRconClient, RconError, parse_json_response
 from .deterministic_underground import OBSERVE_UNDERGROUND_LUA, underground_fields
+from .deterministic_belt_switch_guard import (
+    BELT_ROUTE_REPLACEMENT_LUA, validate_belt_route_replacement, validate_belt_switch_backend)
 
 
 BUILD_BATCH_LIMIT = 32
@@ -64,6 +66,7 @@ def validate_equipped_ammo_recovery(action: dict[str, Any]) -> None:
 
 
 def validate_mine_guard(action: dict[str, Any]) -> None:
+    validate_belt_route_replacement(action)
     identity = {"expected_entity_unit", "expected_entity_world_id"}
     if identity.intersection(action):
         unit = action.get("expected_entity_unit")
@@ -132,7 +135,7 @@ if x.expected_world_id then
  end
  if inv.get_item_count(x.required_replacement_item)<1 then return failure("source_upgrade_replacement_missing") end
 end
-'''
+''' + BELT_ROUTE_REPLACEMENT_LUA
 
 
 def run_config(seed: int = 20260908, *, runtime: Path | None = None,
@@ -343,6 +346,7 @@ return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.
         return observation
 
     def act(self, action: dict[str, Any]) -> dict[str, Any]:
+        validate_belt_switch_backend(action, self.backend)
         if action.get("type") == "build":
             underground_fields(action)
         elif "belt_to_ground_type" in action:
