@@ -41,6 +41,9 @@ class DeterministicFactory:
         if self.state and self.state.get("schema_version") != 1:
             raise ValueError("unsupported factory production checkpoint")
         self._fingerprint = catalog.fingerprint
+        self._power_observation: dict | None = None
+        self._power_context: tuple | None = None
+        self._power_grids: dict[tuple, dict] = {}
 
     def _sync(self, observation: dict) -> None:
         world = observation.get("world_id")
@@ -176,21 +179,7 @@ return {ok=true,covered=covered}
         poles = [e for e in plan.get("entities", []) if e["name"] == "small-electric-pole"]
         if not poles:
             return _report("succeeded", "block requires no electric connection")
-        payload = json.dumps(json.dumps([e["position"] for e in poles], separators=(",", ":")))
-        grid = self.game.query('''
-local wanted=helpers.json_to_table(''' + payload + ''');local networks={};local live={}
-for _,e in pairs(s.find_entities_filtered{force=f,type="generator"}) do
- if e.electric_network_id then networks[e.electric_network_id]=true end
-end
-local connected=0
-for _,p in ipairs(wanted) do local e=target(p,"small-electric-pole")
- if e and networks[e.electric_network_id] then connected=connected+1 end
-end
-for _,e in pairs(s.find_entities_filtered{force=f,type="electric-pole"}) do
- if networks[e.electric_network_id] then live[#live+1]=pos(e.position) end
-end
-return {ok=true,connected=connected,live=live}
-''')
+        grid = self._power_grid(obs, poles)
         if not grid.get("ok"):
             return _report("blocked", "cannot inspect factory power network", query_error=grid.get("reason"))
         if int(grid.get("connected", 0)) == len(poles):
@@ -217,6 +206,38 @@ return {ok=true,connected=connected,live=live}
                 return _report("blocked", "no clear power connection to reserved factory block", block=key)
         result = self.builder.ensure_plan(obs, self.state["power_links"][key])
         return result if not _ready(result) else _report("waiting", "waiting for observed generator connection", block=key)
+
+    def _power_grid(self, obs: dict, poles: list[dict]) -> dict:
+        # Recursive production dependencies revisit the same poles during one
+        # planning observation. Only their read evidence is shared; construction,
+        # placement and action guards still run every time. The catalog and its
+        # fingerprint are fixed snapshots for this planner's lifetime; prototype
+        # changes reload the catalog/planner, rather than mutate it in place.
+        context = (obs.get("world_id"), obs.get("tick"), self._fingerprint, id(self.catalog))
+        if self._power_observation is not obs or self._power_context != context:
+            self._power_observation, self._power_context = obs, context
+            self._power_grids = {}
+        positions = tuple((e["position"]["x"], e["position"]["y"]) for e in poles)
+        if positions in self._power_grids:
+            return self._power_grids[positions]
+        payload = json.dumps(json.dumps([e["position"] for e in poles], separators=(",", ":")))
+        grid = self.game.query('''
+local wanted=helpers.json_to_table(''' + payload + ''');local networks={};local live={}
+for _,e in pairs(s.find_entities_filtered{force=f,type="generator"}) do
+ if e.electric_network_id then networks[e.electric_network_id]=true end
+end
+local connected=0
+for _,p in ipairs(wanted) do local e=target(p,"small-electric-pole")
+ if e and networks[e.electric_network_id] then connected=connected+1 end
+end
+for _,e in pairs(s.find_entities_filtered{force=f,type="electric-pole"}) do
+ if networks[e.electric_network_id] then live[#live+1]=pos(e.position) end
+end
+return {ok=true,connected=connected,live=live}
+''')
+        if grid.get("ok") and int(grid.get("connected", 0)) == len(poles):
+            self._power_grids[positions] = grid
+        return grid
 
     def _power_route(self, source: dict, destination: dict) -> dict:
         # Electric wires pass over belts, machines and water. Walking a pole

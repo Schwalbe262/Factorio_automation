@@ -215,6 +215,12 @@ class InputDependencyTests(unittest.TestCase):
         self.factory._power_route = power_route
         self.factory.builder.can_place = Mock(return_value={"ok": True})
         self.factory.builder.ensure_plan.side_effect = build
+        self.factory._fingerprint = "catalog"
+        self.factory.catalog = SimpleNamespace()
+        self.factory._power_observation = None
+        self.factory._power_context = None
+        self.factory._power_grids = {}
+        self.factory._power_grid = MethodType(DeterministicFactory._power_grid, self.factory)
         self.factory.ensure_power_connection = MethodType(DeterministicFactory.ensure_power_connection, self.factory)
         for _ in range(2):
             result = self.ensure("last")

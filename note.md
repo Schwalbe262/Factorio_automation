@@ -251108,3 +251108,10 @@ Goal: normally manufactured silo/rocket/start-pack and actual platform arrival p
 - Metrics/result: builder30, navigation15 and opt-in local-mock Lua16 tests pass (61 total), exact source/test hunks reviewed and whitespace check clean. No world mutations during diagnosis/tests.
 - Failure/next: strict server50304/client27700/actor11 preserved, worker currently stopped; resume after parallel power-read optimization is frozen. Furnace automatic fuel remains unproven because history includes manual8coal at tick1026640. Main60325 continues copper fuel construction; red35/35, rocket not achieved.
 - Tokens: interval all-agents 2036173; implementation cumulative 245075788; root cumulative 76360035; account weekly 71.0%. Cached input and parallel work included; exact per-part weekly-quota share unavailable.
+
+## 2026-09-08T20:49:59+09:00 | part observation-power-evidence-reuse
+- Goal/hypothesis: reduce repeated electric network inspection inside one recursive production planning observation without weakening construction/repair guards.
+- Actions/options: cache only complete successful connectivity by pole positions for the same observation identity/world/tick/frozen catalog. Keep disconnected/error evidence fresh; never cache actions, placement or final identity/distance guards. Fresh observations reset memory.
+- Metrics/result: same frozen observation tick1458654/entities767 and identical take8belts choice: planning20.656->15.093s, allqueries90->56; power-only53->21queries,8.953->3.625s. Attribute32avoided calls/~5.328s to this patch; two other calls warmed in defense inspection.166focused and468integrated tests OK(37opt-in skips); exact hunks reviewed.
+- Failure/next: no profiling/game/checkpoint mutations. Main stop requested at cycle boundary for code reload; strict already stopped. Resume both frozen implementations preserving clients/worlds/actors. Automatic science/rocket remain unproven.
+- Tokens: interval all-agents 1404973; implementation cumulative 246480761; root cumulative 77139596; account weekly 71.0%. Cached input and parallel work included; exact per-part weekly-quota share unavailable.
