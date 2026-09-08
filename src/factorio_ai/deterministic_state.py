@@ -179,7 +179,7 @@ def _atomic_json(path: Path, payload: Any) -> None:
     fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump(payload, output, ensure_ascii=False, sort_keys=True, allow_nan=False)
+            output.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False))
             output.write("\n")
             output.flush()
             os.fsync(output.fileno())
