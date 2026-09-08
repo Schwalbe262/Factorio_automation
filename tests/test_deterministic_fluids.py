@@ -95,6 +95,7 @@ class FluidProductionTests(unittest.TestCase):
         self.factory.reserve_site.side_effect = lambda plan, *args, **kwargs: plan
         self.factory.register_plan.side_effect = lambda key, plan, obs: plan
         self.factory._reserved.return_value = []
+        self.factory._port_clearances.return_value = set()
         self.factory.request_recipe_unlock.return_value = {"status": "waiting", "reason": "research queued"}
         self.builder._occupied_by_plan.return_value = set()
         self.fluids.factory = self.factory
@@ -229,9 +230,11 @@ class FluidProductionTests(unittest.TestCase):
         source, destination = self.underground_geometry()
         self.fluids._sync(self.obs)
         self.builder.ensure_plan.return_value = {"status": "succeeded"}
+        self.game.query.return_value = {"ok": True, "connected": True}
         first = self.fluids._connect_pipe(self.obs, source, destination, "test-link", {"entities": []})
         second = self.fluids._connect_pipe(self.obs, source, destination, "test-link", {"entities": []})
         self.assertEqual(first, second)
+        self.assertEqual(second["status"], "succeeded")
         self.builder.route.assert_called_once()
         self.factory.register_plan.assert_called_once()
         self.assertEqual(self.factory.register_plan.call_args.args[0], "fluid-link:test-link")
@@ -264,6 +267,53 @@ class FluidProductionTests(unittest.TestCase):
         self.assertIsNone(self.fluids.maintain_coproducts(self.obs))
         self.assertEqual(self.fluids.state["coproduct_jobs"], {})
         self.assertEqual(self.fluids._ensure_recipe.call_count, 3)
+
+    def test_busy_fluid_outlet_branches_from_a_verified_same_segment_pipe(self):
+        source, destination = self.underground_geometry()
+        tap = {"x": 4.5, "y": -3.5}
+        self.fluids._sync(self.obs)
+        self.builder.route.side_effect = [{"ok": False, "reason": "source enclosed"},
+                                          {"ok": True, "path": [tap, destination["position"]]}]
+        self.game.query.side_effect = [{"ok": True, "connected": False, "taps": [tap]},
+                                       {"ok": True, "connected": True}]
+        self.builder.ensure_plan.return_value = {"status": "succeeded"}
+        result = self.fluids._connect_pipe(self.obs, source, destination, "branch", {"entities": []})
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(self.builder.route.call_args.args[0], tap)
+        self.assertEqual(self.fluids.state["links"]["branch"]["entities"][0]["position"], tap)
+
+    def test_already_connected_actual_fluid_segment_needs_no_extra_pipe(self):
+        source, destination = self.underground_geometry()
+        self.fluids._sync(self.obs)
+        self.builder.route.return_value = {"ok": False}
+        self.game.query.return_value = {"ok": True, "connected": True, "taps": []}
+        result = self.fluids._connect_pipe(self.obs, source, destination, "connected", {"entities": []})
+        self.assertEqual(result["status"], "succeeded")
+        self.builder.ensure_plan.assert_not_called()
+        self.factory.register_plan.assert_not_called()
+
+    def test_water_route_excludes_unused_steam_ports_in_actual_and_reserved_machines(self):
+        source, destination = self.underground_geometry()
+        self.fluids._sync(self.obs)
+        self.catalog.entities["steam-engine"] = entity(3, [], [box(1, "input", 0, 2, 8)])
+        self.obs["entities"] = [{"name": "steam-engine", "position": {"x": 32.5, "y": 28.5}, "direction": 0}]
+        planned = {"name": "steam-engine", "position": {"x": 10.5, "y": 10.5}, "direction": 4}
+        self.builder.ensure_plan.return_value = {"type": "build"}
+        self.fluids._connect_pipe(self.obs, source, destination, "water", {"entities": [planned]})
+        reserved = self.builder.route.call_args.args[3]
+        ports = [e["position"] for e in reserved if e["name"] == "reserved-fluid-connection"]
+        self.assertIn({"x": 32.5, "y": 31.5}, ports)
+        self.assertIn({"x": 7.5, "y": 10.5}, ports)
+
+    def test_complete_pipe_entities_without_actual_segment_connection_fail_closed(self):
+        source, destination = self.underground_geometry()
+        self.fluids._sync(self.obs)
+        self.builder.ensure_plan.return_value = {"status": "succeeded"}
+        self.game.query.return_value = {"ok": True, "connected": False}
+        result = self.fluids._connect_pipe(self.obs, source, destination, "broken", {"entities": []})
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn("actual fluid segments", result["reason"])
+        self.assertFalse(result["evidence"]["flow_verified"])
 
 
 if __name__ == "__main__":

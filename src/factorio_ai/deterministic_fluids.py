@@ -338,14 +338,48 @@ return {ok=true,available=available,products_finished=products_finished}
         return {"product": product, "available": available}
 
     def _connect_pipe(self, observation: dict, source: dict, destination: dict, key: str, reserved: dict) -> dict:
+        if source.get("kind") != "fluid" or destination.get("kind") != "fluid" or source.get("item") != destination.get("item"):
+            return _report("blocked", "fluid route requires matching typed fluid ports")
         link = self.state["links"].get(key)
         if link is None:
-            obstacles = reserved.get("entities", []) + self.factory._reserved()
+            obstacles = reserved.get("entities", []) + self.factory._reserved() + [
+                {"name": "reserved-port-approach", "position": {"x": x, "y": y}}
+                for x, y in self.factory._port_clearances()]
+            try:
+                obstacles += self._machine_connection_obstacles(observation.get("entities", []) + obstacles)
+            except ValueError as exc:
+                return _report("blocked", str(exc))
+            network = {}
+            pairs = []
             route = self.builder.route(source["position"], destination["position"], "pipe", obstacles)
+            if not route.get("ok"):
+                network = self._network_taps(source, destination)
+                if network.get("connected"):
+                    return _report("succeeded", "source and destination already share the actual fluid segment")
+                # A busy source outlet may already have pipes in every useful
+                # direction. Branch from another VERIFIED member of that exact
+                # segment instead of treating a same-named fluid elsewhere as it.
+                pairs = [(a, b) for a in network.get("taps", [])[:24]
+                         for b in (network.get("destination_taps") or [destination["position"]])[:24]]
+                pairs.sort(key=lambda pair: math.dist(_point(pair[0]), _point(pair[1])))
+                for tap, receiver in pairs[:32]:
+                    trial = self.builder.route(tap, receiver, "pipe", obstacles)
+                    if trial.get("ok"):
+                        route = trial
+                        break
             if route.get("ok"):
                 entities = [{"name": "pipe", "position": p, "direction": 0} for p in route["path"]]
             else:
                 escape = self._underground_escape(observation, source, destination, obstacles)
+                if not escape.get("ok") and not escape.get("needs_recipe"):
+                    for tap, receiver in pairs[:12]:
+                        for facing in DIRECTIONS:
+                            escape = self._underground_escape(observation, {**source, "position": tap, "facing": facing},
+                                                              {**destination, "position": receiver}, obstacles)
+                            if escape.get("ok"):
+                                break
+                        if escape.get("ok"):
+                            break
                 if not escape.get("ok"):
                     if escape.get("needs_recipe"):
                         return self.factory.request_recipe_unlock(observation, escape["needs_recipe"])
@@ -357,7 +391,62 @@ return {ok=true,available=available,products_finished=products_finished}
                 return _report("blocked", registered.get("reason", "fluid route reservation conflict"))
             self.state["links"][key] = link
             self._save()
-        return self.builder.ensure_plan(observation, link)
+        built = self.builder.ensure_plan(observation, link)
+        if built.get("status") != "succeeded":
+            return built
+        network = self._network_taps(source, destination)
+        if not network.get("connected"):
+            return _report("blocked", "constructed pipe route does not join the actual fluid segments",
+                           link=key, fluid=source["item"], flow_verified=False)
+        return _report("succeeded", "fluid endpoints share the observed segment", link=key, flow_verified=False)
+
+    def _machine_connection_obstacles(self, entities: list[dict]) -> list[dict]:
+        """An unused machine port is an actual fluid junction, even without a pipe.
+
+        Exclude every such tile except a route's explicitly selected endpoints
+        (which the builder permits). This prevents a water path touching an
+        engine's spare steam port or an unfilled chemical plant inlet. Matching
+        existing pipe segments may still be selected as verified network taps.
+        """
+        positions = set()
+        for entity in entities:
+            if entity["name"] in {"pipe", "pipe-to-ground"}:
+                continue
+            boxes = _sequence(self.catalog.entities.get(entity["name"], {}).get("fluidbox_prototypes"))
+            for box in boxes:
+                if not any(c.get("connection_type", "normal") == "normal"
+                           for c in _sequence(box.get("pipe_connections"))):
+                    continue
+                for connection in exterior_connections(box):
+                    direction = entity.get("direction", 0)
+                    if direction not in DIRECTIONS:
+                        raise ValueError("fluid routing requires cardinal machine connection geometry")
+                    dx, dy = _rotate(*_point(connection["position"]), direction)
+                    x, y = _point(entity["position"])
+                    positions.add((round(x + dx, 3), round(y + dy, 3)))
+        return [{"name": "reserved-fluid-connection", "position": _position(x, y)}
+                for x, y in sorted(positions)]
+
+    def _network_taps(self, source: dict, destination: dict) -> dict:
+        payload = json.dumps(json.dumps({"source": source, "destination": destination}, separators=(",", ":")))
+        result = self.game.query('''
+local args=helpers.json_to_table(''' + payload + ''');local origin=target(args.source.position,"pipe")
+if not origin then return {ok=false,reason="source pipe missing"} end
+local id=origin.get_fluid_segment_id(1);local receiver=target(args.destination.position,"pipe")
+if not id then return {ok=false,reason="source fluid segment missing"} end
+local receiver_id=receiver and receiver.get_fluid_segment_id(1);local taps={};local destinations={}
+for _,e in pairs(s.find_entities_filtered{force=f,type="pipe"}) do
+ local segment=e.get_fluid_segment_id(1)
+ if segment==id and (e.get_fluid_contents()[args.source.item] or 0)>0 then taps[#taps+1]=pos(e.position) end
+ if receiver_id and segment==receiver_id then destinations[#destinations+1]=pos(e.position) end
+end
+local d=args.destination.position
+table.sort(taps,function(a,b) return (a.x-d.x)^2+(a.y-d.y)^2<(b.x-d.x)^2+(b.y-d.y)^2 end)
+local s=args.source.position
+table.sort(destinations,function(a,b) return (a.x-s.x)^2+(a.y-s.y)^2<(b.x-s.x)^2+(b.y-s.y)^2 end)
+return {ok=true,taps=taps,destination_taps=destinations,connected=receiver_id==id}
+''')
+        return result if isinstance(result, dict) and result.get("ok") else {"taps": []}
 
     def _underground_escape(self, observation: dict, source: dict, destination: dict, reserved: list[dict]) -> dict:
         """Cross an enclosing pipe with one real, prototype-sized underground pair.
@@ -397,7 +486,7 @@ return {ok=true,available=available,products_finished=products_finished}
                 pair = [{"name": "pipe-to-ground", "position": entry, "direction": (direction + 8 - normal_direction) % 16},
                         {"name": "pipe-to-ground", "position": exit, "direction": (direction - normal_direction) % 16}]
                 extension = {"name": "pipe", "position": continuation, "direction": 0}
-                if self.builder._occupied_by_plan(pair) & self.builder._occupied_by_plan(reserved):
+                if self.builder._occupied_by_plan(pair + [extension]) & self.builder._occupied_by_plan(reserved):
                     continue
                 if not self.builder.can_place(pair + [extension]).get("ok"):
                     continue

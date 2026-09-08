@@ -68,6 +68,32 @@ class SupervisorLifecycleTests(unittest.TestCase):
         supervisor.state = RunState("fixture", supervisor.catalog.fingerprint, first["tick"])
         return first
 
+    def test_failed_action_stops_after_confirmed_partial_progress_without_replanning(self):
+        with TemporaryDirectory() as root:
+            game = fake_game(root)
+            supervisor = module.DeterministicSupervisor(game)
+            choice = {"type": "build_many", "actions": []}
+            failure = {"ok": False, "reason": "placement_blocked", "completed": 1, "built": 1}
+            game.act.side_effect = lambda action: failure if action["type"] == "build_many" else {"ok": True}
+            with patch.object(supervisor, "prepare", side_effect=lambda: self.prepared(supervisor, observation())), \
+                 patch.object(supervisor, "next_action", return_value=choice) as choose, \
+                 patch("factorio_ai.deterministic_character.ensure_crafting_player", return_value={"status": "ready"}):
+                result = supervisor.run(cycles=3, interval=0)
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["cycles"], 1)
+            self.assertEqual(result["evidence"]["result"]["built"], 1)
+            choose.assert_called_once()
+            self.assertEqual([call.args[0]["type"] for call in game.act.call_args_list], ["build_many", "stop"])
+            self.assertEqual(json.loads((Path(root) / "status.json").read_text())["reason"], "placement_blocked")
+
+    def test_component_failure_is_terminal(self):
+        with TemporaryDirectory() as root:
+            _, result, persisted = self.run_sequence(root, [observation(), observation(10)],
+                ["production", "production"], [{"status": "failed", "reason": "invalid_plan"}] * 2)
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["cycles"], 1)
+            self.assertEqual(persisted["reason"], "invalid_plan")
+
     def run_sequence(self, root, observations, stages, choices=None):
         game = fake_game(root)
         supervisor = module.DeterministicSupervisor(game)
@@ -97,13 +123,14 @@ class SupervisorLifecycleTests(unittest.TestCase):
             self.assertEqual(supervisor.game.act.call_args.args[0], {"type": "stop"})
             self.assertTrue((Path(root) / "checkpoint.json").exists())
 
-    def test_covered_defense_cannot_complete_the_requested_rocket_milestone(self):
-        with TemporaryDirectory() as root:
-            supervisor, result, _ = self.run_sequence(root, [observation()], ["defense"],
-                [{"status": "succeeded", "reason": "turrets covered", "evidence": {"urgent": True}}])
-            self.assertEqual(result["status"], "waiting")
-            self.assertEqual(result["reason"], "cycle_limit_reached")
-            self.assertEqual(supervisor.state.tasks["defense"].status, "waiting")
+    def test_component_success_cannot_complete_the_requested_rocket_milestone(self):
+        for stage in ("defense", "energy", "armaments"):
+            with self.subTest(stage=stage), TemporaryDirectory() as root:
+                supervisor, result, _ = self.run_sequence(root, [observation()], [stage],
+                    [{"status": "succeeded", "reason": "component observed", "evidence": {"urgent": True}}])
+                self.assertEqual(result["status"], "waiting")
+                self.assertEqual(result["reason"], "cycle_limit_reached")
+                self.assertEqual(supervisor.state.tasks[stage].status, "waiting")
 
     def test_operator_stop_written_during_prepare_is_honored_before_action(self):
         with TemporaryDirectory() as root:
@@ -161,6 +188,132 @@ class SupervisorLifecycleTests(unittest.TestCase):
             supplied = supervisor.bootstrap.next_action.call_args.args[0]
             self.assertEqual(supplied["entities"], [ordinary])
             supervisor.builder.ensure_power.assert_not_called()
+
+    def production_supervisor(self, root):
+        supervisor = module.DeterministicSupervisor(fake_game(root))
+        supervisor.bootstrap = Mock()
+        supervisor.bootstrap.next_action.return_value = {"status": "succeeded"}
+        supervisor.builder = Mock(state={"power_sample_tick": 1})
+        supervisor.builder.ensure_power.return_value = {"status": "succeeded"}
+        supervisor.builder.owns_automated_burner.return_value = False
+        supervisor.factory = Mock()
+        supervisor.factory.next_action.return_value = {"type": "research", "technology": "electric-mining-drill"}
+        supervisor.fluids = Mock()
+        supervisor.fluids.maintain_coproducts.return_value = None
+        supervisor.energy = Mock(state={})
+        supervisor.energy.next_action.return_value = None
+        supervisor.armaments = Mock()
+        supervisor.defense = Mock()
+        supervisor.defense.requirements.return_value = {"research": ["gun-turret"]}
+        supervisor.defense.next_action.return_value = {"status": "succeeded", "evidence": {"urgent": True}}
+        return supervisor
+
+    def test_cold_energy_recovery_loads_before_power_verification_with_fluids_attached(self):
+        for saved_controller in (False, True):
+            with self.subTest(saved_controller=saved_controller), TemporaryDirectory() as root:
+                supervisor = self.production_supervisor(root)
+                supervisor.catalog = fake_catalog()
+                supervisor.builder.state = {} if saved_controller else {"power_verified_once": True}
+                if saved_controller:
+                    (Path(root) / "energy-expansion.json").write_text(json.dumps({
+                        "schema_version": 1, "world_id": "fixture", "last_tick": 200}), encoding="utf-8")
+                factory, fluids = supervisor.factory, supervisor.fluids
+                supervisor.factory = supervisor.fluids = supervisor.energy = None
+                automated = {"name": "burner-mining-drill", "position": {"x": 5, "y": 5}}
+                factory.owns_automated_burner.side_effect = lambda e: e is automated
+                obs = observation(100, entities=[automated])
+                repair = {"type": "build", "name": "transport-belt", "position": {"x": 5, "y": 6}}
+
+                def recover(controller, current):
+                    self.assertIs(controller.factory.fluids, fluids)
+                    self.assertIs(fluids.factory, controller.factory)
+                    self.assertEqual(current, obs)
+                    return repair
+
+                with patch("factorio_ai.deterministic_factory.DeterministicFactory", return_value=factory), \
+                     patch("factorio_ai.deterministic_fluids.FluidProduction", return_value=fluids), \
+                     patch("factorio_ai.deterministic_defense.DeterministicDefense"), \
+                     patch("factorio_ai.deterministic_armaments.Armaments"), \
+                     patch("factorio_ai.deterministic_energy.EnergyExpansion.next_action", autospec=True, side_effect=recover) as energy:
+                    self.assertEqual(supervisor.next_action(obs, "rocket"), repair)
+                energy.assert_called_once_with(supervisor.energy, obs)
+                self.assertEqual(supervisor.stage, "energy")
+                self.assertEqual(supervisor.bootstrap.next_action.call_args.args[0]["entities"], [])
+                supervisor.builder.ensure_power.assert_not_called()
+                factory.next_action.assert_not_called()
+
+    def test_energy_report_preempts_starter_wait_but_healthy_energy_yields(self):
+        with TemporaryDirectory() as root:
+            supervisor = self.production_supervisor(root)
+            supervisor.builder.state = {"power_verified_once": True}
+            waiting = {"status": "waiting", "reason": "waiting for repaired coal feed"}
+            supervisor.energy.next_action.return_value = waiting
+            self.assertEqual(supervisor.next_action(observation(), "rocket"), waiting)
+            supervisor.builder.ensure_power.assert_not_called()
+            supervisor.energy.next_action.return_value = None
+            supervisor.armaments.next_action.return_value = None
+            self.assertEqual(supervisor.next_action(observation(), "rocket")["type"], "research")
+            supervisor.builder.ensure_power.assert_called_once()
+            self.assertEqual(supervisor.stage, "production")
+
+    def test_initial_power_sample_does_not_start_expansion_before_verified_flow(self):
+        with TemporaryDirectory() as root:
+            supervisor = self.production_supervisor(root)
+            waiting = {"status": "waiting", "reason": "verifying power supply over 30 game seconds"}
+            supervisor.builder.ensure_power.return_value = waiting
+            self.assertEqual(supervisor.next_action(observation(), "rocket"), waiting)
+            supervisor.energy.next_action.assert_not_called()
+
+    def test_saved_energy_from_another_world_cannot_claim_current_power_capability(self):
+        with TemporaryDirectory() as root:
+            supervisor = self.production_supervisor(root)
+            supervisor.builder.state = {}
+            supervisor.energy.state = {"world_id": "old-world"}
+            (Path(root) / "energy-expansion.json").write_text(json.dumps({
+                "schema_version": 1, "world_id": "old-world"}), encoding="utf-8")
+            waiting = {"status": "waiting", "reason": "constructing current world power"}
+            supervisor.builder.ensure_power.return_value = waiting
+            self.assertEqual(supervisor.next_action(observation(), "rocket"), waiting)
+            supervisor.energy.next_action.assert_not_called()
+
+    def test_power_milestone_stops_before_factory_energy_expansion(self):
+        with TemporaryDirectory() as root:
+            supervisor = self.production_supervisor(root)
+            supervisor.builder.state = {"power_verified_once": True}
+            result = supervisor.next_action(observation(), "power")
+            self.assertEqual(result["status"], "succeeded")
+            self.assertEqual(supervisor.stage, "power")
+            supervisor.energy.next_action.assert_not_called()
+            supervisor.factory.next_action.assert_not_called()
+
+    def test_ammunition_research_wait_and_local_success_leave_factory_scheduler_running(self):
+        with TemporaryDirectory() as root:
+            supervisor = self.production_supervisor(root)
+            for result in ({"status": "waiting", "evidence": {"technology": "electric-mining-drill"}},
+                           {"status": "succeeded", "reason": "turret supply observed"}):
+                supervisor.armaments.next_action.return_value = result
+                self.assertEqual(supervisor.next_action(observation(), "rocket")["type"], "research")
+                self.assertEqual(supervisor.factory.priority_research, ["gun-turret"])
+                self.assertEqual(supervisor.stage, "production")
+
+    def test_bounded_ammunition_action_is_never_discarded_for_another_defense_action(self):
+        with TemporaryDirectory() as root:
+            supervisor = self.production_supervisor(root)
+            action = {"type": "insert", "item": "firearm-magazine", "count": 10}
+            supervisor.armaments.next_action.return_value = action
+            self.assertEqual(supervisor.next_action(observation(), "rocket"), action)
+            self.assertEqual(supervisor.stage, "armaments")
+            supervisor.defense.next_action.assert_not_called()
+            supervisor.factory.next_action.assert_not_called()
+
+    def test_failed_enemy_survey_blocks_expansion_instead_of_silently_losing_defense(self):
+        with TemporaryDirectory() as root:
+            supervisor = self.production_supervisor(root)
+            supervisor.armaments.next_action.return_value = None
+            failure = {"status": "blocked", "reason": "enemy observation failed"}
+            supervisor.defense.next_action.return_value = failure
+            self.assertEqual(supervisor.next_action(observation(), "rocket"), failure)
+            supervisor.factory.next_action.assert_not_called()
 
     def test_interrupt_while_connecting_is_persisted_as_operator_stop(self):
         with TemporaryDirectory() as root:

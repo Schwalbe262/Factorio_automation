@@ -29,7 +29,9 @@ class DeterministicSupervisor:
         self.client_status: dict[str, Any] = {}
         self.factory: Any = None
         self.fluids: Any = None
+        self.energy: Any = None
         self.defense: Any = None
+        self.armaments: Any = None
         self.rocket: Any = None
         self.navigator: Any = None
 
@@ -84,12 +86,17 @@ class DeterministicSupervisor:
         if self.factory is None:
             from .deterministic_factory import DeterministicFactory
             from .deterministic_fluids import FluidProduction
+            from .deterministic_energy import EnergyExpansion
             from .deterministic_defense import DeterministicDefense
+            from .deterministic_armaments import Armaments
             self.factory = DeterministicFactory(self.game, self.bootstrap, self.builder, self.catalog)
             self.fluids = FluidProduction(self.game, self.builder, self.catalog)
             self.factory.fluids = self.fluids
             self.fluids.factory = self.factory
+            self.energy = EnergyExpansion(self.game, self.bootstrap, self.builder, self.factory, self.catalog)
             self.defense = DeterministicDefense(self.game, self.bootstrap, self.catalog)
+            self.armaments = Armaments(self.game, self.bootstrap, self.builder, self.factory, self.catalog)
+            self.defense.automatic_ammo = self.armaments.manages_turret
 
     def next_action(self, observation: dict[str, Any], until: str) -> dict[str, Any]:
         self.stage = "bootstrap"
@@ -97,7 +104,9 @@ class DeterministicSupervisor:
             from .deterministic_builder import FactoryBuilder
             self.builder = FactoryBuilder(self.game, self.bootstrap, self.catalog)
         self.builder._sync(observation)
-        if until == "rocket" and "power_sample_tick" in self.builder.state:
+        if until == "rocket" and ("power_sample_tick" in self.builder.state
+                or self.builder.state.get("power_verified_once")
+                or (self.root / "energy-expansion.json").exists()):
             # Restore automatic fuel ownership before bootstrap considers a
             # manual refill. Existing production must survive process restarts.
             self.prepare_production()
@@ -110,6 +119,16 @@ class DeterministicSupervisor:
             return result
         if until == "bootstrap":
             return result
+        # Repair established coal supply before starter verification can wait on
+        # it. A saved controller also survives a cold restart or rollback after
+        # the builder invalidates its transient flow proof; it reobserves assets.
+        if until == "rocket" and self.energy is not None and (
+                self.builder.state.get("power_verified_once")
+                or self.energy.state.get("world_id") == observation.get("world_id")):
+            self.stage = "energy"
+            result = self.energy.next_action(observation)
+            if result:
+                return result
         self.stage = "power"
         result = self.builder.ensure_power(observation)
         if result.get("status") != "succeeded" or result.get("type"):
@@ -118,12 +137,16 @@ class DeterministicSupervisor:
             return result
         self.stage = "production"
         self.prepare_production()
+        self.factory.priority_research = self.defense.requirements(observation).get("research", [])
+        armaments = self.armaments.next_action(observation)
+        if armaments and (armaments.get("type") or armaments.get("status") in {"blocked", "failed"}):
+            self.stage = "armaments"
+            return armaments
         # Research can still advance before turrets unlock; urgent enemy pressure
         # or available defenses are handled before expanding exposed production.
         defense = self.defense.next_action(observation)
-        requirements = defense.get("evidence", {}).get("requirements", {})
-        self.factory.priority_research = requirements.get("research", [])
-        if defense.get("type") or (defense.get("evidence", {}).get("urgent") and defense.get("status") != "succeeded"):
+        if (defense.get("type") or defense.get("status") in {"blocked", "failed"}
+                or (defense.get("evidence", {}).get("urgent") and defense.get("status") != "succeeded")):
             self.stage = "defense"
             return defense
         maintenance = self.fluids.maintain_coproducts(observation)
@@ -206,7 +229,7 @@ class DeterministicSupervisor:
                         print(json.dumps({"stage": self.stage, "status": result.status.value, "reason": result.reason,
                                           "tick": observation["tick"], "entities": len(observation.get("entities", []))}), flush=True)
                         last_print = now
-                    if result.status in {TaskStatus.BLOCKED, TaskStatus.SUCCEEDED}:
+                    if result.status in {TaskStatus.BLOCKED, TaskStatus.FAILED, TaskStatus.SUCCEEDED}:
                         break
                     # Fuel chores temporarily select bootstrap while a later block
                     # is growing. Track the objective's evidence across those chores.

@@ -77,6 +77,20 @@ class DeterministicDefenseTests(unittest.TestCase):
         obs = observation(entities=[entity("lab"), entity("gun-turret", -6)])
         self.assertNotEqual(self.driver.next_action(obs).get("status"), "succeeded")
 
+    def test_managed_turret_keeps_coverage_without_perpetual_hand_refill(self):
+        self.driver.automatic_ammo = lambda turret: True
+        obs = observation(entities=[entity("lab"), entity("gun-turret", -6, inventory={"firearm-magazine": 3})])
+        result = self.driver.next_action(obs)
+        self.assertEqual(result["status"], "succeeded")
+        self.bootstrap.ensure_item.assert_not_called()
+
+    def test_empty_managed_turret_waits_for_supply_without_claiming_armed_coverage(self):
+        self.driver.automatic_ammo = lambda turret: True
+        result = self.driver.next_action(observation(entities=[entity("lab"), entity("gun-turret", -6)]))
+        self.assertEqual(result["status"], "waiting")
+        self.assertEqual(result["evidence"]["empty_turrets"], 1)
+        self.bootstrap.ensure_item.assert_not_called()
+
     def test_armed_covering_turret_proves_defended_supply(self):
         result = self.driver.next_action(observation(entities=[entity("stone-furnace"),
             entity("burner-mining-drill", 0, 2), entity("gun-turret", -6, inventory={"firearm-magazine": 20})]))

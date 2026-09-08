@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import math
-from typing import Any
+from typing import Any, Callable
 
 
 _ASSETS = {"burner-mining-drill", "electric-mining-drill", "stone-furnace", "steel-furnace", "electric-furnace",
@@ -34,6 +34,7 @@ class DeterministicDefense:
         self._health: dict[str, float] = {}
         self._damage: dict[str, int] = {}
         self._range: float | None = None
+        self.automatic_ammo: Callable[[dict], bool] | None = None
 
     def _turret_range(self) -> float:
         if self._range is None:
@@ -130,6 +131,8 @@ return {ok=true,enemies=out}
         turrets = [e for e in observation.get("entities", []) if e.get("name") == "gun-turret"]
         refill = max(1, self.ammo_target // 2)
         for turret in sorted(turrets, key=lambda e: int((e.get("inventory") or {}).get("firearm-magazine", 0))):
+            if self.automatic_ammo is not None and self.automatic_ammo(turret):
+                continue
             stock = int((turret.get("inventory") or {}).get("firearm-magazine", 0))
             if stock >= refill:
                 continue
@@ -144,6 +147,10 @@ return {ok=true,enemies=out}
             return _result("blocked", "live gun-turret range is unavailable")
         uncovered = [e for e in assets if not any(_distance(e["position"], t["position"]) <= coverage for t in turrets)]
         if not uncovered:
+            empty = sum(not int((turret.get("inventory") or {}).get("firearm-magazine", 0)) for turret in turrets)
+            if empty:
+                return _result("waiting", "automatic ammunition supply has empty perimeter turrets",
+                               empty_turrets=empty, urgent=urgent, damage_observed=damage)
             return _result("succeeded", "production sites covered by armed turrets", turret_count=len(turrets),
                            nearby_enemies=len(enemies), damage_observed=damage, urgent=urgent)
         if not (observation.get("enabled_recipes") or {}).get("gun-turret"):
