@@ -87,10 +87,14 @@ class DeterministicGameTests(unittest.TestCase):
         return {"type": "build", "name": "transport-belt", "item": "transport-belt",
                 "position": {"x": index + .5, "y": .5}, "direction": 4, **changes}
 
+    @classmethod
+    def pipe(cls, index=0, **changes):
+        return cls.belt(index, **{"name": "pipe", "item": "pipe", "direction": 0, **changes})
+
     def test_batch_uses_exact_single_build_validation_and_item_cost_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = DeterministicGame(run_config(runtime=Path(tmp)))
-            actions = [self.belt(0), self.belt(1), self.belt(2, name="small-electric-pole", item="small-electric-pole")]
+            actions = [self.belt(0), self.pipe(1), self.belt(2, name="small-electric-pole", item="small-electric-pole")]
             outcomes = [{"ok": True, "status": "succeeded", "unit_number": 10},
                         {"ok": True, "status": "succeeded", "unit_number": 11, "reused": True},
                         {"ok": True, "status": "succeeded", "unit_number": 12}]
@@ -126,13 +130,29 @@ class DeterministicGameTests(unittest.TestCase):
                 game = DeterministicGame(run_config(runtime=Path(tmp)))
                 succeeded = {"ok": True, "status": "succeeded", "unit_number": 10}
                 with patch.object(game, "query", side_effect=[succeeded, error]) as query:
-                    result = game.act({"type": "build_many", "actions": [self.belt(i) for i in range(3)]})
+                    result = game.act({"type": "build_many", "actions": [self.pipe(i) for i in range(3)]})
                 self.assertEqual(query.call_count, 2)
                 self.assertEqual(result["status"], "blocked")
                 self.assertEqual(result["reason"], "build_batch_outcome_unknown")
                 self.assertEqual((result["completed"], result["built"], result["uncertain_index"]), (1, 1, 1))
                 self.assertEqual(result["results"], [succeeded])
                 self.assertEqual(result["exception_type"], type(error).__name__)
+
+    def test_pipe_batch_failure_preserves_paid_and_reused_prefix_and_leaves_later_builds_unattempted(self):
+        for reason in ("missing_item:pipe", "placement_blocked", "existing_direction_mismatch"):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as tmp:
+                game = DeterministicGame(run_config(runtime=Path(tmp)))
+                reused = {"ok": True, "status": "succeeded", "unit_number": 10, "reused": True}
+                paid = {"ok": True, "status": "succeeded", "unit_number": 11}
+                failure = {"ok": False, "reason": reason}
+                actions = [self.pipe(0), self.pipe(1), self.pipe(2), self.belt(3)]
+                with patch.object(game, "query", side_effect=[reused, paid, failure]) as query:
+                    result = game.act({"type": "build_many", "actions": actions})
+                self.assertEqual(query.call_count, 3)
+                self.assertFalse(result["ok"])
+                self.assertEqual((result["completed"], result["built"], result["reused"], result["failed_index"]), (2, 1, 1, 2))
+                self.assertEqual(result["results"], [reused, paid, failure])
+                self.assertEqual(result["reason"], reason)
 
     def test_character_backend_refuses_batch_before_mutating(self):
         game = DeterministicGame(run_config(), backend="character")
@@ -144,6 +164,7 @@ class DeterministicGameTests(unittest.TestCase):
     def test_malformed_later_batch_children_are_rejected_before_any_mutation(self):
         game = DeterministicGame(run_config())
         invalid = [None, [], {"type": "build_many", "actions": [self.belt()]}, self.belt(type="mine"),
+                   self.belt(name="pipe-to-ground", item="pipe-to-ground"),
                    self.belt(name="assembling-machine-1"), self.belt(name=[]), self.belt(item=None),
                    self.belt(position={"x": .5}), self.belt(position={"x": True, "y": .5}),
                    self.belt(position={"x": float("nan"), "y": .5}), self.belt(direction=True),

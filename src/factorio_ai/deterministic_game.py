@@ -24,7 +24,7 @@ from .rcon import FactorioRconClient, RconError, parse_json_response
 
 
 BUILD_BATCH_LIMIT = 32
-BUILD_BATCH_NAMES = frozenset({"transport-belt", "small-electric-pole"})
+BUILD_BATCH_NAMES = frozenset({"transport-belt", "small-electric-pole", "pipe"})
 
 
 RECOVER_EQUIPPED_AMMO_LUA = r'''
@@ -576,7 +576,7 @@ return success{status="running"}
             if (not isinstance(row, dict) or set(row) - {"type", "name", "item", "position", "direction", "reason"}
                     or row.get("type") != "build" or not isinstance(row.get("name"), str)
                     or row["name"] not in BUILD_BATCH_NAMES):
-                raise ValueError("build_many accepts only ordinary belt and pole builds")
+                raise ValueError("build_many accepts only ordinary belt, pole, and plain pipe builds")
             position = row.get("position")
             if (not isinstance(position, dict) or set(position) != {"x", "y"}
                     or any(isinstance(value, bool) or not isinstance(value, (int, float))

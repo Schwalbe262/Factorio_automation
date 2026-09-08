@@ -132,6 +132,39 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual([row["position"] for row in action["actions"]], [belts[2]["position"], belts[3]["position"], pole["position"]])
         self.bootstrap.ensure_item.assert_not_called()
 
+    def test_plain_pipe_plan_batches_only_affordable_prefix_without_changing_fluid_reservations(self):
+        pipes = [{"name": "pipe", "position": {"x": i + .5, "y": .5}, "direction": 0, "_fluid": "water"}
+                 for i in range(40)]
+        original = json.dumps(pipes, sort_keys=True)
+        for available, expected in ((5, 5), (40, 32)):
+            with self.subTest(available=available):
+                self.obs["inventory"] = {"pipe": available}
+                action = self.builder.ensure_plan(self.obs, {"ok": True, "entities": pipes})
+                self.assertEqual(action["type"], "build_many")
+                self.assertEqual(len(action["actions"]), expected)
+                self.assertEqual([row["position"] for row in action["actions"]], [row["position"] for row in pipes[:expected]])
+                self.assertTrue(all(row["type"] == "build" and row["item"] == "pipe" and "_fluid" not in row
+                                    for row in action["actions"]))
+                self.assertEqual(self.obs["inventory"], {"pipe": available})
+                self.assertEqual(json.dumps(pipes, sort_keys=True), original)
+        self.bootstrap.ensure_item.assert_not_called()
+
+    def test_mixed_pipe_batch_reuses_observed_pipe_and_stops_before_underground_or_missing_stock(self):
+        pipes = [{"name": "pipe", "position": {"x": i + .5, "y": .5}, "direction": 0} for i in range(4)]
+        pole = {"name": "small-electric-pole", "position": {"x": 5.5, "y": 1.5}}
+        belt = {"name": "transport-belt", "position": {"x": 6.5, "y": 1.5}, "direction": 4}
+        underground = {"name": "pipe-to-ground", "position": {"x": 7.5, "y": 1.5}, "direction": 8}
+        self.obs["entities"] = [{**pipes[0], "direction": 12}]
+        for barrier in (underground, pipes[3]):
+            with self.subTest(barrier=barrier["name"]):
+                self.obs["inventory"] = {"pipe": 2, "small-electric-pole": 1, "transport-belt": 2, "pipe-to-ground": 2}
+                entities = [pipes[0], pipes[1], pipes[1], pole, pipes[2], belt, barrier, self.belts(1)[0]]
+                action = self.builder.ensure_plan(self.obs, {"ok": True, "entities": entities})
+                self.assertEqual([row["name"] for row in action["actions"]], ["pipe", "small-electric-pole", "pipe", "transport-belt"])
+                self.assertEqual([row["position"] for row in action["actions"]],
+                                 [pipes[1]["position"], pole["position"], pipes[2]["position"], belt["position"]])
+        self.bootstrap.ensure_item.assert_not_called()
+
     def test_build_batch_stops_before_machine_material_deficit_or_recipe_repair(self):
         belts = self.belts(3)
         machine = {"name": "assembling-machine-1", "position": {"x": 8.5, "y": .5}, "recipe": "iron-gear-wheel"}
@@ -156,11 +189,14 @@ class BuilderTests(unittest.TestCase):
 
     def test_character_with_abundant_route_materials_still_builds_one_reachable_entity(self):
         self.game.backend = "character"
-        self.obs["inventory"] = {"transport-belt": 100}
-        action = self.builder.ensure_plan(self.obs, {"ok": True, "entities": self.belts(100)})
-        self.assertEqual(action["type"], "build")
-        self.assertEqual(action["position"], {"x": .5, "y": .5})
-        self.assertNotIn("actions", action)
+        for name in ("transport-belt", "pipe"):
+            with self.subTest(name=name):
+                self.obs["inventory"] = {name: 100}
+                entities = [{**row, "name": name} for row in self.belts(100)]
+                action = self.builder.ensure_plan(self.obs, {"ok": True, "entities": entities})
+                self.assertEqual(action["type"], "build")
+                self.assertEqual(action["position"], {"x": .5, "y": .5})
+                self.assertNotIn("actions", action)
 
     def test_reconstruction_reuses_observed_entities_and_resumes_first_missing(self):
         plan = {"ok": True, "entities": [{"name": "pipe", "position": {"x": .5, "y": .5}},

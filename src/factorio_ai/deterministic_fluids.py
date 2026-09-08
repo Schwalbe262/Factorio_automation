@@ -30,6 +30,24 @@ def _position(x: float, y: float) -> dict:
     return {"x": round(x, 3), "y": round(y, 3)}
 
 
+def _diverse_source_pairs(pairs: list[tuple[dict, dict]], search_costs: dict | None = None) -> list[tuple[dict, dict]]:
+    """Try distinct observed source taps before repeating destination variants."""
+    first, remaining, seen = [], [], set()
+    for pair in pairs:
+        source = _point(pair[0])
+        if source in seen:
+            remaining.append(pair)
+        else:
+            seen.add(source)
+            first.append(pair)
+    def cost(pair):
+        value = (search_costs or {}).get(_point(pair[0]))
+        return value if type(value) in (int, float) and math.isfinite(value) and value > 0 else math.inf
+    # A prior failed search supplies only a cost hint, never an escape proof.
+    first.sort(key=cost)
+    return first + remaining
+
+
 def _rotate(x: float, y: float, direction: int) -> tuple[float, float]:
     for _ in range(direction // 4):
         x, y = -y, x
@@ -484,6 +502,7 @@ return {ok=true,available=available,products_finished=products_finished}
                 return _report("blocked", str(exc))
             network = {}
             pairs = []
+            search_costs = {}
             route = self.builder.route(source["position"], destination["position"], "pipe", obstacles)
             if not route.get("ok"):
                 network = self._network_taps(source, destination)
@@ -497,6 +516,11 @@ return {ok=true,available=available,products_finished=products_finished}
                 pairs.sort(key=lambda pair: math.dist(_point(pair[0]), _point(pair[1])))
                 for tap, receiver in pairs[:32]:
                     trial = self.builder.route(tap, receiver, "pipe", obstacles)
+                    cost = trial.get("visited")
+                    if (trial.get("reason") == "no route within bounds" and type(cost) in (int, float)
+                            and math.isfinite(cost) and cost > 0):
+                        point = _point(tap)
+                        search_costs[point] = min(search_costs.get(point, math.inf), cost)
                     if trial.get("ok"):
                         route = trial
                         break
@@ -505,7 +529,7 @@ return {ok=true,available=available,products_finished=products_finished}
             else:
                 escape = self._underground_escape(observation, source, destination, obstacles)
                 if not escape.get("ok") and not escape.get("needs_recipe"):
-                    for tap, receiver in pairs[:12]:
+                    for tap, receiver in _diverse_source_pairs(pairs, search_costs)[:12]:
                         for facing in DIRECTIONS:
                             escape = self._underground_escape(observation, {**source, "position": tap, "facing": facing},
                                                               {**destination, "position": receiver}, obstacles)
