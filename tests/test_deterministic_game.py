@@ -95,9 +95,15 @@ class DeterministicGameTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             game = DeterministicGame(run_config(runtime=Path(tmp)))
             actions = [self.belt(0), self.pipe(1), self.belt(2, name="small-electric-pole", item="small-electric-pole")]
+            actions += [self.belt(i + 3, name=name, item=name, direction=direction)
+                        for i, (name, direction) in enumerate((
+                            ("inserter", 0), ("long-handed-inserter", 8), ("fast-inserter", 12)))]
             outcomes = [{"ok": True, "status": "succeeded", "unit_number": 10},
                         {"ok": True, "status": "succeeded", "unit_number": 11, "reused": True},
-                        {"ok": True, "status": "succeeded", "unit_number": 12}]
+                        {"ok": True, "status": "succeeded", "unit_number": 12},
+                        {"ok": True, "status": "succeeded", "unit_number": 13},
+                        {"ok": True, "status": "succeeded", "unit_number": 14, "reused": True},
+                        {"ok": True, "status": "succeeded", "unit_number": 15}]
             with patch.object(game, "query", side_effect=outcomes) as query:
                 for child in actions:
                     game.act(child)
@@ -106,8 +112,8 @@ class DeterministicGameTests(unittest.TestCase):
                 result = game.act({"type": "build_many", "actions": actions})
                 self.assertEqual(query.call_args_list, ordinary_commands)
             # Reused infrastructure follows the original early return and spends
-            # no item. Only the two ordinary creations are counted as new builds.
-            self.assertEqual((result["completed"], result["built"], result["reused"]), (3, 2, 1))
+            # no item. Only the four ordinary creations are counted as new builds.
+            self.assertEqual((result["completed"], result["built"], result["reused"]), (6, 4, 2))
             self.assertEqual(result["results"], outcomes)
             self.assertTrue(result["ok"])
 
@@ -161,10 +167,38 @@ class DeterministicGameTests(unittest.TestCase):
                 game.act({"type": "build_many", "actions": [self.belt()]})
             query.assert_not_called()
 
+    def test_mixed_arm_batch_failure_or_timeout_keeps_only_confirmed_paid_and_reused_prefix(self):
+        reused = {"ok": True, "status": "succeeded", "unit_number": 10, "reused": True}
+        paid = {"ok": True, "status": "succeeded", "unit_number": 11}
+        actions = [self.belt(i, name=name, item=name, direction=direction)
+                   for i, (name, direction) in enumerate((
+                       ("long-handed-inserter", 8), ("small-electric-pole", 0),
+                       ("fast-inserter", 12), ("inserter", 4)))]
+        for reason in ("missing_item:fast-inserter", "placement_blocked", "existing_direction_mismatch", "timeout"):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as tmp:
+                game = DeterministicGame(run_config(runtime=Path(tmp)))
+                failure = TimeoutError("response lost") if reason == "timeout" else {"ok": False, "reason": reason}
+                with patch.object(game, "query", side_effect=[reused, paid, failure]) as query:
+                    result = game.act({"type": "build_many", "actions": actions})
+                self.assertEqual(query.call_count, 3)
+                self.assertFalse(result["ok"])
+                self.assertEqual((result["completed"], result["built"], result["reused"]), (2, 1, 1))
+                if reason == "timeout":
+                    self.assertEqual(result["uncertain_index"], 2)
+                    self.assertEqual(result["results"], [reused, paid])
+                    self.assertEqual(result["reason"], "build_batch_outcome_unknown")
+                else:
+                    self.assertEqual(result["failed_index"], 2)
+                    self.assertEqual(result["results"], [reused, paid, failure])
+                    self.assertEqual(result["reason"], reason)
+
     def test_malformed_later_batch_children_are_rejected_before_any_mutation(self):
         game = DeterministicGame(run_config())
         invalid = [None, [], {"type": "build_many", "actions": [self.belt()]}, self.belt(type="mine"),
                    self.belt(name="pipe-to-ground", item="pipe-to-ground"),
+                   self.belt(name="underground-belt", item="underground-belt"),
+                   self.belt(name="bulk-inserter", item="bulk-inserter"),
+                   self.belt(name="inserter", item="inserter", recipe="iron-gear-wheel"),
                    self.belt(name="assembling-machine-1"), self.belt(name=[]), self.belt(item=None),
                    self.belt(position={"x": .5}), self.belt(position={"x": True, "y": .5}),
                    self.belt(position={"x": float("nan"), "y": .5}), self.belt(direction=True),

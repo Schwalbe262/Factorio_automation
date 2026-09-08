@@ -132,6 +132,47 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual([row["position"] for row in action["actions"]], [belts[2]["position"], belts[3]["position"], pole["position"]])
         self.bootstrap.ensure_item.assert_not_called()
 
+    def test_mixed_arm_batch_retains_power_pole_each_facing_and_per_item_inventory(self):
+        pole = {"name": "small-electric-pole", "position": {"x": 2.5, "y": 2.5}, "direction": 0}
+        arms = [{"name": name, "position": {"x": x, "y": y}, "direction": direction}
+                for name, x, y, direction in (("inserter", .5, .5, 0),
+                    ("long-handed-inserter", .5, 1.5, 8), ("fast-inserter", 1.5, .5, 12))]
+        observed = {"name": "fast-inserter", "position": {"x": 4.5, "y": 2.5}, "direction": 4}
+        extra = {**arms[1], "position": {"x": .5, "y": 4.5}}
+        self.obs["entities"] = [observed]
+        self.obs["inventory"] = {name: 1 for name in (pole["name"], *(arm["name"] for arm in arms))}
+        entities = [pole, observed, *arms, arms[1], extra, self.belts(1)[0]]
+        original = json.dumps({"entities": entities, "inventory": self.obs["inventory"]}, sort_keys=True)
+        action = self.builder.ensure_plan(self.obs, {"ok": True, "entities": entities})
+        self.assertEqual(action["type"], "build_many")
+        self.assertEqual(action["actions"], [{"type": "build", "item": row["name"], **row} for row in [pole, *arms]])
+        self.assertEqual(json.dumps({"entities": entities, "inventory": self.obs["inventory"]}, sort_keys=True), original)
+        self.bootstrap.ensure_item.assert_not_called()
+
+    def test_arm_batch_stops_before_machine_or_pending_recipe_configuration(self):
+        arms = [{"name": "inserter", "position": {"x": i + .5, "y": .5}, "direction": 4} for i in range(3)]
+        machine = {"name": "assembling-machine-1", "position": {"x": 8.5, "y": .5}, "recipe": "iron-gear-wheel"}
+        self.obs["inventory"] = {"inserter": 3, "assembling-machine-1": 1}
+        for observed in ([], [{**machine, "recipe": None}]):
+            with self.subTest(machine_observed=bool(observed)):
+                self.obs["entities"] = observed
+                action = self.builder.ensure_plan(self.obs, {"ok": True, "entities": arms[:2] + [machine, arms[2]]})
+                self.assertEqual(action["type"], "build_many")
+                self.assertEqual([row["position"] for row in action["actions"]], [row["position"] for row in arms[:2]])
+
+    def test_arm_batch_limit_and_existing_or_duplicate_facing_conflicts(self):
+        for name in ("inserter", "long-handed-inserter", "fast-inserter"):
+            arms = [{"name": name, "position": {"x": i + .5, "y": .5}, "direction": 8} for i in range(40)]
+            for mode, expected in (("limit", 32), ("existing_facing", 2), ("duplicate_facing", 2)):
+                with self.subTest(name=name, mode=mode):
+                    self.obs["inventory"] = {name: 40}
+                    self.obs["entities"] = [{**arms[2], "direction": 0}] if mode == "existing_facing" else []
+                    entities = arms[:2] + [{**arms[0], "direction": 0}] + arms[2:] if mode == "duplicate_facing" else arms
+                    action = self.builder.ensure_plan(self.obs, {"ok": True, "entities": entities})
+                    self.assertEqual(action["type"], "build_many")
+                    self.assertEqual(len(action["actions"]), expected)
+                    self.assertTrue(all(row["direction"] == 8 for row in action["actions"]))
+
     def test_plain_pipe_plan_batches_only_affordable_prefix_without_changing_fluid_reservations(self):
         pipes = [{"name": "pipe", "position": {"x": i + .5, "y": .5}, "direction": 0, "_fluid": "water"}
                  for i in range(40)]
@@ -189,7 +230,7 @@ class BuilderTests(unittest.TestCase):
 
     def test_character_with_abundant_route_materials_still_builds_one_reachable_entity(self):
         self.game.backend = "character"
-        for name in ("transport-belt", "pipe"):
+        for name in ("transport-belt", "pipe", "inserter", "long-handed-inserter", "fast-inserter"):
             with self.subTest(name=name):
                 self.obs["inventory"] = {name: 100}
                 entities = [{**row, "name": name} for row in self.belts(100)]
