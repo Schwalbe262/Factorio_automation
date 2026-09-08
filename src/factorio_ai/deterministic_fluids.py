@@ -506,6 +506,8 @@ return {ok=true,available=available,products_finished=products_finished}
             route = self.builder.route(source["position"], destination["position"], "pipe", obstacles)
             if not route.get("ok"):
                 network = self._network_taps(source, destination)
+                if network.get("blocked"):
+                    return _report("blocked", network["blocked"])
                 if network.get("connected"):
                     return _report("succeeded", "source and destination already share the actual fluid segment")
                 # A busy source outlet may already have pipes in every useful
@@ -527,7 +529,10 @@ return {ok=true,available=available,products_finished=products_finished}
             if route.get("ok"):
                 entities = [{"name": "pipe", "position": p, "direction": 0} for p in route["path"]]
             else:
-                escape = self._underground_escape(observation, source, destination, obstacles)
+                escape = self._destination_escape(observation, source, destination, obstacles, pairs,
+                                                  network.get("destination_taps", []))
+                if not escape.get("ok") and not escape.get("needs_recipe"):
+                    escape = self._underground_escape(observation, source, destination, obstacles)
                 if not escape.get("ok") and not escape.get("needs_recipe"):
                     for tap, receiver in _diverse_source_pairs(pairs, search_costs)[:12]:
                         for facing in DIRECTIONS:
@@ -591,13 +596,29 @@ local args=helpers.json_to_table(''' + payload + ''');local origin=target(args.s
 if not origin then return {ok=false,reason="source pipe missing"} end
 local id=origin.get_fluid_segment_id(1);local receiver=target(args.destination.position,"pipe")
 if not id then return {ok=false,reason="source fluid segment missing"} end
+local function pure(e)
+ for name,amount in pairs(e.get_fluid_contents()) do
+  if amount>0 and name~=args.source.item then return false end
+ end
+ return true
+end
+if origin.force~=f or (receiver and receiver.force~=f) then
+ return {ok=false,unsafe=true,reason="fluid endpoint belongs to another force"}
+end
+if not pure(origin) or (receiver and not pure(receiver)) then
+ return {ok=false,unsafe=true,reason="fluid endpoint contains another fluid"}
+end
 local receiver_id=receiver and receiver.get_fluid_segment_id(1);local taps={};local destinations={}
-for _,e in pairs(s.find_entities_filtered{force=f,type="pipe"}) do
+for _,e in pairs(s.find_entities_filtered{type="pipe"}) do
  local segment=e.get_fluid_segment_id(1)
  local fluids=e.get_fluid_contents()
- if segment==id and ((fluids[args.source.item] or 0)>0 or
+ if e.force==f and segment==id and ((fluids[args.source.item] or 0)>0 or
     (args.source.allow_empty_segment==true and next(fluids)==nil)) then taps[#taps+1]=pos(e.position) end
- if receiver_id and segment==receiver_id then destinations[#destinations+1]=pos(e.position) end
+ if receiver_id and segment==receiver_id then
+  if e.force~=f then return {ok=false,unsafe=true,reason="receiver fluid segment belongs to another force"} end
+  if not pure(e) then return {ok=false,unsafe=true,reason="receiver fluid segment contains another fluid"} end
+  destinations[#destinations+1]=pos(e.position)
+ end
 end
 local d=args.destination.position
 table.sort(taps,function(a,b) return (a.x-d.x)^2+(a.y-d.y)^2<(b.x-d.x)^2+(b.y-d.y)^2 end)
@@ -605,7 +626,35 @@ local s=args.source.position
 table.sort(destinations,function(a,b) return (a.x-s.x)^2+(a.y-s.y)^2<(b.x-s.x)^2+(b.y-s.y)^2 end)
 return {ok=true,taps=taps,destination_taps=destinations,connected=receiver_id==id}
 ''')
+        if isinstance(result, dict) and result.get("unsafe"):
+            return {"taps": [], "blocked": result["reason"]}
         return result if isinstance(result, dict) and result.get("ok") else {"taps": []}
+
+    def _destination_escape(self, observation: dict, source: dict, destination: dict,
+                            reserved: list[dict], pairs: list, receivers: list) -> dict:
+        """A verified receiver pipe can branch in any cardinal direction.
+
+        Try one nearest source per receiver before repeating source escapes;
+        the port's original facing is only one possible branch of that pipe.
+        """
+        verified = {_point(p) for p in receivers}
+        seen = set()
+        facings = list(dict.fromkeys([destination.get("facing"), *DIRECTIONS]))
+        for tap, receiver in pairs:
+            point = _point(receiver)
+            if point not in verified or point in seen:
+                continue
+            if len(seen) == 12:
+                break
+            seen.add(point)
+            for facing in facings:
+                if facing not in DIRECTIONS:
+                    continue
+                escape = self._underground_escape(observation, {**source, "position": tap, "facing": None},
+                                                  {**destination, "position": receiver, "facing": facing}, reserved)
+                if escape.get("ok") or escape.get("needs_recipe"):
+                    return escape
+        return {"ok": False}
 
     def _underground_escape(self, observation: dict, source: dict, destination: dict, reserved: list[dict]) -> dict:
         """Cross an enclosing pipe with one real, prototype-sized underground pair.
@@ -635,6 +684,16 @@ return {ok=true,taps=taps,destination_taps=destinations,connected=receiver_id==i
         for at_destination, port in ((False, source), (True, destination)):
             if port.get("facing") not in DIRECTIONS:
                 continue
+            other = _point(source["position"] if at_destination else destination["position"])
+            forbidden = set()
+            for row in observation.get("entities", []) + reserved:
+                point = _point(row["position"])
+                if row["name"] in {"pipe", "pipe-to-ground"} and point != other:
+                    forbidden.add(point)
+                    forbidden.update((point[0] + dx, point[1] + dy) for dx, dy in DIRECTIONS.values())
+                elif row["name"] == "transport-belt" and row.get("direction", 0) in DIRECTIONS:
+                    dx, dy = DIRECTIONS[row.get("direction", 0)]
+                    forbidden.add((point[0] + dx, point[1] + dy))
             direction = (port["facing"] + (8 if at_destination else 0)) % 16
             dx, dy = DIRECTIONS[direction]
             x, y = _point(port["position"])
@@ -642,6 +701,10 @@ return {ok=true,taps=taps,destination_taps=destinations,connected=receiver_id==i
             for distance in range(2, int(maximum) + 1):
                 exit = _position(entry["x"] + dx * distance, entry["y"] + dy * distance)
                 continuation = _position(exit["x"] + dx, exit["y"] + dy)
+                # route() exempts its endpoint tiles from obstacles. A new plain
+                # continuation must still avoid other fluid junctions and belt fronts.
+                if _point(continuation) in forbidden:
+                    continue
                 pair = [{"name": "pipe-to-ground", "position": entry, "direction": (direction + 8 - normal_direction) % 16},
                         {"name": "pipe-to-ground", "position": exit, "direction": (direction - normal_direction) % 16}]
                 extension = {"name": "pipe", "position": continuation, "direction": 0}

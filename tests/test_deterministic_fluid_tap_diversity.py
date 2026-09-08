@@ -65,12 +65,13 @@ class PipeConnectionDiversityTests(unittest.TestCase):
         self.builder.ensure_plan.assert_called_once_with(self.obs, link)
         reloaded = FluidProduction(self.game, self.builder, self.catalog)
         self.assertEqual(reloaded.state["links"]["water-branch"], link)
-        self.assertLessEqual(self.fluids._underground_escape.call_count, 1 + 12 * 4)
+        source_calls = [c for c in self.fluids._underground_escape.call_args_list if c.args[1].get("facing") is not None]
+        self.assertLessEqual(len(source_calls), 1 + 12 * 4)
 
     def test_twelve_pair_four_facing_bound_survives_many_destination_variants(self):
         self.fluids._underground_escape = Mock(return_value={"ok": False, "reason": "no outlet route"})
         self.assertEqual(self.connect()["status"], "blocked")
-        calls = self.fluids._underground_escape.call_args_list
+        calls = [c for c in self.fluids._underground_escape.call_args_list if c.args[1].get("facing") is not None]
         self.assertEqual(len(calls), 1 + 12 * 4)
         self.assertEqual({call.args[1]["position"]["x"] for call in calls[1:]}, set(range(100, 112)))
         self.factory.register_plan.assert_not_called()
@@ -87,7 +88,8 @@ class PipeConnectionDiversityTests(unittest.TestCase):
                 self.builder.route.side_effect = route
                 self.fluids._underground_escape = Mock(return_value={"ok": False, "reason": "no outlet route"})
                 self.assertEqual(self.connect()["status"], "blocked")
-                self.assertEqual(self.fluids._underground_escape.call_args_list[1].args[1]["position"]["x"], expected)
+                calls = [c for c in self.fluids._underground_escape.call_args_list if c.args[1].get("facing") is not None]
+                self.assertEqual(calls[1].args[1]["position"]["x"], expected)
 
     def test_existing_link_bypasses_candidate_search_and_keeps_segment_verification(self):
         link = {"ok": True, "entities": [{**e, "_fluid": self.source["item"]} for e in self.escape_entities], "ports": []}
