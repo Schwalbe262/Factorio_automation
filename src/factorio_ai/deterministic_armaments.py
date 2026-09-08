@@ -97,9 +97,31 @@ class Armaments:
                 "inventory": "turret_ammo", "count": count, "reason": "bounded initial turret ammunition seed"}
 
     def _intake_candidates(self, turret: dict) -> Iterator[dict]:
+        ranked, _ = self._intake_order(turret)
+        yield from self._validated_intakes(plan for plan, _ in ranked)
+
+    def _intake_order(self, turret: dict, previous: dict | None = None):
+        from .deterministic_intake_order import order_intakes
+        return order_intakes(self, turret, list(islice(self._intake_geometry(turret), MAX_INTAKE_CANDIDATES)), previous)
+
+    def _validated_intakes(self, plans) -> Iterator[dict]:
+        for plan in plans:
+            port = plan["ports"][0]
+            dx, dy = DIRECTIONS[port["facing"]]
+            arrival = {"name": "transport-belt", "direction": port["facing"], "position": {
+                "x": port["position"]["x"] - dx, "y": port["position"]["y"] - dy}}
+            if self.builder.can_place([*plan["entities"], arrival]).get("ok"):
+                yield plan
+
+    def _intake_geometry(self, turret: dict) -> Iterator[dict]:
+        from .deterministic_intake_order import reusable_poles
         center = turret["position"]
         key = "armaments:" + self._key(turret)
-        occupied = self.builder._occupied_by_plan(self.factory._reserved(exclude=key)) | self.factory._port_clearances(exclude=key)
+        reserved = self.factory._reserved(exclude=key)
+        clearances = self.factory._port_clearances(exclude=key)
+        occupied = self.builder._occupied_by_plan(reserved) | clearances
+        shared = reusable_poles(self, turret)
+        shared_obstacles = {}
         for outward in (12, 4, 0, 8):
             dx, dy = DIRECTIONS[outward]
             for tangent in (-.5, .5):
@@ -114,17 +136,23 @@ class Armaments:
                     continue
                 equipment = [inserter, *belts]
                 for pole in self.factory._intake_poles(position, equipment):
+                    point = pole["position"]["x"], pole["position"]["y"]
+                    proof = shared.get(point)
+                    obstacles = occupied
+                    if proof and max(abs(pole["position"][axis] - position[axis]) for axis in ("x", "y")) <= proof["reach"]:
+                        if point not in shared_obstacles:
+                            shared_obstacles[point] = self.builder._occupied_by_plan([e for e in reserved
+                                if not (e["name"] == "small-electric-pole" and e["position"] == pole["position"])]) | clearances
+                        obstacles = shared_obstacles[point]
+                        pole = {**pole, "_shared_power": proof}
                     entities = [*equipment, pole]
-                    if self.builder._occupied_by_plan(entities) & occupied:
+                    if self.builder._occupied_by_plan(entities) & obstacles:
                         continue
                     plan = {"ok": True, "entities": [
                         {"name": "gun-turret", "position": center, "direction": turret.get("direction", 0), "_width": 2, "_height": 2},
                         *entities], "ports": [{"kind": "item", "item": "firearm-magazine", "direction": "input",
                                                 "position": belts[-1]["position"], "facing": (outward + 8) % 16}]}
-                    arrival = {"name": "transport-belt", "position": {"x": approach[0], "y": approach[1]},
-                               "direction": (outward + 8) % 16}
-                    if self.builder.can_place([*plan["entities"], arrival]).get("ok"):
-                        yield plan
+                    yield plan
 
     def _intake_approach_clear(self, plan: dict) -> bool:
         port = (plan.get("ports") or [{}])[0]
@@ -163,9 +191,10 @@ class Armaments:
         self._save()
         return True
 
-    @staticmethod
-    def _intake_hardware_present(obs: dict, plan: dict) -> bool:
+    def _intake_hardware_present(self, obs: dict, plan: dict) -> bool:
+        from .deterministic_intake_order import inherited_pole
         return any(e.get("name") == planned["name"] and e.get("position") == planned["position"]
+                   and not inherited_pole(self, obs, planned, e, plan.get("key"))
                    for planned in plan.get("entities", []) if planned["name"] != "gun-turret"
                    for e in obs.get("entities", []))
 
@@ -186,6 +215,17 @@ class Armaments:
                     break
         if existing is not None and existing != previous:
             return _report("blocked", "ammunition intake reservation differs from its owned record", turret=turret["position"])
+        candidates = None
+        if (previous and existing == previous and key not in self.factory.state.get("links", {})
+                and not self._intake_hardware_present(obs, previous)):
+            ranked, old_score = self._intake_order(turret, previous)
+            better = [plan for plan, score in ranked if score is not None and old_score is not None and score > old_score]
+            preferred = next(self._validated_intakes(better), None)
+            if preferred is not None and self._discard_unbuilt_intake(obs, turret, key, row):
+                previous = None
+                # Preserve the live-placeable choice: earlier pole variants in
+                # its entrance group may have failed the placement check.
+                candidates = self._validated_intakes([preferred, *(plan for plan, _ in ranked if plan != preferred)])
         if previous:
             reserved = self.factory.register_plan(key, previous, obs)
             if not reserved.get("ok"):
@@ -198,7 +238,7 @@ class Armaments:
                 return result if not _ready(result) else self._finish_intake(obs, key, row)
         # Cover every side within the finite geometry bound; never retry the
         # identical saved plan. Different poles may unblock the same intake.
-        for candidate in islice(self._intake_candidates(turret), MAX_INTAKE_CANDIDATES):
+        for candidate in islice(candidates if candidates is not None else self._intake_candidates(turret), MAX_INTAKE_CANDIDATES):
             if previous and all(candidate.get(field) == previous.get(field) for field in ("entities", "ports")):
                 continue
             reserved = self.factory.register_plan(key, candidate, obs)
