@@ -347,6 +347,7 @@ return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.
 
     def act(self, action: dict[str, Any]) -> dict[str, Any]:
         validate_belt_switch_backend(action, self.backend)
+        validate_belt_route_replacement(action)
         if action.get("type") == "build":
             underground_fields(action)
         elif "belt_to_ground_type" in action:

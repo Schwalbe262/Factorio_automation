@@ -53,7 +53,8 @@ class BeltSwitchGuardTests(unittest.TestCase):
     def test_malformed_identity_or_geometry_fails_before_any_query(self):
         invalid = []
         for key, value in (("expected_entity_unit", True), ("expected_entity_world_id", ""),
-                           ("count", 2), ("name", "stone-furnace"), ("type", "build")):
+                           ("count", 2), ("name", "stone-furnace"), ("type", "build"),
+                           ("type", "repair"), ("type", "finish_repair")):
             action = switch_action(); action[key] = value; invalid.append(action)
         for key, value in (("item", ""), ("expected_actor_unit_number", True), ("entry_direction", 1),
                            ("entities", []), ("pairs", [])):
