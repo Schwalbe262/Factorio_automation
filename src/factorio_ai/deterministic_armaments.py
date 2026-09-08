@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import json
+from itertools import islice
 from pathlib import Path
 from typing import Any, Iterator
 
 from .deterministic_state import _atomic_json
 from .factory_templates import DIRECTIONS
+
+
+MAX_INTAKE_CANDIDATES = 8 * 24  # Four sides, two offsets, at most 24 nearby poles.
 
 
 def _report(status: str, reason: str, **evidence: Any) -> dict:
@@ -95,7 +99,7 @@ class Armaments:
     def _intake_candidates(self, turret: dict) -> Iterator[dict]:
         center = turret["position"]
         key = "armaments:" + self._key(turret)
-        occupied = self.builder._occupied_by_plan(self.factory._reserved(exclude=key)) | self.factory._port_clearances()
+        occupied = self.builder._occupied_by_plan(self.factory._reserved(exclude=key)) | self.factory._port_clearances(exclude=key)
         for outward in (12, 4, 0, 8):
             dx, dy = DIRECTIONS[outward]
             for tangent in (-.5, .5):
@@ -117,32 +121,97 @@ class Armaments:
                         {"name": "gun-turret", "position": center, "direction": turret.get("direction", 0), "_width": 2, "_height": 2},
                         *entities], "ports": [{"kind": "item", "item": "firearm-magazine", "direction": "input",
                                                 "position": belts[-1]["position"], "facing": (outward + 8) % 16}]}
-                    if self.builder.can_place(plan["entities"]).get("ok"):
+                    arrival = {"name": "transport-belt", "position": {"x": approach[0], "y": approach[1]},
+                               "direction": (outward + 8) % 16}
+                    if self.builder.can_place([*plan["entities"], arrival]).get("ok"):
                         yield plan
+
+    def _intake_approach_clear(self, plan: dict) -> bool:
+        port = (plan.get("ports") or [{}])[0]
+        if port.get("facing") not in DIRECTIONS or not port.get("position"):
+            return False
+        dx, dy = DIRECTIONS[port["facing"]]
+        arrival = {"name": "transport-belt", "direction": port["facing"], "position": {
+            "x": port["position"]["x"] - dx, "y": port["position"]["y"] - dy}}
+        return bool(self.builder.can_place([arrival]).get("ok"))
+
+    def _intake_owner_matches(self, obs: dict, turret: dict, row: dict) -> bool:
+        return bool(obs.get("world_id") and self.state.get("world_id") == obs["world_id"]
+                    and self.factory.state.get("world_id") == obs["world_id"]
+                    and self.state.get("catalog_fingerprint") == self.catalog.fingerprint
+                    and self.factory.state.get("catalog_fingerprint") == self.catalog.fingerprint
+                    and type(turret.get("unit_number")) is int and turret["unit_number"] > 0
+                    and row.get("unit_number") == turret["unit_number"]
+                    and any(e.get("unit_number") == turret["unit_number"] and e.get("name") == "gun-turret"
+                            and e.get("position") == turret["position"] for e in obs.get("entities", [])))
+
+    def _discard_unbuilt_intake(self, obs: dict, turret: dict, key: str, row: dict) -> bool:
+        plan = row.get("plan")
+        if (not plan or key in self.factory.state.get("links", {})
+                or not self._intake_owner_matches(obs, turret, row)
+                or self.factory.state.get("blocks", {}).get(key) != plan
+                or self._intake_hardware_present(obs, plan)):
+            return False
+        # Release only this unbuilt reservation. Saving it first makes a crash
+        # between checkpoints safely retry the still-recorded old candidate.
+        self.factory.state["blocks"].pop(key)
+        self.factory._save()
+        row.pop("plan")
+        row["owned"] = False
+        row.pop("sample", None)
+        row.pop("proof", None)
+        self._save()
+        return True
+
+    @staticmethod
+    def _intake_hardware_present(obs: dict, plan: dict) -> bool:
+        return any(e.get("name") == planned["name"] and e.get("position") == planned["position"]
+                   for planned in plan.get("entities", []) if planned["name"] != "gun-turret"
+                   for e in obs.get("entities", []))
 
     def _ensure_intake(self, obs: dict, turret: dict, row: dict, source: dict) -> dict:
         key = "armaments:" + self._key(turret)
-        if "plan" not in row:
-            candidates = self._intake_candidates(turret)
-            for candidate in candidates:
-                reserved = self.factory.register_plan(key, candidate, obs)
-                if not reserved.get("ok"):
-                    continue
-                row["plan"] = reserved
-                self._save()
-                result = self.factory.connect_input(obs, source, reserved["ports"][0], key)
-                # A failed route has built nothing. Try another turret side;
-                # once a link exists its ordinary construction must be resumed.
-                if result.get("status") == "blocked" and key not in self.factory.state.get("links", {}):
-                    row.pop("plan", None)
-                    continue
+        if not self._intake_owner_matches(obs, turret, row):
+            return _report("blocked", "ammunition intake world or turret identity changed")
+        previous = row.get("plan")
+        existing = self.factory.state.get("blocks", {}).get(key)
+        if (previous is None and existing is not None and existing.get("key") == key
+                and key not in self.factory.state.get("links", {}) and not self._intake_hardware_present(obs, existing)):
+            # Recover a crash after register_plan saved, before the armaments
+            # record saved. Only a current, exact deterministic candidate owns it.
+            for candidate in islice(self._intake_candidates(turret), MAX_INTAKE_CANDIDATES):
+                if all(candidate.get(field) == existing.get(field) for field in ("entities", "ports")):
+                    previous = row["plan"] = existing
+                    self._save()
+                    break
+        if existing is not None and existing != previous:
+            return _report("blocked", "ammunition intake reservation differs from its owned record", turret=turret["position"])
+        if previous:
+            reserved = self.factory.register_plan(key, previous, obs)
+            if not reserved.get("ok"):
+                return _report("blocked", "ammunition intake reservation conflicts with another block", turret=turret["position"])
+            result = (self.factory.connect_input(obs, source, previous["ports"][0], key)
+                      if key in self.factory.state.get("links", {}) or self._intake_approach_clear(previous)
+                      else _report("blocked", "ammunition intake approach is obstructed"))
+            if (result.get("status") != "blocked" or result.get("type")
+                    or not self._discard_unbuilt_intake(obs, turret, key, row)):
                 return result if not _ready(result) else self._finish_intake(obs, key, row)
-            return _report("blocked", "no reachable automatic ammunition intake around turret", turret=turret["position"])
-        reserved = self.factory.register_plan(key, row["plan"], obs)
-        if not reserved.get("ok"):
-            return _report("blocked", "ammunition intake reservation conflicts with another block", turret=turret["position"])
-        result = self.factory.connect_input(obs, source, row["plan"]["ports"][0], key)
-        return result if not _ready(result) else self._finish_intake(obs, key, row)
+        # Cover every side within the finite geometry bound; never retry the
+        # identical saved plan. Different poles may unblock the same intake.
+        for candidate in islice(self._intake_candidates(turret), MAX_INTAKE_CANDIDATES):
+            if previous and all(candidate.get(field) == previous.get(field) for field in ("entities", "ports")):
+                continue
+            reserved = self.factory.register_plan(key, candidate, obs)
+            if not reserved.get("ok"):
+                continue
+            row["plan"] = reserved
+            self._save()
+            result = self.factory.connect_input(obs, source, reserved["ports"][0], key)
+            if (result.get("status") == "blocked" and not result.get("type")
+                    and self._discard_unbuilt_intake(obs, turret, key, row)):
+                continue
+            return result if not _ready(result) else self._finish_intake(obs, key, row)
+        return _report("blocked", "no reachable automatic ammunition intake around turret", turret=turret["position"])
 
     def _finish_intake(self, obs: dict, key: str, row: dict) -> dict:
         result = self.builder.ensure_plan(obs, row["plan"])
