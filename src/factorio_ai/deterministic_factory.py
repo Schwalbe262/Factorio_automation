@@ -1197,6 +1197,7 @@ return {ok=true,belts=out}
                 drop = {"x": p["x"] + dx, "y": p["y"] + dy}
                 candidates.append((_distance(source, pickup) + _distance(drop, destination), direction, p, pickup, drop))
         candidates.sort(key=lambda row: row[0])
+        parallel_attempts = 0
         for _, direction, position, pickup, drop in candidates[:128]:
             dx, dy = DIRECTIONS[direction]
             inserter = {"name": "long-handed-inserter", "position": {"x": position["x"] - dx, "y": position["y"] - dy},
@@ -1218,11 +1219,79 @@ return {ok=true,belts=out}
                 second = self.builder.route(drop, destination, "transport-belt", reserved + trial + first_entities, margin=48,
                                             start_direction=direction, end_direction=directions.get("end_direction"))
                 if not second.get("ok"):
+                    if parallel_attempts < 4:
+                        parallel_attempts += 1
+                        extended = self._parallel_belt_bridge_route(
+                            destination, reserved, candidates, direction, position, drop,
+                            trial, first, end_direction=directions.get("end_direction"))
+                        if extended.get("ok"):
+                            return extended
                     break
                 segments = first["segments"] + [inserter, pole] + second["segments"]
                 return {"ok": True, "path": first["path"] + second["path"], "segments": segments,
                         "crossing": {"kind": "long-handed-inserter", "over": position}, "flow_verified": False}
         return {"ok": False, "reason": "no clear powered long-inserter belt crossing"}
+
+    def _parallel_belt_bridge_route(self, destination: dict, reserved: list[dict], candidates: list,
+                                    direction: int, first_position: dict, first_drop: dict,
+                                    first_trial: list[dict], first: dict, *, end_direction: int | None) -> dict:
+        """Cross a second parallel trunk with two direct legs, never recurse.
+
+        Closely spaced coal trunks can divide the same production corridor.
+        The caller bounds eligible first crossings; only two aligned forward
+        second crossings are considered for each, with ordinary paid equipment.
+        """
+        dx, dy = DIRECTIONS[direction]
+        options = []
+        for score, facing, position, pickup, drop in candidates:
+            vx, vy = position["x"] - first_position["x"], position["y"] - first_position["y"]
+            advance = vx * dx + vy * dy
+            if (facing == direction and vx * dy == vy * dx and 4 <= advance <= 64
+                    and _distance(drop, destination) < _distance(first_drop, destination)):
+                options.append((advance, score, position, pickup, drop))
+        options.sort(key=lambda row: (row[0], row[1]))
+        first_entities = [{"name": "transport-belt", **e} for e in first["segments"]]
+        occupied = reserved + first_trial + first_entities
+        for _, _, position, pickup, drop in options[:2]:
+            arm = {"name": "long-handed-inserter", "position": {
+                "x": position["x"] - dx, "y": position["y"] - dy}, "direction": (direction + 8) % 16}
+            equipment = [arm, *[{"name": "transport-belt", "position": p, "direction": direction}
+                               for p in (pickup, drop)]]
+            # Four-tile trunk spacing shares the first drop and second pickup.
+            # Only that identical facing belt may overlap the first crossing.
+            limited = [e for e in occupied if not (pickup == first_drop and e["name"] == "transport-belt"
+                       and e["position"] == pickup and e.get("direction", 0) == direction)]
+            if self.builder._occupied_by_plan(equipment) & self.builder._occupied_by_plan(limited):
+                continue
+            for pole in self._intake_poles(arm["position"], equipment)[:8]:
+                trial = equipment + [pole]
+                if (self.builder._occupied_by_plan(trial) & self.builder._occupied_by_plan(limited)
+                        or not self.builder.can_place(trial).get("ok")):
+                    continue
+                middle = self.builder.route(first_drop, pickup, "transport-belt", occupied + trial,
+                                            margin=48, start_direction=direction, end_direction=direction)
+                if not middle.get("ok"):
+                    break
+                middle_entities = [{"name": "transport-belt", **e} for e in middle["segments"]]
+                last = self.builder.route(drop, destination, "transport-belt", occupied + trial + middle_entities,
+                                          margin=48, start_direction=direction, end_direction=end_direction)
+                if not last.get("ok"):
+                    break
+                rows = first_entities + first_trial + middle_entities + trial + [
+                    {"name": "transport-belt", **e} for e in last["segments"]]
+                unique = {}
+                for entity in rows:
+                    key = (entity["name"], entity["position"]["x"], entity["position"]["y"])
+                    if key in unique and unique[key].get("direction", 0) != entity.get("direction", 0):
+                        return {"ok": False, "reason": "parallel crossing endpoint directions conflict"}
+                    unique[key] = entity
+                segments = list(unique.values())
+                if not self.builder.can_place(segments).get("ok"):
+                    continue
+                return {"ok": True, "path": first["path"] + middle["path"] + last["path"],
+                        "segments": segments, "crossing": {"kind": "long-handed-inserter",
+                            "over": first_position, "additional_over": [position]}, "flow_verified": False}
+        return {"ok": False, "reason": "no clear second parallel long-inserter crossing"}
 
     @staticmethod
     def _electric_source_plan(item: str, x: float, y: float) -> dict:
@@ -1672,8 +1741,14 @@ return {ok=true,input_belt_verified=true}
         result = self.builder.ensure_plan(obs, plan)
         if not _ready(result):
             return result
-        if any(e["name"] == "small-electric-pole" for e in plan["entities"]):
-            result = self.ensure_power_connection(obs, "tap:" + link_key, plan)
+        poles = [e for e in plan["entities"] if e["name"] == "small-electric-pole"]
+        for pole in poles:
+            power_key, power_plan = "tap:" + link_key, plan
+            if len(poles) > 1:
+                x, y = pole["position"]["x"], pole["position"]["y"]
+                power_key += f":pole:{x:g},{y:g}"
+                power_plan = {**plan, "entities": [deepcopy(pole)]}
+            result = self.ensure_power_connection(obs, power_key, power_plan)
             if not _ready(result):
                 return result
         return _report("succeeded", "producer-to-consumer belt connection observed", flow_verified=False, link=link_key)

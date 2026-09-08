@@ -1,10 +1,10 @@
 # Current Handoff
 - Branch feat/deterministic-space-age-autoplayer; goal.md authoritative; active goal real rocket without excessive delay. No gameplay LLMs/material grants/forced research. Automatic science/rocket NOT achieved; red35/35 startup only.
 - Main adapter-smoke UDP34210/RCON27025 world2cc5423e-38ae-4be8-b2c0-2f55b4d2d3a6 actor58; server44760/client58928 GUIvisible. watch_factorio_deterministic.bat reuses client; --hide-window hides.
-- Main worker736 exited naturally1581080/cycle37: material route obstructed, recipe:automation-science-pack:copper-plate, no clear powered long-arm drop into owned input belt. Red assembler(2.5,7.5) installed; main-84117b1.out/err.log.
+- Main worker736 exited1581080/cycle37 at copper route. General two-coal-trunk crossing fixed:43entities,12queries/3.485s live preflight;9focused and503integrated tests OK37skips. Resume main with this commit; red assembler(2.5,7.5) installed.
 - Main copper drill fuel165entities complete, furnace intake built. Three extra iron cells connected/nominal71.25/min; energy feed3 normally built/coal-backed1800kW; earlier proofs in runtime.
 - Belt buffer84117b1 live: chest2937(-3.5,-36.5) bar2/77belts at1548743, powered arm2938 holdingbelt; original belt2101dir4 preserved. Actual batch32 construction pending new input route.
 - Strict character-navigation-qa UDP34216/RCON27031 worlde4e46cc9-8fd3-4993-a950-4e6a7417d11a actor11 server50304/client27700 hidden; worker60380 exited1297920/cycle11 no routed extra boiler coal site(bank0,target577.8vs562kW). strict-84117b1.out/err.log.
 - Strict raw electric drill2295 reach recovery and iron drill1911 auto fuel proven; furnace auto fuel unproven(manual8coal at1026640). Bounded coal survey405sites/148collision-free; routing trace firstsource(-59.5,10.5), destination(-52.5,10.5), no route; diagnostic files in strict runtime.
-- Stable product success reuse frozen: exact observation/item/rate/stack, saved-state revision and driver contexts; state-changing/fluid successes excluded.19.438->15.047s,72->56queries same action.494tests OK37skips. Root owns commit/lifecycle; no restart merely after timeout.
+- Stable product result reuse b1eeb64:19.438->15.047s,72->56queries same action. Current crossing adds two bounded ordinary long-arm crossings and per-pole power routes; actual copper/science flow pending.
 - Preserve pre-existing dirty insight.md. Next fix actual main red copper route, then strict coal routing; frozen three-seed rocket acceptance NOT done. Per-part journal/token accounting and commit/push required.
