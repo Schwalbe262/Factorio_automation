@@ -290,6 +290,37 @@ return success{sites=out}
     def route(self, source: dict, destination: dict, name: str, reserved: list[dict],
               *, start_direction: int | None = None, end_direction: int | None = None,
               margin: float = 12) -> dict:
+        return self._route(source, destination, name, reserved, start_direction=start_direction,
+                           end_direction=end_direction, margin=margin)
+
+    def clear_route_obstacle(self, source: dict, destination: dict, reserved: list[dict],
+                             *, start_direction: int | None = None, end_direction: int | None = None,
+                             margin: float = 24) -> dict:
+        """Return one ordinary mining action only after proving a clearable route.
+
+        The alternate path is never exposed as a construction plan. The caller
+        must reobserve and use normal collision checks after every mined entity.
+        """
+        result = self._route(source, destination, "transport-belt", reserved, margin=margin,
+                             start_direction=start_direction, end_direction=end_direction, clear_natural=True)
+        if not result.get("ok"):
+            return {"ok": False, "reason": result.get("reason", "no clearable route")}
+        clearable = {(row["position"]["x"], row["position"]["y"]): row["entities"]
+                     for row in result.get("clearable", [])}
+        for point in result["path"]:
+            for entity in clearable.get((point["x"], point["y"]), []):
+                if (entity.get("force") == "neutral" and entity.get("minable")
+                        and (entity.get("type") == "tree" or (entity.get("type") == "simple-entity"
+                             and entity.get("name") in {"big-rock", "huge-rock", "big-sand-rock"}))):
+                    return {"ok": True, "action": {"type": "mine", "name": entity["name"],
+                        "position": entity["position"], "count": 1,
+                        "reason": "clear an observed natural obstacle on a proven material route"},
+                        "planned_length": len(result["path"])}
+        return {"ok": False, "reason": "route has no verified natural obstacle to clear"}
+
+    def _route(self, source: dict, destination: dict, name: str, reserved: list[dict],
+               *, start_direction: int | None = None, end_direction: int | None = None,
+               margin: float = 12, clear_natural: bool = False) -> dict:
         if (isinstance(margin, bool) or not isinstance(margin, (int, float)) or not math.isfinite(margin)
                 or margin < 1 or int(margin) != margin):
             return {"ok": False, "reason": "route margin must be a positive whole number of tiles"}
@@ -301,11 +332,33 @@ return success{sites=out}
         if cells > 50000:
             return {"ok": False, "reason": "route survey exceeds 50000 tiles"}
         payload = json.dumps(json.dumps({"bounds": bounds, "name": name, "source": source,
-                                        "destination": destination}, separators=(",", ":")))
+                                        "destination": destination, "clear_natural": clear_natural}, separators=(",", ":")))
         survey = self.game.query('''
-local args=helpers.json_to_table(''' + payload + ''');local b=args.bounds;local blocked={}
+local args=helpers.json_to_table(''' + payload + ''');local b=args.bounds;local blocked={};local clearable={}
+local function natural(p)
+ if not args.clear_natural then return nil end
+ --[[ Ghost checks retain terrain collision but may ignore buildings;
+ independently reject every other entity before admitting this tile. ]]
+ if not s.can_place_entity{name=args.name,position=p,force=f,
+  build_check_type=defines.build_check_type.manual_ghost,forced=true} then return nil end
+ local box=prototypes.entity[args.name].collision_box
+ local area={{p.x+box.left_top.x,p.y+box.left_top.y},{p.x+box.right_bottom.x,p.y+box.right_bottom.y}}
+ local out={}
+ for _,e in pairs(s.find_entities_filtered{area=area}) do
+  if e.type~="resource" then
+   local rock=e.type=="simple-entity" and (e.name=="big-rock" or e.name=="huge-rock" or e.name=="big-sand-rock")
+   if e.force.name~="neutral" or not e.minable or not (e.type=="tree" or rock) then return nil end
+   out[#out+1]={name=e.name,type=e.type,position=pos(e.position),force=e.force.name,minable=true}
+  end
+ end
+ if #out>0 then return out end
+end
 for x=b.min_x,b.max_x,1 do for y=b.min_y,b.max_y,1 do
- if not s.can_place_entity{name=args.name,position={x=x,y=y},force=f} then blocked[#blocked+1]={x=x,y=y} end
+ local p={x=x,y=y}
+ if not s.can_place_entity{name=args.name,position=p,force=f} then
+  local removable=natural(p)
+  if removable then clearable[#clearable+1]={position=p,entities=removable} else blocked[#blocked+1]=p end
+ end
 end end
 local function endpoint(p) return (p.x==args.source.x and p.y==args.source.y) or (p.x==args.destination.x and p.y==args.destination.y) end
 for _,e in pairs(s.find_entities_filtered{area={{b.min_x-1,b.min_y-1},{b.max_x+1,b.max_y+1}},force=f}) do
@@ -318,7 +371,7 @@ for _,e in pairs(s.find_entities_filtered{area={{b.min_x-1,b.min_y-1},{b.max_x+1
   end
  end
 end
-return success{blocked=blocked}
+return success{blocked=blocked,clearable=clearable}
 ''')
         if not survey.get("ok"):
             return {"ok": False, "reason": survey.get("reason") or "route survey failed"}
@@ -336,8 +389,11 @@ return success{blocked=blocked}
         occupied.update((p["x"], p["y"]) for p in survey.get("blocked", []))
         occupied.discard((source["x"], source["y"]))
         occupied.discard((destination["x"], destination["y"]))
-        return route_orthogonal(source, destination, occupied=occupied, bounds=bounds,
-                                max_nodes=25000, start_direction=start_direction, end_direction=end_direction)
+        result = route_orthogonal(source, destination, occupied=occupied, bounds=bounds,
+                                  max_nodes=25000, start_direction=start_direction, end_direction=end_direction)
+        if clear_natural and result.get("ok"):
+            result["clearable"] = survey.get("clearable", [])
+        return result
 
     def _choose_power_plan(self) -> dict:
         for site in self.water_sites():

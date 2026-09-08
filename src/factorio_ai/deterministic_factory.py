@@ -366,18 +366,25 @@ return {ok=true,feeds_receiver=math.abs(p.x-receiver.position.x)<=receiver.proto
             return result
         primary = self.state["blocks"][primary_key]
         if key != primary_key:
+            dependencies = list(plan.get("continuity_dependencies", []))
             if key + ":refill" in self.state["blocks"]:
-                refill = self.state["blocks"][key + ":refill"]
-                buffer = refill.get("receiver") or primary["source_receiver"]
-                if not buffer.get("position") or buffer.get("name") not in {"wooden-chest", "iron-chest", "steel-chest"}:
-                    return _report("blocked", "source continuity refill has no restorable item buffer", item=item)
-                if not any(self._entity_key(e) == self._entity_key(buffer) for e in refill["entities"]):
-                    refill["entities"].insert(0, {**deepcopy(buffer), "direction": 0})
-                    self._save()
-                result = self.builder.ensure_plan(observation, refill)
+                dependencies.append({"category": "blocks", "key": key + ":refill"})
+            for dependency in dependencies:
+                category, dependency_key = dependency.get("category"), dependency.get("key")
+                maintained = self.state.get(category, {}).get(dependency_key) if category in {"blocks", "links"} else None
+                if maintained is None:
+                    return _report("blocked", "source continuity dependency is missing", item=item, dependency=dependency)
+                if dependency_key.endswith(":refill"):
+                    buffer = maintained.get("receiver") or primary["source_receiver"]
+                    if not buffer.get("position") or buffer.get("name") not in {"wooden-chest", "iron-chest", "steel-chest"}:
+                        return _report("blocked", "source continuity refill has no restorable item buffer", item=item)
+                    if not any(self._entity_key(e) == self._entity_key(buffer) for e in maintained["entities"]):
+                        maintained["entities"].insert(0, {**deepcopy(buffer), "direction": 0})
+                        self._save()
+                result = self.builder.ensure_plan(observation, maintained)
                 if not _ready(result):
                     return result
-                result = self.ensure_power_connection(observation, key + ":refill", refill)
+                result = self.ensure_power_connection(observation, dependency_key, maintained)
                 if not _ready(result):
                     return result
             result = self._merge_output(observation, plan["ports"][0], plan.get("continuity_target", primary["ports"][0]), key + ":output")
@@ -457,6 +464,9 @@ return {ok=true,receivers=receivers}
                     accepted = 0
                     for pole in self._intake_poles(arm["position"], equipment):
                         entities = [*equipment, pole]
+                        fx, fy = DIRECTIONS[facing]
+                        if output and pole["position"] == {"x": belt_position["x"] + fx, "y": belt_position["y"] + fy}:
+                            continue
                         if self.builder._occupied_by_plan(entities) & occupied:
                             continue
                         if not self.builder.can_place(entities).get("ok"):
@@ -468,6 +478,88 @@ return {ok=true,receivers=receivers}
                             break
         return candidates
 
+    def _previous_source_targets(self, item: str, primary: dict) -> tuple[list[dict], list[dict], dict | None]:
+        """Reuse only the directed upstream tail of the established source.
+
+        Its complete construction dependencies stay owned by the replacement,
+        including the original chest. Consumer branches are never candidates.
+        """
+        primary_key = "source:" + item
+        previous_key = (primary.get("active_source") or {}).get("extraction_block")
+        previous = self.state["blocks"].get(previous_key)
+        link = self.state["links"].get(str(previous_key) + ":output")
+        if not previous or previous_key == primary_key or not link or not previous.get("ports"):
+            return [], [], None
+        source, target = previous["ports"][0], previous.get("continuity_target", primary["ports"][0])
+        if (source.get("item") != item or target.get("item") != item
+                or link.get("source_port") != source or link.get("consumer_port") != target):
+            return [], [], None
+        dependencies = deepcopy(previous.get("continuity_dependencies", []))
+        if not dependencies:
+            dependencies = [{"category": "blocks", "key": primary_key}]
+        if any(d.get("category") not in {"blocks", "links"}
+               or d.get("key") not in self.state[d["category"]] for d in dependencies):
+            return [], [], None
+        if {"category": "blocks", "key": primary_key} not in dependencies:
+            return [], [], None
+        refill_key = previous_key + ":refill"
+        refill = self.state["blocks"].get(refill_key)
+        if refill:
+            receiver = refill.get("receiver") or primary["source_receiver"]
+            receivers = [self.state["blocks"][d["key"]].get("source_receiver")
+                         for d in dependencies if d["category"] == "blocks"]
+            if receiver not in receivers or target not in refill.get("ports", []):
+                return [], [], None
+            # Legacy refill checkpoints omit receiver identity; establish
+            # the exact ordinary inserter drop geometry before reusing it.
+            p = receiver["position"]
+            matching_arm = any(e["name"] == "inserter" and e.get("direction") in DIRECTIONS
+                and e["position"] == {"x": p["x"] + DIRECTIONS[e["direction"]][0],
+                                      "y": p["y"] + DIRECTIONS[e["direction"]][1]}
+                and target["position"] == {"x": p["x"] + 2 * DIRECTIONS[e["direction"]][0],
+                                           "y": p["y"] + 2 * DIRECTIONS[e["direction"]][1]}
+                and target["facing"] == (e["direction"] + 8) % 16
+                for e in refill["entities"])
+            if not matching_arm:
+                return [], [], None
+            dependencies.append({"category": "blocks", "key": refill_key})
+        elif not any(e["name"] == "transport-belt" and e["position"] == target["position"]
+                     and e["direction"] == target["facing"]
+                     for d in dependencies for e in self.state[d["category"]][d["key"]]["entities"]):
+            return [], [], None
+        dependencies += [{"category": "blocks", "key": previous_key},
+                         {"category": "links", "key": previous_key + ":output"}]
+        dependencies = [dict(category=category, key=key) for category, key in
+                        dict.fromkeys((d["category"], d["key"]) for d in dependencies)]
+        belts = {}
+        for entity in link["entities"]:
+            if entity["name"] != "transport-belt":
+                continue
+            point = entity["position"]["x"], entity["position"]["y"]
+            if point in belts and belts[point]["direction"] != entity["direction"]:
+                return [], [], None
+            belts[point] = entity
+        end = target["position"]["x"], target["position"]["y"]
+        destinations = []
+        for start, entity in belts.items():
+            point, seen = start, set()
+            while point in belts and point not in seen:
+                seen.add(point)
+                belt = belts[point]
+                if point == end:
+                    if belt["direction"] == target["facing"]:
+                        destinations.append({**target, "position": entity["position"], "facing": entity["direction"]})
+                    break
+                delta = DIRECTIONS.get(belt.get("direction"))
+                if delta is None:
+                    break
+                point = point[0] + delta[0], point[1] + delta[1]
+        # Refilling a previous receiver is safe only when its extraction belt
+        # itself belongs to the proven tail, not merely a downstream fragment.
+        receiver = previous.get("source_receiver") if any(p["position"] == source["position"]
+            and p["facing"] == source["facing"] for p in destinations) else None
+        return destinations, dependencies, receiver
+
     def _reserve_relocated_source(self, obs: dict, item: str, receiver: dict, key: str, primary: dict) -> dict:
         reserved = self._reserved()
         occupied = self.builder._occupied_by_plan(reserved + obs.get("entities", [])) | self._port_clearances()
@@ -477,16 +569,35 @@ return {ok=true,receivers=receivers}
         # Every belt in the original short extraction segment precedes every
         # downstream branch. Merging into an arbitrary consumer branch would
         # leave the other consumers starved.
-        destinations = [(None, {**primary["ports"][0], "position": e["position"], "facing": e["direction"]})
+        destinations = [(None, {**primary["ports"][0], "position": e["position"], "facing": e["direction"]}, [])
                         for e in primary["entities"] if e["name"] == "transport-belt"]
         old = primary["source_receiver"]
-        if old.get("position") and old["name"] in {"wooden-chest", "iron-chest", "steel-chest"}:
-            destinations += [(plan, plan["ports"][0]) for plan in
-                             self._receiver_transfer_candidates(old, item, output=False, occupied=occupied,
-                                                                blocked_equipment=blocked_equipment)]
-        pairs = [(output, refill, destination) for output in outputs for refill, destination in destinations]
+        upstream, dependencies, previous_receiver = self._previous_source_targets(item, primary)
+        destinations += [(None, target, dependencies) for target in upstream]
+        for buffer, maintained in [(old, [])] + ([(previous_receiver, dependencies)] if previous_receiver else []):
+            if buffer.get("position") and buffer["name"] in {"wooden-chest", "iron-chest", "steel-chest"}:
+                for plan in self._receiver_transfer_candidates(buffer, item, output=False, occupied=occupied,
+                                                               blocked_equipment=blocked_equipment):
+                    plan["receiver"] = deepcopy(buffer)
+                    destinations.append((plan, plan["ports"][0], maintained))
+        pairs = [(output, refill, destination, maintained) for output in outputs for refill, destination, maintained in destinations]
         pairs.sort(key=lambda row: _distance(row[0]["ports"][0]["position"], row[2]["position"]))
-        for output, refill, destination in pairs[:32]:
+        def reserve_route(output: dict, refill: dict | None, destination: dict, maintained: list, route: dict) -> dict:
+            route["segments"][-1]["direction"] = destination["facing"]
+            output.update(key=key, source_receiver=deepcopy(receiver), continuity_target=deepcopy(destination),
+                          continuity_dependencies=deepcopy(maintained))
+            self.state["blocks"][key] = output
+            if refill:
+                refill["entities"].insert(0, {**deepcopy(refill["receiver"]), "direction": 0})
+                self.state["blocks"][key + ":refill"] = refill
+            self.state["links"][key + ":output"] = _plan(
+                [{"name": "transport-belt", **segment} for segment in route["segments"]],
+                source_port=output["ports"][0], consumer_port=destination)
+            self._save()
+            return output
+
+        blocked_routes = {}
+        for output, refill, destination, maintained in pairs[:96]:
             equipment = output["entities"] + (refill["entities"] if refill else [])
             if refill and self.builder._occupied_by_plan(output["entities"]) & self.builder._occupied_by_plan(refill["entities"]):
                 continue
@@ -494,25 +605,45 @@ return {ok=true,receivers=receivers}
             dx, dy = DIRECTIONS[destination["facing"]]
             front = {"name": "port-clearance", "position": {"x": destination["position"]["x"] + dx,
                                                              "y": destination["position"]["y"] + dy}}
-            route = self._material_route(source["position"], destination["position"], reserved + equipment + [front],
+            route_reserved = reserved + equipment + [front]
+            route = self._material_route(source["position"], destination["position"], route_reserved,
                                          start_direction=source["facing"], allow_bridge=False)
             if not route.get("ok"):
+                if route.get("reason") == "no route within bounds":
+                    point = destination["position"]["x"], destination["position"]["y"]
+                    blocked_routes.setdefault(point, (output, refill, destination, maintained, route_reserved))
                 continue
-            route["segments"][-1]["direction"] = destination["facing"]
-            output.update(key=key, source_receiver=deepcopy(receiver), continuity_target=deepcopy(destination))
-            self.state["blocks"][key] = output
-            if refill:
-                refill["receiver"] = deepcopy(old)
-                refill["entities"].insert(0, {**deepcopy(old), "direction": 0})
-                self.state["blocks"][key + ":refill"] = refill
-            self.state["links"][key + ":output"] = _plan(
-                [{"name": "transport-belt", **segment} for segment in route["segments"]],
-                source_port=source, consumer_port=destination)
-            self._save()
-            return output
+            return reserve_route(output, refill, destination, maintained, route)
         obstacle = self._source_corridor_obstacle(blocked_equipment)
         if obstacle is not None:
             return {"ok": False, "action": obstacle}
+        alternatives = []
+        for output, refill, destination, maintained, route_reserved in list(blocked_routes.values())[:4]:
+            source = output["ports"][0]
+            clearances = self._port_clearances()
+            dx, dy = DIRECTIONS[source["facing"]]
+            clearances.discard((source["position"]["x"] + dx, source["position"]["y"] + dy))
+            route_reserved = route_reserved + [{"name": "port-clearance", "position": {"x": x, "y": y}}
+                                               for x, y in clearances]
+            alternatives.append((source, destination, route_reserved))
+            for margin in (48, 96):
+                route = self.builder.route(source["position"], destination["position"], "transport-belt", route_reserved,
+                    start_direction=source["facing"], margin=margin)
+                if route.get("ok"):
+                    return reserve_route(output, refill, destination, maintained, route)
+                if route.get("reason") != "no route within bounds":
+                    break
+        # Prove a complete alternative corridor before mining a route obstacle.
+        # The helper returns one normal action, never a buildable path through
+        # an uncleared tree/rock. Bound surveys across distinct intake targets.
+        for source, destination, route_reserved in alternatives:
+            for margin in (24, 48, 96):
+                clearing = self.builder.clear_route_obstacle(source["position"], destination["position"], route_reserved,
+                    start_direction=source["facing"], margin=margin)
+                if clearing.get("ok") and clearing.get("action"):
+                    return {"ok": False, "action": clearing["action"]}
+                if clearing.get("reason") != "no route within bounds":
+                    break
         return {"ok": False, "reason": "relocated receiver cannot reach its original source segment or buffer"}
 
     def _source_corridor_obstacle(self, blocked: list[dict]) -> dict | None:

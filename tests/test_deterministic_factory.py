@@ -621,6 +621,140 @@ class FactoryTests(unittest.TestCase):
         self.assertEqual(refill["entities"][0]["position"], original["receiver"]["position"])
         self.factory._merge_output.assert_not_called()
 
+    def previous_refill_fixture(self):
+        original, previous, _ = self.source_relocation_fixture()
+        primary = self.factory.state["blocks"]["source:coal"]
+        key = "source:coal:relocation:" + self.factory._entity_key(previous["receiver"])
+        source = port("coal", 20.5, 2.5, facing=12)
+        target = port("coal", .5, 2.5, direction="input", facing=0)
+        self.factory.state["blocks"][key] = {"ok": True, "key": key, "source_receiver": previous["receiver"],
+            "ports": [source], "continuity_target": target, "entities": [
+                {"name": "inserter", "position": {"x": 20.5, "y": 1.5}, "direction": 0},
+                {"name": "transport-belt", "position": source["position"], "direction": 12}]}
+        self.factory.state["blocks"][key + ":refill"] = {"ok": True, "ports": [target], "entities": [
+            {"name": "inserter", "position": {"x": .5, "y": 1.5}, "direction": 8},
+            {"name": "transport-belt", "position": target["position"], "direction": 0}]}
+        self.factory.state["links"][key + ":output"] = {"ok": True, "source_port": source, "consumer_port": target,
+            "entities": [{"name": "transport-belt", "position": {"x": x + .5, "y": 2.5},
+                          "direction": 12 if x else 0} for x in range(20, -1, -1)]}
+        primary["active_source"] = {"extraction_block": key, "receiver": previous["receiver"], "drill": previous["drill"]}
+        return primary, key, original, previous
+
+    def test_previous_source_targets_require_directed_tail_to_original_buffer(self):
+        primary, key, original, previous = self.previous_refill_fixture()
+        branch = {"name": "transport-belt", "position": {"x": 10.5, "y": 3.5}, "direction": 8}
+        self.factory.state["links"][key + ":output"]["entities"].append(branch)
+        targets, dependencies, receiver = self.factory._previous_source_targets("coal", primary)
+        self.assertEqual(len(targets), 21)
+        self.assertNotIn(branch["position"], [p["position"] for p in targets])
+        self.assertEqual(receiver, previous["receiver"])
+        self.assertEqual(dependencies, [{"category": "blocks", "key": "source:coal"},
+            {"category": "blocks", "key": key + ":refill"}, {"category": "blocks", "key": key},
+            {"category": "links", "key": key + ":output"}])
+        self.factory.state["links"][key + ":output"]["entities"][0]["direction"] = 0
+        targets, _, receiver = self.factory._previous_source_targets("coal", primary)
+        self.assertNotIn({"x": 20.5, "y": 2.5}, [p["position"] for p in targets])
+        self.assertIsNone(receiver)
+
+    def test_previous_source_rejects_mismatched_endpoint_and_unrelated_refill(self):
+        primary, key, _, _ = self.previous_refill_fixture()
+        link = self.factory.state["links"][key + ":output"]
+        link["consumer_port"] = port("coal", 99.5)
+        self.assertEqual(self.factory._previous_source_targets("coal", primary), ([], [], None))
+        link["consumer_port"] = self.factory.state["blocks"][key]["continuity_target"]
+        refill = self.factory.state["blocks"][key + ":refill"]
+        refill["entities"][0]["direction"] = 0
+        self.assertEqual(self.factory._previous_source_targets("coal", primary), ([], [], None))
+
+    def test_third_relocation_keeps_own_refill_and_inherited_dependencies_once(self):
+        primary, key, _, _ = self.previous_refill_fixture()
+        prior_dependencies = [{"category": "blocks", "key": "source:coal"}] * 2
+        self.factory.state["blocks"][key]["continuity_dependencies"] = prior_dependencies
+        _, dependencies, _ = self.factory._previous_source_targets("coal", primary)
+        self.assertIn({"category": "blocks", "key": key + ":refill"}, dependencies)
+        self.assertEqual(dependencies.count({"category": "blocks", "key": "source:coal"}), 1)
+        current = self.coal_cell(40)
+        self.bootstrap.discover_cell.return_value = current
+        next_key = "source:coal:relocation:" + self.factory._entity_key(current["receiver"])
+        self.factory.state["blocks"][next_key] = {"ok": True, "entities": [], "ports": [port("coal", 43.5)],
+            "source_receiver": current["receiver"], "continuity_dependencies": dependencies}
+        repair = {"type": "build", "name": "wooden-chest", "position": primary["source_receiver"]["position"]}
+        refill = self.factory.state["blocks"][key + ":refill"]
+        self.builder.ensure_plan.side_effect = lambda obs, plan: repair if plan is refill else ready()
+        active_before = deepcopy(primary["active_source"])
+        result = self.factory.ensure_product(self.obs, "coal")
+        self.assertEqual(result, repair)
+        self.assertEqual(refill["entities"][0]["name"], "wooden-chest")
+        self.assertEqual(primary["active_source"], active_before)
+        self.factory._merge_output.assert_not_called()
+        self.factory._fuel_burner.assert_not_called()
+
+    def test_relocation_can_merge_only_at_proven_previous_tail_and_preserves_old_plans(self):
+        primary, key, _, _ = self.previous_refill_fixture()
+        original_blocks = deepcopy(self.factory.state["blocks"])
+        original_links = deepcopy(self.factory.state["links"])
+        current = self.coal_cell(40)
+        self.bootstrap.discover_cell.return_value = current
+        upstream = self.factory.state["blocks"][key]["ports"][0]
+        ordinary_route = self.factory._material_route
+        def available_route(source, destination, reserved, **kwargs):
+            if destination != upstream["position"]:
+                return {"ok": False, "reason": "no route within bounds"}
+            return ordinary_route(source, destination, reserved, **kwargs)
+        self.factory._material_route = Mock(side_effect=available_route)
+        result = self.factory.ensure_product(self.obs, "coal")
+        self.assertEqual(result["status"], "succeeded", result)
+        next_key = result["evidence"]["active_source"]["extraction_block"]
+        self.assertEqual(self.factory.state["blocks"][next_key]["continuity_target"]["position"], upstream["position"])
+        self.assertEqual(self.factory.state["links"][key + ":output"], original_links[key + ":output"])
+        self.assertEqual(primary["entities"], original_blocks["source:coal"]["entities"])
+        self.assertEqual(primary["ports"], original_blocks["source:coal"]["ports"])
+        self.assertEqual(self.factory.state["blocks"][key]["entities"], original_blocks[key]["entities"])
+
+    def test_relocation_corridor_mining_requires_proof_without_reserving_uncleared_route(self):
+        self.previous_refill_fixture()
+        self.bootstrap.discover_cell.return_value = self.coal_cell(40)
+        self.factory._material_route = Mock(return_value={"ok": False, "reason": "no route within bounds"})
+        self.builder.route = Mock(return_value={"ok": False, "reason": "no route within bounds"})
+        action = {"type": "mine", "name": "big-rock", "position": {"x": 30.25, "y": 3.75}, "count": 1}
+        self.builder.clear_route_obstacle = Mock(return_value={"ok": True, "action": action, "planned_length": 50})
+        before = deepcopy(self.factory.state)
+        self.assertEqual(self.factory.ensure_product(self.obs, "coal"), action)
+        self.assertEqual(self.factory.state, before)
+        self.builder.clear_route_obstacle.assert_called_once()
+        self.assertTrue(any(e["name"] == "port-clearance"
+                            for e in self.builder.clear_route_obstacle.call_args.args[2]))
+        self.factory._fuel_burner.assert_not_called()
+        self.factory._merge_output.assert_not_called()
+
+    def test_failed_corridor_proof_is_bounded_and_keeps_existing_source(self):
+        self.previous_refill_fixture()
+        self.bootstrap.discover_cell.return_value = self.coal_cell(40)
+        self.factory._material_route = Mock(return_value={"ok": False, "reason": "no route within bounds"})
+        self.builder.route = Mock(return_value={"ok": False, "reason": "no route within bounds"})
+        self.builder.clear_route_obstacle = Mock(return_value={"ok": False, "reason": "no route within bounds"})
+        before = deepcopy(self.factory.state)
+        result = self.factory.ensure_product(self.obs, "coal")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(self.factory.state, before)
+        self.assertLessEqual(self.builder.clear_route_obstacle.call_count, 12)
+        self.assertNotIn("type", result)
+
+    def test_wide_ordinary_route_can_be_reserved_before_any_corridor_mining(self):
+        self.previous_refill_fixture()
+        self.bootstrap.discover_cell.return_value = self.coal_cell(40)
+        ordinary_route = self.builder.route
+        self.builder.route = Mock(side_effect=lambda *args, **kwargs:
+            ordinary_route(*args, **kwargs) if kwargs.get("margin") == 48
+            else {"ok": False, "reason": "no route within bounds"})
+        self.builder.clear_route_obstacle = Mock()
+        result = self.factory.ensure_product(self.obs, "coal")
+        self.assertEqual(result["status"], "succeeded", result)
+        next_key = result["evidence"]["active_source"]["extraction_block"]
+        self.assertIn(next_key + ":output", self.factory.state["links"])
+        self.builder.clear_route_obstacle.assert_not_called()
+        self.assertLessEqual(sum(call.kwargs.get("margin") == 48 for call in self.builder.route.call_args_list), 4)
+
     def electric_bridge_fixture(self):
         self.seed_lab()
         self.catalog.technologies["electric-mining-drill"] = {"name": "electric-mining-drill", "unit_count": 25,

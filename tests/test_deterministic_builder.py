@@ -22,6 +22,37 @@ class BuilderTests(unittest.TestCase):
         self.obs = {"world_id": "test-world", "tick": 100, "entities": [], "inventory": {},
                     "enabled_recipes": {}, "technologies": {"steam-power": True}, "position": {"x": 0, "y": 0}}
 
+    def test_clearance_requires_reachable_route_and_returns_only_one_mining_action(self):
+        rock = {"name": "big-rock", "type": "simple-entity", "force": "neutral", "minable": True,
+                "position": {"x": 2.3, "y": .5}}
+        self.game.query.return_value = {"ok": True, "blocked": [{"x": 2.5, "y": y} for y in (-.5, 1.5)],
+            "clearable": [{"position": {"x": 2.5, "y": .5}, "entities": [rock]}]}
+        args = ({"x": .5, "y": .5}, {"x": 4.5, "y": .5})
+        result = self.builder.clear_route_obstacle(*args, [], margin=1)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"]["position"], rock["position"])
+        self.assertEqual((result["action"]["type"], result["action"]["count"]), ("mine", 1))
+        self.assertNotIn("segments", result)
+        self.assertNotIn("path", result)
+        # A planned machine still closes the only corridor; finding a nearby
+        # rock is insufficient evidence to mine it when no valid route exists.
+        blocked = self.builder.clear_route_obstacle(*args,
+            [{"name": "transport-belt", "position": {"x": 2.5, "y": .5}, "direction": 0}], margin=1)
+        self.assertFalse(blocked["ok"])
+        self.assertNotIn("action", blocked)
+
+    def test_clearance_does_not_mine_off_route_rocks_or_return_unverified_entities(self):
+        obstacle = {"name": "crash-site-spaceship-wreck-small-1", "type": "simple-entity",
+                    "force": "neutral", "minable": True, "position": {"x": 1.5, "y": .5}}
+        for point, entity in [({"x": 1.5, "y": .5}, obstacle),
+                              ({"x": 1.5, "y": 1.5}, {**obstacle, "name": "big-rock"})]:
+            with self.subTest(point=point):
+                self.game.query.return_value = {"ok": True, "blocked": [],
+                    "clearable": [{"position": point, "entities": [entity]}]}
+                result = self.builder.clear_route_obstacle({"x": .5, "y": .5}, {"x": 2.5, "y": .5}, [], margin=1)
+                self.assertFalse(result["ok"])
+                self.assertNotIn("action", result)
+
     def test_missing_construction_item_delegates_to_resource_backed_bootstrap(self):
         plan = build_template("labs_row", inputs=["automation-science-pack"])
         self.bootstrap.ensure_item.return_value = {"type": "craft", "recipe": "lab", "count": 1}
