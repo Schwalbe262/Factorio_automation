@@ -233,6 +233,12 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
         if output <= 0:
             return _report("blocked", "recipe has no deterministic item output", item=item)
         runs = math.ceil((count - have) / output)
+        if not _stack and self._handcraft_collection_targets(observation, item, count) == {}:
+            # The full enabled handcraft tree is reserved from held inventory.
+            # Factorio queues and pays for its intermediates at normal speed;
+            # the requested count is still only the final recipe's missing runs.
+            return {"type": "craft", "recipe": recipe["name"], "count": runs,
+                    "reason": f"engine craft {item} with normal prerequisite queue"}
         if not _stack and getattr(self.game, "backend", None) == "character":
             collect = self._collect_handcraft_batch(observation, item, count)
             if collect is not None:

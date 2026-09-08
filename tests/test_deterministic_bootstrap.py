@@ -112,13 +112,13 @@ class DeterministicBootstrapTests(unittest.TestCase):
         action = self.driver.ensure_item(obs, "transport-belt", 4)
         self.assertEqual((action["type"], action["recipe"], action["count"]), ("craft", "transport-belt", 2))
 
-    def test_recursive_handcraft_uses_live_ingredient_amounts(self):
+    def test_recursive_handcraft_queues_target_using_live_ingredient_amounts(self):
         self.driver._recipes = {"lab": recipe("lab", {"iron-gear-wheel": 7}),
                                 "iron-gear-wheel": recipe("iron-gear-wheel", {"iron-plate": 2})}
         obs = observation(inventory={"iron-plate": 20, "iron-gear-wheel": 3},
                           enabled_recipes={"lab": True, "iron-gear-wheel": True})
         action = self.driver.ensure_item(obs, "lab", 1)
-        self.assertEqual((action["recipe"], action["count"]), ("iron-gear-wheel", 4))
+        self.assertEqual((action["recipe"], action["count"]), ("lab", 1))
 
     def test_locked_or_machine_only_recipe_never_reaches_crafting(self):
         self.game.query.return_value = recipe("boiler", {"iron-plate": 5})
@@ -232,9 +232,67 @@ class StrictHandcraftBatchTests(unittest.TestCase):
             obs = self.obs(inventory={"iron-plate": have}, entities=[entity("stone-furnace", {"iron-plate": 200})])
             self.assertEqual(self.driver.ensure_item(obs, "inserter", 20)["count"], expected)
 
-    def test_fully_stocked_batch_keeps_existing_intermediate_engine_crafting(self):
-        action = self.driver.ensure_item(self.obs(inventory={"iron-plate": 8, "copper-plate": 3}), "inserter", 2)
-        self.assertEqual((action["type"], action["recipe"], action["count"]), ("craft", "iron-gear-wheel", 2))
+    def test_fully_stocked_batch_queues_final_target_on_both_backends(self):
+        for backend in ("assisted", "character"):
+            with self.subTest(backend=backend):
+                self.game.backend = backend
+                obs = self.obs(inventory={"iron-plate": 8, "copper-plate": 3})
+                before = deepcopy(obs)
+                action = self.driver.ensure_item(obs, "inserter", 2)
+                self.assertEqual((action["type"], action["recipe"], action["count"]), ("craft", "inserter", 2))
+                self.assertEqual(obs, before)
+
+    def test_raw_stocked_multiyield_batch_only_queues_missing_final_runs(self):
+        obs = self.obs(inventory={"transport-belt": 1, "iron-plate": 6})
+        action = self.driver.ensure_item(obs, "transport-belt", 4)
+        self.assertEqual((action["recipe"], action["count"]), ("transport-belt", 2))
+
+    def test_shared_ingredient_shortage_never_queues_unaffordable_final_batch(self):
+        for stock in ({"iron-plate": 7, "copper-plate": 3}, {"iron-plate": 8, "copper-plate": 2}):
+            for backend in ("assisted", "character"):
+                with self.subTest(stock=stock, backend=backend):
+                    self.game.backend = backend
+                    action = self.driver.ensure_item(self.obs(inventory=stock), "inserter", 2)
+                    self.assertNotEqual(action.get("recipe"), "inserter")
+
+    def test_held_raw_inputs_still_prefer_available_machine_intermediate_output(self):
+        for backend in ("assisted", "character"):
+            with self.subTest(backend=backend):
+                self.game.backend = backend
+                obs = self.obs(inventory={"iron-plate": 8, "copper-plate": 3},
+                               entities=[entity("wooden-chest", {"iron-gear-wheel": 2})])
+                action = self.driver.ensure_item(obs, "inserter", 2)
+                self.assertEqual((action["type"], action["item"], action["count"]), ("take", "iron-gear-wheel", 2))
+
+    def test_locked_machine_and_fluid_intermediates_cannot_use_root_queue_shortcut(self):
+        original = deepcopy(self.driver._recipes)
+        for case in ("locked", "machine", "fluid"):
+            with self.subTest(case=case):
+                self.driver._recipes = deepcopy(original)
+                obs = self.obs(inventory={"iron-plate": 8, "copper-plate": 3, "iron-gear-wheel": 2})
+                circuit = self.driver._recipes["electronic-circuit"]
+                if case == "locked":
+                    obs["enabled_recipes"]["electronic-circuit"] = False
+                elif case == "machine":
+                    circuit["handcraftable"] = False
+                else:
+                    circuit["ingredients"][0]["type"] = "fluid"
+                action = self.driver.ensure_item(obs, "inserter", 2)
+                self.assertEqual(action["status"], "blocked")
+                self.assertNotIn("type", action)
+
+    def test_machine_only_intermediates_already_held_can_be_consumed_normally(self):
+        self.driver._recipes["electronic-circuit"]["handcraftable"] = False
+        obs = self.obs(inventory={"electronic-circuit": 2, "iron-plate": 6})
+        action = self.driver.ensure_item(obs, "inserter", 2)
+        self.assertEqual((action["recipe"], action["count"]), ("inserter", 2))
+
+    def test_startup_science_chunk_keeps_exact_final_count_with_prerequisite_gears(self):
+        self.driver._recipes["automation-science-pack"] = recipe(
+            "automation-science-pack", {"copper-plate": 1, "iron-gear-wheel": 1})
+        obs = self.obs(inventory={"iron-plate": 100, "copper-plate": 100, "automation-science-pack": 2})
+        action = self.driver.ensure_item(obs, "automation-science-pack", 5)
+        self.assertEqual((action["recipe"], action["count"]), ("automation-science-pack", 3))
 
     def test_existing_produced_intermediates_are_collected_before_unneeded_raw_inputs(self):
         obs = self.obs(entities=[entity("wooden-chest", {"iron-gear-wheel": 2})])
