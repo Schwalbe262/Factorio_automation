@@ -137,21 +137,38 @@ return {ok=true,blocked=blocked,belts=belts}
     for point, facing in sorted(belts.items()):
         for direction in ((4, 12) if facing in (0, 8) else (0, 8)):
             dx, dy = DIRECTIONS[direction]
-            pickup, drop = (point[0] - 3 * dx, point[1] - 3 * dy), (point[0] + dx, point[1] + dy)
-            arm = point[0] - dx, point[1] - dy
-            before, after = (pickup[0] - dx, pickup[1] - dy), (drop[0] + dx, drop[1] + dy)
-            origin, target = components.get(pickup), components.get(drop)
-            if (origin is None or target is None or origin == target or arm in occupied
-                    or (pickup not in (start, finish) and pickup in physical)
-                    or (drop not in (start, finish) and drop in physical)
-                    or (pickup == start and start_direction not in (None, direction))
-                    or (drop == finish and end_direction not in (None, direction))):
-                continue
-            edge = {"from": origin, "to": target, "pickup": pickup, "drop": drop,
-                    "arm": arm, "direction": direction, "over": point,
-                    "entry": pickup == start or components.get(before) == origin,
-                    "exit": drop == finish or components.get(after) == target}
-            raw_edges.append(edge)
+            # The crossed belt may lie between the arm and its drop OR its
+            # pickup. Both use the same ordinary two-tile inserter reach.
+            for offset in (3, 1):
+                pickup = point[0] - offset * dx, point[1] - offset * dy
+                arm = pickup[0] + 2 * dx, pickup[1] + 2 * dy
+                drop = pickup[0] + 4 * dx, pickup[1] + 4 * dy
+                pickup_direction = direction
+                if offset == 1:
+                    # A belt facing the crossed trunk would spill its material
+                    # into it before the arm can collect everything. Receive
+                    # from the ordinary approach but turn this pickup sideways
+                    # toward a reserved empty tile instead.
+                    pickup_direction = next((side for side in ((direction + 4) % 16, (direction + 12) % 16)
+                        if (pickup[0] + DIRECTIONS[side][0], pickup[1] + DIRECTIONS[side][1]) not in occupied), None)
+                    if pickup_direction is None or pickup == start:
+                        continue
+                px, py = DIRECTIONS[pickup_direction]
+                if (pickup[0] + px, pickup[1] + py) in belts:
+                    continue
+                before, after = (pickup[0] - dx, pickup[1] - dy), (drop[0] + dx, drop[1] + dy)
+                origin, target = components.get(pickup), components.get(drop)
+                if (origin is None or target is None or origin == target or arm in occupied
+                        or (pickup not in (start, finish) and pickup in physical)
+                        or (drop not in (start, finish) and drop in physical)
+                        or (pickup == start and start_direction not in (None, direction))
+                        or (drop == finish and end_direction not in (None, direction))):
+                    continue
+                edge = {"from": origin, "to": target, "pickup": pickup, "drop": drop,
+                        "arm": arm, "direction": direction, "pickup_direction": pickup_direction, "over": point,
+                        "entry": pickup == start or components.get(before) == origin,
+                        "exit": drop == finish or components.get(after) == target}
+                raw_edges.append(edge)
     # Immediate handoffs across trunks four tiles apart have one shared belt.
     # Represent these as weighted composite edges: their first pickup and final
     # drop still need usable directed approaches. Merely accepting every free
@@ -226,15 +243,25 @@ return {ok=true,blocked=blocked,belts=belts}
 
 def _construct(factory, start, finish, chain, physical, occupied, bounds, start_direction, end_direction, node_budget):
     equipment = {}
-    for edge in chain:
+    pickup_fronts = set()
+    for index, edge in enumerate(chain):
+        pickup_direction = edge.get("pickup_direction", edge["direction"])
+        following = chain[index + 1] if index + 1 < len(chain) else None
+        drop_direction = (following.get("pickup_direction", following["direction"])
+                          if following and edge["drop"] == following["pickup"] else edge["direction"])
         for name, point, direction in (("long-handed-inserter", edge["arm"], (edge["direction"] + 8) % 16),
-                                      ("transport-belt", edge["pickup"], edge["direction"]),
-                                      ("transport-belt", edge["drop"], edge["direction"])):
+                                      ("transport-belt", edge["pickup"], pickup_direction),
+                                      ("transport-belt", edge["drop"], drop_direction)):
             entity = _entity(name, point, direction)
             if point in equipment and equipment[point] != entity:
                 return None
             equipment[point] = entity
-    blocked = occupied | set(equipment)
+        if pickup_direction != edge["direction"]:
+            dx, dy = DIRECTIONS[pickup_direction]
+            pickup_fronts.add((edge["pickup"][0] + dx, edge["pickup"][1] + dy))
+    if pickup_fronts & (set(equipment) | {start, finish}):
+        return None
+    blocked = occupied | set(equipment) | pickup_fronts
     legs = []
     current, departure = start, start_direction
     for edge in (*chain, None):
@@ -242,11 +269,16 @@ def _construct(factory, start, finish, chain, physical, occupied, bounds, start_
         if node_budget[0] <= 0:
             return None
         target, arrival = (edge["pickup"], edge["direction"]) if edge else (finish, end_direction)
-        route = route_orthogonal(current, target, occupied=blocked - {current, target}, bounds=bounds,
-                                 max_nodes=min(25000, node_budget[0]), start_direction=departure, end_direction=arrival)
+        if current == target and current in equipment:
+            route = {"ok": True, "path": [current], "segments": [dict(equipment[current])], "visited": 0}
+        else:
+            route = route_orthogonal(current, target, occupied=blocked - {current, target}, bounds=bounds,
+                                     max_nodes=min(25000, node_budget[0]), start_direction=departure, end_direction=arrival)
         node_budget[0] -= int(route.get("visited", 0))
         if not route.get("ok"):
             return None
+        if edge:
+            route["segments"][-1]["direction"] = equipment[edge["pickup"]]["direction"]
         legs.append(route)
         for row in route["segments"]:
             point = _point(row)
@@ -254,7 +286,7 @@ def _construct(factory, start, finish, chain, physical, occupied, bounds, start_
             dx, dy = DIRECTIONS[row["direction"]]
             blocked.add((point[0] + dx, point[1] + dy))
         if edge:
-            current, departure = edge["drop"], edge["direction"]
+            current, departure = edge["drop"], equipment[edge["drop"]]["direction"]
     rows = []
     for index, leg in enumerate(legs):
         rows.extend({"name": "transport-belt", **row} for row in leg["segments"])
@@ -266,6 +298,11 @@ def _construct(factory, start, finish, chain, physical, occupied, bounds, start_
         if point in unique and unique[point] != row:
             return None
         unique[point] = row
+    for edge in chain:
+        if edge.get("pickup_direction", edge["direction"]) != edge["direction"]:
+            # Future block placement must preserve this dead-end discharge
+            # tile too; otherwise a later input belt could collect this item.
+            unique[edge["pickup"]]["_keep_output_clear"] = True
     # Pick poles after every directed leg is reserved. Their footprints cannot
     # cut the selected belt path or an existing/future port approach.
     unavailable = blocked | physical | set(unique)

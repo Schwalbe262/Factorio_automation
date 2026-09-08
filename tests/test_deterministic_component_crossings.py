@@ -124,6 +124,9 @@ class ComponentCrossingTests(unittest.TestCase):
                 # facing is blocked. The offset gate remains fully usable.
                 self.blockers = [row for row in self.blockers if point(row) != (.5, 6.5)]
                 self.blockers.append(entity("stone-wall", .5, y))
+                # Close the mirrored arm site too, so the offset gate is the
+                # only usable alternative to this obstructed straight entry.
+                self.blockers.append(entity("stone-wall", .5, 4.5))
                 result = self.route()
                 self.assert_paid_connected_route(result, 1)
                 self.assertEqual([point(row) for row in result["segments"]

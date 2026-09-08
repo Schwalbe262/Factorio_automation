@@ -103,6 +103,13 @@ class DeterministicFactory:
     def _port_clearances(self) -> set[tuple[float, float]]:
         """Keep future belt approaches free when placing machines and poles."""
         clearances = set()
+        for category in ("blocks", "links"):
+            for plan in self.state.get(category, {}).values():
+                for entity in plan.get("entities", []):
+                    if (entity.get("name") == "transport-belt" and entity.get("_keep_output_clear") is True
+                            and entity.get("direction") in DIRECTIONS):
+                        dx, dy = DIRECTIONS[entity["direction"]]
+                        clearances.add((entity["position"]["x"] + dx, entity["position"]["y"] + dy))
         for plan in self.state.get("blocks", {}).values():
             for port in plan.get("ports", []):
                 if port.get("kind") != "item" or port.get("facing") not in DIRECTIONS:
