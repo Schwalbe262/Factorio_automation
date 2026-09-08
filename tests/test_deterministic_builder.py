@@ -95,6 +95,26 @@ class BuilderTests(unittest.TestCase):
         plan = {"ok": True, "entities": [{"name": "pipe", "position": {"x": 50.5, "y": .5}}]}
         self.assertEqual(self.builder.ensure_plan(self.obs, plan)["type"], "move")
 
+    def test_only_own_character_obstruction_delegates_to_navigator_sidestep(self):
+        self.game.backend = "character"
+        self.obs["inventory"] = {"offshore-pump": 1}
+        pump = {"name": "offshore-pump", "position": {"x": 54.5, "y": -.5}, "direction": 4}
+        plan = {"ok": True, "entities": [pump]}
+        self.builder.can_place.return_value = {"ok": False, "blocked": [pump]}
+        self.game.query.return_value = {"ok": True, "only_actor": True}
+        result = self.builder.ensure_plan(self.obs, plan)
+        self.assertEqual((result["type"], result["name"]), ("build", "offshore-pump"))
+        self.assertEqual(result["position"], pump["position"])
+
+    def test_character_sidestep_never_bypasses_other_entity_or_terrain_obstruction(self):
+        self.game.backend = "character"
+        self.obs["inventory"] = {"offshore-pump": 1}
+        pump = {"name": "offshore-pump", "position": {"x": 54.5, "y": -.5}, "direction": 4}
+        self.builder.can_place.return_value = {"ok": False, "blocked": [pump]}
+        for survey in ({"ok": True, "only_actor": False}, {"ok": False, "reason": "survey failed"}):
+            self.game.query.return_value = survey
+            self.assertEqual(self.builder.ensure_plan(self.obs, {"ok": True, "entities": [pump]})["status"], "blocked")
+
     def test_routing_rejects_foreign_belt_side_inputs_and_incidental_pipe_connections(self):
         self.game.query.return_value = {"ok": True, "blocked": []}
         foreign_belt = {"name": "transport-belt", "position": {"x": 1.5, "y": -.5}, "direction": 8}

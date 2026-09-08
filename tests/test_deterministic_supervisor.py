@@ -97,6 +97,14 @@ class SupervisorLifecycleTests(unittest.TestCase):
             self.assertEqual(supervisor.game.act.call_args.args[0], {"type": "stop"})
             self.assertTrue((Path(root) / "checkpoint.json").exists())
 
+    def test_covered_defense_cannot_complete_the_requested_rocket_milestone(self):
+        with TemporaryDirectory() as root:
+            supervisor, result, _ = self.run_sequence(root, [observation()], ["defense"],
+                [{"status": "succeeded", "reason": "turrets covered", "evidence": {"urgent": True}}])
+            self.assertEqual(result["status"], "waiting")
+            self.assertEqual(result["reason"], "cycle_limit_reached")
+            self.assertEqual(supervisor.state.tasks["defense"].status, "waiting")
+
     def test_operator_stop_written_during_prepare_is_honored_before_action(self):
         with TemporaryDirectory() as root:
             game = fake_game(root)
@@ -114,6 +122,45 @@ class SupervisorLifecycleTests(unittest.TestCase):
             self.assertEqual(persisted["cycle"], 0)
             action.assert_not_called()
             game.act.assert_called_once_with({"type": "stop"})
+
+    def test_active_character_mining_batch_preempts_new_partial_stock_plan(self):
+        with TemporaryDirectory() as root:
+            game = fake_game(root)
+            supervisor = module.DeterministicSupervisor(game)
+            mining = {"type": "mine", "name": "coal", "count": 24, "position": {"x": 10, "y": 5}}
+            navigator = Mock()
+            navigator.pending_action.return_value = mining
+            navigator.execute.return_value = {"ok": True, "status": "running"}
+            supervisor.navigator = navigator
+            first = observation(inventory={"coal": 1})
+            with patch.object(supervisor, "prepare", side_effect=lambda: self.prepared(supervisor, first)), \
+                 patch.object(supervisor, "next_action") as replan, \
+                 patch("factorio_ai.deterministic_character.ensure_crafting_player", return_value={"status": "ready"}):
+                result = supervisor.run(cycles=1, interval=0)
+            replan.assert_not_called()
+            navigator.execute.assert_called_once_with(mining, first)
+            navigator.stop.assert_called_once()
+            game.act.assert_not_called()
+            self.assertEqual(result["reason"], "cycle_limit_reached")
+
+    def test_resumed_automatic_fuel_ownership_is_loaded_before_bootstrap(self):
+        with TemporaryDirectory() as root:
+            supervisor = module.DeterministicSupervisor(fake_game(root))
+            automated = {"name": "stone-furnace", "position": {"x": 0, "y": 0}}
+            ordinary = {"name": "burner-mining-drill", "position": {"x": 5, "y": 5}}
+            obs = observation(entities=[automated, ordinary])
+            supervisor.bootstrap = Mock()
+            supervisor.bootstrap.next_action.return_value = {"status": "waiting", "reason": "ordinary startup"}
+            supervisor.builder = Mock(state={"power_sample_tick": 1})
+            supervisor.builder.owns_automated_burner.return_value = False
+            factory = Mock()
+            factory.owns_automated_burner.side_effect = lambda e: e is automated
+            with patch.object(supervisor, "prepare_production", side_effect=lambda: setattr(supervisor, "factory", factory)):
+                supervisor.next_action(obs, "rocket")
+            factory._sync.assert_called_once_with(obs)
+            supplied = supervisor.bootstrap.next_action.call_args.args[0]
+            self.assertEqual(supplied["entities"], [ordinary])
+            supervisor.builder.ensure_power.assert_not_called()
 
     def test_interrupt_while_connecting_is_persisted_as_operator_stop(self):
         with TemporaryDirectory() as root:

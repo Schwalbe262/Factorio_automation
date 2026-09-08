@@ -122,6 +122,24 @@ class FactoryBuilder:
                 return self.bootstrap.ensure_item(observation, item, 1)
             placement = self.can_place([entity])
             if not placement.get("ok"):
+                if self.game.backend == "character":
+                    from .deterministic_navigation import BUILD_FOOTPRINT_LUA
+                    encoded = json.dumps(json.dumps(entity, separators=(",", ":")))
+                    obstruction = self.game.query(BUILD_FOOTPRINT_LUA + '''
+local x=helpers.json_to_table(''' + encoded + ''')
+local left,top,right,bottom=build_box(x)
+local own_actor=false;local other=false
+for _,e in pairs(s.find_entities_filtered{area={{left,top},{right,bottom}}}) do
+ if e==a then own_actor=true elseif e.type~="resource" then other=true end
+end
+local terrain=s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f,
+ build_check_type=defines.build_check_type.script,forced=false}
+return {ok=true,only_actor=own_actor and not other and terrain}
+''')
+                    if obstruction.get("ok") and obstruction.get("only_actor"):
+                        return {"type": "build", "name": entity["name"], "item": item,
+                                "position": entity["position"], "direction": entity.get("direction", 0),
+                                "reason": "step outside the reserved build footprint before placement"}
                 return _report("blocked", "reserved block placement is obstructed", blockers=placement.get("blocked"), entity=entity)
             move = self._move(observation, entity["position"])
             if move:
@@ -198,11 +216,15 @@ return success{sites=out}
         return occupied
 
     def route(self, source: dict, destination: dict, name: str, reserved: list[dict],
-              *, start_direction: int | None = None, end_direction: int | None = None) -> dict:
-        bounds = {"min_x": min(source["x"], destination["x"]) - 12,
-                  "max_x": max(source["x"], destination["x"]) + 12,
-                  "min_y": min(source["y"], destination["y"]) - 12,
-                  "max_y": max(source["y"], destination["y"]) + 12}
+              *, start_direction: int | None = None, end_direction: int | None = None,
+              margin: float = 12) -> dict:
+        if (isinstance(margin, bool) or not isinstance(margin, (int, float)) or not math.isfinite(margin)
+                or margin < 1 or int(margin) != margin):
+            return {"ok": False, "reason": "route margin must be a positive whole number of tiles"}
+        bounds = {"min_x": min(source["x"], destination["x"]) - margin,
+                  "max_x": max(source["x"], destination["x"]) + margin,
+                  "min_y": min(source["y"], destination["y"]) - margin,
+                  "max_y": max(source["y"], destination["y"]) + margin}
         cells = (bounds["max_x"] - bounds["min_x"] + 1) * (bounds["max_y"] - bounds["min_y"] + 1)
         if cells > 50000:
             return {"ok": False, "reason": "route survey exceeds 50000 tiles"}

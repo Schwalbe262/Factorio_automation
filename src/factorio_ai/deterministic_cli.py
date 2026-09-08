@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> None:
     if not args.connect_only:
         if not args.new_world and not args.resume:
             parser.error("choose --new-world or --resume")
-        start_world(cfg, seed=args.seed, new_world=args.new_world)
+        start_world(cfg, seed=args.seed, new_world=args.new_world, backend=args.backend)
     from .deterministic_supervisor import DeterministicSupervisor
     supervisor = DeterministicSupervisor(game)
     result = supervisor.run(cycles=args.cycles, until=args.until)

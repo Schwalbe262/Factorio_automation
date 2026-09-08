@@ -30,9 +30,12 @@ def run_config(seed: int = 20260908, *, runtime: Path | None = None,
                    slurm_enabled=False, server_port=server_port, rcon_port=rcon_port)
 
 
-def start_world(cfg: AppConfig, *, seed: int, new_world: bool = False) -> subprocess.Popen:
+def start_world(cfg: AppConfig, *, seed: int, new_world: bool = False, backend: str = "assisted") -> subprocess.Popen:
     """Create only a new isolated save, or resume its explicitly saved state."""
     save = no_mod_save_path(cfg)
+    if backend not in {"assisted", "character"}:
+        raise ValueError("unknown deterministic backend")
+    newly_created = not save.exists()
     if new_world and save.exists():
         raise FileExistsError(f"World already exists; use --resume: {save}")
     try:
@@ -55,6 +58,9 @@ def start_world(cfg: AppConfig, *, seed: int, new_world: bool = False) -> subpro
         with (cfg.log_dir / "create-world.log").open("wb") as log:
             subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if backend == "character":
+        from .deterministic_navigation import prepare_character_save
+        prepare_character_save(cfg, newly_created=newly_created)
     command = build_start_no_mod_server_command(cfg, save_path=save)
     with (cfg.log_dir / "server-process.log").open("ab") as log:
         proc = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,

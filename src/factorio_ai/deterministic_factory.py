@@ -1,0 +1,939 @@
+"""Persistent, material-backed production ports and automatic science feeding."""
+from __future__ import annotations
+
+from copy import deepcopy
+import heapq
+import json
+import math
+from pathlib import Path
+from typing import Any
+
+from .deterministic_production import ProductionGraph
+from .deterministic_state import _atomic_json
+from .factory_templates import build_template, DIRECTIONS
+
+
+def _report(status: str, reason: str, **evidence: Any) -> dict[str, Any]:
+    return {"status": status, "reason": reason, "evidence": evidence}
+
+
+def _ready(value: dict[str, Any]) -> bool:
+    return value.get("status") == "succeeded" and "type" not in value
+
+
+def _distance(a: dict, b: dict) -> float:
+    return math.hypot(a["x"] - b["x"], a["y"] - b["y"])
+
+
+def _plan(entities: list[dict], ports: list[dict] | None = None, **extra: Any) -> dict:
+    return {"ok": True, "entities": entities, "ports": ports or [], **extra}
+
+
+class DeterministicFactory:
+    def __init__(self, game: Any, bootstrap: Any, builder: Any, catalog: Any):
+        self.game, self.bootstrap, self.builder, self.catalog = game, bootstrap, builder, catalog
+        self.graph = ProductionGraph(catalog)
+        self.fluids: Any = None
+        self.priority_research: list[str] = []
+        self.path = Path(game.cfg.runtime_dir) / "factory-production.json"
+        self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
+        if self.state and self.state.get("schema_version") != 1:
+            raise ValueError("unsupported factory production checkpoint")
+        self._fingerprint = catalog.fingerprint
+
+    def _sync(self, observation: dict) -> None:
+        world = observation.get("world_id")
+        if not world:
+            raise ValueError("production observation requires world_id")
+        if self.state.get("world_id") != world or self.state.get("catalog_fingerprint") != self._fingerprint:
+            self.state = {"schema_version": 1, "world_id": world, "catalog_fingerprint": self._fingerprint,
+                          "blocks": {}, "links": {}, "power_links": {}, "flow_samples": {}}
+            self._save()
+        tick = int(observation.get("tick") or 0)
+        previous_tick = self.state.get("last_tick", 0)
+        if tick < self.state.get("last_tick", 0):
+            self.state["flow_samples"] = {}
+            self.state.pop("bootstrap_science", None)
+            self.state["automated_burners"] = []
+        self.state["last_tick"] = tick
+        if tick != previous_tick:
+            self._save()
+
+    def _save(self) -> None:
+        _atomic_json(self.path, self.state)
+
+    def _reserved(self, *, exclude: str | None = None) -> list[dict]:
+        entities = []
+        for category in ("blocks", "links", "power_links"):
+            for key, plan in self.state.get(category, {}).items():
+                if key != exclude:
+                    entities.extend(plan.get("entities", []))
+        return entities
+
+    def _port_clearances(self) -> set[tuple[float, float]]:
+        """Keep future belt approaches free when placing machines and poles."""
+        clearances = set()
+        for plan in self.state.get("blocks", {}).values():
+            for port in plan.get("ports", []):
+                if port.get("kind") != "item" or port.get("facing") not in DIRECTIONS:
+                    continue
+                dx, dy = DIRECTIONS[port["facing"]]
+                outward = -1 if port["direction"] == "input" else 1
+                clearances.add((port["position"]["x"] + dx * outward, port["position"]["y"] + dy * outward))
+        return clearances
+
+    def register_plan(self, key: str, plan: dict, obs: dict) -> dict:
+        """Reserve an already positioned external block or fluid route.
+
+        Shared end entities are allowed only when name, facing and fluid agree;
+        other planned footprints remain unavailable to every producer/router.
+        """
+        self._sync(obs)
+        if not plan.get("ok"):
+            return plan
+        def identity(entity: dict) -> tuple:
+            position = entity["position"]
+            direction = 0 if entity["name"] in {"pipe", "small-electric-pole", "wooden-chest", "iron-chest", "steel-chest"} else entity.get("direction", 0)
+            return (entity["name"], position["x"], position["y"], direction)
+        proposed = {identity(entity): entity for entity in plan.get("entities", [])}
+        remaining = []
+        for entity in self._reserved(exclude=key):
+            matching = proposed.get(identity(entity))
+            if matching is None or (matching.get("_fluid") and entity.get("_fluid") and matching["_fluid"] != entity["_fluid"]):
+                remaining.append(entity)
+        if self.builder._occupied_by_plan(plan.get("entities", [])) & self.builder._occupied_by_plan(remaining):
+            return {"ok": False, "reason": "fixed plan overlaps another reserved footprint", "key": key}
+        saved = deepcopy(plan)
+        saved["key"] = key
+        self.state["blocks"][key] = saved
+        self._save()
+        return saved
+
+    def reserve_site(self, plan_at_origin: dict, key: str, obs: dict,
+                     reference: dict | None = None) -> dict:
+        self._sync(obs)
+        if key in self.state["blocks"]:
+            return self.state["blocks"][key]
+        if not plan_at_origin.get("ok"):
+            return plan_at_origin
+        if reference is None:
+            producers = [e for e in obs.get("entities", []) if e.get("name") == "stone-furnace"]
+            reference = producers[0]["position"] if producers else obs.get("position", {"x": 0, "y": 0})
+        occupied = self.builder._occupied_by_plan(self._reserved()) | self._port_clearances()
+        offsets = [(x, y) for radius in (8, 16, 24, 32, 48, 64)
+                   for x in range(-radius, radius + 1, 8) for y in range(-radius, radius + 1, 8)
+                   if max(abs(x), abs(y)) == radius]
+        offsets.sort(key=lambda p: p[0] * p[0] + p[1] * p[1])
+        for dx, dy in offsets:
+            plan = deepcopy(plan_at_origin)
+            offset = {"x": math.floor(reference["x"]) + dx, "y": math.floor(reference["y"]) + dy}
+            for obj in plan["entities"] + plan.get("ports", []):
+                obj["position"] = {"x": obj["position"]["x"] + offset["x"], "y": obj["position"]["y"] + offset["y"]}
+            if self.builder._occupied_by_plan(plan["entities"]) & occupied:
+                continue
+            machines = plan["entities"]
+            protected = False
+            if machines:
+                payload = json.dumps(json.dumps(machines, separators=(",", ":")))
+                survey = self.game.query('''
+local machines=helpers.json_to_table(''' + payload + ''');local covered=0
+for _,e in ipairs(machines) do
+ local p=prototypes.entity[e.name]
+ if p and (p.type=="assembling-machine" or p.type=="furnace" or p.type=="lab" or p.type=="rocket-silo" or p.type=="storage-tank") then
+  local w=p.tile_width;local h=p.tile_height
+  if e.direction==4 or e.direction==12 then w,h=h,w end
+  covered=covered+s.count_entities_filtered{area={{e.position.x-w/2,e.position.y-h/2},{e.position.x+w/2,e.position.y+h/2}},type="resource"}
+ end
+end
+return {ok=true,covered=covered}
+''')
+                if not survey.get("ok"):
+                    return {"ok": False, "reason": "resource protection survey failed", "error": survey.get("reason")}
+                protected = int(survey.get("covered", 0)) > 0
+            if not protected and self.builder.can_place(plan["entities"]).get("ok"):
+                plan["key"] = key
+                self.state["blocks"][key] = plan
+                self._save()
+                return plan
+        return {"ok": False, "reason": "no clear adjacent production block site", "key": key}
+
+    def ensure_power_connection(self, obs: dict, key: str, plan: dict) -> dict:
+        self._sync(obs)
+        poles = [e for e in plan.get("entities", []) if e["name"] == "small-electric-pole"]
+        if not poles:
+            return _report("succeeded", "block requires no electric connection")
+        payload = json.dumps(json.dumps([e["position"] for e in poles], separators=(",", ":")))
+        grid = self.game.query('''
+local wanted=helpers.json_to_table(''' + payload + ''');local networks={};local live={}
+for _,e in pairs(s.find_entities_filtered{force=f,type="generator"}) do
+ if e.electric_network_id then networks[e.electric_network_id]=true end
+end
+local connected=0
+for _,p in ipairs(wanted) do local e=target(p,"small-electric-pole")
+ if e and networks[e.electric_network_id] then connected=connected+1 end
+end
+for _,e in pairs(s.find_entities_filtered{force=f,type="electric-pole"}) do
+ if networks[e.electric_network_id] then live[#live+1]=pos(e.position) end
+end
+return {ok=true,connected=connected,live=live}
+''')
+        if not grid.get("ok"):
+            return _report("blocked", "cannot inspect factory power network", query_error=grid.get("reason"))
+        if int(grid.get("connected", 0)) == len(poles):
+            return _report("succeeded", "block poles connected to generator network")
+        live = grid.get("live") or []
+        if not live:
+            return _report("blocked", "no generator-connected power pole is available")
+        if key not in self.state["power_links"]:
+            candidates = sorted(((source, target) for source in live for target in poles),
+                                key=lambda pair: _distance(pair[0], pair[1]["position"]))
+            for source, target in candidates[:24]:
+                if _distance(source, target["position"]) < .2:
+                    continue
+                route = self._power_route(source, target["position"])
+                if not route.get("ok"):
+                    continue
+                path = route["path"]
+                link = _plan([{"name": "small-electric-pole", "position": position, "direction": 0} for position in path])
+                if self.builder.can_place(link["entities"]).get("ok"):
+                    self.state["power_links"][key] = link
+                    self._save()
+                    break
+            if key not in self.state["power_links"]:
+                return _report("blocked", "no clear power connection to reserved factory block", block=key)
+        result = self.builder.ensure_plan(obs, self.state["power_links"][key])
+        return result if not _ready(result) else _report("waiting", "waiting for observed generator connection", block=key)
+
+    def _power_route(self, source: dict, destination: dict) -> dict:
+        # Electric wires pass over belts, machines and water. Walking a pole
+        # footprint through every intervening tile falsely disconnects grids
+        # enclosed by a conveyor loop, so route legal wire-length hops instead.
+        bounds = {"min_x": min(source["x"], destination["x"]) - 48,
+                  "max_x": max(source["x"], destination["x"]) + 48,
+                  "min_y": min(source["y"], destination["y"]) - 48,
+                  "max_y": max(source["y"], destination["y"]) + 48}
+        points = [(source["x"] + x * 3, source["y"] + y * 3)
+                  for x in range(math.ceil((bounds["min_x"] - source["x"]) / 3), math.floor((bounds["max_x"] - source["x"]) / 3) + 1)
+                  for y in range(math.ceil((bounds["min_y"] - source["y"]) / 3), math.floor((bounds["max_y"] - source["y"]) / 3) + 1)]
+        if len(points) > 25000:
+            return {"ok": False, "reason": "power survey exceeds 25000 pole sites"}
+        payload = json.dumps(json.dumps([{"x": x, "y": y} for x, y in points], separators=(",", ":")))
+        survey = self.game.query('''
+local positions=helpers.json_to_table(''' + payload + ''');local blocked={}
+for _,p in ipairs(positions) do
+ if not target(p,"small-electric-pole") and not s.can_place_entity{name="small-electric-pole",position=p,force=f} then
+  blocked[#blocked+1]=p
+ end
+end
+return {ok=true,blocked=blocked}
+''')
+        if not survey.get("ok"):
+            return {"ok": False, "reason": survey.get("reason", "power placement survey failed")}
+        blocked = self.builder._occupied_by_plan(self._reserved()) | self._port_clearances()
+        blocked.update((p["x"], p["y"]) for p in survey.get("blocked", []))
+        start, end = (source["x"], source["y"]), (destination["x"], destination["y"])
+        allowed = set(points) - blocked
+        allowed.add(start)
+        vectors = [(x, y) for x in (-6, -3, 0, 3, 6) for y in (-6, -3, 0, 3, 6) if 0 < math.hypot(x, y) <= 7]
+        frontier, cost, previous = [(0, start)], {start: 0.0}, {}
+        visited = 0
+        while frontier and visited < 25000:
+            _, point = heapq.heappop(frontier)
+            visited += 1
+            if math.dist(point, end) <= 7:
+                path = [end] if point != end else []
+                while True:
+                    path.append(point)
+                    if point == start:
+                        break
+                    point = previous[point]
+                return {"ok": True, "path": [{"x": x, "y": y} for x, y in reversed(path)]}
+            for dx, dy in vectors:
+                neighbor = point[0] + dx, point[1] + dy
+                if neighbor not in allowed:
+                    continue
+                trial = cost[point] + math.hypot(dx, dy)
+                if trial >= cost.get(neighbor, math.inf):
+                    continue
+                cost[neighbor], previous[neighbor] = trial, point
+                heapq.heappush(frontier, (trial + math.dist(neighbor, end), neighbor))
+        return {"ok": False, "reason": "no buildable pole chain within legal wire reach"}
+
+    def _intake_poles(self, position: dict, equipment: list[dict]) -> list[dict]:
+        occupied = self.builder._occupied_by_plan(equipment)
+        offsets = [(dx, dy) for dx in (-2, -1, 0, 1, 2) for dy in (-2, -1, 0, 1, 2) if dx or dy]
+        offsets.sort(key=lambda offset: (max(abs(offset[0]), abs(offset[1])) != 2, abs(offset[0]) + abs(offset[1])))
+        return [{"name": "small-electric-pole", "position": {"x": position["x"] + dx, "y": position["y"] + dy}, "direction": 0}
+                for dx, dy in offsets if (position["x"] + dx, position["y"] + dy) not in occupied]
+
+    def _source_endpoint(self, observation: dict, item: str) -> dict:
+        resources = {"iron-plate": ("iron-ore", "stone-furnace"), "copper-plate": ("copper-ore", "stone-furnace"),
+                     "coal": ("coal", "wooden-chest"), "stone": ("stone", "wooden-chest")}
+        resource, receiver = resources[item]
+        cell = self.bootstrap.discover_cell(resource, receiver)
+        if not cell.get("ok") or not cell.get("complete"):
+            return _report("blocked", "operating raw-material source is missing", item=item, resource=resource)
+        key = "source:" + item
+        if key not in self.state["blocks"]:
+            p = cell["receiver"]["position"]
+            width = 2 if receiver == "stone-furnace" else 1
+            half = width / 2
+            candidates = []
+            for direction in (4, 12, 0, 8):
+                dx, dy = DIRECTIONS[direction]
+                for tangent in ((-.5, .5) if width == 2 else (0,)):
+                    base = {"x": p["x"] - dy * tangent, "y": p["y"] + dx * tangent}
+                    inserter = {"name": "inserter", "position": {"x": base["x"] + dx * (half + .5), "y": base["y"] + dy * (half + .5)},
+                                "direction": (direction + 8) % 16}
+                    belts = [{"name": "transport-belt", "position": {"x": base["x"] + dx * (half + .5 + n),
+                                "y": base["y"] + dy * (half + .5 + n)}, "direction": direction} for n in (1, 2)]
+                    port = {"kind": "item", "item": item, "direction": "output", "position": belts[-1]["position"], "facing": direction}
+                    for pole in self._intake_poles(inserter["position"], [inserter, *belts]):
+                        candidate = _plan([inserter, *belts, pole], [port], key=key)
+                        if not self.builder._occupied_by_plan(candidate["entities"]) & (self.builder._occupied_by_plan(self._reserved()) | self._port_clearances()):
+                            candidates.append(candidate)
+            candidate = next((p for p in candidates if self.builder.can_place(p["entities"]).get("ok")), None)
+            if candidate is None:
+                return _report("blocked", "no clear material extraction port at source", item=item)
+            self.state["blocks"][key] = candidate
+            self._save()
+        plan = self.state["blocks"][key]
+        result = self.builder.ensure_plan(observation, plan)
+        if not _ready(result):
+            return result
+        result = self.ensure_power_connection(observation, key, plan)
+        if not _ready(result):
+            return result
+        coal = _report("succeeded", "coal source port", ports=plan["ports"]) if item == "coal" else self.ensure_product(observation, "coal")
+        if not _ready(coal):
+            return coal
+        burners = [cell.get("drill", {})]
+        if receiver == "stone-furnace":
+            burners.append(cell["receiver"])
+        for burner in burners:
+            if not burner.get("position"):
+                continue
+            result = self._fuel_burner(observation, burner, coal["evidence"]["ports"][0])
+            if not _ready(result):
+                return result
+        return _report("succeeded", "raw source output port constructed", ports=plan["ports"], flow_verified=False)
+
+    @staticmethod
+    def _entity_key(entity: dict) -> str:
+        return f'{entity["name"]}:{entity["position"]["x"]:g},{entity["position"]["y"]:g}'
+
+    def owns_automated_burner(self, entity: dict) -> bool:
+        return self._entity_key(entity) in self.state.get("automated_burners", [])
+
+    def request_recipe_unlock(self, obs: dict, recipe_name: str) -> dict:
+        self._sync(obs)
+        if (obs.get("enabled_recipes") or {}).get(recipe_name):
+            return _report("succeeded", "required recipe is observed enabled", recipe=recipe_name)
+        unlocks = sorted(name for name, technology in self.catalog.technologies.items()
+                         if recipe_name in technology.get("unlocks", []))
+        if not unlocks:
+            return _report("blocked", "required recipe has no catalog research unlock", recipe=recipe_name)
+        pending = self.state.setdefault("capability_research", [])
+        if unlocks[0] not in pending:
+            pending.append(unlocks[0])
+            self._save()
+        return _report("waiting", "required production capability queued for research", recipe=recipe_name, technology=unlocks[0])
+
+    def _fuel_burner(self, obs: dict, burner: dict, coal_port: dict) -> dict:
+        key = "fuel:" + self._entity_key(burner)
+        if key not in self.state["blocks"]:
+            center = burner["position"]
+            width = 2 if burner["name"] in {"burner-mining-drill", "stone-furnace", "steel-furnace"} else 1
+            occupied = self.builder._occupied_by_plan(self._reserved()) | self._port_clearances()
+            for direction in (12, 4, 8, 0):
+                dx, dy = DIRECTIONS[direction]
+                for tangent in ((-.5, .5) if width == 2 else (0,)):
+                    base = {"x": center["x"] - dy * tangent, "y": center["y"] + dx * tangent}
+                    position = {"x": base["x"] + dx * (width / 2 + .5), "y": base["y"] + dy * (width / 2 + .5)}
+                    inserter = {"name": "inserter", "position": position, "direction": direction}
+                    belts = [{"name": "transport-belt", "position": {"x": position["x"] + dx * n, "y": position["y"] + dy * n},
+                              "direction": (direction + 8) % 16} for n in (1, 2)]
+                    approach = (belts[-1]["position"]["x"] + dx, belts[-1]["position"]["y"] + dy)
+                    if approach in occupied:
+                        continue
+                    for pole in self._intake_poles(position, [inserter, *belts]):
+                        candidate = _plan([inserter, *belts, pole], [{"kind": "item", "item": "coal", "direction": "input",
+                                                                  "position": belts[-1]["position"], "facing": (direction + 8) % 16}])
+                        if self.builder._occupied_by_plan(candidate["entities"]) & occupied:
+                            continue
+                        if self.builder.can_place(candidate["entities"]).get("ok"):
+                            self.state["blocks"][key] = candidate
+                            self._save()
+                            break
+                    if key in self.state["blocks"]:
+                        break
+                if key in self.state["blocks"]:
+                    break
+            if key not in self.state["blocks"]:
+                return _report("blocked", "no clear automatic burner fuel intake", burner=burner)
+        plan = self.state["blocks"][key]
+        result = self.builder.ensure_plan(obs, plan)
+        if not _ready(result):
+            return result
+        result = self.ensure_power_connection(obs, key, plan)
+        if not _ready(result):
+            return result
+        result = self.connect_input(obs, coal_port, plan["ports"][0], key)
+        if not _ready(result):
+            return result
+        owned = self.state.setdefault("automated_burners", [])
+        if self._entity_key(burner) not in owned:
+            owned.append(self._entity_key(burner))
+            self._save()
+        return _report("succeeded", "burner coal belt and powered intake constructed", input_handcarry=False)
+
+    def ensure_product(self, obs: dict, item: str, _stack: tuple[str, ...] = (), *,
+                       rate_per_minute: float | None = None) -> dict:
+        self._sync(obs)
+        if item in _stack:
+            return _report("blocked", "production dependency cycle", item=item)
+        if item in {"iron-plate", "copper-plate", "coal", "stone"}:
+            result = self._source_endpoint(obs, item)
+            if _ready(result) and rate_per_minute is not None:
+                return self._expand_raw_source(obs, item, rate_per_minute, result["evidence"]["ports"][0])
+            return result
+        recipe = self.catalog.recipe_for_product(item)
+        if recipe is None:
+            return _report("blocked", "no catalog production recipe", item=item)
+        if recipe["name"] not in (obs.get("enabled_recipes") or {}):
+            result = self.request_recipe_unlock(obs, recipe["name"])
+            if result["status"] == "blocked":
+                result["reason"] = "production recipe is locked and has no catalog research unlock"
+            return result
+        if any(row.get("type", "item") == "fluid" for row in recipe["ingredients"] + recipe["products"]):
+            if self.fluids is None:
+                return _report("blocked", "fluid production driver is required", item=item)
+            return self.fluids.ensure_source(obs, item, rate_per_minute=rate_per_minute) if rate_per_minute is not None else self.fluids.ensure_source(obs, item)
+        machines = self.graph.machines_for_recipe(recipe["name"], obs)
+        if not machines:
+            future = self.graph.machines_for_recipe(recipe["name"], obs, unlocked_only=False)
+            for machine in future:
+                for placement in machine.get("placement_items", []):
+                    build_recipe = self.catalog.recipe_for_product(placement)
+                    if build_recipe:
+                        result = self.request_recipe_unlock(obs, build_recipe["name"])
+                        if result["status"] == "waiting":
+                            return result
+            return _report("blocked", "no unlocked production machine", item=item, recipe=recipe["name"])
+        machine = machines[0]["name"]
+        if machine not in {"assembling-machine-1", "assembling-machine-2", "assembling-machine-3", "stone-furnace", "steel-furnace"}:
+            return _report("blocked", "solid machine needs a specialized supply block", item=item, machine=machine)
+        inputs = [row["name"] for row in recipe["ingredients"]]
+        if machine in {"stone-furnace", "steel-furnace"} and "coal" not in inputs:
+            inputs.append("coal")
+        if len(inputs) > 3:
+            return _report("blocked", "solid recipe exceeds available input-port geometry", recipe=recipe["name"])
+        sources = {}
+        for ingredient in inputs:
+            source = self.ensure_product(obs, ingredient, (*_stack, item))
+            if not _ready(source):
+                return source
+            sources[ingredient] = source["evidence"]["ports"][0]
+        key = "recipe:" + recipe["name"]
+        origin = build_template("furnace_row" if machine in {"stone-furnace", "steel-furnace"} else "assembler_row",
+                                recipe=recipe["name"], machine=machine, inputs=inputs, output=item)
+        reference = {axis: sum(p["position"][axis] for p in sources.values()) / len(sources) for axis in ("x", "y")} if sources else None
+        plan = self.reserve_site(origin, key, obs, reference)
+        if not plan.get("ok"):
+            return _report("blocked", plan.get("reason", "factory site unavailable"), item=item)
+        result = self.builder.ensure_plan(obs, plan)
+        if not _ready(result):
+            return result
+        result = self.ensure_power_connection(obs, key, plan)
+        if not _ready(result):
+            return result
+        for port in plan["ports"]:
+            if port["kind"] != "item" or port["direction"] != "input":
+                continue
+            result = self.connect_input(obs, sources[port["item"]], port, key + ":" + port["item"])
+            if not _ready(result):
+                return result
+        outputs = [p for p in plan["ports"] if p["kind"] == "item" and p["direction"] == "output"]
+        desired_count = 1
+        if rate_per_minute is not None:
+            output_per_cycle = sum(float(row.get("amount", 1)) * float(row.get("probability", 1)) for row in recipe["products"] if row["name"] == item)
+            machine_rate = float(machines[0]["crafting_speed"]) * 60 / float(recipe["energy"]) * output_per_cycle
+            desired_count = max(1, math.ceil(rate_per_minute / machine_rate - 1e-9))
+            for index in range(1, desired_count):
+                extra_key = key + ":capacity:" + str(index)
+                extra = self.reserve_site(origin, extra_key, obs, plan["entities"][0]["position"])
+                if not extra.get("ok"):
+                    return _report("blocked", extra.get("reason", "capacity expansion site unavailable"), item=item, required_machines=desired_count)
+                result = self.builder.ensure_plan(obs, extra)
+                if not _ready(result):
+                    return result
+                result = self.ensure_power_connection(obs, extra_key, extra)
+                if not _ready(result):
+                    return result
+                for port in extra["ports"]:
+                    if port["kind"] != "item" or port["direction"] != "input":
+                        continue
+                    result = self.connect_input(obs, sources[port["item"]], port, extra_key + ":" + port["item"])
+                    if not _ready(result):
+                        return result
+                output = next(p for p in extra["ports"] if p["kind"] == "item" and p["direction"] == "output")
+                result = self._merge_output(obs, output, outputs[0], extra_key + ":output")
+                if not _ready(result):
+                    return result
+        return _report("succeeded", "automatic production block connected", ports=outputs, flow_verified=False,
+                       recipe=recipe["name"], input_handcarry=False, machines_constructed=desired_count,
+                       requested_rate_per_minute=rate_per_minute)
+
+    def _merge_output(self, obs: dict, source_port: dict, bus_port: dict, key: str) -> dict:
+        """Join same-item capacity outputs while retaining the existing bus facing."""
+        if source_port.get("item") != bus_port.get("item"):
+            return _report("blocked", "cannot merge different material outputs")
+        if key not in self.state["links"]:
+            dx, dy = DIRECTIONS[bus_port["facing"]]
+            forbidden_front = {"name": "port-clearance", "position": {"x": bus_port["position"]["x"] + dx,
+                                                                         "y": bus_port["position"]["y"] + dy}}
+            route = self._material_route(source_port["position"], bus_port["position"], self._reserved() + [forbidden_front],
+                                         start_direction=source_port.get("facing"))
+            if not route.get("ok"):
+                return _report("blocked", "capacity output cannot reach its material bus", link=key, query_error=route.get("reason"))
+            segments = route["segments"]
+            segments[-1]["direction"] = bus_port["facing"]
+            self.state["links"][key] = _plan([{"name": "transport-belt", **segment} for segment in segments],
+                                              source_port=source_port, consumer_port=bus_port)
+            self._save()
+        plan = self.state["links"][key]
+        result = self.builder.ensure_plan(obs, plan)
+        if not _ready(result):
+            return result
+        if any(entity["name"] == "small-electric-pole" for entity in plan["entities"]):
+            result = self.ensure_power_connection(obs, "merge:" + key, plan)
+            if not _ready(result):
+                return result
+        return _report("succeeded", "additional producer joins its same-item output bus", flow_verified=False)
+
+    def _material_route(self, source: dict, destination: dict, reserved: list[dict], **directions: Any) -> dict:
+        clearances = self._port_clearances()
+        for position, direction, sign in ((source, directions.get("start_direction"), 1), (destination, directions.get("end_direction"), -1)):
+            if direction in DIRECTIONS:
+                dx, dy = DIRECTIONS[direction]
+                clearances.discard((position["x"] + dx * sign, position["y"] + dy * sign))
+        # These are planning-only footprint obstacles, never constructed entities.
+        reserved = reserved + [{"name": "port-clearance", "position": {"x": x, "y": y}} for x, y in clearances]
+        result = {"ok": False, "reason": "no material routing attempt"}
+        for margin in (12, 24, 48):
+            result = self.builder.route(source, destination, "transport-belt", reserved, margin=margin, **directions)
+            if result.get("ok") or result.get("reason") != "no route within bounds":
+                break
+        if not result.get("ok") and result.get("reason") in {"no route within bounds", "route search budget exhausted"}:
+            bridge = self._belt_bridge_route(source, destination, reserved, **directions)
+            if bridge.get("ok"):
+                return bridge
+        return result
+
+    def _belt_bridge_route(self, source: dict, destination: dict, reserved: list[dict], **directions: Any) -> dict:
+        """Automation's long inserter can cross one belt before Logistics.
+
+        It picks two tiles behind its position and drops two tiles ahead,
+        physically carrying the requested item over the perpendicular belt.
+        Neither belt's contents nor direction is changed by this crossing.
+        """
+        crossing = self.game.query('''
+local recipe=f.recipes["long-handed-inserter"]
+if not recipe or not recipe.enabled then return {ok=false,reason="long inserter recipe is locked"} end
+local out={};for _,e in pairs(s.find_entities_filtered{force=f,type="transport-belt"}) do
+ out[#out+1]={name=e.name,position=pos(e.position),direction=e.direction}
+end
+return {ok=true,belts=out}
+''')
+        if not crossing.get("ok"):
+            return crossing
+        belts = {(e["position"]["x"], e["position"]["y"]): e
+                 for e in reserved + list(crossing.get("belts") or []) if e["name"] == "transport-belt"}
+        occupied = self.builder._occupied_by_plan(reserved)
+        candidates = []
+        for belt in belts.values():
+            for direction in ((4, 12) if belt.get("direction", 0) in (0, 8) else (0, 8)):
+                dx, dy = DIRECTIONS[direction]
+                p = belt["position"]
+                pickup = {"x": p["x"] - dx * 3, "y": p["y"] - dy * 3}
+                drop = {"x": p["x"] + dx, "y": p["y"] + dy}
+                candidates.append((_distance(source, pickup) + _distance(drop, destination), direction, p, pickup, drop))
+        candidates.sort(key=lambda row: row[0])
+        for _, direction, position, pickup, drop in candidates[:128]:
+            dx, dy = DIRECTIONS[direction]
+            inserter = {"name": "long-handed-inserter", "position": {"x": position["x"] - dx, "y": position["y"] - dy},
+                        "direction": (direction + 8) % 16}
+            bridge_belts = [{"name": "transport-belt", "position": pickup, "direction": direction},
+                            {"name": "transport-belt", "position": drop, "direction": direction}]
+            equipment = [inserter, *bridge_belts]
+            if self.builder._occupied_by_plan(equipment) & occupied:
+                continue
+            for pole in self._intake_poles(inserter["position"], equipment):
+                trial = [*equipment, pole]
+                if self.builder._occupied_by_plan(trial) & occupied or not self.builder.can_place(trial).get("ok"):
+                    continue
+                first = self.builder.route(source, pickup, "transport-belt", reserved + trial, margin=48,
+                                           start_direction=directions.get("start_direction"), end_direction=direction)
+                if not first.get("ok"):
+                    break  # Other pole sites cannot repair this disconnected side.
+                first_entities = [{"name": "transport-belt", **segment} for segment in first["segments"]]
+                second = self.builder.route(drop, destination, "transport-belt", reserved + trial + first_entities, margin=48,
+                                            start_direction=direction, end_direction=directions.get("end_direction"))
+                if not second.get("ok"):
+                    break
+                segments = first["segments"] + [inserter, pole] + second["segments"]
+                return {"ok": True, "path": first["path"] + second["path"], "segments": segments,
+                        "crossing": {"kind": "long-handed-inserter", "over": position}, "flow_verified": False}
+        return {"ok": False, "reason": "no clear powered long-inserter belt crossing"}
+
+    @staticmethod
+    def _electric_source_plan(item: str, x: float, y: float) -> dict:
+        drill = {"name": "electric-mining-drill", "position": {"x": x + .5, "y": y + .5}, "direction": 0, "_width": 3, "_height": 3}
+        if item in {"iron-plate", "copper-plate"}:
+            receiver = {"name": "stone-furnace", "position": {"x": x, "y": y - 2}, "direction": 0, "_width": 2, "_height": 2}
+            entities = [drill, receiver,
+                        {"name": "inserter", "position": {"x": x - 1.5, "y": y - 1.5}, "direction": 4},
+                        {"name": "inserter", "position": {"x": x + 1.5, "y": y - 2.5}, "direction": 4}]
+            entities += [{"name": "transport-belt", "position": {"x": x - n - .5, "y": y - 1.5}, "direction": 12} for n in (2, 3)]
+            entities += [{"name": "transport-belt", "position": {"x": x + n + .5, "y": y - 2.5}, "direction": 12} for n in (2, 3)]
+            entities += [{"name": "small-electric-pole", "position": {"x": x - 2.5, "y": y + .5}, "direction": 0},
+                         {"name": "small-electric-pole", "position": {"x": x + 2.5, "y": y - .5}, "direction": 0}]
+            ports = [{"kind": "item", "item": item, "direction": "output", "position": {"x": x - 3.5, "y": y - 1.5}, "facing": 12},
+                     {"kind": "item", "item": "coal", "direction": "input", "position": {"x": x + 3.5, "y": y - 2.5}, "facing": 12}]
+        else:
+            receiver = {"name": "wooden-chest", "position": {"x": x + .5, "y": y - 1.5}, "direction": 0}
+            entities = [drill, receiver, {"name": "inserter", "position": {"x": x + 1.5, "y": y - 1.5}, "direction": 12},
+                        {"name": "small-electric-pole", "position": {"x": x + 2.5, "y": y + .5}, "direction": 0}]
+            entities += [{"name": "transport-belt", "position": {"x": x + n + .5, "y": y - 1.5}, "direction": 4} for n in (2, 3)]
+            ports = [{"kind": "item", "item": item, "direction": "output", "position": {"x": x + 3.5, "y": y - 1.5}, "facing": 4}]
+        return _plan(entities, ports, resource_cell=True)
+
+    def _raw_capacity_site(self, obs: dict, item: str, key: str) -> dict:
+        if key in self.state["blocks"]:
+            return self.state["blocks"][key]
+        resource = {"iron-plate": "iron-ore", "copper-plate": "copper-ore"}.get(item, item)
+        payload = json.dumps(resource)
+        survey = self.game.query('''
+local name=''' + payload + ''';local seen={};local sites={}
+for _,ore in pairs(s.find_entities_filtered{position={0,0},radius=512,name=name,type="resource"}) do
+ local x=math.floor(ore.position.x);local y=math.floor(ore.position.y);local key=x..","..y
+ if not seen[key] then
+  seen[key]=true
+  if s.can_place_entity{name="electric-mining-drill",position={x=x+.5,y=y+.5},direction=0,force=f} then
+   local amount=0;local count=0;local mixed=false
+   for _,r in pairs(s.find_entities_filtered{area={{x-2,y-2},{x+3,y+3}},type="resource"}) do
+    if r.name==name then amount=amount+r.amount;count=count+1 else mixed=true end
+   end
+   if not mixed and count>=4 then sites[#sites+1]={x=x,y=y,score=count*100000+math.min(amount,10000)-(x*x+y*y)} end
+  end
+ end
+end
+table.sort(sites,function(a,b) return a.score>b.score end)
+local best={};for i=1,math.min(#sites,256) do best[i]=sites[i] end
+return {ok=true,sites=best}
+''')
+        if not survey.get("ok"):
+            return {"ok": False, "reason": "electric mining site survey failed", "error": survey.get("reason")}
+        for site in survey.get("sites", []):
+            plan = self._electric_source_plan(item, site["x"], site["y"])
+            if self.builder._occupied_by_plan(plan["entities"]) & self.builder._occupied_by_plan(self._reserved()):
+                continue
+            if not self.builder.can_place(plan["entities"]).get("ok"):
+                continue
+            return self.register_plan(key, plan, obs)
+        return {"ok": False, "reason": "no clear dense electric mining cell site", "resource": resource}
+
+    def _expand_raw_source(self, obs: dict, item: str, rate: float, primary_port: dict) -> dict:
+        if rate <= 0:
+            return _report("succeeded", "no additional raw supply requested", ports=[primary_port])
+        if not (obs.get("enabled_recipes") or {}).get("electric-mining-drill"):
+            return self.request_recipe_unlock(obs, "electric-mining-drill")
+        resource = {"iron-plate": "iron-ore", "copper-plate": "copper-ore"}.get(item, item)
+        mining_time = float(self.catalog.entities[resource]["mining_time"])
+        electric_rate = float(self.catalog.entities["electric-mining-drill"]["mining_speed"]) * 60 / mining_time
+        initial_rate = float(self.catalog.entities["burner-mining-drill"]["mining_speed"]) * 60 / mining_time
+        if item in {"iron-plate", "copper-plate"}:
+            smelting = self.catalog.recipe_for_product(item)
+            furnace_rate = float(self.catalog.entities["stone-furnace"]["crafting_speed"]) * 60 / float(smelting["energy"])
+            electric_rate, initial_rate = min(electric_rate, furnace_rate), min(initial_rate, furnace_rate)
+        additional = max(0, math.ceil((rate - initial_rate) / electric_rate - 1e-9))
+        coal_port = primary_port
+        if item != "coal" and additional:
+            coal = self.ensure_product(obs, "coal")
+            if not _ready(coal):
+                return coal
+            coal_port = coal["evidence"]["ports"][0]
+        for index in range(additional):
+            key = f"source:{item}:capacity:{index}"
+            plan = self._raw_capacity_site(obs, item, key)
+            if not plan.get("ok"):
+                return _report("blocked", plan["reason"], item=item, requested_rate_per_minute=rate)
+            result = self.builder.ensure_plan(obs, plan)
+            if not _ready(result):
+                return result
+            result = self.ensure_power_connection(obs, key, plan)
+            if not _ready(result):
+                return result
+            for consumer in plan["ports"]:
+                if consumer["direction"] != "input":
+                    continue
+                result = self.connect_input(obs, coal_port, consumer, key + ":fuel")
+                if not _ready(result):
+                    return result
+                furnace = next(e for e in plan["entities"] if e["name"] == "stone-furnace")
+                owned = self.state.setdefault("automated_burners", [])
+                if self._entity_key(furnace) not in owned:
+                    owned.append(self._entity_key(furnace))
+                    self._save()
+            result = self._merge_output(obs, plan["ports"][0], primary_port, key + ":output")
+            if not _ready(result):
+                return result
+        return _report("succeeded", "raw mining and smelting capacity constructed with automatic fuel", ports=[primary_port],
+                       additional_cells=additional, nominal_capacity_per_minute=initial_rate + additional * electric_rate,
+                       requested_rate_per_minute=rate, flow_verified=False)
+
+    def ensure_capacity(self, obs: dict, science_packs: list[str]) -> dict:
+        """Expand physical producers for the active science rates from the graph."""
+        self._sync(obs)
+        targets = self.state.setdefault("capacity_science", [])
+        if any(item not in targets for item in science_packs):
+            targets.extend(item for item in science_packs if item not in targets)
+            self._save()
+        cycles, raw_rates = self.graph._continuous_rates(targets)
+        requirements = {}
+        for name, rate in cycles.items():
+            recipe = self.catalog.recipes[name]
+            for product in recipe["products"]:
+                if product.get("type", "item") == "item":
+                    requirements[product["name"]] = requirements.get(product["name"], 0) + float(product.get("amount", 1)) * float(product.get("probability", 1)) * rate
+        requirements.update({name: rate for (kind, name), rate in raw_rates.items() if kind == "item" and name in {"stone", "coal"}})
+        # Fuel is separate from recipe ingredients. Reserve coal for every
+        # requested smelter plus the bootstrap drills using live prototype watts.
+        coal_joules = float(getattr(self.catalog, "items", {}).get("coal", {}).get("fuel_value", 4000000) or 4000000)
+        fuel = 0.0
+        for name, rate in cycles.items():
+            machines = self.graph.machines_for_recipe(name, obs)
+            if machines and machines[0].get("burner"):
+                active = rate * float(self.catalog.recipes[name]["energy"]) / float(machines[0]["crafting_speed"]) / 60
+                fuel += active * float(machines[0].get("energy_usage_per_tick", 0)) * 3600 / coal_joules
+        requirements["coal"] = max(requirements.get("coal", 0) + fuel, 20)
+        ordered = sorted(requirements, key=lambda item: (item not in {"coal", "iron-plate", "copper-plate", "stone"}, item != "coal", item))
+        for item in ordered:
+            if item in {"iron-ore", "copper-ore"}:
+                continue
+            result = self.ensure_product(obs, item, rate_per_minute=requirements[item])
+            if not _ready(result):
+                return result
+        return _report("succeeded", "active science producers have physical nominal capacity", science_rate_per_minute=self.graph.science_rate_per_minute,
+                       requirements_per_minute=requirements, flow_verified=False)
+
+    def connect_input(self, obs: dict, source_port: dict, consumer_port: dict, link_key: str) -> dict:
+        self._sync(obs)
+        if source_port.get("item") != consumer_port.get("item") or source_port.get("kind") != consumer_port.get("kind"):
+            return _report("blocked", "material ports are incompatible", source=source_port, consumer=consumer_port)
+        if source_port.get("kind") != "item":
+            return _report("blocked", "fluid ports require the fluid network router")
+        if link_key not in self.state["links"]:
+            source = source_port["position"]
+            if consumer_port.get("facing") in DIRECTIONS:
+                dx, dy = DIRECTIONS[consumer_port["facing"]]
+                approach = (consumer_port["position"]["x"] - dx, consumer_port["position"]["y"] - dy)
+                if approach != (source["x"], source["y"]) and approach in self.builder._occupied_by_plan(self._reserved()):
+                    return _report("blocked", "consumer belt approach is occupied by another reserved entity", link=link_key,
+                                   approach={"x": approach[0], "y": approach[1]})
+            reused = [p for p in self.state["links"].values() if p.get("source_port") == source_port]
+            tap_entities = []
+            start_direction = source_port.get("facing")
+            route = None
+            if reused:
+                # Independent inserter side-taps distribute one belt to multiple
+                # consumers before splitter research, preserving the original route.
+                candidate_belts = [e for p in reused for e in p["entities"] if e["name"] == "transport-belt"]
+                # Extend the existing network nearest the new consumer. Always
+                # branching next to the original source needlessly crosses its
+                # earlier supply corridors and can trap distant consumers.
+                candidate_belts.sort(key=lambda e: (_distance(e["position"], consumer_port["position"]), _distance(e["position"], source)))
+                reserved = self.builder._occupied_by_plan(self._reserved())
+                for belt in candidate_belts[:64]:
+                    for side in ((belt.get("direction", 0) + 4) % 16, (belt.get("direction", 0) + 12) % 16):
+                        dx, dy = DIRECTIONS[side]
+                        bp = belt["position"]
+                        inserter = {"name": "inserter", "position": {"x": bp["x"] + dx, "y": bp["y"] + dy}, "direction": (side + 8) % 16}
+                        new_belt = {"name": "transport-belt", "position": {"x": bp["x"] + dx * 2, "y": bp["y"] + dy * 2}, "direction": side}
+                        pole = {"name": "small-electric-pole", "position": {"x": bp["x"] + dx - dy, "y": bp["y"] + dy + dx}, "direction": 0}
+                        trial = [inserter, new_belt, pole]
+                        if self.builder._occupied_by_plan(trial) & reserved:
+                            continue
+                        if self.builder.can_place(trial).get("ok"):
+                            attempt = self._material_route(new_belt["position"], consumer_port["position"], self._reserved() + trial,
+                                                           start_direction=side, end_direction=consumer_port.get("facing"))
+                            if attempt.get("ok"):
+                                tap_entities, source, start_direction, route = trial, new_belt["position"], side, attempt
+                                break
+                    if tap_entities:
+                        break
+                if not tap_entities:
+                    return _report("blocked", "no clear inserter distribution tap from producer belt", link=link_key)
+            if route is None:
+                route = self._material_route(source, consumer_port["position"], self._reserved() + tap_entities,
+                                             start_direction=start_direction, end_direction=consumer_port.get("facing"))
+            if not route.get("ok"):
+                return _report("blocked", "material route is obstructed", link=link_key, query_error=route.get("reason"))
+            entities = tap_entities + [{"name": "transport-belt", **segment} for segment in route["segments"]]
+            unique = {(e["name"], e["position"]["x"], e["position"]["y"]): e for e in entities}
+            plan = _plan(list(unique.values()), source_port=source_port, consumer_port=consumer_port)
+            self.state["links"][link_key] = plan
+            self._save()
+        plan = self.state["links"][link_key]
+        result = self.builder.ensure_plan(obs, plan)
+        if not _ready(result):
+            return result
+        if any(e["name"] == "small-electric-pole" for e in plan["entities"]):
+            result = self.ensure_power_connection(obs, "tap:" + link_key, plan)
+            if not _ready(result):
+                return result
+        return _report("succeeded", "producer-to-consumer belt connection observed", flow_verified=False, link=link_key)
+
+    def _lab_plan(self, obs: dict) -> dict:
+        packs = list(self.graph.for_first_rocket()["bom"]["science_packs"])
+        packs.sort(key=lambda item: (item != "automation-science-pack", item != "logistic-science-pack", item))
+        key = "research:labs"
+        if key not in self.state["blocks"]:
+            existing = next((e for e in obs.get("entities", []) if e.get("name") == "lab"), None)
+            if existing:
+                plan = build_template("labs_row", inputs=packs, anchor=existing["position"])
+                if self.builder.can_place(plan.get("entities", [])).get("ok"):
+                    self.state["blocks"][key] = plan
+                    self._save()
+        return self.reserve_site(build_template("labs_row", inputs=packs), key, obs)
+
+    def _ensure_lab(self, obs: dict) -> dict:
+        plan = self._lab_plan(obs)
+        if not plan.get("ok"):
+            return _report("blocked", plan.get("reason", "no lab site"))
+        result = self.builder.ensure_plan(obs, plan)
+        if not _ready(result):
+            return result
+        return self.ensure_power_connection(obs, "research:labs", plan)
+
+    def _bootstrap_automation(self, obs: dict) -> dict:
+        result = self._ensure_lab(obs)
+        if not _ready(result):
+            return result
+        technology = self.catalog.technologies["automation"]
+        if obs.get("research") != "automation":
+            return {"type": "research", "technology": "automation", "reason": "research initial assembler capability"}
+        labs = [e for e in obs.get("entities", []) if e.get("name") == "lab"]
+        for ingredient in technology["ingredients"]:
+            item = ingredient["name"]
+            required = math.ceil(float(technology["unit_count"]) * float(ingredient["amount"]))
+            current_produced = int((obs.get("production") or {}).get(item, {}).get("produced", 0))
+            baseline = self.state.setdefault("bootstrap_science", {}).get(item)
+            if baseline is None:
+                baseline = {"produced": current_produced,
+                            "allowance": max(0, required - int(obs.get("inventory", {}).get(item, 0))
+                                             - sum(int(e.get("inventory", {}).get(item, 0)) for e in labs))}
+                self.state["bootstrap_science"][item] = baseline
+                self._save()
+            held = int(obs.get("inventory", {}).get(item, 0))
+            if held:
+                return {"type": "insert", "name": "lab", "position": labs[0]["position"], "item": item,
+                        "count": min(held, required), "inventory": "lab_input", "reason": "one-off science seed for Automation research"}
+            produced = max(0, current_produced - baseline["produced"])
+            if produced < baseline["allowance"]:
+                return self.bootstrap.ensure_item(obs, item, baseline["allowance"] - produced)
+        return _report("waiting", "initial Automation research consumes its bounded science batch",
+                       research_progress=obs.get("research_progress", 0))
+
+    def next_action(self, obs: dict) -> dict:
+        self._sync(obs)
+        if not (obs.get("technologies") or {}).get("automation"):
+            return self._bootstrap_automation(obs)
+        for item in self.graph.for_first_rocket()["bom"]["science_packs"]:
+            production = (obs.get("production") or {}).get(item, {})
+            if item not in self.state["flow_samples"]:
+                self.state["flow_samples"][item] = {"produced": int(production.get("produced", 0)),
+                                                   "consumed": int(production.get("consumed", 0))}
+                self._save()
+        # Establish construction-belt production before extending the science network.
+        for item in ("transport-belt", "automation-science-pack"):
+            result = self.ensure_product(obs, item)
+            if not _ready(result):
+                return result
+        result = self._ensure_lab(obs)
+        if not _ready(result):
+            return result
+        next_research = self.graph.next_research(obs)
+        if not (obs.get("technologies") or {}).get("logistics"):
+            next_research = {"technology": "logistics", "kind": "research"}
+        done = {name for name, researched in (obs.get("technologies") or {}).items() if researched}
+        priorities = self.priority_research + self.state.get("capability_research", [])
+        if "electric-mining-drill" in self.catalog.technologies:
+            priorities = priorities + ["electric-mining-drill"]
+        for requested in priorities:
+            if requested not in self.catalog.technologies or requested in done:
+                continue
+            for name in self.catalog.technology_order([requested], include_researched=True):
+                technology = self.catalog.technologies[name]
+                if name not in done and all(parent in done for parent in technology["prerequisites"]):
+                    next_research = {"technology": name, "kind": "research"}
+                    break
+            else:
+                continue
+            break
+        if next_research is None:
+            return _report("succeeded", "all first-rocket research technologies are observed complete")
+        technology_name = next_research["technology"]
+        technology = self.catalog.technologies[technology_name]
+        if technology.get("research_trigger"):
+            trigger = technology["research_trigger"]
+            if trigger.get("type") == "craft-item":
+                item = trigger["item"]
+                result = self.ensure_product(obs, item["name"] if isinstance(item, dict) else item)
+                return result if not _ready(result) else _report("waiting", "waiting for natural production research trigger",
+                                                               technology=technology_name, trigger=trigger)
+            if trigger.get("type") in {"craft-fluid", "mine-entity"}:
+                if self.fluids is None:
+                    return _report("blocked", "natural fluid research trigger needs fluid production", technology=technology_name)
+                if trigger["type"] == "craft-fluid":
+                    fluid = trigger.get("fluid")
+                    product = fluid["name"] if isinstance(fluid, dict) else fluid
+                else:
+                    entities = trigger.get("entities") or [trigger.get("entity")]
+                    product = next((name for name in entities if name == "crude-oil"), None)
+                if product:
+                    result = self.fluids.ensure_source(obs, product)
+                    return result if not _ready(result) else _report("waiting", "waiting for natural fluid production research trigger",
+                                                                   technology=technology_name, trigger=trigger)
+            return _report("blocked", "natural research trigger needs a dedicated producer", technology=technology_name, trigger=trigger)
+        lab = self.state["blocks"]["research:labs"]
+        for ingredient in technology["ingredients"]:
+            item = ingredient["name"]
+            source = self.ensure_product(obs, item)
+            if not _ready(source):
+                return source
+            consumer = next((p for p in lab["ports"] if p["kind"] == "item" and p["item"] == item), None)
+            if consumer is None:
+                return _report("blocked", "research science has no lab input port", item=item)
+            result = self.connect_input(obs, source["evidence"]["ports"][0], consumer, "lab:" + item)
+            if not _ready(result):
+                return result
+        if obs.get("research") != technology_name:
+            return {"type": "research", "technology": technology_name, "reason": "advance catalog research with automatic science feed"}
+        if (obs.get("enabled_recipes") or {}).get("electric-mining-drill"):
+            capacity = self.ensure_capacity(obs, [row["name"] for row in technology["ingredients"]])
+            if not _ready(capacity):
+                return capacity
+        return _report("waiting", "automatic science production and lab consumption running",
+                       technology=technology_name, research_progress=obs.get("research_progress", 0), input_handcarry=False,
+                       science_flow=self.flow_evidence(obs))
+
+    def flow_evidence(self, obs: dict) -> dict:
+        result = {}
+        for item, baseline in self.state.get("flow_samples", {}).items():
+            current = (obs.get("production") or {}).get(item, {})
+            produced = int(current.get("produced", 0)) - baseline["produced"]
+            consumed = int(current.get("consumed", 0)) - baseline["consumed"]
+            result[item] = {"produced_since_automation": max(0, produced), "consumed_since_automation": max(0, consumed),
+                            "production_and_consumption_verified": produced > 0 and consumed > 0}
+        return result

@@ -1,5 +1,45 @@
 # Factorio AI Autoplayer
 
+The active implementation is a deterministic Space Age player. Gameplay makes
+no local or cloud LLM calls. Start a new Codex thread from
+[HANDOFF_CURRENT.md](HANDOFF_CURRENT.md); the current scope and acceptance rules
+are in [goal.md](goal.md).
+
+The real-resource starter pipeline has been tested through mining, natural
+early research and continuously coal-fed steam power. Automatic science, oil
+and rocket production are under integration; a completed autonomous rocket run
+has **not** been validated yet.
+
+On Windows, run `run_factorio_deterministic.bat`. It creates an isolated world
+on the first run and resumes its save on later runs. This entry point uses a
+headless server plus an isolated, hidden `FactoryAutomaton` client. The client
+is needed for normal player-crafting research triggers; it uses its own profile
+under the run directory. Existing saves and the user's game profile are preserved.
+
+```powershell
+$env:PYTHONPATH = 'src'
+python -m factorio_ai.deterministic_cli run-no-mod-deterministic --new-world --seed 20260908
+# Existing saved world, or a server left running by a stopped worker:
+python -m factorio_ai.deterministic_cli run-no-mod-deterministic --resume
+python -m factorio_ai.deterministic_cli run-no-mod-deterministic --connect-only
+python -m factorio_ai.deterministic_cli stop-deterministic
+```
+
+Use `--until power` to run the verified starter milestone. A blocked or failed
+task stops and records its reason in `status.json`; it does not claim completion.
+The default run listens on `127.0.0.1:34200`. To observe, join that address from
+Factorio multiplayer or run `watch-deterministic`. A read-only dashboard is available
+with `python -m factorio_ai.deterministic_dashboard --runtime runtime/deterministic/20260908`.
+
+The current development test world uses `127.0.0.1:34210` instead. Its observer
+shortcut is `watch_factorio_deterministic.bat`, and its running dashboard is
+<http://127.0.0.1:18890>. This development world is separate from acceptance runs.
+
+## Archived LLM implementation
+
+The following sections describe the older implementation and its launchers.
+They do not apply to the deterministic entry point above.
+
 Layered Factorio AI autoplayer MVP.
 
 For another LLM, Codex CLI session, Claude session, or future agent continuing
