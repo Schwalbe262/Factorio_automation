@@ -6,5 +6,5 @@
 - Dashboard http://127.0.0.1:18890; observer watch_factorio_deterministic.bat. Main worker resumed; latest source continuity and energy recovery under live observation.
 - Strict character-navigation-qa seed101 UDP34216/RCON27031: real steam generation; natural Automation consumed 10 carried red packs, belt science next.
 - Isolated seeded fixtures prove fluid recipes, two real launches/platforms and belt crossing. Factory flow fixture had explicit prerequisite flags.
-- Energy cold recovery, physical ammo supply, bounded assisted batches integrated; source routing/lab scale pending commit, full flow/three-seed acceptance pending.
+- Energy/ammo/batched builds/source continuity/lab scale integrated; main repairing depleted power coal feed, full flow and three-seed acceptance pending.
 - Preserve pre-existing dirty insight.md; do not stage. Checkpoint reader-lock retries, strict input leases and milestone success guards are covered.

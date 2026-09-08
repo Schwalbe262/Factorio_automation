@@ -273,7 +273,51 @@ return {ok=true,blocked=blocked}
         cell = self.bootstrap.discover_cell(resource, receiver)
         if not cell.get("ok") or not cell.get("complete"):
             return _report("blocked", "operating raw-material source is missing", item=item, resource=resource)
-        key = "source:" + item
+        primary_key = "source:" + item
+        key = primary_key
+        primary = self.state["blocks"].get(primary_key)
+        current_receiver = {"name": cell["receiver"]["name"], "position": deepcopy(cell["receiver"]["position"])}
+        if primary:
+            if "source_receiver" not in primary:
+                association = self._identify_source_receiver(primary, receiver)
+                if not association.get("ok"):
+                    return _report("blocked", "legacy source receiver could not be identified", item=item,
+                                   query_error=association.get("reason"))
+                primary["source_receiver"] = association["receiver"]
+                self._save()
+            if primary["source_receiver"] != current_receiver:
+                key = primary_key + ":relocation:" + self._entity_key(current_receiver)
+                old_receiver = primary["source_receiver"].get("position")
+                for entity in observation.get("entities", []):
+                    if (old_receiver and entity.get("name") == "burner-mining-drill"
+                            and entity.get("status_name") in {"no_minable_resources", "no_mineable_resources"}
+                            and _distance(entity["position"], old_receiver) <= 3):
+                        payload = json.dumps(json.dumps({"drill": entity["position"], "receiver": primary["source_receiver"]}))
+                        ownership = self.game.query('''
+local args=helpers.json_to_table(''' + payload + ''')
+local drill=target(args.drill,"burner-mining-drill");local receiver=target(args.receiver.position,args.receiver.name)
+if not drill or not receiver then return {ok=true,feeds_receiver=false} end
+local p=drill.drop_position
+return {ok=true,feeds_receiver=math.abs(p.x-receiver.position.x)<=receiver.prototype.tile_width/2
+ and math.abs(p.y-receiver.position.y)<=receiver.prototype.tile_height/2}
+''')
+                        if ownership.get("ok") and ownership.get("feeds_receiver"):
+                            return {"type": "mine", "name": entity["name"], "position": entity["position"], "count": 1,
+                                    "reason": "recover exhausted source drill to reconnect its established material bus"}
+                # The established bus and every downstream consumer keep their
+                # original endpoints. Restore that infrastructure if damaged.
+                result = self.builder.ensure_plan(observation, primary)
+                if not _ready(result):
+                    return result
+                result = self.ensure_power_connection(observation, primary_key, primary)
+                if not _ready(result):
+                    return result
+        if key != primary_key and key not in self.state["blocks"]:
+            planned = self._reserve_relocated_source(observation, item, current_receiver, key, primary)
+            if not planned.get("ok"):
+                if planned.get("action"):
+                    return planned["action"]
+                return _report("blocked", planned.get("reason", "relocated source has no clear continuity route"), item=item)
         if key not in self.state["blocks"]:
             p = cell["receiver"]["position"]
             width = 2 if receiver == "stone-furnace" else 1
@@ -289,7 +333,8 @@ return {ok=true,blocked=blocked}
                                 "y": base["y"] + dy * (half + .5 + n)}, "direction": direction} for n in (1, 2)]
                     port = {"kind": "item", "item": item, "direction": "output", "position": belts[-1]["position"], "facing": direction}
                     for pole in self._intake_poles(inserter["position"], [inserter, *belts]):
-                        candidate = _plan([inserter, *belts, pole], [port], key=key)
+                        candidate = _plan([inserter, *belts, pole], [port], key=key,
+                                          source_receiver=deepcopy(current_receiver))
                         if not self.builder._occupied_by_plan(candidate["entities"]) & (self.builder._occupied_by_plan(self._reserved()) | self._port_clearances()):
                             candidates.append(candidate)
             candidate = next((p for p in candidates if self.builder.can_place(p["entities"]).get("ok")), None)
@@ -304,7 +349,26 @@ return {ok=true,blocked=blocked}
         result = self.ensure_power_connection(observation, key, plan)
         if not _ready(result):
             return result
-        coal = _report("succeeded", "coal source port", ports=plan["ports"]) if item == "coal" else self.ensure_product(observation, "coal")
+        primary = self.state["blocks"][primary_key]
+        if key != primary_key:
+            if key + ":refill" in self.state["blocks"]:
+                refill = self.state["blocks"][key + ":refill"]
+                buffer = refill.get("receiver") or primary["source_receiver"]
+                if not buffer.get("position") or buffer.get("name") not in {"wooden-chest", "iron-chest", "steel-chest"}:
+                    return _report("blocked", "source continuity refill has no restorable item buffer", item=item)
+                if not any(self._entity_key(e) == self._entity_key(buffer) for e in refill["entities"]):
+                    refill["entities"].insert(0, {**deepcopy(buffer), "direction": 0})
+                    self._save()
+                result = self.builder.ensure_plan(observation, refill)
+                if not _ready(result):
+                    return result
+                result = self.ensure_power_connection(observation, key + ":refill", refill)
+                if not _ready(result):
+                    return result
+            result = self._merge_output(observation, plan["ports"][0], plan.get("continuity_target", primary["ports"][0]), key + ":output")
+            if not _ready(result):
+                return result
+        coal = _report("succeeded", "coal source port", ports=primary["ports"]) if item == "coal" else self.ensure_product(observation, "coal")
         if not _ready(coal):
             return coal
         burners = [cell.get("drill", {})]
@@ -316,7 +380,153 @@ return {ok=true,blocked=blocked}
             result = self._fuel_burner(observation, burner, coal["evidence"]["ports"][0])
             if not _ready(result):
                 return result
-        return _report("succeeded", "raw source output port constructed", ports=plan["ports"], flow_verified=False)
+        association = {"extraction_block": key, "receiver": current_receiver, "drill": deepcopy(cell.get("drill"))}
+        if primary.get("active_source") != association:
+            primary["active_source"] = association
+            self._save()
+        return _report("succeeded", "active raw source connected to its established material bus",
+                       ports=primary["ports"], active_source=association, relocated=key != primary_key, flow_verified=False)
+
+    def _identify_source_receiver(self, plan: dict, receiver_name: str) -> dict:
+        """Read the actual pickup receiver of a checkpoint predating identities."""
+        inserters = [e for e in plan["entities"] if e["name"] == "inserter"]
+        payload = json.dumps(json.dumps({"inserters": inserters, "receiver": receiver_name}, separators=(",", ":")))
+        survey = self.game.query('''
+local args=helpers.json_to_table(''' + payload + ''');local receivers={};local seen={}
+local vectors={[0]={0,-1},[4]={1,0},[8]={0,1},[12]={-1,0}}
+for _,row in ipairs(args.inserters) do
+ local arm=target(row.position,row.name);local v=vectors[row.direction or 0]
+ local pickup=arm and arm.pickup_position or {x=row.position.x+v[1],y=row.position.y+v[2]}
+ for _,e in pairs(s.find_entities_filtered{position=pickup,radius=1.5,name=args.receiver,force=f}) do
+  if math.abs(pickup.x-e.position.x)<e.prototype.tile_width/2
+   and math.abs(pickup.y-e.position.y)<e.prototype.tile_height/2 and not seen[e.unit_number] then
+   seen[e.unit_number]=true;receivers[#receivers+1]={name=e.name,position=pos(e.position)}
+  end
+ end
+end
+return {ok=true,receivers=receivers}
+''')
+        if not survey.get("ok") or "receivers" not in survey:
+            return {"ok": False, "reason": survey.get("reason", "incomplete receiver survey")}
+        receivers = list(survey["receivers"] or [])
+        if len(receivers) > 1:
+            return {"ok": False, "reason": "source extraction has multiple receiver identities"}
+        # A destroyed old receiver does not invalidate the established bus.
+        # Recording that it is missing allows a new active cell to refill it.
+        return {"ok": True, "receiver": receivers[0] if receivers else {"name": receiver_name, "missing": True}}
+
+    def _receiver_transfer_candidates(self, receiver: dict, item: str, *, output: bool,
+                                      occupied: set[tuple[float, float]], blocked_equipment: list[dict] | None = None) -> list[dict]:
+        """A single belt permits turns immediately after a crowded receiver."""
+        p = receiver["position"]
+        half = 1 if receiver["name"] in {"stone-furnace", "steel-furnace"} else .5
+        candidates = []
+        for direction, (dx, dy) in DIRECTIONS.items():
+            for tangent in ((-.5, .5) if half == 1 else (0,)):
+                base = {"x": p["x"] - dy * tangent, "y": p["y"] + dx * tangent}
+                arm = {"name": "inserter", "position": {"x": base["x"] + dx * (half + .5), "y": base["y"] + dy * (half + .5)},
+                       "direction": (direction + 8) % 16 if output else direction}
+                belt_position = {"x": arm["position"]["x"] + dx, "y": arm["position"]["y"] + dy}
+                facings = (direction, (direction + 4) % 16, (direction + 12) % 16) if output else ((direction + 8) % 16,)
+                for facing in facings:
+                    belt = {"name": "transport-belt", "position": belt_position, "direction": facing}
+                    equipment = [arm, belt]
+                    if self.builder._occupied_by_plan(equipment) & occupied:
+                        continue
+                    placement = self.builder.can_place(equipment)
+                    if not placement.get("ok"):
+                        if blocked_equipment is not None:
+                            blocked_equipment.extend(e for e in placement.get("blocked", [])
+                                                     if e.get("reason") == "terrain_or_entity_collision")
+                        continue
+                    accepted = 0
+                    for pole in self._intake_poles(arm["position"], equipment):
+                        entities = [*equipment, pole]
+                        if self.builder._occupied_by_plan(entities) & occupied:
+                            continue
+                        if not self.builder.can_place(entities).get("ok"):
+                            continue
+                        candidates.append(_plan(entities, [{"kind": "item", "item": item,
+                            "direction": "output" if output else "input", "position": belt_position, "facing": facing}]))
+                        accepted += 1
+                        if accepted == 2:
+                            break
+        return candidates
+
+    def _reserve_relocated_source(self, obs: dict, item: str, receiver: dict, key: str, primary: dict) -> dict:
+        reserved = self._reserved()
+        occupied = self.builder._occupied_by_plan(reserved + obs.get("entities", [])) | self._port_clearances()
+        blocked_equipment = []
+        outputs = self._receiver_transfer_candidates(receiver, item, output=True, occupied=occupied,
+                                                    blocked_equipment=blocked_equipment)
+        # Every belt in the original short extraction segment precedes every
+        # downstream branch. Merging into an arbitrary consumer branch would
+        # leave the other consumers starved.
+        destinations = [(None, {**primary["ports"][0], "position": e["position"], "facing": e["direction"]})
+                        for e in primary["entities"] if e["name"] == "transport-belt"]
+        old = primary["source_receiver"]
+        if old.get("position") and old["name"] in {"wooden-chest", "iron-chest", "steel-chest"}:
+            destinations += [(plan, plan["ports"][0]) for plan in
+                             self._receiver_transfer_candidates(old, item, output=False, occupied=occupied,
+                                                                blocked_equipment=blocked_equipment)]
+        pairs = [(output, refill, destination) for output in outputs for refill, destination in destinations]
+        pairs.sort(key=lambda row: _distance(row[0]["ports"][0]["position"], row[2]["position"]))
+        for output, refill, destination in pairs[:32]:
+            equipment = output["entities"] + (refill["entities"] if refill else [])
+            if refill and self.builder._occupied_by_plan(output["entities"]) & self.builder._occupied_by_plan(refill["entities"]):
+                continue
+            source = output["ports"][0]
+            dx, dy = DIRECTIONS[destination["facing"]]
+            front = {"name": "port-clearance", "position": {"x": destination["position"]["x"] + dx,
+                                                             "y": destination["position"]["y"] + dy}}
+            route = self._material_route(source["position"], destination["position"], reserved + equipment + [front],
+                                         start_direction=source["facing"], allow_bridge=False)
+            if not route.get("ok"):
+                continue
+            route["segments"][-1]["direction"] = destination["facing"]
+            output.update(key=key, source_receiver=deepcopy(receiver), continuity_target=deepcopy(destination))
+            self.state["blocks"][key] = output
+            if refill:
+                refill["receiver"] = deepcopy(old)
+                refill["entities"].insert(0, {**deepcopy(old), "direction": 0})
+                self.state["blocks"][key + ":refill"] = refill
+            self.state["links"][key + ":output"] = _plan(
+                [{"name": "transport-belt", **segment} for segment in route["segments"]],
+                source_port=source, consumer_port=destination)
+            self._save()
+            return output
+        obstacle = self._source_corridor_obstacle(blocked_equipment)
+        if obstacle is not None:
+            return {"ok": False, "action": obstacle}
+        return {"ok": False, "reason": "relocated receiver cannot reach its original source segment or buffer"}
+
+    def _source_corridor_obstacle(self, blocked: list[dict]) -> dict | None:
+        positions = sorted({(e["position"]["x"], e["position"]["y"]) for e in blocked})[:64]
+        if not positions:
+            return None
+        payload = json.dumps(json.dumps([{"x": x, "y": y} for x, y in positions]))
+        survey = self.game.query('''
+local positions=helpers.json_to_table(''' + payload + ''');local obstacles={};local seen={}
+for _,p in ipairs(positions) do
+ for _,e in pairs(s.find_entities_filtered{area={{p.x-.45,p.y-.45},{p.x+.45,p.y+.45}},force="neutral"}) do
+  if (e.type=="tree" or e.type=="simple-entity") and e.minable
+   and not string.find(e.name,"crash") and not string.find(e.name,"wreck") then
+   local key=e.name..":"..e.position.x..","..e.position.y
+   if not seen[key] then
+    seen[key]=true;obstacles[#obstacles+1]={name=e.name,type=e.type,position=pos(e.position),force=e.force.name,minable=true}
+   end
+  end
+ end
+end
+return {ok=true,obstacles=obstacles}
+''')
+        if survey.get("ok"):
+            for entity in sorted(survey.get("obstacles") or [], key=lambda e: (e["position"]["x"], e["position"]["y"], e["name"])):
+                if (entity.get("type") in {"tree", "simple-entity"} and entity.get("force") == "neutral"
+                        and entity.get("minable") and not any(term in entity["name"] for term in ("crash", "wreck"))):
+                    return {"type": "mine", "name": entity["name"], "position": entity["position"], "count": 1,
+                            "reason": "clear observed natural obstacle from source continuity equipment footprint"}
+        return None
 
     @staticmethod
     def _entity_key(entity: dict) -> str:
@@ -511,7 +721,8 @@ return {ok=true,blocked=blocked}
                 return result
         return _report("succeeded", "additional producer joins its same-item output bus", flow_verified=False)
 
-    def _material_route(self, source: dict, destination: dict, reserved: list[dict], **directions: Any) -> dict:
+    def _material_route(self, source: dict, destination: dict, reserved: list[dict], *,
+                        allow_bridge: bool = True, **directions: Any) -> dict:
         clearances = self._port_clearances()
         for position, direction, sign in ((source, directions.get("start_direction"), 1), (destination, directions.get("end_direction"), -1)):
             if direction in DIRECTIONS:
@@ -520,11 +731,11 @@ return {ok=true,blocked=blocked}
         # These are planning-only footprint obstacles, never constructed entities.
         reserved = reserved + [{"name": "port-clearance", "position": {"x": x, "y": y}} for x, y in clearances]
         result = {"ok": False, "reason": "no material routing attempt"}
-        for margin in (12, 24, 48):
+        for margin in ((12, 24, 48) if allow_bridge else (12, 24)):
             result = self.builder.route(source, destination, "transport-belt", reserved, margin=margin, **directions)
             if result.get("ok") or result.get("reason") != "no route within bounds":
                 break
-        if not result.get("ok") and result.get("reason") in {"no route within bounds", "route search budget exhausted"}:
+        if allow_bridge and not result.get("ok") and result.get("reason") in {"no route within bounds", "route search budget exhausted"}:
             bridge = self._belt_bridge_route(source, destination, reserved, **directions)
             if bridge.get("ok"):
                 return bridge
@@ -727,12 +938,77 @@ return {ok=true,sites=best}
         return _report("succeeded", "active science producers have physical nominal capacity", science_rate_per_minute=self.graph.science_rate_per_minute,
                        requirements_per_minute=requirements, flow_verified=False)
 
+    def _recover_unbuilt_link(self, obs: dict, source_port: dict, consumer_port: dict, link_key: str) -> dict | None:
+        """Discard a contradictory old route only after a complete live survey.
+
+        Earlier routing could revisit its source and overwrite the saved belt
+        direction. Already constructed routes require explicit repair; only an
+        entirely unbuilt link between independently reserved endpoints is safe
+        to plan again without moving or rotating any entity.
+        """
+        plan = self.state["links"].get(link_key)
+        if not plan:
+            return None
+        endpoints = {(p["position"]["x"], p["position"]["y"]): p.get("facing")
+                     for p in (source_port, consumer_port)}
+        contradictory = any(e["name"] == "transport-belt"
+                            and (point := (e["position"]["x"], e["position"]["y"])) in endpoints
+                            and endpoints[point] is not None and e.get("direction", 0) != endpoints[point]
+                            for e in plan["entities"])
+        if not contradictory:
+            return None
+        failure = _report("blocked", "contradictory material route cannot be safely replanned", link=link_key)
+        if plan.get("source_port") != source_port or plan.get("consumer_port") != consumer_port:
+            return failure
+        if "tap:" + link_key in self.state["power_links"]:
+            return failure
+        other = self._reserved(exclude=link_key)
+        stable = {(e["position"]["x"], e["position"]["y"]): e.get("direction", 0)
+                  for e in other if e["name"] == "transport-belt"}
+        if any(stable.get(point) != direction for point, direction in endpoints.items()):
+            return failure
+        interior = [e for e in plan["entities"] if (e["position"]["x"], e["position"]["y"]) not in endpoints]
+        if self.builder._occupied_by_plan(interior) & self.builder._occupied_by_plan(other):
+            return failure
+        payload = json.dumps(json.dumps(plan["entities"], separators=(",", ":")))
+        survey = self.game.query('''
+local rows=helpers.json_to_table(''' + payload + ''');local found={}
+for _,row in ipairs(rows) do
+ local entities=s.find_entities_filtered{position=row.position,radius=.1,force=f}
+ for _,e in pairs(entities) do
+  found[#found+1]={name=e.name,position=pos(e.position),direction=e.direction}
+ end
+end
+return {ok=true,checked=#rows,existing=found}
+''')
+        if not survey.get("ok") or survey.get("checked") != len(plan["entities"]) or "existing" not in survey:
+            failure["evidence"]["query_error"] = survey.get("reason", "incomplete route survey")
+            return failure
+        observed = {}
+        for entity in survey["existing"]:
+            point = (entity["position"]["x"], entity["position"]["y"])
+            if point not in endpoints or entity["name"] != "transport-belt" or entity.get("direction", 0) != endpoints[point]:
+                failure["evidence"]["existing_entity"] = entity
+                return failure
+            observed[point] = entity
+        if set(observed) != set(endpoints):
+            return failure
+        del self.state["links"][link_key]
+        self.state["route_recoveries"] = (self.state.get("route_recoveries", []) + [{"link": link_key,
+            "tick": obs.get("tick"), "reason": "unbuilt route contradicted stable endpoint directions",
+            "checked_entities": len(plan["entities"]), "preserved_endpoints": len(observed)}])[-20:]
+        self._save()
+        return None
+
     def connect_input(self, obs: dict, source_port: dict, consumer_port: dict, link_key: str) -> dict:
         self._sync(obs)
         if source_port.get("item") != consumer_port.get("item") or source_port.get("kind") != consumer_port.get("kind"):
             return _report("blocked", "material ports are incompatible", source=source_port, consumer=consumer_port)
         if source_port.get("kind") != "item":
             return _report("blocked", "fluid ports require the fluid network router")
+        recovery = self._recover_unbuilt_link(obs, source_port, consumer_port, link_key)
+        if recovery is not None:
+            return recovery
         if link_key not in self.state["links"]:
             source = source_port["position"]
             if consumer_port.get("facing") in DIRECTIONS:
@@ -815,6 +1091,57 @@ return {ok=true,sites=best}
         if not _ready(result):
             return result
         return self.ensure_power_connection(obs, "research:labs", plan)
+
+    def ensure_lab_capacity(self, obs: dict, technology: dict) -> dict:
+        """Match laboratory consumption to the actual research duration in ticks."""
+        primary = self.state.get("blocks", {}).get("research:labs")
+        if not primary:
+            return _report("blocked", "primary research laboratory is not reserved")
+        timing = self.game.query('''
+return {ok=true,speed=prototypes.entity.lab.get_researching_speed(),
+ bonus=f.laboratory_speed_modifier,drain=prototypes.entity.lab.science_pack_drain_rate_percent}
+''')
+        duration = float(technology.get("unit_energy") or 0)
+        speed = float(timing.get("speed") or 0) * (1 + float(timing.get("bonus") or 0))
+        drain = float(timing.get("drain") or 0) / 100
+        amounts = [float(row["amount"]) for row in technology.get("ingredients", [])]
+        if (not timing.get("ok") or not amounts or min(amounts) <= 0
+                or not all(math.isfinite(value) and value > 0 for value in (duration, speed, drain))):
+            return _report("blocked", "live laboratory research timing is unavailable")
+        per_lab = 3600 * speed * drain * min(amounts) / duration
+        required = max(1, math.ceil(self.graph.science_rate_per_minute / per_lab - 1e-9))
+        existing = [key for key in self.state["blocks"] if key.startswith("research:lab-capacity:")]
+        desired = max(required, 1 + len(existing))
+        packs = [port["item"] for port in primary["ports"] if port["kind"] == "item"]
+        reference = next(entity["position"] for entity in primary["entities"] if entity["name"] == "lab")
+        sources = {}
+        for ingredient in technology["ingredients"]:
+            item = ingredient["name"]
+            source = self.ensure_product(obs, item)
+            if not _ready(source):
+                return source
+            sources[item] = next(port for port in source["evidence"]["ports"] if port["item"] == item)
+        for index in range(1, desired):
+            key = f"research:lab-capacity:{index}"
+            plan = self.reserve_site(build_template("labs_row", inputs=packs), key, obs, reference)
+            if not plan.get("ok"):
+                return _report("blocked", plan.get("reason", "laboratory expansion site unavailable"), required_labs=desired)
+            result = self.builder.ensure_plan(obs, plan)
+            if not _ready(result):
+                return result
+            result = self.ensure_power_connection(obs, key, plan)
+            if not _ready(result):
+                return result
+            for consumer in plan["ports"]:
+                if consumer["kind"] == "item" and consumer["item"] in sources:
+                    result = self.connect_input(obs, sources[consumer["item"]], consumer, key + ":" + consumer["item"])
+                    if not _ready(result):
+                        return result
+        self.state["laboratory_capacity"] = {"constructed_labs": desired, "required_labs": required,
+            "nominal_consumption_per_minute": desired * per_lab, "unit_energy_ticks": duration,
+            "flow_verified": False}
+        self._save()
+        return _report("succeeded", "laboratories connected for the active research duration", **self.state["laboratory_capacity"])
 
     def _bootstrap_automation(self, obs: dict) -> dict:
         result = self._ensure_lab(obs)
@@ -922,6 +1249,9 @@ return {ok=true,sites=best}
             return {"type": "research", "technology": technology_name, "reason": "advance catalog research with automatic science feed"}
         if (obs.get("enabled_recipes") or {}).get("electric-mining-drill"):
             capacity = self.ensure_capacity(obs, [row["name"] for row in technology["ingredients"]])
+            if not _ready(capacity):
+                return capacity
+            capacity = self.ensure_lab_capacity(obs, technology)
             if not _ready(capacity):
                 return capacity
         return _report("waiting", "automatic science production and lab consumption running",

@@ -361,6 +361,227 @@ class FactoryTests(unittest.TestCase):
         self.factory.ensure_power_connection.return_value = ready()
         self.assertEqual(self.factory._merge_output(self.obs, source, destination, "merge")["status"], "succeeded")
 
+    def laboratory_capacity_fixture(self, duration=600):
+        self.automatic_sources()
+        self.factory.graph.science_rate_per_minute = 30
+        self.game.query.side_effect = lambda body: ({"ok": True, "speed": 1, "bonus": 0, "drain": 100}
+            if "get_researching_speed" in body else {"ok": True, "covered": 0})
+        return {"unit_energy": duration, "ingredients": [{"name": "automation-science-pack", "amount": 1}]}
+
+    def test_laboratory_capacity_uses_ticks_and_supplies_every_added_lab(self):
+        technology = self.laboratory_capacity_fixture()
+        result = self.factory.ensure_lab_capacity(self.obs, technology)
+        self.assertEqual(result["evidence"]["constructed_labs"], 5)
+        self.assertEqual(result["evidence"]["nominal_consumption_per_minute"], 30)
+        self.assertEqual(self.factory.connect_input.call_count, 4)
+        self.assertEqual(self.factory.ensure_power_connection.call_count, 4)
+        self.assertFalse(result["evidence"]["flow_verified"])
+        positions = [call.args[2]["position"] for call in self.factory.connect_input.call_args_list]
+        self.assertEqual(len({(p["x"], p["y"]) for p in positions}), 4)
+
+    def test_slower_research_expands_labs_instead_of_reusing_one_lab_capacity(self):
+        technology = self.laboratory_capacity_fixture()
+        self.factory.ensure_lab_capacity(self.obs, technology)
+        technology["unit_energy"] = 1200
+        self.assertEqual(self.factory.ensure_lab_capacity(self.obs, technology)["evidence"]["constructed_labs"], 10)
+        technology["unit_energy"] = 600
+        self.assertEqual(self.factory.ensure_lab_capacity(self.obs, technology)["evidence"]["constructed_labs"], 10)
+
+    def test_laboratory_power_failure_prevents_false_consumption_capacity(self):
+        technology = self.laboratory_capacity_fixture()
+        failure = {"status": "blocked", "reason": "laboratory power route obstructed"}
+        self.factory.ensure_power_connection.return_value = failure
+        self.assertEqual(self.factory.ensure_lab_capacity(self.obs, technology), failure)
+        self.factory.connect_input.assert_not_called()
+        self.assertNotIn("laboratory_capacity", self.factory.state)
+
+    def test_missing_research_timing_never_falls_back_to_invented_capacity(self):
+        technology = self.laboratory_capacity_fixture(duration=0)
+        self.assertEqual(self.factory.ensure_lab_capacity(self.obs, technology)["status"], "blocked")
+        self.builder.ensure_plan.assert_not_called()
+
+    def contradictory_link_fixture(self):
+        source = port("iron-plate", .5, .5, facing=4)
+        consumer = port("iron-plate", .5, 4.5, direction="input", facing=8)
+        endpoints = [{"name": "transport-belt", "position": deepcopy(p["position"]), "direction": p["facing"]}
+                     for p in (source, consumer)]
+        self.factory.state["blocks"]["stable-endpoints"] = {"entities": deepcopy(endpoints)}
+        old = {"ok": True, "source_port": source, "consumer_port": consumer, "entities": [
+            {**deepcopy(endpoints[0]), "direction": 8},
+            {"name": "transport-belt", "position": {"x": .5, "y": 1.5}, "direction": 8},
+            deepcopy(endpoints[1])]}
+        self.factory.state["links"]["iron"] = old
+        survey = {"ok": True, "checked": 3, "existing": deepcopy(endpoints)}
+        self.game.query.side_effect = lambda body: survey if "checked=#rows" in body else {"ok": True, "blocked": []}
+        return source, consumer, old, survey
+
+    def test_only_unbuilt_contradictory_link_is_replanned_preserving_live_endpoints(self):
+        source, consumer, old, survey = self.contradictory_link_fixture()
+        before = deepcopy(self.factory.state["blocks"])
+        result = self.factory.connect_input(self.obs, source, consumer, "iron")
+        self.assertEqual(result["status"], "succeeded", result)
+        new = self.factory.state["links"]["iron"]
+        self.assertIsNot(new, old)
+        first = next(e for e in new["entities"] if e["position"] == source["position"])
+        self.assertEqual(first["direction"], 4)
+        self.assertEqual(before, self.factory.state["blocks"])
+        self.assertEqual(self.factory.state["route_recoveries"][-1]["checked_entities"], 3)
+
+    def test_partly_constructed_contradictory_link_is_never_discarded(self):
+        source, consumer, old, survey = self.contradictory_link_fixture()
+        survey["existing"].append(deepcopy(old["entities"][1]))
+        result = self.factory.connect_input(self.obs, source, consumer, "iron")
+        self.assertEqual(result["status"], "blocked")
+        self.assertIs(self.factory.state["links"]["iron"], old)
+        self.builder.ensure_plan.assert_not_called()
+        self.assertNotIn("route_recoveries", self.factory.state)
+
+    def test_incomplete_recovery_survey_and_changed_live_endpoint_fail_closed(self):
+        for mode in ("incomplete", "changed_endpoint"):
+            with self.subTest(mode=mode):
+                source, consumer, old, survey = self.contradictory_link_fixture()
+                if mode == "incomplete":
+                    survey["checked"] = 2
+                else:
+                    survey["existing"][0]["direction"] = 8
+                result = self.factory.connect_input(self.obs, source, consumer, "iron")
+                self.assertEqual(result["status"], "blocked")
+                self.assertIs(self.factory.state["links"]["iron"], old)
+                self.builder.ensure_plan.assert_not_called()
+
+    @staticmethod
+    def coal_cell(x=0):
+        return {"ok": True, "complete": True,
+                "receiver": {"name": "wooden-chest", "position": {"x": x + .5, "y": .5}},
+                "drill": {"name": "burner-mining-drill", "position": {"x": x + 1, "y": 2}}}
+
+    def source_relocation_fixture(self):
+        original = self.coal_cell()
+        self.bootstrap.discover_cell.return_value = original
+        self.factory._fuel_burner = Mock(return_value=ready())
+        self.factory._merge_output = Mock(return_value=ready())
+        first = self.factory.ensure_product(self.obs, "coal")
+        self.assertEqual(first["status"], "succeeded", first)
+        self.factory._fuel_burner.reset_mock()
+        current = self.coal_cell(20)
+        self.bootstrap.discover_cell.return_value = current
+        return original, current, deepcopy(first["evidence"]["ports"])
+
+    def test_relocated_source_merges_into_stable_bus_and_fuels_current_drill(self):
+        original, current, old_ports = self.source_relocation_fixture()
+        original_entities = deepcopy(self.factory.state["blocks"]["source:coal"]["entities"])
+        result = self.factory.ensure_product(self.obs, "coal")
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertTrue(result["evidence"]["relocated"])
+        self.assertFalse(result["evidence"]["flow_verified"])
+        self.assertEqual(result["evidence"]["ports"], old_ports)
+        primary = self.factory.state["blocks"]["source:coal"]
+        self.assertEqual(primary["entities"], original_entities)
+        self.assertEqual(primary["source_receiver"], original["receiver"])
+        self.assertEqual(primary["active_source"]["receiver"], current["receiver"])
+        self.factory._merge_output.assert_called_once()
+        self.assertEqual(self.factory._merge_output.call_args.args[2], old_ports[0])
+        self.factory._fuel_burner.assert_called_once_with(self.obs, current["drill"], old_ports[0])
+
+    def test_relocation_connection_failure_does_not_claim_new_source_is_active(self):
+        original, current, old_ports = self.source_relocation_fixture()
+        action = {"type": "build", "name": "transport-belt", "position": {"x": 10.5, "y": .5}}
+        self.factory._merge_output.return_value = action
+        self.assertEqual(self.factory.ensure_product(self.obs, "coal"), action)
+        self.assertEqual(self.factory.state["blocks"]["source:coal"]["active_source"]["receiver"], original["receiver"])
+        self.factory._fuel_burner.assert_not_called()
+
+    def test_relocation_association_survives_restart_without_duplicate_extraction(self):
+        original, current, old_ports = self.source_relocation_fixture()
+        self.factory.ensure_product(self.obs, "coal")
+        saved_keys = set(self.factory.state["blocks"])
+        resumed = DeterministicFactory(self.game, self.bootstrap, self.builder, self.catalog)
+        resumed.ensure_power_connection = Mock(return_value=ready())
+        resumed._fuel_burner = Mock(return_value=ready())
+        resumed._merge_output = Mock(return_value=ready())
+        result = resumed.ensure_product(self.obs, "coal")
+        self.assertEqual(result["evidence"]["ports"], old_ports)
+        self.assertEqual(set(resumed.state["blocks"]), saved_keys)
+        self.assertEqual(len(saved_keys), 2)
+        self.assertEqual(resumed.state["blocks"]["source:coal"]["active_source"]["receiver"], current["receiver"])
+
+    def test_legacy_receiver_is_identified_from_live_pickup_before_relocation(self):
+        original, current, old_ports = self.source_relocation_fixture()
+        del self.factory.state["blocks"]["source:coal"]["source_receiver"]
+        self.game.query.return_value = {"ok": True, "receivers": [original["receiver"]]}
+        result = self.factory.ensure_product(self.obs, "coal")
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual(self.factory.state["blocks"]["source:coal"]["source_receiver"], original["receiver"])
+        self.assertEqual(result["evidence"]["ports"], old_ports)
+        self.assertTrue(any("pickup_position" in call.args[0] for call in self.game.query.call_args_list))
+
+    def test_failed_legacy_receiver_survey_preserves_source_without_assuming_identity(self):
+        original, current, old_ports = self.source_relocation_fixture()
+        del self.factory.state["blocks"]["source:coal"]["source_receiver"]
+        before = deepcopy(self.factory.state["blocks"])
+        self.game.query.return_value = {"ok": False, "reason": "fixture survey unavailable"}
+        result = self.factory.ensure_product(self.obs, "coal")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(before, self.factory.state["blocks"])
+        self.factory._merge_output.assert_not_called()
+
+    def test_only_depleted_drill_feeding_old_receiver_is_recovered(self):
+        original, current, old_ports = self.source_relocation_fixture()
+        self.obs["entities"] = [{**original["drill"], "status_name": "no_minable_resources"}]
+        self.game.query.return_value = {"ok": True, "feeds_receiver": True}
+        result = self.factory.ensure_product(self.obs, "coal")
+        self.assertEqual(result["type"], "mine")
+        self.assertEqual(result["name"], "burner-mining-drill")
+        self.assertEqual(result["position"], original["drill"]["position"])
+        self.factory._merge_output.assert_not_called()
+
+    def test_nearby_exhausted_power_drill_is_not_mistaken_for_old_source(self):
+        original, current, old_ports = self.source_relocation_fixture()
+        unrelated = {"name": "burner-mining-drill", "position": {"x": 1, "y": -1}, "status_name": "no_minable_resources"}
+        self.obs["entities"] = [unrelated]
+        self.game.query.return_value = {"ok": True, "feeds_receiver": False}
+        result = self.factory.ensure_product(self.obs, "coal")
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertNotIn("type", result)
+
+    def test_proven_neutral_rock_obstruction_returns_normal_mining_action(self):
+        self.source_relocation_fixture()
+        self.builder.can_place.return_value = {"ok": False, "blocked": [
+            {"name": "inserter", "position": {"x": 20.5, "y": -.5}, "reason": "terrain_or_entity_collision"}]}
+        self.game.query.return_value = {"ok": True, "obstacles": [{"name": "huge-rock", "type": "simple-entity",
+            "position": {"x": 20.25, "y": -.75}, "force": "neutral", "minable": True}]}
+        result = self.factory.ensure_product(self.obs, "coal")
+        self.assertEqual(result["type"], "mine")
+        self.assertEqual(result["name"], "huge-rock")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(set(self.factory.state["blocks"]), {"source:coal"})
+
+    def test_resource_and_wreckage_are_not_source_corridor_cleanup_candidates(self):
+        blocked = [{"name": "inserter", "position": {"x": .5, "y": .5}}]
+        self.game.query.return_value = {"ok": True, "obstacles": [
+            {"name": "crash-site-spaceship-wreck-big-1", "type": "simple-entity", "position": {"x": .5, "y": .5}, "force": "neutral", "minable": True},
+            {"name": "iron-ore", "type": "resource", "position": {"x": 1.5, "y": .5}, "force": "neutral", "minable": True}]}
+        self.assertIsNone(self.factory._source_corridor_obstacle(blocked))
+
+    def test_destroyed_saved_refill_chest_is_restored_before_source_claims_connection(self):
+        original, current, old_ports = self.source_relocation_fixture()
+        key = "source:coal:relocation:wooden-chest:20.5,0.5"
+        self.factory.state["blocks"][key] = {"ok": True, "entities": [], "ports": [port("coal", 23.5)],
+                                             "source_receiver": current["receiver"]}
+        refill = {"ok": True, "receiver": original["receiver"], "entities": [
+            {"name": "inserter", "position": {"x": .5, "y": 1.5}, "direction": 8}]}
+        self.factory.state["blocks"][key + ":refill"] = refill
+        action = {"type": "build", "name": "wooden-chest", "position": original["receiver"]["position"]}
+        def construction(obs, plan):
+            if plan is refill and any(e["name"] == "wooden-chest" for e in plan["entities"]):
+                return action
+            return ready()
+        self.builder.ensure_plan.side_effect = construction
+        result = self.factory.ensure_product(self.obs, "coal")
+        self.assertEqual(result, action)
+        self.assertEqual(refill["entities"][0]["position"], original["receiver"]["position"])
+        self.factory._merge_output.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -338,6 +338,8 @@ def route_orthogonal(start: Any, end: Any, *, occupied: Iterable[Any] = (),
         ex, ey = _point(end)
         if any(d is not None and d not in DIRECTIONS for d in (start_direction, end_direction)):
             raise ValueError("route directions must be 0,4,8,12")
+        if (sx, sy) == (ex, ey) and start_direction is not None and end_direction is not None and start_direction != end_direction:
+            raise ValueError("coincident route endpoints require the same direction")
         if isinstance(max_nodes, bool) or not isinstance(max_nodes, int) or max_nodes < 1:
             raise ValueError("max_nodes must be a positive integer")
         if abs((ex - sx) - round(ex - sx)) > 1e-6 or abs((ey - sy) - round(ey - sy)) > 1e-6:
@@ -362,11 +364,24 @@ def route_orthogonal(start: Any, end: Any, *, occupied: Iterable[Any] = (),
             if (x, y) == (ex, ey) and (end_direction is None or previous == end_direction or node == initial):
                 goal = node
                 break
+            ancestor_tiles = set()
+            ancestor = node
+            while True:
+                ancestor_tiles.add(ancestor[:2])
+                if ancestor == initial:
+                    break
+                ancestor = parents[ancestor]
             for direction, (dx, dy) in DIRECTIONS.items():
                 if node == initial and start_direction is not None and direction != start_direction:
                     continue
                 nx, ny = x + dx, y + dy
                 if not inside(nx, ny) or (nx, ny) in blocked:
+                    continue
+                # Direction is part of the search state, but one physical belt
+                # tile cannot be visited again with a different direction. In
+                # particular, a forced first step must never be undone by a
+                # U-turn through the source to escape an obstructed departure.
+                if (nx, ny) in ancestor_tiles:
                     continue
                 if (nx, ny) == (ex, ey) and end_direction is not None and direction != end_direction:
                     continue
@@ -388,6 +403,9 @@ def route_orthogonal(start: Any, end: Any, *, occupied: Iterable[Any] = (),
                 break
             goal = parents[goal]
         path.reverse()
+        if len({(p["x"], p["y"]) for p in path}) != len(path):
+            failure.update(visited=visited, reason="route revisits a physical tile")
+            return failure
         segments = []
         for i, position in enumerate(path):
             if i + 1 < len(path):

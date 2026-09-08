@@ -139,6 +139,28 @@ class OrthogonalRouterTests(unittest.TestCase):
         self.assertEqual(result["visited"], 1)
         self.assertIn("budget", result["reason"])
 
+    def test_forced_departure_cannot_u_turn_through_its_source(self):
+        result = route_orthogonal((0, 0), (-2, 0), start_direction=4,
+                                  bounds={"min_x": -2, "max_x": 1, "min_y": 0, "max_y": 0})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["segments"], [])
+        self.assertIn("no route", result["reason"])
+
+    def test_forced_departure_uses_clear_detour_without_revisiting_any_tile(self):
+        result = route_orthogonal((0, 0), (-2, 0), start_direction=4, end_direction=0,
+                                  bounds={"min_x": -2, "max_x": 1, "min_y": 0, "max_y": 1})
+        self.assertTrue(result["ok"], result)
+        points = [(p["x"], p["y"]) for p in result["path"]]
+        self.assertEqual(len(points), len(set(points)))
+        self.assertEqual(result["segments"][0]["direction"], 4)
+        self.assertEqual(result["segments"][-1]["direction"], 0)
+        self.assertEqual(result["path"][1], {"x": 1, "y": 0})
+
+    def test_one_tile_route_cannot_overwrite_a_different_source_direction(self):
+        result = route_orthogonal((0, 0), (0, 0), start_direction=4, end_direction=8)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["segments"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
