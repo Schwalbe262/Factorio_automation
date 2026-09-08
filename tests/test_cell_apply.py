@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import Mock, patch
 
 from factorio_ai import blueprints, cell_apply
 
@@ -56,6 +57,53 @@ class CellApplyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             out = cell_apply.apply_design(None, Path(d), "nope", 0, 0, execute=False)
             self.assertFalse(out["ok"])
+
+    def test_raw_template_entities_can_be_planned_without_blueprint_encoding(self):
+        plan = cell_apply.design_build_plan({"entities": [{"name": "lab", "position": {"x": .5, "y": .5}}]})
+        self.assertEqual(plan["required_items"], {"lab": 1})
+
+    def test_failed_build_stops_before_recipe_and_preserves_lua_reason(self):
+        plan = cell_apply.design_build_plan(self._design())
+        plan["ok"] = True
+        controller = Mock()
+        controller.act.return_value = {"ok": False, "reason": "missing item: assembling-machine-1"}
+        with patch.object(cell_apply, "load_design_plan", return_value=plan):
+            result = cell_apply.apply_design(controller, None, "key", 0, 0, execute=True)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["failed_action_index"], 0)
+        self.assertEqual(result["reason"], "missing item: assembling-machine-1")
+        self.assertEqual(result["results"][0]["detail"], result["reason"])
+        self.assertEqual(controller.act.call_count, 1)
+        self.assertEqual(result["placed"], 0)
+
+    def test_success_counts_builds_separately_from_recipe_actions(self):
+        plan = cell_apply.design_build_plan(self._design())
+        plan["ok"] = True
+        controller = Mock()
+        controller.act.return_value = {"ok": True}
+        with patch.object(cell_apply, "load_design_plan", return_value=plan):
+            result = cell_apply.apply_design(controller, None, "key", 0, 0, execute=True)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["placed"], 4)
+        self.assertEqual(result["applied"], 5)
+        self.assertEqual(result["remaining"], 0)
+
+    def test_transport_error_reports_failed_action_after_partial_construction(self):
+        plan = cell_apply.design_build_plan(self._design())
+        plan["ok"] = True
+        controller = Mock()
+        controller.act.side_effect = [{"ok": True}, TimeoutError("RCON unavailable")]
+        with patch.object(cell_apply, "load_design_plan", return_value=plan):
+            result = cell_apply.apply_design(controller, None, "key", 0, 0, execute=True)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["placed"], 1)
+        self.assertEqual(result["failed_action_index"], 1)
+        self.assertIn("RCON unavailable", result["reason"])
+
+    def test_empty_design_is_not_a_successful_build_plan(self):
+        with patch.object(cell_apply.cell_library, "get_design", return_value={"entities": []}):
+            result = cell_apply.load_design_plan(".", "empty")
+        self.assertFalse(result["ok"])
 
 
 if __name__ == "__main__":

@@ -1,10 +1,10 @@
 # Current Handoff
 - Branch: feat/deterministic-space-age-autoplayer; implementing approved LLM-free Space Age first-rocket plan.
 - Read goal.md for current rules; old Qwen/Slurm strategy is legacy, not the new runtime path.
-- New deterministic_game.py uses engine character/crafting, resource-conserving actions and isolated saves.
-- world_catalog.py exports live 2.1.9 data; first rocket+starter+research BOM resolves from actual prototypes.
-- deterministic_state.py handles atomic checkpoints, rollback proof invalidation and exclusive run ownership.
-- Token telemetry can read exact current-session JSONL when the Codex state DB lacks the thread.
-- Primary visible TEST world: runtime/deterministic/adapter-smoke, UDP34210/RCON27025; bootstrap controller now being tested.
+- Parts 1 and 2a: live catalog/state/adapter plus reusable factory templates, material-backed builder and truthful cell application.
+- Separate fixture proved dedicated coal-fed steam generation at 300 kW for 330 seconds; first rocket NOT complete.
+- Main TEST world: runtime/deterministic/adapter-smoke, UDP34210/RCON27025; worker building continuous coal feed.
+- Dedicated FactoryAutomaton GUI runs hidden under runtime/agent-client; actual lab craft naturally unlocked red science.
+- Dashboard http://127.0.0.1:18890; observer BAT watch_factorio_deterministic.bat; never touch user-owned GUI/profile.
 - Prior saves preserved; pre-existing dirty insight.md must not be staged.
-- Next: finish live bootstrap, continuous coal-fed power, then automated production/research/defense/rocket; not yet complete.
+- Next: validate/commit supervisor+bootstrap+hidden client; integrate solid/fluid factories and defense, then legitimate launch.

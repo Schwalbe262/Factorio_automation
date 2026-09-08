@@ -20,6 +20,8 @@ from . import blueprints, cell_library
 
 
 def _design_entities(design: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if isinstance(design, dict) and isinstance(design.get("entities"), list):
+        return [e for e in design["entities"] if isinstance(e, dict)]
     bp = (design or {}).get("blueprint") if isinstance(design, dict) else None
     exchange = bp.get("exchange_string") if isinstance(bp, dict) else None
     if not isinstance(exchange, str) or not exchange:
@@ -74,8 +76,10 @@ def load_design_plan(runtime_dir: Path, key: str, anchor_x: float = 0.0, anchor_
     if design is None:
         return {"ok": False, "reason": f"no library design with key '{key}'", "key": key}
     plan = design_build_plan(design, anchor_x, anchor_y)
-    plan.update({"ok": True, "key": key, "item": design.get("item"),
+    plan.update({"ok": plan["entity_count"] > 0, "key": key, "item": design.get("item"),
                  "required_machines": design.get("required_machines") or []})
+    if not plan["ok"]:
+        plan["reason"] = "design contains no buildable entities"
     return plan
 
 
@@ -89,9 +93,9 @@ def apply_design(
     execute: bool = False,
 ) -> dict[str, Any]:
     """Apply (build) a library design at an anchor. Default ``execute=False`` returns the plan only
-    (dry-run). With ``execute=True`` every action is run through ``controller.act`` -- each action
-    self-validates, so missing-item / collision / reach failures are reported per action rather than
-    raised. Returns the plan plus, when executed, per-action results and placed/failed counts."""
+    (dry-run). Execution stops at the first failed action so recipe changes never follow
+    missing construction. Reports the failed action index for a supervisor to reobserve
+    and repair; the returned index alone is not evidence that earlier actions still exist."""
     plan = load_design_plan(runtime_dir, key, anchor_x, anchor_y)
     if not plan.get("ok"):
         return plan
@@ -99,17 +103,25 @@ def apply_design(
     if not execute:
         return plan
     results: list[dict[str, Any]] = []
-    placed = failed = 0
-    for action in plan["actions"]:
+    placed = failed = applied = 0
+    for index, action in enumerate(plan["actions"]):
         try:
             res = controller.act(action)
-        except Exception as exc:  # noqa: BLE001 - one bad action must not abort the whole apply
+        except Exception as exc:  # noqa: BLE001 - report transport failures as failed actions
             res = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         ok = bool(isinstance(res, dict) and res.get("ok", False))
-        placed += 1 if ok else 0
+        placed += 1 if ok and action.get("type") == "build" else 0
+        applied += 1 if ok else 0
         failed += 0 if ok else 1
+        detail = ((res.get("reason") or res.get("error") or res.get("status") or
+                   ("ok" if ok else "action returned failure without a reason"))
+                  if isinstance(res, dict) else "invalid action response")
         results.append({"action": action.get("type"), "name": action.get("name"),
                         "position": action.get("position"), "ok": ok,
-                        "detail": (res.get("error") or res.get("status") or "ok") if isinstance(res, dict) else "?"})
-    plan.update({"results": results, "placed": placed, "failed": failed})
+                        "detail": detail, "index": index})
+        if not ok:
+            plan.update(reason=detail, failed_action_index=index)
+            break
+    plan.update({"ok": failed == 0, "results": results, "placed": placed, "failed": failed,
+                 "applied": applied, "remaining": len(plan["actions"]) - applied})
     return plan
