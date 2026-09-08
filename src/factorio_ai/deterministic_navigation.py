@@ -320,8 +320,10 @@ if within and not e and x.type=="build" and prototypes.entity[x.name]
  and not s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f} then
  local left,top,right,bottom=build_box(x)
  local actor_box=a.bounding_box
- if actor_box.right_bottom.x>left and actor_box.left_top.x<right
- and actor_box.right_bottom.y>top and actor_box.left_top.y<bottom then
+ --[[ Engine collision includes touching quantized edges; move the owned actor
+ before retrying the unchanged normal placement check. ]]
+ if actor_box.right_bottom.x>=left and actor_box.left_top.x<=right
+ and actor_box.right_bottom.y>=top and actor_box.left_top.y<=bottom then
   local best=nil;local best_distance=math.huge
   for _,position in ipairs({{right+.8,x.position.y},{left-.8,x.position.y},{x.position.x,bottom+.8},{x.position.x,top-.8}}) do
    local candidate={x=position[1],y=position[2]}
