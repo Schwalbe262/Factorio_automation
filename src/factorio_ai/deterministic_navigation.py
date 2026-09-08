@@ -15,6 +15,8 @@ import tempfile
 from typing import Any
 import zipfile
 
+from .deterministic_game import GUARDED_MINE_LUA, validate_mine_guard
+
 
 SCENARIO_INPUT_LUA = r'''
 if not _G.factorio_ai_character_input_version then
@@ -85,7 +87,18 @@ if not _G.factorio_ai_character_input_version then
    end
    if not waypoint then actor.walking_state={walking=false};motion.status="succeeded";return end
    local dx=waypoint.position.x-actor.position.x;local dy=waypoint.position.y-actor.position.y
-   local angle=math.atan2(dy,dx)
+   local steering_dx,steering_dy=dx,dy
+   local previous=motion.path[motion.next_waypoint-1]
+   --[[ Belts can push an actor off a clear path into a neighbouring obstacle.
+   Correct cross-track drift while continuing along a straight segment. ]]
+   if previous then
+    if math.abs(previous.position.x-waypoint.position.x)<0.001 and math.abs(dx)>0.05 and math.abs(dy)>0.05 then
+     steering_dy=(dy<0 and -1 or 1)*math.abs(dx)
+    elseif math.abs(previous.position.y-waypoint.position.y)<0.001 and math.abs(dy)>0.05 and math.abs(dx)>0.05 then
+     steering_dx=(dx<0 and -1 or 1)*math.abs(dy)
+    end
+   end
+   local angle=math.atan2(steering_dy,steering_dx)
    actor.walking_state={walking=true,direction=(math.floor(angle/(math.pi/4)+0.5)*2+4)%16}
    local distance=dx*dx+dy*dy
    if motion.progress_waypoint~=motion.next_waypoint then
@@ -159,6 +172,8 @@ if x.type=="move" then
   pathfind_flags={allow_destroy_friendly_entities=false,allow_paths_through_own_entities=false,cache=false}}
 else
  local entity=target(x.position,x.name)
+ local e=entity;local inv=a.get_main_inventory()
+''' + GUARDED_MINE_LUA + r'''
  if not entity then motion.status="succeeded";return success{status="succeeded"} end
  if string.find(entity.name,"crash%-site") or string.find(entity.name,"wreck") then motion.status="blocked";motion.reason="protected_artifact";return failure(motion.reason) end
  if not a.can_reach_entity(entity) then motion.status="blocked";motion.reason="out_of_reach";return failure(motion.reason) end
@@ -296,7 +311,9 @@ return success{}
 local x=helpers.json_to_table(''' + encoded + ''')
 local e=target(x.position,x.name)
 local within
-if e then within=a.can_reach_entity(e)
+if e and x.type=="take" and e.type=="item-entity" then
+ within=(e.position.x-a.position.x)^2+(e.position.y-a.position.y)^2<=a.item_pickup_distance^2
+elseif e then within=a.can_reach_entity(e)
 else within=(x.position.x-a.position.x)^2+(x.position.y-a.position.y)^2<=math.min(4,a.build_distance)^2 end
 if within and not e and x.type=="build" and prototypes.entity[x.name]
  and not s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f} then
@@ -328,6 +345,7 @@ return success{within=within}
     def _input(self, action: dict) -> dict:
         if action.get("type") not in {"move", "mine"}:
             raise ValueError("character input must be a move or mine action")
+        validate_mine_guard(action)
         count = action.get("count", 1)
         if isinstance(count, bool) or not isinstance(count, int) or count < 1:
             raise ValueError("mining count must be a positive integer")

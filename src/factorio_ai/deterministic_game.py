@@ -27,6 +27,58 @@ BUILD_BATCH_LIMIT = 32
 BUILD_BATCH_NAMES = frozenset({"transport-belt", "small-electric-pole"})
 
 
+def validate_mine_guard(action: dict[str, Any]) -> None:
+    identity = {"expected_entity_unit", "expected_entity_world_id"}
+    if identity.intersection(action):
+        unit = action.get("expected_entity_unit")
+        if (not identity.issubset(action) or action.get("type") != "mine"
+                or type(action.get("count", 1)) is not int or action.get("count", 1) != 1
+                or not isinstance(unit, int) or isinstance(unit, bool) or unit < 1
+                or not isinstance(action.get("expected_entity_world_id"), str) or not action["expected_entity_world_id"]):
+            raise ValueError("invalid owned entity mining guard")
+    keys = {"expected_world_id", "expected_unit_number", "exhausted_source_receiver", "required_replacement_item"}
+    if not keys.intersection(action):
+        return
+    receiver = action.get("exhausted_source_receiver")
+    position = receiver.get("position") if isinstance(receiver, dict) else None
+    unit = action.get("expected_unit_number")
+    valid = (keys.issubset(action) and action.get("type") == "mine"
+             and action.get("name") == "burner-mining-drill" and type(action.get("count", 1)) is int and action.get("count", 1) == 1
+             and isinstance(action.get("expected_world_id"), str) and bool(action["expected_world_id"])
+             and isinstance(unit, int) and not isinstance(unit, bool) and unit > 0
+             and action.get("required_replacement_item") == "electric-mining-drill"
+             and isinstance(receiver, dict) and isinstance(receiver.get("name"), str) and bool(receiver["name"])
+             and isinstance(position, dict) and all(isinstance(position.get(k), (int, float))
+                 and not isinstance(position[k], bool) and math.isfinite(position[k]) for k in ("x", "y")))
+    if not valid:
+        raise ValueError("invalid exhausted source mining guard")
+
+
+GUARDED_MINE_LUA = r'''
+if x.expected_entity_unit then
+ if not d or d.world_id~=x.expected_entity_world_id then return failure("owned_mine_world_changed") end
+ if not e or not e.valid or e.unit_number~=x.expected_entity_unit or e.force~=f then return failure("owned_mine_target_changed") end
+end
+if x.expected_world_id then
+ if not d or d.world_id~=x.expected_world_id then return failure("source_upgrade_world_changed") end
+ if not e or not e.valid or e.unit_number~=x.expected_unit_number or e.name~="burner-mining-drill" or e.force~=f
+  then return failure("source_upgrade_target_changed") end
+ local receiver=target(x.exhausted_source_receiver.position,x.exhausted_source_receiver.name)
+ if not receiver or receiver.force~=f or (receiver.type~="container" and receiver.type~="furnace")
+  then return failure("source_upgrade_receiver_changed") end
+ local p=e.drop_position;local b=receiver.bounding_box
+ if p.x<b.left_top.x or p.x>b.right_bottom.x or p.y<b.left_top.y or p.y>b.right_bottom.y
+  then return failure("source_upgrade_receiver_changed") end
+ local radius=e.prototype.mining_drill_radius
+ for _,ore in pairs(s.find_entities_filtered{area={{e.position.x-radius,e.position.y-radius},
+   {e.position.x+radius,e.position.y+radius}},type="resource"}) do
+  if ore.amount>0 then return failure("source_upgrade_drill_not_exhausted") end
+ end
+ if inv.get_item_count(x.required_replacement_item)<1 then return failure("source_upgrade_replacement_missing") end
+end
+'''
+
+
 def run_config(seed: int = 20260908, *, runtime: Path | None = None,
                server_port: int = 34200, rcon_port: int = 27015) -> AppConfig:
     cfg = load_config()
@@ -225,6 +277,7 @@ return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.
         return observation
 
     def act(self, action: dict[str, Any]) -> dict[str, Any]:
+        validate_mine_guard(action)
         if "count" in action and (isinstance(action["count"], bool)
                 or not isinstance(action["count"], int) or action["count"] < 1):
             raise ValueError("action count must be a positive integer")
@@ -269,6 +322,7 @@ local e=target(x.position,x.name)
 if not e then return failure("target_missing") end
 if string.find(e.name,"crash%-site") or string.find(e.name,"wreck") then return failure("protected_artifact") end
 '''
+            body += GUARDED_MINE_LUA
             if self.backend == "character":
                 body += '''
 if not a.can_reach_entity(e) then return failure("out_of_reach") end
@@ -320,7 +374,8 @@ local e=target(x.position,x.name)
 if not e then return failure("target_missing") end
 '''
             if self.backend == "character":
-                body += 'if not a.can_reach_entity(e) then return failure("out_of_reach") end; '
+                ground_exception = 'e.type~="item-entity" and ' if kind == "take" else ''
+                body += 'if ' + ground_exception + 'not a.can_reach_entity(e) then return failure("out_of_reach") end; '
             if kind == "insert":
                 body += '''
 local n=math.min(x.count or 1,inv.get_item_count(x.item))
@@ -331,6 +386,23 @@ return success{status=inserted>0 and "succeeded" or "waiting",moved=inserted}
 '''
             else:
                 body += '''
+if e.type=="item-entity" then
+ local stack=e.stack
+ if not stack or not stack.valid_for_read or stack.name~=x.item then return failure("ground_item_changed") end
+ if stack.prototype.type~="item" then return failure("ground_stack_metadata_unsupported") end
+ local quality=stack.quality.name
+ if x.quality and x.quality~=quality then return failure("ground_item_quality_changed") end
+'''
+                if self.backend == "character":
+                    body += 'if (e.position.x-a.position.x)^2+(e.position.y-a.position.y)^2>a.item_pickup_distance^2 then return failure("out_of_pickup_reach") end; '
+                body += '''
+ local amount=math.min(x.count or 1,stack.count)
+ local moved=inv.insert{name=stack.name,quality=quality,count=amount}
+ if moved>0 then
+  if moved==stack.count then e.destroy() else stack.count=stack.count-moved end
+ end
+ return success{status=moved>0 and "succeeded" or "waiting",moved=moved,quality=quality}
+end
 local n=math.min(x.count or 1,inv.get_insertable_count(x.item))
 if e.type=="transport-belt" then
  local first=e.get_transport_line(1);local second=e.get_transport_line(2)

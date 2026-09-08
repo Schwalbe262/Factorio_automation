@@ -1,10 +1,10 @@
 # Current Handoff
-- Branch: feat/deterministic-space-age-autoplayer; approved LLM-free Space Age first-rocket plan, goal.md is authoritative.
-- Committed components: catalog/state, bootstrap, power templates, factory/fluid/rocket executors; autonomous first rocket NOT achieved.
-- Main adapter-smoke UDP34210/RCON27025: Automation and electric mining naturally researched, 35 red consumed; autonomous rocket NOT achieved.
-- FactoryAutomaton defaults hidden; watch shortcut shows existing owned client, --hide-window hides it. User requested main GUI visible.
-- Dashboard http://127.0.0.1:18890; watch_factorio_deterministic.bat shows owned main GUI. Worker stopped tick720636: relocated coal receiver cannot reconnect.
-- Strict character-navigation-qa UDP34216/RCON27031: natural Automation/electric mining; worker stopped538658 on path replan limit, hidden client44256/server3172.
-- Isolated seeded fixtures prove fluid recipes, two real launches/platforms and belt crossing. Factory flow fixture had explicit prerequisite flags.
-- General source dependency/clearance fixes tested; main route remains enclosed. Next normal electric upgrade into old receiver; strict navigation blocker under repair.
-- Preserve pre-existing dirty insight.md; do not stage. Checkpoint reader-lock retries, strict input leases and milestone success guards are covered.
+- Branch feat/deterministic-space-age-autoplayer; goal.md is authoritative; LLM-free, natural production/costs/research only.
+- Main adapter-smoke UDP34210/RCON27025 world 2cc5423e-38ae-4be8-b2c0-2f55b4d2d3a6: Automation/electric mining researched; red35 consumed; rocket NOT achieved.
+- Main worker stopped after normal old coal drill mining; crafted electric drill held. Next guarded obsolete fuel-arm retirement, ground pickup, install and flow proof.
+- Main server44760/client58928 actor58; user requested visible GUI. watch_factorio_deterministic.bat reuses it; --hide-window hides.
+- Dashboard http://127.0.0.1:18890; hidden clients otherwise default. Never launch a duplicate actor observer.
+- Strict character-navigation-qa UDP34216/RCON27031 server50304/client27700 hidden actor11; actual570tick walk took48iron without replans; worker stopped662926 on coal source routing.
+- Guarded ordinary mining checks world/unit/resources; ground pickup conserves count/quality; lateral steering corrects belt drift. 45 tests/60 subtests pass.
+- Electric source upgrade helper pending separate commit/live flow; no automatic red/rocket acceptance yet. Seeded fixtures do not count as acceptance.
+- Preserve pre-existing dirty insight.md; root owns main lifecycle, commit/push and token accounting. No runtime grants or forced flags.

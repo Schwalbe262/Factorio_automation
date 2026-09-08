@@ -61,6 +61,27 @@ class DeterministicGameTests(unittest.TestCase):
                     game.act({"type": "mine", "count": n})
             query.assert_not_called()
 
+    def test_partial_or_invalid_source_upgrade_guards_are_rejected_before_rcon(self):
+        guard = {"expected_world_id": "world", "expected_unit_number": 7,
+                 "exhausted_source_receiver": {"name": "wooden-chest", "position": {"x": .5, "y": .5}},
+                 "required_replacement_item": "electric-mining-drill"}
+        action = {"type": "mine", "name": "burner-mining-drill", "position": {"x": 1, "y": 2}, "count": 1, **guard}
+        invalid = [{k: v for k, v in action.items() if k != field} for field in guard]
+        invalid += [{**action, **change} for change in ({"expected_unit_number": True}, {"expected_unit_number": 0},
+            {"expected_world_id": ""}, {"type": "build"}, {"count": True}, {"count": 2},
+            {"required_replacement_item": "stone-furnace"},
+            {"exhausted_source_receiver": {"name": "wooden-chest", "position": {"x": float("nan"), "y": 0}}})]
+        invalid += [{"type": "mine", **changes} for changes in (
+            {"expected_entity_unit": 7}, {"expected_entity_world_id": "world"},
+            {"expected_entity_unit": True, "expected_entity_world_id": "world"},
+            {"expected_entity_unit": 7, "expected_entity_world_id": ""})]
+        game = DeterministicGame(run_config())
+        with patch.object(game, "query") as query:
+            for candidate in invalid:
+                with self.subTest(candidate=candidate), self.assertRaises(ValueError):
+                    game.act(candidate)
+            query.assert_not_called()
+
     @staticmethod
     def belt(index=0, **changes):
         return {"type": "build", "name": "transport-belt", "item": "transport-belt",

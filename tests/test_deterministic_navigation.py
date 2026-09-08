@@ -150,6 +150,12 @@ class CharacterNavigationTests(unittest.TestCase):
                 self.navigator._input({"type": "mine", "count": value, "position": {"x": 1, "y": 1}})
         self.game.query.assert_not_called()
 
+    def test_partial_source_upgrade_guard_never_starts_engine_input(self):
+        with self.assertRaisesRegex(ValueError, "invalid exhausted source mining guard"):
+            self.navigator._input({"type": "mine", "name": "burner-mining-drill",
+                                   "position": {"x": 1, "y": 1}, "expected_world_id": "world"})
+        self.game.query.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
