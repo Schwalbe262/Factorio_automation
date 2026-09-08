@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import math
 import os
 from pathlib import Path
 import socket
@@ -20,6 +21,10 @@ from .config import AppConfig, load_config
 from .factorio import (build_create_no_mod_save_command,
     build_start_no_mod_server_command, no_mod_save_path, wait_for_rcon)
 from .rcon import FactorioRconClient, RconError, parse_json_response
+
+
+BUILD_BATCH_LIMIT = 32
+BUILD_BATCH_NAMES = frozenset({"transport-belt", "small-electric-pole"})
 
 
 def run_config(seed: int = 20260908, *, runtime: Path | None = None,
@@ -226,6 +231,8 @@ return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.
         if action.get("type") == "bar" and (isinstance(action.get("slots"), bool)
                 or not isinstance(action.get("slots"), int) or action["slots"] < 0):
             raise ValueError("bar slots must be a non-negative integer")
+        if action.get("type") == "build_many":
+            return self._record_action(action, self._build_many(action))
         encoded = json.dumps(json.dumps(action, separators=(",", ":")))
         body = 'local x=helpers.json_to_table(' + encoded + '); '
         body += 'if not a or not a.valid then return failure("agent_dead") end; '
@@ -394,11 +401,65 @@ return success{status="running"}
             body += LAUNCH_LUA
         else:
             raise ValueError(f"Unsupported deterministic action: {kind}")
-        result = self.query(body)
+        return self._record_action(action, self.query(body))
+
+    def _record_action(self, action: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
         self.cfg.log_dir.mkdir(parents=True, exist_ok=True)
         with (self.cfg.log_dir / "actions.jsonl").open("a", encoding="utf-8") as log:
             log.write(json.dumps({"action": action, "result": result}, ensure_ascii=False) + "\n")
         return result
+
+    def _build_many(self, action: dict[str, Any]) -> dict[str, Any]:
+        """Amortize planning while retaining the ordinary build for every item."""
+        if self.backend != "assisted":
+            raise ValueError("build_many requires the assisted backend")
+        rows = action.get("actions")
+        if (set(action) - {"type", "actions", "reason"} or not isinstance(rows, list)
+                or not 1 <= len(rows) <= BUILD_BATCH_LIMIT):
+            raise ValueError("build_many requires 1 to 32 infrastructure build actions")
+        if "reason" in action and not isinstance(action["reason"], str):
+            raise ValueError("build_many reasons must be strings")
+        # Validate the entire envelope before the first mutation, including later
+        # children that would otherwise fail only after earlier items were spent.
+        for row in rows:
+            if (not isinstance(row, dict) or set(row) - {"type", "name", "item", "position", "direction", "reason"}
+                    or row.get("type") != "build" or not isinstance(row.get("name"), str)
+                    or row["name"] not in BUILD_BATCH_NAMES):
+                raise ValueError("build_many accepts only ordinary belt and pole builds")
+            position = row.get("position")
+            if (not isinstance(position, dict) or set(position) != {"x", "y"}
+                    or any(isinstance(value, bool) or not isinstance(value, (int, float))
+                           or not math.isfinite(value) for value in position.values())):
+                raise ValueError("build_many requires finite x/y positions")
+            direction = row.get("direction", 0)
+            if isinstance(direction, bool) or not isinstance(direction, int) or direction not in (0, 4, 8, 12):
+                raise ValueError("build_many requires cardinal build directions")
+            if "item" in row and (not isinstance(row["item"], str) or not row["item"]):
+                raise ValueError("build_many placement items must be nonempty names")
+            if "reason" in row and not isinstance(row["reason"], str):
+                raise ValueError("build_many reasons must be strings")
+        results = []
+        built = reused = 0
+        for index, child in enumerate(rows):
+            try:
+                result = self.act(child)
+            except (TimeoutError, RconError, OSError) as exc:
+                # The last command may have executed. Keep the confirmed prefix
+                # separate and stop the worker; a resume must observe the world.
+                return {"ok": False, "status": "blocked", "reason": "build_batch_outcome_unknown",
+                        "completed": index, "built": built, "reused": reused, "results": results,
+                        "uncertain_index": index, "exception": str(exc), "exception_type": type(exc).__name__}
+            results.append(result)
+            if not result.get("ok") or result.get("status") != "succeeded":
+                return {**result, "ok": False, "reason": result.get("reason", "build_batch_child_not_complete"),
+                        "completed": index, "built": built, "reused": reused, "results": results,
+                        "failed_index": index}
+            if result.get("reused"):
+                reused += 1
+            else:
+                built += 1
+        return {"ok": True, "status": "succeeded", "completed": len(rows),
+                "built": built, "reused": reused, "results": results}
 
     def save(self) -> None:
         with FactorioRconClient(self.cfg.rcon_host, self.cfg.rcon_port, self.cfg.rcon_password) as c:

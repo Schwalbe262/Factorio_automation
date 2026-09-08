@@ -12,6 +12,7 @@ import math
 from pathlib import Path
 from typing import Any
 
+from .deterministic_game import BUILD_BATCH_LIMIT, BUILD_BATCH_NAMES
 from .deterministic_state import _atomic_json
 from .factory_templates import build_template, route_orthogonal, DIRECTIONS
 
@@ -75,9 +76,14 @@ class FactoryBuilder:
             self.state = {"schema_version": 1, "world_id": world_id, "seeds": {}}
             self._save()
         tick = int(observation.get("tick", 0))
-        if tick < self.state.get("last_tick", 0):
+        fingerprint = getattr(self.catalog, "fingerprint", None)
+        catalog_changed = ("catalog_fingerprint" in self.state
+                           and self.state["catalog_fingerprint"] != fingerprint)
+        if tick < self.state.get("last_tick", 0) or catalog_changed:
             self.state.pop("power_sample_tick", None)
+            self.state.pop("power_verified_once", None)
             self.state["seeds"] = {}
+        self.state["catalog_fingerprint"] = fingerprint
         self.state["last_tick"] = tick
 
     def _save(self) -> None:
@@ -104,7 +110,7 @@ class FactoryBuilder:
         self._sync(observation)
         if not plan.get("ok") or not plan.get("entities"):
             return _report("blocked", plan.get("reason") or "empty or invalid block plan")
-        for entity in plan["entities"]:
+        for index, entity in enumerate(plan["entities"]):
             existing = _find(observation, entity)
             if existing is not None:
                 direction_matches = _direction_matches(entity["name"], existing.get("direction", 0), entity.get("direction", 0))
@@ -155,10 +161,45 @@ return {ok=true,only_actor=own_actor and not other and terrain}
             move = self._move(observation, entity["position"])
             if move:
                 return move
+            if self.game.backend == "assisted" and entity["name"] in BUILD_BATCH_NAMES:
+                batch = self._affordable_builds(observation, plan["entities"][index:])
+                if len(batch) > 1:
+                    return {"type": "build_many", "actions": batch}
             return {"type": "build", "name": entity["name"], "item": item,
                     "position": entity["position"], "direction": entity.get("direction", 0)}
         return _report("succeeded", "block entities and recipes observed", constructed=len(plan["entities"]),
                        ports=plan.get("ports", []), flow_verified=False)
+
+    def _affordable_builds(self, observation: dict, entities: list[dict]) -> list[dict]:
+        """Take a bounded infrastructure prefix without skipping required work."""
+        stock = Counter(observation.get("inventory", {}))
+        rows, seen = [], {}
+        for entity in entities:
+            existing = _find(observation, entity)
+            if existing is not None:
+                direction_matches = _direction_matches(entity["name"], existing.get("direction", 0), entity.get("direction", 0))
+                if (entity.get("recipe") and (existing.get("recipe") != entity["recipe"] or not direction_matches)
+                        or entity["name"] not in {"pipe", "small-electric-pole", "wooden-chest"} and not direction_matches):
+                    break
+                continue
+            if entity["name"] not in BUILD_BATCH_NAMES or entity.get("recipe"):
+                break
+            p = entity["position"]
+            key = entity["name"], p["x"], p["y"]
+            if key in seen:
+                if entity["name"] != "small-electric-pole" and seen[key] != entity.get("direction", 0):
+                    break
+                continue
+            item = entity.get("item") or self._placement_item(entity["name"])
+            if stock[item] < 1:
+                break
+            stock[item] -= 1
+            seen[key] = entity.get("direction", 0)
+            rows.append({"type": "build", "name": entity["name"], "item": item,
+                         "position": p, "direction": entity.get("direction", 0)})
+            if len(rows) == BUILD_BATCH_LIMIT:
+                break
+        return rows
 
     def _move(self, observation: dict, position: dict) -> dict | None:
         if self.game.backend != "character":
@@ -467,6 +508,11 @@ return success{boiler_fuel=fuel(boiler),drill_fuel=fuel(drill),water=fluid(boile
         self._save()
         if tick - first < 1800:
             return _report("waiting", "verifying power supply over 30 game seconds", **evidence)
+        # Historical capability only: retain it through starvation so a restarted
+        # supervisor can initialize the coal-repair controller. Current flow must
+        # still pass every measurement above before this method succeeds.
+        self.state["power_verified_once"] = True
+        self._save()
         return _report("succeeded", "steam power has a dedicated self-fueled coal feed", **evidence,
                        flow_verified=True, verification_ticks=tick - first,
                        power_ports=[p for p in power["ports"] if p["kind"] == "power"])

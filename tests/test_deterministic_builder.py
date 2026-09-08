@@ -59,6 +59,64 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(self.builder.ensure_plan(self.obs, {"ok": True, "entities": belts})["type"], "build")
         self.bootstrap.ensure_item.assert_not_called()
 
+    @staticmethod
+    def belts(count):
+        return [{"name": "transport-belt", "position": {"x": index + .5, "y": .5}, "direction": 4}
+                for index in range(count)]
+
+    def test_assisted_build_batch_is_bounded_and_spends_only_observed_inventory(self):
+        belts = self.belts(100)
+        for available, expected in ((7, 7), (100, 32)):
+            with self.subTest(available=available):
+                self.obs["inventory"] = {"transport-belt": available}
+                action = self.builder.ensure_plan(self.obs, {"ok": True, "entities": belts})
+                self.assertEqual(action["type"], "build_many")
+                self.assertEqual(len(action["actions"]), expected)
+                self.assertEqual([row["position"] for row in action["actions"]], [row["position"] for row in belts[:expected]])
+                self.assertTrue(all(row["type"] == "build" for row in action["actions"]))
+                self.assertEqual(self.obs["inventory"]["transport-belt"], available)
+        self.bootstrap.ensure_item.assert_not_called()
+        self.assertEqual(self.builder.can_place.call_count, 2)
+
+    def test_build_batch_skips_observed_and_duplicate_entities_without_overspending(self):
+        belts = self.belts(5)
+        self.obs["entities"] = belts[:2]
+        self.obs["inventory"] = {"transport-belt": 2, "small-electric-pole": 1}
+        pole = {"name": "small-electric-pole", "position": {"x": 8.5, "y": 1.5}}
+        action = self.builder.ensure_plan(self.obs, {"ok": True, "entities": belts[:4] + [belts[3], pole, belts[4]]})
+        self.assertEqual([row["position"] for row in action["actions"]], [belts[2]["position"], belts[3]["position"], pole["position"]])
+        self.bootstrap.ensure_item.assert_not_called()
+
+    def test_build_batch_stops_before_machine_material_deficit_or_recipe_repair(self):
+        belts = self.belts(3)
+        machine = {"name": "assembling-machine-1", "position": {"x": 8.5, "y": .5}, "recipe": "iron-gear-wheel"}
+        pole = {"name": "small-electric-pole", "position": {"x": 8.5, "y": 5.5}}
+        for barrier, existing in ((machine, []), (pole, []), (machine, [{**machine, "recipe": None}])):
+            with self.subTest(barrier=barrier["name"], existing=bool(existing)):
+                self.obs["entities"] = existing
+                self.obs["inventory"] = {"transport-belt": 10, "assembling-machine-1": 1}
+                action = self.builder.ensure_plan(self.obs, {"ok": True, "entities": belts[:2] + [barrier, belts[2]]})
+                self.assertEqual([row["position"] for row in action["actions"]], [row["position"] for row in belts[:2]])
+
+    def test_build_batch_stops_before_existing_wrong_belt_direction(self):
+        belts = self.belts(4)
+        self.obs["entities"] = [{**belts[2], "direction": 0}]
+        self.obs["inventory"] = {"transport-belt": 10}
+        action = self.builder.ensure_plan(self.obs, {"ok": True, "entities": belts})
+        self.assertEqual([row["position"] for row in action["actions"]], [row["position"] for row in belts[:2]])
+        self.obs["entities"] = []
+        contradictory = belts[:2] + [{**belts[0], "direction": 0}] + belts[2:]
+        action = self.builder.ensure_plan(self.obs, {"ok": True, "entities": contradictory})
+        self.assertEqual([row["position"] for row in action["actions"]], [row["position"] for row in belts[:2]])
+
+    def test_character_with_abundant_route_materials_still_builds_one_reachable_entity(self):
+        self.game.backend = "character"
+        self.obs["inventory"] = {"transport-belt": 100}
+        action = self.builder.ensure_plan(self.obs, {"ok": True, "entities": self.belts(100)})
+        self.assertEqual(action["type"], "build")
+        self.assertEqual(action["position"], {"x": .5, "y": .5})
+        self.assertNotIn("actions", action)
+
     def test_reconstruction_reuses_observed_entities_and_resumes_first_missing(self):
         plan = {"ok": True, "entities": [{"name": "pipe", "position": {"x": .5, "y": .5}},
                                            {"name": "pipe", "position": {"x": 1.5, "y": .5}}]}
@@ -209,6 +267,35 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(result["status"], "waiting")
         self.assertNotIn("type", result)
         self.assertNotIn("power_sample_tick", self.builder.state)
+
+    def test_verified_capability_survives_starvation_but_does_not_claim_current_flow(self):
+        _, _, evidence = self._ready_power()
+        self.builder.ensure_power(self.obs)
+        self.assertNotIn("power_verified_once", self.builder.state)
+        self.obs["tick"] = evidence["tick"] = 1900
+        self.assertEqual(self.builder.ensure_power(self.obs)["status"], "succeeded")
+        evidence["boiler_fuel"] = 0
+        self.obs["tick"] = evidence["tick"] = 2000
+        self.assertEqual(self.builder.ensure_power(self.obs)["status"], "waiting")
+        self.assertTrue(self.builder.state["power_verified_once"])
+        self.assertNotIn("power_sample_tick", self.builder.state)
+        resumed = FactoryBuilder(self.game, self.bootstrap, self.catalog)
+        self.assertTrue(resumed.state["power_verified_once"])
+
+    def test_power_capability_invalidates_on_world_catalog_change_or_rollback(self):
+        for change in ("world", "catalog", "rollback"):
+            with self.subTest(change=change):
+                self.catalog.fingerprint = "a"
+                self.builder.state = {"world_id": "test-world", "schema_version": 1, "seeds": {},
+                                      "catalog_fingerprint": "a", "last_tick": 100,
+                                      "power_sample_tick": 10, "power_verified_once": True}
+                obs = {**self.obs, "tick": 100}
+                if change == "world": obs["world_id"] = "another-world"
+                elif change == "catalog": self.catalog.fingerprint = "b"
+                else: obs["tick"] = 99
+                self.builder._sync(obs)
+                self.assertNotIn("power_verified_once", self.builder.state)
+                self.assertNotIn("power_sample_tick", self.builder.state)
 
     def test_evidence_error_is_a_blocked_report_not_a_type_error(self):
         self._ready_power()

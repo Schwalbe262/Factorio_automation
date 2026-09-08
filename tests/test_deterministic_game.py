@@ -6,6 +6,7 @@ from unittest.mock import patch, MagicMock
 
 from factorio_ai.deterministic_game import DeterministicGame, run_config, start_world
 from factorio_ai.factorio import no_mod_save_path
+from factorio_ai.rcon import RconError
 
 
 class DeterministicGameTests(unittest.TestCase):
@@ -59,6 +60,91 @@ class DeterministicGameTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     game.act({"type": "mine", "count": n})
             query.assert_not_called()
+
+    @staticmethod
+    def belt(index=0, **changes):
+        return {"type": "build", "name": "transport-belt", "item": "transport-belt",
+                "position": {"x": index + .5, "y": .5}, "direction": 4, **changes}
+
+    def test_batch_uses_exact_single_build_validation_and_item_cost_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = DeterministicGame(run_config(runtime=Path(tmp)))
+            actions = [self.belt(0), self.belt(1), self.belt(2, name="small-electric-pole", item="small-electric-pole")]
+            outcomes = [{"ok": True, "status": "succeeded", "unit_number": 10},
+                        {"ok": True, "status": "succeeded", "unit_number": 11, "reused": True},
+                        {"ok": True, "status": "succeeded", "unit_number": 12}]
+            with patch.object(game, "query", side_effect=outcomes) as query:
+                for child in actions:
+                    game.act(child)
+                ordinary_commands = list(query.call_args_list)
+            with patch.object(game, "query", side_effect=outcomes) as query:
+                result = game.act({"type": "build_many", "actions": actions})
+                self.assertEqual(query.call_args_list, ordinary_commands)
+            # Reused infrastructure follows the original early return and spends
+            # no item. Only the two ordinary creations are counted as new builds.
+            self.assertEqual((result["completed"], result["built"], result["reused"]), (3, 2, 1))
+            self.assertEqual(result["results"], outcomes)
+            self.assertTrue(result["ok"])
+
+    def test_batch_failure_keeps_confirmed_prefix_and_never_attempts_later_builds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = DeterministicGame(run_config(runtime=Path(tmp)))
+            succeeded = {"ok": True, "status": "succeeded", "unit_number": 10}
+            failure = {"ok": False, "reason": "missing_item:transport-belt"}
+            with patch.object(game, "query", side_effect=[succeeded, failure]) as query:
+                result = game.act({"type": "build_many", "actions": [self.belt(i) for i in range(3)]})
+            self.assertEqual(query.call_count, 2)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["reason"], failure["reason"])
+            self.assertEqual((result["completed"], result["built"], result["failed_index"]), (1, 1, 1))
+            self.assertEqual(result["results"], [succeeded, failure])
+
+    def test_uncertain_batch_response_stops_without_retry_and_preserves_confirmed_prefix(self):
+        for error in (TimeoutError("response lost"), RconError("invalid response"), OSError("connection closed")):
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as tmp:
+                game = DeterministicGame(run_config(runtime=Path(tmp)))
+                succeeded = {"ok": True, "status": "succeeded", "unit_number": 10}
+                with patch.object(game, "query", side_effect=[succeeded, error]) as query:
+                    result = game.act({"type": "build_many", "actions": [self.belt(i) for i in range(3)]})
+                self.assertEqual(query.call_count, 2)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason"], "build_batch_outcome_unknown")
+                self.assertEqual((result["completed"], result["built"], result["uncertain_index"]), (1, 1, 1))
+                self.assertEqual(result["results"], [succeeded])
+                self.assertEqual(result["exception_type"], type(error).__name__)
+
+    def test_character_backend_refuses_batch_before_mutating(self):
+        game = DeterministicGame(run_config(), backend="character")
+        with patch.object(game, "query") as query:
+            with self.assertRaisesRegex(ValueError, "assisted"):
+                game.act({"type": "build_many", "actions": [self.belt()]})
+            query.assert_not_called()
+
+    def test_malformed_later_batch_children_are_rejected_before_any_mutation(self):
+        game = DeterministicGame(run_config())
+        invalid = [None, [], {"type": "build_many", "actions": [self.belt()]}, self.belt(type="mine"),
+                   self.belt(name="assembling-machine-1"), self.belt(name=[]), self.belt(item=None),
+                   self.belt(position={"x": .5}), self.belt(position={"x": True, "y": .5}),
+                   self.belt(position={"x": float("nan"), "y": .5}), self.belt(direction=True),
+                   self.belt(direction=1), self.belt(count=-1), self.belt(reason=object())]
+        for child in invalid:
+            with self.subTest(child=child), patch.object(game, "query") as query:
+                with self.assertRaises(ValueError):
+                    game.act({"type": "build_many", "actions": [self.belt(), child]})
+                query.assert_not_called()
+
+    def test_batch_limit_is_enforced_before_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = DeterministicGame(run_config(runtime=Path(tmp)))
+            for rows in ([], [self.belt(i) for i in range(33)], "not a list"):
+                with self.subTest(rows=len(rows)), patch.object(game, "query") as query:
+                    with self.assertRaises(ValueError):
+                        game.act({"type": "build_many", "actions": rows})
+                    query.assert_not_called()
+            with patch.object(game, "query", return_value={"ok": True, "status": "succeeded"}) as query:
+                result = game.act({"type": "build_many", "actions": [self.belt(i) for i in range(32)]})
+            self.assertEqual(query.call_count, 32)
+            self.assertEqual(result["built"], 32)
 
 
 if __name__ == "__main__":
