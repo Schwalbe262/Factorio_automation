@@ -231,17 +231,20 @@ return {ok=true,network_id=network,demand_kw=demand,consumers=consumers,feeds=fe
             for e in self.state["banks"][bank_index]["entities"]
             if e["name"] == "transport-belt" and e["position"] != destination["position"]]
         intact, intakes = self._coal_transit(obs, bank_index)
-        for feed in self.state["feeds"]:
+        for feed_index, feed in enumerate(self.state["feeds"]):
             if not feed.get("complete"):
                 continue
             drill = feed["plan"]["drill"]["position"]
+            owned_belts = {(e["position"]["x"], e["position"]["y"], e.get("direction", 0))
+                           for e in feed["plan"]["entities"] if e["name"] == "transport-belt"}
+            owner_key = f"energy:feed:{feed_index}"
             for entity in feed["plan"]["entities"]:
                 p = entity["position"]
                 if entity["name"] == "transport-belt" and max(abs(p["x"] - drill["x"]), abs(p["y"] - drill["y"])) > 3:
                     tail = self._coal_tail(p, intact, intakes)
                     if tail is not None:
                         destinations.append({**destination, "position": p, "facing": entity.get("direction", 0),
-                                             "downstream": tail})
+                                             "downstream": tail, "owned_plan_key": owner_key})
             # The declared output is already downstream of the drill's fuel
             # pickup. Its intact tail can accept coal even inside the old
             # three-tile exclusion, where a neighbouring conveyor may enclose it.
@@ -252,8 +255,10 @@ return {ok=true,network_id=network,demand_kw=demand,consumers=consumers,feeds=fe
                 if tail and tail[0].get("direction", 0) != port.get("facing"):
                     continue
                 for offset, entity in enumerate(tail or []):
+                    identity = (entity["position"]["x"], entity["position"]["y"], entity.get("direction", 0))
                     destinations.append({**destination, "position": entity["position"],
-                                         "facing": entity.get("direction", 0), "downstream": tail[offset:]})
+                                         "facing": entity.get("direction", 0), "downstream": tail[offset:],
+                                         **({"owned_plan_key": owner_key} if identity in owned_belts else {})})
         destinations = list({(p["position"]["x"], p["position"]["y"], p["facing"]): p
                              for p in destinations}.values())
         positions = self.builder.coal_sites()
@@ -277,6 +282,7 @@ return {ok=true,sites=rows}
                                  (destination["position"]["x"], destination["position"]["y"]))))
         surveyed = 0
         bridge_attempts = 0
+        drop_attempts = 0
         for row in sites:
             site = row["position"]
             plan = self.builder._coal_plan(site)
@@ -300,6 +306,27 @@ return {ok=true,sites=rows}
                     trial["segments"][-1]["direction"] = intake["facing"]
                     route = trial
                     break
+            if route is None:
+                # A dedicated coal tail may be enclosed even when a new paid
+                # long arm can drop into it. Keep its observed facing and inherit
+                # the already verified path to this bank, including later repair.
+                for intake in [p for p in nearby if p.get("owned_plan_key") and p.get("downstream")][:4]:
+                    if drop_attempts >= 4:
+                        break
+                    drop_attempts += 1
+                    consumer = {key: value for key, value in intake.items()
+                                if key not in {"downstream", "owned_plan_key"}}
+                    trial = self.factory._consumer_drop_bridge_route(
+                        obs, plan["ports"][0]["position"], consumer,
+                        self.factory._reserved() + plan["entities"] + clearance_entities,
+                        start_direction=plan["ports"][0]["facing"], owned_plan_key=intake["owned_plan_key"])
+                    segments = trial.get("segments") or []
+                    if (trial.get("ok") and segments and segments[-1].get("name") == "transport-belt"
+                            and segments[-1].get("position") == intake["position"]
+                            and segments[-1].get("direction") == intake["facing"]
+                            and self.builder.can_place(plan["entities"] + segments).get("ok")):
+                        route = trial
+                        break
             if route is None:
                 # Reuse the factory's ordinary long-arm crossing when a
                 # reserved conveyor encloses an otherwise usable coal field.

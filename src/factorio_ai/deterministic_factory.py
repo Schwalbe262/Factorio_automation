@@ -1506,7 +1506,8 @@ return {ok=true,checked=#rows,existing=found}
         return None
 
     def _consumer_drop_bridge_route(self, obs: dict, source: dict, consumer: dict,
-                                    reserved: list[dict], *, start_direction: int | None) -> dict:
+                                    reserved: list[dict], *, start_direction: int | None,
+                                    owned_plan_key: str | None = None) -> dict:
         """Feed an enclosed owned input using the live long-arm drop geometry."""
         destination, facing = consumer["position"], consumer.get("facing")
         actual = next((e for e in obs.get("entities", []) if e.get("name") == "transport-belt"
@@ -1514,6 +1515,17 @@ return {ok=true,checked=#rows,existing=found}
         owned = any(consumer in plan.get("ports", []) and any(e.get("name") == "transport-belt"
                     and e.get("position") == destination and e.get("direction") == facing
                     for e in plan.get("entities", [])) for plan in self.state["blocks"].values())
+        if owned_plan_key is not None:
+            # Energy can join an intermediate belt only after proving its tail
+            # reaches the intended bank. The named saved block must itself own
+            # that exact facing belt and exclusively carry the requested item.
+            owner = self.state["blocks"].get(owned_plan_key, {})
+            ports = [p for p in owner.get("ports", []) if p.get("kind") == "item"]
+            belts = [e for e in owner.get("entities", []) if e.get("name") == "transport-belt"
+                     and e.get("position") == destination]
+            owned = (bool(consumer.get("item")) and bool(ports) and bool(belts)
+                     and all(p.get("item") == consumer["item"] for p in ports)
+                     and all(e.get("direction", 0) == facing for e in belts))
         if (not owned or actual is None or type(actual.get("unit_number")) is not int or actual["unit_number"] < 1
                 or facing not in DIRECTIONS or consumer.get("kind") != "item" or consumer.get("direction") != "input"
                 or not obs.get("world_id") or obs["world_id"] != self.state.get("world_id")):

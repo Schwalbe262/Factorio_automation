@@ -36,9 +36,10 @@ class ConsumerDropBridgeTests(unittest.TestCase):
         self.game.query.side_effect = lambda body: ({"ok": True, "candidates": [deepcopy(self.option)], "new_pole_reach": 2.5}
             if "owned_consumer_long_arm_drop" in body else {"ok": True, "blocked": []})
 
-    def route(self, reserved=None):
+    def route(self, reserved=None, *, owned_plan_key=None):
         return self.factory._consumer_drop_bridge_route(self.obs, self.source, self.consumer,
-            self.factory._reserved() if reserved is None else reserved, start_direction=4)
+            self.factory._reserved() if reserved is None else reserved, start_direction=4,
+            owned_plan_key=owned_plan_key)
 
     def test_enclosed_input_accepts_live_offset_drop_over_pole_without_rotating_belt(self):
         result = self.route()
@@ -120,6 +121,50 @@ class ConsumerDropBridgeTests(unittest.TestCase):
         self.assertNotIn({"x": 4.5, "y": 6.5}, positions)
         blocked = self.factory._reserved() + [{"name": "small-electric-pole", "position": {"x": 1.5, "y": 6.5}, "direction": 0}]
         self.assertFalse(self.route(blocked)["ok"])
+
+    def test_dedicated_saved_transit_belt_accepts_explicit_owner_only(self):
+        owner = self.factory.state["blocks"]["consumer"]
+        owner["ports"] = [{**self.consumer, "direction": "output", "position": {"x": 20.5, "y": .5}}]
+        self.assertFalse(self.route()["ok"])
+        result = self.route(owned_plan_key="consumer")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["segments"][-1]["position"], self.consumer["position"])
+        self.assertEqual(result["segments"][-1]["direction"], self.consumer["facing"])
+
+    def test_transit_owner_must_exist_and_have_only_the_requested_item_ports(self):
+        owner = self.factory.state["blocks"]["consumer"]
+        for ports in ([], [{**self.consumer, "item": "iron-plate"}],
+                      [self.consumer, {**self.consumer, "item": "iron-plate"}],
+                      [{"kind": "power", "item": "electricity"}]):
+            with self.subTest(ports=ports):
+                owner["ports"] = ports
+                self.assertFalse(self.route(owned_plan_key="consumer")["ok"])
+        owner["ports"] = [self.consumer]
+        self.assertFalse(self.route(owned_plan_key="missing")["ok"])
+        self.game.query.assert_not_called()
+
+    def test_transit_owner_requires_exact_unambiguous_reserved_belt_facing(self):
+        owner = self.factory.state["blocks"]["consumer"]
+        original = deepcopy(owner["entities"])
+        wrong = {**self.belt, "direction": 4}
+        for entities in ([e for e in original if e["position"] != self.consumer["position"]],
+                         [wrong], original + [wrong]):
+            owner["entities"] = entities
+            self.assertFalse(self.route(owned_plan_key="consumer")["ok"])
+        self.game.query.assert_not_called()
+
+    def test_transit_owner_retains_live_identity_and_material_guards(self):
+        self.game.query.side_effect = None
+        for reason in ("long-arm input belt identity changed", "long-arm input belt carries another material"):
+            self.game.query.return_value = {"ok": False, "reason": reason}
+            self.assertEqual(self.route(owned_plan_key="consumer"), {"ok": False, "reason": reason})
+        self.builder.can_place.assert_not_called()
+
+    def test_transit_owner_does_not_override_foreign_material_reservations(self):
+        self.factory.state["links"]["foreign"] = {"entities": [deepcopy(self.belt)],
+            "source_port": {"item": "iron-plate"}, "consumer_port": {"item": "iron-plate"}}
+        self.assertFalse(self.route(owned_plan_key="consumer")["ok"])
+        self.builder.can_place.assert_not_called()
 
 
 if __name__ == "__main__":

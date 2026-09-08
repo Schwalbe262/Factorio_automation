@@ -20,6 +20,7 @@ class EnergyTests(unittest.TestCase):
                               "power_plan": build_template("steam_bank"),
                               "coal_plan": FactoryBuilder._coal_plan({"x": -20, "y": 0})}
         self.factory.state = {}
+        self.factory._consumer_drop_bridge_route.return_value = {"ok": False}
         self.factory.register_plan.side_effect = lambda key, plan, obs: plan
         self.factory._entity_key.side_effect = lambda e: e["name"] + str(e["position"])
         self.builder.ensure_plan.return_value = {"status": "succeeded"}
@@ -346,6 +347,7 @@ class EnergyTests(unittest.TestCase):
         self.builder.route.return_value = {"ok": False, "reason": "no route within bounds"}
         self.assertEqual(self.energy._reserve_feed(self.obs, 0)["status"], "blocked")
         self.assertEqual(self.factory._belt_bridge_route.call_count, 4)
+        self.assertEqual(self.factory._consumer_drop_bridge_route.call_count, 4)
         self.assertEqual(len(self.energy.state["feeds"]), 1)
 
     def test_opposing_bridge_terminal_cannot_reverse_a_coal_intake(self):
@@ -375,6 +377,50 @@ class EnergyTests(unittest.TestCase):
         self.assertEqual(self.energy._reserve_feed(self.obs, 0)["status"], "blocked")
         for call in self.builder.route.call_args_list + self.factory._belt_bridge_route.call_args_list:
             self.assertNotIn(call.args[1], foreign)
+        for call in self.factory._consumer_drop_bridge_route.call_args_list:
+            self.assertNotIn(call.args[2]["position"], foreign)
+
+    def test_owned_transit_drop_precedes_crossing_and_inherits_bank_tail(self):
+        outlet, trunk = self.output_tail_fixture()
+        self.builder.route.return_value = {"ok": False, "reason": "no route within bounds"}
+        arm = {"name": "long-handed-inserter", "position": {"x": -25.5, "y": 1.5}, "direction": 12}
+        pole = {"name": "small-electric-pole", "position": {"x": -25.5, "y": 3.5}, "direction": 0}
+        def drop(obs, source, consumer, *args, **kwargs):
+            if consumer["position"] != outlet:
+                return {"ok": False}
+            return {"ok": True, "segments": [{"name": "transport-belt", "position": source, "direction": 8},
+                arm, pole, {"name": "transport-belt", "position": outlet, "direction": consumer["facing"]}]}
+        self.factory._consumer_drop_bridge_route.side_effect = drop
+        self.assertEqual(self.energy._reserve_feed(self.obs, 0)["status"], "waiting")
+        self.factory._belt_bridge_route.assert_not_called()
+        plan = self.energy.state["feeds"][-1]["plan"]
+        self.assertIn(arm, plan["entities"])
+        self.assertIn(pole, plan["entities"])
+        self.assertTrue(all(row in plan["entities"] for row in trunk))
+        self.assertEqual(plan["required_items"]["long-handed-inserter"], 1)
+        self.assertEqual(self.factory._consumer_drop_bridge_route.call_args.kwargs["owned_plan_key"], "energy:feed:0")
+
+    def test_transit_drop_must_preserve_terminal_position_and_facing(self):
+        self.output_tail_fixture()
+        self.builder.route.return_value = {"ok": False, "reason": "no route within bounds"}
+        def drop(obs, source, consumer, *args, **kwargs):
+            return {"ok": True, "segments": [{"name": "transport-belt", "position": consumer["position"],
+                                               "direction": (consumer["facing"] + 8) % 16}]}
+        self.factory._consumer_drop_bridge_route.side_effect = drop
+        self.assertEqual(self.energy._reserve_feed(self.obs, 0)["status"], "blocked")
+        self.assertEqual(len(self.energy.state["feeds"]), 1)
+
+    def test_transit_drop_owner_metadata_matches_a_real_feed_belt(self):
+        self.output_tail_fixture()
+        self.builder.route.return_value = {"ok": False, "reason": "no route within bounds"}
+        self.energy._reserve_feed(self.obs, 0)
+        self.assertGreater(self.factory._consumer_drop_bridge_route.call_count, 0)
+        for call in self.factory._consumer_drop_bridge_route.call_args_list:
+            consumer = call.args[2]
+            index = int(call.kwargs["owned_plan_key"].rsplit(":", 1)[1])
+            owner = self.energy.state["feeds"][index]["plan"]
+            self.assertTrue(any(e["name"] == "transport-belt" and e["position"] == consumer["position"]
+                                and e.get("direction", 0) == consumer["facing"] for e in owner["entities"]))
 
 
 if __name__ == "__main__":
