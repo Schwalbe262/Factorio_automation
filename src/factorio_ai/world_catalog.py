@@ -309,11 +309,13 @@ return {version=helpers.game_version, active_mods=script.active_mods,
 
     @property
     def fingerprint(self) -> str:
-        data = self.to_dict()
+        # Hashing only reads nested structures. Copy just the rows whose force
+        # availability fields are omitted, keeping every call fresh without
+        # deep-copying the complete prototype catalog.
+        data = dict(self._data)
         for table, fields in (("recipes", ("enabled",)), ("technologies", ("enabled", "researched"))):
-            for row in data[table].values():
-                for field in fields:
-                    row.pop(field, None)
+            data[table] = {name: {key: value for key, value in row.items() if key not in fields}
+                           for name, row in data[table].items()}
         return self._hash(data)
 
     @property

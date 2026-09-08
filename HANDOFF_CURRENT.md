@@ -5,6 +5,6 @@
 - Main server44760/client58928 actor58; user requested visible GUI. watch_factorio_deterministic.bat reuses it; --hide-window hides.
 - Dashboard http://127.0.0.1:18890; hidden clients otherwise default. Never launch a duplicate actor observer.
 - Strict character-navigation-qa UDP34216/RCON27031 server50304/client27700 hidden actor11; actual570tick walk took48iron without replans; worker stopped662926 on coal source routing.
-- Guarded ordinary mining checks world/unit/resources; ground pickup conserves count/quality; lateral steering corrects belt drift. 45 tests/60 subtests pass.
+- Catalog fingerprint projection preserves legacy hash/state and nested mutation detection; 17 tests pass; mean49.69ms?11.77ms. Worker imports on next restart.
 - Electric upgrade preserves receiver/bus, retires exactly owned obsolete fuel arm, picks spilled coal normally; 126 tests/43 subtests. Automatic red/rocket still unproven.
 - Preserve pre-existing dirty insight.md; root owns main lifecycle, commit/push and token accounting. No runtime grants or forced flags.

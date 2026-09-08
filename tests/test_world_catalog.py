@@ -57,6 +57,26 @@ class WorldCatalogTests(unittest.TestCase):
         data["recipes"]["gear"]["ingredients"][0]["amount"] = 3
         self.assertNotEqual(catalog.fingerprint, WorldCatalog.from_dict(data).fingerprint)
 
+    def test_fingerprint_preserves_data_and_tracks_in_place_changes(self):
+        data = fixture()
+        data["technologies"]["gearing"] = technology("gearing", unlocks=["gear"])
+        catalog = WorldCatalog.from_dict(data)
+        original = catalog.to_dict()
+        state = catalog.state_fingerprint
+        fingerprint = catalog.fingerprint
+        self.assertEqual(catalog.to_dict(), original)
+        self.assertEqual(catalog.state_fingerprint, state)
+
+        catalog.recipes["gear"]["enabled"] = False
+        catalog.technologies["gearing"]["researched"] = True
+        self.assertEqual(catalog.fingerprint, fingerprint)
+        self.assertNotEqual(catalog.state_fingerprint, state)
+        catalog.recipes["gear"]["ingredients"][0]["amount"] = 3
+        self.assertNotEqual(catalog.fingerprint, fingerprint)
+        geometry_fingerprint = catalog.fingerprint
+        catalog.entities["assembler"]["collision_box"]["left_top"]["x"] = -1.5
+        self.assertNotEqual(catalog.fingerprint, geometry_fingerprint)
+
     def test_shared_ingredients_are_aggregated_before_batch_rounding(self):
         catalog = WorldCatalog.from_dict(fixture())
         bom = catalog.bill_of_materials({"belt": 3, "gear": 1})
