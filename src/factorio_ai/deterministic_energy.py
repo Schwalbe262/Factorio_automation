@@ -573,6 +573,35 @@ return {ok=true,sites=rows}
             return _report("waiting", "reserved an additional self-fueling coal feed", feed=index, bank=bank_index)
         return _report("blocked", "no pure unoccupied coal site has a route to its boiler", bank=bank_index)
 
+    def _inherit_feed_power(self, obs: dict, index: int) -> dict | None:
+        """Keep a borrowed crossing repairable after its original drill retires."""
+        plan = self.state["feeds"][index]["plan"]
+        identity = lambda e: (e["name"], e["position"]["x"], e["position"]["y"], e.get("direction", 0))
+        arms = {identity(e) for e in plan["entities"] if e["name"] == "long-handed-inserter"}
+        if not arms:
+            return None
+        existing = {identity(e) for e in plan["entities"]}
+        poles = {}
+        for category in ("blocks", "links"):
+            for owner in self.factory.state.get(category, {}).values():
+                if not any(identity(e) in arms for e in owner.get("entities", [])):
+                    continue
+                for entity in owner["entities"]:
+                    key = identity(entity)
+                    if entity["name"] == "small-electric-pole" and key not in existing:
+                        poles[key] = deepcopy(entity)
+        if not poles:
+            return None
+        candidate = deepcopy(plan)
+        candidate["entities"].extend(poles.values())
+        candidate["required_items"] = dict(Counter(e.get("item") or e["name"] for e in candidate["entities"]))
+        registered = self.factory.register_plan(f"energy:feed:{index}", candidate, obs)
+        if not registered.get("ok"):
+            return _report("blocked", registered.get("reason", "shared coal crossing power reservation failed"), feed=index)
+        self.state["feeds"][index]["plan"] = registered
+        self._save()
+        return None
+
     def _ensure_feed(self, obs: dict, index: int, row: dict) -> dict | None:
         feed = self.state["feeds"][index]
         if feed.get("retired"):
@@ -586,6 +615,9 @@ return {ok=true,sites=rows}
                 feed["depleted"] = True
                 self._save()
             return None
+        inherited = self._inherit_feed_power(obs, index)
+        if inherited is not None:
+            return inherited
         result = self.builder.ensure_plan(obs, feed["plan"])
         if not _ready(result):
             return result
