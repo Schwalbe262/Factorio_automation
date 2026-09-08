@@ -130,6 +130,18 @@ class MiningUpgradeTests(unittest.TestCase):
         self.assertEqual(self.call()["type"], "build")
         self.builder.ensure_plan.assert_called_once()
 
+    def test_only_character_actor_obstruction_can_reach_the_builders_normal_escape(self):
+        self.reserve()
+        self.obs["inventory"]["electric-mining-drill"] = 1
+        self.survey["old"] = {"present": False}
+        self.row["actor_only"] = True
+        self.assertEqual(self.call()["status"], "blocked")
+        self.game.backend = "character"
+        self.assertEqual(self.call()["type"], "build")
+        self.builder.ensure_plan.assert_called_once()
+        self.row["actor_only"] = False
+        self.assertEqual(self.call()["status"], "blocked")
+
     def test_spilled_drill_contents_are_collected_before_fresh_normal_placement(self):
         self.reserve()
         self.obs["inventory"]["electric-mining-drill"] = 1
@@ -311,3 +323,149 @@ class MiningUpgradeTests(unittest.TestCase):
         self.assertEqual(result["status"], "succeeded")
         self.bootstrap.discover_cell.assert_called_once_with("coal", "wooden-chest", preferred_receiver=self.receiver)
         self.factory._fuel_burner.assert_not_called()
+
+    def test_live_primary_receiver_is_preferred_over_a_new_powered_capacity_cell(self):
+        capacity = {"name": "wooden-chest", "position": {"x": 50.5, "y": 48.5}}
+        self.bootstrap.discover_cell.side_effect = lambda resource, receiver, **kw: {
+            "ok": True, "complete": True, "receiver": self.receiver if kw.get("preferred_receiver") == self.receiver else capacity,
+            "drill": self.old, "electric": False}
+        self.factory.ensure_power_connection = Mock(return_value={"status": "succeeded"})
+        self.builder.ensure_plan.return_value = {"status": "succeeded"}
+        self.factory._fuel_burner = Mock(return_value={"status": "succeeded"})
+        self.factory.state["blocks"]["source:coal"]["source_receiver"] = self.receiver
+        self.factory.state["blocks"]["source:coal"]["ports"] = [{"item": "coal"}]
+        with patch("factorio_ai.deterministic_factory.ensure_source_upgrade", return_value=None):
+            result = self.factory._source_endpoint(self.obs, "coal")
+        self.assertEqual(result["status"], "succeeded")
+        self.bootstrap.discover_cell.assert_called_once_with("coal", "wooden-chest", preferred_receiver=self.receiver)
+        self.assertEqual(self.factory.state["blocks"]["source:coal"]["active_source"], self.association)
+
+
+class LegacySourceRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        MiningUpgradeTests.setUp(self)
+        self.key = "fuel:" + self.factory._entity_key(self.old)
+        self.arm = {"name": "inserter", "position": {"x": 8.5, "y": 6.5}, "direction": 12}
+        self.port = {"kind": "item", "item": "coal", "direction": "output", "position": {"x": 12.5, "y": 4.5}, "facing": 4}
+        self.intake = {"kind": "item", "item": "coal", "direction": "input", "position": {"x": 6.5, "y": 6.5}, "facing": 4}
+        def belt(x, y, direction):
+            return {"name": "transport-belt", "position": {"x": x, "y": y}, "direction": direction}
+        self.factory.state["blocks"]["source:coal"] = {"ok": True, "source_receiver": self.receiver, "ports": [self.port],
+            "entities": [{"name": "inserter", "position": {"x": 10.5, "y": 4.5}, "direction": 12},
+                         belt(11.5, 4.5, 4), belt(12.5, 4.5, 4)]}
+        self.factory.state["blocks"][self.key] = {"ok": True, "ports": [self.intake],
+            "entities": [self.arm, belt(7.5, 6.5, 4), belt(6.5, 6.5, 4)]}
+        self.factory.state["links"][self.key] = {"ok": True, "source_port": deepcopy(self.port),
+            "consumer_port": deepcopy(self.intake), "entities": [belt(12.5, 4.5, 4), belt(13.5, 4.5, 8),
+                belt(13.5, 5.5, 8), belt(13.5, 6.5, 8),
+                *[belt(x + .5, 7.5, 12) for x in range(13, 5, -1)],
+                belt(5.5, 7.5, 0), belt(5.5, 6.5, 4), belt(6.5, 6.5, 4)]}
+        self.factory.state["automated_burners"] = []
+        self.survey["old"] = {"present": False}
+        self.legacy = {"ok": True, "world_id": "one", "direction": 0, "receiver_unit": 321,
+                       "extractor_unit": 322, "arm_present": True, "arm_unit": 777}
+        self.fuel = {"ok": True, "world_id": "one", "inserters": [{"present": True, "owned": True,
+            "inserter": True, "feeds_old_drill": True, "direction": 12, "unit_number": 777, "powered": True}]}
+        self.game.query.side_effect = lambda body: (self.legacy if "legacy_source_provenance" in body else
+            self.fuel if "local box=prototypes.entity[old.name].collision_box" in body else self.survey)
+
+    def call(self):
+        return ensure_source_upgrade(self.factory, self.obs, "coal", "coal")
+
+    def reserve(self):
+        self.assertEqual(self.call()["type"], "craft")
+        return self.factory.state["source_upgrades"]["coal"]
+
+    def test_exact_legacy_construction_can_resume_before_completed_ownership_flag(self):
+        record = self.reserve()
+        self.assertTrue(record["legacy_absent_old"])
+        self.assertIsNone(record["old_unit_number"])
+        self.assertEqual(record["receiver"], self.receiver)
+        self.assertEqual(record["drill"], self.drill)
+        self.assertNotIn("active_source", self.factory.state["blocks"]["source:coal"])
+        self.assertEqual(self.factory.state["automated_burners"], [])
+        self.obs["inventory"]["electric-mining-drill"] = 1
+        action = self.call()
+        self.assertEqual((action["type"], action["name"], action["expected_entity_unit"]), ("mine", "inserter", 777))
+
+    def test_retirement_preserves_link_history_and_requires_normal_placement(self):
+        self.reserve()
+        self.obs["inventory"]["electric-mining-drill"] = 1
+        history = deepcopy(self.factory.state["links"][self.key])
+        self.assertEqual(self.call()["name"], "inserter")
+        self.fuel["inserters"] = [{"present": False}]
+        self.legacy["arm_present"] = False
+        self.assertEqual(self.call()["status"], "blocked")
+        self.assertEqual(self.factory.state["links"][self.key], history)
+        self.assertEqual(self.factory.state["blocks"][self.key]["retired_for_upgrade"], "coal")
+        self.assertFalse(any(e["position"] == {"x": 9.5, "y": 7.5} for e in self.factory._reserved()))
+        self.row["can_place"] = True
+        self.assertEqual(self.call()["type"], "build")
+        self.row["actual"] = {"unit_number": 456, "owned": True, "direction": 0, "feeds_receiver": True, "powered": True}
+        self.assertEqual(self.call()["status"], "succeeded")
+        self.factory.state["blocks"]["source:coal"]["active_source"] = {
+            "drill": self.drill, "receiver": self.receiver, "extraction_block": "source:coal"}
+        self.assertEqual(self.call()["status"], "succeeded")
+
+    def test_provenance_requires_directed_source_and_intake_link_and_exclusive_arm(self):
+        baseline = deepcopy(self.factory.state)
+        for defect in ("source_port", "consumer_port", "link_direction", "extractor_tail", "intake_tail", "shared_arm", "energy_old"):
+            with self.subTest(defect=defect):
+                self.factory.state = deepcopy(baseline)
+                link = self.factory.state["links"][self.key]
+                if defect == "source_port":
+                    link["source_port"]["item"] = "iron-plate"
+                elif defect == "consumer_port":
+                    link["consumer_port"]["position"]["x"] += 1
+                elif defect == "link_direction":
+                    link["entities"][2]["direction"] = 0
+                elif defect == "extractor_tail":
+                    self.factory.state["blocks"]["source:coal"]["entities"][1]["direction"] = 12
+                elif defect == "intake_tail":
+                    self.factory.state["blocks"][self.key]["entities"][1]["direction"] = 12
+                elif defect == "shared_arm":
+                    self.factory.state["blocks"]["energy:feed:0"] = {"entities": [self.arm]}
+                else:
+                    self.builder.state["coal_plan"] = {"drill": self.old}
+                self.assertIsNone(self.call())
+                self.assertNotIn("source_upgrades", self.factory.state)
+
+    def test_pending_recovery_blocks_reappeared_old_and_changed_live_identities(self):
+        self.reserve()
+        self.obs["inventory"]["electric-mining-drill"] = 1
+        self.survey["old"] = {"present": True, "unit_number": 999}
+        self.assertEqual(self.call()["status"], "blocked")
+        self.survey["old"] = {"present": False}
+        for field, value in (("world_id", "other"), ("receiver_unit", 999), ("extractor_unit", 999), ("direction", 4)):
+            before = self.legacy[field]
+            self.legacy[field] = value
+            self.assertEqual(self.call()["status"], "blocked")
+            self.legacy[field] = before
+        for field, value in (("unit_number", 999), ("owned", False), ("feeds_old_drill", False), ("direction", 0)):
+            row = self.fuel["inserters"][0]
+            before = row[field]
+            row[field] = value
+            self.assertEqual(self.call()["status"], "blocked")
+            row[field] = before
+        self.builder.ensure_plan.assert_not_called()
+
+    def test_live_collision_cannot_be_hidden_by_obsolete_link_reservations(self):
+        self.row["blocked"] = True
+        self.assertIsNone(self.call())
+        self.assertNotIn("source_upgrades", self.factory.state)
+
+    def test_another_retired_unbuilt_fuel_link_does_not_block_legacy_candidate(self):
+        key = "fuel:burner-mining-drill:100,100"
+        self.factory.state["blocks"][key] = {"retired_for_upgrade": "stone", "entities": []}
+        self.factory.state["links"][key] = {"entities": [{"name": "transport-belt", "position": self.drill["position"]}]}
+        self.assertEqual(self.reserve()["drill"], self.drill)
+
+    def test_restart_rechecks_full_provenance_and_does_not_reset_science(self):
+        self.reserve()
+        self.factory.state["startup_research"] = {"electric-mining-drill": {"issued": 25}}
+        self.factory._save()
+        self.factory = DeterministicFactory(self.game, self.bootstrap, self.builder, self.catalog)
+        self.assertEqual(self.call()["type"], "craft")
+        self.factory.state["links"][self.key]["entities"][2]["direction"] = 0
+        self.assertEqual(self.call()["status"], "blocked")
+        self.assertEqual(self.factory.state["startup_research"]["electric-mining-drill"]["issued"], 25)

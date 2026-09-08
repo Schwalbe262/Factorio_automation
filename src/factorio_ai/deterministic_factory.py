@@ -78,6 +78,8 @@ class DeterministicFactory:
         entities = []
         for category in ("blocks", "links", "power_links", "source_upgrades"):
             for key, plan in self.state.get(category, {}).items():
+                if category == "links" and self.state.get("blocks", {}).get(key, {}).get("retired_for_upgrade"):
+                    continue  # Preserve its history; the obsolete fuel link is never built again.
                 if key != exclude:
                     entities.extend(plan.get("entities", []))
         return entities
@@ -288,7 +290,10 @@ return {ok=true,blocked=blocked}
         if upgrade is not None:
             cell = self.bootstrap.discover_cell(resource, receiver, preferred_receiver=upgrade["evidence"]["receiver"])
         else:
-            cell = self.bootstrap.discover_cell(resource, receiver)
+            existing = self.state["blocks"].get("source:" + item, {})
+            preferred = (existing.get("active_source") or {}).get("receiver") or existing.get("source_receiver")
+            cell = (self.bootstrap.discover_cell(resource, receiver, preferred_receiver=preferred)
+                    if preferred else self.bootstrap.discover_cell(resource, receiver))
         if not cell.get("ok"):
             return _report("blocked", "raw-material source discovery failed", item=item, resource=resource,
                            query_error=cell.get("reason", "cell_site_query_failed"))

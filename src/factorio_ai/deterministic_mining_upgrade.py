@@ -7,7 +7,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import math
 from typing import Any
+
+from .factory_templates import DIRECTIONS
 
 
 def _report(status: str, reason: str, **evidence: Any) -> dict:
@@ -23,6 +26,150 @@ def _protected(factory: Any, drill: dict) -> bool:
                for entity in plan.get("entities", []))
 
 
+def _directed_belt_tail(entities: list[dict], source: dict, destination: dict) -> bool:
+    belts = {(e["position"]["x"], e["position"]["y"]): e for e in entities if e["name"] == "transport-belt"}
+    if len(belts) != len(entities) or not belts:
+        return False
+    point = source["position"]["x"], source["position"]["y"]
+    end = destination["position"]["x"], destination["position"]["y"]
+    if belts.get(point, {}).get("direction") != source.get("facing"):
+        return False
+    seen = set()
+    while point in belts and point not in seen:
+        seen.add(point)
+        facing = belts[point].get("direction")
+        if point == end:
+            return facing == destination.get("facing") and len(seen) == len(belts)
+        if facing not in DIRECTIONS:
+            return False
+        dx, dy = DIRECTIONS[facing]
+        point = point[0] + dx, point[1] + dy
+    return False
+
+
+def _legacy_absent_source(factory: Any, observation: dict, item: str, resource: str,
+                          pending: dict | None = None) -> dict | None:
+    """Recover intended construction ownership from an exact legacy fuel link.
+
+    A completed automatic-source flag is deliberately unnecessary: old workers
+    could mine an exhausted starter before finishing its already reserved intake.
+    No proximity-based association or authority to mine an old drill is created.
+    """
+    key = "source:" + item
+    primary = factory.state["blocks"][key]
+    receiver = primary.get("source_receiver", {})
+    ports = primary.get("ports", [])
+    extractors = [e for e in primary.get("entities", []) if e["name"] == "inserter"]
+    if (not receiver.get("position") or len(ports) != 1 or ports[0].get("item") != item
+            or len(extractors) != 1 or (primary.get("active_source") and not pending)):
+        return None
+    extractor = extractors[0]
+    if extractor.get("direction") not in DIRECTIONS or ports[0].get("direction") != "output":
+        return None
+    dx, dy = DIRECTIONS[extractor["direction"]]
+    outlet = {"position": {"x": extractor["position"]["x"] - dx, "y": extractor["position"]["y"] - dy},
+              "facing": (extractor["direction"] + 8) % 16}
+    if not _directed_belt_tail([e for e in primary["entities"] if e["name"] == "transport-belt"], outlet, ports[0]):
+        return None
+    candidates = []
+    for fuel_key, plan in factory.state["blocks"].items():
+        if not fuel_key.startswith("fuel:burner-mining-drill:"):
+            continue
+        try:
+            x, y = map(float, fuel_key.rsplit(":", 1)[1].split(","))
+        except ValueError:
+            continue
+        if not all(math.isfinite(v) and v.is_integer() for v in (x, y)):
+            continue
+        old = {"name": "burner-mining-drill", "position": {"x": x, "y": y}}
+        link = factory.state.get("links", {}).get(fuel_key, {})
+        intake = plan.get("ports", [])
+        arms = [e for e in plan.get("entities", []) if e["name"] == "inserter"]
+        if not arms and pending:
+            arms = plan.get("retired_inserters", [])
+        if (_protected(factory, old) or len(arms) != 1 or len(intake) != 1
+                or intake[0].get("item") != "coal" or link.get("source_port") != ports[0]
+                or link.get("consumer_port") != intake[0]
+                or not _directed_belt_tail(link.get("entities", []), ports[0], intake[0])):
+            continue
+        arm = {k: deepcopy(arms[0][k]) for k in ("name", "position", "direction")}
+        if arm["direction"] not in DIRECTIONS:
+            continue
+        dx, dy = DIRECTIONS[arm["direction"]]
+        pickup = {"position": {"x": arm["position"]["x"] + dx, "y": arm["position"]["y"] + dy},
+                  "facing": (arm["direction"] + 8) % 16}
+        if not _directed_belt_tail([e for e in plan["entities"] if e["name"] == "transport-belt"], intake[0], pickup):
+            continue
+        if any(factory._entity_key(e) == factory._entity_key(arm)
+               for other_key, other in factory.state["blocks"].items() if other_key != fuel_key
+               for e in other.get("entities", [])):
+            continue
+        provenance = {"fuel_key": fuel_key, "receiver": receiver, "old_position": old["position"],
+            "source_entities": primary["entities"], "source_port": ports[0], "intake_port": intake[0],
+            "fuel_link_entities": link["entities"], "arm": arm}
+        if pending and provenance != pending.get("legacy_provenance"):
+            continue
+        candidates.append((old, arm, provenance))
+    if len(candidates) != 1:
+        return None
+    old, arm, provenance = candidates[0]
+    payload = json.dumps(json.dumps({"old": old, "receiver": receiver, "extractor": extractors[0], "arm": arm}))
+    proof = factory.game.query('''
+--[[ legacy_source_provenance: no entities or input state are changed. ]]
+local args=helpers.json_to_table(''' + payload + ''')
+local receiver=target(args.receiver.position,args.receiver.name)
+local extractor=target(args.extractor.position,args.extractor.name)
+local arm=target(args.arm.position,args.arm.name)
+if target(args.old.position,args.old.name) then return {ok=false,reason="legacy old drill reappeared"} end
+if not receiver or receiver.force~=f or not extractor or extractor.force~=f
+ or extractor.direction~=args.extractor.direction then return {ok=false,reason="legacy extraction identity changed"} end
+local function inside(p,e)
+ return math.abs(p.x-e.position.x)<e.prototype.tile_width/2 and math.abs(p.y-e.position.y)<e.prototype.tile_height/2
+end
+if not inside(extractor.pickup_position,receiver) then return {ok=false,reason="legacy extractor does not pick from receiver"} end
+local proto=prototypes.entity[args.old.name];local v=proto.vector_to_place_result
+if not v then return {ok=false,reason="legacy drill has no solid output geometry"} end
+local directions={};local x,y=v.x or v[1],v.y or v[2]
+for _,direction in ipairs{0,4,8,12} do
+ if inside({x=args.old.position.x+x,y=args.old.position.y+y},receiver) then directions[#directions+1]=direction end
+ x,y=-y,x
+end
+if #directions~=1 then return {ok=false,reason="legacy drill output orientation is ambiguous"} end
+return {ok=true,world_id=d and d.world_id,direction=directions[1],receiver_unit=receiver.unit_number,
+ extractor_unit=extractor.unit_number,arm_present=arm~=nil,arm_unit=arm and arm.unit_number}
+''')
+    if not proof.get("ok") or proof.get("world_id") != observation["world_id"]:
+        return None
+    if pending:
+        if (proof.get("receiver_unit") != pending.get("legacy_receiver_unit")
+                or proof.get("extractor_unit") != pending.get("legacy_extractor_unit")
+                or proof["direction"] != pending["old_drill"]["direction"]):
+            return None
+    elif not proof.get("arm_present"):
+        return None
+    old["direction"] = proof["direction"]
+    record = {"old_drill": old, "receiver": deepcopy(receiver), "extraction_block": key, "resource": resource,
+              "created_tick": observation.get("tick", 0), "legacy_absent_old": True,
+              "legacy_provenance": deepcopy(provenance), "legacy_receiver_unit": proof["receiver_unit"],
+              "legacy_extractor_unit": proof["extractor_unit"]}
+    # This survey proves the sole planned arm really drops into the absent old
+    # drill footprint. Its exact unit is then required by ordinary mining guards.
+    intake_proof = _fuel_intake_survey(factory, record, [arm])
+    rows = intake_proof.get("inserters") or []
+    if (not intake_proof.get("ok") or intake_proof.get("world_id") != observation["world_id"] or len(rows) != 1):
+        return None
+    live = rows[0]
+    expected = pending["fuel_retirement"]["inserters"][0].get("unit_number") if pending else proof.get("arm_unit")
+    if live.get("present") and (not live.get("owned") or not live.get("inserter") or not live.get("feeds_old_drill")
+            or live.get("direction") != arm["direction"] or live.get("unit_number") != expected):
+        return None
+    if not pending and not live.get("present"):
+        return None
+    arm["unit_number"] = expected
+    record["fuel_retirement"] = {"plan_key": provenance["fuel_key"], "inserters": [arm], "retired": False}
+    return record
+
+
 def _survey(factory: Any, record: dict, *, choose: bool = False) -> dict:
     payload = json.dumps(json.dumps({**record, "choose": choose}, separators=(",", ":")))
     return factory.game.query('''
@@ -31,6 +178,13 @@ local proto=prototypes.entity["electric-mining-drill"]
 local receiver=target(args.receiver.position,args.receiver.name)
 if not receiver or receiver.force~=f then return {ok=false,reason="upgrade receiver is missing or foreign"} end
 local old=target(args.old_drill.position,args.old_drill.name)
+local ignored={}
+if args.legacy_absent_old and not old and args.fuel_retirement then
+ for _,row in ipairs(args.fuel_retirement.inserters) do
+  local e=target(row.position,row.name)
+  if e and e.force==f and e.minable and e.unit_number==row.unit_number and e.direction==row.direction then ignored[e.unit_number]=true end
+ end
+end
 local function feeds(e)
  local p=e.drop_position
  return math.abs(p.x-receiver.position.x)<receiver.prototype.tile_width/2
@@ -78,10 +232,11 @@ local function candidate(p,direction)
  local x2,y2=rotate(box.right_bottom.x,box.right_bottom.y,direction)
  local left,top=p.x+math.min(x1,x2),p.y+math.min(y1,y2)
  local right,bottom=p.x+math.max(x1,x2),p.y+math.max(y1,y2)
- local actual=target(p,proto.name);local blocked=false;local ground_items={}
+local actual=target(p,proto.name);local blocked=false;local ground_items={};local own_actor=false
  for _,e in pairs(s.find_entities_filtered{area={{left,top},{right,bottom}}}) do
-  if e.type~="resource" and e~=old and e~=actual then
-   if e.type=="item-entity" and e.stack and e.stack.valid_for_read then
+  if e.type~="resource" and e~=old and e~=actual and not ignored[e.unit_number] then
+   if e==a then own_actor=true
+   elseif e.type=="item-entity" and e.stack and e.stack.valid_for_read then
     ground_items[#ground_items+1]={name=e.name,position=pos(e.position),item=e.stack.name,
      quality=e.stack.quality.name,count=e.stack.count}
    else blocked=true end
@@ -100,6 +255,8 @@ local function candidate(p,direction)
  return {drill={name=proto.name,position=p,direction=direction,_width=proto.tile_width,_height=proto.tile_height},
   remaining=amount,mixed=mixed,terrain_clear=terrain,blocked=blocked,ground_items=ground_items,power=power,
   can_place=s.can_place_entity{name=proto.name,position=p,direction=direction,force=f},
+  actor_only=own_actor and not blocked and #ground_items==0 and s.can_place_entity{name=proto.name,position=p,
+   direction=direction,force=f,build_check_type=defines.build_check_type.script,forced=false},
   actual=actual and {unit_number=actual.unit_number,owned=actual.force==f,direction=actual.direction,
    feeds_receiver=feeds(actual),powered=networks[actual.electric_network_id] and actual.energy>0 or false} or nil}
 end
@@ -218,24 +375,45 @@ def ensure_source_upgrade(factory: Any, observation: dict, item: str, resource: 
             record = None
     if record is None:
         old = association.get("drill") or {}
-        if (not observation.get("enabled_recipes", {}).get("electric-mining-drill")
-                or old.get("name") != "burner-mining-drill" or not association.get("receiver")
-                or not factory.owns_automated_burner(old) or _protected(factory, old)):
+        if not observation.get("enabled_recipes", {}).get("electric-mining-drill"):
             return None
-        record = {"old_drill": deepcopy(old), "receiver": deepcopy(association["receiver"]),
-                  "extraction_block": association["extraction_block"], "resource": resource,
-                  "created_tick": observation.get("tick", 0)}
+        if not association:
+            record = _legacy_absent_source(factory, observation, item, resource)
+            if record is None:
+                return None
+        else:
+            if (old.get("name") != "burner-mining-drill" or not association.get("receiver")
+                    or not factory.owns_automated_burner(old) or _protected(factory, old)):
+                return None
+            record = {"old_drill": deepcopy(old), "receiver": deepcopy(association["receiver"]),
+                      "extraction_block": association["extraction_block"], "resource": resource,
+                      "created_tick": observation.get("tick", 0)}
         survey = _survey(factory, record, choose=True)
         if not survey.get("ok"):
             return _report("blocked", "cannot survey established raw drill upgrade", query_error=survey.get("reason"))
         if survey.get("world_id") != observation["world_id"]:
             return _report("blocked", "raw drill upgrade survey belongs to another world")
         live = survey.get("old", {})
-        if (not live.get("present")
+        if record.get("legacy_absent_old"):
+            if live.get("present"):
+                return None
+        elif (not live.get("present")
                 or not live.get("owned") or not live.get("exhausted") or live.get("remaining") != 0
                 or not live.get("feeds_receiver") or not live.get("unit_number")):
             return None
-        reserved = factory.builder._occupied_by_plan(factory._reserved()) | factory._port_clearances()
+        reserved_entities = factory._reserved()
+        if record.get("legacy_absent_old"):
+            fuel_key = record["fuel_retirement"]["plan_key"]
+            arm_key = factory._entity_key(record["fuel_retirement"]["inserters"][0])
+            # The dead intake's unfinished link will never be constructed.
+            # Real belts still block the read-only footprint survey normally.
+            reserved_entities = [e for category in ("blocks", "links", "power_links", "source_upgrades")
+                for key, plan in factory.state.get(category, {}).items()
+                if not (category == "links" and (key == fuel_key
+                    or factory.state.get("blocks", {}).get(key, {}).get("retired_for_upgrade")))
+                for e in plan.get("entities", [])
+                if not (category == "blocks" and key == fuel_key and factory._entity_key(e) == arm_key)]
+        reserved = factory.builder._occupied_by_plan(reserved_entities) | factory._port_clearances()
         candidates = [row for row in survey.get("candidates", [])
                       if row.get("remaining", 0) > 0 and not row.get("mixed") and row.get("terrain_clear")
                       and not row.get("blocked") and row.get("power") and not row.get("actual")
@@ -245,10 +423,16 @@ def ensure_source_upgrade(factory: Any, observation: dict, item: str, resource: 
         candidates.sort(key=lambda row: (-row["remaining"], row["drill"]["direction"],
                                           row["drill"]["position"]["x"], row["drill"]["position"]["y"]))
         chosen = candidates[0]
-        record.update(old_unit_number=live["unit_number"], drill=chosen["drill"],
+        record.update(old_unit_number=live.get("unit_number"), drill=chosen["drill"],
                       entities=[chosen["drill"]], ok=True, ports=[], state="reserved")
         factory.state.setdefault("source_upgrades", {})[item] = record
         factory._save()
+    if record.get("legacy_absent_old"):
+        if _legacy_absent_source(factory, observation, item, resource, record) is None:
+            return _report("blocked", "legacy absent source construction provenance changed", item=item)
+        if not association:
+            association = {"receiver": record["receiver"], "extraction_block": record["extraction_block"],
+                           "drill": record["old_drill"]}
     if (association.get("receiver") != record["receiver"]
             or association.get("extraction_block") != record["extraction_block"]
             or not association.get("drill", {}).get("position")
@@ -265,6 +449,8 @@ def ensure_source_upgrade(factory: Any, observation: dict, item: str, resource: 
     if not rows:
         return _report("blocked", "replacement output no longer fits the established receiver")
     row, old = rows[0], survey.get("old", {})
+    if record.get("legacy_absent_old") and old.get("present"):
+        return _report("blocked", "legacy old drill reappeared without a preserved unit identity", item=item)
     if old.get("present") and (old.get("unit_number") != record["old_unit_number"] or not old.get("owned")
             or not old.get("exhausted") or old.get("remaining") != 0 or not old.get("feeds_receiver")):
         return _report("blocked", "old drill is no longer the proven exhausted raw source", item=item)
@@ -311,7 +497,7 @@ def ensure_source_upgrade(factory: Any, observation: dict, item: str, resource: 
         return {"type": "take", "name": dropped["name"], "position": dropped["position"],
                 "item": dropped["item"], "quality": dropped["quality"], "count": min(50, dropped["count"]),
                 "reason": "collect conserved ground items obstructing the replacement drill footprint"}
-    if not row.get("can_place"):
+    if not row.get("can_place") and not (factory.game.backend == "character" and row.get("actor_only")):
         return _report("blocked", "normal placement rejects the reserved replacement drill", item=item)
     built = factory.builder.ensure_plan(observation, record)
     if built.get("status") == "succeeded" and "type" not in built:

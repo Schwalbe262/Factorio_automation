@@ -17,14 +17,18 @@ class MiningUpgradeLuaTests(unittest.TestCase):
         cls.game = DeterministicGame(run_config(runtime=Path("runtime/deterministic/character-navigation-qa"),
                                                server_port=34216, rcon_port=27031))
 
-    def survey(self, *, terrain=True, mixed=False, foreign=False, ground=False):
+    def survey(self, *, terrain=True, mixed=False, foreign=False, ground=False, legacy=False, changed=False, actor=False):
         fake = SimpleNamespace(query=Mock(return_value={}))
         record = {"old_drill": {"name": "burner-mining-drill", "position": {"x": 10, "y": 12}},
                   "receiver": {"name": "wooden-chest", "position": {"x": 10.5, "y": 10.5}}, "resource": "coal"}
+        if legacy:
+            record.update(legacy_absent_old=True, fuel_retirement={"inserters": [{"name": "inserter",
+                "position": {"x": 9.5, "y": 12.5}, "direction": 12, "unit_number": 777}]})
         _survey(SimpleNamespace(game=fake), record, choose=True)
         body = fake.query.call_args.args[0]
         fixture = '''
 local f={};local d={world_id="local-fixture"}
+local a={name="character",type="character",unit_number=991}
 local receiver={name="wooden-chest",force=f,position={x=10.5,y=10.5},prototype=prototypes.entity["wooden-chest"]}
 local old={name="burner-mining-drill",position={x=10,y=12},drop_position=receiver.position,
  prototype=prototypes.entity["burner-mining-drill"],force=f,burner={},minable=true,unit_number=123,
@@ -32,21 +36,45 @@ local old={name="burner-mining-drill",position={x=10,y=12},drop_position=receive
 local ore={name="coal",position={x=12.5,y=14.5},amount=77,type="resource"}
 local pole={name="small-electric-pole",position={x=12.5,y=13.5},prototype=prototypes.entity["small-electric-pole"],
  electric_network_id=7,quality="normal"}
+local function retiring_arm()
+ return {name="inserter",type="inserter",position={x=9.5,y=12.5},force=f,minable=true,
+  direction=12,unit_number=''' + ('778' if changed else '777') + '''}
+end
 local function target(p,name)
  if name==receiver.name and p.x==receiver.position.x and p.y==receiver.position.y then return receiver end
- if name==old.name and p.x==old.position.x and p.y==old.position.y then return old end
+ ''' + ('if name=="inserter" then return retiring_arm() end' if legacy else
+        'if name==old.name and p.x==old.position.x and p.y==old.position.y then return old end') + '''
 end
 local s={find_entities_filtered=function(spec)
  if spec.type=="generator" then return {{electric_network_id=7}} end
  if spec.type=="electric-pole" then return {pole} end
  if spec.type=="resource" then return {ore''' + (', {name="copper-ore",position={x=11.5,y=14.5},amount=33}' if mixed else '') + '''} end
- return {old''' + (', {name="transport-belt",type="transport-belt"}' if foreign else '') + (
+ return {''' + ('retiring_arm()' if legacy else 'old') + (',a' if actor else '') + (', {name="transport-belt",type="transport-belt"}' if foreign else '') + (
     ', {name="item-on-ground",type="item-entity",position={x=11.3,y=11.5},stack={valid_for_read=true,name="coal",count=7,quality={name="uncommon"}}}'
     if ground else '') + '''}
 end, get_tile=function() return {collides_with=function() return ''' + ("false" if terrain else "true") + ''' end} end,
-can_place_entity=function() return false end}
+can_place_entity=function(spec) return spec.build_check_type==defines.build_check_type.script and ''' + (
+    'true' if actor and terrain and not foreign else 'false') + ''' end}
 '''
         return self.game.query(fixture + body)
+
+    def test_legacy_planning_exempts_only_the_proven_arm_unit_across_entity_wrappers(self):
+        for changed in (False, True):
+            result = self.survey(legacy=True, changed=changed)
+            self.assertTrue(result["ok"], result)
+            self.assertFalse(result["old"]["present"])
+            row = next(row for row in result["candidates"] if row["drill"]["direction"] == 0)
+            self.assertEqual(row["blocked"], changed)
+            self.assertFalse(row["can_place"])
+
+    def test_own_actor_is_not_a_hard_collider_but_ground_or_foreign_entity_prevents_escape_proof(self):
+        for ground, foreign in ((False, False), (True, False), (False, True)):
+            result = self.survey(actor=True, ground=ground, foreign=foreign)
+            self.assertTrue(result["ok"], result)
+            row = next(row for row in result["candidates"] if row["drill"]["direction"] == 0)
+            self.assertEqual(row["blocked"], foreign)
+            self.assertEqual(row["actor_only"], not ground and not foreign)
+            self.assertFalse(row["can_place"])
 
     def test_live_rotated_output_and_lattice_geometry_find_same_receiver(self):
         result = self.survey()
