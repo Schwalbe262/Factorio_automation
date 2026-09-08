@@ -107,6 +107,20 @@ class ConsumerEntryTests(unittest.TestCase):
                 self.assertFalse(self.validate()["ok"])
         self.game.query.assert_not_called()
 
+    def test_saved_continuation_resumes_after_standard_machine_intake_upgrade(self):
+        original = deepcopy(self.provenance)
+        for rows in (self.owner["entities"], self.obs["entities"]):
+            arm = next(row for row in rows if row["position"] == {"x": -.5, "y": -1.5})
+            arm["name"] = "fast-inserter"
+            if "unit_number" in arm:
+                arm["unit_number"] = 99
+        self.assertTrue(self.validate()["ok"])
+        self.assertEqual(self.dependencies()["status"], "succeeded")
+        self.assertEqual(self.provenance, original)
+        self.assertIn("consumer entry fast inserter prototype geometry changed", self.game.query.call_args.args[0])
+        self.game.query.return_value = {"ok": False, "reason": "consumer entry fast inserter prototype geometry changed"}
+        self.assertFalse(self.validate()["ok"])
+
     def test_another_port_cannot_share_the_canonical_clearance(self):
         self.factory.state["blocks"]["other"] = {"ports": [{"kind": "item", "item": "coal",
             "direction": "output", "facing": 4, "position": {"x": -1.5, "y": -4.5}}]}

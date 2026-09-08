@@ -261,10 +261,11 @@ class FactoryTests(unittest.TestCase):
         self.factory.connect_input = Mock(return_value=ready())
         self.factory._merge_output = Mock(return_value=ready())
         result = self.factory.ensure_product(self.obs, "gear", rate_per_minute=120)
-        self.assertEqual(result["evidence"]["machines_constructed"], 2)
+        self.assertEqual(result["evidence"]["machines_constructed"], 6)
         machines = [e for block in self.factory.state["blocks"].values() for e in block["entities"] if e["name"] == "assembling-machine-1"]
-        self.assertEqual(len(machines), 2)
-        self.factory._merge_output.assert_called_once()
+        self.assertEqual(len(machines), 6)
+        self.assertEqual(self.factory._merge_output.call_count, 5)
+        self.assertEqual(result["evidence"]["nominal_capacity_per_minute"], 120)
         self.assertFalse(result["evidence"]["flow_verified"])
 
     def test_raw_capacity_uses_mining_and_smelting_limits_and_automatic_fuel(self):

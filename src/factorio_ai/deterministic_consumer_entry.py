@@ -90,7 +90,7 @@ def validate_consumer_entry(factory, obs, canonical_port, provenance):
         size = 2 if machine["name"] in {"stone-furnace", "steel-furnace"} else 3
         arms = []
         for row in entities:
-            if row.get("name") != "inserter" or row.get("direction") not in DIRECTIONS:
+            if row.get("name") not in {"inserter", "fast-inserter"} or row.get("direction") not in DIRECTIONS:
                 continue
             ax, ay = _point(row)
             vx, vy = DIRECTIONS[row["direction"]]
@@ -138,6 +138,14 @@ local function exact(row)
 end
 local first=exact(x.canonical);local entry=exact(x.entry);local arm=exact(x.arm);local receiver=exact(x.receiver)
 if not first or not entry or not arm or not receiver then return {ok=false,reason="consumer entry identity changed"} end
+if arm.name=="fast-inserter" then
+ local basic=prototypes.entity["inserter"];local fast=arm.prototype
+ local function same(a,b) return a and b and math.abs((a.x or a[1])-(b.x or b[1]))<.01
+  and math.abs((a.y or a[2])-(b.y or b[2]))<.01 end
+ if not basic or not same(basic.inserter_pickup_position,fast.inserter_pickup_position)
+  or not same(basic.inserter_drop_position,fast.inserter_drop_position)
+  then return {ok=false,reason="consumer entry fast inserter prototype geometry changed"} end
+end
 for _,belt in ipairs{first,entry} do for lane=1,2 do
  for _,row in pairs(belt.get_transport_line(lane).get_contents()) do
   if row.count>0 and row.name~=x.item then return {ok=false,reason="consumer entry carries another material"} end

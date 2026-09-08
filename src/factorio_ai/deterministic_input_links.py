@@ -42,7 +42,7 @@ def _geometry(plan: dict) -> tuple:
             if point in belts and _identity(belts[point]) != _identity(entity):
                 raise ValueError("input route has contradictory belt directions")
             belts[point] = entity
-        elif name in {"inserter", "long-handed-inserter"}:
+        elif name in {"inserter", "fast-inserter", "long-handed-inserter"}:
             delta = DIRECTIONS.get(entity.get("direction", 0))
             if delta is None:
                 raise ValueError("input route has unsupported inserter direction")
@@ -95,7 +95,7 @@ def _powered_prefix(plan: dict, entities: list) -> dict:
     poles = [entity for entity in plan["entities"] if entity["name"] == "small-electric-pole"]
     required = list(entities)
     for arm in entities:
-        if arm["name"] not in {"inserter", "long-handed-inserter"}:
+        if arm["name"] not in {"inserter", "fast-inserter", "long-handed-inserter"}:
             continue
         x, y = _point(arm)
         # The factory's standard small-pole placements use integer offsets up

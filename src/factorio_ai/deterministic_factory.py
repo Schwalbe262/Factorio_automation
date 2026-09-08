@@ -72,6 +72,10 @@ class DeterministicFactory:
                     upgrade["state"] = "reserved"
                 upgrade.pop("observed_tick", None)
                 upgrade.pop("observed_unit_number", None)
+            for upgrade in self.state.get("machine_port_upgrades", {}).values():
+                upgrade["state"] = "reserved"
+                upgrade.pop("observed_tick", None)
+                upgrade.pop("observed_unit_number", None)
             for budget in self.state.get("startup_research", {}).values():
                 budget.pop("completion_tick", None)
         self.state["last_tick"] = tick
@@ -921,6 +925,10 @@ return {ok=true,obstacles=obstacles}
         plan = self.reserve_site(origin, key, obs, reference)
         if not plan.get("ok"):
             return _report("blocked", plan.get("reason", "factory site unavailable"), item=item)
+        from .deterministic_machine_ports import cell_capacity, ensure_machine_ports, fast_available
+        result = ensure_machine_ports(self, obs, plan, recipe, item)
+        if result is not None:
+            return result
         result = self.builder.ensure_plan(obs, plan)
         if not _ready(result):
             return result
@@ -935,15 +943,26 @@ return {ok=true,obstacles=obstacles}
                 return result
         outputs = [p for p in plan["ports"] if p["kind"] == "item" and p["direction"] == "output"]
         desired_count = 1
+        nominal_capacity = None
         if rate_per_minute is not None:
-            output_per_cycle = sum(float(row.get("amount", 1)) * float(row.get("probability", 1)) for row in recipe["products"] if row["name"] == item)
-            machine_rate = float(machines[0]["crafting_speed"]) * 60 / float(recipe["energy"]) * output_per_cycle
+            try:
+                machine_rate = cell_capacity(self, obs, plan, recipe, item, prefer_fast=fast_available(self, obs))
+            except (KeyError, ValueError) as error:
+                return _report("blocked", str(error), item=item, plan=key)
             desired_count = max(1, math.ceil(rate_per_minute / machine_rate - 1e-9))
+            per_cell_rate = rate_per_minute / desired_count
+            result = ensure_machine_ports(self, obs, plan, recipe, item, rate_per_minute=per_cell_rate)
+            if result is not None:
+                return result
+            nominal_capacity = cell_capacity(self, obs, plan, recipe, item)
             for index in range(1, desired_count):
                 extra_key = key + ":capacity:" + str(index)
                 extra = self.reserve_site(origin, extra_key, obs, plan["entities"][0]["position"])
                 if not extra.get("ok"):
                     return _report("blocked", extra.get("reason", "capacity expansion site unavailable"), item=item, required_machines=desired_count)
+                result = ensure_machine_ports(self, obs, extra, recipe, item)
+                if result is not None:
+                    return result
                 result = self.builder.ensure_plan(obs, extra)
                 if not _ready(result):
                     return result
@@ -956,13 +975,25 @@ return {ok=true,obstacles=obstacles}
                     result = self.connect_input(obs, sources[port["item"]], port, extra_key + ":" + port["item"])
                     if not _ready(result):
                         return result
+                result = ensure_machine_ports(self, obs, extra, recipe, item, rate_per_minute=per_cell_rate)
+                if result is not None:
+                    return result
+                try:
+                    nominal_capacity += cell_capacity(self, obs, extra, recipe, item)
+                except (KeyError, ValueError) as error:
+                    return _report("blocked", str(error), item=item, plan=extra_key)
                 output = next(p for p in extra["ports"] if p["kind"] == "item" and p["direction"] == "output")
                 result = self._merge_output(obs, output, outputs[0], extra_key + ":output")
                 if not _ready(result):
                     return result
+            if nominal_capacity + 1e-9 < rate_per_minute:
+                return _report("blocked", "constructed solid cells do not meet the requested nominal port capacity",
+                               item=item, nominal_capacity_per_minute=nominal_capacity, requested_rate_per_minute=rate_per_minute)
         return _report("succeeded", "automatic production block connected", ports=outputs, flow_verified=False,
                        recipe=recipe["name"], input_handcarry=False, machines_constructed=desired_count,
-                       requested_rate_per_minute=rate_per_minute)
+                       requested_rate_per_minute=rate_per_minute, nominal_capacity_per_minute=nominal_capacity,
+                       machine_port_budget_basis="conservative single-item arm allowances: basic 40/min, fast 100/min",
+                       transport_route_capacity_verified=False)
 
     def _upstream_output_tails(self, obs: dict, bus_port: dict) -> list[dict]:
         """Keep owned same-item tails, including powered arms, to the original bus.
@@ -1379,7 +1410,7 @@ return {ok=true,sites=best}
             if not _ready(result):
                 return result
         return _report("succeeded", "active science producers have physical nominal capacity", science_rate_per_minute=self.graph.science_rate_per_minute,
-                       requirements_per_minute=requirements, flow_verified=False)
+                       requirements_per_minute=requirements, flow_verified=False, transport_route_capacity_verified=False)
 
     def _recover_unbuilt_link(self, obs: dict, source_port: dict, consumer_port: dict, link_key: str) -> dict | None:
         """Discard a contradictory old route only after a complete live survey.

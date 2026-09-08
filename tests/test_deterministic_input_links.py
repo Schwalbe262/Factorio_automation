@@ -4,7 +4,7 @@ from types import MethodType, SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from factorio_ai.deterministic_input_links import ensure_input_dependencies
+from factorio_ai.deterministic_input_links import _geometry, _path, _powered_prefix, ensure_input_dependencies
 from factorio_ai.deterministic_factory import DeterministicFactory
 
 
@@ -58,6 +58,18 @@ class InputDependencyTests(unittest.TestCase):
         self.factory.builder.ensure_plan.assert_not_called()
         self.factory.ensure_power_connection.assert_not_called()
         self.factory._save.assert_not_called()
+
+    def test_standard_fast_arm_retains_directed_edges_and_covering_power(self):
+        plan = {"entities": [entity("transport-belt", .5, -.5, 4),
+                             entity("fast-inserter", .5, .5),
+                             entity("transport-belt", .5, 1.5, 4),
+                             entity("small-electric-pole", 1.5, .5)]}
+        belts, edges, _ = _geometry(plan)
+        path = _path(belts, edges, (.5, -.5), (.5, 1.5))
+        self.assertEqual([row["name"] for row in path], ["transport-belt", "fast-inserter", "transport-belt"])
+        self.assertIn(plan["entities"][-1], _powered_prefix(plan, path)["entities"])
+        with self.assertRaises(ValueError):
+            _powered_prefix({"entities": plan["entities"][:-1]}, path)
 
     def test_direct_primary_link_needs_no_extra_construction(self):
         self.assertEqual(self.ensure("old")["status"], "succeeded")
