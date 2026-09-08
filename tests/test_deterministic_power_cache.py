@@ -32,6 +32,50 @@ class PowerEvidenceTests(unittest.TestCase):
         self.assertEqual(self.check()["status"], "succeeded")
         self.assertEqual(self.game.query.call_count, 2)
 
+    def powered_observation(self):
+        return {**deepcopy(self.obs), "ok": True, "surface": "nauvis", "entities": [
+            {"name": "steam-engine", "type": "generator", "electric_network_id": 7},
+            {**deepcopy(self.plan["entities"][0]), "type": "electric-pole", "electric_network_id": 7}]}
+
+    def test_observed_generator_membership_avoids_a_duplicate_power_query(self):
+        self.assertEqual(self.check(obs=self.powered_observation())["status"], "succeeded")
+        self.game.query.assert_not_called()
+
+    def test_disconnected_fresh_snapshot_still_performs_live_power_inspection(self):
+        self.check(obs=self.powered_observation())
+        obs = self.powered_observation()
+        obs["entities"][1]["electric_network_id"] = 8
+        self.game.query.return_value = {"ok": True, "connected": 0, "live": []}
+        self.assertEqual(self.check(obs=obs)["status"], "blocked")
+        self.game.query.assert_called_once()
+
+    def test_incomplete_or_ambiguous_snapshot_cannot_prove_connected_power(self):
+        def variants():
+            for value in (None, 0, True, "7"):
+                obs = self.powered_observation()
+                for row in obs["entities"]:
+                    row["electric_network_id"] = value
+                yield obs
+            obs = self.powered_observation()
+            obs["entities"].append(deepcopy(obs["entities"][1]))
+            yield obs
+            obs = self.powered_observation()
+            obs["entities"][1]["type"] = "ghost"
+            yield obs
+            obs = self.powered_observation()
+            obs["entities"].append(None)
+            yield obs
+            for field in ("ok", "surface", "tick"):
+                obs = self.powered_observation()
+                obs.pop(field)
+                yield obs
+        self.game.query.return_value = {"ok": True, "connected": 0, "live": []}
+        for obs in variants():
+            with self.subTest(obs=obs):
+                before = self.game.query.call_count
+                self.assertEqual(self.check(obs=obs)["status"], "blocked")
+                self.assertEqual(self.game.query.call_count, before + 1)
+
     def test_new_observation_rechecks_power_loss_even_at_the_same_tick(self):
         self.assertEqual(self.check()["status"], "succeeded")
         self.game.query.return_value = {"ok": True, "connected": 0, "live": []}

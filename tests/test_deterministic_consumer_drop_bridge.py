@@ -36,10 +36,42 @@ class ConsumerDropBridgeTests(unittest.TestCase):
         self.game.query.side_effect = lambda body: ({"ok": True, "candidates": [deepcopy(self.option)], "new_pole_reach": 2.5}
             if "owned_consumer_long_arm_drop" in body else {"ok": True, "blocked": []})
 
-    def route(self, reserved=None, *, owned_plan_key=None):
+    def route(self, reserved=None, *, owned_plan_key=None, allow_upstream_bridge=False):
         return self.factory._consumer_drop_bridge_route(self.obs, self.source, self.consumer,
             self.factory._reserved() if reserved is None else reserved, start_direction=4,
-            owned_plan_key=owned_plan_key)
+            owned_plan_key=owned_plan_key, allow_upstream_bridge=allow_upstream_bridge)
+
+    def test_ordinary_drop_does_not_enable_upstream_crossing_search(self):
+        self.factory._material_route = Mock(wraps=self.factory._material_route)
+        self.assertTrue(self.route()["ok"])
+        self.assertTrue(all(not call.kwargs["allow_bridge"]
+                            for call in self.factory._material_route.call_args_list))
+
+    def test_explicit_upstream_crossing_is_bounded_across_drop_options_and_poles(self):
+        self.option["poles"] = [self.pole] * 3
+        self.game.query.side_effect = None
+        self.game.query.return_value = {"ok": True, "candidates": [self.option] * 4}
+        self.factory._material_route = Mock(return_value={"ok": False, "reason": "no route within bounds"})
+        self.assertFalse(self.route(allow_upstream_bridge=True)["ok"])
+        calls = self.factory._material_route.call_args_list
+        self.assertEqual(len(calls), 12)
+        self.assertEqual(sum(call.kwargs["allow_bridge"] for call in calls), 1)
+
+    def test_upstream_crossing_equipment_is_preserved_and_combined_placement_required(self):
+        upstream = [
+            {"name": "transport-belt", "position": self.source, "direction": 4},
+            {"name": "long-handed-inserter", "position": {"x": 2.5, "y": 6.5}, "direction": 12},
+            {"name": "small-electric-pole", "position": {"x": 2.5, "y": 8.5}, "direction": 0},
+            {"name": "transport-belt", "position": self.option["pickup"], "direction": 0}]
+        self.factory._material_route = Mock(return_value={"ok": True, "segments": upstream})
+        result = self.route(allow_upstream_bridge=True)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["segments"][:len(upstream)], upstream)
+        self.assertEqual(sum(e["name"] == "long-handed-inserter" for e in result["segments"]), 2)
+        self.assertEqual(sum(e["name"] == "small-electric-pole" for e in result["segments"]), 2)
+        self.builder.can_place.assert_called_with(result["segments"])
+        self.builder.can_place.side_effect = [{"ok": True}, {"ok": False}]
+        self.assertFalse(self.route(allow_upstream_bridge=True)["ok"])
 
     def test_enclosed_input_accepts_live_offset_drop_over_pole_without_rotating_belt(self):
         result = self.route()

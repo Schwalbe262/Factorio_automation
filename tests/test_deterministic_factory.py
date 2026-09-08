@@ -522,6 +522,76 @@ class FactoryTests(unittest.TestCase):
         self.assertFalse(first.kwargs["allow_bridge"])
         self.assertTrue(last.kwargs.get("allow_bridge", True))
 
+    def enclosed_output_merge_fixture(self):
+        source, destination = port("iron-plate", .5, 6.5), port("iron-plate", 6.5, .5)
+        belt = {"name": "transport-belt", "position": destination["position"], "direction": destination["facing"]}
+        self.factory.state["blocks"]["iron-bus"] = {"ports": [destination], "entities": [belt]}
+        self.factory._material_route = Mock(return_value={"ok": False, "reason": "no route within bounds"})
+        self.factory._route_upstream_output = Mock(return_value={"ok": False, "reason": "no reachable owned upstream output tail"})
+        self.factory._consumer_drop_bridge_route = Mock(return_value={"ok": True, "segments": [
+            {"name": "transport-belt", "position": source["position"], "direction": source["facing"]},
+            {"name": "long-handed-inserter", "position": {"x": 6.5, "y": 2.5}, "direction": 8},
+            {"name": "small-electric-pole", "position": {"x": 6.5, "y": 3.5}, "direction": 0}, belt]})
+        return source, destination
+
+    def test_capacity_merge_uses_explicit_owned_drop_and_waits_for_its_power(self):
+        source, destination = self.enclosed_output_merge_fixture()
+        original = deepcopy(self.factory.state["blocks"])
+        waiting = {"status": "waiting", "reason": "merge arm power not yet observed"}
+        self.factory.ensure_power_connection.return_value = waiting
+        self.assertEqual(self.factory._merge_output(self.obs, source, destination, "merge"), waiting)
+        call = self.factory._consumer_drop_bridge_route.call_args
+        self.assertEqual(call.args[:3], (self.obs, source["position"], {**destination, "direction": "input"}))
+        self.assertEqual(call.kwargs, {"start_direction": source["facing"], "owned_plan_key": "iron-bus",
+                                      "allow_upstream_bridge": True})
+        self.assertIn({"name": "port-clearance", "position": {"x": 7.5, "y": .5}}, call.args[3])
+        plan = self.factory.state["links"]["merge"]
+        self.assertEqual(plan["consumer_port"], destination)
+        self.assertEqual(plan["entities"][-1]["direction"], destination["facing"])
+        self.assertEqual(self.factory.state["blocks"], original)
+        self.factory.ensure_power_connection.assert_called_once_with(self.obs, "merge:merge", plan)
+        self.factory.ensure_power_connection.return_value = ready()
+        self.assertEqual(self.factory._merge_output(self.obs, source, destination, "merge")["status"], "succeeded")
+        self.factory._consumer_drop_bridge_route.assert_called_once()
+
+    def test_capacity_output_drop_requires_canonical_dedicated_item_owner(self):
+        source, destination = self.enclosed_output_merge_fixture()
+        original = deepcopy(self.factory.state["blocks"]["iron-bus"])
+        for change in ("missing", "different-port", "mixed-item", "missing-belt", "facing", "input"):
+            with self.subTest(change=change):
+                self.factory.state["blocks"] = {"iron-bus": deepcopy(original)}
+                owner = self.factory.state["blocks"]["iron-bus"]
+                target = deepcopy(destination)
+                if change == "missing": self.factory.state["blocks"] = {}
+                if change == "different-port": owner["ports"][0]["position"] = {"x": 8.5, "y": .5}
+                if change == "mixed-item": owner["ports"].append(port("coal"))
+                if change == "missing-belt": owner["entities"] = []
+                if change == "facing": owner["entities"][0]["direction"] = 12
+                if change == "input": target["direction"] = owner["ports"][0]["direction"] = "input"
+                self.assertEqual(self.factory._merge_output(self.obs, source, target, "merge")["status"], "blocked")
+                self.assertNotIn("merge", self.factory.state["links"])
+        self.factory._consumer_drop_bridge_route.assert_not_called()
+        self.builder.ensure_plan.assert_not_called()
+
+    def test_capacity_output_drop_failure_is_not_saved_or_built(self):
+        source, destination = self.enclosed_output_merge_fixture()
+        for reason in ("long-arm input belt identity changed", "long-arm input belt carries another material",
+                       "no clear powered long-arm drop into owned input belt"):
+            with self.subTest(reason=reason):
+                self.factory._consumer_drop_bridge_route.return_value = {"ok": False, "reason": reason}
+                result = self.factory._merge_output(self.obs, source, destination, "merge")
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["evidence"]["query_error"], reason)
+                self.assertNotIn("merge", self.factory.state["links"])
+        self.builder.ensure_plan.assert_not_called()
+
+    def test_capacity_output_drop_never_merges_another_material(self):
+        source, destination = self.enclosed_output_merge_fixture()
+        source["item"] = "coal"
+        self.assertEqual(self.factory._merge_output(self.obs, source, destination, "merge")["status"], "blocked")
+        self.factory._consumer_drop_bridge_route.assert_not_called()
+        self.factory._material_route.assert_not_called()
+
     def observed_upstream_trunk_fixture(self):
         source, bus = port("iron-plate", .5, -2.5, facing=8), port("iron-plate", 20.5, .5)
         points = ([(x + .5, .5) for x in range(0, -22, -1)]

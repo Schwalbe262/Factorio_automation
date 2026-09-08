@@ -245,6 +245,26 @@ return {ok=true,covered=covered}
         positions = tuple((e["position"]["x"], e["position"]["y"]) for e in poles)
         if positions in self._power_grids:
             return self._power_grids[positions]
+        # observe() reads every player generator and pole in one Nauvis tick.
+        # Positive network membership is the same proof as the query below;
+        # incomplete or disconnected snapshots still use its live inspection.
+        if (obs.get("ok") is True and obs.get("surface") == "nauvis"
+                and isinstance(obs.get("world_id"), str) and obs["world_id"]
+                and type(obs.get("tick")) is int and obs["tick"] >= 0
+                and isinstance(obs.get("entities"), list)
+                and all(isinstance(entity, dict) for entity in obs["entities"])):
+            def network(entity):
+                value = entity.get("electric_network_id")
+                return value if type(value) is int and value > 0 else None
+            generators = {network(e) for e in obs["entities"] if e.get("type") == "generator"}
+            generators.discard(None)
+            matches = [[e for e in obs["entities"] if e.get("name") == "small-electric-pole"
+                        and e.get("position") == {"x": x, "y": y}] for x, y in positions]
+            if matches and all(len(rows) == 1 and rows[0].get("type") == "electric-pole"
+                               and network(rows[0]) in generators for rows in matches):
+                grid = {"ok": True, "connected": len(poles), "live": [], "basis": "observation"}
+                self._power_grids[positions] = grid
+                return grid
         payload = json.dumps(json.dumps([e["position"] for e in poles], separators=(",", ":")))
         grid = self.game.query('''
 local wanted=helpers.json_to_table(''' + payload + ''');local networks={};local live={}
@@ -1145,6 +1165,21 @@ return {ok=true,candidates=candidates}
                 if not route.get("ok"):
                     route = self._material_route(source_port["position"], bus_port["position"], self._reserved() + [forbidden_front],
                                                  start_direction=source_port.get("facing"))
+                if not route.get("ok"):
+                    # An enclosed dedicated output can receive the same item
+                    # through a powered drop without rotating its live belt.
+                    owner_key = next((owner_key for owner_key, owner in self.state["blocks"].items()
+                        if bus_port.get("kind") == "item" and bus_port.get("direction") == "output"
+                        and bus_port in owner.get("ports", [])
+                        and all(port.get("item") == bus_port["item"] for port in owner["ports"]
+                                if port.get("kind") == "item")
+                        and any(entity.get("name") == "transport-belt" and entity.get("position") == bus_port["position"]
+                                and entity.get("direction", 0) == bus_port["facing"] for entity in owner.get("entities", []))), None)
+                    if owner_key is not None:
+                        route = self._consumer_drop_bridge_route(obs, source_port["position"],
+                            {**bus_port, "direction": "input"}, self._reserved() + [forbidden_front],
+                            start_direction=source_port.get("facing"), owned_plan_key=owner_key,
+                            allow_upstream_bridge=True)
             if not route.get("ok"):
                 return _report("blocked", "capacity output cannot reach its material bus", link=key, query_error=route.get("reason"))
             segments = route["segments"]
@@ -1402,7 +1437,8 @@ return {ok=true,checked=#rows,existing=found}
 
     def _consumer_drop_bridge_route(self, obs: dict, source: dict, consumer: dict,
                                     reserved: list[dict], *, start_direction: int | None,
-                                    owned_plan_key: str | None = None) -> dict:
+                                    owned_plan_key: str | None = None,
+                                    allow_upstream_bridge: bool = False) -> dict:
         """Feed an enclosed owned input using the live long-arm drop geometry."""
         destination, facing = consumer["position"], consumer.get("facing")
         actual = next((e for e in obs.get("entities", []) if e.get("name") == "transport-belt"
@@ -1411,8 +1447,8 @@ return {ok=true,checked=#rows,existing=found}
                     and e.get("position") == destination and e.get("direction") == facing
                     for e in plan.get("entities", [])) for plan in self.state["blocks"].values())
         if owned_plan_key is not None:
-            # Energy can join an intermediate belt only after proving its tail
-            # reaches the intended bank. The named saved block must itself own
+            # Explicit callers prove that this belt reaches their destination.
+            # The named saved block must itself own
             # that exact facing belt and exclusively carry the requested item.
             owner = self.state["blocks"].get(owned_plan_key, {})
             ports = [p for p in owner.get("ports", []) if p.get("kind") == "item"]
@@ -1488,6 +1524,7 @@ return {ok=true,candidates=rows,new_pole_reach=prototypes.entity["small-electric
                    if e["name"] == "transport-belt"]
         foreign_footprint = self.builder._occupied_by_plan(foreign)
         best = None
+        upstream_bridge_attempted = False
         for option in sorted(survey.get("candidates", []), key=lambda row: (_distance(source, row["pickup"]), row["arm"]["direction"]))[:4]:
             arm, pickup = option["arm"], option["pickup"]
             flow = (arm["direction"] + 8) % 16
@@ -1509,7 +1546,12 @@ return {ok=true,candidates=rows,new_pole_reach=prototypes.entity["small-electric
                     continue
                 if not self.builder.can_place(trial).get("ok"):
                     continue
-                route = self._material_route(source, pickup, reserved + trial, allow_bridge=False,
+                # A merge may need an upstream crossing as well as this drop.
+                # Spend at most one generic routing attempt across all options
+                # and poles; that planner uses only direct belt legs internally.
+                use_bridge = allow_upstream_bridge and not upstream_bridge_attempted
+                upstream_bridge_attempted = upstream_bridge_attempted or use_bridge
+                route = self._material_route(source, pickup, reserved + trial, allow_bridge=use_bridge,
                     start_direction=start_direction, end_direction=pickup_facing)
                 if not route.get("ok"):
                     continue
