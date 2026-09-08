@@ -62,6 +62,13 @@ class LaunchStageTests(unittest.TestCase):
             self.assertNotIn("apply_starter_pack", body)
             self.assertNotIn("force_finish", body)
 
+    def test_launch_prepares_virtual_rocket_inventory_before_attached_cargo_fallback(self):
+        # 2.1's virtual inventory may have size zero. Attached cargo insertion
+        # alone leaves a ready rocket permanently rejecting launch_rocket().
+        self.assertLess(LAUNCH_LUA.index('"rocket_silo_rocket"'),
+                        LAUNCH_LUA.index('"rocket_silo_attached_cargo_unit"'))
+        self.assertNotIn("#cargo", LAUNCH_LUA)
+
 
 if __name__ == "__main__":
     unittest.main()

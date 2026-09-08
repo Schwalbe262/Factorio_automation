@@ -32,7 +32,9 @@ if silo.rocket_silo_status~=defines.rocket_silo_status.rocket_ready then
  return success{status="waiting",reason="rocket_not_ready",rocket_parts=silo.rocket_parts}
 end
 local cargo=nil
-for _,name in ipairs({"rocket_silo_attached_cargo_unit","rocket_silo_rocket"}) do
+--[[ In 2.1 the rocket inventory is virtual (its size can be zero). Inserting
+through it prepares launch cargo; the attached unit alone does not do so. ]]
+for _,name in ipairs({"rocket_silo_rocket","rocket_silo_attached_cargo_unit"}) do
  local index=defines.inventory[name]
  if index then local good,value=pcall(function() return silo.get_inventory(index) end);if good and value then cargo=value;break end end
 end
