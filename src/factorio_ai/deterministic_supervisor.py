@@ -112,6 +112,11 @@ class DeterministicSupervisor:
     def _plan_action(self, observation: dict[str, Any], until: str) -> dict[str, Any]:
         if self.fairness is not None:
             self.fairness.selection = None
+        from .deterministic_repair_control import pending_repair
+        cleanup = pending_repair(observation)
+        if cleanup is not None:
+            self.stage = "repair"
+            return cleanup
         self.stage = "bootstrap"
         if self.builder is None:
             from .deterministic_builder import FactoryBuilder
@@ -166,6 +171,11 @@ class DeterministicSupervisor:
         self.stage = "production"
         self.prepare_production()
         self.factory.priority_research = self.defense.requirements(observation).get("research", [])
+        from .deterministic_repairs import NativeRepairs
+        repair = NativeRepairs(self.game, self.bootstrap, self.factory, self.catalog).next_action(observation, self.defense)
+        if repair is not None:
+            self.stage = "repair"
+            return repair
         from .deterministic_ready_research import ready_research
         research = ready_research(self.factory, observation)
         if research is not None:

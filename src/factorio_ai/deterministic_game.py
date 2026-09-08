@@ -275,7 +275,7 @@ local rows={}
 for _,e in pairs(s.find_entities_filtered{force=f}) do
  if e.valid and e.type~="character" then
   local r={name=e.name,type=e.type,unit_number=e.unit_number,position=pos(e.position),direction=e.direction,
-    health=e.health,energy=e.energy,status=e.status,inventory={},fluids={}}
+    health=e.health,max_health=e.max_health,energy=e.energy,status=e.status,inventory={},fluids={}}
   for name,id in pairs(defines.entity_status) do if id==e.status then r.status_name=name;break end end
   local good,recipe=pcall(function() return e.get_recipe() end)
   if good and recipe then r.recipe=recipe.name end
@@ -329,6 +329,7 @@ end
 local current=f.current_research
 return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.position),inventory=contents(a.get_main_inventory()),
  actor_unit_number=a.unit_number,equipped_ammo=contents(equipped),recoverable_equipped_ammo=recoverable,
+ repair_pending=d.native_repair and {request=d.native_repair.request} or nil,
  crafting_queue=a.crafting_queue,entities=rows,resources=resources,technologies=techs,enabled_recipes=enabled,
  research=current and current.name or nil,research_progress=f.research_progress,production=production,rockets_launched=f.rockets_launched,
  enemies=s.count_entities_filtered{position={0,0},radius=128,force="enemy",type={"unit","unit-spawner"}}}
@@ -339,6 +340,9 @@ return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.
         return observation
 
     def act(self, action: dict[str, Any]) -> dict[str, Any]:
+        if action.get("type") in {"repair", "finish_repair"}:
+            from .deterministic_repair_control import run_repair
+            return self._record_action(action, run_repair(self, action))
         validate_mine_guard(action)
         validate_equipped_ammo_recovery(action)
         if "count" in action and (isinstance(action["count"], bool)
@@ -441,6 +445,9 @@ if not e then return failure("target_missing") end
             if self.backend == "character":
                 ground_exception = 'e.type~="item-entity" and ' if kind == "take" else ''
                 body += 'if ' + ground_exception + 'not a.can_reach_entity(e) then return failure("out_of_reach") end; '
+            if action.get("item") == "repair-pack":
+                from .deterministic_repair_control import TRANSFER_REPAIR_PACK_LUA
+                body += TRANSFER_REPAIR_PACK_LUA
             if kind == "insert":
                 body += '''
 local n=math.min(x.count or 1,inv.get_item_count(x.item))
@@ -537,6 +544,8 @@ if not f.add_research(t) then return failure("research_rejected") end
 return success{status="running"}
 '''
         elif kind == "stop":
+            from .deterministic_repair_control import STOP_REPAIR_LUA
+            body += STOP_REPAIR_LUA
             body += 'a.walking_state={walking=false};a.mining_state={mining=false};return success{status="succeeded"}'
         elif kind == "launch":
             from .deterministic_launch import LAUNCH_LUA
