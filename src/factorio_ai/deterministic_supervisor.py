@@ -34,6 +34,7 @@ class DeterministicSupervisor:
         self.armaments: Any = None
         self.rocket: Any = None
         self.navigator: Any = None
+        self.fairness: Any = None
         self.attempt_started_tick: int | None = None
 
     def connect_character(self) -> dict[str, Any]:
@@ -109,6 +110,8 @@ class DeterministicSupervisor:
             return self._plan_action(observation, until)
 
     def _plan_action(self, observation: dict[str, Any], until: str) -> dict[str, Any]:
+        if self.fairness is not None:
+            self.fairness.selection = None
         self.stage = "bootstrap"
         if self.builder is None:
             from .deterministic_builder import FactoryBuilder
@@ -167,23 +170,35 @@ class DeterministicSupervisor:
         research = ready_research(self.factory, observation)
         if research is not None:
             return research
+        if self.fairness is None:
+            from .deterministic_routine_fairness import RoutineFairness
+            self.fairness = RoutineFairness(self.game)
+        preferred = self.fairness.prefer_production(self.factory, self.armaments, self.defense, observation)
+        production = None
+        if preferred:
+            maintenance = self.fluids.maintain_coproducts(observation)
+            if maintenance:
+                return maintenance
+            production = self.factory.next_action(observation)
+            if production.get("type") or production.get("status") in {"blocked", "failed"}:
+                return self.fairness.bind("production", production)
         armaments = self.armaments.next_action(observation)
         if armaments and (armaments.get("type") or armaments.get("status") in {"blocked", "failed"}):
             self.stage = "armaments"
-            return armaments
+            return self.fairness.bind("routine", armaments)
         # Research can still advance before turrets unlock; urgent enemy pressure
         # or available defenses are handled before expanding exposed production.
         defense = self.defense.next_action(observation)
         if (defense.get("type") or defense.get("status") in {"blocked", "failed"}
                 or (defense.get("evidence", {}).get("urgent") and defense.get("status") != "succeeded")):
             self.stage = "defense"
-            return defense
-        maintenance = self.fluids.maintain_coproducts(observation)
+            return self.fairness.bind("routine", defense)
+        maintenance = self.fluids.maintain_coproducts(observation) if not preferred else None
         if maintenance:
             return maintenance
-        result = self.factory.next_action(observation)
+        result = production if production is not None else self.factory.next_action(observation)
         if result.get("status") != "succeeded" or result.get("type"):
-            return result
+            return self.fairness.bind("production", result)
         self.stage = "launch"
         if self.rocket is None:
             from .deterministic_rocket import DeterministicRocket
@@ -255,6 +270,8 @@ class DeterministicSupervisor:
                     if "type" in choice:
                         self.last_action = choice
                         outcome = self.navigator.execute(choice, observation) if self.navigator is not None else self.game.act(choice)
+                        if self.fairness is not None:
+                            self.fairness.record(choice, outcome)
                         status = TaskStatus.RUNNING if outcome.get("ok") else TaskStatus.FAILED
                         if outcome.get("status") == "waiting":
                             status = TaskStatus.WAITING
