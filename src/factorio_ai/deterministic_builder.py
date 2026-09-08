@@ -15,6 +15,7 @@ from typing import Any
 from .deterministic_game import BUILD_BATCH_LIMIT, BUILD_BATCH_NAMES
 from .deterministic_state import _atomic_json, stop_requested
 from .factory_templates import build_template, route_orthogonal, DIRECTIONS
+from .deterministic_underground import underground_fields
 
 
 def _report(status: str, reason: str, **evidence: Any) -> dict[str, Any]:
@@ -56,8 +57,14 @@ def plan_observed(observation: dict, plan: dict) -> bool:
     if not plan.get("ok") or not plan.get("entities"):
         return False
     for entity in plan["entities"]:
+        try:
+            role = underground_fields(entity)
+        except ValueError:
+            return False
         found = _find(observation, entity)
         if found is None or (entity.get("recipe") and found.get("recipe") != entity["recipe"]):
+            return False
+        if role and (found.get("belt_to_ground_type") != role["belt_to_ground_type"] or found["position"] != entity["position"]):
             return False
         if (entity["name"] not in {"pipe", "small-electric-pole", "wooden-chest"}
                 and not _direction_matches(entity["name"], found.get("direction", 0), entity.get("direction", 0))):
@@ -134,6 +141,11 @@ class FactoryBuilder:
         self._sync(observation)
         if not plan.get("ok") or not plan.get("entities"):
             return _report("blocked", plan.get("reason") or "empty or invalid block plan")
+        try:
+            for entity in plan["entities"]:
+                underground_fields(entity)
+        except ValueError as error:
+            return _report("blocked", str(error))
         # A powered drill can spill ore into an unfinished receiver footprint.
         # This also applies to persisted cells reserved by an older version.
         entities = (sorted(plan["entities"], key=lambda row: row["name"] == "electric-mining-drill")
@@ -141,6 +153,9 @@ class FactoryBuilder:
         for index, entity in enumerate(entities):
             existing = _find(observation, entity)
             if existing is not None:
+                if underground_fields(entity) and (existing.get("belt_to_ground_type") != entity["belt_to_ground_type"]
+                        or existing["position"] != entity["position"]):
+                    return _report("blocked", "existing underground endpoint differs from reserved plan", entity=entity)
                 direction_matches = _direction_matches(entity["name"], existing.get("direction", 0), entity.get("direction", 0))
                 if entity.get("recipe") and (existing.get("recipe") != entity["recipe"] or not direction_matches):
                     if entity["recipe"] not in observation.get("enabled_recipes", {}):
@@ -180,13 +195,14 @@ local own_actor=false;local other=false
 for _,e in pairs(s.find_entities_filtered{area={{left,top},{right,bottom}}}) do
  if e==a then own_actor=true elseif e.type~="resource" then other=true end
 end
-local terrain=s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f,
+local terrain=s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f,type=x.belt_to_ground_type,
  build_check_type=defines.build_check_type.script,forced=false}
 return {ok=true,only_actor=own_actor and not other and terrain}
 ''')
                     if obstruction.get("ok") and obstruction.get("only_actor"):
                         return {"type": "build", "name": entity["name"], "item": item,
                                 "position": entity["position"], "direction": entity.get("direction", 0),
+                                **underground_fields(entity),
                                 "reason": "step outside the reserved build footprint before placement"}
                 recovery = self._recover_resource_cell_obstruction(observation, plan, entity)
                 if recovery is not None:
@@ -200,7 +216,7 @@ return {ok=true,only_actor=own_actor and not other and terrain}
                 if len(batch) > 1:
                     return {"type": "build_many", "actions": batch}
             return {"type": "build", "name": entity["name"], "item": item,
-                    "position": entity["position"], "direction": entity.get("direction", 0)}
+                    "position": entity["position"], "direction": entity.get("direction", 0), **underground_fields(entity)}
         return _report("succeeded", "block entities and recipes observed", constructed=len(plan["entities"]),
                        ports=plan.get("ports", []), flow_verified=False)
 
@@ -303,6 +319,12 @@ return {ok=true,world_id=d and d.world_id,emitter=emitter,ground=ground}
         return None
 
     def can_place(self, entities: list[dict]) -> dict:
+        try:
+            for entity in entities:
+                underground_fields(entity)
+        except ValueError as error:
+            return {"ok": False, "reason": str(error), "blocked": [{"name": entity["name"],
+                    "position": entity["position"], "reason": str(error)}]}
         if stop_requested(self.path.parent / "stop.json"):
             raise InterruptedError("operator_stop_requested")
         payload = json.dumps(json.dumps(entities, separators=(",", ":")))
@@ -312,12 +334,14 @@ for _,x in ipairs(specs) do
  local old=target(x.position,x.name)
  if old then
   local mismatch=x.direction and old.direction~=x.direction
+  if x.belt_to_ground_type and (old.belt_to_ground_type~=x.belt_to_ground_type or old.direction~=(x.direction or 0) or old.force~=f or old.surface~=s
+   or old.position.x~=x.position.x or old.position.y~=x.position.y) then mismatch=true end
   if x.name=="gun-turret" and old.force==f then mismatch=false end
   if x.name=="steam-engine" or x.name=="steam-turbine" then mismatch=x.direction and old.direction%8~=x.direction%8 end
   if mismatch and not x.recipe and x.name~="pipe" and x.name~="small-electric-pole" then
    blocked[#blocked+1]={name=x.name,position=x.position,reason="existing_direction_mismatch"}
   end
- elseif not s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f} then
+ elseif not s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f,type=x.belt_to_ground_type} then
   blocked[#blocked+1]={name=x.name,position=x.position,reason="terrain_or_entity_collision"}
  end
 end

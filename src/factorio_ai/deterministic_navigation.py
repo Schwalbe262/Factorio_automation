@@ -298,6 +298,11 @@ return success{}
 
     def execute(self, action: dict, observation: dict) -> dict:
         """Move into actual reach before allowing the ordinary adapter action."""
+        from .deterministic_underground import underground_fields
+        if action.get("type") == "build":
+            underground_fields(action)
+        elif "belt_to_ground_type" in action:
+            raise ValueError("underground role is only valid on build actions")
         if action.get("type") == "stop":
             return self.stop()
         pending = self.pending_action()
@@ -322,7 +327,7 @@ if within and x.type=="build" then
  if d then d.motion=nil end;a.walking_state={walking=false};a.mining_state={mining=false}
 end
 if within and not e and x.type=="build" and prototypes.entity[x.name]
- and not s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f} then
+ and not s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f,type=x.belt_to_ground_type} then
  local left,top,right,bottom=build_box(x)
  local actor_box=a.bounding_box
  --[[ Engine collision includes touching quantized edges; move the owned actor

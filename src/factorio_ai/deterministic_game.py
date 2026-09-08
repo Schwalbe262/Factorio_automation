@@ -21,6 +21,7 @@ from .config import AppConfig, load_config
 from .factorio import (build_create_no_mod_save_command,
     build_start_no_mod_server_command, no_mod_save_path, wait_for_rcon)
 from .rcon import FactorioRconClient, RconError, parse_json_response
+from .deterministic_underground import OBSERVE_UNDERGROUND_LUA, underground_fields
 
 
 BUILD_BATCH_LIMIT = 32
@@ -263,7 +264,7 @@ return success{world_id=storage.deterministic_player.world_id,position=pos(actor
 ''')
 
     def observe(self, radius: float = 384) -> dict[str, Any]:
-        observation = self.query('''
+        observation = self.query(OBSERVE_UNDERGROUND_LUA + '''
 if not a or not a.valid then return failure("agent_dead") end
 local equipped=a.get_inventory(defines.inventory.character_ammo);local recoverable={}
 if equipped and equipped.valid then for i=1,#equipped do local stack=equipped[i]
@@ -293,7 +294,9 @@ for _,e in pairs(s.find_entities_filtered{force=f}) do
   if has_output and output then r.output_inventory=contents(output) end
   local has_products,products=pcall(function() return e.products_finished end)
   if has_products then r.products_finished=products end
-  if e.type=="transport-belt" then
+  if e.type=="underground-belt" then
+   for key,value in pairs(observe_underground(e)) do r[key]=value end
+  elseif e.type=="transport-belt" then
    r.belt_inventory={}
    for lane=1,2 do
     for _,row in pairs(e.get_transport_line(lane).get_contents()) do
@@ -340,6 +343,10 @@ return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.
         return observation
 
     def act(self, action: dict[str, Any]) -> dict[str, Any]:
+        if action.get("type") == "build":
+            underground_fields(action)
+        elif "belt_to_ground_type" in action:
+            raise ValueError("underground role is only valid on build actions")
         if action.get("type") in {"repair", "finish_repair"}:
             from .deterministic_repair_control import run_repair
             return self._record_action(action, run_repair(self, action))
@@ -415,6 +422,9 @@ return success{status="succeeded"}
             body += '''
 local existing=target(x.position,x.name)
 if existing then
+ if x.belt_to_ground_type and (existing.force~=f or existing.surface~=s
+  or existing.position.x~=x.position.x or existing.position.y~=x.position.y
+  or existing.belt_to_ground_type~=x.belt_to_ground_type) then return failure("existing_underground_mismatch") end
  local desired=x.direction or 0
  local axis_only=x.name=="steam-engine" or x.name=="steam-turbine"
  if existing.direction~=desired and not (x.name=="gun-turret" and existing.force==f)
@@ -432,9 +442,9 @@ if inv.get_item_count(item)<1 then return failure("missing_item:"..item) end
             if self.backend == "character":
                 body += 'if ((x.position.x-a.position.x)^2+(x.position.y-a.position.y)^2)^0.5>a.build_distance then return failure("out_of_reach") end; '
             body += '''
-if not s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f} then return failure("placement_blocked") end
+if not s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f,type=x.belt_to_ground_type} then return failure("placement_blocked") end
 if inv.remove{name=item,count=1}~=1 then return failure("missing_item:"..item) end
-local e=s.create_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f,raise_built=true,player=a.player}
+local e=s.create_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f,type=x.belt_to_ground_type,raise_built=true,player=a.player}
 if not e then inv.insert{name=item,count=1};return failure("build_failed") end
 return success{status="succeeded",unit_number=e.unit_number}
 '''
