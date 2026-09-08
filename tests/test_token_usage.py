@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
@@ -8,6 +9,7 @@ from factorio_ai.token_usage import (
     current_codex_thread_usage,
     record_current_codex_thread_usage,
     record_token_usage,
+    summarize_codex_session_usage,
     token_usage_summary,
 )
 
@@ -154,6 +156,94 @@ class TokenUsageTests(unittest.TestCase):
             self.assertEqual(sample.tokens_used, 2200)
             self.assertEqual(sample.source, "codex_thread")
             self.assertEqual(token_usage_summary(log_dir)["latest_raw_tokens"], 2200)
+
+
+class CodexSessionUsageTests(unittest.TestCase):
+    def _write_session(self, root, *, thread="exact-thread", events=None):
+        path = Path(root) / "sessions" / "2026" / "09" / "08" / f"rollout-{thread}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        metadata = {"type": "session_meta", "payload": {"id": thread, "cwd": "C:/Factorio"}}
+        rows = [metadata] + (events if events is not None else [self._event(1500)])
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        return path
+
+    def _event(self, total, limits=None):
+        return {"type": "event_msg", "timestamp": "2026-09-08T00:00:00Z", "payload": {
+            "type": "token_count", "info": {"total_token_usage": {"total_tokens": total}} if total is not None else None,
+            "rate_limits": limits,
+        }}
+
+    def test_missing_database_falls_back_to_exact_session(self):
+        with TemporaryDirectory() as root:
+            self._write_session(root)
+            usage = current_codex_thread_usage(state_db_path=Path(root) / "state_5.sqlite", thread_id="exact-thread")
+            self.assertEqual((usage.thread_id, usage.tokens_used, usage.source), ("exact-thread", 1500, "codex_session_jsonl"))
+
+    def test_absent_database_row_uses_requested_thread_not_latest_checkout(self):
+        with TemporaryDirectory() as root:
+            path = Path(root) / "state_5.sqlite"
+            _create_threads_fixture(path)
+            self._write_session(root)
+            usage = current_codex_thread_usage(state_db_path=path, thread_id="exact-thread")
+            self.assertEqual(usage.tokens_used, 1500)
+            self.assertEqual(usage.thread_id, "exact-thread")
+
+    def test_malformed_database_falls_back_read_only(self):
+        with TemporaryDirectory() as root:
+            path = Path(root) / "state_5.sqlite"
+            path.write_bytes(b"malformed database")
+            self._write_session(root)
+            usage = current_codex_thread_usage(state_db_path=path, thread_id="exact-thread")
+            self.assertEqual(usage.tokens_used, 1500)
+            self.assertEqual(path.read_bytes(), b"malformed database")
+
+    def test_weekly_window_identified_by_duration_not_slot(self):
+        for slot in ["primary", "secondary"]:
+            with self.subTest(slot=slot), TemporaryDirectory() as root:
+                limits = {"primary": {"window_minutes": 300, "used_percent": 90},
+                          "secondary": {"window_minutes": 60, "used_percent": 99}}
+                limits[slot] = {"window_minutes": 10080, "used_percent": 16.0, "resets_at": 1789435533}
+                path = self._write_session(root, events=[self._event(100), self._event(1500, limits)])
+                usage = summarize_codex_session_usage(path)
+                self.assertEqual(usage["tokens_used"], 1500)
+                self.assertEqual(usage["weekly_used_percent"], 16.0)
+                self.assertEqual(usage["weekly_resets_at"], 1789435533)
+                self.assertEqual(usage["weekly_percent_basis"], "account_usage")
+
+    def test_nonweekly_secondary_is_not_mislabeled_weekly(self):
+        with TemporaryDirectory() as root:
+            path = self._write_session(root, events=[self._event(10, {"secondary": {"window_minutes": 300, "used_percent": 20}})])
+            self.assertIsNone(summarize_codex_session_usage(path)["weekly_used_percent"])
+
+    def test_new_rate_event_without_tokens_and_partial_line_keep_latest_counter(self):
+        with TemporaryDirectory() as root:
+            path = self._write_session(root, events=[self._event(100), self._event(900), self._event(None, {
+                "primary": {"window_minutes": 10080, "used_percent": 17}
+            })])
+            with path.open("a", encoding="utf-8") as file:
+                file.write('{"type":"event_msg","payload":')
+            usage = summarize_codex_session_usage(path)
+            self.assertEqual(usage["tokens_used"], 900)
+            self.assertEqual(usage["weekly_used_percent"], 17)
+
+    def test_wrong_metadata_never_reports_another_threads_tokens(self):
+        with TemporaryDirectory() as root:
+            path = self._write_session(root, thread="someone-else")
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                current_codex_thread_usage(session_path=path, thread_id="exact-thread")
+
+    def test_bounded_tail_does_not_scan_historical_counter(self):
+        with TemporaryDirectory() as root:
+            path = self._write_session(root, events=[self._event(900), {"type": "other", "payload": "x" * 4096}])
+            with self.assertRaisesRegex(ValueError, "bounded"):
+                summarize_codex_session_usage(path, max_tail_bytes=1024)
+
+    def test_tail_aligned_on_line_boundary_keeps_complete_event(self):
+        with TemporaryDirectory() as root:
+            event = self._event(75)
+            path = self._write_session(root, events=[event])
+            usage = summarize_codex_session_usage(path, max_tail_bytes=len(path.read_bytes().splitlines(keepends=True)[-1]))
+            self.assertEqual(usage["tokens_used"], 75)
 
 
 def _create_threads_fixture(db_path: Path) -> None:

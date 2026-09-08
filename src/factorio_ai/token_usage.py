@@ -11,7 +11,7 @@ from typing import Any
 
 
 TOKEN_USAGE_LOG = "token_usage.jsonl"
-DEFAULT_CODEX_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
+DEFAULT_CODEX_STATE_DB = Path(os.getenv("CODEX_HOME") or Path.home() / ".codex") / "state_5.sqlite"
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,9 @@ class CodexThreadUsage:
     cwd: str
     tokens_used: int
     updated_at_ms: int | None
+    weekly_used_percent: float | None = None
+    weekly_resets_at: int | None = None
+    source: str = "codex_state_db"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -99,8 +102,41 @@ def current_codex_thread_usage(
     state_db_path: Path | None = None,
     cwd: Path | str | None = None,
     thread_id: str | None = None,
+    session_path: Path | None = None,
+    sessions_dir: Path | None = None,
 ) -> CodexThreadUsage:
     db_path = Path(state_db_path) if state_db_path is not None else DEFAULT_CODEX_STATE_DB
+    # On a live default call the exact thread is authoritative, never whichever
+    # concurrent thread most recently touched this checkout. Explicit DB callers
+    # retain the older cwd-based lookup API (useful for offline reports).
+    exact_id = thread_id or (os.getenv("CODEX_THREAD_ID") if state_db_path is None else None)
+    db_error: Exception | None = None
+    if session_path is None:
+        try:
+            return _current_codex_db_usage(db_path, cwd=cwd, thread_id=exact_id)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            db_error = exc
+    exact_id = exact_id or os.getenv("CODEX_THREAD_ID")
+    if session_path is None and exact_id:
+        root = Path(sessions_dir) if sessions_dir is not None else db_path.parent / "sessions"
+        session_path = _find_exact_codex_session(root, exact_id)
+    if session_path is not None:
+        summary = summarize_codex_session_usage(session_path)
+        if exact_id and summary["thread_id"] != exact_id:
+            raise ValueError("Codex session metadata does not match the requested thread")
+        if not thread_id and cwd is not None and _normalized_codex_cwd(summary["cwd"]) != _normalized_codex_cwd(cwd):
+            raise ValueError("Codex session cwd does not match the requested checkout")
+        return CodexThreadUsage(
+            thread_id=summary["thread_id"], cwd=summary["cwd"], tokens_used=summary["tokens_used"],
+            updated_at_ms=summary["updated_at_ms"], weekly_used_percent=summary["weekly_used_percent"],
+            weekly_resets_at=summary["weekly_resets_at"], source="codex_session_jsonl",
+        )
+    if db_error is not None:
+        raise db_error
+    raise ValueError("exact Codex session path or thread ID is required")
+
+
+def _current_codex_db_usage(db_path: Path, *, cwd: Path | str | None, thread_id: str | None) -> CodexThreadUsage:
     if not db_path.exists():
         raise FileNotFoundError(f"Codex state DB not found: {db_path}")
 
@@ -131,6 +167,94 @@ def current_codex_thread_usage(
         raise ValueError(f"Codex thread not found for cwd: {cwd if cwd is not None else Path.cwd()}")
     candidates.sort(key=lambda item: ((item.updated_at_ms or 0), item.thread_id), reverse=True)
     return candidates[0]
+
+
+def _find_exact_codex_session(root: Path, thread_id: str) -> Path | None:
+    # Enumerate filenames for this ID only; do not read unrelated private sessions.
+    if not root.exists() or not thread_id or any(ch in thread_id for ch in "/*?[]\\"):
+        return None
+    matches = sorted(root.rglob(f"*{thread_id}.jsonl"))
+    if len(matches) > 1:
+        raise ValueError("multiple session files match the exact Codex thread; supply session_path")
+    return matches[0] if matches else None
+
+
+def summarize_codex_session_usage(path: Path, *, max_tail_bytes: int = 2 * 1024 * 1024) -> dict[str, Any]:
+    """Read one session's metadata and bounded tail, never prompts or tool output.
+
+    The reported token total is the latest cumulative counter, not a sum of repeated
+    events. Weekly percentage is the account meter with an explicit 10080-minute
+    window, which may be primary OR secondary; it is not this thread's quota share.
+    """
+    if max_tail_bytes < 1:
+        raise ValueError("max_tail_bytes must be positive")
+    path = Path(path)
+    with path.open("rb") as file:
+        header = file.readline(128 * 1024)
+        file.seek(0, os.SEEK_END)
+        size = file.tell()
+        start = max(0, size - max_tail_bytes)
+        if start:
+            file.seek(start - 1)
+            starts_at_line = file.read(1) == b"\n"
+        else:
+            starts_at_line = True
+        file.seek(start)
+        tail = file.read(max_tail_bytes)
+    try:
+        metadata = json.loads(header)
+        if metadata.get("type") != "session_meta":
+            raise ValueError("session metadata missing")
+        meta = metadata["payload"]
+        thread_id = meta["id"]
+        if not isinstance(thread_id, str) or not thread_id:
+            raise ValueError("session thread ID missing")
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise ValueError("invalid Codex session metadata") from exc
+    lines = tail.splitlines()
+    # A seek into the middle of a JSON line must not reinterpret its suffix.
+    if not starts_at_line:
+        lines = lines[1:]
+    tokens = updated_at_ms = weekly_percent = weekly_resets_at = None
+    for line in reversed(lines):
+        try:
+            event = json.loads(line)
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(event, dict) or event.get("type") != "event_msg":
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict) or payload.get("type") != "token_count":
+            continue
+        info = payload.get("info")
+        totals = info.get("total_token_usage") if isinstance(info, dict) else None
+        if tokens is None and isinstance(totals, dict):
+            value = totals.get("total_tokens")
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                tokens = value
+                try:
+                    updated_at_ms = int(datetime.fromisoformat(str(event.get("timestamp")).replace("Z", "+00:00")).timestamp() * 1000)
+                except (ValueError, TypeError, OverflowError):
+                    pass
+        limits = payload.get("rate_limits")
+        if weekly_percent is None and isinstance(limits, dict):
+            for window in limits.values():
+                if not isinstance(window, dict) or window.get("window_minutes") != 10080:
+                    continue
+                value = window.get("used_percent")
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 100:
+                    weekly_percent = float(value)
+                    resets = window.get("resets_at")
+                    weekly_resets_at = resets if isinstance(resets, int) and not isinstance(resets, bool) else None
+                    break
+        if tokens is not None and weekly_percent is not None:
+            break
+    if tokens is None:
+        raise ValueError("no cumulative token_count event in the bounded Codex session tail")
+    return {"thread_id": thread_id, "cwd": str(meta.get("cwd") or ""), "tokens_used": tokens,
+            "updated_at_ms": updated_at_ms, "weekly_used_percent": weekly_percent,
+            "weekly_resets_at": weekly_resets_at, "source": "codex_session_jsonl",
+            "session_path": str(path), "weekly_percent_basis": "account_usage"}
 
 
 def _codex_thread_usage_from_row(row: sqlite3.Row) -> CodexThreadUsage:
