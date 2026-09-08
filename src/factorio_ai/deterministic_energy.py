@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from collections import Counter
+from collections import Counter, deque
 import json
 import math
 from pathlib import Path
@@ -145,6 +145,11 @@ return {ok=true,network_id=network,demand_kw=demand,consumers=consumers,feeds=fe
             nominal += demand
         measured["nominal_demand_kw"] = nominal
         measured["target_kw"] = max(nominal, float(measured.get("demand_kw", 0))) * 1.2
+        if self.state.get("coal_links"):
+            measured["coal_routes"] = self._coal_routes(obs)
+            if measured["coal_routes"] is None:
+                return {"ok": False, "reason": "owned coal connectivity proof is unavailable"}
+            measured["coal_route_rate_kind"] = "nominal_single_item_geometry_model"
         return measured
 
     def capacity(self, evidence: dict) -> dict:
@@ -164,13 +169,185 @@ return {ok=true,network_id=network,demand_kw=demand,consumers=consumers,feeds=fe
             per_bank[feed["bank"]] += net
         per_bank = [max(0, min(2 * engine_kw, coal_kw - inserter_kw * (2 if index else 1)))
                     for index, coal_kw in enumerate(per_bank)]
+        if "coal_routes" in evidence:
+            # A feed is a single source even when its owned trunk reaches several
+            # banks. Charge each distinct downstream burner once, then consume
+            # source and shared transit budgets while filling banks in order.
+            routes = evidence["coal_routes"]
+            shared_banks = {0} | {int(key) for key in self.state.get("coal_links", {})}
+            sources = {}
+            drills = set()
+            for index, (feed, row) in enumerate(zip(self.state["feeds"], evidence["feeds"])):
+                drill = feed["plan"]["drill"]
+                identity = drill["name"], drill["position"]["x"], drill["position"]["y"]
+                if (row["remaining"] > 0 and row["fuel"] > 0 and feed.get("complete")
+                        and not feed.get("retired") and routes.get(str(index)) and identity not in drills):
+                    if feed["bank"] not in shared_banks:
+                        continue
+                    drills.add(identity)
+                    sources[str(index)] = max(0, row["gross_coal_per_minute"] * fuel_joules / 60000
+                                              - drill_kw - inserter_kw)
+            transit = {str(row["unit_number"]): row for index in sources
+                       for path in routes[index].values() for row in path}
+            overhead = sum(inserter_kw for row in transit.values() if row["name"] == "burner-inserter")
+            # Bank intake arms are included in the observed paths, as are any
+            # additional crossing arms. Reserve their full maximum consumption.
+            budget = {key: max(0, row["coal_per_minute"] * fuel_joules / 60000 - overhead)
+                      for key, row in transit.items()}
+            for arm, row in transit.items():
+                if row["name"] != "burner-inserter":
+                    continue
+                remaining_loss = inserter_kw
+                for source in sources:
+                    if any(str(e["unit_number"]) == arm for path in routes[source].values() for e in path):
+                        charge = min(sources[source], remaining_loss)
+                        sources[source] -= charge
+                        remaining_loss -= charge
+                if remaining_loss > .01:
+                    # A disconnected arm cannot burn coal from another trunk.
+                    return {"bank_kw": 2 * engine_kw, "fuel_backed_kw": [0.0 for _ in per_bank],
+                            "total_kw": 0.0, "target_kw": float(evidence["target_kw"])}
+            per_bank = [0.0 if bank in shared_banks else value for bank, value in enumerate(per_bank)]
+            for bank in sorted(shared_banks):
+                for source in sources:
+                    path = routes[source].get(str(bank))
+                    if not path:
+                        continue
+                    keys = {str(row["unit_number"]) for row in path}
+                    amount = max(0, min(2 * engine_kw - per_bank[bank], sources[source],
+                                        *(budget[key] for key in keys)))
+                    sources[source] -= amount
+                    per_bank[bank] += amount
+                    for key in keys:
+                        budget[key] -= amount
         return {"bank_kw": 2 * engine_kw, "fuel_backed_kw": per_bank, "total_kw": sum(per_bank),
                 "target_kw": float(evidence["target_kw"])}
+
+    def _coal_plans(self) -> list[dict]:
+        return (self.state["banks"] + [feed["plan"] for feed in self.state["feeds"]]
+                + list(self.state.get("coal_links", {}).values()))
+
+    def _coal_routes(self, obs: dict) -> dict | None:
+        """Reobserve exact owned identities, power and actual arm endpoints."""
+        if obs.get("world_id") != self.state.get("world_id"):
+            return None
+        wanted, conflicts = {}, set()
+        actual = {(e["name"], e["position"]["x"], e["position"]["y"]): e for e in obs.get("entities", [])}
+        for plan in self._coal_plans():
+            for row in plan["entities"]:
+                if row["name"] not in {"transport-belt", "burner-inserter", "long-handed-inserter", "steam-engine", "burner-mining-drill", "boiler"}:
+                    continue
+                key = row["name"], row["position"]["x"], row["position"]["y"]
+                if key in wanted and wanted[key].get("direction", 0) != row.get("direction", 0):
+                    conflicts.add(key)
+                wanted[key] = row
+        rows = []
+        for key, row in wanted.items():
+            found = actual.get(key, {})
+            if (key not in conflicts and type(found.get("unit_number")) is int and found["unit_number"] > 0
+                    and (found.get("direction", 0) == row.get("direction", 0)
+                         or (row["name"] == "steam-engine" and found.get("direction", 0) == (row.get("direction", 0) + 8) % 16))):
+                rows.append({**row, "direction": found.get("direction", 0), "unit_number": found["unit_number"]})
+        pole = next(e for e in self.state["banks"][0]["entities"] if e["name"] == "small-electric-pole")
+        payload = json.dumps(json.dumps({"world": obs["world_id"], "rows": rows, "pole": pole}, separators=(",", ":")))
+        proof = self.game.query('''
+--[[ owned_coal_transit: inert identity, direction, material and power proof. ]]
+local x=helpers.json_to_table(''' + payload + ''');local pole=target(x.pole.position,x.pole.name)
+if not d or d.world_id~=x.world or not pole then return {ok=false} end
+local network=pole.electric_network_id;local rows={}
+for _,row in ipairs(x.rows) do
+ local e=target(row.position,row.name)
+ if e and e.force==f and e.unit_number==row.unit_number and e.direction==row.direction then
+  local good=true;local rate=0;local pickup=nil;local drop=nil;local outputs=nil;local receiver=nil
+  if e.type=="transport-belt" then
+   rate=e.prototype.belt_speed*4*3600 --[[ one lane, even on a two-lane belt ]]
+   outputs={};for _,other in pairs(e.belt_neighbours.outputs) do outputs[#outputs+1]=pos(other.position) end
+   for lane=1,2 do for _,item in pairs(e.get_transport_line(lane).get_contents()) do
+    if item.name~="coal" and item.count>0 then good=false end
+   end end
+  elseif e.type=="inserter" then
+   pickup=pos(e.pickup_position);drop=pos(e.drop_position)
+   local receiving=s.find_entities_filtered{position=drop,name="boiler",force=f}
+   if #receiving==1 then receiver=receiving[1].unit_number end
+   local rotation=e.prototype.get_inserter_rotation_speed("normal");local extension=e.prototype.get_inserter_extension_speed("normal")
+   if not rotation or rotation<=0 or not extension or extension<=0 then good=false
+   else
+    local function radius(p) return math.sqrt((p.x-e.position.x)^2+(p.y-e.position.y)^2) end
+    rate=3600/(1/rotation+2*math.abs(radius(drop)-radius(pickup))/extension)
+   end --[[ nominal one-item cycle; serialize the full turn and radial movement ]]
+   if e.burner then good=good and (e.burner.remaining_burning_fuel+e.burner.inventory.get_item_count("coal")*prototypes.item.coal.fuel_value)>0
+   else good=good and e.electric_network_id==network and e.energy>0 end
+   if e.held_stack.valid_for_read and e.held_stack.name~="coal" then good=false end
+  elseif e.type=="mining-drill" then drop=pos(e.drop_position)
+  elseif e.type=="generator" then good=e.electric_network_id==network end
+  if good then rows[#rows+1]={name=row.name,position=row.position,direction=row.direction,unit_number=row.unit_number,
+    coal_per_minute=rate,pickup_position=pickup,drop_position=drop,belt_outputs=outputs,boiler_unit=receiver} end
+ end
+end
+return {ok=true,world_id=d.world_id,rows=rows}
+''')
+        if not proof.get("ok") or proof.get("world_id") != obs["world_id"]:
+            return None
+        verified = {**obs, "entities": proof.get("rows", [])}
+        for link in self.state.get("coal_links", {}).values():
+            source = link.get("source_port", {})
+            found = next((e for e in verified["entities"] if e["name"] == "transport-belt"
+                          and e["position"] == source.get("position")), {})
+            if (not source.get("unit_number") or found.get("unit_number") != source["unit_number"]
+                    or found.get("direction") != source.get("facing")):
+                arms = {(e["name"], e["position"]["x"], e["position"]["y"]) for e in link["entities"]
+                        if "inserter" in e["name"]}
+                verified["entities"] = [e for e in verified["entities"]
+                    if (e["name"], e["position"]["x"], e["position"]["y"]) not in arms]
+        self._coal_observation = verified
+        intact, _ = self._coal_transit(verified)
+        live = {(e["name"], e["position"]["x"], e["position"]["y"]): e for e in verified["entities"]}
+        routes = {}
+        for bank_index, bank in enumerate(self.state["banks"]):
+            if bank_index and str(bank_index) not in self.state.get("coal_links", {}):
+                continue
+            link = self.state.get("coal_links", {}).get(str(bank_index))
+            if link:
+                source = link.get("source_port", {})
+                p = source.get("position", {})
+                observed_source = live.get(("transport-belt", p.get("x"), p.get("y")), {})
+                if (not source.get("unit_number") or observed_source.get("unit_number") != source["unit_number"]
+                        or observed_source.get("direction") != source.get("facing")):
+                    continue
+            engines = [e for e in bank["entities"] if e["name"] == "steam-engine"]
+            if len(engines) != 2 or any((e["name"], e["position"]["x"], e["position"]["y"]) not in live for e in engines):
+                continue
+            arms = [live.get((e["name"], e["position"]["x"], e["position"]["y"]))
+                    for e in bank["entities"] if e["name"] == "burner-inserter"]
+            if len(arms) != 1 or not arms[0] or not arms[0].get("pickup_position"):
+                continue
+            arm = arms[0]
+            boilers = [live.get((e["name"], e["position"]["x"], e["position"]["y"]), {})
+                       for e in bank["entities"] if e["name"] == "boiler"]
+            if len(boilers) != 1 or not arm.get("boiler_unit") or boilers[0].get("unit_number") != arm["boiler_unit"]:
+                continue
+            intake = tuple(math.floor(arm["pickup_position"][axis]) + .5 for axis in ("x", "y"))
+            for feed_index, feed in enumerate(self.state["feeds"]):
+                drill = feed["plan"]["drill"]
+                observed_drill = live.get((drill["name"], drill["position"]["x"], drill["position"]["y"]), {})
+                drop = observed_drill.get("drop_position")
+                if not drop:
+                    continue
+                port = next((p for p in feed["plan"]["ports"] if p.get("item") == "coal" and p.get("direction") == "output"), None)
+                start = {axis: math.floor(drop[axis]) + .5 for axis in ("x", "y")}
+                prefix = self._coal_tail(start, intact, {(port["position"]["x"], port["position"]["y"])}) if port else None
+                if not prefix:
+                    continue
+                path = self._coal_tail(port["position"], intact, {intake}) if port else None
+                if path:
+                    routes.setdefault(str(feed_index), {})[str(bank_index)] = [
+                        live[(e["name"], e["position"]["x"], e["position"]["y"])] for e in prefix[:-1] + path] + [arm]
+        return routes
 
     def _coal_transit(self, obs: dict, bank_index: int | None = None) -> tuple[dict, set]:
         """Only observed, consistently reserved belts can carry a new coal join."""
         reserved, conflicts = {}, set()
-        for plan in self.state["banks"] + [feed["plan"] for feed in self.state["feeds"]]:
+        for plan in self._coal_plans():
             for entity in plan["entities"]:
                 if entity["name"] != "transport-belt":
                     continue
@@ -183,6 +360,25 @@ return {ok=true,network_id=network,demand_kw=demand,consumers=consumers,feeds=fe
                     if e["name"] == "transport-belt"}
         intact = {key: row for key, row in reserved.items() if key not in conflicts and key in observed
                   and row.get("direction", 0) == observed[key].get("direction", 0)}
+        for key in intact:
+            if "belt_outputs" in observed[key]:
+                intact[key] = {**intact[key], "_coal_outputs": observed[key]["belt_outputs"]}
+        arms = {(e["name"], e["position"]["x"], e["position"]["y"]): e for plan in self._coal_plans()
+                for e in plan["entities"] if e["name"] in {"burner-inserter", "long-handed-inserter"}}
+        for actual in obs.get("entities", []):
+            identity = actual["name"], actual["position"]["x"], actual["position"]["y"]
+            arm = arms.get(identity)
+            if not arm or actual.get("direction", 0) != arm.get("direction", 0) or not actual.get("unit_number"):
+                continue
+            # Only the inert live proof supplies endpoints and transfer limits.
+            pickup, drop = actual.get("pickup_position"), actual.get("drop_position")
+            if not pickup or not drop or actual.get("coal_per_minute", 0) <= 0:
+                continue
+            source = tuple(math.floor(pickup[axis]) + .5 for axis in ("x", "y"))
+            target = tuple(math.floor(drop[axis]) + .5 for axis in ("x", "y"))
+            if source in intact and target in intact:
+                intact[source] = {**intact[source], "_coal_transfers":
+                                  intact[source].get("_coal_transfers", []) + [(arm, target)]}
         # Existing feeds may join downstream of the declared first coal belt.
         # The bank owns and repairs its entire coal conveyor, so any belt along
         # that directed chain is a safe terminal for inherited feed ownership.
@@ -206,19 +402,26 @@ return {ok=true,network_id=network,demand_kw=demand,consumers=consumers,feeds=fe
     @staticmethod
     def _coal_tail(position: dict, intact: dict, intakes: set) -> list[dict] | None:
         key = position["x"], position["y"]
-        path, visited = [], set()
-        while key not in visited:
+        queue, visited = deque([(key, [])]), set()
+        while queue:
+            key, path = queue.popleft()
+            if key in visited:
+                continue
             row = intact.get(key)
             if row is None:
-                return None
+                continue
             visited.add(key)
-            path.append(row)
+            path = path + [{k: v for k, v in row.items() if not k.startswith("_coal_")}]
             if key in intakes:
                 return path
             delta = DIRECTIONS.get(row.get("direction", 0))
-            if delta is None:
-                return None
-            key = key[0] + delta[0], key[1] + delta[1]
+            if "_coal_outputs" in row:
+                for p in row["_coal_outputs"]:
+                    queue.append(((p["x"], p["y"]), path))
+            elif delta is not None:
+                queue.append(((key[0] + delta[0], key[1] + delta[1]), path))
+            for arm, target in row.get("_coal_transfers", []):
+                queue.append((target, path + [arm]))
         return None
 
     def _reserve_feed(self, obs: dict, bank_index: int, *, replacement: bool = False) -> dict:
@@ -230,7 +433,10 @@ return {ok=true,network_id=network,demand_kw=demand,consumers=consumers,feeds=fe
             {**destination, "position": e["position"], "facing": e.get("direction", 0)}
             for e in self.state["banks"][bank_index]["entities"]
             if e["name"] == "transport-belt" and e["position"] != destination["position"]]
-        intact, intakes = self._coal_transit(obs, bank_index)
+        proof_obs = getattr(self, "_coal_observation", {})
+        transit_obs = (proof_obs if proof_obs.get("world_id") == obs.get("world_id")
+                       and proof_obs.get("tick") == obs.get("tick") else obs)
+        intact, intakes = self._coal_transit(transit_obs, bank_index)
         for feed_index, feed in enumerate(self.state["feeds"]):
             if not feed.get("complete"):
                 continue
@@ -255,6 +461,8 @@ return {ok=true,network_id=network,demand_kw=demand,consumers=consumers,feeds=fe
                 if tail and tail[0].get("direction", 0) != port.get("facing"):
                     continue
                 for offset, entity in enumerate(tail or []):
+                    if entity["name"] != "transport-belt":
+                        continue
                     identity = (entity["position"]["x"], entity["position"]["y"], entity.get("direction", 0))
                     destinations.append({**destination, "position": entity["position"],
                                          "facing": entity.get("direction", 0), "downstream": tail[offset:],
