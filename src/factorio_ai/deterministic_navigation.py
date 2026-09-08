@@ -316,6 +316,11 @@ if e and x.type=="take" and e.type=="item-entity" then
 elseif e then within=a.can_reach_entity(e)
 elseif x.type=="build" then within=(x.position.x-a.position.x)^2+(x.position.y-a.position.y)^2<=a.build_distance^2
 else within=(x.position.x-a.position.x)^2+(x.position.y-a.position.y)^2<=math.min(4,a.build_distance)^2 end
+if within and x.type=="build" then
+ --[[ Freeze the previous walk before checking placement in this transaction;
+ otherwise it can enter the footprint before the separate build command. ]]
+ if d then d.motion=nil end;a.walking_state={walking=false};a.mining_state={mining=false}
+end
 if within and not e and x.type=="build" and prototypes.entity[x.name]
  and not s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f} then
  local left,top,right,bottom=build_box(x)
