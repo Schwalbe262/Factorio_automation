@@ -422,6 +422,98 @@ class EnergyTests(unittest.TestCase):
             self.assertTrue(any(e["name"] == "transport-belt" and e["position"] == consumer["position"]
                                 and e.get("direction", 0) == consumer["facing"] for e in owner["entities"]))
 
+    def bank_branch_fixture(self):
+        self.energy._sync(self.obs)
+        self.energy.state["banks"].append(build_template("steam_bank", anchor={"x": 20.5, "y": .5}))
+        belt = {"name": "transport-belt", "position": {"x": 2.5, "y": 12.5}, "direction": 4}
+        self.energy.state["feeds"][0]["plan"]["entities"] = [belt]
+        self.obs["entities"] = [{**deepcopy(belt), "unit_number": 123}]
+        self.factory._port_clearances.return_value = set()
+        self.factory._reserved.return_value = [belt]
+        self.builder._occupied_by_plan.return_value = set()
+        self.builder.can_place.return_value = {"ok": True}
+        self.builder.route.return_value = {"ok": False, "reason": "no route within bounds"}
+        arm = {"name": "long-handed-inserter", "position": {"x": 6.5, "y": 14.5}, "direction": 12}
+        pole = {"name": "small-electric-pole", "position": {"x": 6.5, "y": 16.5}, "direction": 0}
+        self.factory._belt_bridge_route.side_effect = lambda source, destination, *args, **kwargs: {
+            "ok": True, "segments": [{"position": source, "direction": kwargs["start_direction"]}, arm, pole,
+                                       {"position": destination, "direction": kwargs["end_direction"]}]}
+        self.factory.ensure_power_connection.return_value = {"status": "succeeded"}
+        self.game.query.side_effect = lambda body: {"ok": True, "coal_pickup_verified": True}
+        return belt, arm, pole
+
+    def test_bank_branch_crosses_enclosing_belt_and_waits_for_connected_pole(self):
+        belt, arm, pole = self.bank_branch_fixture()
+        self.factory.ensure_power_connection.return_value = {"type": "build", "name": "small-electric-pole"}
+        result = self.energy._connect_bank_coal(self.obs, 1)
+        self.assertEqual(result["name"], "small-electric-pole")
+        plan = self.energy.state["coal_links"]["1"]
+        self.assertIn(arm, plan["entities"])
+        self.assertIn(pole, plan["entities"])
+        self.assertEqual(plan["source_port"]["unit_number"], 123)
+        self.assertEqual(plan["source_port"]["position"], belt["position"])
+        self.factory.ensure_power_connection.assert_called_once_with(self.obs, "energy:coal-bank:1", plan)
+        self.assertIn("coal_bank_branch_source", self.game.query.call_args.args[0])
+        self.builder.ensure_plan.return_value = {"type": "build", "name": "long-handed-inserter"}
+        self.factory.ensure_power_connection.reset_mock()
+        self.assertEqual(self.energy._connect_bank_coal(self.obs, 1)["name"], "long-handed-inserter")
+        self.factory.ensure_power_connection.assert_not_called()
+
+    def test_bank_branch_rejects_changed_world_or_unobserved_unreserved_pickup(self):
+        for damage in ("world", "missing", "reversed", "unit", "unreserved", "conflicting"):
+            with self.subTest(damage=damage):
+                self.bank_branch_fixture()
+                if damage == "world":
+                    self.obs["world_id"] = "other-world"
+                elif damage == "missing":
+                    self.obs["entities"] = []
+                elif damage == "reversed":
+                    self.obs["entities"][0]["direction"] = 12
+                elif damage == "unit":
+                    self.obs["entities"][0].pop("unit_number")
+                elif damage == "unreserved":
+                    self.energy.state["feeds"][0]["plan"]["entities"] = []
+                else:
+                    self.energy.state["banks"][0]["entities"].append({**deepcopy(self.obs["entities"][0]), "direction": 12})
+                self.builder.route.reset_mock()
+                self.assertEqual(self.energy._connect_bank_coal(self.obs, 1)["status"], "blocked")
+                self.builder.route.assert_not_called()
+                self.obs["world_id"] = "energy-test"
+
+    def test_bank_branch_rejects_live_foreign_material_or_missing_source_proof(self):
+        self.bank_branch_fixture()
+        for proof in ({"ok": False, "reason": "coal branch pickup carries another material"}, {"ok": True}):
+            with self.subTest(proof=proof):
+                self.game.query.side_effect = lambda body: proof
+                self.factory.register_plan.reset_mock()
+                self.assertEqual(self.energy._connect_bank_coal(self.obs, 1)["status"], "blocked")
+                self.factory.register_plan.assert_not_called()
+                self.assertNotIn("1", self.energy.state["coal_links"])
+
+    def test_bank_branch_requires_combined_placement_and_preserved_intake_facing(self):
+        self.bank_branch_fixture()
+        self.builder.can_place.side_effect = lambda rows: {"ok": len(rows) == 2}
+        self.assertEqual(self.energy._connect_bank_coal(self.obs, 1)["status"], "blocked")
+        self.builder.can_place.side_effect = None
+        original = self.factory._belt_bridge_route.side_effect
+        def reversed_terminal(*args, **kwargs):
+            result = original(*args, **kwargs)
+            result["segments"][-1]["direction"] = (kwargs["end_direction"] + 8) % 16
+            return result
+        self.factory._belt_bridge_route.side_effect = reversed_terminal
+        self.assertEqual(self.energy._connect_bank_coal(self.obs, 1)["status"], "blocked")
+        self.assertNotIn("1", self.energy.state["coal_links"])
+
+    def test_bank_branch_limits_crossing_attempts_across_source_belts(self):
+        belt, _, _ = self.bank_branch_fixture()
+        belts = [{**deepcopy(belt), "position": {"x": x + .5, "y": 12.5}} for x in range(10)]
+        self.energy.state["feeds"][0]["plan"]["entities"] = belts
+        self.obs["entities"] = [{**deepcopy(row), "unit_number": 100 + i} for i, row in enumerate(belts)]
+        self.factory._belt_bridge_route.side_effect = None
+        self.factory._belt_bridge_route.return_value = {"ok": False}
+        self.assertEqual(self.energy._connect_bank_coal(self.obs, 1)["status"], "blocked")
+        self.assertEqual(self.factory._belt_bridge_route.call_count, 8)
+
 
 if __name__ == "__main__":
     unittest.main()

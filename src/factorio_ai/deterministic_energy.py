@@ -480,15 +480,21 @@ return {ok=true,sites=rows}
         links = self.state.setdefault("coal_links", {})
         key = str(index)
         if key not in links:
+            if not obs.get("world_id") or obs["world_id"] != self.state.get("world_id"):
+                return _report("blocked", "coal branch world identity changed", bank=index)
             bank = self.state["banks"][index]
             destination = next(p for p in bank["ports"] if p["kind"] == "item" and p["item"] == "coal")
+            intact, _ = self._coal_transit(obs)
+            observed = {(e["position"]["x"], e["position"]["y"]): e for e in obs.get("entities", [])
+                        if e["name"] == "transport-belt" and type(e.get("unit_number")) is int and e["unit_number"] > 0}
             candidates = {}
             for feed in self.state["feeds"]:
                 if not feed.get("complete") or feed.get("depleted") or feed.get("retired"):
                     continue
                 for e in feed["plan"]["entities"]:
-                    if e["name"] == "transport-belt":
-                        candidates[(e["position"]["x"], e["position"]["y"])] = e
+                    point = e["position"]["x"], e["position"]["y"]
+                    if e["name"] == "transport-belt" and point in intact and point in observed:
+                        candidates[point] = observed[point]
             candidates = sorted(candidates.values(), key=lambda e: math.dist(
                 (e["position"]["x"], e["position"]["y"]), (destination["position"]["x"], destination["position"]["y"])))
             clearances = self.factory._port_clearances()
@@ -498,6 +504,7 @@ return {ok=true,sites=rows}
             obstacles = reserved + [{"name": "reserved-port-approach", "position": {"x": x, "y": y}} for x, y in clearances]
             occupied = self.builder._occupied_by_plan(reserved + obs.get("entities", [])) | clearances
             plan = None
+            bridge_attempts = 0
             for belt in candidates[:64]:
                 for side in ((belt["direction"] + 4) % 16, (belt["direction"] + 12) % 16):
                     dx, dy = DIRECTIONS[side]
@@ -510,11 +517,45 @@ return {ok=true,sites=rows}
                         continue
                     route = self.builder.route(entry["position"], destination["position"], "transport-belt", obstacles + [inserter, entry],
                                                start_direction=side, end_direction=destination["facing"], margin=24)
+                    # The old coal trunk may sit behind another material's
+                    # conveyor. Reuse paid, powered crossings without joining
+                    # or rotating that conveyor; bound the expensive fallback.
+                    if (not route.get("ok") and bridge_attempts < 8
+                            and route.get("reason") in {"no route within bounds", "route search budget exhausted"}):
+                        bridge_attempts += 1
+                        route = self.factory._belt_bridge_route(entry["position"], destination["position"], obstacles + [inserter, entry],
+                                                                start_direction=side, end_direction=destination["facing"])
                     if not route.get("ok"):
                         continue
-                    entities = [inserter] + [{"name": "transport-belt", **segment} for segment in route["segments"]]
+                    segments = route.get("segments") or []
+                    if (not segments or segments[0].get("position") != entry["position"]
+                            or segments[0].get("direction") != side
+                            or segments[-1].get("position") != destination["position"]
+                            or segments[-1].get("direction") != destination["facing"]):
+                        continue
+                    entities = [inserter] + [{"name": "transport-belt", **segment} for segment in segments]
+                    if not self.builder.can_place(entities).get("ok"):
+                        continue
+                    payload = json.dumps(json.dumps({"world": obs["world_id"], "belt": {
+                        field: belt[field] for field in ("position", "direction", "unit_number")}}, separators=(",", ":")))
+                    proof = self.game.query('''
+--[[ coal_bank_branch_source: verify the exact owned pickup before reservation. ]]
+local x=helpers.json_to_table(''' + payload + ''');local e=target(x.belt.position,"transport-belt")
+if not d or d.world_id~=x.world or not e or e.force~=f or e.unit_number~=x.belt.unit_number
+ or e.direction~=x.belt.direction then return {ok=false,reason="coal branch pickup identity changed"} end
+for lane=1,2 do for _,row in pairs(e.get_transport_line(lane).get_contents()) do
+ if row.name~="coal" and row.count>0 then return {ok=false,reason="coal branch pickup carries another material"} end
+end end
+return {ok=true,coal_pickup_verified=true}
+''')
+                    if not proof.get("ok") or not proof.get("coal_pickup_verified"):
+                        continue
                     candidate = {"ok": True, "entities": entities, "ports": [],
-                                 "required_items": dict(Counter(e["name"] for e in entities))}
+                                 "required_items": dict(Counter(e["name"] for e in entities)),
+                                 "source_port": {"kind": "item", "item": "coal", "direction": "output",
+                                                 "position": belt["position"], "facing": belt["direction"],
+                                                 "unit_number": belt["unit_number"]},
+                                 "consumer_port": deepcopy(destination)}
                     registered = self.factory.register_plan(f"energy:coal-bank:{index}", candidate, obs)
                     if registered.get("ok"):
                         plan = candidate
@@ -525,7 +566,12 @@ return {ok=true,sites=rows}
                 return _report("blocked", "no self-fueling coal branch reaches the new bank", bank=index)
             links[key] = plan
             self._save()
-        return self.builder.ensure_plan(obs, links[key])
+        result = self.builder.ensure_plan(obs, links[key])
+        if not _ready(result):
+            return result
+        if any(e["name"] == "long-handed-inserter" for e in links[key]["entities"]):
+            return self.factory.ensure_power_connection(obs, f"energy:coal-bank:{index}", links[key])
+        return result
 
     def next_action(self, obs: dict) -> dict | None:
         if not self._sync(obs):
