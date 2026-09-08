@@ -355,6 +355,11 @@ class FluidProduction:
                     buffered = self._ensure_buffer(observation, fluid, cell)
                     if buffered.get("status") != "succeeded" or buffered.get("type"):
                         return self._decorate(buffered, plan)
+            if cell_key == "advanced-oil-processing":
+                from .deterministic_petroleum_bus import ensure_petroleum_bus
+                joined = ensure_petroleum_bus(self, observation, cell)
+                if joined.get("status") != "succeeded" or joined.get("type"):
+                    return self._decorate(joined, plan)
             for port in cell["ports"]:
                 if port["direction"] != "input" or port["kind"] == "power":
                     continue
@@ -565,7 +570,9 @@ if not id then return {ok=false,reason="source fluid segment missing"} end
 local receiver_id=receiver and receiver.get_fluid_segment_id(1);local taps={};local destinations={}
 for _,e in pairs(s.find_entities_filtered{force=f,type="pipe"}) do
  local segment=e.get_fluid_segment_id(1)
- if segment==id and (e.get_fluid_contents()[args.source.item] or 0)>0 then taps[#taps+1]=pos(e.position) end
+ local fluids=e.get_fluid_contents()
+ if segment==id and ((fluids[args.source.item] or 0)>0 or
+    (args.source.allow_empty_segment==true and next(fluids)==nil)) then taps[#taps+1]=pos(e.position) end
  if receiver_id and segment==receiver_id then destinations[#destinations+1]=pos(e.position) end
 end
 local d=args.destination.position
