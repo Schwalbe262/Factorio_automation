@@ -21,7 +21,7 @@ local turret={valid=true,name="gun-turret",unit_number=o.turret_unit,position={x
  direction=o.turret_direction,health=o.turret_health,max_health=400,
  get_inventory=function() return {get_item_count=function() return o.ammo end} end}
 local arm={valid=true,type="inserter",name="inserter",unit_number=o.arm_unit,position={x=260,y=4},
- force=f,direction=o.arm_direction,health=150,max_health=150,energy=o.arm_energy,
+ force=o.foreign_arm and foreign or f,direction=o.arm_direction,health=o.arm_health,max_health=150,energy=o.arm_energy,
  is_connected_to_electric_network=function() return o.arm_connected end}
 local belt={valid=true,type="transport-belt",name="transport-belt",unit_number=4,position={x=260,y=3},
  force=f,direction=o.belt_direction,health=150,max_health=150,
@@ -55,7 +55,7 @@ class FairnessLuaTests(unittest.TestCase):
 
     def guard(self, **changes):
         options = dict(world="world", actor=58, actor_x=180, actor_health=250, asset_health=200,
-                       ammo=10, arm_unit=3, arm_direction=0, arm_energy=268, arm_connected=True,
+                       ammo=10, arm_unit=3, arm_direction=0, arm_health=150, arm_energy=268, arm_connected=True,
                        cargo="firearm-magazine", turret_unit=2, turret_direction=0, turret_health=400, belt_direction=0)
         options.update(changes)
         payload = {"world_id": "world", "actor": 58, "names": ["lab", "gun-turret"],
@@ -65,6 +65,11 @@ class FairnessLuaTests(unittest.TestCase):
                               {"name": "inserter", "unit_number": 3, "direction": 0, "position": {"x": 260, "y": 4}},
                               {"name": "transport-belt", "unit_number": 4, "direction": 0,
                                "ammunition": True, "position": {"x": 260, "y": 3}}]}
+        if options.get("pending_route"):
+            for row in payload["routes"][1:]:
+                row["pending"] = True
+        if options.get("unobserved_arm"):
+            payload["routes"][1].pop("unit_number")
         body = SAFETY_LUA.replace("PAYLOAD", json.dumps(json.dumps(payload)))
         script = SHADOW.replace("OPTIONS", json.dumps(json.dumps(options))).replace("BODY", body)
         with patch.object(deterministic_game, "_HELPERS", ""):
@@ -118,6 +123,24 @@ class FairnessLuaTests(unittest.TestCase):
         for changes in ({"ammo": 9}, {"turret_health": 399}):
             with self.subTest(changes=changes):
                 self.assertFalse(self.guard(turret_direction=12, **changes)["result"]["quiet"])
+
+    def test_only_new_unbuilt_pieces_and_pending_power_can_interleave(self):
+        self.assertTrue(self.guard(pending_route=True, arm_missing=True, unobserved_arm=True)["result"]["routes_ready"])
+        self.assertFalse(self.guard(pending_route=True, arm_missing=True)["result"]["routes_ready"])
+        self.assertFalse(self.guard(arm_missing=True, unobserved_arm=True)["result"]["routes_ready"])
+        for changes in ({"arm_energy": 0}, {"arm_connected": False}):
+            self.assertTrue(self.guard(pending_route=True, **changes)["result"]["routes_ready"])
+            self.assertFalse(self.guard(**changes)["result"]["routes_ready"])
+
+    def test_pending_pieces_keep_material_identity_damage_ammo_and_enemy_guards(self):
+        for changes in ({"arm_unit": 55}, {"arm_direction": 8}, {"belt_direction": 8},
+                        {"foreign_arm": True}, {"cargo": "iron-plate"}):
+            with self.subTest(changes=changes):
+                self.assertFalse(self.guard(pending_route=True, **changes)["result"]["routes_ready"])
+        for changes in ({"arm_health": 149}, {"asset_health": 199}, {"actor_health": 249},
+                        {"turret_health": 399}, {"ammo": 9}, {"enemy_x": 260}):
+            with self.subTest(changes=changes):
+                self.assertFalse(self.guard(pending_route=True, **changes)["result"]["quiet"])
 
 
 if __name__ == "__main__":

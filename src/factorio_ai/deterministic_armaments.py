@@ -51,13 +51,24 @@ class Armaments:
             for row in self.state["turrets"].values():
                 row["owned"] = False
                 row.pop("sample", None)
+                row.pop("pending_intake", None)
                 # Issued seed actions stay debited across rollback. A checkpoint
                 # rollback cannot authorize an unbounded new ammunition batch.
         self.state["last_tick"] = tick
+        baseline = self.state.get("intake_baseline_units")
+        if (not isinstance(baseline, list)
+                or any(type(unit) is not int or unit <= 0 for unit in baseline)):
+            # A fresh/legacy checkpoint cannot distinguish old damaged intakes
+            # from new construction, even if a catalog reset erased plans.
+            self.state["intake_baseline_units"] = sorted({e["unit_number"] for e in obs.get("entities", [])
+                if e.get("name") == "gun-turret" and type(e.get("unit_number")) is int and e["unit_number"] > 0})
+            for row in self.state["turrets"].values():
+                row.pop("pending_intake", None)
         present = {self._key(e) for e in obs.get("entities", []) if e.get("name") == "gun-turret"}
         for key, row in self.state["turrets"].items():
             if key not in present:
                 row["owned"] = False
+                row.pop("pending_intake", None)
         self._save()
 
     def manages_turret(self, entity: dict) -> bool:
@@ -77,6 +88,17 @@ class Armaments:
             stock = int((turret.get("inventory") or {}).get("firearm-magazine", 0))
             self.state["turrets"][key] = {"unit_number": turret.get("unit_number"), "position": turret["position"],
                                          "seed_remaining": max(0, self.seed_limit - stock), "owned": False}
+            owner = "armaments:" + key
+            if (previous is None and isinstance(self.state.get("intake_baseline_units"), list)
+                    and type(turret.get("unit_number")) is int and turret["unit_number"] > 0
+                    and turret.get("unit_number") not in self.state["intake_baseline_units"]
+                    and owner not in self.factory.state.get("blocks", {})
+                    and owner not in self.factory.state.get("links", {})
+                    and not any(name in {owner, "tap:" + owner} or name.startswith((owner + ":pole:", "tap:" + owner + ":pole:"))
+                                for name in self.factory.state.get("power_links", {}))):
+                self.state["turrets"][key]["pending_intake"] = {
+                    "world_id": self.state["world_id"], "catalog_fingerprint": self.state["catalog_fingerprint"],
+                    "unit_number": turret.get("unit_number"), "started_tick": self.state["last_tick"]}
             self._save()
         return self.state["turrets"][key]
 
@@ -266,7 +288,14 @@ class Armaments:
 
     def _finish_intake(self, obs: dict, key: str, row: dict) -> dict:
         result = self.builder.ensure_plan(obs, row["plan"])
-        return result if not _ready(result) else self.factory.ensure_power_connection(obs, key, row["plan"])
+        if _ready(result):
+            result = self.factory.ensure_power_connection(obs, key, row["plan"])
+        if _ready(result) and "pending_intake" in row:
+            # connect_input has already observed the complete route. Completion
+            # ends this exception permanently, independently of refill proof.
+            row.pop("pending_intake")
+            self._save()
+        return result
 
     def _supply_observation(self, turret: dict, row: dict) -> dict:
         inserter = next(e for e in row["plan"]["entities"] if e["name"] == "inserter")

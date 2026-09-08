@@ -41,13 +41,16 @@ for _,p in ipairs(anchors) do
 end
 for _,p in ipairs(x.routes) do
  local e=target(p.position,p.name)
+ if not e and p.pending and not p.unit_number then
+  --[[ This new intake has not built this piece in the current observation. ]]
+ else
  if not e or e.force~=f or e.position.x~=p.position.x or e.position.y~=p.position.y
   or (p.unit_number and e.unit_number~=p.unit_number)
   or (p.name~="gun-turret" and p.direction~=nil and e.direction~=p.direction) then
   return {ok=true,quiet=true,routes_ready=false,reason="ammunition_route_missing"}
  end
  if not healthy(e) then return {ok=true,quiet=false,reason="damaged_ammunition_route"} end
- if e.type=="inserter" or e.type=="assembling-machine" then
+ if not p.pending and (e.type=="inserter" or e.type=="assembling-machine") then
   if e.energy<=0 or not e.is_connected_to_electric_network() then
    return {ok=true,quiet=true,routes_ready=false,reason="ammunition_route_unpowered"}
   end
@@ -60,6 +63,7 @@ for _,p in ipairs(x.routes) do
     return {ok=true,quiet=true,routes_ready=false,reason="ammunition_route_contaminated"}
    end
   end end
+ end
  end
 end
 return {ok=true,quiet=true,routes_ready=true,tick=game.tick}
@@ -129,31 +133,66 @@ class RoutineFairness:
         routes = []
         live = {(e["name"], e["position"]["x"], e["position"]["y"]): e for e in obs["entities"]}
         producer = factory.state["blocks"].get("recipe:firearm-magazine")
+        pending_owners = set()
+        baseline = armaments.state.get("intake_baseline_units")
+        known_baseline = isinstance(baseline, list) and all(type(unit) is int and unit > 0 for unit in baseline)
+        for turret in turrets:
+            row = armaments.state["turrets"].get(armaments._key(turret), {})
+            marker = row.get("pending_intake")
+            if (known_baseline and turret["unit_number"] not in baseline
+                    and isinstance(marker, dict) and type(marker.get("started_tick")) is int
+                    and 0 <= marker["started_tick"] <= obs["tick"] and type(marker.get("unit_number")) is int
+                    and marker == {"world_id": obs["world_id"], "catalog_fingerprint": fingerprint,
+                                   "unit_number": turret["unit_number"], "started_tick": marker["started_tick"]}):
+                pending_owners.add("armaments:" + armaments._key(turret))
+        def pending_owner(name):
+            return any(name in {owner, "tap:" + owner} or name.startswith((owner + ":pole:", "tap:" + owner + ":pole:"))
+                       for owner in pending_owners)
+        # A shared physical piece keeps every established owner's safety guard,
+        # even when it also appears in a new intake's construction reservation.
+        strict = {(e["name"], e["position"]["x"], e["position"]["y"])
+                  for category in ("blocks", "links", "power_links")
+                  for name, plan in factory.state.get(category, {}).items() if not pending_owner(name)
+                  for e in plan.get("entities", [])}
         for turret in turrets:
             key = armaments._key(turret)
             row = armaments.state["turrets"].get(key)
             link = factory.state["links"].get("armaments:" + key)
+            pending = "armaments:" + key in pending_owners
             if row and row.get("unit_number") != turret["unit_number"]:
                 raise ValueError("fairness turret identity differs")
             if not link:  # A newly seeded turret need not already have a reserved intake.
-                if row and row.get("plan"):
+                if row and row.get("plan") and not pending:
                     raise ValueError("fairness saved intake has no link")
-                continue
+                if not row or not row.get("plan"):
+                    continue
+            if pending and (row["plan"].get("existing_receiver") != {
+                    "name": "gun-turret", "position": turret["position"], "unit_number": turret["unit_number"],
+                    "world_id": obs["world_id"], "catalog_fingerprint": fingerprint}
+                    or len(row["plan"].get("ports", [])) != 1
+                    or row["plan"]["ports"][0].get("direction") != "input"):
+                raise ValueError("fairness pending intake receiver differs")
             if (not row or not row.get("plan") or not producer
                     or factory.state["blocks"].get("armaments:" + key) != row["plan"]
-                    or link["source_port"] not in producer["ports"]
-                    or link["consumer_port"] not in row["plan"]["ports"]
+                    or (link and (link["source_port"] not in producer["ports"]
+                                  or link["consumer_port"] not in row["plan"]["ports"]))
                     or any(p.get("kind") != "item" or p.get("item") != "firearm-magazine"
-                           for p in (link["source_port"], link["consumer_port"]))):
+                           for p in ((link["source_port"], link["consumer_port"]) if link else row["plan"]["ports"]))):
                 raise ValueError("fairness ammunition ownership differs")
             for plan in (link, row["plan"]):
-                routes.extend({**e, "ammunition": True} for e in plan["entities"])
-            for name in ("armaments:" + key, "tap:armaments:" + key):
-                routes.extend(deepcopy(factory.state.get("power_links", {}).get(name, {}).get("entities", [])))
+                if plan:
+                    routes.extend({**e, "ammunition": True, "pending": pending} for e in plan["entities"])
+            for name, plan in factory.state.get("power_links", {}).items():
+                if (name in {"armaments:" + key, "tap:armaments:" + key}
+                        or name.startswith(("armaments:" + key + ":pole:", "tap:armaments:" + key + ":pole:"))):
+                    routes.extend({**e, "pending": pending} for e in plan.get("entities", []))
         if routes:
             routes.extend(deepcopy(producer["entities"]))
         for e in routes:
-            found = live.get((e["name"], e["position"]["x"], e["position"]["y"]))
+            physical = e["name"], e["position"]["x"], e["position"]["y"]
+            if physical in strict or e["name"] == "gun-turret":
+                e.pop("pending", None)
+            found = live.get(physical)
             if found:
                 e["unit_number"] = found["unit_number"]
         assets = [{key: e[key] for key in ("name", "unit_number", "position")} for e in assets]
