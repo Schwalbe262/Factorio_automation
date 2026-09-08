@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .deterministic_game import BUILD_BATCH_LIMIT, BUILD_BATCH_NAMES
-from .deterministic_state import _atomic_json
+from .deterministic_state import _atomic_json, stop_requested
 from .factory_templates import build_template, route_orthogonal, DIRECTIONS
 
 
@@ -296,6 +296,8 @@ return {ok=true,world_id=d and d.world_id,emitter=emitter,ground=ground}
         return None
 
     def can_place(self, entities: list[dict]) -> dict:
+        if stop_requested(self.path.parent / "stop.json"):
+            raise InterruptedError("operator_stop_requested")
         payload = json.dumps(json.dumps(entities, separators=(",", ":")))
         return self.game.query('''
 local specs=helpers.json_to_table(''' + payload + ''');local blocked={}
@@ -387,6 +389,8 @@ return success{sites=out}
     def _route(self, source: dict, destination: dict, name: str, reserved: list[dict],
                *, start_direction: int | None = None, end_direction: int | None = None,
                margin: float = 12, clear_natural: bool = False) -> dict:
+        if stop_requested(self.path.parent / "stop.json"):
+            raise InterruptedError("operator_stop_requested")
         if (isinstance(margin, bool) or not isinstance(margin, (int, float)) or not math.isfinite(margin)
                 or margin < 1 or int(margin) != margin):
             return {"ok": False, "reason": "route margin must be a positive whole number of tiles"}

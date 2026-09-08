@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import Mock
 
 from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_ai.deterministic_state import request_stop
 from factorio_ai.factory_templates import build_template
 
 
@@ -40,6 +41,19 @@ class BuilderTests(unittest.TestCase):
             [{"name": "transport-belt", "position": {"x": 2.5, "y": .5}, "direction": 0}], margin=1)
         self.assertFalse(blocked["ok"])
         self.assertNotIn("action", blocked)
+
+    def test_stop_interrupts_each_read_only_route_or_placement_attempt(self):
+        request_stop(Path(self.temp.name) / "stop.json")
+        source, destination = {"x": .5, "y": .5}, {"x": 4.5, "y": .5}
+        for attempt in (
+            lambda: FactoryBuilder.can_place(self.builder, []),
+            lambda: self.builder.route(source, destination, "transport-belt", []),
+            lambda: self.builder.clear_route_obstacle(source, destination, []),
+        ):
+            with self.assertRaisesRegex(InterruptedError, "operator_stop_requested"):
+                attempt()
+        self.game.query.assert_not_called()
+        self.assertFalse(self.builder.path.exists())
 
     def test_clearance_does_not_mine_off_route_rocks_or_return_unverified_entities(self):
         obstacle = {"name": "crash-site-spaceship-wreck-small-1", "type": "simple-entity",
