@@ -1177,12 +1177,20 @@ return {ok=true,candidates=candidates}
             candidates = []
             for tail in tails:
                 destination = tail["port"]
+                actual = next((e for e in obs.get("entities", []) if e.get("name") == "transport-belt"
+                               and e.get("position") == destination["position"]
+                               and e.get("direction") == destination["facing"]), {})
+                owned_drop = ({"world_id": obs.get("world_id"), "tick": obs.get("tick"),
+                    "unit_number": actual["unit_number"], "port": destination, "bus_port": bus_port,
+                    "category": tail["category"], "key": tail["key"]}
+                    if mode == "bridge" and type(actual.get("unit_number")) is int and actual["unit_number"] > 0 else None)
                 dx, dy = DIRECTIONS[destination["facing"]]
                 front = {"name": "port-clearance", "position": {"x": destination["position"]["x"] + dx,
                                                                 "y": destination["position"]["y"] + dy}}
                 route = (self._source_pickup_bridge_route(obs, source_port, destination, reserved + [front])
                     if mode == "source-pickup" else self._material_route(source_port["position"], destination["position"],
-                        reserved + [front], allow_bridge=mode == "bridge", start_direction=source_port.get("facing")))
+                        reserved + [front], allow_bridge=mode == "bridge", start_direction=source_port.get("facing"),
+                        **({"owned_drop": owned_drop} if owned_drop is not None else {})))
                 if not route.get("ok"):
                     continue
                 # The copied suffix provides every missing construction step;
@@ -1249,7 +1257,7 @@ return {ok=true,candidates=candidates}
         return _report("succeeded", "additional producer joins its same-item output bus", flow_verified=False)
 
     def _material_route(self, source: dict, destination: dict, reserved: list[dict], *,
-                        allow_bridge: bool = True, **directions: Any) -> dict:
+                        allow_bridge: bool = True, owned_drop: dict | None = None, **directions: Any) -> dict:
         clearances = self._port_clearances()
         for position, direction, sign in ((source, directions.get("start_direction"), 1), (destination, directions.get("end_direction"), -1)):
             if direction in DIRECTIONS:
@@ -1263,7 +1271,8 @@ return {ok=true,candidates=candidates}
             if result.get("ok") or result.get("reason") != "no route within bounds":
                 break
         if allow_bridge and not result.get("ok") and result.get("reason") in {"no route within bounds", "route search budget exhausted"}:
-            bridge = self._belt_bridge_route(source, destination, reserved, **directions)
+            bridge = self._belt_bridge_route(source, destination, reserved, **directions,
+                **({"owned_drop": owned_drop} if owned_drop is not None else {}))
             if bridge.get("ok"):
                 return bridge
         return result

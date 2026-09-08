@@ -32,8 +32,45 @@ def _stopped(factory):
         raise InterruptedError("operator_stop_requested")
 
 
+def _owned_drop_valid(factory, destination, proof):
+    """An explicit same-item output suffix owns the existing final drop belt."""
+    from .deterministic_input_links import _geometry, _path, _powered_prefix
+    try:
+        port, bus = proof["port"], proof["bus_port"]
+        if (proof["world_id"] != factory.state.get("world_id") or not proof["world_id"]
+                or factory.state.get("catalog_fingerprint") != factory.catalog.fingerprint
+                or factory._fingerprint != factory.catalog.fingerprint
+                or type(proof["tick"]) is not int or proof["tick"] < factory.state.get("last_tick", 0)
+                or proof["tick"] < 0 or type(proof["unit_number"]) is not int or proof["unit_number"] < 1
+                or port["position"] != destination or type(port["facing"]) is not int or port["facing"] not in DIRECTIONS
+                or not port["item"] or port["item"] != bus["item"]
+                or any(p.get("kind") != "item" or p.get("direction") != "output" for p in (port, bus))
+                or proof["category"] not in ("blocks", "links")):
+            return False
+        owner = factory.state[proof["category"]][proof["key"]]
+        if proof["category"] == "blocks":
+            if bus not in owner.get("ports", []):
+                return False
+        elif owner.get("consumer_port") != bus or (owner.get("source_port") or {}).get("item") != port["item"]:
+            return False
+        belts, edges, _ = _geometry(owner)
+        start, end = (destination["x"], destination["y"]), (bus["position"]["x"], bus["position"]["y"])
+        path = _path(belts, edges, start, end)
+        if not path or belts[start]["direction"] != port["facing"] or belts[end]["direction"] != bus["facing"]:
+            return False
+        _powered_prefix(owner, path)
+        foreign = [e for plan in factory.state["links"].values()
+                   if any((plan.get(field) or {}).get("item") not in (None, port["item"])
+                          for field in ("source_port", "consumer_port")) for e in plan.get("entities", [])]
+        if factory.builder._occupied_by_plan(path) & factory.builder._occupied_by_plan(foreign):
+            return False
+        return True
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def plan_belt_crossings(factory, source, destination, reserved, *,
-                        start_direction=None, end_direction=None):
+                        start_direction=None, end_direction=None, owned_drop=None):
     """Survey once, then select up to six crossings without per-leg RCON.
 
     Region connectivity selects useful crossings before geometric route work.
@@ -43,6 +80,8 @@ def plan_belt_crossings(factory, source, destination, reserved, *,
     """
     failure = {"ok": False, "reason": "no clear powered long-inserter belt crossing"}
     _stopped(factory)
+    if owned_drop is not None and not _owned_drop_valid(factory, destination, owned_drop):
+        return {**failure, "reason": "invalid owned output drop proof"}
     start, finish = (source["x"], source["y"]), (destination["x"], destination["y"])
     if (any(d is not None and (type(d) is not int or d not in DIRECTIONS) for d in (start_direction, end_direction))
             or not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
@@ -53,12 +92,23 @@ def plan_belt_crossings(factory, source, destination, reserved, *,
               "min_y": min(start[1], finish[1]) - 48, "max_y": max(start[1], finish[1]) + 48}
     if (bounds["max_x"] - bounds["min_x"] + 1) * (bounds["max_y"] - bounds["min_y"] + 1) > 50000:
         return {**failure, "reason": "crossing survey exceeds 50000 tiles"}
-    payload = json.dumps(json.dumps(bounds, separators=(",", ":")))
+    payload = json.dumps(json.dumps({"bounds": bounds, "owned_drop": owned_drop}, separators=(",", ":")))
     survey = factory.game.query('''
 --[[ bounded belt crossing survey ]]
 local recipe=f.recipes["long-handed-inserter"]
 if not recipe or not recipe.enabled then return {ok=false,reason="long inserter recipe is locked"} end
-local b=helpers.json_to_table(''' + payload + ''');local blocked={};local belts={}
+local args=helpers.json_to_table(''' + payload + ''');local b=args.bounds;local blocked={};local belts={}
+local owned=args.owned_drop
+if owned then
+ local belt=target(owned.port.position,"transport-belt")
+ if not d or d.world_id~=owned.world_id or game.tick<owned.tick or not belt or belt.force~=f
+  or belt.unit_number~=owned.unit_number or belt.direction~=owned.port.facing then
+  return {ok=false,reason="owned output drop identity changed"}
+ end
+ for lane=1,2 do for _,row in pairs(belt.get_transport_line(lane).get_contents()) do
+  if row.name~=owned.port.item and row.count>0 then return {ok=false,reason="owned output drop carries another material"} end
+ end end
+end
 for x=b.min_x,b.max_x do for y=b.min_y,b.max_y do
  local p={x=x,y=y}
  if not s.can_place_entity{name="transport-belt",position=p,force=f} then blocked[#blocked+1]=p end
@@ -67,10 +117,12 @@ for _,e in pairs(s.find_entities_filtered{force=f,type="transport-belt",
  area={{b.min_x-1,b.min_y-1},{b.max_x+1,b.max_y+1}}}) do
  belts[#belts+1]={name=e.name,position=pos(e.position),direction=e.direction}
 end
-return {ok=true,blocked=blocked,belts=belts}
+return {ok=true,blocked=blocked,belts=belts,owned_drop_verified=owned~=nil}
 ''')
     if not survey.get("ok"):
         return {**failure, "reason": survey.get("reason", "crossing survey failed")}
+    if owned_drop is not None and survey.get("owned_drop_verified") is not True:
+        return {**failure, "reason": "owned output drop was not verified"}
     def point_valid(point):
         return (isinstance(point, dict) and all(isinstance(point.get(axis), (int, float))
                 and not isinstance(point[axis], bool) and math.isfinite(point[axis])
@@ -101,6 +153,10 @@ return {ok=true,blocked=blocked,belts=belts}
     for point, direction in ((start, start_direction), (finish, end_direction)):
         if point in belts and direction is not None and belts[point] != direction:
             return {**failure, "reason": "crossing endpoint belt facing changed"}
+    if owned_drop is not None and (belts.get(finish) != owned_drop["port"]["facing"]
+            or not any(e.get("name") == "transport-belt" and e.get("position") == destination
+                       and e.get("direction") == owned_drop["port"]["facing"] for e in reserved)):
+        return {**failure, "reason": "owned output drop reservation or survey changed"}
     clearance = factory._port_clearances()
     for point, direction, sign in ((start, start_direction, 1), (finish, end_direction, -1)):
         if direction in DIRECTIONS:
@@ -228,7 +284,8 @@ return {ok=true,blocked=blocked,belts=belts}
         _stopped(factory)
         attempts += 1
         plan = _construct(factory, start, finish, chain, physical, occupied, bounds,
-                          start_direction, end_direction, node_budget)
+                          start_direction, end_direction, node_budget,
+                          owned_drop["port"]["facing"] if owned_drop is not None else None)
         if plan is None:
             if node_budget[0] <= 0:
                 break
@@ -241,7 +298,8 @@ return {ok=true,blocked=blocked,belts=belts}
     return {**failure, "crossing_candidates_checked": attempts}
 
 
-def _construct(factory, start, finish, chain, physical, occupied, bounds, start_direction, end_direction, node_budget):
+def _construct(factory, start, finish, chain, physical, occupied, bounds, start_direction, end_direction, node_budget,
+               owned_drop_direction=None):
     equipment = {}
     pickup_fronts = set()
     for index, edge in enumerate(chain):
@@ -249,6 +307,10 @@ def _construct(factory, start, finish, chain, physical, occupied, bounds, start_
         following = chain[index + 1] if index + 1 < len(chain) else None
         drop_direction = (following.get("pickup_direction", following["direction"])
                           if following and edge["drop"] == following["pickup"] else edge["direction"])
+        # An arm deposits into the existing belt independently of its facing.
+        # Ordinary belt arrivals and intermediate crossing belts keep their rules.
+        if owned_drop_direction is not None and following is None and edge["drop"] == finish:
+            drop_direction = owned_drop_direction
         for name, point, direction in (("long-handed-inserter", edge["arm"], (edge["direction"] + 8) % 16),
                                       ("transport-belt", edge["pickup"], pickup_direction),
                                       ("transport-belt", edge["drop"], drop_direction)):
