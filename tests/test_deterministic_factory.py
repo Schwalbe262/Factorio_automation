@@ -438,6 +438,90 @@ class FactoryTests(unittest.TestCase):
         self.obs["entities"] = [deepcopy(tail[-1])]
         self.assertEqual(self.factory._upstream_output_tails(self.obs, destination), [])
 
+    def source_pickup_fixture(self):
+        source = port("iron-plate")
+        destination = port("iron-plate", 8.5, -3.5)
+        belt = {"name": "transport-belt", "position": source["position"], "direction": source["facing"]}
+        self.factory.state["blocks"]["capacity"] = {"ok": True, "entities": [belt], "ports": [source]}
+        self.obs["entities"] = [{**belt, "unit_number": 11, "belt_inventory": {"iron-plate": 4}}]
+        self.game.query.side_effect = lambda body: ({"ok": True, "candidates": [
+            {"direction": 0, "over": {"x": .5, "y": -2.5}}]}
+            if "owned crossing pickup changed" in body else {"ok": True, "blocked": []})
+        return source, destination, belt
+
+    def test_source_pickup_bridge_preserves_existing_belt_facing_and_ordinary_arm_geometry(self):
+        source, destination, belt = self.source_pickup_fixture()
+        route = self.factory._source_pickup_bridge_route(self.obs, source, destination, [belt])
+        self.assertTrue(route["ok"], route)
+        self.assertEqual(route["segments"][0], belt)
+        arm = next(e for e in route["segments"] if e.get("name") == "long-handed-inserter")
+        self.assertEqual(arm["position"], {"x": .5, "y": -1.5})
+        self.assertEqual(arm["direction"], 8)
+        self.assertEqual(route["crossing"]["pickup_unit_number"], 11)
+        self.assertTrue(any(e.get("name") == "small-electric-pole" for e in route["segments"]))
+        self.assertFalse(route["flow_verified"])
+
+    def test_source_pickup_requires_owned_observed_belt_and_matching_world(self):
+        source, destination, belt = self.source_pickup_fixture()
+        for change in ("ownership", "unit", "world"):
+            with self.subTest(change=change):
+                observation = deepcopy(self.obs)
+                requested = deepcopy(source)
+                if change == "ownership":
+                    requested["position"] = {"x": 1.5, "y": .5}
+                    observation["entities"][0]["position"] = requested["position"]
+                elif change == "unit":
+                    observation["entities"][0].pop("unit_number")
+                else:
+                    observation["world_id"] = "another-world"
+                route = self.factory._source_pickup_bridge_route(observation, requested, destination, [belt])
+                self.assertFalse(route["ok"], route)
+        self.game.query.assert_not_called()
+
+    def test_source_pickup_rejects_fresh_identity_or_material_failure(self):
+        source, destination, belt = self.source_pickup_fixture()
+        self.game.query.side_effect = None
+        for reason in ("owned crossing pickup changed", "crossing pickup contains another item", "long inserter recipe is locked"):
+            with self.subTest(reason=reason):
+                self.game.query.return_value = {"ok": False, "reason": reason}
+                self.assertEqual(self.factory._source_pickup_bridge_route(self.obs, source, destination, [belt]),
+                                 {"ok": False, "reason": reason})
+        self.builder.can_place.assert_not_called()
+
+    def test_source_pickup_does_not_share_identical_foreign_material_reservation(self):
+        source, destination, belt = self.source_pickup_fixture()
+        self.factory.state["links"]["coal"] = {"ok": True, "entities": [deepcopy(belt)],
+            "source_port": port("coal"), "consumer_port": port("coal", 2.5)}
+        route = self.factory._source_pickup_bridge_route(self.obs, source, destination, [belt])
+        self.assertFalse(route["ok"], route)
+        self.builder.can_place.assert_not_called()
+
+    def test_capacity_merge_attempts_source_pickup_before_generic_crossing_and_requires_power(self):
+        source, destination, tail = self.upstream_merge_fixture()
+        self.factory._material_route = Mock(return_value={"ok": False, "reason": "no route within bounds"})
+        self.factory._upstream_output_tails = Mock(return_value=[{"entities": tail, "category": "blocks",
+            "key": "source:iron-plate", "port": {**destination, "position": tail[0]["position"]}}])
+        self.factory._source_pickup_bridge_route = Mock(return_value={"ok": True, "segments": [
+            {"name": "transport-belt", "position": source["position"], "direction": source["facing"]},
+            {"name": "long-handed-inserter", "position": {"x": -3.5, "y": -1.5}, "direction": 4},
+            {"name": "small-electric-pole", "position": {"x": -3.5, "y": -3.5}, "direction": 0}, tail[0]]})
+        waiting = {"status": "waiting", "reason": "bridge power not yet observed"}
+        self.factory.ensure_power_connection.return_value = waiting
+        self.assertEqual(self.factory._merge_output(self.obs, source, destination, "merge"), waiting)
+        self.assertTrue(all(call.kwargs.get("allow_bridge") is False for call in self.factory._material_route.call_args_list))
+        self.assertEqual(self.factory.state["links"]["merge"]["consumer_port"], destination)
+
+    def test_capacity_merge_retains_direct_generic_crossing_when_no_upstream_tail_exists(self):
+        source, destination = port("iron-plate", -8.5), port("iron-plate", 8.5)
+        self.factory._material_route = Mock(side_effect=[
+            {"ok": False, "reason": "no route within bounds"},
+            {"ok": True, "segments": [{"position": source["position"], "direction": 4},
+                                      {"position": destination["position"], "direction": 4}]}])
+        self.assertEqual(self.factory._merge_output(self.obs, source, destination, "merge")["status"], "succeeded")
+        first, last = self.factory._material_route.call_args_list
+        self.assertFalse(first.kwargs["allow_bridge"])
+        self.assertTrue(last.kwargs.get("allow_bridge", True))
+
     def laboratory_capacity_fixture(self, duration=600):
         self.automatic_sources()
         self.factory.graph.science_rate_per_minute = 30

@@ -932,6 +932,80 @@ return {ok=true,obstacles=obstacles}
                         point = following
         return candidates
 
+    def _source_pickup_bridge_route(self, obs: dict, source_port: dict, destination: dict, reserved: list[dict]) -> dict:
+        """An owned output belt may feed a crossing without changing its facing."""
+        position = source_port["position"]
+        actual = next((e for e in obs.get("entities", []) if e["name"] == "transport-belt"
+                       and e["position"] == position and e.get("direction") == source_port.get("facing")), None)
+        owned = any(source_port in plan.get("ports", []) and any(e["name"] == "transport-belt"
+                    and e["position"] == position and e.get("direction") == source_port.get("facing")
+                    for e in plan.get("entities", [])) for plan in self.state["blocks"].values())
+        if (not owned or not actual or not actual.get("unit_number")
+                or source_port.get("kind") != "item" or source_port.get("direction") != "output"
+                or source_port.get("item") != destination.get("item")
+                or self.state.get("world_id") != obs.get("world_id")):
+            return {"ok": False, "reason": "crossing pickup is not an observed owned output belt"}
+        args = json.dumps(json.dumps({"position": position, "direction": actual["direction"],
+            "unit": actual["unit_number"], "world": obs["world_id"], "item": source_port["item"]}, separators=(",", ":")))
+        survey = self.game.query('''
+local x=helpers.json_to_table(''' + args + ''')
+local source=target(x.position,"transport-belt")
+if not d or d.world_id~=x.world or not source or source.force~=f or source.unit_number~=x.unit
+ or source.direction~=x.direction then return {ok=false,reason="owned crossing pickup changed"} end
+for lane=1,2 do for _,item in pairs(source.get_transport_line(lane).get_contents()) do
+ if item.name~=x.item and item.count>0 then return {ok=false,reason="crossing pickup contains another item"} end
+end end
+local recipe=f.recipes["long-handed-inserter"]
+if not recipe or not recipe.enabled then return {ok=false,reason="long inserter recipe is locked"} end
+local candidates={}
+for direction,v in pairs({[0]={0,-1},[4]={1,0},[8]={0,1},[12]={-1,0}}) do
+ local p={x=x.position.x+3*v[1],y=x.position.y+3*v[2]}
+ local belt=target(p,"transport-belt")
+ if belt and belt.force==f and belt.direction%8~=direction%8 then candidates[#candidates+1]={direction=direction,over=p} end
+end
+return {ok=true,candidates=candidates}
+''')
+        if not survey.get("ok"):
+            return survey
+        clearances = [{"name": "port-clearance", "position": {"x": x, "y": y}} for x, y in self._port_clearances()]
+        reserved = reserved + clearances
+        limited = [e for e in reserved if e["name"] != "transport-belt" or e["position"] != position
+                   or e.get("direction") != actual["direction"]]
+        occupied = self.builder._occupied_by_plan(limited)
+        # An identical geometric reservation for another item is still foreign.
+        for plan in self.state["links"].values():
+            if any((plan.get(field) or {}).get("item") not in (None, source_port["item"])
+                   for field in ("source_port", "consumer_port")):
+                occupied.update(self.builder._occupied_by_plan(plan.get("entities", [])))
+        best = None
+        for candidate in sorted(survey.get("candidates", []), key=lambda row: row["direction"])[:4]:
+            direction = candidate["direction"]
+            dx, dy = DIRECTIONS[direction]
+            drop = {"x": position["x"] + 4 * dx, "y": position["y"] + 4 * dy}
+            if drop == destination["position"]:
+                continue  # Destination sharing requires its own identity proof.
+            source = {"name": "transport-belt", "position": position, "direction": actual["direction"]}
+            arm = {"name": "long-handed-inserter", "position": {"x": position["x"] + 2 * dx,
+                   "y": position["y"] + 2 * dy}, "direction": (direction + 8) % 16}
+            equipment = [source, arm, {"name": "transport-belt", "position": drop, "direction": direction}]
+            if self.builder._occupied_by_plan(equipment) & occupied:
+                continue
+            for pole in self._intake_poles(arm["position"], equipment)[:8]:
+                trial = equipment + [pole]
+                if self.builder._occupied_by_plan(trial) & occupied or not self.builder.can_place(trial).get("ok"):
+                    continue
+                route = self.builder.route(drop, destination["position"], "transport-belt", reserved + trial,
+                                           margin=48, start_direction=direction)
+                if not route.get("ok"):
+                    break
+                segments = [source, arm, pole] + route["segments"]
+                if best is None or len(segments) < len(best["segments"]):
+                    best = {"ok": True, "segments": segments, "flow_verified": False,
+                            "crossing": {"kind": "long-handed-inserter", "over": candidate["over"],
+                                         "pickup_unit_number": actual["unit_number"]}}
+                break
+        return best or {"ok": False, "reason": "no clear owned-output pickup crossing"}
+
     def _route_upstream_output(self, obs: dict, source_port: dict, bus_port: dict) -> dict:
         tails = self._upstream_output_tails(obs, bus_port)
         tails.sort(key=lambda tail: (_distance(source_port["position"], tail["port"]["position"])
@@ -939,14 +1013,15 @@ return {ok=true,obstacles=obstacles}
         # Bound recovery work even when a large factory has many old outputs.
         tails = tails[:16]
         reserved = self._reserved()
-        for allow_bridge in (False, True):
+        for mode in ("belts", "source-pickup", "bridge"):
             for tail in tails:
                 destination = tail["port"]
                 dx, dy = DIRECTIONS[destination["facing"]]
                 front = {"name": "port-clearance", "position": {"x": destination["position"]["x"] + dx,
                                                                 "y": destination["position"]["y"] + dy}}
-                route = self._material_route(source_port["position"], destination["position"], reserved + [front],
-                    allow_bridge=allow_bridge, start_direction=source_port.get("facing"))
+                route = (self._source_pickup_bridge_route(obs, source_port, destination, reserved + [front])
+                    if mode == "source-pickup" else self._material_route(source_port["position"], destination["position"],
+                        reserved + [front], allow_bridge=mode == "bridge", start_direction=source_port.get("facing")))
                 if not route.get("ok"):
                     continue
                 # The copied suffix provides every missing construction step;
@@ -968,9 +1043,12 @@ return {ok=true,obstacles=obstacles}
             forbidden_front = {"name": "port-clearance", "position": {"x": bus_port["position"]["x"] + dx,
                                                                          "y": bus_port["position"]["y"] + dy}}
             route = self._material_route(source_port["position"], bus_port["position"], self._reserved() + [forbidden_front],
-                                         start_direction=source_port.get("facing"))
+                                         allow_bridge=False, start_direction=source_port.get("facing"))
             if not route.get("ok") and route.get("reason") in {"no route within bounds", "route search budget exhausted"}:
                 route = self._route_upstream_output(obs, source_port, bus_port)
+                if not route.get("ok"):
+                    route = self._material_route(source_port["position"], bus_port["position"], self._reserved() + [forbidden_front],
+                                                 start_direction=source_port.get("facing"))
             if not route.get("ok"):
                 return _report("blocked", "capacity output cannot reach its material bus", link=key, query_error=route.get("reason"))
             segments = route["segments"]

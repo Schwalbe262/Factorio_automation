@@ -5,6 +5,6 @@
 - Main server44760/client58928 actor58; user requested visible GUI. watch_factorio_deterministic.bat reuses it; --hide-window hides.
 - Dashboard http://127.0.0.1:18890; hidden clients otherwise default. Never launch a duplicate actor observer.
 - Strict character-navigation-qa UDP34216/RCON27031 server50304/client27700 hidden actor11; worker64000 running iron intake construction; red35/35, automatic science unproven.
-- Upstream same-item merge fallback validated: 73factorytests; actual100belts+longarm+pole, 2beltsreused; 211.9s/799readonlyqueries. Endpoint pickup optimization next.
+- Merge optimization uses owned sourcebelt pickup with preservedfacing: 79tests, actual86belts+arm+pole/2existingbelts; 75queries/24.61s. Main restart after craft-batch review.
 - Strict real legacy recovery tick796107: electric1762 working into originalchest424, coal710->772/ore7552->7432, obsoletearm1399 absent/protectedenergy1123 intact.
 - Preserve pre-existing dirty insight.md; root owns main lifecycle, commit/push and token accounting. No runtime grants or forced flags.
