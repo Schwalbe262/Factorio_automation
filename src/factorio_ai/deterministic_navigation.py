@@ -120,6 +120,15 @@ CHARACTER_INPUT_LUA = r'''
 local key=helpers.table_to_json(x)
 local motion=d.motion
 local retry_count=0
+local replan_count=0
+if motion and motion.key==key then
+ replan_count=motion.replan_count or 0
+ if x.type=="move" and motion.status=="blocked" and motion.reason=="character_path_stalled" then
+  if replan_count>=2 then motion.reason="character_path_replan_exhausted";return failure(motion.reason) end
+  replan_count=replan_count+1
+  motion=nil
+ end
+end
 if motion and motion.key==key and motion.status=="retry" then
  if game.tick<(motion.retry_after_tick or 0) then
   motion.expires_tick=game.tick+600;return success{status="waiting",reason="character_pathfinder_busy"}
@@ -136,7 +145,7 @@ if motion and motion.key==key and motion.status~="expired" and motion.status~="r
 end
 a.walking_state={walking=false};a.mining_state={mining=false}
 motion={key=key,kind=x.type,status="running",expires_tick=game.tick+600,last_progress_tick=game.tick,
- started_tick=game.tick,retry_count=retry_count}
+ started_tick=game.tick,retry_count=retry_count,replan_count=replan_count}
 d.motion=motion
 if x.type=="move" then
  local goal=s.find_non_colliding_position("character",x.position,12,0.5)
