@@ -1,4 +1,5 @@
 import tempfile
+import socket
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -34,6 +35,17 @@ class DeterministicGameTests(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 game.query("return {ok=true}")
             self.assertEqual(client.execute.call_count, 1)
+
+    def test_busy_rcon_port_cannot_attach_to_another_world(self):
+        with tempfile.TemporaryDirectory() as tmp, socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            cfg = run_config(runtime=Path(tmp), rcon_port=listener.getsockname()[1])
+            with patch("factorio_ai.deterministic_game.subprocess.Popen") as process:
+                with self.assertRaisesRegex(RuntimeError, "already in use"):
+                    start_world(cfg, seed=1, new_world=True)
+                process.assert_not_called()
+            self.assertFalse(no_mod_save_path(cfg).exists())
 
     def test_model_environment_does_not_enable_slurm(self):
         with patch.dict("os.environ", {"FACTORIO_AI_SLURM_ENABLED": "1",

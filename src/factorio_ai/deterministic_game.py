@@ -10,6 +10,7 @@ from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import time
 from typing import Any
@@ -34,6 +35,13 @@ def start_world(cfg: AppConfig, *, seed: int, new_world: bool = False) -> subpro
     save = no_mod_save_path(cfg)
     if new_world and save.exists():
         raise FileExistsError(f"World already exists; use --resume: {save}")
+    try:
+        connection = socket.create_connection((cfg.rcon_host, cfg.rcon_port), timeout=0.3)
+    except OSError:
+        pass
+    else:
+        connection.close()
+        raise RuntimeError("RCON port is already in use; select --connect-only for the existing run")
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
     if not save.exists():
         if not new_world:
@@ -63,6 +71,13 @@ def start_world(cfg: AppConfig, *, seed: int, new_world: bool = False) -> subpro
 _HELPERS = r'''
 local d=storage.deterministic_player
 local a=d and d.actor
+if d and d.crafting_player_index and (not a or not a.valid) then
+ local owner=game.get_player(d.crafting_player_index)
+ if owner and owner.name=="FactoryAutomaton" and owner.connected and owner.character and owner.character.valid
+    and d.crafting_actor_unit_number and owner.character.unit_number==d.crafting_actor_unit_number then
+  a=owner.character;d.actor=a
+ end
+end
 local s=game.surfaces.nauvis
 local f=game.forces.player
 local function contents(inv)
@@ -130,7 +145,7 @@ return success{world_id=storage.deterministic_player.world_id,position=pos(actor
 ''')
 
     def observe(self, radius: float = 384) -> dict[str, Any]:
-        return self.query('''
+        observation = self.query('''
 if not a or not a.valid then return failure("agent_dead") end
 local rows={}
 for _,e in pairs(s.find_entities_filtered{force=f}) do
@@ -140,13 +155,34 @@ for _,e in pairs(s.find_entities_filtered{force=f}) do
   for name,id in pairs(defines.entity_status) do if id==e.status then r.status_name=name;break end end
   local good,recipe=pcall(function() return e.get_recipe() end)
   if good and recipe then r.recipe=recipe.name end
+  local has_burner,burner=pcall(function() return e.burner end)
+  if has_burner and burner then r.remaining_burning_fuel=burner.remaining_burning_fuel end
+  local has_network,network=pcall(function() return e.electric_network_id end)
+  if has_network then r.electric_network_id=network end
+  local has_connection,connected=pcall(function() return e.is_connected_to_electric_network() end)
+  if has_connection then r.electric_network_connected=connected end
   for i=1,e.get_max_inventory_index() do
    local inv=e.get_inventory(i)
    if inv then for name,n in pairs(contents(inv)) do r.inventory[name]=(r.inventory[name] or 0)+n end end
   end
-  local has_fluid,fb=pcall(function() return e.fluidbox end)
-  if has_fluid and fb then for i=1,#fb do local v=fb[i];if v then r.fluids[v.name]=(r.fluids[v.name] or 0)+v.amount end end end
-  if e.type=="rocket-silo" then r.rocket_parts=e.rocket_parts end
+  local has_output,output=pcall(function() return e.get_output_inventory() end)
+  if has_output and output then r.output_inventory=contents(output) end
+  local has_products,products=pcall(function() return e.products_finished end)
+  if has_products then r.products_finished=products end
+  if e.type=="transport-belt" then
+   r.belt_inventory={}
+   for lane=1,2 do
+    for _,row in pairs(e.get_transport_line(lane).get_contents()) do
+     r.belt_inventory[row.name]=(r.belt_inventory[row.name] or 0)+row.count
+    end
+   end
+  end
+  local has_fluid,fluids=pcall(function() return e.get_fluid_contents() end)
+  if has_fluid and fluids then r.fluids=fluids end
+  if e.type=="rocket-silo" then
+   r.rocket_parts=e.rocket_parts
+   for name,id in pairs(defines.rocket_silo_status) do if e.rocket_silo_status==id then r.rocket_silo_status=name;break end end
+  end
   rows[#rows+1]=r
  end
 end
@@ -172,11 +208,18 @@ return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.
  research=current and current.name or nil,research_progress=f.research_progress,production=production,rockets_launched=f.rockets_launched,
  enemies=s.count_entities_filtered{position={0,0},radius=128,force="enemy",type={"unit","unit-spawner"}}}
 ''')
+        if observation.get("ok"):
+            from .deterministic_launch import OBSERVE_LAUNCH_LUA
+            observation["launch"] = self.query(OBSERVE_LAUNCH_LUA)
+        return observation
 
     def act(self, action: dict[str, Any]) -> dict[str, Any]:
         if "count" in action and (isinstance(action["count"], bool)
                 or not isinstance(action["count"], int) or action["count"] < 1):
             raise ValueError("action count must be a positive integer")
+        if action.get("type") == "bar" and (isinstance(action.get("slots"), bool)
+                or not isinstance(action.get("slots"), int) or action["slots"] < 0):
+            raise ValueError("bar slots must be a non-negative integer")
         encoded = json.dumps(json.dumps(action, separators=(",", ":")))
         body = 'local x=helpers.json_to_table(' + encoded + '); '
         body += 'if not a or not a.valid then return failure("agent_dead") end; '
@@ -236,7 +279,9 @@ return success{status="succeeded"}
             body += '''
 local existing=target(x.position,x.name)
 if existing then
- if existing.direction~=(x.direction or 0) then return failure("existing_direction_mismatch") end
+ local desired=x.direction or 0
+ local axis_only=x.name=="steam-engine" or x.name=="steam-turbine"
+ if existing.direction~=desired and not (axis_only and existing.direction%8==desired%8) then return failure("existing_direction_mismatch") end
  return success{status="succeeded",reused=true,unit_number=existing.unit_number}
 end
 local proto=prototypes.entity[x.name]
@@ -283,10 +328,29 @@ local inserted=inv.insert{name=x.item,count=removed}
 if inserted<removed then source.insert{name=x.item,count=removed-inserted} end
 return success{status=inserted>0 and "succeeded" or "waiting",moved=inserted}
 '''
+        elif kind == "bar":
+            body += '''
+local e=target(x.position,x.name)
+if not e or e.type~="container" then return failure("container_missing") end
+'''
+            if self.backend == "character":
+                body += 'if not a.can_reach_entity(e) then return failure("out_of_reach") end; '
+            body += '''
+local chest=e.get_inventory(defines.inventory.chest)
+if not chest or not chest.supports_bar() then return failure("inventory_bar_unsupported") end
+if x.slots>#chest then return failure("bar_exceeds_inventory_size") end
+chest.set_bar(x.slots+1)
+local bar=chest.get_bar()
+return bar==x.slots+1 and success{status="succeeded",slots=bar-1} or failure("inventory_bar_rejected")
+'''
         elif kind == "recipe":
             body += '''
 local e=target(x.position,x.name)
 if not e then return failure("target_missing") end
+'''
+            if self.backend == "character":
+                body += 'if not a.can_reach_entity(e) then return failure("out_of_reach") end; '
+            body += '''
 local r=f.recipes[x.recipe]
 if not r or not r.enabled then return failure("recipe_locked") end
 local current=e.get_recipe()
@@ -308,6 +372,9 @@ return success{status="running"}
 '''
         elif kind == "stop":
             body += 'a.walking_state={walking=false};a.mining_state={mining=false};return success{status="succeeded"}'
+        elif kind == "launch":
+            from .deterministic_launch import LAUNCH_LUA
+            body += LAUNCH_LUA
         else:
             raise ValueError(f"Unsupported deterministic action: {kind}")
         result = self.query(body)

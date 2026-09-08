@@ -86,6 +86,12 @@ def _config_with_port_overrides(cfg: Any, args: argparse.Namespace) -> Any:
 
 
 def main(argv: list[str] | None = None) -> None:
+    effective_argv = list(sys.argv[1:] if argv is None else argv)
+    from .deterministic_cli import COMMANDS as deterministic_commands
+    if effective_argv and effective_argv[0] in deterministic_commands:
+        from .deterministic_cli import main as deterministic_main
+        deterministic_main(effective_argv)
+        return
     parser = argparse.ArgumentParser(description="Factorio AI autoplayer")
     parser.add_argument("--config", help="Path to config.json")
     subparsers = parser.add_subparsers(dest="command", required=True)
