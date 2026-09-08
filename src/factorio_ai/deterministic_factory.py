@@ -135,7 +135,8 @@ class DeterministicFactory:
         def identity(entity: dict) -> tuple:
             position = entity["position"]
             direction = 0 if entity["name"] in {"pipe", "small-electric-pole", "wooden-chest", "iron-chest", "steel-chest"} else entity.get("direction", 0)
-            return (entity["name"], position["x"], position["y"], direction)
+            base = (entity["name"], position["x"], position["y"], direction)
+            return (*base, entity.get("belt_to_ground_type")) if entity["name"] == "underground-belt" else base
         proposed = {identity(entity): entity for entity in plan.get("entities", [])}
         remaining = []
         for entity in self._reserved(exclude=key):

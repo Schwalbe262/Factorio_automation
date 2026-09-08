@@ -12,7 +12,8 @@ def _point(entity: dict) -> tuple:
 
 
 def _identity(entity: dict) -> tuple:
-    return entity["name"], _point(entity), entity.get("direction", 0)
+    identity = entity["name"], _point(entity), entity.get("direction", 0)
+    return (*identity, entity.get("belt_to_ground_type")) if entity["name"] == "underground-belt" else identity
 
 
 def _ready(result: dict) -> bool:
@@ -32,10 +33,12 @@ def _geometry(plan: dict) -> tuple:
     entities = plan.get("entities") or []
     if len(entities) > 4096:
         raise ValueError("input route exceeds dependency geometry budget")
+    from .deterministic_underground_geometry import underground_edges
+    tunnels = underground_edges(plan)
     belts, arms = {}, []
     for entity in entities:
         name = entity["name"]
-        if name == "transport-belt":
+        if name in {"transport-belt", "underground-belt"}:
             point = _point(entity)
             if entity.get("direction", 0) not in DIRECTIONS:
                 raise ValueError("input route has unsupported belt direction")
@@ -55,12 +58,19 @@ def _geometry(plan: dict) -> tuple:
     for point, belt in belts.items():
         direction = belt.get("direction", 0)
         dx, dy = DIRECTIONS[direction]
+        if point in tunnels:
+            edges[point].append((tunnels[point], None))
+            continue
         destination = point[0] + dx, point[1] + dy
         other = belts.get(destination)
-        if other and other.get("direction", 0) != (direction + 8) % 16:
+        if (other and other.get("direction", 0) != (direction + 8) % 16
+                and (other["name"] != "underground-belt"
+                     or (other.get("belt_to_ground_type") == "input" and other.get("direction") == direction))):
             edges[point].append((destination, None))
     inlets = []
     for arm, pickup, drop in arms:
+        if any(belts.get(point, {}).get("name") == "underground-belt" for point in (pickup, drop)):
+            raise ValueError("input route cannot infer inserter access to an underground endpoint")
         if drop in belts:
             if pickup in belts:
                 edges[pickup].append((drop, arm))
@@ -108,7 +118,18 @@ def _powered_prefix(plan: dict, entities: list) -> dict:
                                              _point(row)))
         if pole not in required:
             required.append(pole)
-    return {**plan, "entities": deepcopy(required), "ports": []}
+    result = {**plan, "entities": deepcopy(required), "ports": []}
+    if "underground_pairs" in plan:
+        points = {_point(entity) for entity in required if entity["name"] == "underground-belt"}
+        pairs = []
+        for pair in plan["underground_pairs"]:
+            included = [_point(pair[role]) in points for role in ("input", "output")]
+            if any(included) and not all(included):
+                raise ValueError("input prefix must preserve both underground endpoints")
+            if all(included):
+                pairs.append(deepcopy(pair))
+        result["underground_pairs"] = pairs
+    return result
 
 
 def _direct_intake(factory, plan: dict, provenance: dict) -> None:
