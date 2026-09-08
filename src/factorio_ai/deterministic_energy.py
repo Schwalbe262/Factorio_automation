@@ -167,6 +167,59 @@ return {ok=true,network_id=network,demand_kw=demand,consumers=consumers,feeds=fe
         return {"bank_kw": 2 * engine_kw, "fuel_backed_kw": per_bank, "total_kw": sum(per_bank),
                 "target_kw": float(evidence["target_kw"])}
 
+    def _coal_transit(self, obs: dict) -> tuple[dict, set]:
+        """Only observed, consistently reserved belts can carry a new coal join."""
+        reserved, conflicts = {}, set()
+        for plan in self.state["banks"] + [feed["plan"] for feed in self.state["feeds"]]:
+            for entity in plan["entities"]:
+                if entity["name"] != "transport-belt":
+                    continue
+                p = entity["position"]
+                key = p["x"], p["y"]
+                if key in reserved and reserved[key].get("direction", 0) != entity.get("direction", 0):
+                    conflicts.add(key)
+                reserved[key] = entity
+        observed = {(e["position"]["x"], e["position"]["y"]): e for e in obs.get("entities", [])
+                    if e["name"] == "transport-belt"}
+        intact = {key: row for key, row in reserved.items() if key not in conflicts and key in observed
+                  and row.get("direction", 0) == observed[key].get("direction", 0)}
+        # Existing feeds may join downstream of the declared first coal belt.
+        # The bank owns and repairs its entire coal conveyor, so any belt along
+        # that directed chain is a safe terminal for inherited feed ownership.
+        intakes = set()
+        for bank in self.state["banks"]:
+            belts = {(e["position"]["x"], e["position"]["y"]): e for e in bank["entities"]
+                     if e["name"] == "transport-belt"}
+            for port in bank["ports"]:
+                if port["kind"] != "item" or port["item"] != "coal":
+                    continue
+                key = port["position"]["x"], port["position"]["y"]
+                while key in belts and key not in intakes:
+                    intakes.add(key)
+                    delta = DIRECTIONS.get(belts[key].get("direction", 0))
+                    if delta is None:
+                        break
+                    key = key[0] + delta[0], key[1] + delta[1]
+        return intact, intakes
+
+    @staticmethod
+    def _coal_tail(position: dict, intact: dict, intakes: set) -> list[dict] | None:
+        key = position["x"], position["y"]
+        path, visited = [], set()
+        while key not in visited:
+            row = intact.get(key)
+            if row is None:
+                return None
+            visited.add(key)
+            path.append(row)
+            if key in intakes:
+                return path
+            delta = DIRECTIONS.get(row.get("direction", 0))
+            if delta is None:
+                return None
+            key = key[0] + delta[0], key[1] + delta[1]
+        return None
+
     def _reserve_feed(self, obs: dict, bank_index: int, *, replacement: bool = False) -> dict:
         clearances = self.factory._port_clearances()
         clearance_entities = [{"name": "reserved-port-approach", "position": {"x": x, "y": y}} for x, y in clearances]
@@ -176,14 +229,18 @@ return {ok=true,network_id=network,demand_kw=demand,consumers=consumers,feeds=fe
             {**destination, "position": e["position"], "facing": e.get("direction", 0)}
             for e in self.state["banks"][bank_index]["entities"]
             if e["name"] == "transport-belt" and e["position"] != destination["position"]]
+        intact, intakes = self._coal_transit(obs)
         for feed in self.state["feeds"]:
-            if not feed.get("complete") or feed.get("depleted") or feed.get("retired"):
+            if not feed.get("complete"):
                 continue
             drill = feed["plan"]["drill"]["position"]
             for entity in feed["plan"]["entities"]:
                 p = entity["position"]
                 if entity["name"] == "transport-belt" and max(abs(p["x"] - drill["x"]), abs(p["y"] - drill["y"])) > 3:
-                    destinations.append({**destination, "position": p, "facing": entity.get("direction", 0)})
+                    tail = self._coal_tail(p, intact, intakes)
+                    if tail is not None:
+                        destinations.append({**destination, "position": p, "facing": entity.get("direction", 0),
+                                             "downstream": tail})
         positions = self.builder.coal_sites()
         payload = json.dumps(json.dumps(positions, separators=(",", ":")))
         survey = self.game.query('''
@@ -230,6 +287,10 @@ return {ok=true,sites=rows}
             if route is None:
                 continue
             plan["entities"] += [{"name": "transport-belt", **segment} for segment in route["segments"]]
+            # The original drill may be depleted or retire later. Give the new
+            # live feed ownership of the whole shared tail so ensure_plan repairs
+            # a broken transit belt even when the old feed no longer runs.
+            plan["entities"] += deepcopy(intake.get("downstream", []))
             plan["entities"] = list({(e["name"], e["position"]["x"], e["position"]["y"]): e for e in plan["entities"]}.values())
             plan["required_items"] = dict(Counter(e.get("item") or e["name"] for e in plan["entities"]))
             index = len(self.state["feeds"])

@@ -169,6 +169,101 @@ class EnergyTests(unittest.TestCase):
         self.assertEqual(result["type"], "build")
         self.factory.fluids.ensure_source.assert_not_called()
 
+    def depleted_trunk(self):
+        self.energy._sync(self.obs)
+        feed = self.energy.state["feeds"][0]
+        trunk = [{"name": "transport-belt", "position": {"x": x + .5, "y": 3.5}, "direction": 4}
+                 for x in range(-17, -3)]
+        feed["plan"]["entities"] = [feed["plan"]["drill"]] + trunk
+        feed["depleted"] = True
+        self.obs["entities"] = deepcopy(feed["plan"]["entities"] + self.energy.state["banks"][0]["entities"])
+        return trunk
+
+    def reserve_replacement_at_trunk(self):
+        trunk = self.depleted_trunk()
+        self.factory._port_clearances.return_value = set()
+        self.factory._reserved.return_value = self.obs["entities"]
+        self.builder._occupied_by_plan.return_value = set()
+        site = {"x": -20, "y": 8}
+        self.builder.coal_sites.return_value = [site]
+        self.builder._coal_plan.side_effect = FactoryBuilder._coal_plan
+        self.builder.can_place.return_value = {"ok": True}
+        self.game.query.side_effect = lambda body: {"ok": True, "sites": [{"position": site, "remaining": 5000}]}
+        self.builder.route.side_effect = lambda start, end, *args, **kwargs: {
+            "ok": True, "segments": [{"position": start, "direction": 0}, {"position": end, "direction": 4}]}
+        result = self.energy._reserve_feed(self.obs, 0, replacement=True)
+        self.assertEqual(result["status"], "waiting")
+        return trunk, self.energy.state["feeds"][1]
+
+    def test_depleted_trunk_reuse_reserves_downstream_repair_without_old_drill(self):
+        trunk, replacement = self.reserve_replacement_at_trunk()
+        self.assertEqual(self.builder.route.call_args.args[1], trunk[0]["position"])
+        for row in trunk:
+            self.assertIn(row, replacement["plan"]["entities"])
+        old_drill = self.energy.state["feeds"][0]["plan"]["drill"]
+        self.assertNotIn(old_drill, replacement["plan"]["entities"])
+        self.assertTrue(replacement["replacement"])
+        self.assertEqual(replacement["plan"]["entities"][-1], trunk[-1])
+
+    def test_live_replacement_repairs_inherited_belt_and_excludes_exhausted_drill_capacity(self):
+        trunk, replacement = self.reserve_replacement_at_trunk()
+        replacement.update(seeded=True, complete=True)
+        missing = trunk[6]
+        self.obs["entities"] = [deepcopy(row) for row in replacement["plan"]["entities"] if row != missing]
+        self.obs["inventory"] = {"transport-belt": 1}
+        self.game.backend = "assisted"
+        real_builder = FactoryBuilder(self.game, self.bootstrap, self.catalog)
+        real_builder.can_place = Mock(return_value={"ok": True})
+        self.builder.ensure_plan.side_effect = real_builder.ensure_plan
+        live = {"remaining": 5000, "fuel": 8000000, "belt_coal": 8, "gross_coal_per_minute": 15}
+        action = self.energy._ensure_feed(self.obs, 1, live)
+        self.assertEqual((action["type"], action["name"], action["position"]),
+                         ("build", "transport-belt", missing["position"]))
+        self.builder._seed.assert_not_called()
+        evidence = {"target_kw": 300, "feeds": [{**live, "remaining": 0}, live]}
+        self.assertEqual(self.energy.capacity(evidence)["total_kw"], 562)
+
+    def test_trunk_transit_requires_observed_matching_belts_to_bank(self):
+        trunk = self.depleted_trunk()
+        pristine = deepcopy(self.obs["entities"])
+        for damage in ("missing", "reversed", "unreserved", "conflicting_reservation"):
+            with self.subTest(damage=damage):
+                self.obs["entities"] = deepcopy(pristine)
+                original = deepcopy(self.energy.state["feeds"])
+                if damage == "missing":
+                    self.obs["entities"] = [e for e in self.obs["entities"] if e != trunk[6]]
+                elif damage == "reversed":
+                    next(e for e in self.obs["entities"] if e == trunk[6])["direction"] = 12
+                elif damage == "unreserved":
+                    self.energy.state["feeds"][0]["plan"]["entities"].remove(trunk[6])
+                else:
+                    self.energy.state["feeds"].append({"plan": {"entities": [{**trunk[6], "direction": 12}]}})
+                intact, intakes = self.energy._coal_transit(self.obs)
+                self.assertIsNone(self.energy._coal_tail(trunk[0]["position"], intact, intakes))
+                self.energy.state["feeds"] = original
+
+    def test_trunk_tail_rejects_cycles_and_preserves_each_turn(self):
+        rows = [{"name": "transport-belt", "position": {"x": .5, "y": .5}, "direction": 4},
+                {"name": "transport-belt", "position": {"x": 1.5, "y": .5}, "direction": 8},
+                {"name": "transport-belt", "position": {"x": 1.5, "y": 1.5}, "direction": 12}]
+        intact = {(e["position"]["x"], e["position"]["y"]): e for e in rows}
+        self.assertEqual(self.energy._coal_tail(rows[0]["position"], intact, {(1.5, 1.5)}), rows)
+        rows[1]["direction"] = 12
+        self.assertIsNone(self.energy._coal_tail(rows[0]["position"], intact, {(1.5, 1.5)}))
+
+    def test_join_downstream_of_declared_bank_port_retains_bank_repair_ownership(self):
+        self.energy._sync(self.obs)
+        bank = self.energy.state["banks"][0]
+        terminal = next(e for e in bank["entities"] if e["name"] == "transport-belt" and e["position"]["x"] == .5)
+        incoming = {"name": "transport-belt", "position": {"x": .5, "y": 2.5}, "direction": 8}
+        isolated = {"name": "transport-belt", "position": {"x": 10.5, "y": 10.5}, "direction": 4}
+        bank["entities"].append(isolated)
+        self.energy.state["feeds"][0]["plan"]["entities"].append(incoming)
+        self.obs["entities"] = bank["entities"] + [incoming]
+        intact, intakes = self.energy._coal_transit(self.obs)
+        self.assertEqual(self.energy._coal_tail(incoming["position"], intact, intakes), [incoming, terminal])
+        self.assertNotIn((10.5, 10.5), intakes)
+
 
 if __name__ == "__main__":
     unittest.main()
