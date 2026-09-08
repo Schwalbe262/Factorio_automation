@@ -284,8 +284,75 @@ return {ok=true,ammo=ammo and ammo.get_item_count("firearm-magazine") or 0,held=
  powered=arm.energy>0 and arm.is_connected_to_electric_network(),producer_finished=produced,tick=game.tick}
 ''')
 
-    def _verify_supply(self, obs: dict, turret: dict, row: dict) -> dict:
-        live = self._supply_observation(turret, row)
+    def _supply_request(self, obs: dict, turret: dict, row: dict) -> dict | None:
+        if not self._intake_owner_matches(obs, turret, row):
+            return None
+        arms = [e for e in row.get("plan", {}).get("entities", []) if e.get("name") == "inserter"]
+        if len(arms) != 1:
+            return None
+        arm = arms[0]
+        found = [e for e in obs.get("entities", []) if e.get("name") == "inserter"
+                 and e.get("position") == arm["position"] and e.get("direction", 0) == arm.get("direction", 0)]
+        if len(found) != 1 or type(found[0].get("unit_number")) is not int or found[0]["unit_number"] <= 0:
+            return None
+        return {"turret": dict(turret["position"]), "turret_unit": turret["unit_number"],
+                "inserter": dict(arm["position"]), "inserter_unit": found[0]["unit_number"], "direction": arm.get("direction", 0)}
+
+    def _supply_observations(self, obs: dict, turrets: list[dict]) -> dict:
+        """Read one call's exact receivers and one common producer counter."""
+        requests = {}
+        for turret in turrets:
+            request = self._supply_request(obs, turret, self.state["turrets"][self._key(turret)])
+            if request is not None:
+                requests[self._key(turret)] = request
+        if not requests:
+            return {}
+        payload = json.dumps(json.dumps({"world_id": obs["world_id"], "tick": obs["tick"], "requests": requests},
+                                        separators=(",", ":")))
+        result = self.game.query('''
+--[[ ammunition_supply_survey: read-only, exact identities, one next_action call. ]]
+local x=helpers.json_to_table(''' + payload + ''')
+if not d or d.world_id~=x.world_id or game.tick<x.tick then return {ok=false} end
+local produced=0
+for _,e in pairs(s.find_entities_filtered{force=f,type="assembling-machine"}) do
+ local recipe=e.get_recipe();if recipe and recipe.name=="firearm-magazine" then produced=produced+e.products_finished end
+end
+local rows={}
+for key,p in pairs(x.requests) do
+ local turret=target(p.turret,"gun-turret");local arm=target(p.inserter,"inserter")
+ local row={ok=false,identity=p};rows[key]=row
+ if turret and arm and turret.force==f and arm.force==f and turret.surface==s and arm.surface==s
+  and turret.unit_number==p.turret_unit and arm.unit_number==p.inserter_unit and arm.direction==p.direction
+  and turret.position.x==p.turret.x and turret.position.y==p.turret.y
+  and arm.position.x==p.inserter.x and arm.position.y==p.inserter.y then
+  local ammo=turret.get_inventory(defines.inventory.turret_ammo)
+  row.ok=true;row.ammo=ammo and ammo.get_item_count("firearm-magazine") or 0
+  row.held=arm.held_stack.valid_for_read and arm.held_stack.name=="firearm-magazine" and arm.held_stack.count or 0
+  row.powered=arm.energy>0 and arm.is_connected_to_electric_network()
+ end
+end
+return {ok=true,world_id=d.world_id,tick=game.tick,producer_finished=produced,rows=rows}
+''')
+        valid = (isinstance(result, dict) and result.get("ok") is True and result.get("world_id") == obs["world_id"]
+                 and type(result.get("tick")) is int and result["tick"] >= obs["tick"]
+                 and type(result.get("producer_finished")) is int and result["producer_finished"] >= 0
+                 and isinstance(result.get("rows"), dict) and set(result["rows"]) == set(requests))
+        survey = {}
+        for key, request in requests.items():
+            live = result["rows"].get(key) if valid else None
+            if (isinstance(live, dict) and live.get("ok") is True and live.get("identity") == request
+                    and type(live.get("powered")) is bool
+                    and all(type(live.get(field)) is int and live[field] >= 0 for field in ("ammo", "held"))):
+                observation = {field: live[field] for field in ("ok", "powered", "ammo", "held")}
+                observation.update(tick=result["tick"], producer_finished=result["producer_finished"])
+            else:
+                observation = {"ok": False, "reason": "ammunition supply survey missing or identity changed"}
+            survey[key] = {"request": request, "observation": observation}
+        return survey
+
+    def _verify_supply(self, obs: dict, turret: dict, row: dict, *, live: dict | None = None) -> dict:
+        if live is None:
+            live = self._supply_observation(turret, row)
         if not live.get("ok") or not live.get("powered"):
             row["owned"] = False
             row.pop("sample", None)
@@ -376,6 +443,7 @@ return {ok=true,ammo=ammo and ammo.get_item_count("firearm-magazine") or 0,held=
         if not outputs:
             return _report("blocked", "ammunition producer has no material output port")
         pending = None
+        supply = None
         for turret in turrets:
             row = self.state["turrets"][self._key(turret)]
             result = self._ensure_intake(obs, turret, row, outputs[0])
@@ -384,7 +452,15 @@ return {ok=true,ammo=ammo and ammo.get_item_count("firearm-magazine") or 0,held=
                 row.pop("sample", None)
                 self._save()
                 return result
-            proof = self._verify_supply(obs, turret, row)
+            # Start lazily so earlier seed/construction actions still return
+            # without surveying. Never retain this data across next_action.
+            if supply is None:
+                supply = self._supply_observations(obs, turrets)
+            surveyed = supply.get(self._key(turret), {})
+            live = surveyed.get("observation") if surveyed.get("request") == self._supply_request(obs, turret, row) else None
+            if live is None:
+                live = {"ok": False, "reason": "ammunition supply intake changed after survey"}
+            proof = self._verify_supply(obs, turret, row, live=live)
             if not _ready(proof):
                 pending = proof
         return pending or _report("succeeded", "all managed turrets have observed automatic ammunition supply",
