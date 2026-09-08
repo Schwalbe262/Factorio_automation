@@ -36,6 +36,16 @@ def validate_mine_guard(action: dict[str, Any]) -> None:
                 or not isinstance(unit, int) or isinstance(unit, bool) or unit < 1
                 or not isinstance(action.get("expected_entity_world_id"), str) or not action["expected_entity_world_id"]):
             raise ValueError("invalid owned entity mining guard")
+    if "lab_replacement" in action:
+        replacement = action["lab_replacement"]
+        position = replacement.get("position") if isinstance(replacement, dict) else None
+        unit = replacement.get("unit_number") if isinstance(replacement, dict) else None
+        if (not identity.issubset(action) or action.get("name") != "lab"
+                or not isinstance(unit, int) or isinstance(unit, bool) or unit < 1
+                or unit == action.get("expected_entity_unit")
+                or not isinstance(position, dict) or not all(isinstance(position.get(axis), (int, float))
+                    and not isinstance(position[axis], bool) and math.isfinite(position[axis]) for axis in ("x", "y"))):
+            raise ValueError("invalid laboratory retirement guard")
     keys = {"expected_world_id", "expected_unit_number", "exhausted_source_receiver", "required_replacement_item"}
     if not keys.intersection(action):
         return
@@ -58,6 +68,16 @@ GUARDED_MINE_LUA = r'''
 if x.expected_entity_unit then
  if not d or d.world_id~=x.expected_entity_world_id then return failure("owned_mine_world_changed") end
  if not e or not e.valid or e.unit_number~=x.expected_entity_unit or e.force~=f then return failure("owned_mine_target_changed") end
+end
+if x.lab_replacement then
+ if e.name~="lab" or not e.minable then return failure("lab_retirement_target_changed") end
+ local input=e.get_inventory(defines.inventory.lab_input);local modules=e.get_module_inventory()
+ if f.current_research or not input or not input.is_empty() or (modules and not modules.is_empty())
+  then return failure("lab_retirement_not_idle_empty") end
+ local replacement=target(x.lab_replacement.position,"lab")
+ if not replacement or replacement.unit_number~=x.lab_replacement.unit_number or replacement==e
+  or replacement.force~=f or replacement.energy<=0 then return failure("lab_retirement_replacement_changed") end
+ if inv.get_insertable_count("lab")<1 then return failure("lab_retirement_inventory_full") end
 end
 if x.expected_world_id then
  if not d or d.world_id~=x.expected_world_id then return failure("source_upgrade_world_changed") end

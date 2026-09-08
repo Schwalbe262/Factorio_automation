@@ -1784,6 +1784,7 @@ return {ok=true,input_belt_verified=true}
         return _report("succeeded", "producer-to-consumer belt connection observed", flow_verified=False, link=link_key)
 
     def _lab_plan(self, obs: dict) -> dict:
+        from .deterministic_lab_migration import lab_site_clear
         packs = list(self.graph.for_first_rocket()["bom"]["science_packs"])
         packs.sort(key=lambda item: (item != "automation-science-pack", item != "logistic-science-pack", item))
         key = "research:labs"
@@ -1791,12 +1792,17 @@ return {ok=true,input_belt_verified=true}
             existing = next((e for e in obs.get("entities", []) if e.get("name") == "lab"), None)
             if existing:
                 plan = build_template("labs_row", inputs=packs, anchor=existing["position"])
-                if self.builder.can_place(plan.get("entities", [])).get("ok"):
+                if lab_site_clear(self, plan) and self.builder.can_place(plan.get("entities", [])).get("ok"):
                     self.state["blocks"][key] = plan
                     self._save()
         return self.reserve_site(build_template("labs_row", inputs=packs), key, obs)
 
     def _ensure_lab(self, obs: dict) -> dict:
+        from .deterministic_lab_migration import ensure_lab_migration
+        self._sync(obs)
+        migration = ensure_lab_migration(self, obs)
+        if migration is not None:
+            return migration
         plan = self._lab_plan(obs)
         if not plan.get("ok"):
             return _report("blocked", plan.get("reason", "no lab site"))
