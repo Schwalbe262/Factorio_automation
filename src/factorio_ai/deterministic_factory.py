@@ -883,6 +883,9 @@ return {ok=true,obstacles=obstacles}
 
     def _ensure_product(self, obs: dict, item: str, _stack: tuple[str, ...], *,
                         rate_per_minute: float | None) -> dict:
+        if item in {"iron-ore", "copper-ore"}:
+            from .deterministic_raw_ore import ensure_raw_ore
+            return ensure_raw_ore(self, obs, item, rate_per_minute)
         if item in {"iron-plate", "copper-plate", "coal", "stone"}:
             result = self._source_endpoint(obs, item)
             if _ready(result) and rate_per_minute is not None:
