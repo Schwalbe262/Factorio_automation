@@ -50,6 +50,10 @@ class DeterministicFactory:
         self._product_revision = 0
 
     def _sync(self, observation: dict) -> None:
+        from .deterministic_input_bypass import input_bypass_sync_error
+        bypass_error = input_bypass_sync_error(self, observation)
+        if bypass_error:
+            raise ValueError(bypass_error)
         world = observation.get("world_id")
         if not world:
             raise ValueError("production observation requires world_id")

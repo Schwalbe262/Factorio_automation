@@ -121,6 +121,20 @@ class DeterministicSupervisor:
         if self.builder is None:
             from .deterministic_builder import FactoryBuilder
             self.builder = FactoryBuilder(self.game, self.bootstrap, self.catalog)
+        # A mined entry must be reconciled before bootstrap or any ancestor
+        # builder can recreate the still-saved old canonical facing.
+        saved_factory = self.root / "factory-production.json"
+        factory_state = self.factory.state if self.factory is not None else None
+        has_bypass = isinstance(factory_state, dict) and bool(factory_state.get("input_bypasses"))
+        if self.factory is None and saved_factory.exists():
+            has_bypass = bool(json.loads(saved_factory.read_text(encoding="utf-8")).get("input_bypasses"))
+        if has_bypass:
+            from .deterministic_input_bypass import resume_input_bypass
+            self.prepare_production()
+            critical = resume_input_bypass(self.factory, observation, critical_only=True)
+            if critical is not None:
+                self.stage = "production"
+                return critical
         self.builder._sync(observation)
         if until == "rocket" and ("power_sample_tick" in self.builder.state
                 or self.builder.state.get("power_verified_once")
