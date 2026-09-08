@@ -264,6 +264,118 @@ class EnergyTests(unittest.TestCase):
         self.assertEqual(self.energy._coal_tail(incoming["position"], intact, intakes), [incoming, terminal])
         self.assertNotIn((10.5, 10.5), intakes)
 
+    def output_tail_fixture(self):
+        self.energy._sync(self.obs)
+        feed = self.energy.state["feeds"][0]
+        output = feed["plan"]["ports"][0]
+        outlet = output["position"]
+        trunk = [{"name": "transport-belt", "position": {"x": x + .5, "y": 2.5},
+                  "direction": 8 if x == -4 else 4} for x in range(-23, -3)]
+        feed["plan"]["entities"] += trunk
+        self.obs["entities"] = deepcopy(feed["plan"]["entities"] + self.energy.state["banks"][0]["entities"])
+        self.factory._port_clearances.return_value = set()
+        self.factory._reserved.return_value = deepcopy(self.obs["entities"])
+        self.builder._occupied_by_plan.return_value = set()
+        site = {"x": -30, "y": 0}
+        self.builder.coal_sites.return_value = [site]
+        self.builder._coal_plan.side_effect = FactoryBuilder._coal_plan
+        self.builder.can_place.return_value = {"ok": True}
+        self.game.query.side_effect = lambda body: {"ok": True, "sites": [{"position": site, "remaining": 5000}]}
+        self.factory._belt_bridge_route.return_value = {"ok": False}
+        return outlet, trunk
+
+    def test_declared_output_tail_can_join_inside_three_tiles_without_reversing_fuel_loop(self):
+        outlet, trunk = self.output_tail_fixture()
+        previous_loop = deepcopy(self.energy.state["feeds"][0]["plan"]["entities"])
+        self.builder.route.side_effect = lambda source, target, *args, **kwargs: {
+            "ok": target == outlet, "segments": [{"position": source, "direction": 8},
+                                                 {"position": target, "direction": 4}]}
+        result = self.energy._reserve_feed(self.obs, 0)
+        self.assertEqual(result["status"], "waiting")
+        plan = self.energy.state["feeds"][-1]["plan"]
+        self.assertIn({"name": "transport-belt", "position": outlet, "direction": 8}, plan["entities"])
+        self.assertTrue(all(row in plan["entities"] for row in trunk))
+        self.assertEqual(self.energy.state["feeds"][0]["plan"]["entities"], previous_loop)
+        self.factory._belt_bridge_route.assert_not_called()
+
+    def test_enclosed_coal_site_can_reserve_powered_crossing_with_owned_downstream_tail(self):
+        outlet, trunk = self.output_tail_fixture()
+        self.builder.route.return_value = {"ok": False, "reason": "no route within bounds"}
+        arm = {"name": "long-handed-inserter", "position": {"x": -27.5, "y": 3.5}, "direction": 12}
+        pole = {"name": "small-electric-pole", "position": {"x": -27.5, "y": 4.5}, "direction": 0}
+        self.factory._belt_bridge_route.side_effect = lambda source, target, *args, **kwargs: {
+            "ok": True, "segments": [{"position": source, "direction": 8}, arm, pole,
+                                       {"position": {"x": -23.5, "y": 1.5}, "direction": 4},
+                                       {"position": target, "direction": 4}]}
+        self.assertEqual(self.energy._reserve_feed(self.obs, 0)["status"], "waiting")
+        plan = self.energy.state["feeds"][-1]["plan"]
+        self.assertIn(arm, plan["entities"])
+        self.assertIn(pole, plan["entities"])
+        self.assertTrue(all(row in plan["entities"] for row in trunk))
+        self.assertEqual(plan["required_items"]["long-handed-inserter"], 1)
+        self.assertIn({"name": "transport-belt", "position": outlet, "direction": 8}, plan["entities"])
+
+    def test_feed_bridge_requires_power_before_seeding_or_completing(self):
+        self.energy._sync(self.obs)
+        feed = self.energy.state["feeds"][0]
+        feed.update(seeded=False, complete=False)
+        feed["plan"]["entities"].append({"name": "long-handed-inserter", "position": {"x": -30.5, "y": 3.5}, "direction": 12})
+        self.factory.ensure_power_connection.return_value = {"type": "build", "name": "small-electric-pole"}
+        live = {"remaining": 1000, "fuel": 8000000, "belt_coal": 20}
+        self.assertEqual(self.energy._ensure_feed(self.obs, 0, live)["name"], "small-electric-pole")
+        self.builder._seed.assert_not_called()
+        self.assertFalse(feed["complete"])
+        self.factory.ensure_power_connection.return_value = {"status": "succeeded"}
+        self.assertIsNone(self.energy._ensure_feed(self.obs, 0, live))
+        self.assertTrue(feed["complete"])
+        self.factory.ensure_power_connection.assert_called_with(self.obs, "energy:feed:0", feed["plan"])
+
+    def test_transit_terminals_are_scoped_to_the_bank_receiving_capacity(self):
+        self.energy._sync(self.obs)
+        other = build_template("steam_bank", anchor={"x": 60.5, "y": .5})
+        self.energy.state["banks"].append(other)
+        self.obs["entities"] = deepcopy(self.energy.state["banks"][0]["entities"] + other["entities"])
+        foreign = next(p["position"] for p in other["ports"] if p["item"] == "coal")
+        intact, intakes = self.energy._coal_transit(self.obs, 0)
+        self.assertIsNone(self.energy._coal_tail(foreign, intact, intakes))
+        intact, intakes = self.energy._coal_transit(self.obs, 1)
+        self.assertIsNotNone(self.energy._coal_tail(foreign, intact, intakes))
+
+    def test_bridge_fallback_has_a_total_budget(self):
+        self.output_tail_fixture()
+        self.builder.route.return_value = {"ok": False, "reason": "no route within bounds"}
+        self.assertEqual(self.energy._reserve_feed(self.obs, 0)["status"], "blocked")
+        self.assertEqual(self.factory._belt_bridge_route.call_count, 4)
+        self.assertEqual(len(self.energy.state["feeds"]), 1)
+
+    def test_opposing_bridge_terminal_cannot_reverse_a_coal_intake(self):
+        self.output_tail_fixture()
+        intact, intakes = self.energy._coal_transit(self.obs, 0)
+        self.builder.route.return_value = {"ok": False, "reason": "no route within bounds"}
+        self.factory._belt_bridge_route.side_effect = lambda source, target, *args, **kwargs: {
+            "ok": True, "segments": [{"position": source, "direction":
+                (intact[(target["x"], target["y"])]["direction"] + 8) % 16},
+                {"position": target, "direction": 4}]}
+        self.assertEqual(self.energy._reserve_feed(self.obs, 0)["status"], "blocked")
+        self.assertEqual(len(self.energy.state["feeds"]), 1)
+
+    def test_reservation_never_attributes_a_foreign_bank_tail_to_the_requested_bank(self):
+        self.output_tail_fixture()
+        other = build_template("steam_bank", anchor={"x": -60.5, "y": .5})
+        self.energy.state["banks"].append(other)
+        foreign_port = next(p for p in other["ports"] if p["item"] == "coal")
+        feed = {"plan": {"entities": deepcopy(other["entities"]),
+                         "drill": FactoryBuilder._coal_plan({"x": -80, "y": 0})["drill"],
+                         "ports": [{**foreign_port, "direction": "output"}]},
+                "bank": 1, "complete": True}
+        self.energy.state["feeds"].append(feed)
+        self.obs["entities"] += deepcopy(other["entities"])
+        foreign = [e["position"] for e in other["entities"] if e["name"] == "transport-belt"]
+        self.builder.route.return_value = {"ok": False, "reason": "no route within bounds"}
+        self.assertEqual(self.energy._reserve_feed(self.obs, 0)["status"], "blocked")
+        for call in self.builder.route.call_args_list + self.factory._belt_bridge_route.call_args_list:
+            self.assertNotIn(call.args[1], foreign)
+
 
 if __name__ == "__main__":
     unittest.main()

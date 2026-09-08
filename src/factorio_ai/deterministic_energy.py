@@ -167,7 +167,7 @@ return {ok=true,network_id=network,demand_kw=demand,consumers=consumers,feeds=fe
         return {"bank_kw": 2 * engine_kw, "fuel_backed_kw": per_bank, "total_kw": sum(per_bank),
                 "target_kw": float(evidence["target_kw"])}
 
-    def _coal_transit(self, obs: dict) -> tuple[dict, set]:
+    def _coal_transit(self, obs: dict, bank_index: int | None = None) -> tuple[dict, set]:
         """Only observed, consistently reserved belts can carry a new coal join."""
         reserved, conflicts = {}, set()
         for plan in self.state["banks"] + [feed["plan"] for feed in self.state["feeds"]]:
@@ -187,7 +187,8 @@ return {ok=true,network_id=network,demand_kw=demand,consumers=consumers,feeds=fe
         # The bank owns and repairs its entire coal conveyor, so any belt along
         # that directed chain is a safe terminal for inherited feed ownership.
         intakes = set()
-        for bank in self.state["banks"]:
+        banks = self.state["banks"] if bank_index is None else [self.state["banks"][bank_index]]
+        for bank in banks:
             belts = {(e["position"]["x"], e["position"]["y"]): e for e in bank["entities"]
                      if e["name"] == "transport-belt"}
             for port in bank["ports"]:
@@ -229,7 +230,7 @@ return {ok=true,network_id=network,demand_kw=demand,consumers=consumers,feeds=fe
             {**destination, "position": e["position"], "facing": e.get("direction", 0)}
             for e in self.state["banks"][bank_index]["entities"]
             if e["name"] == "transport-belt" and e["position"] != destination["position"]]
-        intact, intakes = self._coal_transit(obs)
+        intact, intakes = self._coal_transit(obs, bank_index)
         for feed in self.state["feeds"]:
             if not feed.get("complete"):
                 continue
@@ -241,6 +242,20 @@ return {ok=true,network_id=network,demand_kw=demand,consumers=consumers,feeds=fe
                     if tail is not None:
                         destinations.append({**destination, "position": p, "facing": entity.get("direction", 0),
                                              "downstream": tail})
+            # The declared output is already downstream of the drill's fuel
+            # pickup. Its intact tail can accept coal even inside the old
+            # three-tile exclusion, where a neighbouring conveyor may enclose it.
+            for port in feed["plan"]["ports"]:
+                if port.get("kind") != "item" or port.get("item") != "coal" or port.get("direction") != "output":
+                    continue
+                tail = self._coal_tail(port["position"], intact, intakes)
+                if tail and tail[0].get("direction", 0) != port.get("facing"):
+                    continue
+                for offset, entity in enumerate(tail or []):
+                    destinations.append({**destination, "position": entity["position"],
+                                         "facing": entity.get("direction", 0), "downstream": tail[offset:]})
+        destinations = list({(p["position"]["x"], p["position"]["y"], p["facing"]): p
+                             for p in destinations}.values())
         positions = self.builder.coal_sites()
         payload = json.dumps(json.dumps(positions, separators=(",", ":")))
         survey = self.game.query('''
@@ -261,6 +276,7 @@ return {ok=true,sites=rows}
                        math.dist((row["position"]["x"], row["position"]["y"]),
                                  (destination["position"]["x"], destination["position"]["y"]))))
         surveyed = 0
+        bridge_attempts = 0
         for row in sites:
             site = row["position"]
             plan = self.builder._coal_plan(site)
@@ -284,6 +300,23 @@ return {ok=true,sites=rows}
                     trial["segments"][-1]["direction"] = intake["facing"]
                     route = trial
                     break
+            if route is None:
+                # Reuse the factory's ordinary long-arm crossing when a
+                # reserved conveyor encloses an otherwise usable coal field.
+                # Keep the expensive fallback bounded across the whole survey.
+                for intake in nearby[:4]:
+                    if bridge_attempts >= 4:
+                        break
+                    bridge_attempts += 1
+                    trial = self.factory._belt_bridge_route(plan["ports"][0]["position"], intake["position"],
+                        self.factory._reserved() + plan["entities"] + clearance_entities,
+                        start_direction=plan["ports"][0]["facing"])
+                    if trial.get("ok"):
+                        if len(trial["segments"]) > 1 and trial["segments"][-2]["direction"] == (intake["facing"] + 8) % 16:
+                            continue
+                        trial["segments"][-1]["direction"] = intake["facing"]
+                        route = trial
+                        break
             if route is None:
                 continue
             plan["entities"] += [{"name": "transport-belt", **segment} for segment in route["segments"]]
@@ -321,6 +354,10 @@ return {ok=true,sites=rows}
         result = self.builder.ensure_plan(obs, feed["plan"])
         if not _ready(result):
             return result
+        if any(e["name"] == "long-handed-inserter" for e in feed["plan"]["entities"]):
+            result = self.factory.ensure_power_connection(obs, f"energy:feed:{index}", feed["plan"])
+            if not _ready(result):
+                return result
         seed = self.builder._seed(obs, f"energy:feed:{index}", feed["plan"]["drill"], 8)
         if seed:
             return seed
