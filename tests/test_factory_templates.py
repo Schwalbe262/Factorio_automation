@@ -146,6 +146,38 @@ class OrthogonalRouterTests(unittest.TestCase):
         self.assertEqual(result["segments"], [])
         self.assertIn("no route", result["reason"])
 
+    def test_obstructed_directional_endpoints_fail_before_search(self):
+        for direction, (dx, dy) in {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}.items():
+            for endpoint in ("start", "end"):
+                for obstruction in ("occupied", "outside"):
+                    with self.subTest(direction=direction, endpoint=endpoint, obstruction=obstruction):
+                        start, end = (0, 0), (10, 10)
+                        x, y = start if endpoint == "start" else end
+                        sign = 1 if endpoint == "start" else -1
+                        required = (x + sign * dx, y + sign * dy)
+                        bounds = {"min_x": -20, "max_x": 20, "min_y": -20, "max_y": 20}
+                        # Place both endpoints on the same edge for outside cases.
+                        if obstruction == "outside":
+                            start, end = ((0, 0), (0, 10)) if dx else ((0, 0), (10, 0))
+                            axis = "x" if dx else "y"
+                            bounds[("max_" if sign * (dx or dy) > 0 else "min_") + axis] = 0
+                        result = route_orthogonal(start, end, bounds=bounds,
+                            occupied={required} if obstruction == "occupied" else (),
+                            **{endpoint + "_direction": direction})
+                        self.assertFalse(result["ok"])
+                        self.assertEqual(result["visited"], 0)
+                        self.assertEqual(result["reason"], "no route within bounds")
+
+    def test_coincident_route_needs_no_approach_and_adjacent_route_reuses_endpoint(self):
+        same = route_orthogonal((0, 0), (0, 0), start_direction=4, end_direction=4,
+                                occupied={(1, 0), (-1, 0)})
+        self.assertTrue(same["ok"], same)
+        self.assertEqual(len(same["segments"]), 1)
+        adjacent = route_orthogonal((0, 0), (1, 0), start_direction=4, end_direction=4,
+                                    bounds={"min_x": 0, "max_x": 1, "min_y": 0, "max_y": 0})
+        self.assertTrue(adjacent["ok"], adjacent)
+        self.assertEqual(len(adjacent["segments"]), 2)
+
     def test_forced_departure_uses_clear_detour_without_revisiting_any_tile(self):
         result = route_orthogonal((0, 0), (-2, 0), start_direction=4, end_direction=0,
                                   bounds={"min_x": -2, "max_x": 1, "min_y": 0, "max_y": 1})

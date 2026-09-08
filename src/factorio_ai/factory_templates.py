@@ -353,6 +353,17 @@ def route_orthogonal(start: Any, end: Any, *, occupied: Iterable[Any] = (),
             return limits["min_x"] <= x <= limits["max_x"] and limits["min_y"] <= y <= limits["max_y"]
         if not inside(sx, sy) or not inside(ex, ey):
             raise ValueError("route endpoint is outside bounds")
+        if (sx, sy) != (ex, ey):
+            # A forced belt facing requires this adjacent tile in every path.
+            # Reject an obstructed approach before spending the search budget;
+            # a crossing planner may still select a different endpoint.
+            for x, y, direction, sign in ((sx, sy, start_direction, 1),
+                                           (ex, ey, end_direction, -1)):
+                if direction is not None:
+                    dx, dy = DIRECTIONS[direction]
+                    required = (x + dx * sign, y + dy * sign)
+                    if required in blocked or not inside(*required):
+                        return {**failure, "reason": "no route within bounds"}
         initial = (sx, sy, -1)
         frontier = [(0.0, 0, initial)]
         costs, parents = {initial: 0}, {}
