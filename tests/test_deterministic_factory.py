@@ -522,6 +522,69 @@ class FactoryTests(unittest.TestCase):
         self.assertFalse(first.kwargs["allow_bridge"])
         self.assertTrue(last.kwargs.get("allow_bridge", True))
 
+    def observed_upstream_trunk_fixture(self):
+        source, bus = port("iron-plate", .5, -2.5, facing=8), port("iron-plate", 20.5, .5)
+        points = ([(x + .5, .5) for x in range(0, -22, -1)]
+                  + [(-20.5, y + .5) for y in range(1, 21)]
+                  + [(x + .5, 20.5) for x in range(-20, 21)]
+                  + [(20.5, y + .5) for y in range(19, -1, -1)])
+        vectors = {(0, -1): 0, (1, 0): 4, (0, 1): 8, (-1, 0): 12}
+        belts = [{"name": "transport-belt", "position": {"x": x, "y": y},
+                  "direction": vectors[(points[i + 1][0] - x, points[i + 1][1] - y)] if i + 1 < len(points) else 4}
+                 for i, (x, y) in enumerate(points)]
+        self.factory.state["links"]["built-trunk"] = {"ok": True, "entities": belts,
+            "source_port": port("iron-plate", .5, .5, facing=12), "consumer_port": bus}
+        self.obs["entities"] = [{**deepcopy(belt), "unit_number": 100 + i} for i, belt in enumerate(belts)]
+        def route(start, end, *args, **kwargs):
+            if end != belts[0]["position"]:
+                return {"ok": False, "reason": "no route within bounds"}
+            return {"ok": True, "segments": [
+                {"position": source["position"], "direction": 8},
+                {"position": {"x": .5, "y": -1.5}, "direction": 8},
+                {"position": {"x": .5, "y": -.5}, "direction": 8}, belts[0]]}
+        self.factory._material_route = Mock(side_effect=route)
+        return source, bus, belts
+
+    def test_upstream_ranking_keeps_long_observed_trunk_inside_sixteen_candidate_limit(self):
+        source, bus, belts = self.observed_upstream_trunk_fixture()
+        self.assertGreater(len(self.factory._upstream_output_tails(self.obs, bus)), 16)
+        route = self.factory._route_upstream_output(self.obs, source, bus)
+        self.assertTrue(route["ok"], route)
+        self.assertEqual(route["upstream_tail"]["entry_port"]["position"], belts[0]["position"])
+        self.assertEqual(self.factory._material_route.call_count, 16)
+        self.assertEqual(route["segments"][-len(belts):], belts)
+        self.builder.can_place.assert_called_once_with(route["segments"])
+
+    def test_upstream_ranking_does_not_discount_unproven_or_other_world_observations(self):
+        source, bus, _ = self.observed_upstream_trunk_fixture()
+        for change in ("unit", "world"):
+            with self.subTest(change=change):
+                observation = deepcopy(self.obs)
+                if change == "unit":
+                    for belt in observation["entities"]:
+                        belt.pop("unit_number")
+                else:
+                    observation["world_id"] = "other-world"
+                route = self.factory._route_upstream_output(observation, source, bus)
+                self.assertFalse(route["ok"], route)
+        self.builder.can_place.assert_not_called()
+
+    def test_upstream_merge_compares_complete_new_construction_cost_after_routing(self):
+        source, bus, tail = self.upstream_merge_fixture()
+        original_route = self.factory._material_route.side_effect
+        detour = [(-1.5, -1.5, 8), (-1.5, -.5, 12), (-2.5, -.5, 0), (-2.5, -1.5, 0),
+                  (-2.5, -2.5, 4), (-1.5, -2.5, 4), (-.5, -2.5, 8), (-.5, -1.5, 8), (-.5, -.5, 8), (-.5, .5, 8)]
+        def route(start, end, *args, **kwargs):
+            if end == tail[1]["position"]:
+                return {"ok": True, "segments": [{"position": {"x": x, "y": y}, "direction": facing}
+                                                  for x, y, facing in detour]}
+            return original_route(start, end, *args, **kwargs)
+        self.factory._material_route.side_effect = route
+        selected = self.factory._route_upstream_output(self.obs, source, bus)
+        self.assertEqual(self.factory._material_route.call_args_list[0].args[1], tail[1]["position"])
+        self.assertEqual(selected["upstream_tail"]["entry_port"]["position"], tail[0]["position"])
+        self.assertEqual(len(selected["segments"]), 5)
+
     def laboratory_capacity_fixture(self, duration=600):
         self.automatic_sources()
         self.factory.graph.science_rate_per_minute = 30

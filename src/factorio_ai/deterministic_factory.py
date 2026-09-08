@@ -1008,12 +1008,26 @@ return {ok=true,candidates=candidates}
 
     def _route_upstream_output(self, obs: dict, source_port: dict, bus_port: dict) -> dict:
         tails = self._upstream_output_tails(obs, bus_port)
+        def identity(entity: dict) -> tuple:
+            return entity["name"], entity["position"]["x"], entity["position"]["y"], entity.get("direction")
+        owned = {identity(e) for tail in tails for e in tail["entities"]}
+        source = ("transport-belt", source_port["position"]["x"], source_port["position"]["y"], source_port.get("facing"))
+        if any(source_port in plan.get("ports", []) and any(identity(e) == source for e in plan.get("entities", []))
+               for plan in self.state["blocks"].values()):
+            owned.add(source)
+        observed = {identity(e) for e in obs.get("entities", [])
+                    if e["name"] == "transport-belt" and type(e.get("unit_number")) is int and e["unit_number"] > 0
+                    and obs.get("world_id") == self.state.get("world_id") and identity(e) in owned}
+        def new_count(entities: list[dict]) -> int:
+            return sum(identity(e) not in observed for e in entities)
         tails.sort(key=lambda tail: (_distance(source_port["position"], tail["port"]["position"])
-                                    + len(tail["entities"]), len(tail["entities"]), tail["key"]))
+                                    + new_count(tail["entities"]),
+                                    _distance(source_port["position"], tail["port"]["position"]) + len(tail["entities"]), tail["key"]))
         # Bound recovery work even when a large factory has many old outputs.
         tails = tails[:16]
         reserved = self._reserved()
         for mode in ("belts", "source-pickup", "bridge"):
+            candidates = []
             for tail in tails:
                 destination = tail["port"]
                 dx, dy = DIRECTIONS[destination["facing"]]
@@ -1028,10 +1042,14 @@ return {ok=true,candidates=candidates}
                 # a current placement check rejects changed entities/terrain.
                 segments = route["segments"][:-1] + tail["entities"]
                 entities = [{"name": "transport-belt", **segment} for segment in segments]
-                if not self.builder.can_place(entities).get("ok"):
-                    continue
-                return {**route, "segments": entities, "upstream_tail": {
-                    "category": tail["category"], "key": tail["key"], "entry_port": destination}}
+                candidates.append({**route, "segments": entities, "upstream_tail": {
+                    "category": tail["category"], "key": tail["key"], "entry_port": destination}})
+            # Nearby entry points can require long detours around an existing
+            # bus. Compare complete construction costs within the bounded set.
+            candidates.sort(key=lambda route: (new_count(route["segments"]), len(route["segments"])))
+            for candidate in candidates:
+                if self.builder.can_place(candidate["segments"]).get("ok"):
+                    return candidate
         return {"ok": False, "reason": "no reachable owned upstream output tail"}
 
     def _merge_output(self, obs: dict, source_port: dict, bus_port: dict, key: str) -> dict:
