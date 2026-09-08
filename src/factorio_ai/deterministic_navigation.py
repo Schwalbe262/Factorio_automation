@@ -286,7 +286,8 @@ local e=target(x.position,x.name)
 local within
 if e then within=a.can_reach_entity(e)
 else within=(x.position.x-a.position.x)^2+(x.position.y-a.position.y)^2<=math.min(4,a.build_distance)^2 end
-if within and not e and x.type=="build" and prototypes.entity[x.name] then
+if within and not e and x.type=="build" and prototypes.entity[x.name]
+ and not s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f} then
  local left,top,right,bottom=build_box(x)
  local actor_box=a.bounding_box
  if actor_box.right_bottom.x>left and actor_box.left_top.x<right

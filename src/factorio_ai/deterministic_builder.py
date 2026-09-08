@@ -119,7 +119,18 @@ class FactoryBuilder:
                 continue
             item = entity.get("item") or self._placement_item(entity["name"])
             if int(observation.get("inventory", {}).get(item, 0)) < 1:
-                return self.bootstrap.ensure_item(observation, item, 1)
+                entity_type = self.catalog.entities.get(entity["name"], {}).get("type", entity["name"])
+                infrastructure = {"transport-belt", "underground-belt", "splitter", "pipe", "pipe-to-ground",
+                                  "electric-pole", "wall", "gate"}
+                cap = (32 if entity_type in infrastructure else 8 if entity_type == "inserter"
+                       else 4 if entity_type in {"container", "logistic-container"} else 2)
+                missing = set()
+                for wanted in plan["entities"]:
+                    placement_item = wanted.get("item") or self._placement_item(wanted["name"])
+                    if placement_item == item and _find(observation, wanted) is None:
+                        p = wanted["position"]
+                        missing.add((wanted["name"], p["x"], p["y"]))
+                return self.bootstrap.ensure_item(observation, item, min(cap, len(missing)))
             placement = self.can_place([entity])
             if not placement.get("ok"):
                 if self.game.backend == "character":

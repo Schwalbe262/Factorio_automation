@@ -30,6 +30,35 @@ class BuilderTests(unittest.TestCase):
         self.bootstrap.ensure_item.assert_called_once_with(self.obs, "lab", 1)
         self.game.query.assert_not_called()
 
+    def test_material_batch_excludes_installed_entities_and_duplicate_reservations(self):
+        belts = [{"name": "transport-belt", "position": {"x": index + .5, "y": .5}, "direction": 4}
+                 for index in range(12)]
+        self.obs["entities"] = belts[:8]
+        self.bootstrap.ensure_item.return_value = {"type": "craft", "recipe": "transport-belt", "count": 2}
+        result = self.builder.ensure_plan(self.obs, {"ok": True, "entities": belts + [belts[-1]]})
+        self.bootstrap.ensure_item.assert_called_once_with(self.obs, "transport-belt", 4)
+        self.assertEqual(result["type"], "craft")
+
+    def test_long_infrastructure_routes_request_at_most_32_placement_items(self):
+        belts = [{"name": "transport-belt", "position": {"x": index + .5, "y": .5}, "direction": 4}
+                 for index in range(100)]
+        self.builder.ensure_plan(self.obs, {"ok": True, "entities": belts})
+        self.bootstrap.ensure_item.assert_called_once_with(self.obs, "transport-belt", 32)
+
+    def test_machine_batch_is_small_and_uses_only_same_placement_item(self):
+        machines = [{"name": "assembling-machine-1", "position": {"x": index * 5 + .5, "y": .5}}
+                    for index in range(10)]
+        machines.append({"name": "lab", "position": {"x": .5, "y": 10.5}})
+        self.builder.ensure_plan(self.obs, {"ok": True, "entities": machines})
+        self.bootstrap.ensure_item.assert_called_once_with(self.obs, "assembling-machine-1", 2)
+
+    def test_existing_construction_stock_is_used_before_procuring_another_batch(self):
+        self.obs["inventory"] = {"transport-belt": 1}
+        belts = [{"name": "transport-belt", "position": {"x": index + .5, "y": .5}, "direction": 4}
+                 for index in range(40)]
+        self.assertEqual(self.builder.ensure_plan(self.obs, {"ok": True, "entities": belts})["type"], "build")
+        self.bootstrap.ensure_item.assert_not_called()
+
     def test_reconstruction_reuses_observed_entities_and_resumes_first_missing(self):
         plan = {"ok": True, "entities": [{"name": "pipe", "position": {"x": .5, "y": .5}},
                                            {"name": "pipe", "position": {"x": 1.5, "y": .5}}]}
