@@ -130,7 +130,11 @@ class FactoryBuilder:
         self._sync(observation)
         if not plan.get("ok") or not plan.get("entities"):
             return _report("blocked", plan.get("reason") or "empty or invalid block plan")
-        for index, entity in enumerate(plan["entities"]):
+        # A powered drill can spill ore into an unfinished receiver footprint.
+        # This also applies to persisted cells reserved by an older version.
+        entities = (sorted(plan["entities"], key=lambda row: row["name"] == "electric-mining-drill")
+                    if plan.get("resource_cell") else plan["entities"])
+        for index, entity in enumerate(entities):
             existing = _find(observation, entity)
             if existing is not None:
                 direction_matches = _direction_matches(entity["name"], existing.get("direction", 0), entity.get("direction", 0))
@@ -177,18 +181,80 @@ return {ok=true,only_actor=own_actor and not other and terrain}
                         return {"type": "build", "name": entity["name"], "item": item,
                                 "position": entity["position"], "direction": entity.get("direction", 0),
                                 "reason": "step outside the reserved build footprint before placement"}
+                recovery = self._recover_resource_cell_obstruction(observation, plan, entity)
+                if recovery is not None:
+                    return recovery
                 return _report("blocked", "reserved block placement is obstructed", blockers=placement.get("blocked"), entity=entity)
             move = self._move(observation, entity["position"])
             if move:
                 return move
             if self.game.backend == "assisted" and entity["name"] in BUILD_BATCH_NAMES:
-                batch = self._affordable_builds(observation, plan["entities"][index:])
+                batch = self._affordable_builds(observation, entities[index:])
                 if len(batch) > 1:
                     return {"type": "build_many", "actions": batch}
             return {"type": "build", "name": entity["name"], "item": item,
                     "position": entity["position"], "direction": entity.get("direction", 0)}
         return _report("succeeded", "block entities and recipes observed", constructed=len(plan["entities"]),
                        ports=plan.get("ports", []), flow_verified=False)
+
+    def _recover_resource_cell_obstruction(self, observation: dict, plan: dict, entity: dict) -> dict | None:
+        """Recover a partial cell through ordinary mining and conserved pickup."""
+        if not plan.get("resource_cell") or entity["name"] not in {"stone-furnace", "wooden-chest"}:
+            return None
+        drills = [row for row in plan["entities"] if row["name"] == "electric-mining-drill"]
+        if len(drills) != 1:
+            return None
+        observed = _find(observation, drills[0])
+        payload = json.dumps(json.dumps({"receiver": entity, "drill": drills[0]}, separators=(",", ":")))
+        survey = self.game.query('''
+local args=helpers.json_to_table(''' + payload + ''');local x=args.receiver
+if target(x.position,x.name) then return {ok=false} end
+local box=prototypes.entity[x.name].collision_box
+local function rotate(x,y)
+ local direction=args.receiver.direction or 0
+ if direction==4 then return -y,x elseif direction==8 then return -x,-y elseif direction==12 then return y,-x end
+ return x,y
+end
+local x1,y1=rotate(box.left_top.x,box.left_top.y);local x2,y2=rotate(box.right_bottom.x,box.right_bottom.y)
+local left,right=x.position.x+math.min(x1,x2),x.position.x+math.max(x1,x2)
+local top,bottom=x.position.y+math.min(y1,y2),x.position.y+math.max(y1,y2)
+local ground={}
+for _,e in pairs(s.find_entities_filtered{area={{left,top},{right,bottom}}}) do
+ if e~=a and e.type~="resource" then
+  if e.type~="item-entity" or not e.stack.valid_for_read or e.stack.prototype.type~="item" then return {ok=false} end
+  ground[#ground+1]={name=e.name,position=pos(e.position),item=e.stack.name,quality=e.stack.quality.name,count=e.stack.count}
+ end
+end
+if #ground==0 or not s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f,
+ build_check_type=defines.build_check_type.manual_ghost,forced=true} then return {ok=false} end
+local drill=target(args.drill.position,args.drill.name);local emitter=nil
+if drill then
+ local p=drill.drop_position
+ if drill.force~=f or not drill.minable or drill.direction~=(args.drill.direction or 0)
+  or p.x<left or p.x>right or p.y<top or p.y>bottom then return {ok=false} end
+ emitter={unit_number=drill.unit_number}
+end
+return {ok=true,world_id=d and d.world_id,emitter=emitter,ground=ground}
+''')
+        if not survey.get("ok") or survey.get("world_id") != observation["world_id"]:
+            return None
+        emitter = survey.get("emitter")
+        if emitter:
+            unit = emitter.get("unit_number")
+            if not observed or not unit or observed.get("unit_number") != unit:
+                return None
+            return {"type": "mine", "name": drills[0]["name"], "position": drills[0]["position"], "count": 1,
+                    "expected_entity_unit": unit, "expected_entity_world_id": observation["world_id"],
+                    "reason": "recover the owned electric drill until its reserved receiver is built"}
+        if observed:
+            return None
+        ground = sorted(survey.get("ground") or [], key=lambda row: (row["position"]["x"], row["position"]["y"], row["item"], row["quality"]))
+        if not ground:
+            return None
+        row = ground[0]
+        return {"type": "take", "name": row["name"], "position": row["position"], "item": row["item"],
+                "quality": row["quality"], "count": min(50, row["count"]),
+                "reason": "collect spilled ore before constructing the reserved resource receiver"}
 
     def _affordable_builds(self, observation: dict, entities: list[dict]) -> list[dict]:
         """Take a bounded infrastructure prefix without skipping required work."""
