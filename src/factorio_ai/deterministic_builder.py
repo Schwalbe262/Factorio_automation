@@ -81,6 +81,7 @@ def _plan(entities: list[dict], ports: list[dict], **extra: Any) -> dict:
 class FactoryBuilder:
     def __init__(self, game: Any, bootstrap: Any, catalog: Any):
         self.game, self.bootstrap, self.catalog = game, bootstrap, catalog
+        self.construction_materials: Any = None
         self.path = Path(game.cfg.runtime_dir) / "factory-builder.json"
         self.state: dict[str, Any] = {}
         if self.path.exists():
@@ -160,7 +161,10 @@ class FactoryBuilder:
                     if placement_item == item and _find(observation, wanted) is None:
                         p = wanted["position"]
                         missing.add((wanted["name"], p["x"], p["y"]))
-                return self.bootstrap.ensure_item(observation, item, min(cap, len(missing)))
+                result = self.bootstrap.ensure_item(observation, item, min(cap, len(missing)))
+                if self.construction_materials is not None:
+                    return self.construction_materials.ensure(observation, result)
+                return result
             placement = self.can_place([entity])
             if not placement.get("ok"):
                 if self.game.backend == "character":

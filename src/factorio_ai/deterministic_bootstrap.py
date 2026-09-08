@@ -228,7 +228,8 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
         if not enabled.get(recipe["name"]):
             return _report("blocked", "required recipe is locked", item=item, recipe=recipe["name"])
         if not recipe.get("handcraftable"):
-            return _report("blocked", "required item needs a production machine", item=item, recipe=recipe["name"])
+            return _report("blocked", "required item needs a production machine", item=item, recipe=recipe["name"],
+                           have=have, need=count)
         output = sum(float(p.get("amount") or 0) for p in recipe["products"]
                      if p.get("name") == item and p.get("type", "item") == "item" and p.get("probability", 1) in {None, 1})
         if output <= 0:

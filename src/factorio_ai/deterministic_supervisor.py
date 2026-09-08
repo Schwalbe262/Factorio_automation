@@ -90,7 +90,9 @@ class DeterministicSupervisor:
             from .deterministic_energy import EnergyExpansion
             from .deterministic_defense import DeterministicDefense
             from .deterministic_armaments import Armaments
+            from .deterministic_construction_materials import ConstructionMaterials
             self.factory = DeterministicFactory(self.game, self.bootstrap, self.builder, self.catalog)
+            self.builder.construction_materials = ConstructionMaterials(self.factory)
             self.fluids = FluidProduction(self.game, self.builder, self.catalog)
             self.factory.fluids = self.fluids
             self.fluids.factory = self.factory
