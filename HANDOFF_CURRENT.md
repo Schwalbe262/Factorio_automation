@@ -5,6 +5,6 @@
 - Main capacity0 all88merge entities built; furnace2284 products220->246 over5094ticks, iron acrossarm2376 to bus1554; later433/fulloutput/coal5.
 - Main server44760/client58928 actor58 GUIvisible per user; watch_factorio_deterministic.bat reuses it; --hide-window hides. Dashboard http://127.0.0.1:18890.
 - Main live fuel proof: longarm2576 carries coal into belt2468, input belts coal3/4; furnace2462 products113->176/coal7->5 over12264ticks. Both original belt facings preserved.
-- Strict character-navigation-qa UDP34216/RCON27031 server50304/client27700 hidden actor11; worker51304 resumed latest code, strict-fuel-recovery-20260908-195350 logs.
+- Strict character-navigation-qa UDP34216/RCON27031 server50304/client27700 hidden actor11; worker51304 running. Drill1911 fuel0->5/working over ticks1015902->1064555, no manual inserts; furnace intake2211 built, its delivery unproven.
 - Fuel recovery:451 tests OK33skips. Main capacity1 coal delivery and continued smelting observed; startup iron expansion/science still ongoing. Strict repairing missing parent fuel prefixes.
 - Preserve pre-existing dirty insight.md. Root owns lifecycle, journal/tokenaccounting and per-part commit/push; three-seed rocket acceptance NOT done.

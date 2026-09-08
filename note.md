@@ -251078,3 +251078,10 @@ Goal: normally manufactured silo/rocket/start-pack and actual platform arrival p
 - Metrics/result: tick1284514->1296778, world unchanged; arm holds1coal, existinginput belts carry3/4coal; furnace2462 natural products113->176, fuel7->5, later working/output58. Capacity1 fuel10/10/output112/112 installed; new capacity2 receiver built first,9/10hardware at tick1301621. Main/strict workers running, main GUIvisible and strict hidden.
 - Failure/next: no new blocker at sample; continuous rate under sustained demand, automatic science and rocket remain unproven. Finish remaining iron cell then observe science pipeline.
 - Tokens: interval all-agents 6025252; implementation cumulative 234107031; root cumulative 70624390; account weekly 68.0%. Cached input and parallel work included; exact per-part weekly-quota share unavailable.
+
+## 2026-09-08T20:10:25+09:00 | part strict-automatic-iron-fuel-flow
+- Goal/hypothesis: prove repaired upstream fuel ancestry can supply iron mining through ordinary character construction and belt transport.
+- Actions/options: bounded strict worker observation, exact drill1911 inventory/status snapshots and action-history search after baseline; no intervention. Existing actor11, world e4e46cc9-8fd3-4993-a950-4e6a7417d11a, protected energy drill1123 and hidden client27700 preserved.
+- Metrics/result: ticks1015902->1064555, drill fuel0->5coal and working; no manual drill inserts after baseline. New furnace intake2211 built, furnace delivery still unproven. Proof strict-automatic-iron-fuel-flow-proof.json. Worker51304 remains running; dedicated monitor finished, root can inspect both statuses together.
+- Failure/next: no blocker at sample; verify sustained furnace delivery and automatic science. Main worker71601 continues last startup iron cell; rocket not achieved.
+- Tokens: interval all-agents 1762433; implementation cumulative 235869464; root cumulative 71611481; account weekly 68.0%. Cached input and parallel work included; exact per-part weekly-quota share unavailable.
