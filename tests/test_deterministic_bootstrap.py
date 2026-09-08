@@ -29,6 +29,19 @@ class DeterministicBootstrapTests(unittest.TestCase):
         self.game = Mock()
         self.driver = DeterministicBootstrap(self.game)
 
+    def test_construction_collects_only_the_missing_batch_from_live_belt(self):
+        obs = observation(inventory={"iron-plate": 2}, entities=[
+            entity("stone-furnace", {}), entity("transport-belt", belt_inventory={"iron-plate": 40})])
+        action = self.driver.ensure_item(obs, "iron-plate", 7)
+        self.assertEqual(action["type"], "take")
+        self.assertEqual(action["name"], "transport-belt")
+        self.assertEqual(action["count"], 5)
+        self.game.query.assert_not_called()
+
+    def test_bootstrap_does_not_steal_power_coal_from_automatic_belts(self):
+        obs = observation(entities=[entity("transport-belt", belt_inventory={"coal": 40})])
+        self.assertIsNone(self.driver._take_output(obs, "coal", 8))
+
     def test_iron_and_copper_are_collected_from_real_furnace_output(self):
         for item in ["iron-plate", "copper-plate"]:
             with self.subTest(item=item):

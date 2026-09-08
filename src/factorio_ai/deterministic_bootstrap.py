@@ -169,6 +169,15 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
             if stock > 0:
                 return {"type": "take", "name": name, "position": entity["position"], "item": item,
                         "count": min(count, stock, 50), "reason": f"collect produced {item}"}
+        # Finite construction batches can be picked from the actual conveyor
+        # after an output inserter has moved them out of the producing machine.
+        # Power coal remains reserved for the continuous burner supply.
+        if item not in {"coal", "wood"}:
+            for entity in observation.get("entities", []):
+                stock = int((entity.get("belt_inventory") or {}).get(item, 0))
+                if entity.get("name") == "transport-belt" and stock > 0:
+                    return {"type": "take", "name": entity["name"], "position": entity["position"],
+                            "item": item, "count": min(count, stock, 50), "reason": f"collect constructed supply belt {item}"}
         return None
 
     def _collect_or_wait(self, observation: dict[str, Any], item: str, count: int, reason: str) -> dict[str, Any]:

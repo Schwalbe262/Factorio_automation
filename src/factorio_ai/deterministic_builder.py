@@ -107,14 +107,15 @@ class FactoryBuilder:
         for entity in plan["entities"]:
             existing = _find(observation, entity)
             if existing is not None:
-                if entity["name"] not in {"pipe", "small-electric-pole", "wooden-chest"} and not _direction_matches(
-                        entity["name"], existing.get("direction", 0), entity.get("direction", 0)):
-                    return _report("blocked", "existing entity direction differs from reserved plan", entity=entity)
-                if entity.get("recipe") and existing.get("recipe") != entity["recipe"]:
+                direction_matches = _direction_matches(entity["name"], existing.get("direction", 0), entity.get("direction", 0))
+                if entity.get("recipe") and (existing.get("recipe") != entity["recipe"] or not direction_matches):
                     if entity["recipe"] not in observation.get("enabled_recipes", {}):
                         return _report("blocked", "block recipe is locked", recipe=entity["recipe"])
                     move = self._move(observation, entity["position"])
-                    return move or {"type": "recipe", "name": entity["name"], "position": entity["position"], "recipe": entity["recipe"]}
+                    return move or {"type": "recipe", "name": entity["name"], "position": entity["position"],
+                                    "recipe": entity["recipe"], "direction": entity.get("direction", 0)}
+                if entity["name"] not in {"pipe", "small-electric-pole", "wooden-chest"} and not direction_matches:
+                    return _report("blocked", "existing entity direction differs from reserved plan", entity=entity)
                 continue
             item = entity.get("item") or self._placement_item(entity["name"])
             if int(observation.get("inventory", {}).get(item, 0)) < 1:
@@ -147,7 +148,7 @@ for _,x in ipairs(specs) do
  if old then
   local mismatch=x.direction and old.direction~=x.direction
   if x.name=="steam-engine" or x.name=="steam-turbine" then mismatch=x.direction and old.direction%8~=x.direction%8 end
-  if mismatch and x.name~="pipe" and x.name~="small-electric-pole" then
+  if mismatch and not x.recipe and x.name~="pipe" and x.name~="small-electric-pole" then
    blocked[#blocked+1]={name=x.name,position=x.position,reason="existing_direction_mismatch"}
   end
  elseif not s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f} then
@@ -179,11 +180,15 @@ return success{sites=out}
 
     def _occupied_by_plan(self, entities: list[dict]) -> set[tuple[float, float]]:
         known = {"boiler": (3, 2), "steam-engine": (3, 5), "burner-mining-drill": (2, 2),
-                 "stone-furnace": (2, 2), "lab": (3, 3), "assembling-machine-1": (3, 3),
-                 "assembling-machine-2": (3, 3), "oil-refinery": (5, 5), "chemical-plant": (3, 3)}
+                 "stone-furnace": (2, 2), "steel-furnace": (2, 2), "electric-mining-drill": (3, 3),
+                 "lab": (3, 3), "assembling-machine-1": (3, 3),
+                 "assembling-machine-2": (3, 3), "assembling-machine-3": (3, 3),
+                 "oil-refinery": (5, 5), "chemical-plant": (3, 3), "pumpjack": (3, 3),
+                 "storage-tank": (3, 3), "rocket-silo": (9, 9)}
         occupied = set()
         for e in entities:
             w, h = known.get(e["name"], (1, 1))
+            w, h = e.get("_width", w), e.get("_height", h)
             if e.get("direction") in (4, 12):
                 w, h = h, w
             x, y = e["position"]["x"], e["position"]["y"]

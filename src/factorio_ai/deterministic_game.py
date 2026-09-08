@@ -319,6 +319,15 @@ return success{status=inserted>0 and "succeeded" or "waiting",moved=inserted}
             else:
                 body += '''
 local n=math.min(x.count or 1,inv.get_insertable_count(x.item))
+if e.type=="transport-belt" then
+ local first=e.get_transport_line(1);local second=e.get_transport_line(2)
+ local available=first.get_item_count(x.item)+second.get_item_count(x.item)
+ local inserted=inv.insert{name=x.item,count=math.min(n,available)}
+ local removed=first.remove_item{name=x.item,count=inserted}
+ if removed<inserted then removed=removed+second.remove_item{name=x.item,count=inserted-removed} end
+ if removed<inserted then inv.remove{name=x.item,count=inserted-removed} end
+ return success{status=removed>0 and "succeeded" or "waiting",moved=removed}
+end
 local source=e.get_output_inventory()
 if x.inventory then source=e.get_inventory(defines.inventory[x.inventory]) end
 if not source then source=e.get_inventory(defines.inventory.chest) end
@@ -354,10 +363,12 @@ if not e then return failure("target_missing") end
 local r=f.recipes[x.recipe]
 if not r or not r.enabled then return failure("recipe_locked") end
 local current=e.get_recipe()
-if current and current.name==x.recipe then return success{status="succeeded"} end
-e.set_recipe(x.recipe)
+if not current or current.name~=x.recipe then e.set_recipe(x.recipe) end
+if x.direction~=nil then e.direction=x.direction end
 current=e.get_recipe()
-return current and current.name==x.recipe and success{status="succeeded"} or failure("recipe_rejected")
+if not current or current.name~=x.recipe then return failure("recipe_rejected") end
+if x.direction~=nil and e.direction~=x.direction then return failure("recipe_direction_rejected") end
+return success{status="succeeded",direction=e.direction}
 '''
         elif kind == "research":
             body += '''

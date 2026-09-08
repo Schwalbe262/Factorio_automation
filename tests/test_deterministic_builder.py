@@ -63,6 +63,21 @@ class BuilderTests(unittest.TestCase):
         self.obs["entities"] = [{**belt, "direction": 0}]
         self.assertIn("direction", self.builder.ensure_plan(self.obs, plan)["reason"])
 
+    def test_fluid_assembler_recipe_activates_ports_before_restoring_orientation(self):
+        machine = {"name": "assembling-machine-2", "position": {"x": .5, "y": .5},
+                   "direction": 8, "recipe": "rocket-fuel"}
+        plan = {"ok": True, "entities": [machine]}
+        self.obs["enabled_recipes"] = {"rocket-fuel": True}
+        # Empty assemblers normalize direction to north until a fluid recipe exists.
+        self.obs["entities"] = [{**machine, "recipe": None, "direction": 0}]
+        action = self.builder.ensure_plan(self.obs, plan)
+        self.assertEqual(action["type"], "recipe")
+        self.assertEqual(action["direction"], 8)
+        self.obs["entities"][0]["recipe"] = "rocket-fuel"
+        self.assertEqual(self.builder.ensure_plan(self.obs, plan), action)
+        self.obs["entities"][0]["direction"] = 8
+        self.assertEqual(self.builder.ensure_plan(self.obs, plan)["status"], "succeeded")
+
     def test_two_direction_generators_reuse_normalized_axis_but_reject_perpendicular_axis(self):
         for name in ("steam-engine", "steam-turbine"):
             for planned, actual in ((8, 0), (12, 4)):
