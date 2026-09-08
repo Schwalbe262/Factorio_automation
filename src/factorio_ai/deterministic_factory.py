@@ -2071,6 +2071,10 @@ return {ok=true,speed=prototypes.entity.lab.get_researching_speed(),
             capacity = self._ensure_startup_iron(obs)
             if not _ready(capacity):
                 return capacity
+        from .deterministic_bypass_selection import maybe_upgrade_input_routes
+        bypass = maybe_upgrade_input_routes(self, obs)
+        if bypass is not None:
+            return bypass
         for item in self.graph.for_first_rocket()["bom"]["science_packs"]:
             production = (obs.get("production") or {}).get(item, {})
             if item not in self.state["flow_samples"]:
