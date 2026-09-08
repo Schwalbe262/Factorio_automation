@@ -14,8 +14,14 @@ from .deterministic_underground import OBSERVE_UNDERGROUND_LUA, underground_fiel
 from .deterministic_underground_bypass import propose_collinear_bypasses
 
 
+def _reobserve_wait(result):
+    if result.get("status") == "waiting" and "type" not in result:
+        return {**result, "evidence": {**result.get("evidence", {}), "reobserve_required": True}}
+    return result
+
+
 def _report(reason, *, status="blocked", **evidence):
-    return {"status": status, "reason": reason, "evidence": evidence}
+    return _reobserve_wait({"status": status, "reason": reason, "evidence": evidence})
 
 
 def describe_bypass_entity(entity: dict) -> dict:
@@ -440,7 +446,7 @@ def resume_input_bypass(factory, observation: dict, *, critical_only=False) -> d
             critical = record["phase"] == "switching" or rollback
             if (critical_only and not critical) or (record["phase"] == "published" and not rollback):
                 continue
-            return _resume(factory, record, observation)
+            return _reobserve_wait(_resume(factory, record, observation))
     except (KeyError, TypeError, ValueError, AttributeError):
         return _report("malformed input bypass receipt or live survey; receipt preserved")
     return None

@@ -204,7 +204,8 @@ class DeterministicSupervisor:
             if maintenance:
                 return maintenance
             production = self.factory.next_action(observation)
-            if production.get("type") or production.get("status") in {"blocked", "failed"}:
+            if (production.get("type") or production.get("status") in {"blocked", "failed"}
+                    or production.get("evidence", {}).get("reobserve_required") is True):
                 return self.fairness.bind("production", production)
         armaments = self.armaments.next_action(observation)
         if armaments and (armaments.get("type") or armaments.get("status") in {"blocked", "failed"}):

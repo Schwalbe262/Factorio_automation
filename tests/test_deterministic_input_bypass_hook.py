@@ -124,6 +124,44 @@ class InputBypassHookTests(unittest.TestCase):
         resume.assert_called_once_with(self.factory, self.obs, critical_only=True)
         self.assertEqual(self.events, ["restore", "builder_sync", "bootstrap"])
 
+    def test_real_reservation_and_procurement_wait_end_preferred_production_before_stale_armaments(self):
+        from tests.test_deterministic_input_bypass import InputBypassTests
+        from factorio_ai.deterministic_input_bypass import start_input_bypass, resume_input_bypass
+        for preparing in (False, True):
+            with self.subTest(preparing=preparing):
+                fixture = InputBypassTests()
+                fixture.setUp()
+                self.addCleanup(fixture.doCleanups)
+                factory = fixture.factory
+                if preparing:
+                    fixture.reserve()
+                    fixture.survey["normal_inventory"]["transport-belt"] = 0
+                    def procure(fresh, item, count):
+                        factory._sync(fresh)
+                        return {"status": "waiting", "reason": "ordinary crafting still busy"}
+                    fixture.bootstrap.ensure_item.side_effect = procure
+                fixture.survey["tick"] = fixture.obs["tick"] + 86
+                supervisor = fixtures.SupervisorLifecycleTests().production_supervisor(Path(fixture.tmp.name))
+                supervisor.factory = factory
+                supervisor.prepare_production = Mock()
+                supervisor.fairness = SimpleNamespace(selection=None, prefer_production=Mock(return_value=True),
+                                                       bind=lambda lane, result: result)
+                factory.next_action = Mock(side_effect=lambda obs: resume_input_bypass(factory, obs) if preparing else
+                    start_input_bypass(factory, "input", fixture.proposal, obs))
+                # This is the real formerly failing call if the preferred wait
+                # falls through: the new receipt's tick is ahead of this obs.
+                supervisor.armaments.next_action.side_effect = lambda obs: factory._sync(obs)
+                with patch("factorio_ai.deterministic_repairs.NativeRepairs.next_action", return_value=None), patch(
+                        "factorio_ai.deterministic_ready_research.ready_research", return_value=None), patch(
+                        "factorio_ai.deterministic_repair_control.pending_repair", return_value=None):
+                    result = supervisor.next_action(fixture.obs, "rocket")
+                self.assertEqual(result["status"], "waiting", result)
+                self.assertTrue(result["evidence"]["reobserve_required"])
+                self.assertGreater(fixture.record["last_tick"], fixture.obs["tick"])
+                supervisor.armaments.next_action.assert_not_called()
+                supervisor.defense.next_action.assert_not_called()
+                self.assertEqual(factory.state["links"]["input"], fixture.plan)
+
 
 if __name__ == "__main__":
     unittest.main()
