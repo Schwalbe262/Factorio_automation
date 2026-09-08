@@ -1399,12 +1399,14 @@ return {ok=true,sites=best}
             self._save()
         cycles, raw_rates = self.graph._continuous_rates(targets)
         requirements = {}
+        fluid_requirements = {}
         for name, rate in cycles.items():
             recipe = self.catalog.recipes[name]
             for product in recipe["products"]:
-                if product.get("type", "item") == "item":
-                    requirements[product["name"]] = requirements.get(product["name"], 0) + float(product.get("amount", 1)) * float(product.get("probability", 1)) * rate
+                destination = fluid_requirements if product.get("type", "item") == "fluid" else requirements
+                destination[product["name"]] = destination.get(product["name"], 0) + float(product.get("amount", 1)) * float(product.get("probability", 1)) * rate
         requirements.update({name: rate for (kind, name), rate in raw_rates.items() if kind == "item" and name in {"stone", "coal"}})
+        fluid_requirements.update({name: rate for (kind, name), rate in raw_rates.items() if kind == "fluid" and rate > 0})
         # Fuel is separate from recipe ingredients. Reserve coal for every
         # requested smelter plus the bootstrap drills using live prototype watts.
         coal_joules = float(getattr(self.catalog, "items", {}).get("coal", {}).get("fuel_value", 4000000) or 4000000)
@@ -1415,6 +1417,14 @@ return {ok=true,sites=best}
                 active = rate * float(self.catalog.recipes[name]["energy"]) / float(machines[0]["crafting_speed"]) / 60
                 fuel += active * float(machines[0].get("energy_usage_per_tick", 0)) * 3600 / coal_joules
         requirements["coal"] = max(requirements.get("coal", 0) + fuel, 20)
+        # Shared fluid demand must be sized in aggregate before an individual
+        # plastic/sulfur consumer recursively requests only its own fraction.
+        for fluid, rate in sorted(fluid_requirements.items()):
+            if self.fluids is None:
+                return _report("blocked", "fluid capacity requires the fluid production driver", fluid=fluid)
+            result = self.fluids.ensure_source(obs, fluid, rate_per_minute=rate)
+            if not _ready(result):
+                return result
         ordered = sorted(requirements, key=lambda item: (item not in {"coal", "iron-plate", "copper-plate", "stone"}, item != "coal", item))
         for item in ordered:
             if item in {"iron-ore", "copper-ore"}:
@@ -1423,7 +1433,8 @@ return {ok=true,sites=best}
             if not _ready(result):
                 return result
         return _report("succeeded", "active science producers have physical nominal capacity", science_rate_per_minute=self.graph.science_rate_per_minute,
-                       requirements_per_minute=requirements, flow_verified=False, transport_route_capacity_verified=False)
+                       requirements_per_minute=requirements, fluid_requirements_per_minute=fluid_requirements,
+                       flow_verified=False, transport_route_capacity_verified=False)
 
     def _recover_unbuilt_link(self, obs: dict, source_port: dict, consumer_port: dict, link_key: str) -> dict | None:
         """Discard a contradictory old route only after a complete live survey.

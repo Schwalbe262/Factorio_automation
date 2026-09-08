@@ -189,9 +189,12 @@ class FluidProductionTests(unittest.TestCase):
     def test_capacity_requirement_never_silently_reuses_smaller_block(self):
         self.builder.ensure_plan.return_value = {"type": "build"}
         self.fluids.ensure_source(self.obs, "petroleum-gas")
+        primary = deepcopy(self.fluids.state["sources"]["basic-oil-processing"])
         result = self.fluids.ensure_source(self.obs, "petroleum-gas", rate_per_minute=1000)
-        self.assertEqual(result["status"], "blocked")
-        self.assertIn("capacity", result["reason"])
+        self.assertEqual(result["type"], "build")
+        self.assertFalse(result["evidence"]["flow_verified"])
+        self.assertEqual(self.fluids.state["sources"]["basic-oil-processing"], primary)
+        self.assertIn("basic-oil-processing:capacity:1", self.fluids.state["sources"])
 
     def underground_geometry(self):
         self.catalog.entities["pipe-to-ground"] = {"fluidbox_prototypes": [{"pipe_connections": [

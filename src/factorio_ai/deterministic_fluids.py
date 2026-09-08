@@ -225,7 +225,10 @@ class FluidProduction:
         if self.factory is None:
             return _report("blocked", "fluid production requires the shared factory site and power router")
         if product in {"water", "crude-oil"}:
-            return self._ensure_raw_source(observation, product, amount)
+            result = self._ensure_raw_source(observation, product, amount)
+            if rate_per_minute is None or result.get("status") != "succeeded" or result.get("type"):
+                return result
+            return self._raw_capacity(observation, product, rate_per_minute, result)
         recipe = self._pick_recipe(observation, product)
         if not recipe:
             return _report("blocked", "required fluid production recipe is unavailable", product=product)
@@ -245,16 +248,55 @@ class FluidProduction:
                     return self.factory.request_recipe_unlock(observation, name)
             return _report("blocked", "no unlocked live machine for fluid recipe", recipe=recipe)
         row = self.catalog.recipes[recipe]
-        count = 1
-        if rate is not None:
-            output = next((float(p.get("amount", 0)) for p in row["products"] if p["name"] == product), 0)
-            capacity = 60 * float(self.catalog.entities[machine].get("crafting_speed", 1)) * output / float(row["energy"])
-            if capacity <= 0:
-                return _report("blocked", "recipe has no deterministic requested product output")
-            count = max(1, math.ceil(rate / capacity))
+        output = sum(float(p.get("amount", 0)) * float(p.get("probability", 1))
+                     for p in row["products"] if p["name"] == product)
+        if not math.isfinite(output) or output <= 0:
+            return _report("blocked", "recipe has no deterministic requested product output")
+        from .deterministic_machine_ports import ARM_BUDGETS
+        def capacity(plan: dict) -> float:
+            name = plan.get("machine", machine)
+            count = plan.get("machine_count", 1)
+            if type(count) is not int or not 1 <= count <= 64:
+                raise ValueError("fluid cell has invalid saved machine count")
+            per_machine = 60 * float(self.catalog.entities[name].get("crafting_speed", 1)) * output / float(row["energy"])
+            seen = set()
+            for port in plan.get("ports", []):
+                if port["kind"] != "item":
+                    continue
+                index = port.get("machine_index", 0 if count == 1 else None)
+                if type(index) is not int or not 0 <= index < count:
+                    raise ValueError("fluid material port has no valid owning machine")
+                values = row["ingredients"] if port["direction"] == "input" else row["products"]
+                amount = sum(float(value["amount"]) for value in values if value["name"] == port["item"])
+                dx, dy = DIRECTIONS[port["facing"]]
+                sign = 1 if port["direction"] == "input" else -1
+                point = {"x": port["position"]["x"] + 2 * dx * sign, "y": port["position"]["y"] + 2 * dy * sign}
+                arms = [e for e in plan["entities"] if e["position"] == point and e["name"] in ARM_BUDGETS
+                        and e.get("direction", 0) == (port["facing"] + 8) % 16]
+                if len(arms) != 1 or amount <= 0:
+                    raise ValueError("fluid cell has unsupported solid material port geometry")
+                per_machine = min(per_machine, ARM_BUDGETS[arms[0]["name"]] * output / amount)
+                seen.add((index, port["direction"], port["item"]))
+            required = {(index, direction, value["name"]) for index in range(count)
+                        for direction, values in (("input", row["ingredients"]), ("output", row["products"]))
+                        for value in values if value.get("type", "item") == "item"}
+            if not required.issubset(seen):
+                raise ValueError("fluid cell is missing a required solid material port")
+            # A legacy mixed-arm row uses its slowest arm as a conservative
+            # per-machine allowance; expansion cells each contain one machine.
+            return per_machine * count
+        unit_plan = self.plan(recipe, machine, {"x": .5, "y": .5})
+        if not unit_plan.get("ok"):
+            return _report("blocked", unit_plan.get("reason", "fluid capacity geometry unavailable"), recipe=recipe)
+        try:
+            unit_capacity = capacity(unit_plan)
+        except (KeyError, TypeError, ValueError, ZeroDivisionError) as error:
+            return _report("blocked", str(error), recipe=recipe)
+        if not math.isfinite(unit_capacity) or unit_capacity <= 0:
+            return _report("blocked", "fluid machine has no positive nominal capacity", recipe=recipe)
         plan = self.state["sources"].get(recipe)
         if plan is None:
-            origin = self.plan(recipe, machine, {"x": .5, "y": .5}, count=count)
+            origin = self.plan(recipe, machine, {"x": .5, "y": .5})
             if not origin["ok"]:
                 return _report("blocked", origin["reason"], recipe=recipe)
             plan = self.factory.reserve_site(origin, "fluid:" + recipe, observation)
@@ -262,45 +304,150 @@ class FluidProduction:
                 return _report("blocked", plan.get("reason", "no fluid site"))
             self.state["sources"][recipe] = plan
             self._save()
-        if count > plan.get("machine_count", 1):
-            return self._decorate(_report("blocked", "existing fluid site requires capacity expansion",
-                                          required_machines=count, existing_machines=plan.get("machine_count", 1)), plan)
-        built = self.builder.ensure_plan(observation, plan)
-        if built.get("status") != "succeeded":
-            return self._decorate(built, plan)
-        powered = self.factory.ensure_power_connection(observation, "fluid:" + recipe, plan)
-        if powered.get("status") != "succeeded":
-            return self._decorate(powered, plan)
-        # Multi-output refining must expose a real buffer for EVERY coproduct
-        # before feeding crude oil; otherwise an unused outlet stalls the refinery.
-        if len(plan.get("coproducts", [])) > 1:
-            for fluid in plan["coproducts"]:
-                buffered = self._ensure_buffer(observation, fluid, plan)
-                if buffered.get("status") != "succeeded":
-                    return self._decorate(buffered, plan)
+        prefix = recipe + ":capacity:"
+        cells = [(recipe, plan)] + sorted((key, cell) for key, cell in self.state["sources"].items()
+                                          if key.startswith(prefix))
+        try:
+            nominal = sum(capacity(cell) for _, cell in cells)
+        except (KeyError, TypeError, ValueError, ZeroDivisionError) as error:
+            return self._decorate(_report("blocked", str(error), recipe=recipe), plan)
+        machine_count = sum(int(cell.get("machine_count", 1)) for _, cell in cells)
+        additional = max(0, math.ceil(((rate or 0) - nominal) / unit_capacity - 1e-9))
+        if machine_count + additional > 64:
+            return self._decorate(_report("blocked", "fluid recipe capacity exceeds bounded 64-machine expansion", recipe=recipe), plan)
+        for _ in range(additional):
+            index = 1
+            while prefix + str(index) in self.state["sources"]:
+                index += 1
+            key = prefix + str(index)
+            origin = self.plan(recipe, machine, {"x": .5, "y": .5})
+            if not origin.get("ok"):
+                return self._decorate(_report("blocked", origin.get("reason", "fluid capacity geometry unavailable")), plan)
+            origin["capacity_key"] = key
+            extra = self.factory.reserve_site(origin, "fluid:" + key, observation,
+                                              reference=plan["entities"][0]["position"])
+            if not extra.get("ok"):
+                return self._decorate(_report("blocked", extra.get("reason", "fluid capacity site unavailable")), plan)
+            self.state["sources"][key] = extra
+            self._save()
+            cells.append((key, extra))
+            nominal += capacity(extra)
+            machine_count += int(extra.get("machine_count", 1))
+        # Keep the original ports stable, including legacy multi-machine rows.
+        # Every additional outlet must join its same-material primary network.
+        outputs = {}
         for port in plan["ports"]:
-            if port["direction"] != "input" or port["kind"] == "power":
-                continue
-            if port["kind"] == "fluid":
-                source = self.ensure_source(observation, port["item"], _stack=(*stack, recipe))
-            else:
-                source = self.factory.ensure_product(observation, port["item"])
-            if source.get("status") != "succeeded":
-                return self._decorate(source, plan)
-            sources = [p for p in source.get("evidence", {}).get("ports", [])
-                       if p["kind"] == port["kind"] and p["item"] == port["item"] and p["direction"] == "output"]
-            if not sources:
-                return self._decorate(_report("blocked", "upstream source exposes no compatible output port", item=port["item"]), plan)
-            key = f"fluid:{recipe}:{port['machine_index']}:{port['item']}"
-            connected = (self._connect_pipe(observation, sources[0], port, key, plan)
-                         if port["kind"] == "fluid" else self.factory.connect_input(observation, sources[0], port, key))
-            if connected.get("status") != "succeeded":
-                return self._decorate(connected, plan)
-        evidence = self._source_evidence(observation, plan, product)
+            if port["direction"] == "output":
+                outputs.setdefault((port["kind"], port["item"]), port)
+        input_rates = ({(i.get("type", "item"), i["name"]): float(i["amount"]) * rate / output
+                        for i in row["ingredients"]} if rate is not None else {})
+        sources = {}
+        for cell_key, cell in cells:
+            built = self.builder.ensure_plan(observation, cell)
+            if built.get("status") != "succeeded" or built.get("type"):
+                return self._decorate(built, plan)
+            powered = self.factory.ensure_power_connection(observation, "fluid:" + cell_key, cell)
+            if powered.get("status") != "succeeded" or powered.get("type"):
+                return self._decorate(powered, plan)
+            # Shared tanks must receive every coproduct before any crude feed.
+            if len(cell.get("coproducts", [])) > 1:
+                for fluid in cell["coproducts"]:
+                    buffered = self._ensure_buffer(observation, fluid, cell)
+                    if buffered.get("status") != "succeeded" or buffered.get("type"):
+                        return self._decorate(buffered, plan)
+            for port in cell["ports"]:
+                if port["direction"] != "input" or port["kind"] == "power":
+                    continue
+                material = port["kind"], port["item"]
+                if material not in sources:
+                    kwargs = {"rate_per_minute": input_rates[material]} if material in input_rates else {}
+                    source = (self.ensure_source(observation, port["item"], _stack=(*stack, recipe), **kwargs)
+                              if port["kind"] == "fluid" else self.factory.ensure_product(observation, port["item"], **kwargs))
+                    if source.get("status") != "succeeded" or source.get("type"):
+                        return self._decorate(source, plan)
+                    available = [p for p in source.get("evidence", {}).get("ports", [])
+                                 if p["kind"] == port["kind"] and p["item"] == port["item"] and p["direction"] == "output"]
+                    if not available:
+                        return self._decorate(_report("blocked", "upstream source exposes no compatible output port", item=port["item"]), plan)
+                    sources[material] = available[0]
+                key = f"fluid:{cell_key}:{port['machine_index']}:{port['item']}"
+                connected = (self._connect_pipe(observation, sources[material], port, key, cell)
+                             if port["kind"] == "fluid" else self.factory.connect_input(observation, sources[material], port, key))
+                if connected.get("status") != "succeeded" or connected.get("type"):
+                    return self._decorate(connected, plan)
+            for port in cell["ports"]:
+                if port["direction"] != "output":
+                    continue
+                destination = outputs.get((port["kind"], port["item"]))
+                if destination is None:
+                    return self._decorate(_report("blocked", "fluid capacity outlet differs from its primary recipe", item=port["item"]), plan)
+                if port == destination:
+                    continue
+                key = f"fluid:{cell_key}:output:{port.get('machine_index', 0)}:{port['item']}"
+                merged = (self._connect_pipe(observation, port, destination, key,
+                                            {"entities": cell["entities"] + plan["entities"]})
+                          if port["kind"] == "fluid" else self.factory._merge_output(observation, port, destination, key))
+                if merged.get("status") != "succeeded" or merged.get("type"):
+                    return self._decorate(merged, plan)
+        observed_plan = {**plan, "entities": [entity for _, cell in cells for entity in cell["entities"]]}
+        evidence = self._source_evidence(observation, observed_plan, product)
         # Once all routes exist, an empty product buffer is a real production wait.
         status = "succeeded" if evidence["available"] > 0 else "waiting"
         return self._decorate(_report(status, "fluid recipe output observed" if status == "succeeded" else "waiting for connected fluid recipe production",
-                                      **evidence, flow_verified=status == "succeeded"), plan)
+                                      **evidence, flow_verified=status == "succeeded", throughput_verified=False,
+                                      machines_constructed=machine_count, requested_rate_per_minute=rate,
+                                      nominal_capacity_per_minute=nominal, input_rates_per_minute={name: value for (_, name), value in input_rates.items()},
+                                      capacity_basis="base prototype speed and conservative installed item-arm allowances",
+                                      raw_source_capacity_verified=rate is not None), plan)
+
+    def _raw_capacity(self, observation: dict, fluid: str, rate: float, result: dict) -> dict:
+        """Reject insufficient extraction instead of crediting idle refinery rows.
+
+        This checks the existing owned source only. Selecting and joining extra
+        oil wells is a separate capability; insufficient yield remains explicit.
+        """
+        plan = self.state["sources"].get("raw:" + fluid, {})
+        name = "pumpjack" if fluid == "crude-oil" else "offshore-pump"
+        machines = [e for e in plan.get("entities", []) if e["name"] == name]
+        if len(machines) != 1:
+            return _report("blocked", "raw fluid capacity requires an exact owned source", fluid=fluid, requested_rate_per_minute=rate)
+        payload = json.dumps(json.dumps(machines[0], separators=(",", ":")))
+        survey = self.game.query('''
+--[[ raw_fluid_capacity: current nominal extraction, never measured throughput. ]]
+local x=helpers.json_to_table(''' + payload + ''');local e=target(x.position,x.name)
+if not e or e.force~=f then return {ok=false,reason="raw fluid source is missing or foreign"} end
+local rate;local amount
+if e.type=="offshore-pump" then
+ rate=e.prototype.get_pumping_speed(e.quality)*3600
+else
+ local wells=s.find_entities_filtered{position=e.position,radius=0.1,name="crude-oil"}
+ if #wells~=1 then return {ok=false,reason="owned pumpjack has no unique crude oil well"} end
+ local well=wells[1];local proto=well.prototype;local mine=proto.mineable_properties
+ local normal=proto.normal_resource_amount;local product=0
+ if not proto.infinite_resource or not normal or normal<=0 or not mine.mining_time or mine.mining_time<=0
+  then return {ok=false,reason="unsupported live oil yield geometry"} end
+ for _,row in pairs(mine.products or {}) do
+  if row.type=="fluid" and row.name=="crude-oil" then product=product+(row.amount or 0) end
+ end
+ amount=well.amount
+ --[[ Ignore positive bonuses; negative speed/productivity effects cannot inflate the bound. ]]
+ rate=e.prototype.mining_speed*math.max(0,1+math.min(0,e.speed_bonus))
+  *math.max(0,1+math.min(0,e.productivity_bonus))*60/mine.mining_time*product*amount/normal
+end
+return {ok=true,world_id=d and d.world_id,unit_number=e.unit_number,nominal_capacity_per_minute=rate,resource_amount=amount}
+''')
+        capacity = survey.get("nominal_capacity_per_minute")
+        if (not survey.get("ok") or survey.get("world_id") != observation["world_id"]
+                or isinstance(capacity, bool) or not isinstance(capacity, (int, float)) or not math.isfinite(capacity) or capacity <= 0):
+            return self._decorate(_report("blocked", "raw fluid nominal capacity is unavailable", fluid=fluid,
+                                         requested_rate_per_minute=rate, query_error=survey.get("reason")), plan)
+        if capacity + 1e-9 < rate:
+            return self._decorate(_report("blocked", "owned raw fluid source requires extraction capacity expansion", fluid=fluid,
+                                         requested_rate_per_minute=rate, nominal_capacity_per_minute=capacity,
+                                         throughput_verified=False, raw_source_capacity_verified=False), plan)
+        return {**result, "evidence": {**result.get("evidence", {}), "requested_rate_per_minute": rate,
+                                      "nominal_capacity_per_minute": capacity, "throughput_verified": False,
+                                      "raw_source_capacity_verified": True}}
 
     def _source_evidence(self, observation: dict, plan: dict, product: str) -> dict:
         positions = {(e["name"], e["position"]["x"], e["position"]["y"]) for e in plan["entities"]}
@@ -609,7 +756,7 @@ return {ok=true,taps=taps,destination_taps=destinations,connected=receiver_id==i
             return built
         destination = next(p for p in buffer["ports"] if p["direction"] == "input")
         for source in (p for p in producer["ports"] if p["item"] == fluid and p["direction"] == "output"):
-            key = f"fluid:buffer:{producer.get('recipe')}:{fluid}"
+            key = f"fluid:buffer:{producer.get('capacity_key', producer.get('recipe'))}:{fluid}"
             if source.get("machine_index", 0):
                 key += ":" + str(source["machine_index"])
             result = self._connect_pipe(observation, source, destination, key,
