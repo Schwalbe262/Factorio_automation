@@ -315,7 +315,7 @@ return best and {ok=true,name=best.name,position=pos(best.position)} or {ok=fals
         if cells.get("cells"):
             # A coal drill with no fuel cannot bootstrap itself. A small emergency
             # seed may restart it; once operating, wait for its actual chest output.
-            if item != "coal" or any(c.get("fuel", 0) > 0 or c.get("burning") for c in cells["cells"]):
+            if item != "coal" or any(c.get("electric") or c.get("fuel", 0) > 0 or c.get("burning") for c in cells["cells"]):
                 return _report("waiting", f"waiting for automated {item} output")
             count = min(count, 8)
         resource = (observation.get("resources") or {}).get(item)
@@ -332,14 +332,17 @@ for _,e in pairs(s.find_entities_filtered{force=f,type="mining-drill"}) do
  local target_name=nil
  local good,t=pcall(function() return e.mining_target end)
  if good and t and t.valid then target_name=t.name end
- local counts={};local best=0
- if not target_name then
-  for _,ore in pairs(s.find_entities_filtered{position=e.position,radius=1.5,type="resource"}) do
-   counts[ore.name]=(counts[ore.name] or 0)+1
-   if counts[ore.name]>best then best=counts[ore.name];target_name=ore.name end
+ local counts={};local best=0;local kinds=0
+ local radius=e.prototype.mining_drill_radius
+ for _,ore in pairs(s.find_entities_filtered{area={{e.position.x-radius,e.position.y-radius},
+      {e.position.x+radius,e.position.y+radius}},type="resource"}) do
+  if math.abs(ore.position.x-e.position.x)<=radius and math.abs(ore.position.y-e.position.y)<=radius and ore.amount>0 then
+   if not counts[ore.name] then kinds=kinds+1 end
+   counts[ore.name]=(counts[ore.name] or 0)+ore.amount
+   if counts[ore.name]>best then best=counts[ore.name];if not good or not t or not t.valid then target_name=ore.name end end
   end
  end
- if target_name==resource then
+ if target_name==resource and kinds==1 then
   local receiver=nil
   for _,candidate in pairs(s.find_entities_filtered{position=e.drop_position,radius=1.5,force=f}) do
    if candidate.type=="furnace" or candidate.type=="container" then
@@ -352,19 +355,27 @@ for _,e in pairs(s.find_entities_filtered{force=f,type="mining-drill"}) do
   cells[#cells+1]={drill={name=e.name,position=pos(e.position),direction=e.direction},drop_position=pos(e.drop_position),
    receiver=receiver and {name=receiver.name,position=pos(receiver.position)} or nil,
    fuel=e.get_fuel_inventory() and e.get_fuel_inventory().get_item_count("coal") or 0,
-   burning=burner and burner.remaining_burning_fuel>0 or false}
+   burning=burner and burner.remaining_burning_fuel>0 or false,electric=burner==nil,
+   operating=burner==nil and e.energy>0 and e.is_connected_to_electric_network() or false,
+   remaining=counts[resource] or 0}
  end
 end
 return {ok=true,cells=cells}
 ''')
 
-    def discover_cell(self, resource: str, receiver_name: str) -> dict[str, Any]:
+    def discover_cell(self, resource: str, receiver_name: str,
+                      *, preferred_receiver: dict[str, Any] | None = None) -> dict[str, Any]:
         existing = self._existing_cells(resource)
         if not existing.get("ok"):
             return existing
-        for cell in existing.get("cells", []):
-            if cell.get("receiver") and cell["receiver"]["name"] == receiver_name:
-                return {"ok": True, "complete": True, **cell}
+        cells = existing.get("cells", [])
+        complete = [cell for cell in cells if cell.get("receiver") and cell["receiver"]["name"] == receiver_name]
+        if complete:
+            complete.sort(key=lambda cell: (cell["receiver"] != preferred_receiver,
+                                           not (cell.get("electric") and cell.get("operating")),
+                                           cell["receiver"]["position"]["x"], cell["receiver"]["position"]["y"]))
+            return {"ok": True, "complete": True, **complete[0]}
+        for cell in cells:
             if cell["drill"].get("direction") == 0:
                 p = cell["drill"]["position"]
                 drop = cell["drop_position"]

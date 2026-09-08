@@ -29,6 +29,24 @@ class DeterministicBootstrapTests(unittest.TestCase):
         self.game = Mock()
         self.driver = DeterministicBootstrap(self.game)
 
+    def test_operating_electric_source_precedes_isolated_burner_and_incomplete_cells(self):
+        burner = {"drill": entity("burner-mining-drill", direction=0),
+                  "receiver": entity("wooden-chest", position={"x": 1.5, "y": 2.5})}
+        electric = {"drill": entity("electric-mining-drill"), "electric": True, "operating": True,
+                    "receiver": entity("wooden-chest", position={"x": 8.5, "y": 9.5})}
+        partial = {"drill": entity("burner-mining-drill", direction=0)}
+        self.game.query.return_value = {"ok": True, "cells": [partial, burner, electric]}
+        result = self.driver.discover_cell("coal", "wooden-chest")
+        self.assertEqual(result["receiver"], electric["receiver"])
+        result = self.driver.discover_cell("coal", "wooden-chest", preferred_receiver=burner["receiver"])
+        self.assertEqual(result["receiver"], burner["receiver"])
+
+    def test_electric_coal_drill_never_requests_a_burner_emergency_hand_seed(self):
+        self.game.query.return_value = {"ok": True, "cells": [{"fuel": 0, "burning": False, "electric": True}]}
+        result = self.driver.ensure_item(observation(), "coal", 8)
+        self.assertEqual(result["status"], "waiting")
+        self.assertNotIn("type", result)
+
     def test_construction_collects_only_the_missing_batch_from_live_belt(self):
         obs = observation(inventory={"iron-plate": 2}, entities=[
             entity("stone-furnace", {}), entity("transport-belt", belt_inventory={"iron-plate": 40})])

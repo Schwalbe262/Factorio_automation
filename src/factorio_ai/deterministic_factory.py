@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .deterministic_production import ProductionGraph
+from .deterministic_mining_upgrade import ensure_source_upgrade
 from .deterministic_state import _atomic_json
 from .factory_templates import build_template, DIRECTIONS
 
@@ -59,6 +60,11 @@ class DeterministicFactory:
             self.state["flow_samples"] = {}
             self.state.pop("bootstrap_science", None)
             self.state["automated_burners"] = []
+            for upgrade in self.state.get("source_upgrades", {}).values():
+                if upgrade.get("state") == "observed":
+                    upgrade["state"] = "reserved"
+                upgrade.pop("observed_tick", None)
+                upgrade.pop("observed_unit_number", None)
             for budget in self.state.get("startup_research", {}).values():
                 budget.pop("completion_tick", None)
         self.state["last_tick"] = tick
@@ -70,7 +76,7 @@ class DeterministicFactory:
 
     def _reserved(self, *, exclude: str | None = None) -> list[dict]:
         entities = []
-        for category in ("blocks", "links", "power_links"):
+        for category in ("blocks", "links", "power_links", "source_upgrades"):
             for key, plan in self.state.get(category, {}).items():
                 if key != exclude:
                     entities.extend(plan.get("entities", []))
@@ -276,7 +282,13 @@ return {ok=true,blocked=blocked}
         resources = {"iron-plate": ("iron-ore", "stone-furnace"), "copper-plate": ("copper-ore", "stone-furnace"),
                      "coal": ("coal", "wooden-chest"), "stone": ("stone", "wooden-chest")}
         resource, receiver = resources[item]
-        cell = self.bootstrap.discover_cell(resource, receiver)
+        upgrade = ensure_source_upgrade(self, observation, item, resource)
+        if upgrade is not None and not _ready(upgrade):
+            return upgrade
+        if upgrade is not None:
+            cell = self.bootstrap.discover_cell(resource, receiver, preferred_receiver=upgrade["evidence"]["receiver"])
+        else:
+            cell = self.bootstrap.discover_cell(resource, receiver)
         if not cell.get("ok"):
             return _report("blocked", "raw-material source discovery failed", item=item, resource=resource,
                            query_error=cell.get("reason", "cell_site_query_failed"))
@@ -393,7 +405,10 @@ return {ok=true,feeds_receiver=math.abs(p.x-receiver.position.x)<=receiver.proto
         coal = _report("succeeded", "coal source port", ports=primary["ports"]) if item == "coal" else self.ensure_product(observation, "coal")
         if not _ready(coal):
             return coal
-        burners = [cell.get("drill", {})]
+        drill = cell.get("drill", {})
+        burner_drill = not cell.get("electric") and (drill.get("name") == "burner-mining-drill"
+            or self.catalog.entities.get(drill.get("name"), {}).get("burner"))
+        burners = [drill] if burner_drill else []
         if receiver == "stone-furnace":
             burners.append(cell["receiver"])
         for burner in burners:
@@ -697,6 +712,8 @@ return {ok=true,obstacles=obstacles}
 
     def _fuel_burner(self, obs: dict, burner: dict, coal_port: dict) -> dict:
         key = "fuel:" + self._entity_key(burner)
+        if self.state["blocks"].get(key, {}).get("retired_for_upgrade"):
+            return _report("blocked", "raw drill fuel intake was retired for electric replacement", burner=burner)
         if key not in self.state["blocks"]:
             center = burner["position"]
             width = 2 if burner["name"] in {"burner-mining-drill", "stone-furnace", "steel-furnace"} else 1
