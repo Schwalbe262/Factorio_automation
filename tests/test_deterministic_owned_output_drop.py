@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from factorio_ai.deterministic_builder import FactoryBuilder
 from factorio_ai.deterministic_factory import DeterministicFactory
@@ -109,17 +109,55 @@ class OwnedOutputDropTests(unittest.TestCase):
         self.reserved = self.wall
         self.assertFalse(self.route()["ok"])
 
-    def test_ordinary_arrival_and_nonterminal_drop_keep_their_directions(self):
+    def test_owned_surface_arrival_changes_only_the_terminal_facing(self):
         self.builder.can_place = Mock(return_value={"ok": True})
         bounds = {"min_x": -8.5, "max_x": 12.5, "min_y": -8.5, "max_y": 8.5}
-        direct = _construct(self.factory, (8.5, .5), (.5, .5), (), set(), set(), bounds, 12, None, [25000], 8)
+        direct = _construct(self.factory, (8.5, .5), (.5, .5), (), set(), set(), bounds, 12, None, [25000])
         self.assertEqual(direct["segments"][-1]["direction"], 12)
+        owned = _construct(self.factory, (8.5, .5), (.5, .5), (), set(), set(), bounds, 12, None, [25000], 8)
+        self.assertEqual(owned["segments"][-1]["direction"], 8)
+        self.assertEqual(owned["segments"][:-1], direct["segments"][:-1])
         edge = {"pickup": (4.5, .5), "drop": (.5, .5), "arm": (2.5, .5),
                 "direction": 12, "over": (1.5, .5)}
         route = _construct(self.factory, (8.5, .5), (-3.5, .5), (edge,), set(), set(), bounds, 12, None, [25000], 8)
         self.assertIsNotNone(route)
         self.assertIn(entity("transport-belt", .5, .5, 12), route["segments"])
-        self.assertEqual(route["segments"][-1]["direction"], 12)
+        self.assertEqual(route["segments"][-1]["direction"], 8)
+
+    def test_owned_head_on_surface_arrival_remains_rejected(self):
+        bounds = {"min_x": -8.5, "max_x": 12.5, "min_y": -8.5, "max_y": 8.5}
+        self.assertIsNone(_construct(self.factory, (8.5, .5), (.5, .5), (), set(), set(),
+                                     bounds, 12, None, [25000], 4))
+
+    def test_normal_proven_side_feed_passes_placement_and_reaches_unchanged_bus(self):
+        self.source, self.entry, self.bus = port(.5, 8.5, 0), port(.5, .5, 4), port(2.5, .5, 4)
+        self.tail = [entity("transport-belt", x + .5, .5, 4) for x in range(3)]
+        self.owner = {"entities": self.tail, "source_port": self.entry, "consumer_port": self.bus}
+        self.factory.state["links"]["old-output"] = self.owner
+        self.proof.update(port=self.entry, bus_port=self.bus)
+        self.reserved = self.tail
+        self.builder.can_place.side_effect = lambda rows: {"ok": all(
+            row["direction"] == 4 for row in rows if row["position"] == self.entry["position"])}
+        result = self.factory._belt_bridge_route(self.source["position"], self.entry["position"],
+            self.reserved, start_direction=0, owned_drop=self.proof)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["segments"][-1], self.tail[0])
+        full = result["segments"][:-1] + self.tail
+        belts, edges, _ = _geometry({"entities": full})
+        self.assertIsNotNone(_path(belts, edges, (.5, 8.5), (2.5, .5)))
+        self.game.query.assert_called_once()
+        self.builder.can_place.assert_called_once()
+
+    def test_failed_leg_search_stays_bounded_and_extra_attempts_require_owned_proof(self):
+        attempts = []
+        for owned in (False, True):
+            self.game.query.reset_mock()
+            with patch("factorio_ai.deterministic_belt_crossings._construct", return_value=None) as construct:
+                self.assertFalse(self.route(owned)["ok"])
+            attempts.append(construct.call_count)
+            self.game.query.assert_called_once()
+            self.assertTrue(all(call.args[9][0] <= 100000 for call in construct.call_args_list))
+        self.assertEqual(attempts, [24, 48])
 
     def test_owned_keyword_does_not_leak_into_direct_builder_route(self):
         self.builder.route = Mock(return_value={"ok": False, "reason": "route search budget exhausted"})

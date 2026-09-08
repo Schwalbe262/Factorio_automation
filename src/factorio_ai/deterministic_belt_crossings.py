@@ -82,6 +82,9 @@ def plan_belt_crossings(factory, source, destination, reserved, *,
     _stopped(factory)
     if owned_drop is not None and not _owned_drop_valid(factory, destination, owned_drop):
         return {**failure, "reason": "invalid owned output drop proof"}
+    # An enclosed owned output may need later chains after short directed legs
+    # fail. Keep the same total routing-node and crossing limits.
+    chain_limit = MAX_CHAINS * (2 if owned_drop is not None else 1)
     start, finish = (source["x"], source["y"]), (destination["x"], destination["y"])
     if (any(d is not None and (type(d) is not int or d not in DIRECTIONS) for d in (start_direction, end_direction))
             or not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
@@ -274,13 +277,13 @@ return {ok=true,blocked=blocked,belts=belts,owned_drop_verified=owned~=nil}
                 choices.append((cost, (*chain, *crossing_chain), edge["to"], crossing_chain[-1]["drop"]))
         choices.sort(key=lambda row: (row[0] + math.dist(row[3], finish),
                                      tuple((e["over"], e["direction"]) for e in row[1])))
-        pending = choices[:MAX_CHAINS]
+        pending = choices[:chain_limit]
         if not pending:
             break
     chains.sort(key=lambda row: (row[0] + math.dist(row[3], finish),
                                 tuple((e["over"], e["direction"]) for e in row[1])))
     attempts, node_budget = 0, [MAX_ROUTE_NODES]
-    for _, chain, _, _ in chains[:MAX_CHAINS]:
+    for _, chain, _, _ in chains[:chain_limit]:
         _stopped(factory)
         attempts += 1
         plan = _construct(factory, start, finish, chain, physical, occupied, bounds,
@@ -378,6 +381,16 @@ def _construct(factory, start, finish, chain, physical, occupied, bounds, start_
         unavailable.add(_point(pole))
     # Keep destination last, matching the existing material-route contract.
     destination_row = unique.pop(finish)
+    if owned_drop_direction is not None and (not chain or chain[-1]["drop"] != finish):
+        # An adjacent surface belt can side-feed this exact owned output too.
+        # Keep its live facing only when the arrival cannot feed head-on.
+        incoming = destination_row["direction"]
+        dx, dy = DIRECTIONS[incoming]
+        previous = unique.get((finish[0] - dx, finish[1] - dy))
+        if (incoming == (owned_drop_direction + 8) % 16 or previous is None
+                or previous["name"] != "transport-belt" or previous["direction"] != incoming):
+            return None
+        destination_row["direction"] = owned_drop_direction
     segments = [*unique.values(), *poles, destination_row]
     return {"ok": True, "path": [p for leg in legs for p in leg["path"]], "segments": segments,
             "crossings": [{"kind": "long-handed-inserter", "over": _position(edge["over"])} for edge in chain],
