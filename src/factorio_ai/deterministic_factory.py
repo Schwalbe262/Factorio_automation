@@ -851,6 +851,10 @@ return {ok=true,obstacles=obstacles}
         result = self.ensure_power_connection(obs, key, plan)
         if not _ready(result):
             return result
+        if plan.get("adjacent_fuel_intake", {}).get("new_pole"):
+            invalid = validate_adjacent_fuel_intake(self, obs, burner, coal_port, key, require_power=True)
+            if invalid is not None:
+                return invalid
         result = self.connect_input(obs, coal_port, plan["ports"][0], key)
         if not _ready(result):
             return result

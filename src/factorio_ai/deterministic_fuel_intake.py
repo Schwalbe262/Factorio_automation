@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import math
 from typing import Any
 
 
@@ -33,7 +34,7 @@ local poles={};for _,e in pairs(s.find_entities_filtered{force=f,type="electric-
  if e.name=="small-electric-pole" and networks[e.electric_network_id] then poles[#poles+1]=e end
 end
 table.sort(poles,function(x,y) return x.unit_number<y.unit_number end)
-local rows={}
+local rows={};local uncovered={}
 for _,option in ipairs(args.options) do
  local expected=option.belt;local belt=target(expected.position,"transport-belt")
  if belt and belt.force==f and belt.unit_number==option.unit_number and belt.direction==expected.direction then
@@ -65,21 +66,46 @@ for _,option in ipairs(args.options) do
        force=f,build_check_type=defines.build_check_type.script,forced=false}
      end
     end
-    if allowed then for _,pole in ipairs(poles) do
+    if allowed and args.pending and args.pending.new_pole then
+     local saved=args.pending.pole;local pole=target(saved.position,"small-electric-pole")
+     local reach=math.min(2,prototypes.entity["small-electric-pole"].get_supply_area_distance("normal"))
+     local matching=not pole and not args.pending.pole_unit
+     if pole then
+      matching=pole.force==f and pole.position.x==saved.position.x and pole.position.y==saved.position.y
+       and pole.direction==saved.direction and (not args.pending.pole_unit or pole.unit_number==args.pending.pole_unit)
+      reach=math.min(2,pole.prototype.get_supply_area_distance(pole.quality))
+     end
+     if matching and math.abs(position.x-saved.position.x)<=reach and math.abs(position.y-saved.position.y)<=reach then
+      rows[#rows+1]={parent=option.parent,belt=expected,belt_unit=belt.unit_number,burner_unit=furnace.unit_number,
+       arm={name="inserter",position=position,direction=direction},arm_unit=arm and arm.unit_number,
+       pole=saved,pole_unit=pole and pole.unit_number,coal_items=coal,
+       powered=pole~=nil and networks[pole.electric_network_id]==true and arm~=nil and arm.energy>0
+        and arm.electric_network_id==pole.electric_network_id and arm.is_connected_to_electric_network()}
+     end
+    elseif allowed then
+     local covered=false
+     for _,pole in ipairs(poles) do
      local reach=math.min(2,pole.prototype.get_supply_area_distance(pole.quality))
      if math.abs(position.x-pole.position.x)<=reach and math.abs(position.y-pole.position.y)<=reach
       and (not args.pending or pole.unit_number==args.pending.pole_unit) then
       rows[#rows+1]={parent=option.parent,belt=expected,belt_unit=belt.unit_number,burner_unit=furnace.unit_number,
        arm={name="inserter",position=position,direction=direction},arm_unit=arm and arm.unit_number,
        pole={name=pole.name,position=pos(pole.position),direction=0},pole_unit=pole.unit_number,coal_items=coal}
+      covered=true
       break
      end
-    end end
+     end
+     if not covered and not args.pending then
+      uncovered[#uncovered+1]={parent=option.parent,belt=expected,belt_unit=belt.unit_number,burner_unit=furnace.unit_number,
+       arm={name="inserter",position=position,direction=direction},coal_items=coal}
+     end
+    end
    end
   end end
  end
 end
-return {ok=true,world_id=d.world_id,tick=game.tick,options=rows}
+return {ok=true,world_id=d.world_id,tick=game.tick,options=rows,uncovered=uncovered,
+ new_pole_reach=math.min(2,prototypes.entity["small-electric-pole"].get_supply_area_distance("normal"))}
 ''')
 
 
@@ -120,7 +146,23 @@ def reserve_adjacent_fuel_intake(factory: Any, obs: dict, burner: dict, source: 
     if not survey.get("ok") or survey.get("world_id") != obs["world_id"]:
         return False
     occupied = factory.builder._occupied_by_plan(factory._reserved()) | factory._port_clearances()
-    for row in survey.get("options", []):
+    def candidates():
+        yield from survey.get("options") or []
+        reach = survey.get("new_pole_reach")
+        if type(reach) not in (int, float) or not math.isfinite(reach) or not 0 < reach <= 2:
+            return
+        for row in (survey.get("uncovered") or [])[:4]:
+            if factory.builder._occupied_by_plan([row["arm"]]) & occupied:
+                continue
+            for pole in factory._intake_poles(row["arm"]["position"], [row["arm"]])[:8]:
+                if (max(abs(pole["position"][axis] - row["arm"]["position"][axis]) for axis in ("x", "y"))
+                        > reach
+                        or factory.builder._occupied_by_plan([pole]) & occupied):
+                    continue
+                if factory.builder.can_place([row["arm"], pole]).get("ok"):
+                    yield {**row, "pole": pole, "new_pole": True, "created_tick": obs["tick"]}
+                    break
+    for row in candidates():
         if factory.builder._occupied_by_plan([row["arm"]]) & occupied:
             continue
         record = {**deepcopy(row), "world_id": obs["world_id"], "burner": deepcopy(burner), "source_port": deepcopy(source)}
@@ -137,13 +179,27 @@ def reserve_adjacent_fuel_intake(factory: Any, obs: dict, burner: dict, source: 
     return False
 
 
-def validate_adjacent_fuel_intake(factory: Any, obs: dict, burner: dict, source: dict, key: str) -> dict | None:
+def validate_adjacent_fuel_intake(factory: Any, obs: dict, burner: dict, source: dict, key: str,
+                                *, require_power: bool = False) -> dict | None:
     plan = factory.state["blocks"][key]
     record = plan.get("adjacent_fuel_intake")
     if not record:
         return None
     failure = {"status": "blocked", "reason": "owned adjacent coal intake identity, content or power changed", "evidence": {"burner": burner}}
     if record["burner"] != burner or record["source_port"] != source or record["world_id"] != obs["world_id"]:
+        return failure
+    other = factory._reserved(exclude=key)
+    # A later ordinary power connection may share this already identified pole.
+    if record.get("new_pole") and record.get("pole_unit") and any(
+            e.get("name") == "small-electric-pole" and e.get("position") == record["pole"]["position"]
+            and e.get("direction", 0) == record["pole"]["direction"] and e.get("unit_number") == record["pole_unit"]
+            for e in obs.get("entities", [])):
+        other = [e for e in other if not (e.get("name") == "small-electric-pole"
+                 and e.get("position") == record["pole"]["position"] and e.get("direction", 0) == record["pole"]["direction"])]
+    if record.get("new_pole") and (obs["tick"] < record["created_tick"]
+            or plan.get("entities") != [record["arm"], record["pole"]]
+            or factory.builder._occupied_by_plan([record["pole"]])
+               & factory.builder._occupied_by_plan(other)):
         return failure
     if factory.builder._occupied_by_plan([record["arm"]]) & factory.builder._occupied_by_plan(factory._reserved(exclude=key)):
         return failure
@@ -156,7 +212,15 @@ def validate_adjacent_fuel_intake(factory: Any, obs: dict, burner: dict, source:
     if not survey.get("ok") or survey.get("world_id") != obs["world_id"] or len(survey.get("options", [])) != 1:
         return failure
     row = survey["options"][0]
-    if row.get("arm_unit") and record.get("arm_unit") != row["arm_unit"]:
-        record["arm_unit"] = row["arm_unit"]
+    if record.get("new_pole") and (type(survey.get("tick")) is not int or survey["tick"] < obs["tick"]):
+        return failure
+    changed = False
+    for field in (("arm_unit", "pole_unit") if record.get("new_pole") else ("arm_unit",)):
+        if row.get(field) and record.get(field) != row[field]:
+            record[field] = row[field]
+            changed = True
+    if changed:
         factory._save()
+    if require_power and record.get("new_pole") and row.get("powered") is not True:
+        return {"status": "waiting", "reason": "waiting for powered owned adjacent coal intake", "evidence": {"burner": burner}}
     return None
