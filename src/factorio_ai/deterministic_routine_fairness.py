@@ -193,6 +193,10 @@ class RoutineFairness:
             return
         lane, _, quiet = selected
         if lane == "production":
+            # Keep collected construction materials in the production lane
+            # until it builds hardware; routine work can consume them otherwise.
+            if action.get("type") not in {"build", "build_many"}:
+                return
             self.state["completed"] = 0
         elif lane == "routine" and quiet:
             self.state["completed"] = min(3, self.state["completed"] + 1)
