@@ -401,14 +401,12 @@ class FluidProduction:
                                       raw_source_capacity_verified=rate is not None), plan)
 
     def _raw_capacity(self, observation: dict, fluid: str, rate: float, result: dict) -> dict:
-        """Reject insufficient extraction instead of crediting idle refinery rows.
-
-        This checks the existing owned source only. Selecting and joining extra
-        oil wells is a separate capability; insufficient yield remains explicit.
-        """
+        """Size extraction separately from nominal refinery capacity."""
+        if fluid == "crude-oil":
+            from .deterministic_oil_capacity import ensure_oil_capacity
+            return ensure_oil_capacity(self, observation, rate, result)
         plan = self.state["sources"].get("raw:" + fluid, {})
-        name = "pumpjack" if fluid == "crude-oil" else "offshore-pump"
-        machines = [e for e in plan.get("entities", []) if e["name"] == name]
+        machines = [e for e in plan.get("entities", []) if e["name"] == "offshore-pump"]
         if len(machines) != 1:
             return _report("blocked", "raw fluid capacity requires an exact owned source", fluid=fluid, requested_rate_per_minute=rate)
         payload = json.dumps(json.dumps(machines[0], separators=(",", ":")))
@@ -416,25 +414,8 @@ class FluidProduction:
 --[[ raw_fluid_capacity: current nominal extraction, never measured throughput. ]]
 local x=helpers.json_to_table(''' + payload + ''');local e=target(x.position,x.name)
 if not e or e.force~=f then return {ok=false,reason="raw fluid source is missing or foreign"} end
-local rate;local amount
-if e.type=="offshore-pump" then
- rate=e.prototype.get_pumping_speed(e.quality)*3600
-else
- local wells=s.find_entities_filtered{position=e.position,radius=0.1,name="crude-oil"}
- if #wells~=1 then return {ok=false,reason="owned pumpjack has no unique crude oil well"} end
- local well=wells[1];local proto=well.prototype;local mine=proto.mineable_properties
- local normal=proto.normal_resource_amount;local product=0
- if not proto.infinite_resource or not normal or normal<=0 or not mine.mining_time or mine.mining_time<=0
-  then return {ok=false,reason="unsupported live oil yield geometry"} end
- for _,row in pairs(mine.products or {}) do
-  if row.type=="fluid" and row.name=="crude-oil" then product=product+(row.amount or 0) end
- end
- amount=well.amount
- --[[ Ignore positive bonuses; negative speed/productivity effects cannot inflate the bound. ]]
- rate=e.prototype.mining_speed*math.max(0,1+math.min(0,e.speed_bonus))
-  *math.max(0,1+math.min(0,e.productivity_bonus))*60/mine.mining_time*product*amount/normal
-end
-return {ok=true,world_id=d and d.world_id,unit_number=e.unit_number,nominal_capacity_per_minute=rate,resource_amount=amount}
+local rate=e.prototype.get_pumping_speed(e.quality)*3600
+return {ok=true,world_id=d and d.world_id,unit_number=e.unit_number,nominal_capacity_per_minute=rate}
 ''')
         capacity = survey.get("nominal_capacity_per_minute")
         if (not survey.get("ok") or survey.get("world_id") != observation["world_id"]

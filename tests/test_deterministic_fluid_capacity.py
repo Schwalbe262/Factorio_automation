@@ -247,6 +247,9 @@ class RawFluidCapacityTests(unittest.TestCase):
         self.game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=Path(self.temp.name)), query=Mock())
         self.fluids = FluidProduction(self.game, Mock(), catalog())
         self.fluids.factory = Mock()
+        self.fluids.factory.state = {"blocks": {}}
+        self.fluids.factory.ensure_power_connection.return_value = READY
+        self.fluids.builder.ensure_plan.return_value = READY
         self.obs = {"world_id": "fixture", "tick": 1}
         self.fluids._sync(self.obs)
         for fluid_name, name in (("crude-oil", "pumpjack"), ("water", "offshore-pump")):
@@ -256,23 +259,27 @@ class RawFluidCapacityTests(unittest.TestCase):
         self.fluids._ensure_raw_source = Mock(side_effect=lambda obs, item, amount: FluidCapacityTests.source(item, "fluid"))
 
     def test_current_well_yield_cannot_be_replaced_by_refinery_nominal_capacity(self):
-        self.game.query.return_value = {"ok": True, "world_id": "fixture", "nominal_capacity_per_minute": 1200}
+        self.game.query.return_value = {"ok": True, "world_id": "fixture", "owned": [{"key": "raw:crude-oil",
+            "position": {"x": .5, "y": .5}, "built": True, "nominal_capacity_per_minute": 1200}],
+            "candidates": [], "search_truncated": False}
         result = self.fluids.ensure_source(self.obs, "crude-oil", rate_per_minute=2500)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["evidence"]["nominal_capacity_per_minute"], 1200)
         self.assertEqual(result["evidence"]["requested_rate_per_minute"], 2500)
         self.assertFalse(result["evidence"]["raw_source_capacity_verified"])
-        self.assertIn("extraction capacity expansion", result["reason"])
+        self.assertIn("insufficient reachable unoccupied oil wells", result["reason"])
 
     def test_sufficient_source_is_nominal_only_and_rechecked_after_yield_declines(self):
-        self.game.query.return_value = {"ok": True, "world_id": "fixture", "nominal_capacity_per_minute": 3000}
+        self.game.query.return_value = {"ok": True, "world_id": "fixture", "owned": [{"key": "raw:crude-oil",
+            "position": {"x": .5, "y": .5}, "built": True, "nominal_capacity_per_minute": 3000}],
+            "candidates": [], "search_truncated": False}
         result = self.fluids.ensure_source(self.obs, "crude-oil", rate_per_minute=2500)
         self.assertEqual(result["status"], "succeeded")
         self.assertFalse(result["evidence"]["throughput_verified"])
         self.assertTrue(result["evidence"]["raw_source_capacity_verified"])
-        self.game.query.return_value["nominal_capacity_per_minute"] = 2000
+        self.game.query.return_value["owned"][0]["nominal_capacity_per_minute"] = 2000
         self.assertEqual(self.fluids.ensure_source(self.obs, "crude-oil", rate_per_minute=2500)["status"], "blocked")
-        self.assertEqual(self.game.query.call_count, 2)
+        self.assertEqual(self.game.query.call_count, 3)  # Decline triggers a fresh bounded well survey.
 
     def test_unknown_foreign_or_wrong_world_source_does_not_credit_capacity(self):
         for survey in ({"ok": False, "reason": "foreign source"},
