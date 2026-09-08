@@ -43,7 +43,7 @@ for _,p in ipairs(x.routes) do
  local e=target(p.position,p.name)
  if not e or e.force~=f or e.position.x~=p.position.x or e.position.y~=p.position.y
   or (p.unit_number and e.unit_number~=p.unit_number)
-  or (p.direction~=nil and e.direction~=p.direction) then
+  or (p.name~="gun-turret" and p.direction~=nil and e.direction~=p.direction) then
   return {ok=true,quiet=true,routes_ready=false,reason="ammunition_route_missing"}
  end
  if not healthy(e) then return {ok=true,quiet=false,reason="damaged_ammunition_route"} end
