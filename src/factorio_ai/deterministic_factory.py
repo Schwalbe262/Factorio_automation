@@ -1866,6 +1866,10 @@ return {ok=true,speed=prototypes.entity.lab.get_researching_speed(),
 
     def next_action(self, obs: dict) -> dict:
         self._sync(obs)
+        from .deterministic_construction_buffer import ensure_construction_buffer
+        buffer_action = ensure_construction_buffer(self, obs)
+        if buffer_action is not None:
+            return buffer_action
         if not (obs.get("technologies") or {}).get("automation"):
             return self._bootstrap_automation(obs)
         startup = self.bootstrap_electric_mining(obs)

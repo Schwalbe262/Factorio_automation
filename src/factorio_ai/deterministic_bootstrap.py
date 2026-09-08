@@ -26,6 +26,7 @@ class DeterministicBootstrap:
         self.catalog = catalog
         self._recipes: dict[str, dict[str, Any]] = {}
         self._world_id: str | None = None
+        self.construction_buffers: dict[str, dict[str, Any]] = {}
 
     def next_action(self, observation: dict[str, Any]) -> dict[str, Any]:
         if not observation.get("ok", True):
@@ -253,6 +254,14 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
                 "reason": f"engine craft {item} from live recipe"}
 
     def _take_output(self, observation: dict[str, Any], item: str, count: int) -> dict[str, Any] | None:
+        buffer = self.construction_buffers.get(item)
+        if buffer and buffer.get("world_id") == observation.get("world_id"):
+            chest = next((e for e in observation.get("entities", []) if e.get("unit_number") == buffer["unit_number"]
+                          and e.get("name") == buffer["name"] and e.get("position") == buffer["position"]), None)
+            stock = int((chest or {}).get("inventory", {}).get(item, 0))
+            if stock > 0:
+                return {"type": "take", "name": buffer["name"], "position": buffer["position"], "item": item,
+                        "count": min(count, stock, 50), "reason": f"collect buffered construction {item}"}
         for entity in observation.get("entities", []):
             name = entity.get("name", "")
             if name not in {"stone-furnace", "steel-furnace", "electric-furnace", "wooden-chest", "iron-chest", "steel-chest",
