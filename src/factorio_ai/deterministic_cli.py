@@ -28,6 +28,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--connect-only", action="store_true", help="Use the already running dedicated server")
     parser.add_argument("--cycles", type=int, default=0, help="0 runs until the objective or an explicit blocker")
     parser.add_argument("--until", choices=["bootstrap", "power", "rocket"], default="rocket")
+    parser.add_argument("--hide-window", action="store_true", help="With watch-deterministic, hide the automation window again")
     args = parser.parse_args(argv)
     if not 1 <= args.server_port <= 65535 or not 1 <= args.rcon_port <= 65535:
         parser.error("ports must be between 1 and 65535")
@@ -37,9 +38,11 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps({"ok": True, "status": "stop_requested"}))
         return
     if args.command == "watch-deterministic":
-        from .factorio import start_no_mod_gui_client
-        process = start_no_mod_gui_client(cfg)
-        print(json.dumps({"ok": True, "pid": process.pid, "address": f"127.0.0.1:{cfg.server_port}"}))
+        from .deterministic_character import set_client_visibility
+        result = set_client_visibility(cfg, visible=not args.hide_window)
+        print(json.dumps(result))
+        if result["status"] == "blocked":
+            raise SystemExit(1)
         return
     game = DeterministicGame(cfg, backend=args.backend)
     if args.command == "deterministic-status":

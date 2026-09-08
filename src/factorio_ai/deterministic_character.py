@@ -17,6 +17,8 @@ import subprocess
 import time
 from typing import Any
 
+from .deterministic_state import _atomic_json
+
 
 PLAYER_NAME = "FactoryAutomaton"
 _PROCESSES: dict[str, subprocess.Popen] = {}
@@ -96,6 +98,73 @@ def _hide_client_windows(pid: int) -> None:
         return True
     callback = callback_type(visit)
     user32.EnumWindows(callback, 0)
+
+
+def _view_requested(root: Path, state: dict[str, Any]) -> bool:
+    try:
+        view = json.loads((root / "client-view.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return (isinstance(view, dict) and view.get("visible") is True
+            and bool(state.get("creation_time"))
+            and view.get("pid") == state.get("pid")
+            and view.get("creation_time") == state["creation_time"])
+
+
+def _show_client_windows(pid: int, creation_time: int) -> int:
+    """Restore only game windows owned by this exact client, once on request."""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                   ctypes.c_int, ctypes.c_int, wintypes.UINT]
+    shown = 0
+    def visit(hwnd, _):
+        nonlocal shown
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value != pid or _identity(pid) != creation_time:
+            return True
+        title = ctypes.create_unicode_buffer(512)
+        user32.GetWindowTextW(hwnd, title, len(title))
+        if title.value == "Factorio" or title.value.startswith("Factorio:"):
+            user32.ShowWindow(hwnd, 9)
+            # Keep the current screen position; enlarge the tiny background view.
+            user32.SetWindowPos(hwnd, None, 0, 0, 1600, 900, 0x0002 | 0x0004 | 0x0040)
+            user32.SetForegroundWindow(hwnd)
+            shown += bool(user32.IsWindowVisible(hwnd))
+        return True
+    user32.EnumWindows(callback_type(visit), 0)
+    return shown
+
+
+def set_client_visibility(cfg: Any, *, visible: bool = True) -> dict[str, Any]:
+    """Watch the existing automation connection without a second Steam login."""
+    if os.name != "nt":
+        return {"status": "blocked", "reason": "window_control_requires_windows"}
+    root = (Path(cfg.runtime_dir) / "agent-client").resolve()
+    try:
+        state = json.loads((root / "client-process.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"status": "blocked", "reason": "no_owned_client"}
+    if not isinstance(state, dict):
+        return {"status": "blocked", "reason": "no_owned_client"}
+    pid, created = state.get("pid"), state.get("creation_time")
+    if not pid or not created or _identity(pid) != created:
+        return {"status": "blocked", "reason": "owned_client_not_running"}
+    _atomic_json(root / "client-view.json", {"pid": pid, "creation_time": created, "visible": visible})
+    if visible:
+        shown = _show_client_windows(pid, created)
+        if not shown:
+            return {"status": "running", "reason": "client_window_not_ready", "pid": pid}
+    elif _identity(pid) == created:
+        _hide_client_windows(pid)
+    return {"status": "ready", "pid": pid, "visible": visible,
+            "address": f"{cfg.rcon_host}:{cfg.server_port}"}
 
 
 def stop_crafting_client(cfg: Any) -> dict[str, Any]:
@@ -179,7 +248,10 @@ def ensure_crafting_player(game: Any) -> dict[str, Any]:
     live = process is not None and process.poll() is None
     if not live and state.get("pid") and state.get("creation_time"):
         live = _identity(int(state["pid"])) == state["creation_time"]
-    if live:
+    owned = bool(state.get("pid") and state.get("creation_time")
+                 and (process is None or process.pid == state["pid"])
+                 and _identity(int(state["pid"])) == state["creation_time"])
+    if owned and not _view_requested(root, state):
         _hide_client_windows(int(state["pid"]))
     if result.get("status") == "ready":
         return dict(result, pid=state.get("pid"))

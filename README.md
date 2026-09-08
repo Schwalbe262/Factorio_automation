@@ -27,8 +27,12 @@ python -m factorio_ai.deterministic_cli stop-deterministic
 
 Use `--until power` to run the verified starter milestone. A blocked or failed
 task stops and records its reason in `status.json`; it does not claim completion.
-The default run listens on `127.0.0.1:34200`. To observe, join that address from
-Factorio multiplayer or run `watch-deterministic`. A read-only dashboard is available
+The default run listens on `127.0.0.1:34200`. Run `watch-deterministic` to show
+the already connected automation client, including when Steam says the game is
+already running. This shares the automation character's view and controls.
+Minimize the window to leave it running, or use `watch-deterministic --hide-window`
+to hide it again. A restarted client defaults to hidden until requested again.
+A read-only dashboard is available
 with `python -m factorio_ai.deterministic_dashboard --runtime runtime/deterministic/20260908`.
 
 The current development test world uses `127.0.0.1:34210` instead. Its observer

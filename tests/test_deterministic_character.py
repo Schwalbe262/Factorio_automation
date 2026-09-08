@@ -96,6 +96,74 @@ class DedicatedCraftingClientTests(unittest.TestCase):
             with patch.object(module, '_identity', return_value=999):
                 self.assertEqual(module.stop_crafting_client(cfg)['reason'], 'owned_client_not_running')
 
+    def test_watch_shows_existing_client_without_spawning_and_survives_poll(self):
+        with TemporaryDirectory() as directory:
+            cfg = config(directory)
+            _, root = module.prepare_client(cfg)
+            (root / 'client-process.json').write_text(json.dumps({'pid': 345, 'creation_time': 123, 'started_at': 1000}))
+            game = SimpleNamespace(cfg=cfg, query=Mock(return_value={'status': 'ready'}))
+            with patch.object(module, '_identity', return_value=123), patch.object(module, '_show_client_windows', return_value=1) as show, patch.object(module, '_hide_client_windows') as hide, patch.object(module.subprocess, 'Popen') as spawn:
+                self.assertEqual(module.set_client_visibility(cfg)['status'], 'ready')
+                show.assert_called_once_with(345, 123)
+                for status in ['ready', 'running']:
+                    game.query.return_value = {'status': status}
+                    with patch.object(module.time, 'time', return_value=1010):
+                        module.ensure_crafting_player(game)
+                hide.assert_not_called()
+                spawn.assert_not_called()
+
+    def test_watch_refuses_reused_pid_and_missing_registry(self):
+        with TemporaryDirectory() as directory:
+            cfg = config(directory)
+            _, root = module.prepare_client(cfg)
+            with patch.object(module, '_identity', return_value=999), patch.object(module, '_show_client_windows') as show, patch.object(module.subprocess, 'Popen') as spawn:
+                self.assertEqual(module.set_client_visibility(cfg)['reason'], 'no_owned_client')
+                (root / 'client-process.json').write_text(json.dumps({'pid': 345, 'creation_time': 123}))
+                self.assertEqual(module.set_client_visibility(cfg)['reason'], 'owned_client_not_running')
+                show.assert_not_called()
+                spawn.assert_not_called()
+                self.assertFalse((root / 'client-view.json').exists())
+
+    def test_stale_view_request_does_not_expose_restarted_client(self):
+        with TemporaryDirectory() as directory:
+            cfg = config(directory)
+            _, root = module.prepare_client(cfg)
+            (root / 'client-process.json').write_text(json.dumps({'pid': 345, 'creation_time': 456}))
+            (root / 'client-view.json').write_text(json.dumps({'pid': 345, 'creation_time': 123, 'visible': True}))
+            game = SimpleNamespace(cfg=cfg, query=Mock(return_value={'status': 'ready'}))
+            with patch.object(module, '_identity', return_value=456), patch.object(module, '_hide_client_windows') as hide:
+                module.ensure_crafting_player(game)
+                hide.assert_called_once_with(345)
+
+    def test_cached_process_registry_mismatch_cannot_control_other_window(self):
+        with TemporaryDirectory() as directory:
+            cfg = config(directory)
+            _, root = module.prepare_client(cfg)
+            (root / 'client-process.json').write_text(json.dumps({'pid': 345, 'creation_time': 123}))
+            module._PROCESSES[str(root)] = Mock(pid=987, poll=Mock(return_value=None))
+            game = SimpleNamespace(cfg=cfg, query=Mock(return_value={'status': 'ready'}))
+            with patch.object(module, '_identity', return_value=123), patch.object(module, '_hide_client_windows') as hide:
+                module.ensure_crafting_player(game)
+                hide.assert_not_called()
+
+    def test_explicit_hide_clears_view_preference(self):
+        with TemporaryDirectory() as directory:
+            cfg = config(directory)
+            _, root = module.prepare_client(cfg)
+            (root / 'client-process.json').write_text(json.dumps({'pid': 345, 'creation_time': 123}))
+            with patch.object(module, '_identity', return_value=123), patch.object(module, '_hide_client_windows') as hide:
+                self.assertFalse(module.set_client_visibility(cfg, visible=False)['visible'])
+                hide.assert_called_once_with(345)
+            self.assertFalse(json.loads((root / 'client-view.json').read_text())['visible'])
+
+    def test_window_not_ready_is_not_reported_as_visible(self):
+        with TemporaryDirectory() as directory:
+            cfg = config(directory)
+            _, root = module.prepare_client(cfg)
+            (root / 'client-process.json').write_text(json.dumps({'pid': 345, 'creation_time': 123}))
+            with patch.object(module, '_identity', return_value=123), patch.object(module, '_show_client_windows', return_value=0):
+                self.assertEqual(module.set_client_visibility(cfg)['status'], 'running')
+
 
 if __name__ == '__main__':
     unittest.main()
