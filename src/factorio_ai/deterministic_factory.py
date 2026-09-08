@@ -1312,9 +1312,14 @@ return {ok=true,candidates=candidates}
         if key in self.state["blocks"]:
             return self.state["blocks"][key]
         resource = {"iron-plate": "iron-ore", "copper-plate": "copper-ore"}.get(item, item)
-        payload = json.dumps(resource)
+        primary = self.state["blocks"].get("source:" + item, {})
+        reference = next((port["position"] for port in primary.get("ports", [])
+                          if port.get("kind") == "item" and port.get("direction") == "output"
+                          and port.get("item") == item), {"x": 0, "y": 0})
+        payload = json.dumps(json.dumps({"name": resource, "reference": reference}))
+        # Rank proximity before truncating; richness extends lifetime, not mining speed.
         survey = self.game.query('''
-local name=''' + payload + ''';local seen={};local sites={}
+local args=helpers.json_to_table(''' + payload + ''');local name=args.name;local seen={};local sites={}
 for _,ore in pairs(s.find_entities_filtered{position={0,0},radius=512,name=name,type="resource"}) do
  local x=math.floor(ore.position.x);local y=math.floor(ore.position.y);local key=x..","..y
  if not seen[key] then
@@ -1324,11 +1329,17 @@ for _,ore in pairs(s.find_entities_filtered{position={0,0},radius=512,name=name,
    for _,r in pairs(s.find_entities_filtered{area={{x-2,y-2},{x+3,y+3}},type="resource"}) do
     if r.name==name then amount=amount+r.amount;count=count+1 else mixed=true end
    end
-   if not mixed and count>=4 then sites[#sites+1]={x=x,y=y,score=count*100000+math.min(amount,10000)-(x*x+y*y)} end
+   if not mixed and count>=4 then sites[#sites+1]={x=x,y=y,amount=amount,count=count,
+    distance=(x+.5-args.reference.x)^2+(y+.5-args.reference.y)^2} end
   end
  end
 end
-table.sort(sites,function(a,b) return a.score>b.score end)
+table.sort(sites,function(a,b)
+ if a.distance~=b.distance then return a.distance<b.distance end
+ if a.amount~=b.amount then return a.amount>b.amount end
+ if a.count~=b.count then return a.count>b.count end
+ if a.x~=b.x then return a.x<b.x end;return a.y<b.y
+end)
 local best={};for i=1,math.min(#sites,256) do best[i]=sites[i] end
 return {ok=true,sites=best}
 ''')
