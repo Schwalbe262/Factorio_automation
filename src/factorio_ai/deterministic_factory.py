@@ -384,6 +384,10 @@ return {ok=true,blocked=blocked}
                 primary["source_receiver"] = association["receiver"]
                 self._save()
             if primary["source_receiver"] != current_receiver:
+                from .deterministic_capacity_source import adopt_capacity_source
+                reused = adopt_capacity_source(self, observation, item, cell, primary)
+                if reused is not None:
+                    return reused
                 key = primary_key + ":relocation:" + self._entity_key(current_receiver)
                 old_receiver = primary["source_receiver"].get("position")
                 for entity in observation.get("entities", []):
@@ -961,15 +965,17 @@ return {ok=true,obstacles=obstacles}
                        requested_rate_per_minute=rate_per_minute)
 
     def _upstream_output_tails(self, obs: dict, bus_port: dict) -> list[dict]:
-        """Keep only owned same-item belt tails that reach the original bus.
+        """Keep owned same-item tails, including powered arms, to the original bus.
 
         Missing reserved belts remain paid construction dependencies. Observed
         belts must retain their facing; consumer branches are never endpoints.
         """
+        from .deterministic_input_links import _geometry, _identity, _path, _powered_prefix
+
         end = bus_port["position"]["x"], bus_port["position"]["y"]
         candidates, seen_tails = [], set()
-        observed = {(e["position"]["x"], e["position"]["y"]): e
-                    for e in obs.get("entities", []) if e["name"] == "transport-belt"}
+        observed = {(e["name"], (e["position"]["x"], e["position"]["y"])): e
+                    for e in obs.get("entities", [])}
         reserved = self._reserved()
         foreign = [e for plan in self.state["links"].values()
                    if any((plan.get(field) or {}).get("item") not in (None, bus_port["item"])
@@ -984,50 +990,45 @@ return {ok=true,obstacles=obstacles}
                 elif (plan.get("consumer_port") != bus_port
                       or (plan.get("source_port") or {}).get("item") != bus_port["item"]):
                     continue
-                belts, contradictory = {}, False
-                for entity in plan.get("entities", []):
-                    if entity["name"] != "transport-belt":
-                        continue
-                    point = entity["position"]["x"], entity["position"]["y"]
-                    if point in belts and belts[point].get("direction") != entity.get("direction"):
-                        contradictory = True
-                        break
-                    belts[point] = entity
-                if contradictory:
+                try:
+                    belts, edges, _ = _geometry(plan)
+                except ValueError:
+                    continue
+                if end not in belts or belts[end].get("direction", 0) != bus_port["facing"]:
                     continue
                 for start, entity in belts.items():
                     if start == end:
                         continue
-                    point, visited, tail = start, set(), []
-                    while point in belts and point not in visited and len(tail) < 256:
-                        visited.add(point)
-                        belt = belts[point]
-                        delta = DIRECTIONS.get(belt.get("direction"))
-                        actual = observed.get(point)
-                        if (delta is None or (actual and (actual.get("direction") != belt["direction"]
+                    tail = _path(belts, edges, start, end)
+                    if tail is None or len(tail) > 256:
+                        continue
+                    try:
+                        powered = _powered_prefix(plan, tail)["entities"]
+                    except ValueError:
+                        continue
+                    # Route callers preserve the last entity's canonical facing.
+                    # Keep arm power dependencies before that final bus belt.
+                    tail = powered[:len(tail) - 1] + powered[len(tail):] + [tail[-1]]
+                    changed = False
+                    for expected in tail:
+                        actual = observed.get(_identity(expected)[:2])
+                        if actual and (actual.get("direction", 0) != expected.get("direction", 0)
                                 or any(item != bus_port["item"] and count > 0
-                                       for item, count in actual.get("belt_inventory", {}).items())))):
+                                       for item, count in actual.get("belt_inventory", {}).items())):
+                            changed = True
                             break
-                        tail.append(belt)
-                        if point == end:
-                            if belt["direction"] != bus_port["facing"]:
-                                break
-                            signature = tuple((b["position"]["x"], b["position"]["y"], b["direction"]) for b in tail)
-                            if signature in seen_tails:
-                                break
-                            matching = set(signature)
-                            other = [e for e in reserved if (e["name"] != "transport-belt"
-                                or (e["position"]["x"], e["position"]["y"], e.get("direction")) not in matching)]
-                            if self.builder._occupied_by_plan(tail) & (self.builder._occupied_by_plan(other) | foreign_footprint):
-                                break
-                            seen_tails.add(signature)
-                            candidates.append({"entities": deepcopy(tail), "category": category, "key": key,
-                                "port": {**bus_port, "position": deepcopy(entity["position"]), "facing": entity["direction"]}})
-                            break
-                        following = point[0] + delta[0], point[1] + delta[1]
-                        if following in belts and belts[following].get("direction") == (belt["direction"] + 8) % 16:
-                            break
-                        point = following
+                    if changed:
+                        continue
+                    signature = tuple(_identity(e) for e in tail)
+                    if signature in seen_tails:
+                        continue
+                    matching = set(signature)
+                    other = [e for e in reserved if _identity(e) not in matching]
+                    if self.builder._occupied_by_plan(tail) & (self.builder._occupied_by_plan(other) | foreign_footprint):
+                        continue
+                    seen_tails.add(signature)
+                    candidates.append({"entities": deepcopy(tail), "category": category, "key": key,
+                        "port": {**bus_port, "position": deepcopy(entity["position"]), "facing": entity["direction"]}})
         return candidates
 
     def _source_pickup_bridge_route(self, obs: dict, source_port: dict, destination: dict, reserved: list[dict]) -> dict:
@@ -1302,6 +1303,13 @@ return {ok=true,sites=best}
             smelting = self.catalog.recipe_for_product(item)
             furnace_rate = float(self.catalog.entities["stone-furnace"]["crafting_speed"]) * 60 / float(smelting["energy"])
             electric_rate, initial_rate = min(electric_rate, furnace_rate), min(initial_rate, furnace_rate)
+        primary = self.state.get("blocks", {}).get("source:" + item, {})
+        active_key = (primary.get("active_source") or {}).get("extraction_block", "")
+        if (isinstance(active_key, str) and active_key.startswith(f"source:{item}:capacity:")
+                and self.state["blocks"].get(active_key, {}).get("resource_cell") is True):
+            # This cell is already counted by the capacity loop. The retired
+            # starter no longer contributes a separate nominal mining rate.
+            initial_rate = 0
         additional = max(0, math.ceil((rate - initial_rate) / electric_rate - 1e-9))
         coal_port = primary_port
         if item != "coal" and additional:
