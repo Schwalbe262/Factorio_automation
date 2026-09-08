@@ -346,6 +346,14 @@ return {ok=true,ammo=ammo and ammo.get_item_count("firearm-magazine") or 0,held=
                 return seed
         if not (obs.get("enabled_recipes") or {}).get("electric-mining-drill"):
             return self.factory.request_recipe_unlock(obs, "electric-mining-drill")
+        # A cold routine lane can build before Factory.next_action has restored
+        # its existing belt buffer's preferred collection source.
+        from .deterministic_construction_buffer import BUFFER_KEY, ensure_construction_buffer
+        self.factory._sync(obs)
+        if BUFFER_KEY in self.factory.state["blocks"]:
+            buffer = ensure_construction_buffer(self.factory, obs)
+            if buffer is not None:
+                return buffer
         rate = max(4, 2 * len(turrets))
         capacity = self.factory.ensure_product(obs, "iron-plate", rate_per_minute=self._iron_rate(rate))
         if not _ready(capacity):

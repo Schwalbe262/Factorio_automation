@@ -3,8 +3,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
+from factorio_ai.deterministic_armaments import Armaments
 from factorio_ai.deterministic_bootstrap import DeterministicBootstrap
 from factorio_ai.deterministic_builder import FactoryBuilder
 from factorio_ai.deterministic_construction_buffer import BUFFER_KEY, ensure_construction_buffer
@@ -128,6 +129,83 @@ class ConstructionBufferTests(unittest.TestCase):
         self.game.query.return_value = {"count": 8}
         fallback = self.bootstrap.ensure_item(self.obs, "transport-belt", 32)
         self.assertEqual((fallback["name"], fallback["count"]), ("assembling-machine-1", 8))
+
+    def routine(self):
+        self.complete(stock=100)
+        self.obs["entities"][0]["inventory"] = {"transport-belt": 8}
+        self.obs["entities"].append(entity("gun-turret", 20, 20, unit_number=30, inventory={"firearm-magazine": 20}))
+        self.obs["technologies"] = {"automation": True}
+        self.obs["enabled_recipes"] = {"electric-mining-drill": True}
+        self.catalog.recipe_for_product = lambda item: {"ingredients": [{"name": "iron-plate", "amount": 4}],
+                                                       "products": [{"name": "firearm-magazine", "amount": 1}]}
+        self.game.query.side_effect = lambda body: {"ok": True, "slots": 1} if "buffer_identity_changed" in body else {"count": 8}
+        self.factory.ensure_product = Mock(side_effect=lambda obs, item, **kwargs:
+                                           self.bootstrap.ensure_item(obs, "transport-belt", 32))
+        return Armaments(self.game, self.bootstrap, self.builder, self.factory, self.catalog)
+
+    def test_cold_routine_revalidates_owned_full_buffer_before_collecting_small_assembler_output(self):
+        routine = self.routine()
+        self.assertEqual(self.bootstrap.construction_buffers, {})
+        original = deepcopy(self.factory.state["blocks"])
+        for held, needed in ((0, 32), (5, 27)):
+            with self.subTest(held=held):
+                self.bootstrap.construction_buffers.clear()
+                self.obs["inventory"] = {"transport-belt": held}
+                with patch.object(self.bootstrap, "_recipe") as recipe:
+                    action = routine.next_action(self.obs)
+                    recipe.assert_not_called()
+                self.assertEqual((action["type"], action["name"], action["count"]), ("take", "wooden-chest", needed))
+                self.assertEqual(action["position"], original[BUFFER_KEY]["entities"][0]["position"])
+                self.assertEqual(self.bootstrap.construction_buffers["transport-belt"]["unit_number"], 20)
+                self.assertEqual(self.factory.state["blocks"], original)
+                self.assertEqual(self.obs["entities"][-3]["inventory"], {"transport-belt": 100})
+
+    def test_routine_does_not_create_unsaved_buffer_or_reuse_another_world_reservation(self):
+        for mode in ("missing", "world_changed"):
+            with self.subTest(mode=mode):
+                routine = self.routine()
+                if mode == "missing":
+                    del self.factory.state["blocks"][BUFFER_KEY]
+                else:
+                    self.obs["world_id"] = "new-world"
+                with patch("factorio_ai.deterministic_construction_buffer.ensure_construction_buffer") as buffer:
+                    action = routine.next_action(self.obs)
+                    buffer.assert_not_called()
+                self.assertNotIn(BUFFER_KEY, self.factory.state["blocks"])
+                self.assertEqual((action["type"], action["name"], action["count"]), ("take", "assembling-machine-1", 8))
+
+    def test_routine_buffer_repair_wait_and_identity_failure_precede_material_collection(self):
+        routine = self.routine()
+        for result in ({"type": "build", "name": "inserter"}, {"status": "waiting"},
+                       {"status": "blocked", "reason": "buffer_identity_changed"}):
+            with self.subTest(result=result):
+                self.factory.ensure_product.reset_mock()
+                with patch("factorio_ai.deterministic_construction_buffer.ensure_construction_buffer", return_value=result):
+                    self.assertEqual(routine.next_action(self.obs), result)
+                self.factory.ensure_product.assert_not_called()
+        self.game.query.side_effect = None
+        self.game.query.return_value = {"ok": False, "reason": "buffer_identity_changed"}
+        self.bootstrap.construction_buffers["transport-belt"] = {"stale": True}
+        result = routine.next_action(self.obs)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["evidence"]["reason"], "buffer_identity_changed")
+        self.assertEqual(self.bootstrap.construction_buffers, {})
+        self.factory.ensure_product.assert_not_called()
+
+    def test_routine_seeding_and_locked_mining_still_precede_buffer_binding(self):
+        routine = self.routine()
+        self.obs["entities"][-1]["inventory"] = {}
+        self.obs["inventory"] = {"firearm-magazine": 5}
+        with patch("factorio_ai.deterministic_construction_buffer.ensure_construction_buffer") as buffer:
+            action = routine.next_action(self.obs)
+            self.assertEqual((action["type"], action["item"]), ("insert", "firearm-magazine"))
+            buffer.assert_not_called()
+        self.obs["entities"][-1]["inventory"] = {"firearm-magazine": 20}
+        self.obs["enabled_recipes"] = {}
+        self.factory.request_recipe_unlock = Mock(return_value={"status": "waiting"})
+        with patch("factorio_ai.deterministic_construction_buffer.ensure_construction_buffer") as buffer:
+            self.assertEqual(routine.next_action(self.obs), {"status": "waiting"})
+            buffer.assert_not_called()
 
     def test_stale_buffer_world_or_unit_does_not_override_ordinary_collection(self):
         self.complete(stock=64)
