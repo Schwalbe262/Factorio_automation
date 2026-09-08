@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from factorio_ai.deterministic_factory import DeterministicFactory
 from factorio_ai.deterministic_fluids import FluidProduction
@@ -242,6 +242,9 @@ class AggregateFluidDemandTests(unittest.TestCase):
 
 class RawFluidCapacityTests(unittest.TestCase):
     def setUp(self):
+        extent = patch("factorio_ai.deterministic_oil_capacity._pipeline_extent", return_value={"ok": True})
+        extent.start()
+        self.addCleanup(extent.stop)
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=Path(self.temp.name)), query=Mock())
@@ -267,7 +270,7 @@ class RawFluidCapacityTests(unittest.TestCase):
         self.assertEqual(result["evidence"]["nominal_capacity_per_minute"], 1200)
         self.assertEqual(result["evidence"]["requested_rate_per_minute"], 2500)
         self.assertFalse(result["evidence"]["raw_source_capacity_verified"])
-        self.assertIn("insufficient reachable unoccupied oil wells", result["reason"])
+        self.assertIn("live actor position", result["reason"])
 
     def test_sufficient_source_is_nominal_only_and_rechecked_after_yield_declines(self):
         self.game.query.return_value = {"ok": True, "world_id": "fixture", "owned": [{"key": "raw:crude-oil",

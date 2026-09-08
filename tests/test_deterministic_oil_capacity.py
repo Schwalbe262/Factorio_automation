@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 from factorio_ai.deterministic_builder import FactoryBuilder
 from factorio_ai.deterministic_factory import DeterministicFactory
 from factorio_ai.deterministic_fluids import FluidProduction
-from factorio_ai.deterministic_oil_capacity import PRIMARY, PREFIX, _survey
+from factorio_ai.deterministic_oil_capacity import PRIMARY, PREFIX, _survey, _pipeline_extent
 from factorio_ai.factory_templates import route_orthogonal
 from test_deterministic_fluids import catalog, entity, box
 
@@ -52,8 +52,21 @@ class OilCapacityTests(unittest.TestCase):
         self.foreign = set()
         self.occupied = set()
         self.error = None
+        self.extent_limit = 320
+        self.extent_members = []
 
     def query(self, body):
+        if "oil_pipeline_extent" in body:
+            bounds = None
+            if self.extent_members:
+                points = [e["position"] for e in self.extent_members]
+                bounds = {"left_top": {axis: min(p[axis] for p in points)-.5 for axis in ("x", "y")},
+                          "right_bottom": {axis: max(p[axis] for p in points)+.5 for axis in ("x", "y")}}
+            return {"ok": True, "world_id": "fixture", "limit": self.extent_limit,
+                    "source_present": bool(self.extent_members), "bounds": bounds}
+        if "oil_exploration_standing" in body:
+            point = json.loads(json.loads(re.search(r'helpers.json_to_table\(("(?:[^"\\]|\\.)*")\)', body).group(1)))
+            return {"ok": True, "world_id": "fixture", "position": getattr(self, "standing_override", point)}
         self.assertIn("oil_well_capacity", body)
         args = json.loads(json.loads(re.search(r'helpers.json_to_table\(("(?:[^"\\]|\\.)*")\)', body).group(1)))
         if self.error:
@@ -165,7 +178,7 @@ class OilCapacityTests(unittest.TestCase):
         self.builder.route.return_value = {"ok": False}
         done = self.ensure()
         self.assertEqual(done["status"], "blocked")
-        self.assertIn("bounded discovery", done["reason"])
+        self.assertIn("live actor position", done["reason"])
         self.assertEqual(len(self.fluids.state["sources"]), 1)
         self.bootstrap.ensure_item.assert_not_called()
 
@@ -229,8 +242,136 @@ class OilCapacityTests(unittest.TestCase):
             done = self.ensure()
         self.assertEqual(done["reason"], "bounded oil well capacity is insufficient")
         self.assertAlmostEqual(done["evidence"]["nominal_capacity_per_minute"], 1646.01)
-        self.assertEqual(self.game.query.call_count, 1)
+        self.assertEqual(self.game.query.call_count, 2)  # Capacity and current full segment extent.
         self.assertEqual(len(self.fluids.state["sources"]), 2)
+
+    def explore(self):
+        self.wells = {(.5, .5): 746.01}
+        self.obs.setdefault("position", {"x": .5, "y": .5})
+        return self.ensure()
+
+    def test_exploration_uses_deterministic_backend_moves_and_requires_fresh_arrival(self):
+        first = self.explore()
+        self.assertEqual(first["type"], "move")
+        self.assertEqual(first["position"], {"x": .5, "y": -127.5})
+        self.obs["position"] = deepcopy(first["position"])
+        self.assertEqual(self.explore()["type"], "move")  # Same tick cannot prove arrival.
+        self.assertEqual(self.fluids.state["oil_exploration"]["index"], 0)
+        self.obs["tick"] += 1
+        self.assertEqual(self.explore()["status"], "waiting")
+        self.assertEqual(self.fluids.state["oil_exploration"]["arrived"], [0])
+        self.obs["tick"] += 1
+        second = self.explore()
+        self.assertEqual(second["position"], {"x": 128.5, "y": .5})
+        self.assertFalse(second["evidence"]["raw_source_capacity_verified"])
+
+    def test_pending_exploration_resumes_on_reload_and_resets_arrivals_on_rollback(self):
+        first = self.explore()
+        self.obs["position"] = first["position"]
+        self.obs["tick"] += 1
+        self.explore()
+        self.obs["tick"] += 1
+        second = self.explore()
+        restored = FluidProduction(self.game, self.builder, self.catalog)
+        restored.factory = self.factory
+        self.fluids = restored
+        self.obs["tick"] += 1
+        self.assertEqual(self.explore()["position"], second["position"])
+        self.obs["tick"] = 1
+        self.obs["position"] = {"x": .5, "y": .5}
+        self.assertEqual(self.explore()["position"], first["position"])
+        self.assertEqual(self.fluids.state["oil_exploration"]["arrived"], [])
+
+    def test_reobserved_charted_well_is_built_before_more_exploration(self):
+        self.explore()
+        self.wells[(12.5, .5)] = 1900
+        done = self.ensure()
+        self.assertEqual(done["reason"], "normal construction materials needed")
+        self.assertEqual(len(self.fluids.state["sources"]), 2)
+        self.assertEqual(self.fluids.state["oil_exploration"]["index"], 0)
+
+    def test_strict_backend_uses_same_move_action_and_observed_nearby_arrival(self):
+        self.game.backend = "character"
+        first = self.explore()
+        self.obs["position"] = {"x": first["position"]["x"] + 10, "y": first["position"]["y"]}
+        self.obs["tick"] += 1
+        self.assertEqual(self.explore()["status"], "waiting")
+        self.assertEqual(self.fluids.state["oil_exploration"]["arrived"], [0])
+
+    def test_unreachable_and_water_waypoints_are_recorded_without_false_arrival(self):
+        self.standing_override = None
+        self.assertIn("no standing position", self.explore()["reason"])
+        state = self.fluids.state["oil_exploration"]
+        self.assertEqual(state["unreached"], [0])
+        self.assertEqual(state["arrived"], [])
+        del self.standing_override
+        self.explore()
+        self.obs["tick"] += 7200
+        self.assertIn("timed out", self.explore()["reason"])
+        self.assertEqual(state["unreached"], [0, 1])
+        self.assertEqual(state["arrived"], [])
+
+    def test_exploration_has_finite_waypoints_and_honest_exhaustion(self):
+        positions = []
+        for _ in range(16):
+            move = self.explore()
+            positions.append(move["position"])
+            self.obs["position"] = deepcopy(move["position"])
+            self.obs["tick"] += 1
+            self.explore()
+            self.obs["tick"] += 1
+        done = self.explore()
+        self.assertEqual(done["status"], "blocked")
+        self.assertIn("exploration exhausted", done["reason"])
+        self.assertEqual(done["evidence"]["waypoints_arrived"], 16)
+        self.assertEqual(len({(p["x"], p["y"]) for p in positions}), 16)
+        self.assertTrue(all((p["x"]-.5)**2 + (p["y"]-.5)**2 < 320**2 for p in positions))
+
+    def test_far_candidate_and_live_crude_segment_union_must_fit_engine_limit(self):
+        candidate = self.fluids._utility_plan("pumpjack", {"x": 200.5, "y": .5}, 0, "crude-oil")
+        self.extent_members = [{"name": "pipe", "position": {"x": -150.5, "y": .5}}]
+        extent = _pipeline_extent(self.fluids, self.obs, self.original, candidate)
+        self.assertFalse(extent["ok"])
+        self.assertGreater(extent["width"], 320)
+        self.extent_limit = 400
+        self.assertTrue(_pipeline_extent(self.fluids, self.obs, self.original, candidate)["ok"])
+
+    def test_saved_unbuilt_crude_route_is_included_in_pipeline_extent(self):
+        self.factory.register_plan("future-crude", {"ok": True, "entities": [{"name": "pipe",
+            "position": {"x": 330.5, "y": .5}, "_fluid": "crude-oil"}]}, self.obs)
+        self.assertFalse(_pipeline_extent(self.fluids, self.obs, self.original)["ok"])
+        done = self.ensure()
+        self.assertIn("exceed live extent", done["reason"])
+        self.assertNotIn("oil_exploration", self.fluids.state)
+
+    def test_overextended_candidate_is_not_reserved_and_missing_extent_fails_closed(self):
+        self.extent_limit = 10
+        self.obs["position"] = {"x": .5, "y": .5}
+        done = self.ensure()
+        self.assertEqual(done["type"], "move")
+        self.assertIn("exceed live extent", done["evidence"]["placement_issue"])
+        self.assertEqual(len(self.fluids.state["sources"]), 1)
+        self.extent_limit = None
+        self.assertEqual(self.ensure()["status"], "blocked")
+
+    def test_exploration_cannot_reuse_another_worlds_frontier_or_escape_its_waypoint(self):
+        self.explore()
+        self.fluids._sync({"world_id": "new-world", "tick": 500})
+        self.assertNotIn("oil_exploration", self.fluids.state)
+        self.fluids._sync(self.obs)
+        self.fluids.state["sources"][PRIMARY] = deepcopy(self.original)
+        self.standing_override = {"x": 900, "y": 900}
+        self.assertIn("escaped waypoint bound", self.explore()["reason"])
+        self.assertEqual(self.fluids.state["oil_exploration"]["index"], 0)
+
+    def test_adjusted_assisted_standing_position_is_saved_and_actual_arrival_checked(self):
+        self.standing_override = {"x": 4.5, "y": -127.5}
+        move = self.explore()
+        self.assertEqual(move["position"], self.standing_override)
+        self.obs["position"] = {"x": 12, "y": -127.5}
+        self.obs["tick"] += 1
+        self.assertEqual(self.explore()["status"], "waiting")
+        self.assertEqual(self.fluids.state["oil_exploration"]["arrived"], [0])
 
 
 if __name__ == "__main__":
