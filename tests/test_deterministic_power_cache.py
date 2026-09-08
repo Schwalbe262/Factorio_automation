@@ -73,6 +73,37 @@ class PowerEvidenceTests(unittest.TestCase):
         self.assertEqual(self.game.query.call_count, 2)
         self.assertEqual(self.builder.ensure_plan.call_count, 2)
 
+    def test_separate_crossing_poles_receive_independent_persisted_connections(self):
+        second = {"name": "small-electric-pole", "position": {"x": 20.5, "y": .5}}
+        plan = {"ok": True, "entities": [self.plan["entities"][0], second]}
+        connected = set()
+        self.factory._power_grid = Mock(side_effect=lambda obs, poles: {
+            "ok": True, "connected": sum(p["position"]["x"] in connected for p in poles),
+            "live": [{"x": -9.5, "y": .5}]})
+        self.factory._power_route = Mock(side_effect=lambda source, destination: {
+            "ok": True, "path": [source, destination]})
+        self.builder.can_place.return_value = {"ok": True}
+        self.builder.ensure_plan.return_value = {"type": "build", "name": "small-electric-pole"}
+        self.assertEqual(self.check(plan=plan)["type"], "build")
+        connected.add(.5)
+        self.assertEqual(self.check(plan=plan)["type"], "build")
+        self.assertEqual(set(self.factory.state["power_links"]), {"source:pole:0.5,0.5", "source:pole:20.5,0.5"})
+        connected.add(20.5)
+        self.assertEqual(self.check(plan=plan)["status"], "succeeded")
+        self.assertEqual(self.builder.ensure_plan.call_count, 2)
+
+    def test_existing_multi_pole_wire_path_is_maintained_before_new_connections(self):
+        second = {"name": "small-electric-pole", "position": {"x": 20.5, "y": .5}}
+        plan = {"ok": True, "entities": [self.plan["entities"][0], second]}
+        self.factory._sync(self.obs)
+        legacy = {"ok": True, "entities": [{"name": "small-electric-pole", "position": {"x": -4.5, "y": .5}}]}
+        self.factory.state["power_links"]["source"] = legacy
+        self.game.query.return_value = {"ok": True, "connected": 0, "live": [{"x": -9.5, "y": .5}]}
+        self.builder.ensure_plan.return_value = {"type": "build", "name": "small-electric-pole"}
+        self.assertEqual(self.check(plan=plan)["type"], "build")
+        self.builder.ensure_plan.assert_called_once_with(self.obs, legacy)
+        self.assertEqual(self.factory.state["power_links"], {"source": legacy})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -330,7 +330,7 @@ class FactoryTests(unittest.TestCase):
         foreign = [{"name": "transport-belt", "position": {"x": .5, "y": y + .5}, "direction": 8} for y in range(-100, 101)]
         def survey(body):
             if "long inserter recipe is locked" in body:
-                return {"ok": True, "belts": foreign}
+                return {"ok": True, "belts": foreign, "blocked": [e["position"] for e in foreign]}
             return {"ok": True, "blocked": [e["position"] for e in foreign]}
         self.game.query.side_effect = survey
         route = self.factory._material_route({"x": -8.5, "y": .5}, {"x": 8.5, "y": .5}, [], start_direction=4, end_direction=4)
