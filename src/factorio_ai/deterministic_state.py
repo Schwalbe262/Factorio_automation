@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 from typing import Any
 
 
@@ -160,7 +161,19 @@ def load_run_state(path: Path, *, world_id: str, game_fingerprint: str, tick: in
         raise CheckpointError(f"cannot load deterministic checkpoint {path}: {exc}") from exc
 
 
-def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+def replace_with_retry(source: str | Path, destination: str | Path) -> None:
+    """Windows readers can briefly deny rename while reading a status snapshot."""
+    for attempt in range(6):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError:
+            if attempt == 5:
+                raise
+            time.sleep(0.01 * 2 ** attempt)
+
+
+def _atomic_json(path: Path, payload: Any) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
@@ -170,7 +183,7 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
             output.write("\n")
             output.flush()
             os.fsync(output.fileno())
-        os.replace(name, path)
+        replace_with_retry(name, path)
     finally:
         if os.path.exists(name):
             os.unlink(name)

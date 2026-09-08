@@ -14,6 +14,36 @@ from factorio_ai.deterministic_state import (
 
 
 class DeterministicStateTests(unittest.TestCase):
+    def test_brief_reader_sharing_lock_does_not_abort_checkpoint_write(self):
+        with TemporaryDirectory() as root:
+            path = Path(root) / "state.json"
+            path.write_text('{"old":true}')
+            original_replace = os.replace
+            attempts = []
+            def replace(source, destination):
+                attempts.append(source)
+                if len(attempts) < 3:
+                    raise PermissionError("Windows reader temporarily denies replacement")
+                return original_replace(source, destination)
+            with patch("factorio_ai.deterministic_state.os.replace", side_effect=replace), \
+                 patch("factorio_ai.deterministic_state.time.sleep"):
+                save_run_state(path, RunState("world-a", "catalog-a", 10))
+            self.assertEqual(json.loads(path.read_text())["last_tick"], 10)
+            self.assertEqual(len(attempts), 3)
+            self.assertEqual(list(Path(root).iterdir()), [path])
+
+    def test_permanent_sharing_failure_is_bounded_and_preserves_last_checkpoint(self):
+        with TemporaryDirectory() as root:
+            path = Path(root) / "state.json"
+            path.write_text('{"old":true}')
+            with patch("factorio_ai.deterministic_state.os.replace", side_effect=PermissionError("denied")) as replace, \
+                 patch("factorio_ai.deterministic_state.time.sleep"):
+                with self.assertRaises(PermissionError):
+                    save_run_state(path, RunState("world-a", "catalog-a"))
+            self.assertEqual(replace.call_count, 6)
+            self.assertEqual(json.loads(path.read_text()), {"old": True})
+            self.assertEqual(list(Path(root).iterdir()), [path])
+
     def test_restart_preserves_goal_evidence_and_retry_budget(self):
         with TemporaryDirectory() as root:
             path = Path(root) / "state.json"

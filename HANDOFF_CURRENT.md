@@ -7,4 +7,4 @@
 - Dedicated FactoryAutomaton GUI runs hidden under runtime/agent-client; actual lab craft naturally unlocked red science.
 - Dashboard http://127.0.0.1:18890; observer BAT watch_factorio_deterministic.bat; never touch user-owned GUI/profile.
 - Prior saves preserved; pre-existing dirty insight.md must not be staged.
-- Fluid component: 9 live recipe fixtures, natural pumpjack/water/refinery/tanks and conserved belt collection passed; full oil run pending.
+- Fluid/launch fixtures passed; full oil/rocket autonomy pending. Checkpoint replacement tolerates brief Windows reader locks.
