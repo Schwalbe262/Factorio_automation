@@ -1,4 +1,4 @@
-"""Give quiet factories a construction turn after three completed defense actions."""
+"""Give quiet factories a turn after routine construction or three other receipts."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -238,7 +238,10 @@ class RoutineFairness:
                 return
             self.state["completed"] = 0
         elif lane == "routine" and quiet:
-            self.state["completed"] = min(3, self.state["completed"] + 1)
+            # Yield after real construction, while keeping material collection
+            # on the existing quota so Factory cannot repeatedly consume it.
+            self.state["completed"] = (3 if action.get("type") in {"build", "build_many"}
+                                       else min(3, self.state["completed"] + 1))
         else:
             return
         self._save()

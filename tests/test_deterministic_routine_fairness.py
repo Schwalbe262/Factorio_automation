@@ -58,13 +58,33 @@ class FairnessSafetyTests(unittest.TestCase):
                 game.query.assert_not_called()
 
     def test_failed_unknown_or_unsafe_survey_retains_normal_order(self):
-        for response in (None, [], {}, {"ok": False}, {"ok": True, "quiet": False},
-                         {"ok": True, "quiet": True, "routes_ready": False}):
+        self.driver.state["completed"] = 0
+        self.assertFalse(self.prefer())
+        build = self.driver.bind("routine", {"type": "build", "name": "transport-belt"})
+        self.driver.record(build, {"ok": True, "status": "succeeded", "unit_number": 42})
+        self.assertEqual(self.driver.state["completed"], 3)
+        responses = [None, [], {}, {"ok": False}]
+        responses += [{"ok": True, "quiet": False, "reason": reason} for reason in
+                      ("damaged_actor", "damaged_asset", "nearby_enemy", "low_turret_ammunition")]
+        responses += [{"ok": True, "quiet": True, "routes_ready": False, "reason": reason} for reason in
+                      ("ammunition_route_missing", "ammunition_route_unpowered", "ammunition_route_contaminated")]
+        for response in responses:
             with self.subTest(response=response):
                 self.game.query.return_value = response
                 self.assertFalse(self.prefer())
         self.game.query.side_effect = TimeoutError("survey unavailable")
         self.assertFalse(self.prefer())
+
+    def test_legacy_zero_through_three_counter_reload_requires_fresh_safe_observation(self):
+        for completed in range(4):
+            with self.subTest(completed=completed):
+                self.driver.state["completed"] = completed
+                self.driver._save()
+                self.driver = RoutineFairness(self.game)
+                self.assertFalse(self.driver.safety["ok"])
+                self.assertIsNone(self.driver.selection)
+                self.assertEqual(self.prefer(), completed >= 3)
+                self.assertEqual(self.driver.state["completed"], completed)
 
     def test_missing_malformed_or_rolled_back_live_tick_cannot_grant_science(self):
         for tick in (None, True, 99, 100.0):

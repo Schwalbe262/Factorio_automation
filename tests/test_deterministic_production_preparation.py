@@ -53,7 +53,20 @@ class ProductionPreparationTests(unittest.TestCase):
         inventory["transport-belt"] -= 4
         s.fairness.record(routine_build, success(completed=4, built=4, reused=0))
         self.assertEqual(inventory["transport-belt"], 0)
-        self.assertEqual(s.fairness.state["completed"], 2)
+        self.assertEqual(s.fairness.state["completed"], 3)
+        # Both lanes completed paid construction before Factory is granted its
+        # next turn. Its newly collected materials remain held through the build.
+        s.armaments.next_action.reset_mock()
+        self.assertEqual(self.choose(), take)
+        inventory["transport-belt"] += 4
+        s.fairness.record(take, success(moved=4))
+        self.assertEqual(s.fairness.state["completed"], 3)
+        self.assertEqual(self.choose(), build)
+        s.armaments.next_action.assert_not_called()
+        inventory["transport-belt"] -= 4
+        s.fairness.record(build, success(completed=4, built=4, reused=0))
+        self.assertEqual(s.fairness.state["completed"], 0)
+        self.assertEqual(inventory["transport-belt"], 0)
 
     def test_preparation_and_nonstructural_receipts_keep_production_due(self):
         s = self.supervisor

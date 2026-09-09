@@ -183,7 +183,7 @@ class ConstructionFairnessTests(unittest.TestCase):
         self.assertTrue(all(row.get("pending") for row in self.payload()["routes"] if row["name"] == "transport-belt"))
 
     def test_existing_quota_and_real_action_receipts_still_control_interleaving(self):
-        self.driver.state["completed"] = 2
+        self.driver.state["completed"] = 0
         self.assertFalse(self.prefer())
         build = self.driver.bind("routine", {"type": "build", "name": "transport-belt"})
         self.driver.record(build, {"ok": True, "status": "succeeded", "unit_number": 42, "reused": True})

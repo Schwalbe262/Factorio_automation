@@ -101,7 +101,7 @@ class RoutineFairnessReceiptTests(unittest.TestCase):
             action = self.fairness.bind("routine", transfer())
             self.fairness.record(action, success(moved=1))
 
-    def test_each_bound_receipt_is_consumed_once_and_batch_counts_once(self):
+    def test_each_bound_receipt_is_consumed_once_and_completed_batch_grants_production(self):
         action = transfer()
         self.fairness.record(action, success(moved=1))
         self.assertEqual(self.fairness.state["completed"], 0)
@@ -113,8 +113,11 @@ class RoutineFairnessReceiptTests(unittest.TestCase):
         self.assertEqual(self.saved()["completed"], 1)
         batch = {"type": "build_many", "actions": [{"type": "build"}] * 3}
         self.fairness.bind("routine", batch)
-        self.fairness.record(batch, success(completed=3, built=3))
-        self.assertEqual(self.saved()["completed"], 2)
+        with patch.object(self.fairness, "_save", wraps=self.fairness._save) as save:
+            self.fairness.record(batch, success(completed=3, built=3))
+            self.fairness.record(batch, success(completed=3, built=3))
+            save.assert_called_once_with()
+        self.assertEqual(self.saved()["completed"], 3)
         self.complete_routine(3)
         self.assertEqual(self.saved()["completed"], 3)
 
@@ -165,12 +168,14 @@ class RoutineFairnessReceiptTests(unittest.TestCase):
 
     def test_routine_requires_quiet_evidence_at_selection(self):
         for safety in ({"ok": False, "quiet": True}, {"ok": True, "quiet": False}, {}):
-            with self.subTest(safety=safety):
-                self.fairness.safety = safety
-                action = self.fairness.bind("routine", transfer())
-                self.fairness.safety = {"ok": True, "quiet": True}
-                self.fairness.record(action, success(moved=1))
-                self.assertEqual(self.saved()["completed"], 0)
+            for selected, receipt in ((transfer(), success(moved=1)),
+                                      ({"type": "build"}, success(unit_number=101))):
+                with self.subTest(safety=safety, action=selected):
+                    self.fairness.safety = safety
+                    action = self.fairness.bind("routine", selected)
+                    self.fairness.safety = {"ok": True, "quiet": True}
+                    self.fairness.record(action, receipt)
+                    self.assertEqual(self.saved()["completed"], 0)
         action = self.fairness.bind("emergency", transfer())
         self.fairness.record(action, success(moved=1))
         self.assertEqual(self.saved()["completed"], 0)
