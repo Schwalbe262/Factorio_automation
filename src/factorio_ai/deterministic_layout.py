@@ -42,6 +42,36 @@ def reserved_aisles(factory) -> set[tuple[float, float]]:
     return result
 
 
+def mining_clearances(factory) -> tuple[set, set]:
+    """Protect saved production from newly reserved extraction hardware."""
+    drill_buffer = set()
+    for plan in factory.state.get("blocks", {}).values():
+        if not production_plan(factory, plan):
+            continue
+        footprint = factory.builder._occupied_by_plan(plan.get("entities", []))
+        if not footprint:
+            continue
+        area = bounds(footprint, RESOURCE_MARGIN)
+        drill_buffer.update((x + .5, y + .5)
+                            for x in range(math.floor(area[0][0]), math.ceil(area[1][0]))
+                            for y in range(math.floor(area[0][1]), math.ceil(area[1][1])))
+    return drill_buffer, reserved_aisles(factory)
+
+
+def mining_site_clear(builder, entities: list[dict], clearances: tuple[set, set],
+                      *, existing: list[dict] = ()) -> bool:
+    """Belts/pipes may use aisles; exact inherited paid hardware stays owned."""
+    def identity(e):
+        return e["name"], e["position"]["x"], e["position"]["y"], e.get("direction", 0)
+    inherited = {identity(e) for e in existing}
+    new = [e for e in entities if identity(e) not in inherited]
+    drills = [e for e in new if e["name"].endswith("mining-drill") or e["name"] == "pumpjack"]
+    support = [e for e in new if not (e["name"].endswith("transport-belt")
+               or e["name"].endswith("underground-belt") or e["name"] in {"pipe", "pipe-to-ground"})]
+    return not (builder._occupied_by_plan(drills) & clearances[0]
+                or builder._occupied_by_plan(support) & clearances[1])
+
+
 def _translated(origin: dict, offset: dict) -> dict:
     plan = deepcopy(origin)
     for obj in plan["entities"] + plan.get("ports", []):

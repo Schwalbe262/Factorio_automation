@@ -414,9 +414,12 @@ def ensure_source_upgrade(factory: Any, observation: dict, item: str, resource: 
                 for e in plan.get("entities", [])
                 if not (category == "blocks" and key == fuel_key and factory._entity_key(e) == arm_key)]
         reserved = factory.builder._occupied_by_plan(reserved_entities) | factory._port_clearances()
+        from .deterministic_layout import mining_clearances, mining_site_clear
+        production_clearances = mining_clearances(factory)
         candidates = [row for row in survey.get("candidates", [])
                       if row.get("remaining", 0) > 0 and not row.get("mixed") and row.get("terrain_clear")
                       and not row.get("blocked") and row.get("power") and not row.get("actual")
+                      and mining_site_clear(factory.builder, [row["drill"]], production_clearances)
                       and not factory.builder._occupied_by_plan([row["drill"]]) & reserved]
         if not candidates:
             return None

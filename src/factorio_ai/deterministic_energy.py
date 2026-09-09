@@ -435,6 +435,8 @@ return {ok=true,world_id=d.world_id,rows=rows}
         return None
 
     def _reserve_feed(self, obs: dict, bank_index: int, *, replacement: bool = False) -> dict:
+        from .deterministic_layout import mining_clearances, mining_site_clear
+        production_clearances = mining_clearances(self.factory)
         clearances = self.factory._port_clearances()
         clearance_entities = [{"name": "reserved-port-approach", "position": {"x": x, "y": y}} for x, y in clearances]
         occupied = self.builder._occupied_by_plan(self.factory._reserved() + obs.get("entities", [])) | clearances
@@ -504,6 +506,8 @@ return {ok=true,sites=rows}
         for row in sites:
             site = row["position"]
             plan = self.builder._coal_plan(site)
+            if not mining_site_clear(self.builder, plan["entities"], production_clearances):
+                continue
             if self.builder._occupied_by_plan(plan["entities"]) & occupied:
                 continue
             if not self.builder.can_place(plan["entities"]).get("ok"):
@@ -565,6 +569,9 @@ return {ok=true,sites=rows}
             if route is None:
                 continue
             plan["entities"] += [{"name": "transport-belt", **segment} for segment in route["segments"]]
+            if not mining_site_clear(self.builder, plan["entities"], production_clearances,
+                                     existing=self.factory._reserved()):
+                continue
             # The original drill may be depleted or retire later. Give the new
             # live feed ownership of the whole shared tail so ensure_plan repairs
             # a broken transit belt even when the old feed no longer runs.

@@ -1356,10 +1356,14 @@ return {ok=true,sites=best}
 ''')
         if not survey.get("ok"):
             return {"ok": False, "reason": "electric mining site survey failed", "error": survey.get("reason")}
+        from .deterministic_layout import mining_clearances, mining_site_clear
+        production_clearances = mining_clearances(self)
         occupied = self.builder._occupied_by_plan(self._reserved())
         clearances = self._port_clearances()
         for site in survey.get("sites", []):
             plan = self._electric_source_plan(item, site["x"], site["y"])
+            if not mining_site_clear(self.builder, plan["entities"], production_clearances):
+                continue
             if self.builder._occupied_by_plan(plan["entities"]) & (occupied | clearances):
                 continue
             approaches = set()
