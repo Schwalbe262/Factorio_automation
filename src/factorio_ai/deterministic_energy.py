@@ -594,7 +594,7 @@ return {ok=true,sites=rows}
         """Keep a borrowed crossing repairable after its original drill retires."""
         plan = self.state["feeds"][index]["plan"]
         identity = lambda e: (e["name"], e["position"]["x"], e["position"]["y"], e.get("direction", 0))
-        arms = {identity(e) for e in plan["entities"] if e["name"] == "long-handed-inserter"}
+        arms = {identity(e) for e in plan["entities"] if e["name"] in {"long-handed-inserter", "inserter", "fast-inserter"}}
         if not arms:
             return None
         existing = {identity(e) for e in plan["entities"]}
@@ -638,7 +638,7 @@ return {ok=true,sites=rows}
         result = self.builder.ensure_plan(obs, feed["plan"])
         if not _ready(result):
             return result
-        if any(e["name"] == "long-handed-inserter" for e in feed["plan"]["entities"]):
+        if any(e["name"] in {"long-handed-inserter", "inserter", "fast-inserter"} for e in feed["plan"]["entities"]):
             result = self.factory.ensure_power_connection(obs, f"energy:feed:{index}", feed["plan"])
             if not _ready(result):
                 return result
@@ -826,11 +826,15 @@ return {ok=true,coal_pickup_verified=true}
         result = self.builder.ensure_plan(obs, links[key])
         if not _ready(result):
             return result
-        if any(e["name"] == "long-handed-inserter" for e in links[key]["entities"]):
+        if any(e["name"] in {"long-handed-inserter", "inserter", "fast-inserter"} for e in links[key]["entities"]):
             return self.factory.ensure_power_connection(obs, f"energy:coal-bank:{index}", links[key])
         return result
 
     def next_action(self, obs: dict) -> dict | None:
+        from .deterministic_coal_upgrade import resume_coal_upgrade, start_coal_upgrade
+        pending = resume_coal_upgrade(self, obs)
+        if pending is not None:
+            return pending
         if not self._sync(obs):
             return None
         for index, feed in enumerate(self.state["feeds"]):
@@ -868,6 +872,9 @@ return {ok=true,coal_pickup_verified=true}
         for index, supplied in enumerate(capacity["fuel_backed_kw"]):
             share = max(1, min(capacity["bank_kw"], max(0, target - index * capacity["bank_kw"])))
             if supplied + .01 < share:
+                upgrade = start_coal_upgrade(self, obs, evidence, capacity)
+                if upgrade is not None:
+                    return upgrade
                 return self._reserve_feed(obs, index)
         if capacity["bank_kw"] * len(self.state["banks"]) + .01 < target:
             return self._reserve_bank(obs)

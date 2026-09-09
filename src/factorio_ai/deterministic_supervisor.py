@@ -121,6 +121,18 @@ class DeterministicSupervisor:
         if self.builder is None:
             from .deterministic_builder import FactoryBuilder
             self.builder = FactoryBuilder(self.game, self.bootstrap, self.catalog)
+        # A foreign coal cutover must fail before generic synchronization can
+        # replace either copy of its durable shared-owner plans.
+        energy_state = self.energy.state if self.energy is not None else None
+        saved_energy = self.root / "energy-expansion.json"
+        if energy_state is None and saved_energy.exists():
+            energy_state = json.loads(saved_energy.read_text(encoding="utf-8"))
+        from .deterministic_coal_upgrade import coal_upgrade_epoch_error
+        epoch_error = (coal_upgrade_epoch_error(energy_state, observation, getattr(self.catalog, "fingerprint", None))
+                       if isinstance(energy_state, dict) and "coal_transit_upgrade" in energy_state else None)
+        if epoch_error is not None:
+            self.stage = "energy"
+            return epoch_error
         # A mined entry must be reconciled before bootstrap or any ancestor
         # builder can recreate the still-saved old canonical facing.
         saved_factory = self.root / "factory-production.json"
