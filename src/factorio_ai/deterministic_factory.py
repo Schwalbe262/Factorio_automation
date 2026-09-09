@@ -1266,7 +1266,8 @@ return {ok=true,candidates=candidates}
         return _report("succeeded", "additional producer joins its same-item output bus", flow_verified=False)
 
     def _material_route(self, source: dict, destination: dict, reserved: list[dict], *,
-                        allow_bridge: bool = True, owned_drop: dict | None = None, **directions: Any) -> dict:
+                        allow_bridge: bool = True, owned_drop: dict | None = None,
+                        allow_underground: bool = False, **directions: Any) -> dict:
         clearances = self._port_clearances()
         for position, direction, sign in ((source, directions.get("start_direction"), 1), (destination, directions.get("end_direction"), -1)):
             if direction in DIRECTIONS:
@@ -1284,6 +1285,12 @@ return {ok=true,candidates=candidates}
                 **({"owned_drop": owned_drop} if owned_drop is not None else {}))
             if bridge.get("ok"):
                 return bridge
+            if allow_underground:
+                from .deterministic_underground_routes import plan_underground_route
+                underground = plan_underground_route(self, source, destination, reserved,
+                    start_direction=directions.get("start_direction"), end_direction=directions.get("end_direction"))
+                if underground.get("ok"):
+                    return underground
         return result
 
     def _belt_bridge_route(self, source: dict, destination: dict, reserved: list[dict], **directions: Any) -> dict:
@@ -1535,6 +1542,7 @@ return {ok=true,checked=#rows,existing=found}
                                     reserved: list[dict], *, start_direction: int | None,
                                     owned_plan_key: str | None = None,
                                     allow_upstream_bridge: bool = False,
+                                    allow_underground: bool = False,
                                     consumer_entry: dict | None = None) -> dict:
         """Feed an enclosed owned input using the live long-arm drop geometry."""
         canonical_approach = None
@@ -1666,7 +1674,8 @@ return {ok=true,candidates=rows,new_pole_reach=prototypes.entity["small-electric
                 use_bridge = allow_upstream_bridge and not upstream_bridge_attempted
                 upstream_bridge_attempted = upstream_bridge_attempted or use_bridge
                 route = self._material_route(source, pickup, reserved + trial, allow_bridge=use_bridge,
-                    start_direction=start_direction, end_direction=pickup_facing)
+                    start_direction=start_direction, end_direction=pickup_facing,
+                    **({"allow_underground": True} if allow_underground else {}))
                 if not route.get("ok"):
                     continue
                 entities = [{"name": "transport-belt", **segment} for segment in route["segments"]] + [arm, pole, final_belt]
@@ -1688,21 +1697,24 @@ return {ok=true,candidates=rows,new_pole_reach=prototypes.entity["small-electric
         destination, facing = consumer["position"], consumer.get("facing")
         if facing not in DIRECTIONS:
             return self._material_route(source, destination, reserved, start_direction=start_direction)
+        owned = any(consumer in plan.get("ports", []) and any(
+                e.get("name") == "transport-belt" and e.get("position") == destination
+                and e.get("direction") == facing for e in plan.get("entities", []))
+                for plan in self.state["blocks"].values())
+        actual = next((e for e in obs.get("entities", []) if e.get("name") == "transport-belt"
+                       and e.get("position") == destination and e.get("direction") == facing), None)
+        underground = (owned and actual is not None and type(actual.get("unit_number")) is int
+                       and actual["unit_number"] > 0 and obs.get("world_id") == self.state.get("world_id"))
         dx, dy = DIRECTIONS[facing]
         approach = (destination["x"] - dx, destination["y"] - dy)
         result = {"ok": False, "reason": "consumer belt approach is occupied"}
         if approach == (source["x"], source["y"]) or approach not in self.builder._occupied_by_plan(reserved):
             result = self._material_route(source, destination, reserved,
-                                          start_direction=start_direction, end_direction=facing)
+                                          start_direction=start_direction, end_direction=facing, allow_underground=underground)
             if result.get("ok") or result.get("reason") not in {"no route within bounds", "route search budget exhausted"}:
                 return result
-        if not any(consumer in plan.get("ports", []) and any(
-                e.get("name") == "transport-belt" and e.get("position") == destination
-                and e.get("direction") == facing for e in plan.get("entities", []))
-                for plan in self.state["blocks"].values()):
+        if not owned:
             return result
-        actual = next((e for e in obs.get("entities", []) if e.get("name") == "transport-belt"
-                       and e.get("position") == destination and e.get("direction") == facing), None)
         if actual is None or not actual.get("unit_number") or not obs.get("world_id"):
             return result
         payload = json.dumps(json.dumps({"position": destination, "facing": facing, "item": consumer["item"],
@@ -1724,7 +1736,7 @@ return {ok=true,input_belt_verified=true}
         if not route.get("ok"):
             if route.get("reason") in {"no route within bounds", "route search budget exhausted"}:
                 drop = self._consumer_drop_bridge_route(obs, source, consumer, reserved,
-                    start_direction=start_direction, allow_upstream_bridge=True)
+                    start_direction=start_direction, allow_upstream_bridge=True, allow_underground=True)
                 if drop.get("ok") or drop.get("reason") != "no clear powered long-arm drop into owned input belt":
                     return drop
                 owners = [key for key, plan in self.state["blocks"].items() if consumer in plan.get("ports", [])]
@@ -1734,6 +1746,7 @@ return {ok=true,input_belt_verified=true}
                 entry["position"] = {"x": destination["x"] + dx, "y": destination["y"] + dy}
                 return self._consumer_drop_bridge_route(obs, source, consumer, reserved,
                     start_direction=start_direction, allow_upstream_bridge=True,
+                    allow_underground=True,
                     consumer_entry={"owner_key": owners[0], "entry_port": entry})
             return route
         segments = deepcopy(route["segments"])
@@ -1804,6 +1817,8 @@ return {ok=true,input_belt_verified=true}
             entities = tap_entities + [{"name": "transport-belt", **segment} for segment in route["segments"]]
             unique = {(e["name"], e["position"]["x"], e["position"]["y"]): e for e in entities}
             plan = _plan(list(unique.values()), source_port=source_port, consumer_port=consumer_port)
+            if route.get("underground_pairs"):
+                plan["underground_pairs"] = deepcopy(route["underground_pairs"])
             if route.get("consumer_entry") is not None:
                 plan["consumer_entry"] = deepcopy(route["consumer_entry"])
             if upstream_tap is not None:

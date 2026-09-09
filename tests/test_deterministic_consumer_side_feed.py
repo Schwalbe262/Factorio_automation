@@ -72,7 +72,7 @@ class ConsumerSideFeedTests(unittest.TestCase):
                 self.assertIs(self.route(), result)
                 self.factory._consumer_drop_bridge_route.assert_called_once_with(
                     self.obs, self.source, self.consumer, self.factory._reserved(),
-                    start_direction=4, allow_upstream_bridge=True)
+                    start_direction=4, allow_upstream_bridge=True, allow_underground=True)
 
     def test_enclosed_input_tries_only_its_one_forward_owned_continuation(self):
         self.factory._material_route = Mock(return_value={"ok": False, "reason": "no route within bounds"})
@@ -86,7 +86,7 @@ class ConsumerSideFeedTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         entry = deepcopy(canonical)
         entry["position"] = {"x": canonical["position"]["x"] - 1, "y": canonical["position"]["y"]}
-        self.assertEqual(calls[1].kwargs, {"start_direction": 4, "allow_upstream_bridge": True,
+        self.assertEqual(calls[1].kwargs, {"start_direction": 4, "allow_upstream_bridge": True, "allow_underground": True,
             "consumer_entry": {"owner_key": "consumer", "entry_port": entry}})
 
     def test_live_drop_identity_or_material_failure_does_not_authorize_continuation(self):
