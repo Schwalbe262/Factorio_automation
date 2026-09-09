@@ -17,6 +17,7 @@ import zipfile
 
 from .deterministic_game import GUARDED_MINE_LUA, validate_mine_guard
 from .deterministic_belt_switch_guard import validate_belt_switch_backend
+from .deterministic_coal_replacement_guard import validate_coal_replacement_backend
 
 
 SCENARIO_INPUT_LUA = r'''
@@ -300,6 +301,7 @@ return success{}
     def execute(self, action: dict, observation: dict) -> dict:
         """Move into actual reach before allowing the ordinary adapter action."""
         validate_belt_switch_backend(action, "character")
+        validate_coal_replacement_backend(action, "character")
         from .deterministic_underground import underground_fields
         if action.get("type") == "build":
             underground_fields(action)
@@ -359,6 +361,7 @@ return success{within=within}
 
     def _input(self, action: dict) -> dict:
         validate_belt_switch_backend(action, "character")
+        validate_coal_replacement_backend(action, "character")
         if action.get("type") not in {"move", "mine"}:
             raise ValueError("character input must be a move or mine action")
         validate_mine_guard(action)
