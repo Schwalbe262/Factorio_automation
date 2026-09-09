@@ -10,6 +10,12 @@ early research and continuously coal-fed steam power. Automatic science, oil
 and rocket production are under integration; a completed autonomous rocket run
 has **not** been validated yet.
 
+Mining stays on resource patches. New assembly and research blocks grow around
+a persistent production district, with four tiles of clearance from resources
+and mining drills and two-tile aisles for belts and pipes. Direct-feed mining
+and smelting cells keep their resource-dependent placement. Existing facilities
+are preserved when resuming a save; the spacing rule applies to new blocks.
+
 On Windows, run `run_factorio_deterministic.bat`. It creates an isolated world
 on the first run and resumes its save on later runs. This entry point uses a
 headless server plus an isolated, hidden `FactoryAutomaton` client. The client
