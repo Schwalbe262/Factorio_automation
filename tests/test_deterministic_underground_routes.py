@@ -65,6 +65,44 @@ class UndergroundRouteTests(unittest.TestCase):
         self.assertEqual(sum(r["name"] == "underground-belt" for r in path), 4)
         self.builder.can_place.assert_called_once_with(result["segments"])
 
+    def isolated_components(self, source, destination, openings):
+        self.source, self.destination = {"x": source[0], "y": source[1]}, {"x": destination[0], "y": destination[1]}
+        left, right = min(source[0], destination[0]) - 48, max(source[0], destination[0]) + 48
+        top, bottom = min(source[1], destination[1]) - 48, max(source[1], destination[1]) + 48
+        self.survey["blocked"] = [{"x": left + x, "y": top + y}
+            for x in range(int(right - left) + 1) for y in range(int(bottom - top) + 1)
+            if (left + x, top + y) not in openings]
+
+    def test_three_separated_turning_pairs_retain_every_surface_connector(self):
+        openings = {(.5, .5), (1.5, .5), (6.5, .5), (7.5, .5), (8.5, .5),
+                    (8.5, 1.5), (8.5, 2.5), (8.5, 3.5), (8.5, 8.5), (8.5, 9.5),
+                    (8.5, 10.5), (7.5, 10.5), (6.5, 10.5), (5.5, 10.5), (.5, 10.5), (-.5, 10.5)}
+        self.isolated_components((.5, .5), (-.5, 10.5), openings)
+        result = self.route(end_direction=12)
+        self.assertTrue(result["ok"], result)
+        pairs = result["underground_pairs"]
+        self.assertEqual(len(pairs), 3)
+        self.assertEqual([p["input"]["direction"] for p in pairs], [4, 8, 12])
+        self.assertTrue(all(p["max_distance"] == 5 for p in pairs))
+        plan = {"entities": result["segments"], "underground_pairs": pairs}
+        self.assertEqual(len(underground_edges(plan)), 3)
+        belts, edges, arms = _geometry(plan)
+        path = _path(belts, edges, (.5, .5), (-.5, 10.5))
+        self.assertIsNotNone(path)
+        self.assertEqual(len(path), len(result["segments"]))
+        self.assertEqual({tuple(row["position"].values()) for row in path}, openings)
+        self.assertEqual(sum(row["name"] == "underground-belt" for row in path), 6)
+        self.assertEqual(arms, [])
+        self.assertFalse(result["flow_verified"])
+        self.builder.can_place.assert_called_once_with(result["segments"])
+
+    def test_one_pair_route_does_not_add_unnecessary_second_or_third_pair(self):
+        self.isolated_components((.5, .5), (7.5, .5), {(.5, .5), (1.5, .5), (6.5, .5), (7.5, .5)})
+        result = self.route(end_direction=4)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(len(result["underground_pairs"]), 1)
+        self.assertEqual(len(result["segments"]), 4)
+
     def test_locked_or_short_live_range_cannot_invent_a_tunnel(self):
         self.survey.update(ok=False, reason="underground belts are locked")
         self.assertIn("locked", self.route()["reason"])
