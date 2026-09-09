@@ -245,7 +245,7 @@ return {ok=true,network_id=network,demand_kw=demand,consumers=consumers,feeds=fe
         actual = {(e["name"], e["position"]["x"], e["position"]["y"]): e for e in obs.get("entities", [])}
         for plan in self._coal_plans():
             for row in plan["entities"]:
-                if row["name"] not in {"transport-belt", "burner-inserter", "long-handed-inserter", "steam-engine", "burner-mining-drill", "boiler"}:
+                if row["name"] not in {"transport-belt", "burner-inserter", "inserter", "fast-inserter", "long-handed-inserter", "steam-engine", "burner-mining-drill", "boiler"}:
                     continue
                 key = row["name"], row["position"]["x"], row["position"]["y"]
                 if key in wanted and wanted[key].get("direction", 0) != row.get("direction", 0):
@@ -374,7 +374,7 @@ return {ok=true,world_id=d.world_id,rows=rows}
             if "belt_outputs" in observed[key]:
                 intact[key] = {**intact[key], "_coal_outputs": observed[key]["belt_outputs"]}
         arms = {(e["name"], e["position"]["x"], e["position"]["y"]): e for plan in self._coal_plans()
-                for e in plan["entities"] if e["name"] in {"burner-inserter", "long-handed-inserter"}}
+                for e in plan["entities"] if e["name"] in {"burner-inserter", "inserter", "fast-inserter", "long-handed-inserter"}}
         for actual in obs.get("entities", []):
             identity = actual["name"], actual["position"]["x"], actual["position"]["y"]
             arm = arms.get(identity)
