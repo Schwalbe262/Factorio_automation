@@ -38,7 +38,7 @@
 - Iron/copper production uses mining drills and furnaces, not recurring manual ore collection.
 - Bootstrap hand supply is bounded by construction/startup needs and stops when automatic supply is verified.
 - Related sites stay compact; longer routes require validated material, throughput, power and expansion corridors.
-- Keep mining on resource patches and grow assembly/research in a separate, persistent production district. New production blocks must clear resources and mining drills by four tiles and leave two-tile logistics aisles; direct-feed mining/smelting cells retain resource-dependent placement. Preserve existing paid facilities until a validated migration replaces them.
+- Keep mining on resource patches and grow assembly/research in a separate, persistent production district. New production blocks must clear resources and mining drills by four tiles and leave two-tile logistics aisles; later mining expansions must also respect existing production buffers and keep new extraction support hardware out of those aisles. Belts and pipes may use the logistics aisles, and direct-feed mining/smelting cells retain resource-dependent placement. Preserve existing paid facilities until a validated migration replaces them.
 - Templates must include all required item/fluid/power connections. Fail closed on unsupported geometry.
 - Science starts at 30 packs/minute; calculate actual machine counts and supply needs from live recipes.
 - Test initial fuel/power/production for at least five game minutes, and recover broken supplies and attack damage.
