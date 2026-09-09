@@ -133,6 +133,49 @@ class ConsumerDropBridgeTests(unittest.TestCase):
         self.builder.can_place.side_effect = [{"ok": True}, {"ok": False}]
         self.assertFalse(self.route(allow_upstream_bridge=True)["ok"])
 
+    def test_later_owned_pickup_gets_crossing_after_nearer_pickup_cannot_connect(self):
+        later = {"arm": {"name": "long-handed-inserter", "position": {"x": 4.5, "y": .5}, "direction": 12},
+            "pickup": {"x": 2.5, "y": .5}, "pickup_position": {"x": 2.5, "y": .5},
+            "drop_position": {"x": 6.7, "y": .5},
+            "poles": [{"name": "small-electric-pole", "position": {"x": 4.5, "y": -1.5}, "direction": 0, "unit_number": 9}]}
+        self.source = {"x": 7.5, "y": 6.5}
+        self.factory.state["blocks"]["consumer"]["entities"] = [self.belt, self.pole, later["poles"][0]]
+        self.option["poles"] = [self.pole] * 3
+        self.game.query.side_effect = None
+        self.game.query.return_value = {"ok": True, "candidates": [self.option, later]}
+        from factorio_ai.factory_templates import route_orthogonal
+        def upstream(source, pickup, reserved, **kwargs):
+            if pickup != later["pickup"] or not kwargs["allow_bridge"]:
+                return {"ok": False, "reason": "no route within bounds"}
+            return route_orthogonal(tuple(source[a] for a in ("x", "y")),
+                tuple(pickup[a] for a in ("x", "y")), occupied=self.builder._occupied_by_plan(reserved) -
+                {tuple(source[a] for a in ("x", "y")), tuple(pickup[a] for a in ("x", "y"))},
+                start_direction=4, end_direction=4)
+        self.factory._material_route = Mock(side_effect=upstream)
+        result = self.factory._consumer_drop_bridge_route(self.obs, self.source, self.consumer,
+            self.factory._reserved(), start_direction=4, allow_upstream_bridge=True, allow_underground=True)
+        self.assertTrue(result["ok"], result)
+        self.assertIn(later["arm"], result["segments"])
+        calls = self.factory._material_route.call_args_list
+        self.assertEqual([c.kwargs["allow_bridge"] for c in calls], [True, False, False, True])
+        self.assertEqual(result["segments"][-1]["direction"], self.consumer["facing"])
+        self.builder.can_place.assert_called_with(result["segments"])
+        from factorio_ai.deterministic_input_links import _geometry, _path
+        belts, edges, _ = _geometry({"entities": result["segments"]})
+        self.assertIsNotNone(_path(belts, edges, (7.5, 6.5), (6.5, .5)))
+
+    def test_owned_pickup_duplicates_and_pole_retries_do_not_repeat_crossings(self):
+        self.option["poles"] = [self.pole] * 3
+        self.game.query.side_effect = None
+        self.game.query.return_value = {"ok": True, "candidates": [self.option] * 6}
+        self.factory._material_route = Mock(return_value={"ok": False, "reason": "no route within bounds"})
+        result = self.factory._consumer_drop_bridge_route(self.obs, self.source, self.consumer,
+            self.factory._reserved(), start_direction=4, allow_upstream_bridge=True, allow_underground=True)
+        self.assertFalse(result["ok"])
+        calls = self.factory._material_route.call_args_list
+        self.assertEqual(len(calls), 12)  # At most four options, three existing poles each.
+        self.assertEqual(sum(c.kwargs["allow_bridge"] for c in calls), 1)
+
     def test_enclosed_input_accepts_live_offset_drop_over_pole_without_rotating_belt(self):
         result = self.route()
         self.assertTrue(result["ok"], result)

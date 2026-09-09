@@ -1644,7 +1644,7 @@ return {ok=true,candidates=rows,new_pole_reach=prototypes.entity["small-electric
                    if e["name"] == "transport-belt"]
         foreign_footprint = self.builder._occupied_by_plan(foreign)
         best = None
-        upstream_bridge_attempted = False
+        upstream_bridge_attempts = set()
         for option in sorted(survey.get("candidates", []), key=lambda row: (_distance(source, row["pickup"]), row["arm"]["direction"]))[:4]:
             arm, pickup = option["arm"], option["pickup"]
             if canonical_approach is not None and arm["position"] != canonical_approach:
@@ -1669,10 +1669,12 @@ return {ok=true,candidates=rows,new_pole_reach=prototypes.entity["small-electric
                 if not self.builder.can_place(trial).get("ok"):
                     continue
                 # An input may need an upstream crossing as well as this drop.
-                # Spend at most one generic routing attempt across all options
-                # and poles; that planner uses only direct belt legs internally.
-                use_bridge = allow_upstream_bridge and not upstream_bridge_attempted
-                upstream_bridge_attempted = upstream_bridge_attempted or use_bridge
+                # Owned consumer routing may cross at each of its four pickup
+                # positions, once each; alternate poles never repeat that work.
+                attempt_key = (pickup["x"], pickup["y"]) if allow_underground else None
+                use_bridge = allow_upstream_bridge and attempt_key not in upstream_bridge_attempts
+                if use_bridge:
+                    upstream_bridge_attempts.add(attempt_key)
                 route = self._material_route(source, pickup, reserved + trial, allow_bridge=use_bridge,
                     start_direction=start_direction, end_direction=pickup_facing,
                     **({"allow_underground": True} if allow_underground else {}))
