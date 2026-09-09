@@ -1707,12 +1707,19 @@ return {ok=true,candidates=rows,new_pole_reach=prototypes.entity["small-electric
                        and e.get("position") == destination and e.get("direction") == facing), None)
         underground = (owned and actual is not None and type(actual.get("unit_number")) is int
                        and actual["unit_number"] > 0 and obs.get("world_id") == self.state.get("world_id"))
+        prospective = None
+        if owned and actual is None:
+            from .deterministic_prospective_intake import prospective_intake
+            prospective = prospective_intake(self, obs, consumer)
+            underground = prospective is not None
         dx, dy = DIRECTIONS[facing]
         approach = (destination["x"] - dx, destination["y"] - dy)
         result = {"ok": False, "reason": "consumer belt approach is occupied"}
         if approach == (source["x"], source["y"]) or approach not in self.builder._occupied_by_plan(reserved):
             result = self._material_route(source, destination, reserved,
                                           start_direction=start_direction, end_direction=facing, allow_underground=underground)
+            if result.get("ok") and result.get("underground_pairs") and prospective is not None:
+                result = {**result, "prospective_intake_owner": prospective["key"]}
             if result.get("ok") or result.get("reason") not in {"no route within bounds", "route search budget exhausted"}:
                 return result
         if not owned:
@@ -1817,6 +1824,11 @@ return {ok=true,input_belt_verified=true}
             if not route.get("ok"):
                 return _report("blocked", "material route is obstructed", link=link_key, query_error=route.get("reason"))
             entities = tap_entities + [{"name": "transport-belt", **segment} for segment in route["segments"]]
+            if route.get("prospective_intake_owner") is not None and route["prospective_intake_owner"] != link_key:
+                return _report("blocked", "prospective intake differs from connection owner", link=link_key)
+            if route.get("underground_pairs") and not self.builder.can_place([
+                    *entities, *self.state["blocks"].get(link_key, {}).get("entities", [])]).get("ok"):
+                return _report("blocked", "combined underground input placement changed", link=link_key)
             unique = {(e["name"], e["position"]["x"], e["position"]["y"]): e for e in entities}
             plan = _plan(list(unique.values()), source_port=source_port, consumer_port=consumer_port)
             if route.get("underground_pairs"):
