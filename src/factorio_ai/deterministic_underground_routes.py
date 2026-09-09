@@ -1,6 +1,7 @@
 """Bounded, additive underground escapes for owned item consumer routes."""
-from collections import deque
+from collections import defaultdict, deque
 from copy import deepcopy
+from itertools import islice
 import json
 import math
 
@@ -12,6 +13,7 @@ from .deterministic_underground import UNDERGROUND_NAMES
 MAX_INLETS = 32
 MAX_CANDIDATES = 24
 MAX_ROUTE_NODES = 100000
+MAX_COMPONENT_EDGES = 8192
 SURFACE_NAMES = frozenset({"transport-belt", "fast-transport-belt", "express-transport-belt", "turbo-transport-belt"})
 
 
@@ -33,8 +35,63 @@ def _stopped(factory):
         raise InterruptedError("operator_stop_requested")
 
 
+def _component_chains(free, components, start, finish, clear_mouth, maximum):
+    """Bounded shortest chains of at most three separated underground pairs."""
+    edges, reverse = defaultdict(list), defaultdict(set)
+    edge_count = 0
+    for point in sorted(free):
+        origin = components[point]
+        for direction, (dx, dy) in DIRECTIONS.items():
+            if ((point[0] + dx, point[1] + dy) in free
+                    or components.get((point[0] - dx, point[1] - dy)) != origin
+                    or not clear_mouth(point, direction)):
+                continue
+            for span in range(2, maximum + 1):
+                outlet = point[0] + span * dx, point[1] + span * dy
+                target = components.get(outlet)
+                if (target is None or target == origin
+                        or components.get((outlet[0] + dx, outlet[1] + dy)) != target
+                        or not clear_mouth(outlet, direction)):
+                    continue
+                edges[origin].append((point, outlet, direction))
+                reverse[target].add(origin)
+                edge_count += 1
+                if edge_count > MAX_COMPONENT_EDGES:
+                    return []
+    target, origin = components[finish], components[start]
+    distances, queue = {target: 0}, deque([target])
+    while queue:
+        current = queue.popleft()
+        if distances[current] >= 3:
+            continue
+        for previous in sorted(reverse[current]):
+            if previous not in distances:
+                distances[previous] = distances[current] + 1
+                queue.append(previous)
+    if origin not in distances or origin == target:
+        return []
+    pending = [(0.0, [], origin, start)]
+    for _ in range(distances[origin]):
+        choices = []
+        for cost, chain, current, previous in pending:
+            useful = [edge for edge in edges[current]
+                      if distances.get(components[edge[1]]) == distances[current] - 1]
+            useful.sort(key=lambda edge: (math.dist(previous, edge[0]), math.dist(edge[1], finish), edge))
+            inlets = set()
+            for edge in useful:
+                inlet = edge[0], edge[2]
+                if inlet not in inlets and len(inlets) >= MAX_INLETS:
+                    continue
+                inlets.add(inlet)
+                score = cost + math.dist(previous, edge[0]) + math.dist(edge[0], edge[1])
+                choices.append((score, chain + [edge], components[edge[1]], edge[1]))
+        choices.sort(key=lambda row: (row[0] + math.dist(row[3], finish), row[1]))
+        pending = choices[:MAX_CANDIDATES]
+    return [chain for _, chain, current, _ in pending if current == target]
+
+
 def plan_underground_route(factory, source, destination, reserved, *, start_direction, end_direction):
-    """Try one or two collinear pairs; existing endpoints are never replaced.
+    """Prefer adjacent pairs, then at most three pairs with surface connectors.
 
     The live survey proves ordinary underground range and excludes all existing
     mouths near a candidate axis. Every surface leg retains the ordinary belt
@@ -190,18 +247,32 @@ return {ok=true,world_id=d.world_id,tick=game.tick,maximum=maximum,blocked=block
                     following.append((rows, after))
             pending = following
     candidates.sort(key=lambda rows: (len(rows), math.dist(start, rows[0][0]) + math.dist(rows[-1][1], finish), rows))
+    def ordered_candidates():
+        yield from candidates
+        if len(candidates) < MAX_CANDIDATES:
+            _stopped(factory)
+            yield from _component_chains(free, components, start, finish, clear_mouth, maximum)
     budget = MAX_ROUTE_NODES
-    for pairs in candidates[:MAX_CANDIDATES]:
+    for pairs in islice(ordered_candidates(), MAX_CANDIDATES):
         _stopped(factory)
         endpoints = [e for inlet, outlet, direction in pairs
                      for e in (_entity(inlet, direction, "input"), _entity(outlet, direction, "output"))]
         records = [{"input": endpoints[i], "output": endpoints[i + 1], "max_distance": maximum}
                    for i in range(0, len(endpoints), 2)]
+        try:
+            underground_edges({"entities": endpoints, "underground_pairs": records})
+        except ValueError:
+            continue
         mouth_points = {_point(e) for e in endpoints}
         blocked = occupied | mouth_points
         legs = []
-        for a, b, departure, arrival in ((start, pairs[0][0], start_direction, pairs[0][2]),
-                                        (pairs[-1][1], finish, pairs[-1][2], end_direction)):
+        connections = [(start, pairs[0][0], start_direction, pairs[0][2])]
+        for previous, following in zip(pairs, pairs[1:]):
+            dx, dy = DIRECTIONS[previous[2]]
+            if previous[2] != following[2] or following[0] != (previous[1][0] + dx, previous[1][1] + dy):
+                connections.append((previous[1], following[0], previous[2], following[2]))
+        connections.append((pairs[-1][1], finish, pairs[-1][2], end_direction))
+        for a, b, departure, arrival in connections:
             if budget <= 0:
                 return {**failure, "reason": "underground route node budget exhausted"}
             leg = route_orthogonal(a, b, occupied=blocked - {a, b}, bounds=bounds,
@@ -213,7 +284,7 @@ return {ok=true,world_id=d.world_id,tick=game.tick,maximum=maximum,blocked=block
             for row in leg["segments"]:
                 p = _point(row); vx, vy = DIRECTIONS[row["direction"]]
                 blocked.update((p, (p[0] + vx, p[1] + vy)))
-        if len(legs) != 2:
+        if len(legs) != len(connections):
             continue
         rows = [{"name": "transport-belt", **row} for leg in legs for row in leg["segments"]]
         unique = {_point(row): row for row in rows}
