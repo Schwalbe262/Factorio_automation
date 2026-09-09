@@ -41,6 +41,46 @@ def _find(observation: dict, entity: dict) -> dict | None:
                  if e.get("name") == entity["name"] and _same_position(e["position"], entity["position"])), None)
 
 
+def _plan_lookup(observation: dict):
+    """Index only one plan's synchronous inspection, before any external query.
+
+    Keep row order and the original strict position comparison. Rebuild for
+    every call; mutable observations and their entity lists are never cached.
+    """
+    fallback = lambda entity: _find(observation, entity)
+    buckets = {}
+    try:
+        for ordinal, row in enumerate(observation.get("entities", [])):
+            position = row["position"]
+            if abs(position["x"]) > 2**40 or abs(position["y"]) > 2**40:
+                return fallback  # Preserve mixed int/float comparisons outside precise tile arithmetic.
+            key = (row.get("name"), math.floor(position["x"]), math.floor(position["y"]))
+            buckets.setdefault(key, []).append((ordinal, row))
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+        # An unrelated malformed row must not introduce a new lookup error.
+        return fallback
+
+    def find(entity: dict) -> dict | None:
+        try:
+            position = entity["position"]
+            if abs(position["x"]) > 2**40 or abs(position["y"]) > 2**40:
+                return fallback(entity)
+            xs = range(math.floor(position["x"] - .2), math.floor(position["x"] + .2) + 1)
+            ys = range(math.floor(position["y"] - .2), math.floor(position["y"] + .2) + 1)
+            name = entity["name"]
+            found, first = None, math.inf
+            for x in xs:
+                for y in ys:
+                    for ordinal, row in buckets.get((name, x, y), ()):
+                        if ordinal < first and _same_position(row["position"], position):
+                            found, first = row, ordinal
+            return found
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+            return fallback(entity)
+
+    return find
+
+
 def _direction_matches(name: str, actual: int, planned: int) -> bool:
     # This square turret's facing does not change its ammunition intake geometry.
     if name == "gun-turret":
@@ -56,12 +96,13 @@ def plan_observed(observation: dict, plan: dict) -> bool:
     """Check integrity without issuing construction, recipe, or fuel actions."""
     if not plan.get("ok") or not plan.get("entities"):
         return False
+    find = _plan_lookup(observation)
     for entity in plan["entities"]:
         try:
             role = underground_fields(entity)
         except ValueError:
             return False
-        found = _find(observation, entity)
+        found = find(entity)
         if found is None or (entity.get("recipe") and found.get("recipe") != entity["recipe"]):
             return False
         if role and (found.get("belt_to_ground_type") != role["belt_to_ground_type"] or found["position"] != entity["position"]):
@@ -150,8 +191,9 @@ class FactoryBuilder:
         # This also applies to persisted cells reserved by an older version.
         entities = (sorted(plan["entities"], key=lambda row: row["name"] == "electric-mining-drill")
                     if plan.get("resource_cell") else plan["entities"])
+        find = _plan_lookup(observation)
         for index, entity in enumerate(entities):
-            existing = _find(observation, entity)
+            existing = find(entity)
             if existing is not None:
                 if underground_fields(entity) and (existing.get("belt_to_ground_type") != entity["belt_to_ground_type"]
                         or existing["position"] != entity["position"]):
@@ -176,7 +218,7 @@ class FactoryBuilder:
                 missing = set()
                 for wanted in plan["entities"]:
                     placement_item = wanted.get("item") or self._placement_item(wanted["name"])
-                    if placement_item == item and _find(observation, wanted) is None:
+                    if placement_item == item and find(wanted) is None:
                         p = wanted["position"]
                         missing.add((wanted["name"], p["x"], p["y"]))
                 result = self.bootstrap.ensure_item(observation, item, min(cap, len(missing)))
