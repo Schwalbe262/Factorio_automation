@@ -255,7 +255,7 @@ class DeterministicSupervisor:
             "attempt_started_tick": self.attempt_started_tick,
             "model_calls": 0, "server_address": f"127.0.0.1:{self.game.cfg.server_port}"})
 
-    def _observe_short_craft(self, observation: dict[str, Any]) -> dict[str, Any]:
+    def _observe_short_craft(self, observation: dict[str, Any], *, research_wait: bool = False) -> dict[str, Any]:
         """Refresh a just-started engine craft before expensive factory planning.
 
         A short craft can finish while the dependency walk still sees its old
@@ -267,7 +267,7 @@ class DeterministicSupervisor:
         compact = callable(getattr(self.game, "observe_waiting", None))
         polled = False
         for _ in range(4):
-            if (not observation.get("ok") or not observation.get("crafting_queue")
+            if (not observation.get("ok") or (not research_wait and not observation.get("crafting_queue"))
                     or observation.get("world_id") != world or time.monotonic() >= deadline
                     or stop_requested(self.root / "stop.json")):
                 break
@@ -281,7 +281,7 @@ class DeterministicSupervisor:
                         or summary.get("actor_unit_number") != observation.get("actor_unit_number")
                         or summary.get("surface") != observation.get("surface")
                         or summary.get("tick", -1) < observation.get("tick", 0)
-                        or summary.get("crafting_queue_length", 0) == 0
+                        or (not research_wait and summary.get("crafting_queue_length", 0) == 0)
                         or summary.get("research") != observation.get("research")
                         or summary.get("entity_count") != len(observation.get("entities", []))
                         or summary.get("enemies", 0) or summary.get("damaged", 0)
@@ -378,9 +378,12 @@ class DeterministicSupervisor:
                         last_save = now
                     time.sleep(interval)
                     observation = self.game.observe()
-                    if (choice.get("type") == "craft"
+                    research_wait = (result.status == TaskStatus.WAITING
+                                     and choice.get("evidence", {}).get("waiting_for_progress")
+                                     and bool(observation.get("research")))
+                    if (choice.get("type") == "craft" or research_wait
                             or (result.status == TaskStatus.WAITING and observation.get("crafting_queue"))):
-                        observation = self._observe_short_craft(observation)
+                        observation = self._observe_short_craft(observation, research_wait=bool(research_wait))
                 else:
                     result = TaskResult(TaskStatus.WAITING, "cycle_limit_reached")
             except KeyboardInterrupt:

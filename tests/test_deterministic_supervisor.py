@@ -154,6 +154,18 @@ class SupervisorLifecycleTests(unittest.TestCase):
                 game.observe_waiting.assert_called_once()
                 game.observe.assert_called_once()
 
+    def test_research_wait_polls_without_a_crafting_queue_and_returns_fresh_full(self):
+        with TemporaryDirectory() as root:
+            game = fake_game(root)
+            waiting = observation(30, surface="nauvis", actor_unit_number=17, research="logistics")
+            game.observe_waiting = Mock(return_value={"ok": True, "world_id": "fixture", "surface": "nauvis",
+                "actor_unit_number": 17, "tick": 31, "crafting_queue_length": 0, "entity_count": 0, "research": "logistics"})
+            supervisor = module.DeterministicSupervisor(game)
+            with patch.object(module.time, "sleep"), patch.object(module.time, "monotonic", return_value=0):
+                self.assertIs(supervisor._observe_short_craft(waiting, research_wait=True), game.observe.return_value)
+            self.assertEqual(game.observe_waiting.call_count, 4)
+            game.observe.assert_called_once()
+
     def test_craft_grace_preserves_failed_or_changed_world_observation(self):
         for changed in ({"ok": False, "reason": "agent_dead"}, observation(0, world_id="different")):
             with self.subTest(changed=changed), TemporaryDirectory() as root:

@@ -1,5 +1,6 @@
 """World-scoped execution of reviewed array plans through the paid builder."""
 from copy import deepcopy
+from collections import deque
 import json
 import math
 
@@ -25,7 +26,7 @@ def construction_order(plan):
     return {**plan, "entities": sorted(plan["entities"], key=rank)}
 
 
-def foundation_stages(plan, catalog, underground_distance):
+def foundation_stages(plan, catalog, underground_distance, *, pole_wire=7.5, pole_supply=2.5):
     """Activate each iron smelter with complete dependencies before copper."""
     from .deterministic_input_links import _geometry, _path
     view = {**plan, "entities": [e for e in plan["entities"] if e["name"] not in {"inserter", "fast-inserter"}],
@@ -60,7 +61,6 @@ def foundation_stages(plan, catalog, underground_distance):
             raise ValueError("foundation tap is not on its declared item path")
         edges[pickup].append((drop, arm))
     inputs = {p["item"]: p for p in plan["ports"] if p["direction"] == "input"}
-    outputs = {p["item"]: p for p in plan["ports"] if p["direction"] == "output"}
     items = {n["recipe"]: n["item"] for n in plan["demand"]["nodes"]}
     machines = [e for e in plan["entities"] if e["name"] in PRODUCERS]
     machines.sort(key=lambda e: (items[e.get("recipe", e.get("_array_recipe"))] != "iron-plate",
@@ -69,7 +69,7 @@ def foundation_stages(plan, catalog, underground_distance):
     stages = []
     for machine in machines:
         left, top, right, bottom = _footprint(machine, catalog)
-        rows, sources = list(poles), set()
+        rows, sources = [], set()
         for arm in plan["entities"]:
             if arm.get("_role") not in {"input", "output"}:
                 continue
@@ -86,13 +86,42 @@ def foundation_stages(plan, catalog, underground_distance):
                 path = _path(belts, edges, (port["x"], port["y"]), pickup)
                 sources.add(item)
             else:
-                port = outputs[item]["position"]
-                path = _path(belts, edges, drop, (port["x"], port["y"]))
+                # A real receiving belt safely backs up while the full export
+                # route is still being paid for. Bootstrap can collect its output.
+                path = [belts[drop]] if drop in belts and belts[drop].get("_item") == item else None
             if path is None:
                 raise ValueError("foundation producer dependency path is disconnected: " + item)
             rows.extend(path)
             rows.append(arm)
         rows.append(machine)
+        selected = {0}
+        if not poles:
+            raise ValueError("foundation producer has no connected power plan")
+        for entity in rows:
+            if entity["name"] not in {"inserter", "fast-inserter"}:
+                continue
+            l, t, r, b = _footprint(entity, catalog)
+            covers = {i for i, p in enumerate(poles)
+                      if min(r, p["position"]["x"] + pole_supply) > max(l, p["position"]["x"] - pole_supply)
+                      and min(b, p["position"]["y"] + pole_supply) > max(t, p["position"]["y"] - pole_supply)}
+            queue, previous = deque(sorted(selected)), dict.fromkeys(selected)
+            found = None
+            while queue:
+                current = queue.popleft()
+                if current in covers:
+                    found = current
+                    break
+                origin = poles[current]["position"]
+                for i, p in enumerate(poles):
+                    if i not in previous and math.hypot(origin["x"] - p["position"]["x"], origin["y"] - p["position"]["y"]) <= pole_wire:
+                        previous[i] = current
+                        queue.append(i)
+            if found is None:
+                raise ValueError("foundation arm has no connected supply pole path")
+            while found is not None:
+                selected.add(found)
+                found = previous[found]
+        rows.extend(poles[i] for i in sorted(selected))
         unique = {(e["name"], e["position"]["x"], e["position"]["y"]): e for e in rows}
         stages.append({"sources": sorted(sources), "item": items[machine.get("recipe", machine.get("_array_recipe"))],
                        "plan": construction_order({"ok": True, "entities": list(unique.values())})})
@@ -397,7 +426,8 @@ return {ok=count<=256,first=first,count=count}
             return action
         self._building = True
         try:
-            stages = foundation_stages(plan, factory.catalog, geometry["underground_distance"]) if plan.get("phase") == "construction-foundation" else []
+            stages = foundation_stages(plan, factory.catalog, geometry["underground_distance"],
+                                      pole_wire=geometry["pole_wire"], pole_supply=geometry["pole_supply"]) if plan.get("phase") == "construction-foundation" else []
             for link in ([] if stages else plan["source_links"].values()):
                 result = factory.builder.ensure_plan(obs, link)
                 if result.get("status") != "succeeded" or result.get("type"):

@@ -82,8 +82,8 @@ def _plan_lookup(observation: dict):
 
 
 def _direction_matches(name: str, actual: int, planned: int) -> bool:
-    # This square turret's facing does not change its ammunition intake geometry.
-    if name == "gun-turret":
+    # These square entities have no directional intake or output geometry.
+    if name in {"gun-turret", "stone-furnace", "steel-furnace"}:
         return True
     # These generators have two_direction_only in the real prototype: the game
     # normalizes south to north and west to east without changing fluid geometry.

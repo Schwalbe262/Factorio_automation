@@ -473,7 +473,8 @@ if existing then
   or existing.belt_to_ground_type~=x.belt_to_ground_type) then return failure("existing_underground_mismatch") end
  local desired=x.direction or 0
  local axis_only=x.name=="steam-engine" or x.name=="steam-turbine"
- if existing.direction~=desired and not (x.name=="gun-turret" and existing.force==f)
+ local square=x.name=="gun-turret" or x.name=="stone-furnace" or x.name=="steel-furnace"
+ if existing.direction~=desired and not (square and existing.force==f)
   and not (axis_only and existing.direction%8==desired%8) then return failure("existing_direction_mismatch") end
  return success{status="succeeded",reused=true,unit_number=existing.unit_number}
 end

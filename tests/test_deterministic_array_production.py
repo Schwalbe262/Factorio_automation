@@ -24,6 +24,8 @@ class ArrayExecutionTests(unittest.TestCase):
             ports += [{"item": ore, "direction": "input", "position": {"x": x-2.5, "y": .5}},
                       {"item": item, "direction": "output", "position": {"x": x+1.5, "y": 2.5}}]
         rows += [row("transport-belt", x+.5, -2.5, 4, _item="coal") for x in range(11)]
+        rows += [row("small-electric-pole", x, y) for x, y in
+                 ((-.5, -1.5), (1.5, 1.5), (5.5, -1.5), (9.5, -1.5), (11.5, 1.5))]
         ports.append({"item": "coal", "direction": "input", "position": {"x": .5, "y": -2.5}})
         plan = {"entities": rows, "ports": ports,
                 "demand": {"nodes": [{"item": item, "recipe": item} for item in ("iron-plate", "copper-plate")]}}
@@ -34,6 +36,7 @@ class ArrayExecutionTests(unittest.TestCase):
         self.assertFalse(any(e.get("_item") == "copper-ore" for e in first["plan"]["entities"]))
         self.assertEqual(sum(e["name"] == "stone-furnace" for e in first["plan"]["entities"]), 1)
         self.assertLess(len(first["plan"]["entities"]), len(rows))
+        self.assertEqual(sum(e["name"] == "small-electric-pole" for e in first["plan"]["entities"]), 2)
     def test_failed_external_routes_do_not_publish_a_district(self):
         factory = SimpleNamespace(state={}, catalog=SimpleNamespace(entities={}),
                                   _reserved=lambda: [], _save=Mock(),

@@ -2107,7 +2107,7 @@ return {ok=true,speed=prototypes.entity.lab.get_researching_speed(),
                 return action
         automatic_required = unused == 0 and needed > 0 and held + lab_stock + queued == 0
         return _report("waiting", f"finite startup science awaits observed {label} research",
-                       **evidence, automatic_science_required=automatic_required)
+                       **evidence, automatic_science_required=automatic_required, waiting_for_progress=True)
 
     def _ensure_startup_iron(self, obs: dict) -> dict:
         if not (obs.get("enabled_recipes") or {}).get("electric-mining-drill"):

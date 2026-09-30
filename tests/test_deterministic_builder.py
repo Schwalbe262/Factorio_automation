@@ -5,12 +5,22 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from factorio_ai.deterministic_builder import FactoryBuilder, plan_observed
+from factorio_ai.deterministic_builder import FactoryBuilder, plan_observed, _direction_matches
 from factorio_ai.deterministic_state import request_stop
 from factorio_ai.factory_templates import build_template
 
 
 class BuilderTests(unittest.TestCase):
+    def test_square_furnace_normalization_keeps_rotated_plan_observed(self):
+        for name in ("stone-furnace", "steel-furnace"):
+            for direction in (0, 4, 8, 12):
+                wanted = {"name": name, "position": {"x": 0, "y": 0}, "direction": direction}
+                obs = {"entities": [{**wanted, "direction": 0}]}
+                self.assertTrue(plan_observed(obs, {"ok": True, "entities": [wanted]}))
+                self.assertTrue(_direction_matches(name, 0, direction))
+        self.assertFalse(_direction_matches("inserter", 0, 12))
+        self.assertFalse(_direction_matches("transport-belt", 0, 12))
+
     def setUp(self):
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
