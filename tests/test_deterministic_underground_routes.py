@@ -65,6 +65,25 @@ class UndergroundRouteTests(unittest.TestCase):
         self.assertEqual(sum(r["name"] == "underground-belt" for r in path), 4)
         self.builder.can_place.assert_called_once_with(result["segments"])
 
+    def test_natural_and_crossing_route_is_clearance_only_until_whole_plan_is_buildable(self):
+        baseline = self.route()
+        self.survey["clearable"] = [baseline["segments"][1]["position"]]
+        self.builder.can_place.return_value = {"ok": False}
+        result = plan_underground_route(self.factory, self.source, self.destination, [],
+                                       start_direction=4, end_direction=8, clear_natural=True)
+        self.assertFalse(result["ok"])
+        plan = result["clearance_plan"]
+        belts, edges, _ = _geometry({"entities": plan["segments"], "underground_pairs": plan["underground_pairs"]})
+        self.assertIsNotNone(_path(belts, edges, tuple(self.source.values()), tuple(self.destination.values())))
+        self.assertNotIn("clearance_plan", self.route())
+
+    def test_natural_route_rejects_missing_clearance_evidence(self):
+        result = plan_underground_route(self.factory, self.source, self.destination, [],
+                                       start_direction=4, end_direction=8, clear_natural=True)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "incomplete underground natural obstacle survey")
+        self.builder.can_place.assert_not_called()
+
     def isolated_components(self, source, destination, openings):
         self.source, self.destination = {"x": source[0], "y": source[1]}, {"x": destination[0], "y": destination[1]}
         left, right = min(source[0], destination[0]) - 48, max(source[0], destination[0]) + 48

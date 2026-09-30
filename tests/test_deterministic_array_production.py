@@ -10,6 +10,31 @@ from factorio_ai.deterministic_layout_policy import resolve_layout_policy, save_
 
 
 class ArrayExecutionTests(unittest.TestCase):
+    def test_underground_supply_clearance_revalidates_footprint_and_preserves_owned_source(self):
+        source = {"position": {"x": .5, "y": .5}, "facing": 4, "item": "ore"}
+        outlet = {"name": "underground-belt", "position": {"x": 4.5, "y": .5},
+                  "direction": 4, "belt_to_ground_type": "output"}
+        source_belt = {"name": "transport-belt", "position": source["position"], "direction": 4}
+        factory = SimpleNamespace(state={"production_layout": {"anchor": {"x": 10, "y": 0}}},
+            catalog=SimpleNamespace(entities={}), _reserved=lambda: [],
+            _material_route=Mock(return_value={"ok": False, "reason": "no route within bounds"}))
+        factory.builder = SimpleNamespace(_occupied_by_plan=lambda rows: set(),
+            can_place=Mock(return_value={"ok": True}), clear_route_obstacle=Mock(return_value={"ok": False}))
+        local = {"entities": [{"name": "small-electric-pole", "position": {"x": .5, "y": 3.5}}],
+                 "ports": [{"kind": "item", "item": "ore", "direction": "input", "facing": 4,
+                            "position": {"x": .5, "y": .5}}]}
+        arrays = ArrayProduction(factory)
+        arrays._clearance = Mock(return_value={"type": "mine", "name": "tree-01", "count": 1,
+                                               "position": outlet["position"]})
+        with patch("factorio_ai.deterministic_array_production._survey", return_value={"ok": True, "clear": [1]}), \
+             patch("factorio_ai.deterministic_array_production.reserved_aisles", return_value=set()), \
+             patch("factorio_ai.deterministic_underground_routes.plan_underground_route", return_value={
+                 "ok": False, "clearance_plan": {"segments": [source_belt, outlet]}}) as underground:
+            result = arrays._reserve({"world_id": "world", "surface": "nauvis"}, local, "proof", {"ore": source})
+        self.assertEqual(result["type"], "mine")
+        arrays._clearance.assert_called_once_with([outlet])
+        self.assertTrue(underground.call_args.kwargs["clear_natural"])
+
     def test_reserved_supply_link_retains_underground_geometry_for_later_inspection(self):
         from factorio_ai.deterministic_builder import FactoryBuilder
         from factorio_ai.deterministic_input_links import _geometry

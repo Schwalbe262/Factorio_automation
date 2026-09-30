@@ -90,7 +90,8 @@ def _component_chains(free, components, start, finish, clear_mouth, maximum):
     return [chain for _, chain, current, _ in pending if current == target]
 
 
-def plan_underground_route(factory, source, destination, reserved, *, start_direction, end_direction):
+def plan_underground_route(factory, source, destination, reserved, *, start_direction, end_direction,
+                           clear_natural=False):
     """Prefer adjacent pairs, then at most three pairs with surface connectors.
 
     The live survey proves ordinary underground range and excludes all existing
@@ -110,7 +111,7 @@ def plan_underground_route(factory, source, destination, reserved, *, start_dire
     if (bounds["max_x"] - bounds["min_x"] + 1) * (bounds["max_y"] - bounds["min_y"] + 1) > 50000:
         return {**failure, "reason": "underground route survey exceeds 50000 tiles"}
     world = factory.state.get("world_id")
-    payload = json.dumps(json.dumps({"bounds": bounds, "world": world}, separators=(",", ":")))
+    payload = json.dumps(json.dumps({"bounds": bounds, "world": world, "clear_natural": clear_natural}, separators=(",", ":")))
     survey = factory.game.query('''
 --[[ additive underground input survey: no world mutations. ]]
 local x=helpers.json_to_table(''' + payload + ''');local b=x.bounds
@@ -119,10 +120,26 @@ local recipe=f.recipes["underground-belt"]
 if not recipe or not recipe.enabled then return {ok=false,reason="underground belts are locked"} end
 local maximum=prototypes.entity["underground-belt"].max_underground_distance
 if not maximum or maximum<2 or maximum>16 then return {ok=false,reason="unsupported underground belt range"} end
-local blocked={};local belts={};local mouths={}
+local blocked={};local belts={};local mouths={};local clearable={}
+local function natural(p)
+ if not x.clear_natural or not s.can_place_entity{name="transport-belt",position=p,force=f,
+  build_check_type=defines.build_check_type.manual_ghost,forced=true} then return false end
+ local box=prototypes.entity["transport-belt"].collision_box;local found=false
+ for _,e in pairs(s.find_entities_filtered{area={{p.x+box.left_top.x,p.y+box.left_top.y},
+                                               {p.x+box.right_bottom.x,p.y+box.right_bottom.y}}}) do
+  if e.type~="resource" and not e.prototype.collision_mask.colliding_with_tiles_only then
+   local rock=e.type=="simple-entity" and (e.name=="big-rock" or e.name=="huge-rock" or e.name=="big-sand-rock")
+   if e.force.name~="neutral" or not e.minable or not (e.type=="tree" or rock) then return false end
+   found=true
+  end
+ end
+ return found
+end
 for px=b.min_x,b.max_x do for py=b.min_y,b.max_y do
  local p={x=px,y=py}
- if not s.can_place_entity{name="transport-belt",position=p,force=f} then blocked[#blocked+1]=p end
+ if not s.can_place_entity{name="transport-belt",position=p,force=f} then
+  if natural(p) then clearable[#clearable+1]=p else blocked[#blocked+1]=p end
+ end
 end end
 for _,e in pairs(s.find_entities_filtered{type={"transport-belt","underground-belt"},
  area={{b.min_x-maximum,b.min_y-maximum},{b.max_x+maximum,b.max_y+maximum}}}) do
@@ -130,7 +147,8 @@ for _,e in pairs(s.find_entities_filtered{type={"transport-belt","underground-be
  if e.type=="underground-belt" then row.belt_to_ground_type=e.belt_to_ground_type;mouths[#mouths+1]=row
  else belts[#belts+1]=row end
 end
-return {ok=true,world_id=d.world_id,tick=game.tick,maximum=maximum,blocked=blocked,belts=belts,mouths=mouths}
+return {ok=true,world_id=d.world_id,tick=game.tick,maximum=maximum,blocked=blocked,belts=belts,mouths=mouths,
+ clearable=clearable}
 ''')
     if not survey.get("ok"):
         return {**failure, "reason": survey.get("reason", "underground route survey failed")}
@@ -154,6 +172,10 @@ return {ok=true,world_id=d.world_id,tick=game.tick,maximum=maximum,blocked=block
             or any(row.get("name") not in UNDERGROUND_NAMES or row.get("belt_to_ground_type") not in {"input", "output"}
                    for row in survey["mouths"])):
         return {**failure, "reason": "incomplete underground obstacle survey"}
+    if clear_natural and ("clearable" not in survey
+            or not (isinstance(survey["clearable"], list) or survey["clearable"] == {})
+            or any(not valid_point(p) for p in survey["clearable"])):
+        return {**failure, "reason": "incomplete underground natural obstacle survey"}
     _stopped(factory)
     physical = factory.builder._occupied_by_plan(reserved) | {_point(p) for p in survey["blocked"]}
     belts = {}
@@ -301,5 +323,10 @@ return {ok=true,world_id=d.world_id,tick=game.tick,maximum=maximum,blocked=block
             continue
         if factory.builder.can_place(plan["segments"]).get("ok"):
             return plan
+        if clear_natural and any(_point(p) in unique or _point(p) == finish for p in survey["clearable"]):
+            # This is not a buildable route. The caller must freshly validate
+            # the whole footprint and return one ordinary mining action only.
+            return {**failure, "reason": "underground route requires verified natural clearance",
+                    "clearance_plan": plan}
         return {**failure, "reason": "combined underground placement changed"}
     return failure

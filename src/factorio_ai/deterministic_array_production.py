@@ -378,6 +378,20 @@ return {ok=count<=256,first=first,count=count}
                             start_direction=source.get("facing"), end_direction=port["facing"])
                         if clearing.get("ok") and clearing.get("action"):
                             return clearing["action"]
+                        pending = None
+                        if source.get("facing") in DIRECTIONS and port.get("facing") in DIRECTIONS:
+                            from .deterministic_underground_routes import plan_underground_route
+                            underground = plan_underground_route(factory, source["position"], port["position"], reserved,
+                                start_direction=source["facing"], end_direction=port["facing"], clear_natural=True)
+                            pending = underground.get("clearance_plan")
+                        if pending:
+                            # The source belt was already identity-verified by
+                            # _sources. Never treat it as a removable obstacle.
+                            clearing = self._clearance([e for e in pending["segments"]
+                                                       if e["position"] != source["position"]])
+                            if clearing is not None:
+                                clearing["reason"] = "clear a verified natural obstacle on an underground supply route"
+                                return clearing
                         break
                     entities = [{"name": "transport-belt", **segment} for segment in route["segments"]]
                     links[port["item"]] = {"ok": True, "entities": entities,
