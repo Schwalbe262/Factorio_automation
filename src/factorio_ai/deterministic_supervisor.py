@@ -251,6 +251,7 @@ class DeterministicSupervisor:
             "technologies": sorted(observation.get("technologies", {})),
             "entities": observation.get("entities", []), "last_action": self.last_action,
             "crafting_client": self.client_status,
+            "observation_metrics": getattr(self.game, "observation_metrics", {}),
             "attempt_started_tick": self.attempt_started_tick,
             "model_calls": 0, "server_address": f"127.0.0.1:{self.game.cfg.server_port}"})
 
@@ -263,6 +264,8 @@ class DeterministicSupervisor:
         """
         world = observation.get("world_id")
         deadline = time.monotonic() + 2
+        compact = callable(getattr(self.game, "observe_waiting", None))
+        polled = False
         for _ in range(4):
             if (not observation.get("ok") or not observation.get("crafting_queue")
                     or observation.get("world_id") != world or time.monotonic() >= deadline
@@ -271,6 +274,22 @@ class DeterministicSupervisor:
             time.sleep(.25)
             if time.monotonic() >= deadline or stop_requested(self.root / "stop.json"):
                 break
+            if compact:
+                summary = self.game.observe_waiting()
+                polled = True
+                if (not summary.get("ok") or summary.get("world_id") != world
+                        or summary.get("actor_unit_number") != observation.get("actor_unit_number")
+                        or summary.get("surface") != observation.get("surface")
+                        or summary.get("tick", -1) < observation.get("tick", 0)
+                        or summary.get("crafting_queue_length", 0) == 0
+                        or summary.get("research") != observation.get("research")
+                        or summary.get("entity_count") != len(observation.get("entities", []))
+                        or summary.get("enemies", 0) or summary.get("damaged", 0)
+                        or summary.get("actor_damaged") or summary.get("fuel_alarm")):
+                    break
+            else:
+                observation = self.game.observe()
+        if polled and not stop_requested(self.root / "stop.json"):
             observation = self.game.observe()
         return observation
 
@@ -359,7 +378,8 @@ class DeterministicSupervisor:
                         last_save = now
                     time.sleep(interval)
                     observation = self.game.observe()
-                    if choice.get("type") == "craft":
+                    if (choice.get("type") == "craft"
+                            or (result.status == TaskStatus.WAITING and observation.get("crafting_queue"))):
                         observation = self._observe_short_craft(observation)
                 else:
                     result = TaskResult(TaskStatus.WAITING, "cycle_limit_reached")

@@ -251486,3 +251486,10 @@ Goal: expandblue-sciencefluidproduction toaggregategraphdemand. Hypothesis: stab
 - Token snapshot: thread27,340,492; since previous runtime-part snapshot5,446,900 including cached. Account weekly used0.0%; exact per-part weekly token quota percentage unavailable.
 
 - Direct-mining follow-up evidence: exec53232 confirmed live after push9124922; tick325141/entities343 reports complete foundation district and external routes reserved. Iron merge blocker recovered through outlet escape; next construct reserved foundation and observe actual smelting. Tokens tracked in preceding part snapshot.
+
+### 2026-09-30 | Compact crafting wait observation
+- Goal: reduce waiting observation payload/query work while retaining fresh action evidence. Hypothesis: bounded summaries can replace repeated full factory snapshots during craft grace.
+- Actions/options: compact actor/world/queue/research/structure/health/enemy/fuel wake query; max4 polls/2s; one fresh full snapshot before planning. Applied to newly started crafts and busy-queue waits. Full/waiting normalized JSON bytes, query counts and elapsed seconds persisted in status. Normal stop/save confirmed before same-server reload, exec42860.
+- Metrics/result: native full122825B/0.720s vs waiting227B/0.217s,99.82% smaller per summary; paired whole-run50% acceptance remains unproven.33 supervisor tests PASS/full1140 PASS104skip. Native foundation has6 planned furnaces but0 observed at351426/entities482: transport-first construction still delays production funding.
+- Failure/next: no completed smelting/science/rocket proof yet. Add incremental iron-first producer activation with its exact supply/output dependencies to finance remaining construction; inspect live waiting telemetry.
+- Tokens snapshot: thread29,543,994; since direct-mining snapshot2,203,502 including cached. Account weekly0.0%; per-part weekly percentage unavailable without quota.

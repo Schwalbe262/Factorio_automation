@@ -122,6 +122,38 @@ class SupervisorLifecycleTests(unittest.TestCase):
             self.assertLessEqual(game.observe.call_count, 4)
             game.act.assert_not_called()
 
+    def test_compact_craft_wait_refreshes_full_observation_once_before_planning(self):
+        with TemporaryDirectory() as root:
+            game = fake_game(root)
+            busy = observation(30, surface="nauvis", actor_unit_number=17, crafting_queue=[{"count": 1}])
+            summary = {"ok": True, "world_id": "fixture", "surface": "nauvis", "actor_unit_number": 17,
+                       "tick": 31, "crafting_queue_length": 1, "entity_count": 0}
+            game.observe_waiting = Mock(return_value=summary)
+            fresh = observation(100)
+            game.observe.return_value = fresh
+            supervisor = module.DeterministicSupervisor(game)
+            with patch.object(module.time, "sleep"), patch.object(module.time, "monotonic", return_value=0):
+                self.assertIs(supervisor._observe_short_craft(busy), fresh)
+            self.assertEqual(game.observe_waiting.call_count, 4)
+            game.observe.assert_called_once()
+            game.act.assert_not_called()
+
+    def test_compact_wait_wakes_for_urgent_changes_and_identity_changes(self):
+        for change in ({"crafting_queue_length": 0}, {"enemies": 1}, {"damaged": 1}, {"fuel_alarm": True},
+                       {"actor_damaged": True}, {"world_id": "other"}, {"actor_unit_number": 18},
+                       {"research": "logistics"}, {"entity_count": 1}, {"tick": 0}, {"ok": False}):
+            with self.subTest(change=change), TemporaryDirectory() as root:
+                game = fake_game(root)
+                busy = observation(30, surface="nauvis", actor_unit_number=17, crafting_queue=[{"count": 1}])
+                summary = {"ok": True, "world_id": "fixture", "surface": "nauvis", "actor_unit_number": 17,
+                           "tick": 31, "crafting_queue_length": 1, "entity_count": 0, **change}
+                game.observe_waiting = Mock(return_value=summary)
+                supervisor = module.DeterministicSupervisor(game)
+                with patch.object(module.time, "sleep"), patch.object(module.time, "monotonic", return_value=0):
+                    self.assertIs(supervisor._observe_short_craft(busy), game.observe.return_value)
+                game.observe_waiting.assert_called_once()
+                game.observe.assert_called_once()
+
     def test_craft_grace_preserves_failed_or_changed_world_observation(self):
         for changed in ({"ok": False, "reason": "agent_dead"}, observation(0, world_id="different")):
             with self.subTest(changed=changed), TemporaryDirectory() as root:

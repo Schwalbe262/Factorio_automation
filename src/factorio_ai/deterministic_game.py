@@ -229,6 +229,40 @@ class DeterministicGame:
         self.cfg = cfg
         self.backend = backend
         self._confirmed = False
+        self.observation_metrics: dict[str, dict[str, float]] = {}
+
+    def _measure_observation(self, kind, started, value, queries=1):
+        metric = self.observation_metrics.setdefault(kind, {"observations": 0, "queries": 0, "seconds": 0, "bytes": 0})
+        metric["observations"] += 1
+        metric["queries"] += queries
+        metric["seconds"] += time.perf_counter() - started
+        metric["bytes"] += len(json.dumps(value, separators=(",", ":")).encode("utf-8"))
+
+    def observe_waiting(self):
+        """Compact wake-up evidence only; never an input to action planning."""
+        started = time.perf_counter()
+        value = self.query('''
+if not a or not a.valid then return failure("agent_dead") end
+local count=0;local damaged=0;local fuel_alarm=false
+for _,e in pairs(s.find_entities_filtered{force=f}) do
+ if e.valid and e.type~="character" then
+  count=count+1
+  if e.health and e.max_health and e.health<e.max_health then damaged=damaged+1 end
+  local good,burner=pcall(function() return e.burner end)
+  if good and burner and burner.remaining_burning_fuel<1000000 then
+   local fuel=e.get_fuel_inventory()
+   if not fuel or fuel.is_empty() then fuel_alarm=true end
+  end
+ end
+end
+local queue=a.crafting_queue or {};local research=f.current_research
+return success{world_id=d.world_id,surface=s.name,tick=game.tick,actor_unit_number=a.unit_number,
+ crafting_queue_length=#queue,research=research and research.name or nil,entity_count=count,
+ damaged=damaged,actor_damaged=a.health<a.max_health,fuel_alarm=fuel_alarm,
+ enemies=s.count_entities_filtered{position={0,0},radius=128,force="enemy",type={"unit","unit-spawner"}}}
+''')
+        self._measure_observation("waiting", started, value)
+        return value
 
     def query(self, body: str) -> dict[str, Any]:
         if not self._confirmed:
@@ -270,6 +304,7 @@ return success{world_id=storage.deterministic_player.world_id,position=pos(actor
 ''')
 
     def observe(self, radius: float = 384) -> dict[str, Any]:
+        started = time.perf_counter()
         observation = self.query(OBSERVE_UNDERGROUND_LUA + '''
 if not a or not a.valid then return failure("agent_dead") end
 local equipped=a.get_inventory(defines.inventory.character_ammo);local recoverable={}
@@ -346,6 +381,7 @@ return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.
         if observation.get("ok"):
             from .deterministic_launch import OBSERVE_LAUNCH_LUA
             observation["launch"] = self.query(OBSERVE_LAUNCH_LUA)
+        self._measure_observation("full", started, observation, queries=2 if observation.get("ok") else 1)
         return observation
 
     def act(self, action: dict[str, Any]) -> dict[str, Any]:
