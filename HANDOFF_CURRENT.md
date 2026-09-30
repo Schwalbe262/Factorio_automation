@@ -1,7 +1,7 @@
 # Current Handoff
 - Active: approved arrays-v2 redesign through REAL Space Age rocket; frozen seeds20260908/101/202 acceptance; no gameplay LLM/grants/research/counter edits.
 - User requested2.1.20 and external friends access; installed/server2.1.20 verified. Same paid world20c82012-8fa7-45c4-bf11-2e7432c76ea3 preserved; ZIP-verified backup runtime/deterministic/arrays-v2-seed20260908/backups/pre-2.1.20-20260930.
-- LIVE same runtime/server62928 UDP34230/RCON127.0.0.1:27035; assisted supervisor exec53232/log layout-v2/live-run-direct-escape.log. Revalidate handles; no timeout restarts. Source iron secondary merge blocked by protected wreck; outlet escape0 being built.
+- LIVE same runtime/server62928 UDP34230/RCON127.0.0.1:27035; assisted supervisor exec53232/log layout-v2/live-run-direct-escape.log confirmed live. Iron merge recovered via outlet escape; tick325141/entities343 foundation district+external routes reserved, now build. No timeout restarts.
 - Automation client59532 FactoryAutomaton/actor17 hidden; user client36780 NEC/actor415 visible. User completed separate login; preserve user window/control. Game password/address only ignored friends-access.txt.
 - Router inspected user rule TCPUDP34230->192.168.0.19:34230; existing firewall allows Factorio. Actual OUTSIDE-client reachability not yet verified; RCON confirmed loopback-only.
 - Branch feat/deterministic-space-age-autoplayer; part1 pushed310c020. Hosting fixes: persistent world settings, game password client, loopback RCON; focused20/full deterministic1130 PASS104skip.
