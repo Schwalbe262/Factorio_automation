@@ -1,10 +1,10 @@
 # Current Handoff
-- Active: new-world arrays-v2 redesign, then real Space Age rocket on frozen seeds20260908/101/202; no gameplay LLM, grants, forced research/counters/gamespeed/chart.
-- User selected fresh world; preserve ALL legacy saves. Use shared belt-fed arrays and short trunks; port reference96cba587 design into official-mod paid deterministic execution.
-- Branch feat/deterministic-space-age-autoplayer; part1 offline benchmark implemented: live BOM/dedup/assembly-resource metrics, benchmark-layout CLI, 4 focused tests PASS.
-- Legacy post-coal-fast-59dc4dc catalog matches adapter-smoke/catalog.json; assembly971 entities, surface893/underground8, transport iron-ore1411; sustained flow unproved.
-- Legacy last recorded MAIN world2cc5423e actor58/player2 UDP34210/RCON27025 blocked4692867: relocated copper receiver cannot reach original source. Preserve paid coal7907/all14feeds and copper bypass6762/3058/child3067.
-- Next part2: aggregate live recipe rates, shared-spine array geometry, hard static capacity/power/flow gates, bounded cost optimization, staged FactoryPlan and saved policy.
-- Then part3: waiting summaries/phase timing and new-world red-green30/min for5min; part4 blue/oil/rocket and three frozen seeds. No completed live v2 proof yet.
-- Protected insight.md has pre-existing+16899 lines; NEVER stage/overwrite. Journals search-only; handoff <=10 lines.
-- Latest usage part1 interval1,130,474/thread2,208,346 inclcached; accountweekly51.0%; exact per-part weekly quota unknown.
+- Active: approved arrays-v2 redesign through REAL Space Age rocket; frozen seeds20260908/101/202 acceptance; no gameplay LLM/grants/research/counter edits.
+- User requested2.1.20 and external friends access; installed/server2.1.20 verified. Same paid world20c82012-8fa7-45c4-bf11-2e7432c76ea3 preserved; ZIP-verified backup runtime/deterministic/arrays-v2-seed20260908/backups/pre-2.1.20-20260930.
+- LIVE runtime/deterministic/arrays-v2-seed20260908 server62928 UDP34230/RCON127.0.0.1:27035; supervisor exec42127; revalidate handles, never restart on timeout.
+- Automation client59532 FactoryAutomaton/actor17 hidden; user client36780 NEC/actor415 visible. User completed separate login; preserve user window/control. Game password/address only ignored friends-access.txt.
+- Router inspected user rule TCPUDP34230->192.168.0.19:34230; existing firewall allows Factorio. Actual OUTSIDE-client reachability not yet verified; RCON confirmed loopback-only.
+- Branch feat/deterministic-space-age-autoplayer; part1 pushed310c020. Hosting fixes: persistent world settings, game password client, loopback RCON; focused20/full deterministic1130 PASS104skip.
+- Part2 arrays modules/factory hooks/policy remain uncommitted and unfinished. Array suite15 PASS; static live ore-boundary plan passes after furnace arm correction; native geometry fixed array vectors.
+- Remaining: atomic external route/power/natural clearance and staged runtime, same-demand30% cost proof,50% waiting observation payload, real red/green30/min5min then blue/oil/rocket and all seeds.
+- Legacy saves ALL preserved; old MAIN2cc5423e remains separate. Protected insight.md+16899 lines NEVER stage/overwrite; journals search-only; handoff <=10lines.

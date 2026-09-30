@@ -112,6 +112,9 @@ def write_no_mod_server_settings(cfg: AppConfig) -> Path:
     server_dir = cfg.runtime_dir / "vanilla"
     server_dir.mkdir(parents=True, exist_ok=True)
     settings_path = server_dir / "server-settings.json"
+    if settings_path.exists():
+        # Hosting preferences belong to this world and survive server resumes.
+        return settings_path
     payload = {
         "name": "Factorio AI No-Mod RCON",
         "description": "Vanilla-compatible local/LAN server controlled by trusted RCON Lua commands.",
@@ -361,8 +364,8 @@ def build_start_no_mod_server_command(
         str(settings),
         "--port",
         str(cfg.server_port),
-        "--rcon-port",
-        str(cfg.rcon_port),
+        "--rcon-bind",
+        f"127.0.0.1:{cfg.rcon_port}",
         "--rcon-password",
         cfg.rcon_password,
         "--console-log",

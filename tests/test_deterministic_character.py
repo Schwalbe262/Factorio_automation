@@ -39,6 +39,16 @@ class DedicatedCraftingClientTests(unittest.TestCase):
             module.prepare_client(cfg)
             self.assertEqual(path.read_text(), content)
 
+    def test_dedicated_client_uses_world_game_password(self):
+        with TemporaryDirectory() as directory:
+            cfg = config(directory)
+            settings = Path(directory) / 'vanilla/server-settings.json'
+            settings.parent.mkdir(parents=True)
+            settings.write_text(json.dumps({'game_password': 'fixture-password'}))
+            command, _ = module.prepare_client(cfg)
+            self.assertEqual(command[command.index('--password') + 1], 'fixture-password')
+            self.assertEqual(command[command.index('--mp-connect') + 1], '127.0.0.1:34213')
+
     def test_ready_player_does_not_start_another_gui(self):
         with TemporaryDirectory() as directory:
             game = SimpleNamespace(cfg=config(directory), query=Mock(return_value={'status': 'ready', 'player_name': module.PLAYER_NAME}))

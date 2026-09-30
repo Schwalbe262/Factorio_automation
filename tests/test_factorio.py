@@ -75,6 +75,17 @@ class FactorioProcessConfigTests(unittest.TestCase):
         self.assertIn('"name": "space-age"', mod_list_text)
         self.assertNotIn("factorio_ai_autoplayer", joined)
         self.assertNotIn("factorio_ai_autoplayer", mod_list_text)
+        self.assertEqual(start_command[start_command.index("--rcon-bind") + 1], "127.0.0.1:27015")
+        self.assertNotIn("--rcon-port", start_command)
+
+    def test_no_mod_hosting_preferences_survive_resume(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cfg = make_test_config(Path(directory))
+            path = write_no_mod_server_settings(cfg)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload.update(name="Friends observation", game_password="test-local-password", max_players=12)
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            self.assertEqual(json.loads(write_no_mod_server_settings(cfg).read_text(encoding="utf-8")), payload)
 
     def test_no_mod_map_gen_settings_keep_enemies_but_expand_safe_start(self):
         with tempfile.TemporaryDirectory() as temp_dir:

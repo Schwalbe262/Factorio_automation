@@ -230,6 +230,11 @@ def prepare_client(cfg: Any) -> tuple[list[str], Path]:
     command = [str(cfg.factorio_exe), "--config", str(config), "--mod-directory", str(mods),
                "--disable-migration-window", "--disable-audio", "--force-graphics-preset", "very-low",
                "--window-size", "800x600", "--port", "0", "--mp-connect", f"{cfg.rcon_host}:{cfg.server_port}"]
+    settings = Path(cfg.runtime_dir) / "vanilla" / "server-settings.json"
+    if settings.exists():
+        password = json.loads(settings.read_text(encoding="utf-8")).get("game_password")
+        if password:
+            command.extend(["--password", password])
     return command, root
 
 
