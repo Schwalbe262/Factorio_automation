@@ -2178,6 +2178,29 @@ return {ok=true,speed=prototypes.entity.lab.get_researching_speed(),
             self._save()
         return result
 
+    def ensure_research_trigger(self, obs: dict, technology_name: str) -> dict:
+        """Satisfy catalog trigger research through ordinary paid production."""
+        trigger = self.catalog.technologies[technology_name].get("research_trigger", {})
+        if trigger.get("type") == "craft-item":
+            item = trigger["item"]
+            result = self.ensure_product(obs, item["name"] if isinstance(item, dict) else item)
+            return result if not _ready(result) else _report("waiting", "waiting for natural production research trigger",
+                                                           technology=technology_name, trigger=trigger)
+        if trigger.get("type") in {"craft-fluid", "mine-entity"}:
+            if self.fluids is None:
+                return _report("blocked", "natural fluid research trigger needs fluid production", technology=technology_name)
+            if trigger["type"] == "craft-fluid":
+                fluid = trigger.get("fluid")
+                product = fluid["name"] if isinstance(fluid, dict) else fluid
+            else:
+                entities = trigger.get("entities") or [trigger.get("entity")]
+                product = next((name for name in entities if name == "crude-oil"), None)
+            if product:
+                result = self.fluids.ensure_source(obs, product)
+                return result if not _ready(result) else _report("waiting", "waiting for natural fluid production research trigger",
+                                                               technology=technology_name, trigger=trigger)
+        return _report("blocked", "natural research trigger needs a dedicated producer", technology=technology_name, trigger=trigger)
+
     def next_action(self, obs: dict) -> dict:
         self._sync(obs)
         if self.layout_policy == "arrays-v2" and obs.get("technologies", {}).get("electric-mining-drill"):
@@ -2241,26 +2264,7 @@ return {ok=true,speed=prototypes.entity.lab.get_researching_speed(),
         technology_name = next_research["technology"]
         technology = self.catalog.technologies[technology_name]
         if technology.get("research_trigger"):
-            trigger = technology["research_trigger"]
-            if trigger.get("type") == "craft-item":
-                item = trigger["item"]
-                result = self.ensure_product(obs, item["name"] if isinstance(item, dict) else item)
-                return result if not _ready(result) else _report("waiting", "waiting for natural production research trigger",
-                                                               technology=technology_name, trigger=trigger)
-            if trigger.get("type") in {"craft-fluid", "mine-entity"}:
-                if self.fluids is None:
-                    return _report("blocked", "natural fluid research trigger needs fluid production", technology=technology_name)
-                if trigger["type"] == "craft-fluid":
-                    fluid = trigger.get("fluid")
-                    product = fluid["name"] if isinstance(fluid, dict) else fluid
-                else:
-                    entities = trigger.get("entities") or [trigger.get("entity")]
-                    product = next((name for name in entities if name == "crude-oil"), None)
-                if product:
-                    result = self.fluids.ensure_source(obs, product)
-                    return result if not _ready(result) else _report("waiting", "waiting for natural fluid production research trigger",
-                                                                   technology=technology_name, trigger=trigger)
-            return _report("blocked", "natural research trigger needs a dedicated producer", technology=technology_name, trigger=trigger)
+            return self.ensure_research_trigger(obs, technology_name)
         lab = self.state["blocks"]["research:labs"]
         for ingredient in technology["ingredients"]:
             item = ingredient["name"]

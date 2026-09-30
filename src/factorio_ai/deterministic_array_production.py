@@ -326,6 +326,20 @@ return {ok=count<=256,first=first,count=count}
 
     def _reserve(self, obs, local, owner, sources):
         factory = self.factory
+        clearance_key = plan_digest({"owner": owner, "world": obs.get("world_id"), "surface": obs.get("surface"),
+            "catalog": getattr(factory.catalog, "fingerprint", None), "local": local,
+            "sources": sources, "reserved": factory._reserved()})
+        pending = factory.state.get("array_supply_clearance")
+        if pending:
+            if pending.get("key") == clearance_key and obs.get("tick", 0) >= pending.get("created_tick", 0):
+                district = translate_array(local, pending["anchor"], pending["rotation"])
+                if factory.builder.can_place(district["entities"]).get("ok"):
+                    clearing = self._clearance(pending["entities"])
+                    if clearing is not None:
+                        clearing["reason"] = "clear a verified natural obstacle on an underground supply route"
+                        return clearing
+            factory.state.pop("array_supply_clearance", None)
+            factory._save()
         reference = factory.state.get("production_layout", {}).get("anchor")
         if reference is None:
             reference = {axis: sum(p["position"][axis] for p in sources.values()) / max(1, len(sources))
@@ -387,9 +401,14 @@ return {ok=count<=256,first=first,count=count}
                         if pending:
                             # The source belt was already identity-verified by
                             # _sources. Never treat it as a removable obstacle.
-                            clearing = self._clearance([e for e in pending["segments"]
-                                                       if e["position"] != source["position"]])
+                            rows = [e for e in pending["segments"] if e["position"] != source["position"]]
+                            clearing = self._clearance(rows)
                             if clearing is not None:
+                                factory.state["array_supply_clearance"] = {"key": clearance_key,
+                                    "created_tick": obs.get("tick", 0),
+                                    "anchor": deepcopy(candidate["anchor"]), "rotation": candidate["rotation"],
+                                    "entities": deepcopy(rows)}
+                                factory._save()
                                 clearing["reason"] = "clear a verified natural obstacle on an underground supply route"
                                 return clearing
                         break
@@ -541,6 +560,8 @@ return {ok=count<=256,first=first,count=count}
                 plan.pop("flow_proof", None)
                 plan["flow_sample"] = {"tick": tick, "production": production}
                 factory._save()
+        if research and factory.catalog.technologies[research["technology"]].get("research_trigger"):
+            return factory.ensure_research_trigger(obs, research["technology"])
         if research and obs.get("research") != research["technology"]:
             return {"type": "research", "technology": research["technology"], "reason": "advance catalog research using array-fed labs"}
         if research is None:

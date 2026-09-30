@@ -10,13 +10,51 @@ from factorio_ai.deterministic_layout_policy import resolve_layout_policy, save_
 
 
 class ArrayExecutionTests(unittest.TestCase):
+    def test_completed_array_advances_item_oil_and_fluid_triggers_through_paid_producers(self):
+        from factorio_ai.deterministic_factory import DeterministicFactory
+        for trigger, expected in (({"type": "craft-item", "item": "widget"}, "assembler"),
+                                  ({"type": "mine-entity", "entities": ["crude-oil"]}, "pumpjack"),
+                                  ({"type": "craft-fluid", "fluid": "petroleum-gas"}, "pumpjack")):
+            with self.subTest(trigger=trigger):
+                plan = {"owner": "owner", "completed": True, "phase": "science", "world_id": "world",
+                        "surface": "nauvis", "catalog_fingerprint": "catalog", "entities": [],
+                        "source_links": {}, "power_plan": {"entities": []}, "lab_inputs": ["red"],
+                        "demand": {"external_rates": {}}}
+                factory = SimpleNamespace(state={"array_plans": {"owner": plan}},
+                    catalog=SimpleNamespace(fingerprint="catalog", technologies={"trigger": {"research_trigger": trigger}}),
+                    graph=SimpleNamespace(science_rate_per_minute=30,
+                        next_research=Mock(return_value={"technology": "trigger", "kind": "trigger"})),
+                    builder=SimpleNamespace(ensure_plan=Mock(return_value={"status": "succeeded"})), _save=Mock(),
+                    ensure_product=Mock(return_value={"type": "build", "name": "assembler"}),
+                    fluids=SimpleNamespace(ensure_source=Mock(return_value={"type": "build", "name": "pumpjack"})))
+                factory.ensure_research_trigger = lambda obs, name: DeterministicFactory.ensure_research_trigger(factory, obs, name)
+                arrays = ArrayProduction(factory)
+                arrays._geometry = Mock(return_value={"underground_distance": 5, "pole_wire": 7.5, "pole_supply": 2.5})
+                arrays._targets = Mock(return_value=({"red": 30}, ["red"], "science"))
+                arrays._sources = Mock(return_value=(None, {}))
+                obs = {"world_id": "world", "surface": "nauvis", "tick": 100,
+                       "enabled_recipes": {"underground-belt": True}}
+                with patch("factorio_ai.deterministic_array_production.plan_digest", return_value="owner"), \
+                     patch("factorio_ai.deterministic_array_production.phase_lab_count", return_value=1), \
+                     patch("factorio_ai.deterministic_array_production.foundation_stages", return_value=[]), \
+                     patch("factorio_ai.deterministic_array_production.owned_production", return_value=None):
+                    result = arrays.next_action(obs)
+                self.assertEqual(result, {"type": "build", "name": expected})
+                if expected == "assembler":
+                    factory.ensure_product.assert_called_once_with(obs, "widget")
+                    factory.fluids.ensure_source.assert_not_called()
+                else:
+                    factory.fluids.ensure_source.assert_called_once_with(obs,
+                        "crude-oil" if trigger["type"] == "mine-entity" else "petroleum-gas")
+                    factory.ensure_product.assert_not_called()
+
     def test_underground_supply_clearance_revalidates_footprint_and_preserves_owned_source(self):
         source = {"position": {"x": .5, "y": .5}, "facing": 4, "item": "ore"}
         outlet = {"name": "underground-belt", "position": {"x": 4.5, "y": .5},
                   "direction": 4, "belt_to_ground_type": "output"}
         source_belt = {"name": "transport-belt", "position": source["position"], "direction": 4}
         factory = SimpleNamespace(state={"production_layout": {"anchor": {"x": 10, "y": 0}}},
-            catalog=SimpleNamespace(entities={}), _reserved=lambda: [],
+            catalog=SimpleNamespace(entities={}), _reserved=lambda: [], _save=Mock(),
             _material_route=Mock(return_value={"ok": False, "reason": "no route within bounds"}))
         factory.builder = SimpleNamespace(_occupied_by_plan=lambda rows: set(),
             can_place=Mock(return_value={"ok": True}), clear_route_obstacle=Mock(return_value={"ok": False}))
@@ -26,13 +64,21 @@ class ArrayExecutionTests(unittest.TestCase):
         arrays = ArrayProduction(factory)
         arrays._clearance = Mock(return_value={"type": "mine", "name": "tree-01", "count": 1,
                                                "position": outlet["position"]})
-        with patch("factorio_ai.deterministic_array_production._survey", return_value={"ok": True, "clear": [1]}), \
+        with patch("factorio_ai.deterministic_array_production._survey", return_value={"ok": True, "clear": [1]}) as survey, \
              patch("factorio_ai.deterministic_array_production.reserved_aisles", return_value=set()), \
              patch("factorio_ai.deterministic_underground_routes.plan_underground_route", return_value={
                  "ok": False, "clearance_plan": {"segments": [source_belt, outlet]}}) as underground:
             result = arrays._reserve({"world_id": "world", "surface": "nauvis"}, local, "proof", {"ore": source})
+            resumed = arrays._reserve({"world_id": "world", "surface": "nauvis"}, local, "proof", {"ore": source})
+            self.assertEqual(resumed, result)
+            self.assertEqual(survey.call_count, 1)
+            self.assertEqual(underground.call_count, 1)
+            arrays._reserve({"world_id": "changed", "surface": "nauvis"}, local, "proof", {"ore": source})
+            self.assertEqual(survey.call_count, 2)
+            self.assertEqual(underground.call_count, 2)
         self.assertEqual(result["type"], "mine")
-        arrays._clearance.assert_called_once_with([outlet])
+        self.assertEqual(arrays._clearance.call_count, 3)
+        self.assertTrue(all(call.args == ([outlet],) for call in arrays._clearance.call_args_list))
         self.assertTrue(underground.call_args.kwargs["clear_natural"])
 
     def test_reserved_supply_link_retains_underground_geometry_for_later_inspection(self):
