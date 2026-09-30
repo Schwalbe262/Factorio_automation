@@ -10,7 +10,7 @@ from .deterministic_game import DeterministicGame, run_config, start_world
 from .deterministic_state import request_stop
 
 
-COMMANDS = {"run-no-mod-deterministic", "deterministic-status", "stop-deterministic", "watch-deterministic"}
+COMMANDS = {"run-no-mod-deterministic", "deterministic-status", "stop-deterministic", "watch-deterministic", "benchmark-layout"}
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -18,6 +18,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("command", choices=sorted(COMMANDS))
     parser.add_argument("--seed", type=int, default=20260908)
     parser.add_argument("--runtime", type=Path)
+    parser.add_argument("--catalog", type=Path, help="Exported live catalog for an offline layout benchmark")
+    parser.add_argument("--factory-state", type=Path, help="Production checkpoint for an offline layout benchmark")
     parser.add_argument("--server-port", type=int, default=34200)
     parser.add_argument("--rcon-port", type=int, default=27015)
     parser.add_argument("--backend", choices=["assisted", "character"], default="assisted")
@@ -30,6 +32,15 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--until", choices=["bootstrap", "power", "rocket"], default="rocket")
     parser.add_argument("--hide-window", action="store_true", help="With watch-deterministic, hide the automation window again")
     args = parser.parse_args(argv)
+    if args.command == "benchmark-layout":
+        if not args.catalog or not args.factory_state:
+            parser.error("benchmark-layout requires --catalog and --factory-state")
+        from .world_catalog import WorldCatalog
+        from .deterministic_layout_metrics import checkpoint_metrics
+        catalog = WorldCatalog.from_dict(json.loads(args.catalog.read_text(encoding="utf-8-sig")))
+        state = json.loads(args.factory_state.read_text(encoding="utf-8-sig"))
+        print(json.dumps(checkpoint_metrics(state, catalog), ensure_ascii=False))
+        return
     if not 1 <= args.server_port <= 65535 or not 1 <= args.rcon_port <= 65535:
         parser.error("ports must be between 1 and 65535")
     cfg = run_config(args.seed, runtime=args.runtime, server_port=args.server_port, rcon_port=args.rcon_port)

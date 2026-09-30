@@ -38,6 +38,8 @@
 - Iron/copper production uses mining drills and furnaces, not recurring manual ore collection.
 - Bootstrap hand supply is bounded by construction/startup needs and stops when automatic supply is verified.
 - Related sites stay compact; longer routes require validated material, throughput, power and expansion corridors.
+- New-world redesign uses arrays-v2: aggregate current-stage production demand, shared belt-fed machine arrays, short inter-process trunks, and complete placement/routing/power validation before construction. Retain legacy saves and their policy on resume. Transfer the reference repository's planning/verification principles into the existing no-gameplay-LLM, official-mod, normally paid execution path.
+- Compare layouts at identical demand: target 30% lower assembly transport construction material cost and 50% lower waiting observation payload. Throughput is a required gate, not a score traded against cost. Bound optimization to six improving rounds and 32 candidates per round.
 - Keep mining on resource patches and grow assembly/research in a separate, persistent production district. New production blocks must clear resources and mining drills by four tiles and leave two-tile logistics aisles; later mining expansions must also respect existing production buffers and keep new extraction support hardware out of those aisles. Belts and pipes may use the logistics aisles, and direct-feed mining/smelting cells retain resource-dependent placement. Preserve existing paid facilities until a validated migration replaces them.
 - Templates must include all required item/fluid/power connections. Fail closed on unsupported geometry.
 - Science starts at 30 packs/minute; calculate actual machine counts and supply needs from live recipes.
