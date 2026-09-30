@@ -395,17 +395,20 @@ for _,e in pairs(s.find_entities_filtered{force=f,type="mining-drill"}) do
   end
  end
  if target_name==resource and kinds==1 then
-  local receiver=nil
+  local receiver=nil;local direct_belt=false
   for _,candidate in pairs(s.find_entities_filtered{position=e.drop_position,radius=1.5,force=f}) do
    if candidate.type=="furnace" or candidate.type=="container" then
     local box=candidate.bounding_box;local p=e.drop_position
     if math.abs(p.x-candidate.position.x)<=candidate.prototype.tile_width/2
      and math.abs(p.y-candidate.position.y)<=candidate.prototype.tile_height/2 then receiver=candidate;break end
+   elseif candidate.type=="transport-belt" or candidate.type=="underground-belt" then
+    local b=candidate.bounding_box;local p=e.drop_position
+    if p.x>=b.left_top.x and p.x<b.right_bottom.x and p.y>=b.left_top.y and p.y<b.right_bottom.y then direct_belt=true end
    end
   end
   local burner=e.burner
   cells[#cells+1]={drill={name=e.name,position=pos(e.position),direction=e.direction},drop_position=pos(e.drop_position),
-   receiver=receiver and {name=receiver.name,position=pos(receiver.position)} or nil,
+   receiver=receiver and {name=receiver.name,position=pos(receiver.position)} or nil,direct_belt=direct_belt,
    fuel=e.get_fuel_inventory() and e.get_fuel_inventory().get_item_count("coal") or 0,
    burning=burner and burner.remaining_burning_fuel>0 or false,electric=burner==nil,
    operating=burner==nil and e.energy>0 and e.is_connected_to_electric_network() or false,
@@ -431,7 +434,7 @@ return {ok=true,cells=cells}
                                            cell["receiver"]["position"]["x"], cell["receiver"]["position"]["y"]))
             return {"ok": True, "complete": True, **complete[0]}
         for cell in cells:
-            if cell["drill"].get("direction") == 0:
+            if cell["drill"].get("direction") == 0 and not cell.get("direct_belt"):
                 p = cell["drill"]["position"]
                 drop = cell["drop_position"]
                 receiver = {"x": p["x"], "y": p["y"] - 2} if receiver_name == "stone-furnace" else {

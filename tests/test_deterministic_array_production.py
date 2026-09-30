@@ -4,11 +4,36 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from factorio_ai.deterministic_array_production import ArrayProduction, phase_lab_count, owned_production, construction_order
+from factorio_ai.deterministic_array_production import ArrayProduction, phase_lab_count, owned_production, construction_order, foundation_stages
 from factorio_ai.deterministic_layout_policy import resolve_layout_policy, save_layout_policy
 
 
 class ArrayExecutionTests(unittest.TestCase):
+    def test_foundation_first_iron_cell_has_paths_without_copper_construction(self):
+        rows, ports = [], []
+        def row(name, x, y, direction=0, **fields):
+            return {"name": name, "position": {"x": x, "y": y}, "direction": direction, **fields}
+        for x, item, ore in ((0, "iron-plate", "iron-ore"), (10, "copper-plate", "copper-ore")):
+            rows += [row("stone-furnace", x, 0, _array_recipe=item),
+                     row("transport-belt", x-2.5, .5, 4, _item=ore),
+                     row("inserter", x-1.5, .5, 12, _item=ore, _role="input"),
+                     row("inserter", x+.5, -1.5, 0, _item="coal", _role="input"),
+                     row("inserter", x+.5, 1.5, 0, _item=item, _role="output"),
+                     row("transport-belt", x+.5, 2.5, 4, _item=item),
+                     row("transport-belt", x+1.5, 2.5, 4, _item=item)]
+            ports += [{"item": ore, "direction": "input", "position": {"x": x-2.5, "y": .5}},
+                      {"item": item, "direction": "output", "position": {"x": x+1.5, "y": 2.5}}]
+        rows += [row("transport-belt", x+.5, -2.5, 4, _item="coal") for x in range(11)]
+        ports.append({"item": "coal", "direction": "input", "position": {"x": .5, "y": -2.5}})
+        plan = {"entities": rows, "ports": ports,
+                "demand": {"nodes": [{"item": item, "recipe": item} for item in ("iron-plate", "copper-plate")]}}
+        stages = foundation_stages(plan, SimpleNamespace(entities={}), 5)
+        self.assertEqual([s["item"] for s in stages], ["iron-plate", "copper-plate"])
+        first = stages[0]
+        self.assertEqual(first["sources"], ["coal", "iron-ore"])
+        self.assertFalse(any(e.get("_item") == "copper-ore" for e in first["plan"]["entities"]))
+        self.assertEqual(sum(e["name"] == "stone-furnace" for e in first["plan"]["entities"]), 1)
+        self.assertLess(len(first["plan"]["entities"]), len(rows))
     def test_failed_external_routes_do_not_publish_a_district(self):
         factory = SimpleNamespace(state={}, catalog=SimpleNamespace(entities={}),
                                   _reserved=lambda: [], _save=Mock(),

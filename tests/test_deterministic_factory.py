@@ -1073,6 +1073,19 @@ class FactoryTests(unittest.TestCase):
         self.assertTrue(exhausted["evidence"]["automatic_science_required"])
         self.assertEqual(self.bootstrap.ensure_item.call_count, 5)
 
+    def test_logistics_bridge_has_separate_finite_ten_pack_budget(self):
+        self.electric_bridge_fixture()
+        self.catalog.technologies["logistics"] = {**self.catalog.technologies["electric-mining-drill"],
+                                                  "name": "logistics", "unit_count": 10}
+        self.obs["research"] = "logistics"
+        for expected in (5, 10):
+            action = self.factory.bootstrap_electric_mining(self.obs, technology_name="logistics")
+            self.assertEqual((action["type"], action["count"]), ("craft", 5))
+            self.assertEqual(self.factory.state["startup_research"]["logistics"]["issued"], expected)
+        result = self.factory.bootstrap_electric_mining(self.obs, technology_name="logistics")
+        self.assertTrue(result["evidence"]["automatic_science_required"])
+        self.assertNotIn("electric-mining-drill", self.factory.state["startup_research"])
+
     def test_electric_bridge_credits_current_progress_held_lab_and_queued_packs(self):
         self.electric_bridge_fixture()
         self.obs["research_progress"] = .4

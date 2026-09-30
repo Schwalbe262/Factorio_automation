@@ -41,6 +41,15 @@ class DeterministicBootstrapTests(unittest.TestCase):
         result = self.driver.discover_cell("coal", "wooden-chest", preferred_receiver=burner["receiver"])
         self.assertEqual(result["receiver"], burner["receiver"])
 
+    def test_belt_fed_drill_is_not_repaired_as_a_missing_furnace(self):
+        direct = {"drill": entity("electric-mining-drill", direction=0), "direct_belt": True,
+                  "drop_position": {"x": 4, "y": 3}}
+        new_cell = {"ok": True, "complete": False, "drill": entity("burner-mining-drill", position={"x": 100, "y": 100})}
+        self.game.query.side_effect = [{"ok": True, "cells": [direct]}, new_cell]
+        result = self.driver.discover_cell("iron-ore", "stone-furnace")
+        self.assertEqual(result["drill"]["position"], {"x": 100, "y": 100})
+        self.assertEqual(self.game.query.call_count, 2)
+
     def test_electric_coal_drill_never_requests_a_burner_emergency_hand_seed(self):
         self.game.query.return_value = {"ok": True, "cells": [{"fuel": 0, "burning": False, "electric": True}]}
         result = self.driver.ensure_item(observation(), "coal", 8)

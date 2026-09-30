@@ -1999,7 +1999,7 @@ return {ok=true,speed=prototypes.entity.lab.get_researching_speed(),
         return _report("waiting", "initial Automation research consumes its bounded science batch",
                        research_progress=obs.get("research_progress", 0))
 
-    def bootstrap_electric_mining(self, obs: dict) -> dict | None:
+    def bootstrap_electric_mining(self, obs: dict, *, technology_name: str = "electric-mining-drill") -> dict | None:
         """A finite, streamed research bridge before financing the full mall.
 
         The ledger debits science crafts before they leave this method. It is
@@ -2008,7 +2008,10 @@ return {ok=true,speed=prototypes.entity.lab.get_researching_speed(),
         production, never another handcraft allowance.
         """
         self._sync(obs)
-        name, item = "electric-mining-drill", "automation-science-pack"
+        if technology_name not in {"electric-mining-drill", "logistics"}:
+            return _report("blocked", "unsupported finite startup research bridge", technology=technology_name)
+        name, item = technology_name, "automation-science-pack"
+        label = "electric mining" if name == "electric-mining-drill" else "logistics"
         if (obs.get("technologies") or {}).get(name):
             budget = self.state.get("startup_research", {}).get(name)
             if budget is not None and "completion_tick" not in budget:
@@ -2088,7 +2091,7 @@ return {ok=true,speed=prototypes.entity.lab.get_researching_speed(),
         if held and remaining_units > lab_stock and labs:
             return {"type": "insert", "name": "lab", "position": labs[0]["position"], "item": item,
                     "count": min(5, held, remaining_units - lab_stock), "inventory": "lab_input",
-                    "reason": "stream finite startup science into natural electric mining research"}
+                    "reason": f"stream finite startup science into natural {label} research"}
         needed = max(0, remaining_units - held - lab_stock - queued)
         if needed and unused:
             chunk = min(5, unused, needed)
@@ -2103,7 +2106,7 @@ return {ok=true,speed=prototypes.entity.lab.get_researching_speed(),
             if not _ready(action):
                 return action
         automatic_required = unused == 0 and needed > 0 and held + lab_stock + queued == 0
-        return _report("waiting", "finite startup science awaits observed electric mining research",
+        return _report("waiting", f"finite startup science awaits observed {label} research",
                        **evidence, automatic_science_required=automatic_required)
 
     def _ensure_startup_iron(self, obs: dict) -> dict:

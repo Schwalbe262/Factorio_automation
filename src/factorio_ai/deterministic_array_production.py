@@ -25,6 +25,80 @@ def construction_order(plan):
     return {**plan, "entities": sorted(plan["entities"], key=rank)}
 
 
+def foundation_stages(plan, catalog, underground_distance):
+    """Activate each iron smelter with complete dependencies before copper."""
+    from .deterministic_input_links import _geometry, _path
+    view = {**plan, "entities": [e for e in plan["entities"] if e["name"] not in {"inserter", "fast-inserter"}],
+            "underground_pairs": []}
+    mouths = [e for e in plan["entities"] if e["name"] == "underground-belt"]
+    for inlet in mouths:
+        if inlet.get("belt_to_ground_type") != "input":
+            continue
+        dx, dy = DIRECTIONS[inlet["direction"]]
+        x, y = inlet["position"]["x"], inlet["position"]["y"]
+        candidates = []
+        for outlet in mouths:
+            vx, vy = outlet["position"]["x"] - x, outlet["position"]["y"] - y
+            distance = vx * dx + vy * dy
+            if (outlet.get("belt_to_ground_type") == "output" and outlet["direction"] == inlet["direction"]
+                    and outlet.get("_item") == inlet.get("_item") and vx * dy == vy * dx
+                    and 0 < distance <= underground_distance):
+                candidates.append((distance, outlet))
+        if not candidates:
+            raise ValueError("foundation underground dependency has no bounded paired outlet")
+        outlet = min(candidates, key=lambda row: row[0])[1]
+        view["underground_pairs"].append({"input": inlet, "output": outlet, "max_distance": underground_distance})
+    belts, edges, _ = _geometry(view)
+    for arm in plan["entities"]:
+        if arm.get("_role") != "tap":
+            continue
+        dx, dy = DIRECTIONS[arm["direction"]]
+        pos = arm["position"]
+        pickup, drop = (pos["x"] + dx, pos["y"] + dy), (pos["x"] - dx, pos["y"] - dy)
+        if (pickup not in belts or drop not in belts
+                or any(belts[p].get("_item") != arm["_item"] for p in (pickup, drop))):
+            raise ValueError("foundation tap is not on its declared item path")
+        edges[pickup].append((drop, arm))
+    inputs = {p["item"]: p for p in plan["ports"] if p["direction"] == "input"}
+    outputs = {p["item"]: p for p in plan["ports"] if p["direction"] == "output"}
+    items = {n["recipe"]: n["item"] for n in plan["demand"]["nodes"]}
+    machines = [e for e in plan["entities"] if e["name"] in PRODUCERS]
+    machines.sort(key=lambda e: (items[e.get("recipe", e.get("_array_recipe"))] != "iron-plate",
+                                 e["position"]["y"], e["position"]["x"]))
+    poles = [e for e in plan["entities"] if e["name"] == "small-electric-pole"]
+    stages = []
+    for machine in machines:
+        left, top, right, bottom = _footprint(machine, catalog)
+        rows, sources = list(poles), set()
+        for arm in plan["entities"]:
+            if arm.get("_role") not in {"input", "output"}:
+                continue
+            dx, dy = DIRECTIONS[arm["direction"]]
+            pos = arm["position"]
+            pickup = pos["x"] + dx, pos["y"] + dy
+            drop = pos["x"] - dx, pos["y"] - dy
+            endpoint = drop if arm["_role"] == "input" else pickup
+            if not (left <= endpoint[0] < right and top <= endpoint[1] < bottom):
+                continue
+            item = arm["_item"]
+            if arm["_role"] == "input":
+                port = inputs[item]["position"]
+                path = _path(belts, edges, (port["x"], port["y"]), pickup)
+                sources.add(item)
+            else:
+                port = outputs[item]["position"]
+                path = _path(belts, edges, drop, (port["x"], port["y"]))
+            if path is None:
+                raise ValueError("foundation producer dependency path is disconnected: " + item)
+            rows.extend(path)
+            rows.append(arm)
+        rows.append(machine)
+        unique = {(e["name"], e["position"]["x"], e["position"]["y"]): e for e in rows}
+        stages.append({"sources": sorted(sources), "item": items[machine.get("recipe", machine.get("_array_recipe"))],
+                       "plan": construction_order({"ok": True, "entities": list(unique.values())})})
+    return stages
+
+
 def phase_lab_count(catalog, packs, geometry, rate):
     """Size once per pack phase, independent of the currently selected research."""
     durations = [float(row["unit_energy"]) for row in catalog.technologies.values()
@@ -281,6 +355,10 @@ return {ok=count<=256,first=first,count=count}
 
     def next_action(self, obs):
         factory = self.factory
+        if not obs.get("enabled_recipes", {}).get("underground-belt"):
+            bridge = factory.bootstrap_electric_mining(obs, technology_name="logistics")
+            if bridge is not None:
+                return bridge
         geometry = self._geometry(obs)
         targets, packs, phase = self._targets(obs)
         if not packs and phase == "science":
@@ -319,13 +397,22 @@ return {ok=count<=256,first=first,count=count}
             return action
         self._building = True
         try:
-            for link in plan["source_links"].values():
+            stages = foundation_stages(plan, factory.catalog, geometry["underground_distance"]) if plan.get("phase") == "construction-foundation" else []
+            for link in ([] if stages else plan["source_links"].values()):
                 result = factory.builder.ensure_plan(obs, link)
                 if result.get("status") != "succeeded" or result.get("type"):
                     return result
             result = factory.builder.ensure_plan(obs, plan["power_plan"])
             if result.get("status") != "succeeded" or result.get("type"):
                 return result
+            for stage in stages:
+                for item in stage["sources"]:
+                    result = factory.builder.ensure_plan(obs, plan["source_links"][item])
+                    if result.get("status") != "succeeded" or result.get("type"):
+                        return result
+                result = factory.builder.ensure_plan(obs, stage["plan"])
+                if result.get("status") != "succeeded" or result.get("type"):
+                    return result
             result = factory.builder.ensure_plan(obs, construction_order(plan))
             if result.get("status") != "succeeded" or result.get("type"):
                 return result
