@@ -33,6 +33,38 @@ class RawOreTests(unittest.TestCase):
         self.assertEqual(result["reason"], "direct mining demand requires another shared belt line")
         self.assertEqual(len(self.factory.state["blocks"]), 1)
 
+    def test_underground_side_feed_preserves_bus_and_uses_fresh_approach(self):
+        self.factory._material_route = Mock(return_value={"ok": False, "reason": "no route within bounds"})
+        self.factory._route_upstream_output = Mock(return_value={"ok": False})
+        source = {"item": "iron-ore", "position": {"x": 10.5, "y": 10.5}, "facing": 4}
+        destination = {"item": "iron-ore", "position": {"x": 14.5, "y": 10.5}, "facing": 4}
+        route = {"ok": True, "segments": [{"name": "transport-belt",
+            "position": {"x": 14.5, "y": 9.5}, "direction": 8}]}
+        with patch("factorio_ai.deterministic_underground_routes.plan_underground_route", autospec=True,
+                   side_effect=[{"ok": False}, route]) as underground:
+            result = self.factory._merge_output(self.obs, source, destination, "side-feed", belt_only=True)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(underground.call_args.args[2], {"x": 14.5, "y": 9.5})
+        self.assertEqual(underground.call_args.kwargs["end_direction"], 8)
+        entities = self.factory.state["links"]["side-feed"]["entities"]
+        self.assertEqual(entities[-2]["direction"], 8)
+        self.assertEqual(entities[-1]["position"], destination["position"])
+        self.assertEqual(entities[-1]["direction"], 4)
+
+    def test_underground_merge_never_uses_occupied_side_feed_tiles(self):
+        self.factory._material_route = Mock(return_value={"ok": False, "reason": "no route within bounds"})
+        self.factory._route_upstream_output = Mock(return_value={"ok": False})
+        source = {"item": "iron-ore", "position": {"x": 10.5, "y": 10.5}, "facing": 4}
+        destination = {"item": "iron-ore", "position": {"x": 14.5, "y": 10.5}, "facing": 4}
+        obs = {**self.obs, "entities": [{"name": "transport-belt", "position": {"x": 14.5, "y": y}}
+                                      for y in (9.5, 11.5)]}
+        with patch("factorio_ai.deterministic_underground_routes.plan_underground_route", autospec=True,
+                   return_value={"ok": False}) as underground:
+            result = self.factory._merge_output(obs, source, destination, "occupied-side", belt_only=True)
+        self.assertEqual(result["status"], "blocked")
+        underground.assert_called_once()
+        self.assertNotIn("occupied-side", self.factory.state["links"])
+
     def test_conversion_recovers_drill_first_and_keeps_output_port(self):
         direct = direct_mining_plan("iron-ore", 20, 20)
         old = deepcopy(direct)

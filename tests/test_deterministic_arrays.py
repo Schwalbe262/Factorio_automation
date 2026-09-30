@@ -110,6 +110,16 @@ class ArrayTests(unittest.TestCase):
         self.assertEqual(self.catalog.fingerprint, before)
         self.assertFalse(a["validation"]["flow_verified"])
 
+    def test_process_reordering_rejects_consumers_before_suppliers(self):
+        order = [node["item"] for node in self.demand["nodes"]]
+        with self.assertRaisesRegex(ValueError, "suppliers before consumers"):
+            compile_array(self.catalog, self.demand, GEOMETRY, node_order=list(reversed(order)))
+        with self.assertRaisesRegex(ValueError, "each production node once"):
+            compile_array(self.catalog, self.demand, GEOMETRY, node_order=order[:-1])
+        plan = compile_array(self.catalog, self.demand, GEOMETRY, node_order=order)
+        self.assertTrue(plan["ok"])
+        self.assertEqual(plan["geometry"]["node_order"], order)
+
     def test_rotation_preserves_static_connections_and_power(self):
         for direction in (0, 4, 8, 12):
             translated = translate_array(self.plan, {"x": -20.5, "y": 40.5}, direction)

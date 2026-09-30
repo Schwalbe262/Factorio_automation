@@ -246,12 +246,22 @@ def validate_array(plan: dict, catalog, geometry: dict) -> dict:
 
 
 def compile_array(catalog, demand: dict, geometry: dict, *, pitch=6, gap=3, raw_order=None,
-                  labs: list[str] | None = None, lab_count=1) -> dict:
+                  labs: list[str] | None = None, lab_count=1, node_order=None) -> dict:
     """Place all production and shared connections together before any reservation."""
     if (pitch < 6 or gap < 3 or type(lab_count) is not int
             or not (1 if labs else 0) <= lab_count <= 64):
         raise ValueError("invalid array geometry or lab count")
     nodes = demand["nodes"]
+    if node_order is not None:
+        by_item = {node["item"]: node for node in nodes}
+        if len(node_order) != len(nodes) or set(node_order) != set(by_item):
+            raise ValueError("process order must contain each production node once")
+        nodes = [by_item[item] for item in node_order]
+        available = set(demand["external_rates"])
+        for node in nodes:
+            if not set(node["inputs"]).issubset(available):
+                raise ValueError("process order must place suppliers before consumers")
+            available.add(node["item"])
     raw = list(raw_order or sorted(demand["external_rates"], key=lambda k: (-demand["rates"][k], k)))
     if set(raw) != set(demand["external_rates"]) or len(raw) != len(set(raw)):
         raise ValueError("raw spine order must contain each external item once")
@@ -366,7 +376,8 @@ def compile_array(catalog, demand: dict, geometry: dict, *, pitch=6, gap=3, raw_
     result = {"ok": True, "schema_version": 2, "template": "shared-spine-array",
               "entities": list(entities.values()), "ports": ports, "demand": deepcopy(demand),
               "lab_inputs": list(labs or []), "lab_count": lab_count if labs else 0,
-              "geometry": {"pitch": pitch, "gap": gap, "raw_order": raw},
+              "geometry": {"pitch": pitch, "gap": gap, "raw_order": raw,
+                           "node_order": [node["item"] for node in nodes]},
               "required_items": dict(sorted(Counter(e["name"] for e in entities.values()).items()))}
     result["validation"] = validate_array(result, catalog, geometry)
     result["ok"] = result["validation"]["ok"]
@@ -381,7 +392,7 @@ def optimize_array(catalog, observation, targets, geometry, *, boundary=RAW_ITEM
     order = sorted(demand["external_rates"], key=lambda k: (-demand["rates"][k], k))
     cache, history = {}, []
     def evaluate(cfg):
-        key = (cfg["pitch"], cfg["gap"], tuple(cfg["raw_order"]))
+        key = (cfg["pitch"], cfg["gap"], tuple(cfg["raw_order"]), tuple(cfg["node_order"]))
         if key not in cache:
             try:
                 plan = compile_array(catalog, demand, geometry, labs=labs, lab_count=lab_count, **cfg)
@@ -395,7 +406,8 @@ def optimize_array(catalog, observation, targets, geometry, *, boundary=RAW_ITEM
                 cache[key] = None
         return cache[key]
     # Start with feasible, expanded spacing, then squeeze only through the gate.
-    cfg = {"pitch": 8, "gap": 4, "raw_order": order}
+    cfg = {"pitch": 8, "gap": 4, "raw_order": order,
+           "node_order": [node["item"] for node in demand["nodes"]]}
     best = evaluate(cfg)
     if best is None:
         cfg = {**cfg, "pitch": 6, "gap": 3}
@@ -409,6 +421,10 @@ def optimize_array(catalog, observation, targets, geometry, *, boundary=RAW_ITEM
             alternative = list(cfg["raw_order"])
             alternative[i], alternative[i + 1] = alternative[i + 1], alternative[i]
             moves.append({**cfg, "raw_order": alternative})
+        for i in range(len(cfg["node_order"]) - 1):
+            alternative = list(cfg["node_order"])
+            alternative[i], alternative[i + 1] = alternative[i + 1], alternative[i]
+            moves.append({**cfg, "node_order": alternative})
         improved = []
         for alternative in moves[:32]:
             result = evaluate(alternative)

@@ -1247,6 +1247,24 @@ return {ok=true,candidates=candidates}
                     from .deterministic_underground_routes import plan_underground_route
                     route = plan_underground_route(self, source_port["position"], bus_port["position"],
                         self._reserved() + [forbidden_front], start_direction=source_port.get("facing"), end_direction=bus_port["facing"])
+                    if not route.get("ok"):
+                        # A live bus already occupies its rear approach. Finish
+                        # on a fresh side-feed tile instead of rotating that bus.
+                        for direction in ((bus_port["facing"] + 4) % 16, (bus_port["facing"] + 12) % 16):
+                            sx, sy = DIRECTIONS[direction]
+                            approach = {"x": bus_port["position"]["x"] - sx,
+                                        "y": bus_port["position"]["y"] - sy}
+                            if ((approach["x"], approach["y"]) in self.builder._occupied_by_plan(self._reserved())
+                                    or any(e.get("position") == approach for e in obs.get("entities", []))):
+                                continue
+                            candidate = plan_underground_route(self, source_port["position"], approach,
+                                self._reserved() + [forbidden_front], start_direction=source_port.get("facing"),
+                                end_direction=direction)
+                            if candidate.get("ok"):
+                                candidate["segments"].append({"name": "transport-belt",
+                                    "position": deepcopy(bus_port["position"]), "direction": bus_port["facing"]})
+                                route = candidate
+                                break
                 if not route.get("ok") and not belt_only:
                     route = self._material_route(source_port["position"], bus_port["position"], self._reserved() + [forbidden_front],
                                                  start_direction=source_port.get("facing"))
