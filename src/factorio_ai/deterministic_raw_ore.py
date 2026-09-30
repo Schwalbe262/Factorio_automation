@@ -119,7 +119,12 @@ end
 local network=drill.electric_network_id;local generator=false
 for _,e in pairs(s.find_entities_filtered{force=f,type="generator"}) do if network and e.electric_network_id==network then generator=true;break end end
 local mining_time=prototypes.entity[x.item].mineable_properties.mining_time
+local vectors={[0]={0,-1},[4]={1,0},[8]={0,1},[12]={-1,0}}
+local v=vectors[last.direction]
+local obstructed=not next(last.belt_neighbours.outputs) and not s.can_place_entity{
+ name="transport-belt",position={last.position.x+v[1],last.position.y+v[2]},force=f}
 return {ok=true,world_id=d.world_id,tick=game.tick,remaining=remaining,complete=true,
+ output_obstructed=obstructed,
  powered=network~=nil and drill.energy>0 and generator,drill_unit=drill.unit_number,
  nominal_rate_per_minute=math.min(drill.prototype.mining_speed*60/mining_time,belt_rate),bus_capacity_per_minute=belt_rate,
  speed_bonus=drill.speed_bonus,productivity_bonus=drill.productivity_bonus,output_items=output}
@@ -264,6 +269,23 @@ def ensure_raw_ore(factory, obs: dict, item: str, rate_per_minute: float | None 
         result = factory.ensure_power_connection(obs, key, maintained)
         if not _ready(result):
             return result
+        if (key == primary_key and plan.get("direct_mining") and proof.get("output_obstructed") is True
+                and plan["ports"][0]["facing"] == 4):
+            port = plan["ports"][0]
+            attached = any(p.get("position") == port["position"]
+                           for link in factory.state.get("links", {}).values()
+                           for p in (link.get("source_port", {}), link.get("consumer_port", {}),
+                                     *link.get("entities", [])))
+            if not attached:
+                occupied = factory.builder._occupied_by_plan(factory._reserved())
+                for direction, dy in ((0, -1), (8, 1)):
+                    position = {"x": port["position"]["x"], "y": port["position"]["y"] + dy}
+                    candidate = {"name": "transport-belt", "position": position, "direction": direction}
+                    if ((position["x"], position["y"]) not in occupied
+                            and factory.builder.can_place([candidate]).get("ok")):
+                        plan["direct_output_escape"] = direction
+                        factory._save()
+                        return _report("waiting", "reserved a free primary mining outlet escape", item=item, cell=key)
         if key != primary_key:
             result = factory._merge_output(obs, plan["ports"][0], primary["ports"][0], key + ":output",
                                            **({"belt_only": True} if plan.get("direct_mining") else {}))

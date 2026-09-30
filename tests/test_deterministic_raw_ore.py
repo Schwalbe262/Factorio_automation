@@ -227,6 +227,25 @@ class RawOreTests(unittest.TestCase):
         self.assertEqual(plan["direct_output_escape"], 0)
         self.assertEqual(plan["ports"][0]["facing"], 4)
 
+    def test_obstructed_primary_reserves_escape_before_any_consumer_is_published(self):
+        self.source()
+        self.proof["output_obstructed"] = True
+        result = self.again()
+        self.assertEqual(result["status"], "waiting")
+        self.assertEqual(result["reason"], "reserved a free primary mining outlet escape")
+        plan = self.factory.state["blocks"]["source:iron-ore"]
+        self.assertEqual(plan["direct_output_escape"], 0)
+        self.assertEqual(plan["ports"][0]["facing"], 4)
+
+    def test_obstructed_primary_preserves_published_link_even_without_port_metadata(self):
+        self.source()
+        self.proof["output_obstructed"] = True
+        plan = self.factory.state["blocks"]["source:iron-ore"]
+        self.factory.state["links"]["consumer"] = {"entities": [deepcopy(plan["entities"][-1])]}
+        result = self.again()
+        self.assertEqual(result["status"], "succeeded")
+        self.assertNotIn("direct_output_escape", plan)
+
     def test_saved_reservation_is_revalidated_on_reload_without_new_cell(self):
         self.source()
         self.factory._save()
