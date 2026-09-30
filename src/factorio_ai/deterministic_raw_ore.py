@@ -79,7 +79,8 @@ return {ok=true,world_id=d.world_id,tick=game.tick,remaining=remaining,complete=
     return measured
 
 
-def ensure_raw_ore(factory, obs: dict, item: str, rate_per_minute: float | None = None) -> dict:
+def ensure_raw_ore(factory, obs: dict, item: str, rate_per_minute: float | None = None,
+                   *, source_key: str | None = None) -> dict:
     from .deterministic_factory import _ready, _report
 
     requested = 1.0 if rate_per_minute is None else float(rate_per_minute)
@@ -87,7 +88,10 @@ def ensure_raw_ore(factory, obs: dict, item: str, rate_per_minute: float | None 
         return _report("blocked", "raw ore demand must be a finite nonnegative rate", item=item)
     if not obs.get("enabled_recipes", {}).get("electric-mining-drill"):
         return factory.request_recipe_unlock(obs, "electric-mining-drill")
-    primary_key = "source:" + item
+    primary_key = source_key or "source:" + item
+    base_key = "source:" + item
+    if not isinstance(primary_key, str) or not (primary_key == base_key or primary_key.startswith(base_key + ":")):
+        return _report("blocked", "dedicated ore source key is incompatible", item=item)
     primary = factory._raw_capacity_site(obs, item, primary_key)
     if not primary.get("ok"):
         return _report("blocked", primary.get("reason", "dedicated raw ore site unavailable"), item=item)

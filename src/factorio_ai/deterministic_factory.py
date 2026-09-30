@@ -38,6 +38,8 @@ class DeterministicFactory:
         self.priority_research: list[str] = []
         self.path = Path(game.cfg.runtime_dir) / "factory-production.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
+        self.layout_policy = getattr(game, "layout_policy", "legacy")
+        self.arrays: Any = None
         if self.state and self.state.get("schema_version") != 1:
             raise ValueError("unsupported factory production checkpoint")
         self._fingerprint = catalog.fingerprint
@@ -64,10 +66,15 @@ class DeterministicFactory:
             startup = deepcopy(self.state.get("startup_research", {})) if self.state.get("world_id") == world else {}
             self.state = {"schema_version": 1, "world_id": world, "catalog_fingerprint": self._fingerprint,
                           "blocks": {}, "links": {}, "power_links": {}, "flow_samples": {}, "startup_research": startup}
+            if self.layout_policy == "arrays-v2":
+                self.state["layout_policy"] = self.layout_policy
             self._save()
         tick = int(observation.get("tick") or 0)
         previous_tick = self.state.get("last_tick", 0)
         if tick < self.state.get("last_tick", 0):
+            for array in self.state.get("array_plans", {}).values():
+                array.pop("flow_proof", None)
+                array.pop("flow_sample", None)
             self.state["flow_samples"] = {}
             self.state.pop("bootstrap_science", None)
             self.state["automated_burners"] = []
@@ -872,6 +879,14 @@ return {ok=true,obstacles=obstacles}
     def ensure_product(self, obs: dict, item: str, _stack: tuple[str, ...] = (), *,
                        rate_per_minute: float | None = None) -> dict:
         self._sync(obs)
+        if self.layout_policy == "arrays-v2" and obs.get("technologies", {}).get("electric-mining-drill"):
+            recipe = self.catalog.recipe_for_product(item)
+            if (recipe and item not in {"iron-ore", "copper-ore", "coal", "stone", "wood"}
+                    and not any(row.get("type", "item") == "fluid" for row in recipe["ingredients"] + recipe["products"])):
+                from .deterministic_array_production import ArrayProduction
+                if self.arrays is None:
+                    self.arrays = ArrayProduction(self)
+                return self.arrays.ensure_product(obs, item, rate_per_minute)
         if item in _stack:
             return _report("blocked", "production dependency cycle", item=item)
         context = (obs.get("world_id"), obs.get("tick"), self._fingerprint,
@@ -2091,6 +2106,11 @@ return {ok=true,speed=prototypes.entity.lab.get_researching_speed(),
 
     def next_action(self, obs: dict) -> dict:
         self._sync(obs)
+        if self.layout_policy == "arrays-v2" and obs.get("technologies", {}).get("electric-mining-drill"):
+            from .deterministic_array_production import ArrayProduction
+            if self.arrays is None:
+                self.arrays = ArrayProduction(self)
+            return self.arrays.next_action(obs)
         from .deterministic_construction_buffer import ensure_construction_buffer
         buffer_action = ensure_construction_buffer(self, obs)
         if buffer_action is not None:
