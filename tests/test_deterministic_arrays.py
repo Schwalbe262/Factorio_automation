@@ -130,6 +130,37 @@ class ArrayTests(unittest.TestCase):
         self.assertTrue(p["validation"]["ok"])
         self.assertEqual(sum(e["name"] == "lab" for e in p["entities"]), 3)
 
+    def test_horizontal_lab_rack_has_separate_powered_inputs_in_all_rotations(self):
+        demand = production_demand(self.catalog, self.obs, {"widget": 30, "circuit": 30, "gear": 30})
+        for packs in (["widget"], ["widget", "circuit"], ["widget", "circuit", "gear"]):
+            plan = compile_array(self.catalog, demand, GEOMETRY, labs=packs, lab_count=3, lab_layout="rack")
+            self.assertTrue(plan["ok"], plan["validation"])
+            labs = [e for e in plan["entities"] if e["name"] == "lab"]
+            self.assertEqual(len(labs), 3)
+            self.assertEqual(len({e["position"]["y"] for e in labs}), 1)
+            for lab in labs:
+                x, y = lab["position"]["x"], lab["position"]["y"]
+                arm_positions = {(x, y - 2), (x, y + 2), (x - 2, y)}
+                supplied = {e.get("_item") for e in plan["entities"] if e.get("_role") == "input"
+                            and (e["position"]["x"], e["position"]["y"]) in arm_positions}
+                self.assertEqual(supplied, set(packs))
+            for direction in (0, 4, 8, 12):
+                moved = translate_array(plan, {"x": 10.5, "y": -10.5}, direction)
+                self.assertTrue(validate_array(moved, self.catalog, GEOMETRY)["ok"])
+
+    def test_lab_rack_reduces_transport_with_identical_production_and_lab_capacity(self):
+        from factorio_ai.deterministic_layout_metrics import layout_metrics
+        column = compile_array(self.catalog, self.demand, GEOMETRY, labs=["widget"], lab_count=15)
+        rack = compile_array(self.catalog, self.demand, GEOMETRY, labs=["widget"], lab_count=15, lab_layout="rack")
+        self.assertTrue(rack["ok"])
+        self.assertEqual(column["demand"], rack["demand"])
+        self.assertEqual(column["lab_count"], rack["lab_count"])
+        cost = lambda p: layout_metrics(p["entities"], self.catalog)["transport"]["raw_item_units"]
+        self.assertLess(cost(rack), cost(column))
+        too_fast = production_demand(self.catalog, self.obs, {"widget": 45})
+        with self.assertRaisesRegex(ValueError, "tap capacity"):
+            compile_array(self.catalog, too_fast, GEOMETRY, labs=["widget"], lab_count=15, lab_layout="rack")
+
     def test_two_tile_furnace_inputs_do_not_overlap_machine(self):
         data = self.catalog.to_dict()
         data["recipes"]["iron-plate"] = {"enabled": True, "categories": ["smelting"], "energy": 3.2,

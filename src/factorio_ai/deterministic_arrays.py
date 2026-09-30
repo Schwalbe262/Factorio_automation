@@ -246,11 +246,13 @@ def validate_array(plan: dict, catalog, geometry: dict) -> dict:
 
 
 def compile_array(catalog, demand: dict, geometry: dict, *, pitch=6, gap=3, raw_order=None,
-                  labs: list[str] | None = None, lab_count=1, node_order=None) -> dict:
+                  labs: list[str] | None = None, lab_count=1, node_order=None, lab_layout="column") -> dict:
     """Place all production and shared connections together before any reservation."""
     if (pitch < 6 or gap < 3 or type(lab_count) is not int
             or not (1 if labs else 0) <= lab_count <= 64):
         raise ValueError("invalid array geometry or lab count")
+    if lab_layout not in {"column", "rack"}:
+        raise ValueError("unsupported lab layout")
     nodes = demand["nodes"]
     if node_order is not None:
         by_item = {node["item"]: node for node in nodes}
@@ -309,15 +311,23 @@ def compile_array(catalog, demand: dict, geometry: dict, *, pitch=6, gap=3, raw_
     if labs:
         if len(labs) > 3 or not set(labs).issubset(items):
             raise ValueError("array labs require one to three planned science inputs")
-        for i in range(lab_count):
-            rows.append((current + pitch * i, {"item": None, "machine": "lab", "arm": "inserter",
-                                              "inputs": dict.fromkeys(labs, 1)}))
+        if lab_layout == "column":
+            for i in range(lab_count):
+                rows.append((current + pitch * i, {"item": None, "machine": "lab", "arm": "inserter",
+                                                  "inputs": dict.fromkeys(labs, 1)}))
+        else:
+            if any(demand["targets"].get(item, demand["rates"][item]) > ARM_BUDGETS["inserter"] + 1e-9 for item in labs):
+                raise ValueError("rack science header exceeds its ordinary tap capacity")
+            current += 6  # Keep the three-pack crossing above the last producer.
     for y, node in rows:
         slots = (-1, 0) if node["machine"] in FURNACES else (-1, 0, 1)
         for slot, item in zip(slots, sorted(node["inputs"])):
             spans[item].append(y + slot)
         if node["item"]:
             spans[node["item"]].append(y + (2 if node["machine"] in FURNACES else 3))
+    if labs and lab_layout == "rack":
+        for item, offset in zip(labs, (-3, 3, -8)):
+            spans[item].append(current + offset)
     lane_spans = {item: (min(spans[item]) - (2 if item in raw else 0),
                         max(spans[item]) + (0 if item in raw else 2)) for item in items}
     for y, node in rows:
@@ -344,6 +354,42 @@ def compile_array(catalog, demand: dict, geometry: dict, *, pitch=6, gap=3, raw_
             if pole_x in columns.values():
                 pole_x += 1
             add(_entity("small-electric-pole", pole_x, y + (3 if furnace else 2)))
+    if labs and lab_layout == "rack":
+        # Shared horizontal science headers feed separate sides of every lab.
+        # The third header uses ordinary taps and bounded underground crossings
+        # beneath the north header, so no mixed-item belt or hand supply is needed.
+        for item, offset in zip(labs, (-3, 3, -8)):
+            col, y = columns[item], current + offset
+            add(_entity("inserter", col + 1, y, 12, _item=item, _role="tap"))
+            add(_entity("small-electric-pole", col + 1, y - 2))
+            horizontal(col + 2, (lab_count - 1) * pitch + 1, y, item)
+        add(_entity("small-electric-pole", 2, current - 10))
+        add(_entity("small-electric-pole", 2, current - 6))
+        for pole_x in range(-2, min(columns.values()), -6):
+            if pole_x in columns.values():
+                pole_x += 1
+            add(_entity("small-electric-pole", pole_x, current - 6))
+            if len(labs) >= 2:
+                add(_entity("small-electric-pole", pole_x, current + 1))
+        for i in range(lab_count):
+            x, y = i * pitch, current
+            add(_entity("lab", x, y))
+            add(_entity("inserter", x, y - 2, 0, _item=labs[0], _role="input"))
+            add(_entity("small-electric-pole", x + 2, y - 2))
+            if len(labs) >= 2:
+                add(_entity("inserter", x, y + 2, 8, _item=labs[1], _role="input"))
+                add(_entity("small-electric-pole", x + 2, y + 2))
+            if len(labs) == 3:
+                item = labs[2]
+                add(_entity("inserter", x - 3, y - 7, 0, _item=item, _role="tap"))
+                belt(x - 3, y - 6, 8, item)
+                for offset, role in ((-5, "input"), (-1, "output")):
+                    add(_entity("underground-belt", x - 3, y + offset, 8,
+                                _item=item, belt_to_ground_type=role))
+                belt(x - 3, y, 8, item)
+                add(_entity("inserter", x - 2, y, 12, _item=item, _role="input"))
+                add(_entity("small-electric-pole", x - 2, y - 2))
+                add(_entity("small-electric-pole", x - 2, y - 6))
     for item, col in columns.items():
         if not spans[item]:
             continue
@@ -377,7 +423,7 @@ def compile_array(catalog, demand: dict, geometry: dict, *, pitch=6, gap=3, raw_
               "entities": list(entities.values()), "ports": ports, "demand": deepcopy(demand),
               "lab_inputs": list(labs or []), "lab_count": lab_count if labs else 0,
               "geometry": {"pitch": pitch, "gap": gap, "raw_order": raw,
-                           "node_order": [node["item"] for node in nodes]},
+                           "node_order": [node["item"] for node in nodes], "lab_layout": lab_layout},
               "required_items": dict(sorted(Counter(e["name"] for e in entities.values()).items()))}
     result["validation"] = validate_array(result, catalog, geometry)
     result["ok"] = result["validation"]["ok"]
@@ -392,7 +438,7 @@ def optimize_array(catalog, observation, targets, geometry, *, boundary=RAW_ITEM
     order = sorted(demand["external_rates"], key=lambda k: (-demand["rates"][k], k))
     cache, history = {}, []
     def evaluate(cfg):
-        key = (cfg["pitch"], cfg["gap"], tuple(cfg["raw_order"]), tuple(cfg["node_order"]))
+        key = (cfg["pitch"], cfg["gap"], tuple(cfg["raw_order"]), tuple(cfg["node_order"]), cfg["lab_layout"])
         if key not in cache:
             try:
                 plan = compile_array(catalog, demand, geometry, labs=labs, lab_count=lab_count, **cfg)
@@ -407,7 +453,7 @@ def optimize_array(catalog, observation, targets, geometry, *, boundary=RAW_ITEM
         return cache[key]
     # Start with feasible, expanded spacing, then squeeze only through the gate.
     cfg = {"pitch": 8, "gap": 4, "raw_order": order,
-           "node_order": [node["item"] for node in demand["nodes"]]}
+           "node_order": [node["item"] for node in demand["nodes"]], "lab_layout": "column"}
     best = evaluate(cfg)
     if best is None:
         cfg = {**cfg, "pitch": 6, "gap": 3}
@@ -417,6 +463,8 @@ def optimize_array(catalog, observation, targets, geometry, *, boundary=RAW_ITEM
     history.append({"round": 0, "score": best[0][:2]})
     for round_index in range(1, rounds + 1):
         moves = [{**cfg, "pitch": cfg["pitch"] - 1}, {**cfg, "gap": cfg["gap"] - 1}]
+        if labs:
+            moves.append({**cfg, "lab_layout": "rack" if cfg["lab_layout"] == "column" else "column"})
         for i in range(len(order) - 1):
             alternative = list(cfg["raw_order"])
             alternative[i], alternative[i + 1] = alternative[i + 1], alternative[i]

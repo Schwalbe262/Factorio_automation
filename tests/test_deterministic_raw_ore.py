@@ -33,6 +33,44 @@ class RawOreTests(unittest.TestCase):
         self.assertEqual(result["reason"], "direct mining demand requires another shared belt line")
         self.assertEqual(len(self.factory.state["blocks"]), 1)
 
+    def test_belt_only_upstream_search_does_not_try_powered_pickup_bridges(self):
+        source = {"item": "iron-ore", "position": {"x": 10.5, "y": 10.5}, "facing": 4}
+        bus = {"item": "iron-ore", "position": {"x": 14.5, "y": 10.5}, "facing": 4}
+        tail = {"port": bus, "entities": [{"name": "transport-belt", "position": bus["position"], "direction": 4}],
+                "category": "blocks", "key": "owned-bus"}
+        self.factory._upstream_output_tails = Mock(return_value=[tail])
+        self.factory._material_route = Mock(return_value={"ok": False})
+        self.factory._source_pickup_bridge_route = Mock()
+        result = self.factory._route_upstream_output(self.obs, source, bus, belt_only=True)
+        self.assertFalse(result["ok"])
+        self.factory._material_route.assert_called_once()
+        self.assertFalse(self.factory._material_route.call_args.kwargs["allow_bridge"])
+        self.factory._source_pickup_bridge_route.assert_not_called()
+        tail["entities"].append({"name": "inserter", "position": {"x": 13.5, "y": 10.5}})
+        self.factory._material_route.reset_mock()
+        self.assertFalse(self.factory._route_upstream_output(self.obs, source, bus, belt_only=True)["ok"])
+        self.factory._material_route.assert_not_called()
+
+    def test_owned_underground_tail_restores_bounded_pair_metadata_without_changing_plan(self):
+        bus = {"kind": "item", "direction": "output", "item": "iron-ore",
+               "position": {"x": 107.5, "y": 100.5}, "facing": 4}
+        entities = [{"name": "transport-belt", "position": {"x": x, "y": 100.5}, "direction": 4}
+                    for x in (100.5, 106.5, 107.5)]
+        entities += [{"name": "underground-belt", "position": {"x": x, "y": 100.5},
+                      "direction": 4, "belt_to_ground_type": role}
+                     for x, role in ((101.5, "input"), (105.5, "output"))]
+        plan = {"ok": True, "ports": [bus], "entities": entities}
+        self.factory.state["blocks"]["tunnel-bus"] = plan
+        self.game.query.return_value = {"distance": 5}
+        obs = {**self.obs, "entities": [{**e, "unit_number": i + 1} for i, e in enumerate(entities)]}
+        tails = self.factory._upstream_output_tails(obs, bus)
+        before_tunnel = next(t for t in tails if t["port"]["position"] == {"x": 100.5, "y": 100.5})
+        after_tunnel = next(t for t in tails if t["port"]["position"] == {"x": 106.5, "y": 100.5})
+        self.assertEqual(len(before_tunnel["underground_pairs"]), 1)
+        self.assertEqual(after_tunnel["underground_pairs"], [])
+        self.assertNotIn("underground_pairs", plan)
+        self.assertTrue(all(t["port"]["position"]["x"] not in (101.5, 105.5) for t in tails))
+
     def test_underground_side_feed_preserves_bus_and_uses_fresh_approach(self):
         self.factory._material_route = Mock(return_value={"ok": False, "reason": "no route within bounds"})
         self.factory._route_upstream_output = Mock(return_value={"ok": False})

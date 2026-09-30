@@ -1054,6 +1054,7 @@ return {ok=true,obstacles=obstacles}
                           for field in ("source_port", "consumer_port"))
                    for e in plan.get("entities", [])]
         foreign_footprint = self.builder._occupied_by_plan(foreign)
+        underground_limit = None
         for category in ("blocks", "links"):
             for key, plan in self.state[category].items():
                 if category == "blocks":
@@ -1063,13 +1064,38 @@ return {ok=true,obstacles=obstacles}
                       or (plan.get("source_port") or {}).get("item") != bus_port["item"]):
                     continue
                 try:
-                    belts, edges, _ = _geometry(plan)
+                    view = plan
+                    mouths = [e for e in plan.get("entities", []) if e["name"] == "underground-belt"]
+                    if mouths and not plan.get("underground_pairs"):
+                        if underground_limit is None:
+                            underground_limit = self.game.query('return {distance=prototypes.entity["underground-belt"].max_underground_distance}').get("distance")
+                        if type(underground_limit) is not int or underground_limit < 1:
+                            continue
+                        records = []
+                        for inlet in mouths:
+                            if inlet.get("belt_to_ground_type") != "input":
+                                continue
+                            dx, dy = DIRECTIONS[inlet["direction"]]
+                            x, y = inlet["position"]["x"], inlet["position"]["y"]
+                            outlets = []
+                            for outlet in mouths:
+                                vx, vy = outlet["position"]["x"] - x, outlet["position"]["y"] - y
+                                distance = vx * dx + vy * dy
+                                if (outlet.get("belt_to_ground_type") == "output" and outlet["direction"] == inlet["direction"]
+                                        and vx * dy == vy * dx and 0 < distance <= underground_limit):
+                                    outlets.append((distance, outlet))
+                            if not outlets:
+                                raise ValueError("owned upstream tunnel has no bounded outlet")
+                            records.append({"input": inlet, "output": min(outlets, key=lambda row: row[0])[1],
+                                            "max_distance": underground_limit})
+                        view = {**plan, "underground_pairs": records}
+                    belts, edges, _ = _geometry(view)
                 except ValueError:
                     continue
                 if end not in belts or belts[end].get("direction", 0) != bus_port["facing"]:
                     continue
                 for start, entity in belts.items():
-                    if start == end:
+                    if start == end or entity["name"] != "transport-belt":
                         continue
                     tail = _path(belts, edges, start, end)
                     if tail is None or len(tail) > 256:
@@ -1100,6 +1126,9 @@ return {ok=true,obstacles=obstacles}
                         continue
                     seen_tails.add(signature)
                     candidates.append({"entities": deepcopy(tail), "category": category, "key": key,
+                        "underground_pairs": [deepcopy(pair) for pair in view.get("underground_pairs", [])
+                            if all((pair[role]["position"]["x"], pair[role]["position"]["y"]) in {_identity(e)[1] for e in tail}
+                                   for role in ("input", "output"))],
                         "port": {**bus_port, "position": deepcopy(entity["position"]), "facing": entity["direction"]}})
         return candidates
 
@@ -1177,8 +1206,11 @@ return {ok=true,candidates=candidates}
                 break
         return best or {"ok": False, "reason": "no clear owned-output pickup crossing"}
 
-    def _route_upstream_output(self, obs: dict, source_port: dict, bus_port: dict) -> dict:
+    def _route_upstream_output(self, obs: dict, source_port: dict, bus_port: dict, *, belt_only: bool = False) -> dict:
         tails = self._upstream_output_tails(obs, bus_port)
+        if belt_only:
+            tails = [tail for tail in tails if all(e["name"] in {"transport-belt", "underground-belt"}
+                                                 for e in tail["entities"])]
         def identity(entity: dict) -> tuple:
             return entity["name"], entity["position"]["x"], entity["position"]["y"], entity.get("direction")
         owned = {identity(e) for tail in tails for e in tail["entities"]}
@@ -1197,7 +1229,7 @@ return {ok=true,candidates=candidates}
         # Bound recovery work even when a large factory has many old outputs.
         tails = tails[:16]
         reserved = self._reserved()
-        for mode in ("belts", "source-pickup", "bridge"):
+        for mode in (("belts", "underground") if belt_only else ("belts", "source-pickup", "bridge")):
             candidates = []
             for tail in tails:
                 destination = tail["port"]
@@ -1211,7 +1243,12 @@ return {ok=true,candidates=candidates}
                 dx, dy = DIRECTIONS[destination["facing"]]
                 front = {"name": "port-clearance", "position": {"x": destination["position"]["x"] + dx,
                                                                 "y": destination["position"]["y"] + dy}}
-                route = (self._source_pickup_bridge_route(obs, source_port, destination, reserved + [front])
+                if mode == "underground":
+                    from .deterministic_underground_routes import plan_underground_route
+                    route = plan_underground_route(self, source_port["position"], destination["position"],
+                        reserved + [front], start_direction=source_port.get("facing"), end_direction=destination["facing"])
+                else:
+                    route = (self._source_pickup_bridge_route(obs, source_port, destination, reserved + [front])
                     if mode == "source-pickup" else self._material_route(source_port["position"], destination["position"],
                         reserved + [front], allow_bridge=mode == "bridge", start_direction=source_port.get("facing"),
                         **({"owned_drop": owned_drop} if owned_drop is not None else {})))
@@ -1222,7 +1259,8 @@ return {ok=true,candidates=candidates}
                 segments = route["segments"][:-1] + tail["entities"]
                 entities = [{"name": "transport-belt", **segment} for segment in segments]
                 candidates.append({**route, "segments": entities, "upstream_tail": {
-                    "category": tail["category"], "key": tail["key"], "entry_port": destination}})
+                    "category": tail["category"], "key": tail["key"], "entry_port": destination},
+                    "underground_pairs": deepcopy(route.get("underground_pairs", []) + tail.get("underground_pairs", []))})
             # Nearby entry points can require long detours around an existing
             # bus. Compare complete construction costs within the bounded set.
             candidates.sort(key=lambda route: (new_count(route["segments"]), len(route["segments"])))
@@ -1242,7 +1280,8 @@ return {ok=true,candidates=candidates}
             route = self._material_route(source_port["position"], bus_port["position"], self._reserved() + [forbidden_front],
                                          allow_bridge=False, start_direction=source_port.get("facing"))
             if not route.get("ok") and route.get("reason") in {"no route within bounds", "route search budget exhausted"}:
-                route = self._route_upstream_output(obs, source_port, bus_port)
+                route = self._route_upstream_output(obs, source_port, bus_port,
+                                                     **({"belt_only": True} if belt_only else {}))
                 if not route.get("ok") and belt_only:
                     from .deterministic_underground_routes import plan_underground_route
                     route = plan_underground_route(self, source_port["position"], bus_port["position"],
@@ -1291,7 +1330,8 @@ return {ok=true,candidates=candidates}
                 return _report("blocked", "direct mining bus requires a belt-only merge", link=key)
             segments[-1]["direction"] = bus_port["facing"]
             self.state["links"][key] = _plan([{"name": "transport-belt", **segment} for segment in segments],
-                                              source_port=source_port, consumer_port=bus_port)
+                                              source_port=source_port, consumer_port=bus_port,
+                                              underground_pairs=deepcopy(route.get("underground_pairs", [])))
             if route.get("upstream_tail"):
                 self.state["links"][key]["upstream_tail"] = route["upstream_tail"]
             self._save()
