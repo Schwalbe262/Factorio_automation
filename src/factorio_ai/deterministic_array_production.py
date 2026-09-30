@@ -292,9 +292,9 @@ for _,x in ipairs(rows) do
     if e.force.name~="neutral" or not e.minable or not (e.type=="tree" or rock)
      then return {ok=false,reason="district contains a protected obstacle"} end
     found=true
-    if not e.unit_number then return {ok=false,reason="natural obstacle has no identity"} end
-    if not seen[e.unit_number] then
-     seen[e.unit_number]=true;count=count+1
+    local identity=e.unit_number or (e.name..":"..e.position.x..":"..e.position.y)
+    if not seen[identity] then
+     seen[identity]=true;count=count+1
      first=first or {name=e.name,position=pos(e.position)}
     end
    end
