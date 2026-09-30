@@ -10,6 +10,35 @@ from factorio_ai.deterministic_layout_policy import resolve_layout_policy, save_
 
 
 class ArrayExecutionTests(unittest.TestCase):
+    def test_reserved_supply_link_retains_underground_geometry_for_later_inspection(self):
+        from factorio_ai.deterministic_builder import FactoryBuilder
+        from factorio_ai.deterministic_input_links import _geometry
+        def belt(name, x, **extra):
+            return {"name": name, "position": {"x": x, "y": .5}, "direction": 4, **extra}
+        inlet = belt("underground-belt", .5, belt_to_ground_type="input")
+        outlet = belt("underground-belt", 4.5, belt_to_ground_type="output")
+        route = {"ok": True, "segments": [inlet, outlet] + [belt("transport-belt", x+.5) for x in range(5, 11)],
+                 "underground_pairs": [{"input": inlet, "output": outlet, "max_distance": 5}]}
+        factory = SimpleNamespace(state={"blocks": {}, "links": {}, "power_links": {},
+                                         "production_layout": {"anchor": {"x": 10, "y": 0}}},
+            catalog=SimpleNamespace(entities={}, fingerprint="catalog"), _reserved=lambda: [], _save=Mock(),
+            _material_route=Mock(return_value=route), _power_grid=Mock(return_value={"ok": True, "live": [{"x": 8.5, "y": 3.5}]}),
+            _power_route=Mock(return_value={"ok": True, "path": [{"x": 10.5, "y": 3.5}]}))
+        factory.builder = SimpleNamespace(_occupied_by_plan=lambda rows: FactoryBuilder._occupied_by_plan(None, rows),
+                                          can_place=lambda rows: {"ok": True})
+        local = {"entities": [{"name": "small-electric-pole", "position": {"x": .5, "y": 3.5}}],
+                 "ports": [{"kind": "item", "item": "ore", "direction": "input", "facing": 4,
+                            "position": {"x": .5, "y": .5}}]}
+        source = {"kind": "item", "item": "ore", "direction": "output", "facing": 4,
+                  "position": {"x": .5, "y": .5}}
+        with patch("factorio_ai.deterministic_array_production._survey", return_value={"ok": True, "clear": [1]}), \
+             patch("factorio_ai.deterministic_array_production.reserved_aisles", return_value=set()):
+            result = ArrayProduction(factory)._reserve({"world_id": "world", "surface": "nauvis"}, local, "proof", {"ore": source})
+        self.assertEqual(result["status"], "waiting")
+        saved = factory.state["links"]["arrays:proof:ore"]
+        _, edges, _ = _geometry(saved)
+        self.assertTrue(any(point == (4.5, .5) for point, _ in edges[(.5, .5)]))
+
     def test_cached_compilation_still_rechecks_sources_and_placement_before_actions(self):
         factory = SimpleNamespace(state={}, catalog=SimpleNamespace(fingerprint="catalog", technologies={}),
                                   graph=SimpleNamespace(science_rate_per_minute=30, next_research=Mock(return_value=None)))

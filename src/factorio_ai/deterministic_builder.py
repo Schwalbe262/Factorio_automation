@@ -489,7 +489,7 @@ local function natural(p)
  local area={{p.x+box.left_top.x,p.y+box.left_top.y},{p.x+box.right_bottom.x,p.y+box.right_bottom.y}}
  local out={}
  for _,e in pairs(s.find_entities_filtered{area=area}) do
-  if e.type~="resource" then
+  if e.type~="resource" and not e.prototype.collision_mask.colliding_with_tiles_only then
    local rock=e.type=="simple-entity" and (e.name=="big-rock" or e.name=="huge-rock" or e.name=="big-sand-rock")
    if e.force.name~="neutral" or not e.minable or not (e.type=="tree" or rock) then return nil end
    out[#out+1]={name=e.name,type=e.type,position=pos(e.position),force=e.force.name,minable=true}

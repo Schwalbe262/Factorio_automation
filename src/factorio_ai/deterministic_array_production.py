@@ -381,6 +381,7 @@ return {ok=count<=256,first=first,count=count}
                         break
                     entities = [{"name": "transport-belt", **segment} for segment in route["segments"]]
                     links[port["item"]] = {"ok": True, "entities": entities,
+                                            "underground_pairs": deepcopy(route.get("underground_pairs", [])),
                                             "source_port": deepcopy(source), "consumer_port": deepcopy(port)}
                     reserved += entities
                 else:
