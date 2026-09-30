@@ -296,6 +296,7 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
             if stock > 0:
                 return {"type": "take", "name": buffer["name"], "position": buffer["position"], "item": item,
                         "count": min(count, stock, 50), "reason": f"collect buffered construction {item}"}
+        candidates = []
         for entity in observation.get("entities", []):
             name = entity.get("name", "")
             if name not in {"stone-furnace", "steel-furnace", "electric-furnace", "wooden-chest", "iron-chest", "steel-chest",
@@ -305,15 +306,24 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
                 continue  # Never count an operating machine's fuel as output.
             if "furnace" in name and item not in {"iron-plate", "copper-plate", "steel-plate", "stone-brick"}:
                 continue
-            stock = int((entity.get("inventory") or {}).get(item, 0))
-            if stock > 0 and name.startswith("assembling-machine"):
+            machine = "furnace" in name or name.startswith("assembling-machine")
+            inventory = entity.get("output_inventory") if machine and "output_inventory" in entity else entity.get("inventory")
+            stock = int((inventory or {}).get(item, 0))
+            if stock > 0 and name.startswith("assembling-machine") and "output_inventory" not in entity:
                 result = self.game.query('local e=target({x=' + str(float(entity["position"]["x"])) +
                     ',y=' + str(float(entity["position"]["y"])) + '},' + json.dumps(name) + '); '
                     'local output=e and e.get_output_inventory();return {count=output and output.get_item_count(' + json.dumps(item) + ') or 0}')
                 stock = int(result.get("count", 0))
             if stock > 0:
-                return {"type": "take", "name": name, "position": entity["position"], "item": item,
-                        "count": min(count, stock, 50), "reason": f"collect produced {item}"}
+                candidates.append({"type": "take", "name": name, "position": entity["position"], "item": item,
+                                   "count": min(count, stock, 50), "reason": f"collect produced {item}"})
+        if candidates:
+            actor = observation.get("position") or {"x": 0, "y": 0}
+            # Verified construction buffers were handled above. Prefer actual
+            # producer output over incidental, unbound chest stock.
+            return min(candidates, key=lambda action: ("chest" in action["name"], -action["count"],
+                (action["position"]["x"] - actor["x"]) ** 2 + (action["position"]["y"] - actor["y"]) ** 2,
+                action["name"], action["position"]["x"], action["position"]["y"]))
         # Finite construction batches can be picked from the actual conveyor
         # after an output inserter has moved them out of the producing machine.
         # Power coal remains reserved for the continuous burner supply.

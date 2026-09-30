@@ -50,6 +50,23 @@ class DeterministicBootstrapTests(unittest.TestCase):
         self.assertEqual(result["drill"]["position"], {"x": 100, "y": 100})
         self.assertEqual(self.game.query.call_count, 2)
 
+    def test_collection_uses_full_construction_batch_from_expanded_smelting(self):
+        starter = entity("stone-furnace", {"iron-plate": 2}, position={"x": 1, "y": 1},
+                         output_inventory={"iron-plate": 2})
+        expanded = entity("stone-furnace", {"iron-plate": 100}, position={"x": 10, "y": 10},
+                          output_inventory={"iron-plate": 100})
+        for rows in ([starter, expanded], [expanded, starter]):
+            action = self.driver._take_output(observation(entities=rows), "iron-plate", 32)
+            self.assertEqual(action["position"], expanded["position"])
+            self.assertEqual(action["count"], 32)
+        self.game.query.assert_not_called()
+
+    def test_observed_machine_inputs_are_never_collected_as_outputs(self):
+        machines = [entity("assembling-machine-1", {"iron-plate": 100}, output_inventory={}),
+                    entity("steel-furnace", {"iron-plate": 100}, output_inventory={"steel-plate": 5})]
+        self.assertIsNone(self.driver._take_output(observation(entities=machines), "iron-plate", 32))
+        self.game.query.assert_not_called()
+
     def test_electric_coal_drill_never_requests_a_burner_emergency_hand_seed(self):
         self.game.query.return_value = {"ok": True, "cells": [{"fuel": 0, "burning": False, "electric": True}]}
         result = self.driver.ensure_item(observation(), "coal", 8)
