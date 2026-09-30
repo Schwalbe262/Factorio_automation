@@ -10,6 +10,50 @@ from factorio_ai.deterministic_layout_policy import resolve_layout_policy, save_
 
 
 class ArrayExecutionTests(unittest.TestCase):
+    def test_cached_compilation_still_rechecks_sources_and_placement_before_actions(self):
+        factory = SimpleNamespace(state={}, catalog=SimpleNamespace(fingerprint="catalog", technologies={}),
+                                  graph=SimpleNamespace(science_rate_per_minute=30, next_research=Mock(return_value=None)))
+        manager = ArrayProduction(factory)
+        manager._geometry = Mock(return_value={})
+        manager._targets = Mock(return_value=({"iron-plate": 30}, [], "construction-foundation"))
+        manager._sources = Mock(return_value=(None, {"iron-ore": {"position": {"x": 0, "y": 0}}}))
+        manager._reserve = Mock(return_value={"type": "mine", "name": "tree"})
+        obs = {"world_id": "world", "surface": "nauvis", "enabled_recipes": {"underground-belt": True}}
+        with patch("factorio_ai.deterministic_array_production.optimize_array",
+                   return_value={"entities": [], "demand": {"external_rates": {"iron-ore": 30}}}) as compile_plan:
+            for _ in range(2):
+                self.assertEqual(manager.next_action(obs)["type"], "mine")
+            compile_plan.assert_called_once()
+            self.assertEqual(manager._sources.call_count, 2)
+            self.assertEqual(manager._reserve.call_count, 2)
+            blocked = {"status": "blocked", "reason": "source changed"}
+            manager._sources.return_value = (blocked, None)
+            self.assertEqual(manager.next_action(obs), blocked)
+            self.assertEqual(manager._reserve.call_count, 2)
+
+    def test_local_blueprint_cache_recompiles_for_changed_inputs_and_returns_independent_plans(self):
+        factory = SimpleNamespace(catalog=SimpleNamespace(fingerprint="catalog"))
+        manager = ArrayProduction(factory)
+        obs = {"world_id": "world", "surface": "nauvis", "enabled_recipes": {"widget": True}, "tick": 100}
+        args = [obs, {"widget": 30}, {"belt_speed": .03125}, ["widget"], 15, "science"]
+        with patch("factorio_ai.deterministic_array_production.optimize_array", return_value={"entities": []}) as compile_plan:
+            first = manager._local_blueprint(*args)
+            first["entities"].append({"name": "changed"})
+            obs["tick"] = 200
+            self.assertEqual(manager._local_blueprint(*args)["entities"], [])
+            compile_plan.assert_called_once()
+            for field, value in (("world_id", "other"), ("surface", "other"),
+                                 ("enabled_recipes", {"widget": True, "fast-belt": True})):
+                obs[field] = value
+                manager._local_blueprint(*args)
+            factory.catalog.fingerprint = "changed"
+            manager._local_blueprint(*args)
+            for index, value in ((1, {"widget": 40}), (2, {"belt_speed": .0625}),
+                                 (3, ["widget", "green"]), (4, 16), (5, "next-phase")):
+                args[index] = value
+                manager._local_blueprint(*args)
+            self.assertEqual(compile_plan.call_count, 10)
+
     def test_intermediate_producers_start_in_dependency_order_before_science_exports(self):
         from test_deterministic_arrays import array_catalog, GEOMETRY
         from factorio_ai.deterministic_arrays import optimize_array, PRODUCERS

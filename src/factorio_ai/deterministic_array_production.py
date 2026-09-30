@@ -192,6 +192,21 @@ class ArrayProduction:
         self.factory = factory
         self.geometry = None
         self._building = False
+        self._local_key = None
+        self._local_plan = None
+
+    def _local_blueprint(self, obs, targets, geometry, packs, count, phase):
+        """Cache only pure compilation; source and placement evidence stays fresh."""
+        key = plan_digest({"world": obs.get("world_id"), "surface": obs.get("surface"),
+                           "catalog": self.factory.catalog.fingerprint,
+                           "enabled": obs.get("enabled_recipes", {}), "targets": targets,
+                           "geometry": geometry, "packs": packs, "labs": count, "phase": phase})
+        if key != self._local_key:
+            local = optimize_array(self.factory.catalog, obs, targets, geometry,
+                    boundary={"iron-ore", "copper-ore", "coal", "stone", "wood"}, labs=packs, lab_count=count)
+            local["phase"] = phase
+            self._local_plan, self._local_key = local, key
+        return deepcopy(self._local_plan)
 
     def _geometry(self, obs):
         if self.geometry is None:
@@ -287,7 +302,7 @@ for _,x in ipairs(rows) do
    then return {ok=false,reason="district terrain is not buildable"} end
   local left,top,right,bottom=build_box(x);local found=false
   for _,e in pairs(s.find_entities_filtered{area={{left,top},{right,bottom}}}) do
-   if e.type~="resource" then
+   if e.type~="resource" and not e.prototype.collision_mask.colliding_with_tiles_only then
     local rock=e.type=="simple-entity" and (e.name=="big-rock" or e.name=="huge-rock" or e.name=="big-sand-rock")
     if e.force.name~="neutral" or not e.minable or not (e.type=="tree" or rock)
      then return {ok=false,reason="district contains a protected obstacle"} end
@@ -439,9 +454,7 @@ return {ok=count<=256,first=first,count=count}
         plan = factory.state.get("array_plans", {}).get(owner)
         if plan is None:
             try:
-                local = optimize_array(factory.catalog, obs, targets, geometry,
-                        boundary={"iron-ore", "copper-ore", "coal", "stone", "wood"}, labs=packs, lab_count=count)
-                local["phase"] = phase
+                local = self._local_blueprint(obs, targets, geometry, packs, count, phase)
             except ValueError as error:
                 return report("blocked", str(error), phase_targets=targets)
             action, sources = self._sources(obs, local["demand"]["external_rates"], owner)
