@@ -4,7 +4,138 @@ import json
 import math
 
 
+def direct_mining_plan(item, x, y):
+    """North-facing drills drop straight onto an eastbound shared belt."""
+    entities = [{"name": "electric-mining-drill", "position": {"x": x + .5, "y": y + .5},
+                 "direction": 0, "_width": 3, "_height": 3},
+                {"name": "small-electric-pole", "position": {"x": x + 2.5, "y": y + .5}, "direction": 0}]
+    entities += [{"name": "transport-belt", "position": {"x": x + i + .5, "y": y - 1.5},
+                  "direction": 4} for i in range(4)]
+    return {"ok": True, "resource_cell": True, "direct_mining": True, "entities": entities,
+            "ports": [{"kind": "item", "item": item, "direction": "output",
+                       "position": {"x": x + 3.5, "y": y - 1.5}, "facing": 4}]}
+
+
+def convert_direct(factory, obs, item, key, plan):
+    """Recover old paid hardware normally; keep the downstream output fixed."""
+    if plan.get("direct_mining"):
+        return None
+    drills = [e for e in plan.get("entities", []) if e["name"] == "electric-mining-drill"]
+    if len(drills) != 1:
+        return {"status": "blocked", "reason": "direct mining migration has no unique owned drill"}
+    drill = drills[0]
+    desired = direct_mining_plan(item, drill["position"]["x"] - .5, drill["position"]["y"] - .5)
+    if plan.get("ports") != desired["ports"]:
+        return {"status": "blocked", "reason": "direct mining migration would change the downstream port"}
+    actual = {(e["name"], e["position"]["x"], e["position"]["y"]): e for e in obs.get("entities", [])}
+    for name in ("electric-mining-drill", "inserter", "wooden-chest"):
+        for row in plan["entities"]:
+            if row["name"] != name:
+                continue
+            live = actual.get((name, row["position"]["x"], row["position"]["y"]))
+            if live is None:
+                continue
+            unit = live.get("unit_number")
+            if type(unit) is not int or unit <= 0:
+                return {"status": "blocked", "reason": "direct mining migration entity identity unavailable"}
+            move = factory.builder._move(obs, row["position"])
+            return move or {"type": "mine", "name": name, "position": row["position"], "count": 1,
+                           "expected_entity_unit": unit, "expected_entity_world_id": obs["world_id"],
+                           "reason": "recover owned drill/chest/arm before installing direct mining belts"}
+    plan.update(desired)
+    factory._save()
+    return {"status": "waiting", "reason": "direct mining replacement reserved with unchanged output port"}
+
+
+def repair_output_escape(factory, obs, plan):
+    direction = plan.get("direct_output_escape")
+    if direction is None:
+        return None
+    port = plan["ports"][0]
+    last = next(e for e in plan["entities"] if e["name"] == "transport-belt" and e["position"] == port["position"])
+    live = next((e for e in obs.get("entities", []) if e["name"] == last["name"] and e["position"] == last["position"]), None)
+    if live is not None and live.get("direction") != direction:
+        unit = live.get("unit_number")
+        if type(unit) is not int or unit <= 0:
+            return {"status": "blocked", "reason": "direct mining escape belt identity unavailable"}
+        move = factory.builder._move(obs, last["position"])
+        return move or {"type": "mine", "name": last["name"], "position": last["position"], "count": 1,
+                       "expected_entity_unit": unit, "expected_entity_world_id": obs["world_id"],
+                       "reason": "recover owned mining outlet belt before changing its escape direction"}
+    last["direction"] = direction
+    port["facing"] = direction
+    plan.pop("direct_output_escape")
+    factory._save()
+    return {"status": "waiting", "reason": "direct mining outlet escape reserved; rebuild and reobserve"}
+
+
+def _inspect_direct(factory, obs, item, plan):
+    drills = [e for e in plan.get("entities", []) if e["name"] == "electric-mining-drill"]
+    belts = [e for e in plan.get("entities", []) if e["name"] == "transport-belt"]
+    ports = plan.get("ports", [])
+    if (not plan.get("resource_cell") or len(drills) != 1 or len(belts) != 4 or len(ports) != 1
+            or ports[0].get("item") != item or ports[0].get("direction") != "output"
+            or any(e["name"] not in {"electric-mining-drill", "transport-belt", "small-electric-pole"}
+                   for e in plan["entities"])):
+        return {"ok": False, "reason": "direct mining cell ownership is incompatible"}
+    actual = {(e["name"], e["position"]["x"], e["position"]["y"]): e for e in obs.get("entities", [])}
+    rows = [{**e, "unit_number": actual.get((e["name"], e["position"]["x"], e["position"]["y"]), {}).get("unit_number")}
+            for e in [drills[0], *belts]]
+    payload = json.dumps(json.dumps({"world": obs["world_id"], "item": item, "rows": rows,
+                                     "output": ports[0]}, separators=(",", ":")))
+    measured = factory.game.query('''
+local x=helpers.json_to_table(''' + payload + ''')
+if not d or d.world_id~=x.world then return {ok=false,reason="direct mining world changed"} end
+local row=x.rows[1];local radius=prototypes.entity[row.name].mining_drill_radius
+local remaining=0
+for _,ore in pairs(s.find_entities_filtered{area={{row.position.x-radius,row.position.y-radius},{row.position.x+radius,row.position.y+radius}},type="resource"}) do
+ if ore.name==x.item then remaining=remaining+ore.amount
+ elseif ore.amount>0 then return {ok=false,reason="direct mining area contains another resource"} end
+end
+local live={};local complete=true
+for i,wanted in ipairs(x.rows) do
+ local e=target(wanted.position,wanted.name)
+ if not e or e.force~=f or not wanted.unit_number or wanted.unit_number~=e.unit_number then complete=false
+ elseif e.direction~=wanted.direction then return {ok=false,reason="direct mining facing changed"}
+ else live[i]=e end
+end
+if not complete then return {ok=true,world_id=d.world_id,remaining=remaining,complete=false} end
+local drill=live[1];local first=live[2];local last=live[#live];local box=first.bounding_box;local drop=drill.drop_position
+if drop.x<box.left_top.x or drop.x>=box.right_bottom.x or drop.y<box.left_top.y or drop.y>=box.right_bottom.y
+ or last.position.x~=x.output.position.x or last.position.y~=x.output.position.y or last.direction~=x.output.facing then
+ return {ok=false,reason="direct mining drop or output geometry is disconnected"} end
+local output=0;local belt_rate=math.huge
+for i=2,#live do
+ local belt=live[i];belt_rate=math.min(belt_rate,belt.prototype.belt_speed*4*3600)
+ if i<#live then
+  local connected=false;for _,other in pairs(belt.belt_neighbours.outputs) do if other==live[i+1] then connected=true end end
+  if not connected then return {ok=false,reason="direct mining belts are disconnected"} end
+ end
+ for lane=1,2 do for _,stack in pairs(belt.get_transport_line(lane).get_contents()) do
+  if stack.name~=x.item and stack.count>0 then return {ok=false,reason="direct mining belt contains another material"} end
+  output=output+stack.count
+ end end
+end
+local network=drill.electric_network_id;local generator=false
+for _,e in pairs(s.find_entities_filtered{force=f,type="generator"}) do if network and e.electric_network_id==network then generator=true;break end end
+local mining_time=prototypes.entity[x.item].mineable_properties.mining_time
+return {ok=true,world_id=d.world_id,tick=game.tick,remaining=remaining,complete=true,
+ powered=network~=nil and drill.energy>0 and generator,drill_unit=drill.unit_number,
+ nominal_rate_per_minute=math.min(drill.prototype.mining_speed*60/mining_time,belt_rate),bus_capacity_per_minute=belt_rate,
+ speed_bonus=drill.speed_bonus,productivity_bonus=drill.productivity_bonus,output_items=output}
+''')
+    if measured.get("ok") and measured.get("complete"):
+        for effect in ("speed_bonus", "productivity_bonus"):
+            bonus = measured.get(effect)
+            if type(bonus) not in (int, float) or not math.isfinite(bonus):
+                return {"ok": False, "reason": "direct mining effects are unavailable"}
+            measured["nominal_rate_per_minute"] *= max(0, 1 + min(0, bonus))
+    return measured
+
+
 def _inspect(factory, obs: dict, item: str, plan: dict) -> dict:
+    if plan.get("direct_mining"):
+        return _inspect_direct(factory, obs, item, plan)
     drills = [e for e in plan.get("entities", []) if e["name"] == "electric-mining-drill"]
     receivers = [e for e in plan.get("entities", []) if e["name"] == "wooden-chest"]
     arms = [e for e in plan.get("entities", []) if e["name"] == "inserter"]
@@ -108,6 +239,12 @@ def ensure_raw_ore(factory, obs: dict, item: str, rate_per_minute: float | None 
         plan = factory.state["blocks"].get(key)
         if plan is None:
             return _report("blocked", "dedicated raw ore cell reservation is missing", item=item, cell=key)
+        conversion = convert_direct(factory, obs, item, key, plan)
+        if conversion is not None:
+            return conversion
+        escape = repair_output_escape(factory, obs, plan)
+        if escape is not None:
+            return escape
         proof = _inspect(factory, obs, item, plan)
         if not proof.get("ok") or proof.get("world_id") != obs.get("world_id"):
             return _report("blocked", proof.get("reason", "raw ore observation unavailable"), item=item, cell=key)
@@ -128,13 +265,33 @@ def ensure_raw_ore(factory, obs: dict, item: str, rate_per_minute: float | None 
         if not _ready(result):
             return result
         if key != primary_key:
-            result = factory._merge_output(obs, plan["ports"][0], primary["ports"][0], key + ":output")
+            result = factory._merge_output(obs, plan["ports"][0], primary["ports"][0], key + ":output",
+                                           **({"belt_only": True} if plan.get("direct_mining") else {}))
             if not _ready(result):
+                if (plan.get("direct_mining") and result.get("status") == "blocked"
+                        and key + ":output" not in factory.state["links"]
+                        and plan["ports"][0]["facing"] == 4):
+                    occupied = factory.builder._occupied_by_plan(factory._reserved())
+                    port = plan["ports"][0]
+                    for direction, dy in ((0, -1), (8, 1)):
+                        position = {"x": port["position"]["x"], "y": port["position"]["y"] + dy}
+                        candidate = {"name": "transport-belt", "position": position, "direction": direction}
+                        if (position["x"], position["y"]) not in occupied and factory.builder.can_place([candidate]).get("ok"):
+                            plan["direct_output_escape"] = direction
+                            factory._save()
+                            return _report("waiting", "reserved a free belt-only mining outlet escape", item=item, cell=key)
                 return result
         if retired:
             continue
         if not proof.get("complete") or not proof.get("powered"):
             return _report("waiting", "waiting for dedicated ore drill and extraction power observation", item=item, cell=key)
+        if key == primary_key and plan.get("direct_mining"):
+            bus_capacity = proof.get("bus_capacity_per_minute")
+            if type(bus_capacity) not in (int, float) or not math.isfinite(bus_capacity) or bus_capacity <= 0:
+                return _report("blocked", "direct mining shared belt capacity is unavailable", item=item)
+            if requested > bus_capacity + .01:
+                return _report("blocked", "direct mining demand requires another shared belt line",
+                               item=item, requested=requested, bus_capacity=bus_capacity)
         rate = float(proof.get("nominal_rate_per_minute", 0))
         if not math.isfinite(rate) or rate <= 0:
             return _report("blocked", "raw ore nominal mining rate is unavailable", item=item, cell=key)

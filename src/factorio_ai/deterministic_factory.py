@@ -1231,7 +1231,7 @@ return {ok=true,candidates=candidates}
                     return candidate
         return {"ok": False, "reason": "no reachable owned upstream output tail"}
 
-    def _merge_output(self, obs: dict, source_port: dict, bus_port: dict, key: str) -> dict:
+    def _merge_output(self, obs: dict, source_port: dict, bus_port: dict, key: str, *, belt_only: bool = False) -> dict:
         """Join same-item capacity outputs while retaining the existing bus facing."""
         if source_port.get("item") != bus_port.get("item"):
             return _report("blocked", "cannot merge different material outputs")
@@ -1243,10 +1243,14 @@ return {ok=true,candidates=candidates}
                                          allow_bridge=False, start_direction=source_port.get("facing"))
             if not route.get("ok") and route.get("reason") in {"no route within bounds", "route search budget exhausted"}:
                 route = self._route_upstream_output(obs, source_port, bus_port)
-                if not route.get("ok"):
+                if not route.get("ok") and belt_only:
+                    from .deterministic_underground_routes import plan_underground_route
+                    route = plan_underground_route(self, source_port["position"], bus_port["position"],
+                        self._reserved() + [forbidden_front], start_direction=source_port.get("facing"), end_direction=bus_port["facing"])
+                if not route.get("ok") and not belt_only:
                     route = self._material_route(source_port["position"], bus_port["position"], self._reserved() + [forbidden_front],
                                                  start_direction=source_port.get("facing"))
-                if not route.get("ok"):
+                if not route.get("ok") and not belt_only:
                     # An enclosed dedicated output can receive the same item
                     # through a powered drop without rotating its live belt.
                     owner_key = next((owner_key for owner_key, owner in self.state["blocks"].items()
@@ -1264,6 +1268,9 @@ return {ok=true,candidates=candidates}
             if not route.get("ok"):
                 return _report("blocked", "capacity output cannot reach its material bus", link=key, query_error=route.get("reason"))
             segments = route["segments"]
+            if belt_only and any(segment.get("name", "transport-belt") not in {
+                    "transport-belt", "underground-belt"} for segment in segments):
+                return _report("blocked", "direct mining bus requires a belt-only merge", link=key)
             segments[-1]["direction"] = bus_port["facing"]
             self.state["links"][key] = _plan([{"name": "transport-belt", **segment} for segment in segments],
                                               source_port=source_port, consumer_port=bus_port)
@@ -1271,6 +1278,9 @@ return {ok=true,candidates=candidates}
                 self.state["links"][key]["upstream_tail"] = route["upstream_tail"]
             self._save()
         plan = self.state["links"][key]
+        if belt_only and any(entity["name"] not in {"transport-belt", "underground-belt"}
+                             for entity in plan["entities"]):
+            return _report("blocked", "saved direct mining merge is not belt-only", link=key)
         result = self.builder.ensure_plan(obs, plan)
         if not _ready(result):
             return result
@@ -1314,6 +1324,9 @@ return {ok=true,candidates=candidates}
 
     @staticmethod
     def _electric_source_plan(item: str, x: float, y: float) -> dict:
+        if item in {"iron-ore", "copper-ore", "coal", "stone"}:
+            from .deterministic_raw_ore import direct_mining_plan
+            return direct_mining_plan(item, x, y)
         drill = {"name": "electric-mining-drill", "position": {"x": x + .5, "y": y + .5}, "direction": 0, "_width": 3, "_height": 3}
         if item in {"iron-plate", "copper-plate"}:
             receiver = {"name": "stone-furnace", "position": {"x": x, "y": y - 2}, "direction": 0, "_width": 2, "_height": 2}

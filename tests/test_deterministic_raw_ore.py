@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch
 import unittest
 
 from factorio_ai.deterministic_factory import DeterministicFactory
-from factorio_ai.deterministic_raw_ore import _inspect
+from factorio_ai.deterministic_raw_ore import _inspect, convert_direct, direct_mining_plan
 import test_deterministic_factory as factory_tests
 
 
@@ -12,6 +12,48 @@ ready = factory_tests.ready
 
 class RawOreTests(unittest.TestCase):
     setUp = factory_tests.FactoryTests.setUp
+
+    def test_direct_shared_bus_uses_underground_route_when_surface_is_blocked(self):
+        self.factory._material_route = Mock(return_value={"ok": False, "reason": "no route within bounds"})
+        self.factory._route_upstream_output = Mock(return_value={"ok": False})
+        source = {"item": "iron-ore", "position": {"x": 10.5, "y": 10.5}, "facing": 4}
+        destination = {"item": "iron-ore", "position": {"x": 14.5, "y": 10.5}, "facing": 4}
+        route = {"ok": True, "segments": [
+            {"name": "underground-belt", "position": source["position"], "direction": 4, "belt_to_ground_type": "input"},
+            {"name": "underground-belt", "position": destination["position"], "direction": 4, "belt_to_ground_type": "output"}]}
+        with patch("factorio_ai.deterministic_underground_routes.plan_underground_route", autospec=True, return_value=route) as underground:
+            result = self.factory._merge_output(self.obs, source, destination, "direct-test", belt_only=True)
+        self.assertEqual(result["status"], "succeeded")
+        underground.assert_called_once()
+        self.assertEqual(underground.call_args.kwargs["end_direction"], 4)
+        self.assertTrue(all(e["name"] == "underground-belt" for e in self.factory.state["links"]["direct-test"]["entities"]))
+
+    def test_shared_belt_bandwidth_is_checked_before_adding_more_drills(self):
+        result = self.source(rate=451)
+        self.assertEqual(result["reason"], "direct mining demand requires another shared belt line")
+        self.assertEqual(len(self.factory.state["blocks"]), 1)
+
+    def test_conversion_recovers_drill_first_and_keeps_output_port(self):
+        direct = direct_mining_plan("iron-ore", 20, 20)
+        old = deepcopy(direct)
+        old.pop("direct_mining")
+        old["entities"] = old["entities"][:2] + old["entities"][4:] + [
+            {"name": "wooden-chest", "position": {"x": 20.5, "y": 18.5}},
+            {"name": "inserter", "position": {"x": 21.5, "y": 18.5}, "direction": 12}]
+        port = deepcopy(old["ports"])
+        obs = {"world_id": "one", "entities": [{**e, "unit_number": i + 1} for i, e in enumerate(old["entities"])]}
+        self.builder._move = Mock(return_value=None)
+        for name in ("electric-mining-drill", "inserter", "wooden-chest"):
+            action = convert_direct(self.factory, obs, "iron-ore", "source:iron-ore", old)
+            self.assertEqual(action["type"], "mine")
+            self.assertEqual(action["name"], name)
+            self.assertEqual(action["expected_entity_world_id"], "one")
+            self.assertFalse(old.get("direct_mining"))
+            obs["entities"] = [e for e in obs["entities"] if e["name"] != name]
+        self.assertEqual(convert_direct(self.factory, obs, "iron-ore", "source:iron-ore", old)["status"], "waiting")
+        self.assertEqual(old["ports"], port)
+        self.assertTrue(old["direct_mining"])
+        self.assertNotIn("wooden-chest", [e["name"] for e in old["entities"]])
 
     def source(self, *, item="iron-ore", rate=None):
         self.obs["enabled_recipes"]["electric-mining-drill"] = True
@@ -24,7 +66,8 @@ class RawOreTests(unittest.TestCase):
             return self.factory.state["blocks"][key]
         self.factory._raw_capacity_site = Mock(side_effect=reserve)
         self.proof = {"ok": True, "world_id": "one", "tick": 100, "remaining": 1000, "complete": True,
-                      "powered": True, "drill_unit": 123, "nominal_rate_per_minute": 30, "output_items": 0, "chest_items": 0}
+                      "powered": True, "drill_unit": 123, "nominal_rate_per_minute": 30,
+                      "bus_capacity_per_minute": 450, "output_items": 0}
         self.inspection = patch("factorio_ai.deterministic_raw_ore._inspect", side_effect=lambda factory, obs, item, plan: {
             **self.proof, "drill_unit": int(plan["entities"][0]["position"]["x"] * 10)}).start()
         self.addCleanup(patch.stopall)
@@ -34,7 +77,7 @@ class RawOreTests(unittest.TestCase):
         self.obs["tick"] += 1
         return self.factory.ensure_product(self.obs, item, rate_per_minute=rate)
 
-    def test_iron_ore_has_a_dedicated_electric_chest_cell_without_recipe_or_hand_ore(self):
+    def test_iron_ore_drops_directly_on_a_belt_without_chest_or_arm(self):
         result = self.source()
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual(result["evidence"]["nominal_capacity_per_minute"], 30)
@@ -43,7 +86,9 @@ class RawOreTests(unittest.TestCase):
         plan = self.factory.state["blocks"]["source:iron-ore"]
         names = [e["name"] for e in plan["entities"]]
         self.assertEqual(names.count("electric-mining-drill"), 1)
-        self.assertIn("wooden-chest", names)
+        self.assertNotIn("wooden-chest", names)
+        self.assertNotIn("inserter", names)
+        self.assertEqual(names.count("transport-belt"), 4)
         self.assertNotIn("stone-furnace", names)
         self.assertTrue(all(p["direction"] == "output" for p in plan["ports"]))
         self.factory._source_endpoint.assert_not_called()
@@ -100,7 +145,17 @@ class RawOreTests(unittest.TestCase):
     def test_failed_replacement_merge_does_not_claim_restored_capacity(self):
         self.source(rate=60)
         self.factory._merge_output.return_value = {"status": "blocked", "reason": "no continuity route"}
+        self.builder.can_place.return_value = {"ok": False}
         self.assertEqual(self.again(rate=60)["reason"], "no continuity route")
+
+    def test_blocked_merge_can_reserve_free_outlet_escape_without_claiming_capacity(self):
+        self.source(rate=60)
+        self.factory._merge_output.return_value = {"status": "blocked", "reason": "no continuity route"}
+        result = self.again(rate=60)
+        self.assertEqual(result["status"], "waiting")
+        plan = self.factory.state["blocks"]["source:iron-ore:ore:1"]
+        self.assertEqual(plan["direct_output_escape"], 0)
+        self.assertEqual(plan["ports"][0]["facing"], 4)
 
     def test_saved_reservation_is_revalidated_on_reload_without_new_cell(self):
         self.source()
