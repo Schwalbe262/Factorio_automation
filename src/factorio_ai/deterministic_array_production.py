@@ -26,8 +26,9 @@ def construction_order(plan):
     return {**plan, "entities": sorted(plan["entities"], key=rank)}
 
 
-def foundation_stages(plan, catalog, underground_distance, *, pole_wire=7.5, pole_supply=2.5):
-    """Activate each iron smelter with complete dependencies before copper."""
+def foundation_stages(plan, catalog, underground_distance, *, pole_wire=7.5, pole_supply=2.5,
+                      include_intermediates=False):
+    """Activate paid producers with complete supply paths before bulk exports."""
     from .deterministic_input_links import _geometry, _path
     view = {**plan, "entities": [e for e in plan["entities"] if e["name"] not in {"inserter", "fast-inserter"}],
             "underground_pairs": []}
@@ -63,7 +64,21 @@ def foundation_stages(plan, catalog, underground_distance, *, pole_wire=7.5, pol
     inputs = {p["item"]: p for p in plan["ports"] if p["direction"] == "input"}
     items = {n["recipe"]: n["item"] for n in plan["demand"]["nodes"]}
     machines = [e for e in plan["entities"] if e["name"] in PRODUCERS]
-    machines.sort(key=lambda e: (items[e.get("recipe", e.get("_array_recipe"))] != "iron-plate",
+    process_order = {}
+    if include_intermediates:
+        pending = list(plan["demand"]["nodes"])
+        available = set(inputs)
+        while pending:
+            ready = [n for n in pending if set(n["inputs"]).issubset(available)]
+            if not ready:
+                raise ValueError("producer construction order has no dependency-ready process")
+            node = min(ready, key=lambda n: (n["item"] != "transport-belt", n["item"] != "iron-plate",
+                                            n["item"] not in {"copper-plate", "iron-gear-wheel"}, n["item"]))
+            process_order[node["item"]] = len(process_order)
+            available.add(node["item"])
+            pending.remove(node)
+    machines.sort(key=lambda e: (process_order.get(items[e.get("recipe", e.get("_array_recipe"))],
+                                                  items[e.get("recipe", e.get("_array_recipe"))] != "iron-plate"),
                                  e["position"]["y"], e["position"]["x"]))
     poles = [e for e in plan["entities"] if e["name"] == "small-electric-pole"]
     stages = []
@@ -82,9 +97,24 @@ def foundation_stages(plan, catalog, underground_distance, *, pole_wire=7.5, pol
                 continue
             item = arm["_item"]
             if arm["_role"] == "input":
-                port = inputs[item]["position"]
-                path = _path(belts, edges, (port["x"], port["y"]), pickup)
-                sources.add(item)
+                if item in inputs:
+                    port = inputs[item]["position"]
+                    path = _path(belts, edges, (port["x"], port["y"]), pickup)
+                    sources.add(item)
+                elif include_intermediates:
+                    paths = []
+                    for output in plan["entities"]:
+                        if output.get("_role") != "output" or output.get("_item") != item:
+                            continue
+                        ox, oy = DIRECTIONS[output["direction"]]
+                        p = output["position"]
+                        start = p["x"] - ox, p["y"] - oy
+                        candidate = _path(belts, edges, start, pickup)
+                        if candidate is not None:
+                            paths.append((len(candidate), start, candidate))
+                    path = min(paths, key=lambda p: (p[0], p[1]))[2] if paths else None
+                else:
+                    raise ValueError("foundation input is not an external material: " + item)
             else:
                 # A real receiving belt safely backs up while the full export
                 # route is still being paid for. Bootstrap can collect its output.
@@ -98,7 +128,7 @@ def foundation_stages(plan, catalog, underground_distance, *, pole_wire=7.5, pol
         if not poles:
             raise ValueError("foundation producer has no connected power plan")
         for entity in rows:
-            if entity["name"] not in {"inserter", "fast-inserter"}:
+            if entity["name"] not in {"inserter", "fast-inserter"} | PRODUCERS:
                 continue
             l, t, r, b = _footprint(entity, catalog)
             covers = {i for i, p in enumerate(poles)
@@ -427,7 +457,8 @@ return {ok=count<=256,first=first,count=count}
         self._building = True
         try:
             stages = foundation_stages(plan, factory.catalog, geometry["underground_distance"],
-                                      pole_wire=geometry["pole_wire"], pole_supply=geometry["pole_supply"]) if plan.get("phase") == "construction-foundation" else []
+                                      pole_wire=geometry["pole_wire"], pole_supply=geometry["pole_supply"],
+                                      include_intermediates=plan.get("phase") != "construction-foundation")
             for link in ([] if stages else plan["source_links"].values()):
                 result = factory.builder.ensure_plan(obs, link)
                 if result.get("status") != "succeeded" or result.get("type"):

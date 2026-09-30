@@ -1,4 +1,5 @@
 from pathlib import Path
+from copy import deepcopy
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
@@ -9,6 +10,30 @@ from factorio_ai.deterministic_layout_policy import resolve_layout_policy, save_
 
 
 class ArrayExecutionTests(unittest.TestCase):
+    def test_intermediate_producers_start_in_dependency_order_before_science_exports(self):
+        from test_deterministic_arrays import array_catalog, GEOMETRY
+        from factorio_ai.deterministic_arrays import optimize_array, PRODUCERS
+        catalog = array_catalog()
+        obs = {"enabled_recipes": dict.fromkeys(catalog.recipes, True)}
+        plan = optimize_array(catalog, obs, {"widget": 30, "transport-belt": 30}, GEOMETRY,
+                              labs=["widget"], lab_count=3)
+        before = deepcopy(plan)
+        stages = foundation_stages(plan, catalog, 5, include_intermediates=True)
+        nodes = {n["item"]: n for n in plan["demand"]["nodes"]}
+        available = set(plan["demand"]["external_rates"])
+        for stage in stages:
+            self.assertTrue(set(nodes[stage["item"]]["inputs"]).issubset(available))
+            available.add(stage["item"])
+            self.assertEqual(sum(e["name"] in PRODUCERS for e in stage["plan"]["entities"]), 1)
+            self.assertFalse(any(e["name"] == "lab" for e in stage["plan"]["entities"]))
+        order = [s["item"] for s in stages]
+        self.assertLess(order.index("gear"), order.index("transport-belt"))
+        self.assertLess(order.index("transport-belt"), order.index("widget"))
+        self.assertEqual(next(s for s in stages if s["item"] == "transport-belt")["sources"], ["iron-plate"])
+        self.assertEqual(len(stages), sum(e["name"] in PRODUCERS for e in plan["entities"]))
+        self.assertLess(len(stages[0]["plan"]["entities"]), len(plan["entities"]))
+        self.assertEqual(plan, before)
+
     def test_foundation_first_iron_cell_has_paths_without_copper_construction(self):
         rows, ports = [], []
         def row(name, x, y, direction=0, **fields):

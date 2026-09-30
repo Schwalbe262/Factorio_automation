@@ -352,7 +352,10 @@ def start_coal_upgrade(energy, obs, evidence, capacity):
             for path in paths.values():
                 for edge in path:
                     if edge["unit_number"] == unit:
-                        edge.update(name="fast-inserter", coal_per_minute=1e9)
+                        # Test transport headroom alone. Removing burner fuel
+                        # consumption here would misclassify a mining shortage
+                        # as a binding transit arm and prevent normal feed growth.
+                        edge["coal_per_minute"] = 1e9
         gain = energy.capacity(trial)["total_kw"] - capacity["total_kw"]
         if gain > .01:
             candidates.append((-gain, unit, row, ends))

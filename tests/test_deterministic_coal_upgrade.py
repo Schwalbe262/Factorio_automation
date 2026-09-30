@@ -93,6 +93,18 @@ class CoalUpgradeTests(unittest.TestCase):
         self.assertEqual(record["owners"][-1]["factory_old"].get("key"), "energy:coal-bank:1")
         self.assertNotIn("key", record["owners"][-1]["old"])
 
+    def test_fuel_savings_alone_do_not_turn_a_mining_shortage_into_transit_upgrade(self):
+        e, obs, evidence, proof = self.fixture()
+        for row in evidence["feeds"]:
+            row["gross_coal_per_minute"] = 6
+        capacity = e.capacity(evidence)
+        self.assertGreater(capacity["total_kw"], 0)
+        self.assertLess(capacity["total_kw"], capacity["target_kw"])
+        with patch("factorio_ai.deterministic_coal_upgrade._survey", return_value=proof) as survey:
+            self.assertIsNone(start_coal_upgrade(e, obs, evidence, capacity))
+        survey.assert_not_called()
+        self.assertNotIn("coal_transit_upgrade", e.state)
+
     def test_preparation_mine_build_publication_and_cold_reload(self):
         e, obs, _, proof = self.begin()
         original_feeds = deepcopy(e.state["feeds"])
