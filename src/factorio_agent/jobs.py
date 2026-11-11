@@ -71,6 +71,8 @@ CAPABILITIES = {
                       "effect":"normally build a defended powered pumpjack and real crude pipe outlet; naturally trigger native oil-processing research by extraction"},
     "basic_petroleum": {"parameters":{},"requires":["oil_gathering"],
                         "effect":"normally connect the exact proven crude source to a defended refinery using isolated bounded pipe segments; prove native petroleum production and publish a fixed gas outlet"},
+    "engine_production": {"parameters":{},"requires":["steel_production","main_bus_factory"],
+                          "effect":"normally build a defended compact engine district with a surplus iron tap, fixed steel supply and reserved machine expansion; prove real engines on its output"},
     "ammo_production": {"parameters":{},"requires":["main_bus_factory"],
                        "effect":"normally build a defended automatic magazine factory from a critical iron bus tap, bound its real output buffer, then supply full normal magazines through guarded inventory transfers"},
     "legacy_coal_cleanup": {"parameters":{},"requires":["steam_expansion","dedicated_materials"],
@@ -291,6 +293,7 @@ def control(root: Path, game, key: str, operation: str) -> dict:
 class StarterExecutors:
     """Explicit temporary v1 executor reuse, with no v1 strategic supervisor."""
     def __init__(self, game, catalog):
+        self.game,self.catalog=game,catalog
         from .construction_supply import V2Bootstrap
         from .power_layout import V2FactoryBuilder
         self.bootstrap = V2Bootstrap(game, catalog)
@@ -353,6 +356,10 @@ class StarterExecutors:
         self.ammo=AmmoProduction(game,self.builder,catalog,self.perimeter,
                                 bus_factory=self.bus_factory,science=self.science,green=self.green)
         self.perimeter.ammo_source=self.ammo
+        from .engine_production import EngineProduction
+        self.engines=EngineProduction(game,self.builder,catalog,self.perimeter,
+                                     bus_factory=self.bus_factory,science=self.science,green=self.green,
+                                     steel=self.industrial_operations.steel)
         from .normal_research import NormalResearch
         self.normal_research=NormalResearch(game,catalog,self.science,self.green)
         ledger=Ledger(Path(game.cfg.runtime_dir)).data
@@ -477,6 +484,8 @@ class StarterExecutors:
             return self.petroleum.step(obs)
         if capability == "ammo_production":
             return self.ammo.step(obs)
+        if capability == "engine_production":
+            return self.engines.step(obs)
         raise ValueError("no executor for capability: " + capability)
 
     def proof(self, capability: str, obs: dict, result: dict, parameters: dict | None = None) -> dict | None:
@@ -543,6 +552,8 @@ class StarterExecutors:
             return self.petroleum.proof(obs)
         if capability == "ammo_production":
             return self.ammo.proof(obs)
+        if capability == "engine_production":
+            return self.engines.proof(obs)
         produced = obs.get("production", {})
         if not all(produced.get(name, {}).get("produced", 0) > 0 for name in ("iron-plate", "copper-plate")):
             return None
@@ -641,16 +652,25 @@ def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> 
                 status = result.get("status")
                 if status not in {"running", "waiting", "blocked", "failed", "succeeded"}:
                     raise ValueError("executor returned no recognized action or status")
-                job.update(status=status, reason=result.get("reason", ""), evidence=result.get("evidence", {}))
                 if status == "succeeded":
+                    # sync() persists this same mutable job. Never publish a
+                    # terminal success before the independent proof returns.
+                    job.update(status="waiting",reason="verifying_postcondition",evidence={})
                     fresh = game.observe()
                     ledger.sync(fresh)
-                    proof = executors.proof(job["capability"], fresh, result, job["parameters"])
+                    try:
+                        proof = executors.proof(job["capability"], fresh, result, job["parameters"])
+                    except Exception:
+                        job.update(status="blocked",reason="postcondition_verification_error",evidence={})
+                        ledger.save()
+                        raise
                     if proof is None:
                         job.update(status="blocked", reason="postcondition_not_verified", evidence={})
                     else:
-                        job["evidence"] = proof
+                        job.update(status="succeeded",reason=result.get("reason",""),evidence=proof)
                     game.save()
+                else:
+                    job.update(status=status, reason=result.get("reason", ""), evidence=result.get("evidence", {}))
             ledger.save()
             if job["status"] in TERMINAL:
                 if job['status']=='blocked':job.update(blocked_at_tick=obs['tick'],blocked_at_time=time.time());ledger.save()

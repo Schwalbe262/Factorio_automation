@@ -403,10 +403,19 @@ return {ok=true,extent=e.get_fluid_segment_extent_bounding_box(1),limit=prototyp
         bindings=dict(self.state['bindings']);bindings[_key(dict(self.state['source'],name='pipe'))]=self.state['source']['unit_number']
         relevant=self.state['fluid_nodes']+self.state['core']['machines']
         if any(_key(e)not in bindings for e in relevant):self.last_proof_failure={'reason':'petroleum_native_bindings_incomplete'};return None
+        from .fluid_handoffs import bound_handoffs
+        gas_source=dict(self.state['core']['ports'][1],world_id=obs['world_id'],
+                        unit_number=bindings[_key(self.state['core']['ports'][1])],
+                        defense_scope_id=self.state['defense_scope_id'])
+        try:
+            registry=json.loads(self.sources_path.read_text(encoding='utf-8'))
+            handoffs=bound_handoffs(registry,obs,self.catalog,gas_source)
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            self.last_proof_failure={'reason':'petroleum_handoff_registry_invalid','detail':str(exc)};return None
         args={'nodes':[dict(e,unit_number=bindings[_key(e)])for e in relevant],
               'edges':self.state['fluid_edges'],'bindings':bindings,'source':self.state['source'],
               'gas_positions':[e['position']for e in self.state['core']['gas_pipes']],
-              'outlet':self.state['core']['ports'][1]}
+              'outlet':self.state['core']['ports'][1],'handoffs':handoffs}
         result=self.game.query(PETROLEUM_PROOF_LUA.replace('PAYLOAD',_payload(args)))
         if not result.get('ok'):self.last_proof_failure=result;return None
         outlet=dict(self.state['core']['ports'][1],world_id=obs['world_id'],unit_number=result['outlet_unit'],
@@ -444,6 +453,16 @@ for _,edge in ipairs(args.edges)do local a=live[key(edge.a)];local b=live[key(ed
  if not forward or not reverse then return {ok=false,reason="petroleum_reciprocal_typed_peer_missing",position=edge.a.position}end
  expected[id(edge.a,ai)]=expected[id(edge.a,ai)]or{};expected[id(edge.a,ai)][b.unit_number..":"..bi]=true
  expected[id(edge.b,bi)]=expected[id(edge.b,bi)]or{};expected[id(edge.b,bi)][a.unit_number..":"..ai]=true
+end
+for _,handoff in ipairs(args.handoffs or{})do local q=handoff.first_neighbor;local e=target(q.position,q.name);local src=live[key(args.outlet)]
+ if not e or e.force~=f or e.surface~=s or e.unit_number~=q.unit_number or e.position.x~=q.position.x or e.position.y~=q.position.y
+  or(q.name=="pipe-to-ground"and e.direction~=q.direction)then return {ok=false,reason="petroleum_bound_consumer_identity_changed"}end
+ for name in pairs(e.get_fluid_contents())do if name~="petroleum-gas"then return {ok=false,reason="petroleum_bound_consumer_contaminated"}end end
+ local forward=false;local reverse=false
+ for _,p in pairs(src.get_fluid_box_neighbours(1)or{})do if p.entity==e and p.index==1 then forward=true end end
+ for _,p in pairs(e.get_fluid_box_neighbours(1)or{})do if p.entity==src and p.index==1 then reverse=true end end
+ if not forward or not reverse then return {ok=false,reason="petroleum_bound_consumer_edge_missing"}end
+ expected[id(args.outlet,1)]=expected[id(args.outlet,1)]or{};expected[id(args.outlet,1)][e.unit_number..":1"]=true
 end
 for _,q in ipairs(args.nodes)do if q.unit_number~=args.source.unit_number then
  local e=live[key(q)];local indices=q.name=="oil-refinery"and{1,2,3,4,5}or{1}

@@ -6614,3 +6614,6 @@ Promote to insight.md only if:
 
 ## 2026-11-12T06:49:10+09:00 | Native automatic-furnace idle witness
 - Source: Part9 shared-coal loop2422761. Improvement: full automatic furnaces can release recipe while holding valid output; require exact native normal output/raw/fuel, finished products and identity instead of rejecting recipe=None alone. Before: physically working Brick blocked shared-coal commissioning. After: strict inventory witness passed, shared flow and Steel commissioned. Evidence: native2422761/2477998 and negative contamination/no-output tests. Risk: commissioning proves production/history, not continuous throughput.
+
+## 2026-11-12T07:09:05+09:00 | Atomic committed-gap construction and proof publication
+- Source: EXP0017/2579456 and proof-exception regression. Improvement: when an active inserter feeds an empty upgrade gap, perform conserved pickup and prepaid normal build in one native command; keep durable job waiting until independent proof returns. Before:191successful pickups still never built; callback exception could persist succeeded through sync. After:8native replacements375nom and exception receipt blocked/noevidence, native reverified2585802. Evidence: executable Lua conservation/negative tests,20upgrade/19jobs tests. Risk: assisted backend only; no sustained-throughput claim.

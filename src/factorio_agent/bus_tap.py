@@ -248,7 +248,14 @@ return {ok=true}''')
         if any(d.get('world_id') != s['world_id'] or d.get('catalog_fingerprint') != s['catalog_fingerprint'] for d in docs.values()):
             return {'status': 'blocked', 'reason': 'tap_publish_identity_changed'}
         if _hash(docs['factory']['bus']) not in (s['old_hash'], s['new_hash']) or _hash(docs['board']['shared_main_bus']) not in (s['old_hash'], s['new_hash']):
-            return {'status': 'blocked', 'reason': 'tap_publish_bus_revision_changed'}
+            from .capacity_profiles import rebase_tap_capacity
+            rebased=rebase_tap_capacity(self.game,self.catalog,old,new,
+                                        [docs['factory']['bus'],docs['board']['shared_main_bus']])
+            if not rebased.get('ok'):
+                return {'status':'blocked','reason':'tap_publish_bus_revision_changed','evidence':rebased}
+            old,new=rebased['old_bus'],rebased['new_bus']
+            s.update(old_bus=old,new_bus=new,old_hash=_hash(old),new_hash=_hash(new))
+            self._save()
         try:
             for key in ('plan', 'red_plan'): docs['factory'][key] = replace_bus(docs['factory'][key], old, new)
             for key in ('red', 'green'): docs[key]['plan'] = replace_bus(docs[key]['plan'], old, new)

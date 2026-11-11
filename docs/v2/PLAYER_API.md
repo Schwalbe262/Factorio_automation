@@ -71,6 +71,7 @@ Current capabilities:
 | oil_gathering | none | native oil-gathering research and normal steel; defended pumpjack, real crude outlet and natural oil-processing trigger |
 | basic_petroleum | none | oil_gathering; preserve the exact crude source, isolated bounded pipeline and defended basic refinery, prove real petroleum |
 | ammo_production | none | main_bus_factory; critical-priority iron tap, compact automatic magazine production and bounded full normal ammunition buffer |
+| engine_production | none | steel_production and main_bus_factory; fixed steel port and surplus iron tap, compact gear/pipe/engine cells with reserved expansion |
 | steam_coal_reroute | none | steam_expansion; prebuild alternative, verify loaded engines, recover obsolete owned transport |
 | legacy_coal_cleanup | none | steam_expansion and dedicated_materials; isolated burner/cache recovery after replacement supply and headroom proof |
 | research | `--technology` native catalog name | automation_science; native prerequisites and continuous supported science supply |
@@ -82,9 +83,10 @@ system. Starter research uses finite normally crafted science budgets to unlock
 the first machines; it cannot handcraft its way through later research.
 Permanent green science, strategic armed posts and shared-bus migration are
 implemented. Steel/brick construction and pumpjack extraction interfaces are
-implemented and commissioned in the development world. Automatic ammunition and
-basic petroleum interfaces are implemented; their live commissioning remains
-pending. Construction mall, repair, blue science, rail and rocket remain pending.
+implemented and commissioned in the development world. Iron steel-furnace upgrades
+and automatic ammunition are also commissioned. Basic petroleum and engine
+interfaces are implemented; live commissioning remains pending. Construction
+mall, repair, blue science, rail and rocket remain pending.
 Do not claim a rocket-capable system.
 
 New construction checks resource tiles and registered mining growth space before

@@ -135,11 +135,12 @@ class FurnaceUpgradeTests(unittest.TestCase):
         self.obs['entities'] = [e for e in self.obs['entities'] if e['unit_number'] != mine['expected_entity_unit']]
         self.builder.can_place.return_value = {'ok': False}
         self.builder._move = Mock(return_value=None)
+        self.obs['actor_unit_number'] = 7
         spill = {'name': 'item-on-ground', 'position': {'x': -39.5, 'y': -32.3}, 'item': 'coal', 'count': 1}
         self.game.query.side_effect = [{'count': 1}, {'ok': True, 'ground': [spill]}]
         result = self.controller.step(self.obs, self.request)
-        self.assertEqual((result['type'], result['item'], result['quality'], result['count']),
-                         ('take', 'coal', 'normal', 1))
+        self.assertEqual((result['type'], result['expected_old_unit'], result['expected_actor_unit']),
+                         ('build_furnace_gap', mine['expected_entity_unit'], 7))
         self.assertIn('pending', self.controller.state)
         self.game.query.side_effect = [{'count': 1}, {'ok': False}]
         result = self.controller.step(self.obs, self.request)

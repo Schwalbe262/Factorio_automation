@@ -329,10 +329,11 @@ return {ok=#ground>0,ground=ground}''')
         ground = sorted(result['ground'], key=lambda e: (e['position']['x'], e['position']['y'], e['item']))
         if not ground:
             return None
-        row = ground[0]
-        move = self.builder._move(obs, row['position'])
-        return move or dict(row, type='take', quality='normal',
-                            reason='recover normally spilled raw material from the exact prepaid furnace replacement gap')
+        move = self.builder._move(obs, pending['position'])
+        return move or dict(type='build_furnace_gap', position=pending['position'], direction=0,
+                            resource=self.state['resource'], expected_old_unit=pending['unit_number'],
+                            expected_actor_unit=obs['actor_unit_number'], expected_world_id=obs['world_id'],
+                            reason='atomically recover normally spilled raw material and build the prepaid furnace in the exact committed gap')
 
     def _normal_stock(self):
         result = self.game.query('''

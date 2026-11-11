@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from factorio_ai.deterministic_state import _atomic_json
-from factorio_agent.capacity_profiles import refresh_bus_capacity
+from factorio_agent.capacity_profiles import rebase_tap_capacity,refresh_bus_capacity
 from factorio_agent.main_bus import BusMaterial, ConsumerTap, plan_main_bus
 
 
@@ -73,3 +73,20 @@ class CapacityProfileTests(unittest.TestCase):
             self.assertEqual(refresh_bus_capacity(self.game,self.catalog,self.component)['reason'],
                              'capacity_profile_world_or_catalog_changed')
             write.assert_not_called()
+
+    def test_pending_tap_rebases_only_derived_capacity_after_verified_upgrade(self):
+        self.game.expected_world='w'
+        _atomic_json(self.root/'furnace-upgrade.json',dict(world_id='w',catalog_fingerprint='f',phase='verified'))
+        refresh_bus_capacity(self.game,self.catalog,self.component)
+        current=json.loads(self.component.path.read_text())['bus']
+        result=rebase_tap_capacity(self.game,self.catalog,self.bus,self.bus,[current,current])
+        self.assertTrue(result['ok'],result)
+        self.assertEqual(result['new_bus'],current)
+        self.assertEqual({k:v for k,v in result['new_bus'].items()if k!='capacity'},
+                         {k:v for k,v in self.bus.items()if k!='capacity'})
+        changed=deepcopy(current);changed['entities'][0]['direction']=4
+        self.assertFalse(rebase_tap_capacity(self.game,self.catalog,self.bus,self.bus,[changed,current])['ok'])
+        wrong=deepcopy(current);wrong['capacity']['materials']['iron-plate']['supply_ceiling_per_minute']=999
+        self.assertFalse(rebase_tap_capacity(self.game,self.catalog,self.bus,self.bus,[wrong,current])['ok'])
+        _atomic_json(self.root/'furnace-upgrade.json',dict(world_id='w',catalog_fingerprint='f',phase='upgrade'))
+        self.assertFalse(rebase_tap_capacity(self.game,self.catalog,self.bus,self.bus,[current,current])['ok'])

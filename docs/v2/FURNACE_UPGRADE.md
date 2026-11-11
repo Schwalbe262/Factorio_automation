@@ -33,9 +33,13 @@ normal durable job boundary; this controller never retries transport errors.
 
 A working input arm can drop a stack into the temporarily empty footprint.
 If placement fails, a native check accepts only normal coal or the requested
-ore inside that exact committed gap, with no other obstruction. The controller
-returns an ordinary conserved pickup and reobserves before building; it never
-removes neighboring belts, poles or unrelated ground items to clear the site.
+ore inside that exact committed gap, with no other obstruction. Separate pickup
+and build actions are insufficient: a working arm can spill again between game
+ticks. `build_furnace_gap` therefore performs normal inventory pickup, exact
+one-item payment and construction in one native command, without advancing a
+tick between them. It validates the saved pending old unit/world, actor, normal
+prepaid item, all ground stacks and pickup capacity before mutation. It never
+removes neighboring hardware or unrelated items. A dry run makes no changes.
 
 Preparation preflights the complete prospective source plan while ignoring
 only the exact old units selected for replacement. Stone and steel furnaces

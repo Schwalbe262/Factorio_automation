@@ -31,6 +31,9 @@ class WorldBoundGame(DeterministicGame):
         return super().query(body)
 
     def act(self,action:dict)->dict:
+        if action.get('type')=='build_furnace_gap':
+            from .furnace_gap import execute_gap_build
+            return self._record_action(action,execute_gap_build(self,action))
         if action.get('type')=='take_full_magazines':
             from .ammo_transfer import execute_take_full_magazines
             return self._record_action(action,execute_take_full_magazines(self,action))

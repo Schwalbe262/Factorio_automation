@@ -277,6 +277,25 @@ function target(p,name)return entities[name..":"..p.x..":"..p.y]end''')
             live.get_fluid_contents=lua.eval('function(expected)return function()if contaminated then return{water=1}end;return expected end end')(table(fluids))
         self.game.query.side_effect=lambda body:decode(lua.execute('return(function() '+' '.join(body.splitlines())+' end)()'))
         self.assertIsNotNone(self.c.proof(self.obs),self.c.last_proof_failure)
+        outlet=deepcopy(self.c.state['core']['ports'][1]);outlet_key=_key(outlet)
+        source=dict(outlet,world_id='w',unit_number=bindings[outlet_key],defense_scope_id=self.c.state['defense_scope_id'])
+        neighbor=dict(name='pipe',position={'x':outlet['position']['x']+1,'y':outlet['position']['y']},
+                      direction=0,fluidbox_index=1,unit_number=7000)
+        lua.globals().outlet=lua.globals().entities[outlet_key];lua.globals().consumer=table(neighbor)
+        lua.execute('''consumer.force=f;consumer.surface=s;consumer.get_fluid_contents=function()return {["petroleum-gas"]=1}end
+consumer.get_fluid_box_neighbours=function()return {{entity=outlet,index=1}}end
+original_peers=outlet.get_fluid_box_neighbours
+outlet.get_fluid_box_neighbours=function(index)local rows=original_peers(index);rows[#rows+1]={entity=consumer,index=1};return rows end
+entities["pipe:"..consumer.position.x..":"..consumer.position.y]=consumer''')
+        self.assertIsNone(self.c.proof(self.obs))
+        registry=deepcopy(self.registry)
+        registry['handoffs']={'chemical:plastic-bar':{'petroleum-gas':dict(world_id='w',catalog_fingerprint=self.c.catalog.fingerprint,
+            source=source,first_neighbor=neighbor,phase='bound')}}
+        self.c.sources_path.write_text(json.dumps(registry))
+        self.assertIsNotNone(self.c.proof(self.obs),self.c.last_proof_failure)
+        lua.execute('consumer.unit_number=7001');self.assertIsNone(self.c.proof(self.obs))
+        lua.execute('outlet.get_fluid_box_neighbours=original_peers')
+        self.c.sources_path.write_text(json.dumps(self.registry))
         machine=_key(self.c.state['core']['machines'][0]);live=lua.globals().entities[machine]
         for change,restore in(('powered=false','powered=true'),('wrong_recipe=true','wrong_recipe=false'),
             ('contaminated=true','contaminated=false'),('one_way=true','one_way=false'),

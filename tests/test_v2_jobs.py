@@ -114,6 +114,18 @@ class JobBoundaryTests(unittest.TestCase):
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason"], "postcondition_not_verified")
 
+    def test_proof_exception_cannot_leave_success_in_persisted_receipt(self):
+        submit(self.root,self.game,self.request())
+        executor=Executor({'status':'succeeded'}, {'measured':True})
+        def fail_proof(*args,**kwargs):
+            self.assertNotEqual(Ledger(self.root).data['jobs']['test']['status'],'succeeded')
+            raise AttributeError('simulated missing postcondition dependency')
+        executor.proof=fail_proof
+        with self.assertRaises(AttributeError):run_slice(self.root,self.game,executor,'test')
+        saved=Ledger(self.root).data['jobs']['test']
+        self.assertEqual((saved['status'],saved['reason'],saved['evidence']),
+                         ('blocked','postcondition_verification_error',{}))
+
     def test_verified_success_survives_process_restart_but_rollback_invalidates_it(self):
         submit(self.root, self.game, self.request())
         result = run_slice(self.root, self.game, Executor({"status": "succeeded"}, {"measured": True}), "test")
