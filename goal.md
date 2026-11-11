@@ -15,6 +15,10 @@ only the framework interface and its documented state, with no parent decisions.
 - Preserve all v1 saves and uncommitted changes. One executor owns each world.
 - Use PCB-style production zoning, fixed typed ports, reserved orthogonal trunks,
   controlled branches/crossings and expansion space; reject snake-like layouts.
+- Early factories and transport trunks avoid resource patches. Permit only
+  explicit local mining footprints and minimal straight exits; prebuild safe
+  replacement corridors before moving existing supplies off ore. Do not silently
+  relax this policy for later expansion.
 - Never claim a full-game or rocket success from unit tests or fixture saves.
 
 ## Parts and gates
@@ -34,8 +38,8 @@ Current sprint (2026-11-12): independent paired producers retain fixed ports
 ordinary belts (EXP-0010/0011). Loaded second steam pair, nominal iron ore300
 and plates225/min, and eight normally armed strategic posts are commissioned.
 The user manually repelled a destructive enemy attack; this is human assistance.
-Shared iron/copper main bus and compact32x28 green migration are in execution
-(EXP-0012); current results must be checked in HANDOFF_CURRENT.md. Construction
+Shared iron/copper main bus and compact32x28 green migration are commissioned,
+and the old western hardware retired (EXP-0012). Construction
 stock collection now pools live sources instead of repeatedly taking empty
 moving belts. These are assisted development outcomes, not a Luna-only score.
 Next prove loaded continuous rates, build permanent steel/mall/automatic ammo

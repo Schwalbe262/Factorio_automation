@@ -142,3 +142,16 @@ full footprints, reserved slots, catalog speed, power, and all eight lab paths.
 This subtask's exact Codex token count and weekly quota change are unavailable
 to the delegated worker; the parent should report its measured thread/account
 usage rather than estimating either value.
+
+## Native commissioning completed
+
+The original migration key succeeded at1660346, proof1660440. All five
+intermediate machines and seven green machines produced; green counters were
+[45,45,45,43,42,39,11]. Every lab held both pack types and each row lane held128.
+The last green station needed an extended normal buffer-fill interval before
+its first product; waiting was not treated as completion or bypassed by items.
+Independent reinspection1663671 again passed with green counters
+[50,49,49,48,47,44,15]. The old western hardware was normally recovered while
+its poles were retained. The image [pcb-layout-current.png](images/pcb-layout-current.png)
+shows the actual compact block and shared bus after retirement. Rated35/minute
+remains a design rating; measured sustained output/consumption is still pending.

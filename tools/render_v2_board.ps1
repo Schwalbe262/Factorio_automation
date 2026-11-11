@@ -37,6 +37,17 @@ function Py([double]$y) { return [single](90 + ($y - $minY) * $scale) }
 try {
     $graphics.DrawString('PCB factory: reserved blocks, fixed ports, orthogonal corridors', $font, [System.Drawing.Brushes]::Black, 30, 18)
     $graphics.DrawString("Live entities at tick $($observation.tick). Filled = placed; outline = planned. Grid: 8 tiles.", $small, [System.Drawing.Brushes]::DimGray, 30, 48)
+    $orePath = Join-Path $Runtime 'layout-resources.json'
+    if (Test-Path -LiteralPath $orePath) {
+        $oreMap = Get-Content -Raw -Encoding UTF8 -LiteralPath $orePath | ConvertFrom-Json
+        if ($oreMap.world_id -ne $observation.world_id) { throw 'Resource overlay world identity differs from factory observation' }
+        $oreColors = @{'iron-ore'='#d6e8ee'; 'copper-ore'='#f2dfcd'; 'coal'='#dce1e8'; 'stone'='#ece5cb'}
+        foreach ($ore in $oreMap.resources) {
+            if (-not $oreColors.ContainsKey($ore.name) -or $ore.position.x -lt $minX -or $ore.position.x -ge $maxX -or $ore.position.y -lt $minY -or $ore.position.y -ge $maxY) { continue }
+            $oreBrush = [System.Drawing.SolidBrush]::new([System.Drawing.ColorTranslator]::FromHtml($oreColors[$ore.name]))
+            try { $graphics.FillRectangle($oreBrush, (Px ($ore.position.x-.5)), (Py ($ore.position.y-.5)), [single]$scale, [single]$scale) } finally { $oreBrush.Dispose() }
+        }
+    }
     for ($x = $minX; $x -le $maxX; $x += 8) { $graphics.DrawLine($grid, (Px $x), (Py $minY), (Px $x), (Py $maxY)) }
     for ($y = $minY; $y -le $maxY; $y += 8) { $graphics.DrawLine($grid, (Px $minX), (Py $y), (Px $maxX), (Py $y)) }
     $graphics.SetClip((New-Object System.Drawing.RectangleF((Px $minX), (Py $minY), $plotWidth, $plotHeight)))
@@ -81,6 +92,7 @@ try {
     $graphics.ResetClip()
     $graphics.DrawString('Teal: electric mine | orange: furnace | pink: assembler | blue: underground | purple: splitter', $small, [System.Drawing.Brushes]::DimGray, 30, ($plotHeight+120))
     $graphics.DrawString('Geometric engineering diagram. Native item output and sustained throughput require separate game evidence.', $small, [System.Drawing.Brushes]::DimGray, 30, ($plotHeight+142))
+    $graphics.DrawString('Pale tiles: unmined resources. Red squares: armed defense posts.', $small, [System.Drawing.Brushes]::DimGray, 30, ($plotHeight+160))
     $bitmap.Save([System.IO.Path]::GetFullPath($Output), [System.Drawing.Imaging.ImageFormat]::Png)
     Write-Output $Output
 } finally {

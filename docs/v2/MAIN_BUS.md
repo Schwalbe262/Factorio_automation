@@ -123,3 +123,24 @@ semantics, preserved ports/entities during parallel activation, reserved-line
 crossings, source/belt/lane budgets, exact corridor tracing and recovery guards,
 publication freshness and commissioning gates. Per-agent token and weekly
 quota usage are unavailable; the root task records the project/account meters.
+
+## Live completion: 2026-11-12
+
+`luna-main-bus-compact-20261112` succeeded on its original key at1660346,
+proof1660440:347actions, zero consecutive failures at completion. The earlier
+three tree-mining failures/full inventory block are preserved in EXP-0012/0013.
+Planning456.81s/execution669.54s; recorded paused/blocked intervals549.91s were
+excluded from active budgets without resetting action history or consumed time.
+
+Both shared lines carried only their declared material (509iron/553copper in
+the receipt). All four native splitters had input-left/output-right priorities.
+All12compact machines and all8labs were verified; green counters were
+[45,45,45,43,42,39,11]. Both lab-row lanes held128packs, green left/red right.
+The preserved12iron/6copper furnaces and ore/coal feed lanes passed fresh proof.
+
+Independent live reinspection at1663671 again passed the complete proof:
+phaseverified, no pending recoveries/retirements, no old western assemblers,
+inserters, belts or underground belts in its reservation. Every old pole was
+retained. All8strategic posts remained healthy with100rounds each. The current
+layout image is rendered from that real observation, not the prospective plan.
+This remains commissioning evidence; no sustained30SPM/5min certification.

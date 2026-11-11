@@ -80,3 +80,22 @@ Validation checkpoint:178v2tests plus53legacy game/builder tests pass. Per-part
 measured usage is in note.md; it includes cached parent input, with no child
 counter or exact weekly task quota exposed. No sustained30SPM/5min or rocket
 acceptance is claimed.
+
+## Final native result
+
+The SAME key succeeded at1660346 with347actions, zero consecutive failures at
+completion (the earlier three inventory-related failures remain in history).
+Proof1660440: all12compact machine units and all8labs healthy, typed bus stock
+509iron/553copper, four native input-left/output-right splitters. Green counts
+[45,45,45,43,42,39,11]; intermediates223belts/573gears/320inserters/320circuits/
+483cable. Both lab lanes held128packs; labs held16green total. Preserved source
+furnaces12iron/6copper all produced, with separate ore/coal feed lanes,3UGpairs
+and3actual source splitters. All458obsolete retirement assets were recovered.
+
+Planning456.81s/execution669.54s; excluded recorded pause/blocked549.91s. The
+commissioning wait included the last green station receiving its first inputs;
+no additional geometry change, pack insertion or production shortcut was used.
+Independent fresh proof1663671 passed again, pending recoveries/retirement0,
+old western non-pole production/transport entities0. All8posts healthy100rounds.
+Actual board image was regenerated and visually inspected. Cutover is complete;
+sustained30SPM/5min, automatic ammo/repair and rocket acceptance remain open.
