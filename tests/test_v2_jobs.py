@@ -1,0 +1,162 @@
+"""Safety/recovery tests for real multi-process gameplay job boundaries."""
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+from factorio_ai.deterministic_state import RunLock
+from factorio_agent.jobs import Ledger, Request, control, run_slice, submit
+
+
+class Game:
+    def __init__(self):
+        self.observation = {"ok": True, "world_id": "world", "tick": 100, "entities": [], "production": {}}
+        self.actions = []
+        self.lose_receipt = False
+        self.saved = 0
+
+    def observe(self):
+        return json.loads(json.dumps(self.observation))
+
+    def act(self, action):
+        self.actions.append(action)
+        if self.lose_receipt:
+            raise TimeoutError("server outcome unknown")
+        return {"ok": True}
+
+    def save(self):
+        self.saved += 1
+
+
+class Executor:
+    def __init__(self, result, proof=None):
+        self.result, self.evidence = result, proof
+        self.calls = 0
+
+    def step(self, capability, obs, parameters=None):
+        self.calls += 1
+        return self.result
+
+    def proof(self, capability, obs, result, parameters=None):
+        return self.evidence
+
+
+class JobBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.game = Game()
+
+    def request(self, key="test", capability="starter", tick=100):
+        return Request(key, "world", tick, capability)
+
+    def test_retry_is_idempotent_but_key_cannot_change_effect(self):
+        original = submit(self.root, self.game, self.request())
+        self.game.observation["tick"] = 6000
+        # Retried request may have a stale observation; it returns the same receipt.
+        self.assertEqual(submit(self.root, self.game, self.request()), original)
+        with self.assertRaisesRegex(ValueError, "another request"):
+            submit(self.root, self.game, self.request(capability="power"))
+        self.assertEqual(len(Ledger(self.root).data["jobs"]), 1)
+
+    def test_world_and_snapshot_binding_reject_wrong_requests(self):
+        for request in (Request("x", "other", 100, "starter"), self.request(tick=101)):
+            with self.assertRaises(ValueError):
+                submit(self.root, self.game, request)
+        self.game.observation["tick"] = 4000
+        with self.assertRaisesRegex(ValueError, "stale"):
+            submit(self.root, self.game, self.request())
+
+    def test_missing_prerequisite_or_second_active_job_rejected(self):
+        with self.assertRaisesRegex(ValueError, "prerequisites"):
+            submit(self.root, self.game, self.request(capability="power"))
+        submit(self.root, self.game, self.request())
+        with self.assertRaisesRegex(ValueError, "another job"):
+            submit(self.root, self.game, self.request(key="other"))
+
+    def test_executor_success_needs_independent_postcondition(self):
+        submit(self.root, self.game, self.request())
+        result = run_slice(self.root, self.game, Executor({"status": "succeeded"}), "test")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason"], "postcondition_not_verified")
+
+    def test_verified_success_survives_process_restart_but_rollback_invalidates_it(self):
+        submit(self.root, self.game, self.request())
+        result = run_slice(self.root, self.game, Executor({"status": "succeeded"}, {"measured": True}), "test")
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(Ledger(self.root).data["jobs"]["test"]["evidence"], {"measured": True})
+        self.game.observation["tick"] = 90
+        executor = Executor({"type": "build", "name": "lab"})
+        result = run_slice(self.root, self.game, executor, "test")
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn("rollback", result["reason"])
+        self.assertEqual(result["evidence"], {})
+        self.assertEqual(executor.calls, 0)
+
+    def test_lost_mutation_receipt_is_never_replayed_on_restart(self):
+        submit(self.root, self.game, self.request())
+        self.game.lose_receipt = True
+        executor = Executor({"type": "build", "name": "lab"})
+        with self.assertRaises(TimeoutError):
+            run_slice(self.root, self.game, executor, "test")
+        self.assertEqual(len(self.game.actions), 1)
+        self.assertTrue(Ledger(self.root).data["jobs"]["test"]["pending_action"])
+        self.game.lose_receipt = False
+        result = run_slice(self.root, self.game, executor, "test")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(len(self.game.actions), 1)
+
+    def test_time_slice_yields_without_claiming_success(self):
+        submit(self.root, self.game, self.request())
+        result = run_slice(self.root, self.game, Executor({"status": "waiting", "reason": "crafting"}), "test", seconds=.001)
+        self.assertEqual(result["status"], "waiting")
+        self.assertEqual(result["reason"], "execution_slice_complete")
+        self.assertEqual(self.game.actions, [])
+
+    def test_model_can_pause_a_slow_goal_do_another_job_and_resume(self):
+        submit(self.root, self.game, self.request())
+        control(self.root, self.game, "test", "pause")
+        submit(self.root, self.game, self.request(key="other"))
+        with self.assertRaisesRegex(ValueError, "another job"):
+            control(self.root, self.game, "test", "resume")
+        run_slice(self.root, self.game, Executor({"status": "succeeded"}, {"measured": True}), "other")
+        control(self.root, self.game, "test", "resume")
+        self.assertEqual(Ledger(self.root).data["jobs"]["test"]["status"], "waiting")
+
+    def test_reconciliation_discards_uncertain_intent_and_requires_fresh_planning(self):
+        submit(self.root, self.game, self.request())
+        self.game.lose_receipt = True
+        with self.assertRaises(TimeoutError):
+            run_slice(self.root, self.game, Executor({"type": "build", "name": "lab"}), "test")
+        control(self.root, self.game, "test", "reconcile")
+        self.game.lose_receipt = False
+        run_slice(self.root, self.game, Executor({"status": "succeeded"}, {"observed_lab": True}), "test")
+        self.assertEqual(len(self.game.actions), 1)
+
+    def test_intentional_pause_does_not_spend_execution_deadline(self):
+        submit(self.root, self.game, self.request())
+        control(self.root, self.game, "test", "pause")
+        self.game.observation["tick"] = 200000
+        control(self.root, self.game, "test", "resume")
+        result = run_slice(self.root, self.game, Executor({"status":"succeeded"}, {"measured":True}), "test")
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["paused_ticks"], 199900)
+
+    def test_os_lock_prevents_another_process_writing_same_world(self):
+        script = ("from pathlib import Path; from factorio_ai.deterministic_state import RunLock; "
+                  "RunLock(Path(__import__('sys').argv[1])).acquire()")
+        with RunLock(self.root / "writer.lock"):
+            result = subprocess.run([sys.executable, "-B", "-c", script, str(self.root / "writer.lock")],
+                                    capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("another process owns", result.stderr)
+        # The lock is released by the OS, not by trusting stale PID metadata.
+        with RunLock(self.root / "writer.lock"):
+            pass
+
+
+if __name__ == "__main__":
+    unittest.main()

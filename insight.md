@@ -6530,3 +6530,7 @@ Promote to insight.md only if:
 - Evidence: `{"item":"iron-plate","item_count":32,"source_loop":5030,"steps":1,"target":10}`
 - Remaining risk: Needs continued validation in later loops.
 
+
+
+## 2026-11-11 / EXP-0002 ? Power poles need network identity
+- Improvement: associate pole electric_network_id with energized generator network IDs when selecting powered consumer sites. Before: all three real connected poles reported false for the consumer connectivity predicate and the planner blocked no_powered_lab_site. After: ordinary lab placed/connected,35 normal red packs consumed, both startup technologies unlocked; measured generation60kW under load. Evidence: seed101/world32a34974, EXP-0002, native network1 at tick209556. Remaining risk: current site selector handles the starter steam network; other power types and district capacity require their own verification.

@@ -49,6 +49,34 @@ expanding. Reserve rail corridors early; implement remote mining by midgame.
 Oil coproducts, recipe alternatives and multi-output/cyclic chains require
 explicit material balance; they are not forced into a single-product recipe DAG.
 
+## PCB-style layout policy
+
+- Place production districts and reserve logistics corridors together. Blocks
+  expose fixed typed input/output ports at their boundaries, including rate and
+  facing. Reserve extension footprints before funding initial construction.
+- Use a shared eight-tile orthogonal trunk grid. Short local port escapes join
+  whole horizontal/vertical corridors. A route currently allows at most six
+  turns and 1.35 times direct distance plus four tiles for port escapes.
+- A failed corridor gate is an explicit planning failure. Reconsider port,
+  block position or corridor; do not fall back to a free-form maze route.
+- Underground crossings are research-gated, resource-backed links with actual
+  span/orientation checks. Splitters are explicit branching components with
+  declared priority/rates. These broader crossing/branch executors are pending.
+- Avoid interference with other item/fluid networks. Separate trunk allocation,
+  local routing, construction and observed-throughput validation.
+- Rank future power coast candidates using coal distance as well as access to
+  the starter area. Do not choose a water-only location and ignore fuel cost.
+
+The first live migration replaced the unfinished starter coal layout, keeping
+its paid drill and existing power plant. Native preflight, ordinary guarded
+hardware recovery and fresh entity checks verified a four-belt self-feed and
+four-turn trunk. Whole-plan belts changed from 140 to 132; route length itself
+was 128 versus 126 previously, so this is not a route-length speedup claim.
+The production-district allocator and full science/logistics system are not yet
+implemented. This first corridor must not be described as a complete PCB factory.
+
+![Previous and rebuilt coal layout plans](images/coal-layout-comparison.png)
+
 ## Evaluation
 
 Compare target-only, target+diagnosis and candidate-choice interfaces on paired

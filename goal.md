@@ -13,6 +13,8 @@ only the framework interface and its documented state, with no parent decisions.
 - Engine crafting, machine production, science consumption and launch are real.
 - Never grant materials, unlock research by script, or edit progress counters.
 - Preserve all v1 saves and uncommitted changes. One executor owns each world.
+- Use PCB-style production zoning, fixed typed ports, reserved orthogonal trunks,
+  controlled branches/crossings and expansion space; reject snake-like layouts.
 - Never claim a full-game or rocket success from unit tests or fixture saves.
 
 ## Parts and gates

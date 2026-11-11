@@ -533,11 +533,15 @@ return success{blocked=blocked,clearable=clearable}
         occupied.update((p["x"], p["y"]) for p in survey.get("blocked", []))
         occupied.discard((source["x"], source["y"]))
         occupied.discard((destination["x"], destination["y"]))
-        result = route_orthogonal(source, destination, occupied=occupied, bounds=bounds,
-                                  max_nodes=25000, start_direction=start_direction, end_direction=end_direction)
+        result = self.plan_route(name, source, destination, occupied=occupied, bounds=bounds,
+                                 max_nodes=25000, start_direction=start_direction, end_direction=end_direction)
         if clear_natural and result.get("ok"):
             result["clearable"] = survey.get("clearable", [])
         return result
+
+    def plan_route(self, name: str, source: dict, destination: dict, **kwargs) -> dict:
+        """Routing policy seam; v1 preserves its original orthogonal search."""
+        return route_orthogonal(source, destination, **kwargs)
 
     def _choose_power_plan(self) -> dict:
         for site in self.water_sites():

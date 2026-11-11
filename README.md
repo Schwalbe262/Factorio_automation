@@ -10,6 +10,23 @@ The game uses the default map/enemy rules and the installed 2.1.20 expansion.
 Start from [HANDOFF_CURRENT.md](HANDOFF_CURRENT.md) and [goal.md](goal.md).
 V2 is under construction; an autonomous v2 rocket launch is **not verified**.
 
+Current capabilities: starter cells, starter capacity expansion, self-fueled
+steam setup, finite starter research, and regular coal-trunk migration. The live
+starter and layout are verified; broader science/oil/rail/rocket execution is
+unfinished. See the [gameplay API](docs/v2/PLAYER_API.md).
+
+To watch the existing development world, run `watch_factorio_v2.bat`. Viewing
+does not stop automation; movement/build controls share the automation actor.
+
+```powershell
+$env:PYTHONPATH = 'src'
+python -B -m factorio_agent --runtime runtime/v2/dev-101 observe
+python -B -m unittest discover -s tests -p 'test_v2_*.py' -q
+```
+
+New worlds use `create`, `start`, then `connect-player`; choose another runtime
+directory and distinct ports. Never replace a running save to inspect references.
+
 ## Archived v1 documentation
 
 Everything below describes the inherited v1 implementation and its commands.
