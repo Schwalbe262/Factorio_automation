@@ -6541,3 +6541,10 @@ Promote to insight.md only if:
 - Improvement/after: require current powered entity identities and retain native output evidence for at most600ticks.
 - Evidence: Luna retry succeeded tick344894 without rebuilding, observed coal344787; regression checks movement and expiry.
 - Remaining risk: this proves recent output, not sustained throughput; use a separate timed production/consumption window for capacity.
+
+
+## 2026-11-11T12:23:21.852315+00:00 | EXP-0006 | bootstrap upkeep must respect automatic ownership
+- Before: generic starter upkeep seeded8coal into each of6new belt-fed furnaces, which could falsely validate automatic logistics.
+- Improvement/after: filter registered automatic furnaces from every bootstrap path, including explicit starter requests; normally recover accidental seeds before recording zero-product/empty-fuel baseline. Reject already-burning or previously productive contaminated baselines.
+- Evidence: regression covers starter-vs-district ownership and normal recovery; actual48coal returned, baseline505800, zero later actor inserts, all6furnaces produced via separated ore/coal belt lanes at517019 and520099.
+- Remaining risk: old starter upkeep still funds capital; retire it after permanent supply/mall is proven. Baseline/initial output does not replace sustained-rate validation.

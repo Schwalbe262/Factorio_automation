@@ -42,8 +42,8 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
                  max_detour_ratio=1.35, grid_pitch=8):
     """Select whole straight trunk corridors, never incremental squiggles.
 
-    Candidates consist of direct L paths or one horizontal/vertical trunk with
-    local port escapes. Port headings and obstacle ownership are hard constraints.
+    Candidates consist of whole orthogonal trunks and crossbars with bounded
+    straight port escapes. Port headings and obstacle ownership are hard constraints.
     Failure is explicit when no clean corridor fits; no spaghetti fallback.
     Survey/clearance and underground-layer planning are separate responsibilities.
     """
@@ -95,6 +95,34 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
             for y in trunk_lanes[1]:
                 skeletons.append([a,pa,(pa[0],y),(x,y),(x,pb[1]),pb,b])
                 skeletons.append([a,pa,(x,pa[1]),(x,y),(pb[0],y),pb,b])
+        # A one-tile escape can be trapped by a nearby pole even when a clean
+        # corridor exists. A fixed four-tile escape remains a straight port
+        # connection; the same global turn/detour/obstacle gates still apply.
+        pa4=(a[0]+4*av[0],a[1]+4*av[1])
+        pb4=(b[0]-4*bv[0],b[1]-4*bv[1])
+        for x in sorted(set(trunk_lanes[0]+[pa4[0],pb4[0]])):
+            for y in sorted(set(trunk_lanes[1]+[pa4[1],pb4[1]])):
+                skeletons.append([a,pa4,(pa4[0],y),(x,y),(x,pb4[1]),pb4,b])
+                skeletons.append([a,pa4,(x,pa4[1]),(x,y),(pb4[0],y),pb4,b])
+        # Parallel trunks with one crossbar permit independent port escapes.
+        # Four nearby grid lanes, short local escapes and eight crossbars.
+        # These are complete corridor candidates, never a free-cell maze search.
+        for axis in (0,1):
+            other=1-axis
+            lanes=trunk_lanes[axis]
+            first=set(sorted(lanes,key=lambda n:abs(n-pa[axis]))[:4])
+            last=set(sorted(lanes,key=lambda n:abs(n-pb[axis]))[:4])
+            first.update(a[axis]+av[axis]*n for n in (2,3,4))
+            last.update(b[axis]-bv[axis]*n for n in (2,3,4))
+            midpoint=(pa[other]+pb[other])/2
+            bars=sorted(trunk_lanes[other],key=lambda n:(abs(n-pa[other])+abs(n-pb[other]),abs(n-midpoint)))[:8]
+            for p in first:
+                for q in last:
+                    for bar in bars:
+                        if axis==0:
+                            skeletons.append([a,pa,(p,pa[1]),(p,bar),(q,bar),(q,pb[1]),pb,b])
+                        else:
+                            skeletons.append([a,pa,(pa[0],p),(bar,p),(bar,q),(pb[0],q),pb,b])
         skeletons.sort(key=lambda vs: sum(abs(p[0]-q[0])+abs(p[1]-q[1]) for p,q in zip(vs,vs[1:])))
         valid = []
         visited = 0

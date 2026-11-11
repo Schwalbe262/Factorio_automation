@@ -1,0 +1,116 @@
+"""Whole orthogonal corridors with explicit underground crossing pairs."""
+from __future__ import annotations
+
+import json
+
+from factorio_ai.deterministic_builder import _plan
+from .board import entity
+from .routing import VECTORS,route_trunks
+
+
+def xy(e):
+    return e['position']['x'],e['position']['y']
+
+
+def compile_crossings(route,foreign,*,maximum_span=5):
+    """Cross foreign surface belts without removing or joining their network.
+
+    Every crossing is a straight input/output pair. Reject turns in buried
+    spans, overlapping pairs and nearby same-axis mouths that could steal pairs.
+    """
+    if not route.get('ok'):return route
+    segments=route['segments'];positions=[xy(e) for e in segments]
+    surface={xy(e):e for e in foreign if e['name']=='transport-belt'}
+    underground=[e for e in foreign if e['name']=='underground-belt']
+    hits=[i for i,p in enumerate(positions) if p in surface]
+    spans=[]
+    for index in hits:
+        if spans and index<=spans[-1][1]+1:
+            spans[-1]=(spans[-1][0],index+1)
+        else:spans.append((index-1,index+1))
+    result=[];pairs=[];buried=set();mouths={}
+    for first,last in spans:
+        if first<=0 or last>=len(segments)-1 or last-first>maximum_span:
+            return {'ok':False,'reason':'crossing_has_no_clear_straight_mouths_or_exceeds_span'}
+        direction=segments[first]['direction'];v=VECTORS[direction]
+        for i in range(first,last):
+            if segments[i]['direction']!=direction or positions[i+1]!=(positions[i][0]+v[0],positions[i][1]+v[1]):
+                return {'ok':False,'reason':'underground_crossing_would_include_a_turn'}
+        if positions[first] in surface or positions[last] in surface:
+            return {'ok':False,'reason':'underground_mouth_would_replace_foreign_belt'}
+        if any(surface[positions[i]]['direction']%8==direction%8 for i in range(first+1,last) if positions[i] in surface):
+            return {'ok':False,'reason':'foreign_parallel_belt_requires_explicit_junction'}
+        for index,role in ((first,'input'),(last,'output')):
+            p=positions[index]
+            for other in underground:
+                q=xy(other)
+                aligned=(p[0]==q[0]) if direction%8==0 else (p[1]==q[1])
+                if other['direction']==direction and aligned and abs(p[0]-q[0])+abs(p[1]-q[1])<=maximum_span:
+                    return {'ok':False,'reason':'nearby_underground_endpoint_could_steal_pair'}
+            mouths[index]=dict(entity('underground-belt',*p,direction),belt_to_ground_type=role)
+        buried.update(range(first+1,last));pairs.append({'input':list(positions[first]),'output':list(positions[last]),'direction':direction,'span':last-first})
+    for i,segment in enumerate(segments):
+        if i not in buried:result.append(mouths.get(i,dict(segment,name='transport-belt')))
+    # Reject accidental surface merges in either direction. Input mouths carry
+    # forward underground, not onto the foreign crossing above their tunnel.
+    own={xy(e):e for e in result}
+    for p,e in own.items():
+        if e.get('belt_to_ground_type')=='input' or p==positions[-1]:continue
+        vx,vy=VECTORS[e['direction']]
+        if (p[0]+vx,p[1]+vy) in surface:
+            return {'ok':False,'reason':'route_would_feed_foreign_surface_belt'}
+    for p,e in surface.items():
+        vx,vy=VECTORS[e['direction']]
+        recipient=(p[0]+vx,p[1]+vy)
+        if recipient==positions[0] and e['direction']==segments[0]['direction']:continue
+        if recipient in own:
+            return {'ok':False,'reason':'foreign_surface_belt_would_feed_route'}
+    return _plan(result,[],underground_pairs=pairs,route_metrics=route['metrics'],layout_policy='pcb-layered-trunks-v1')
+
+
+def plan_connection(game,builder,obs,source,destination,reserved=()):
+    if source.get('item')!=destination.get('item'):
+        return {'ok':False,'reason':'port_item_mismatch'}
+    a,b=source['position'],destination['position'];ends={(a['x'],a['y']),(b['x'],b['y'])}
+    bounds={'min_x':min(a['x'],b['x'])-16,'max_x':max(a['x'],b['x'])+16,
+            'min_y':min(a['y'],b['y'])-16,'max_y':max(a['y'],b['y'])+16}
+    if (bounds['max_x']-bounds['min_x']+1)*(bounds['max_y']-bounds['min_y']+1)>40000:
+        return {'ok':False,'reason':'belt_corridor_survey_budget_exceeded'}
+    payload=json.dumps(json.dumps(bounds,separators=(',',':')))
+    survey=game.query('''
+local b=helpers.json_to_table('''+payload+''');local blocked={}
+for x=b.min_x,b.max_x do for y=b.min_y,b.max_y do
+ local p={x=x,y=y};local old=target(p,"transport-belt")
+ if not (old and old.force==f) and not s.can_place_entity{name="transport-belt",position=p,force=f} then
+  blocked[#blocked+1]=p
+ end
+end end
+return {ok=true,blocked=blocked,max_span=prototypes.entity["underground-belt"].max_underground_distance}
+''')
+    if not survey.get('ok'):return survey
+    # Surface belts are crossable, all other prospective footprints are hard.
+    all_entities={ (e['name'],*xy(e)):e for e in obs['entities']+list(reserved) }
+    foreign=[e for e in all_entities.values() if e['name'] in {'transport-belt','underground-belt'} and xy(e) not in ends]
+    hard={(p['x'],p['y']) for p in survey['blocked']}
+    hard.update(builder._occupied_by_plan([e for e in reserved if e['name']!='transport-belt']))
+    hard-=ends
+    route=route_trunks(a,b,occupied=hard,bounds=bounds,start_direction=source['facing'],
+                       end_direction=destination['facing'],max_nodes=150000)
+    compiled=compile_crossings(route,foreign,maximum_span=survey['max_span'])
+    if not compiled.get('ok'):return compiled
+    compiled['ports']=[source,destination]
+    preflight=builder.can_place(compiled['entities'])
+    # Prospective destination/source mouths are deliberately shared with blocks.
+    if not preflight.get('ok'):return {'ok':False,'reason':'native_corridor_preflight_failed','blocked':preflight.get('blocked')}
+    return compiled
+
+
+def underground_proof(obs,plan):
+    by_position={xy(e):e for e in obs['entities'] if e['name']=='underground-belt'}
+    for pair in plan.get('underground_pairs',[]):
+        first=by_position.get(tuple(pair['input']));last=by_position.get(tuple(pair['output']))
+        if not first or not last:return False
+        if not first.get('underground_pair_verified') or not last.get('underground_pair_verified'):return False
+        if first.get('underground_neighbour',{}).get('unit_number')!=last['unit_number']:return False
+        if first.get('direction')!=pair['direction'] or last.get('direction')!=pair['direction']:return False
+    return True

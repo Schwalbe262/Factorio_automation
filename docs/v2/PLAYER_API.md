@@ -47,6 +47,7 @@ Current capabilities:
 | bootstrap_logistics | none | power and naturally unlocked Automation |
 | electric_coal | none | power and naturally unlocked electric-mining-drill |
 | mining_outpost | `--resource iron-ore` (or copper-ore/coal/stone), `--rate-per-minute 1..240` absolute nominal target | power and electric-mining-drill |
+| smelting_district | none; initial district has iron60/copper30 nominal inputs | power, bootstrap_logistics, mining_outpost; one ready bank each iron60/copper30/coal30 |
 
 Use the typed parameter flags above to avoid Windows shell JSON quoting issues.
 Starter capacity funds initial construction using extra drill-fed starter cells;
@@ -79,6 +80,17 @@ rates and surveys pure resource coverage, complete placements and power before
 construction. Existing productive banks stay in place when capacity is added.
 The receipt proves powered extraction/native item output. Nominal capacity is
 not a measured downstream smelting or science rate; those require further jobs.
+Smelting reserves a32x32 expansion footprint before construction. Parameterized
+furnace rows have separate ore/coal side-load lanes, ordinary inserters and fixed
+plate outputs. A separate coal bank supplies one real balanced splitter; the
+existing power feed remains operating. Full route/placement preflight precedes
+payment. Perpendicular foreign belt crossings use normal underground endpoints
+with span, role, orientation, pairing and unintended-merge checks. Foreign
+surface belts are preserved. Native proof requires every furnace to produce,
+plate output, actual underground partners and distinct ore/coal feed lanes.
+Its initial inputs are rated60/30; sustained output needs downstream consumption
+and a measured window. The actor never inserts ore/fuel into these new furnaces.
+
 `observe` reports time-window production rates only after two timed samples;
 lifetime counters are never labeled throughput. Saved-project construction
 budgets are separate from the next immediate component deficit and exclude

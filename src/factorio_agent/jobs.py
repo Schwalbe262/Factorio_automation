@@ -31,6 +31,8 @@ CAPABILITIES = {
                       "effect": "normally craft electric drill, prebuild grid, reserve-backed cutover and real coal output onto retained trunk"},
     "mining_outpost": {"parameters": {"resource":"iron-ore|copper-ore|coal|stone","rate_per_minute":"finite number 0..240, absolute nominal target"},
                        "requires":["power"],"effect":"add aligned powered electric drills/collector banks with fixed output ports; never replace operating banks to expand"},
+    "smelting_district": {"parameters":{},"requires":["power","bootstrap_logistics","mining_outpost"],
+                         "effect":"reserve a PCB district, connect iron60/copper30 nominal banks and separate coal source with actual splitter/underground crossing, normally belt-feed furnaces"},
 }
 
 
@@ -217,14 +219,20 @@ class StarterExecutors:
         self.electric_coal=ElectricCoal(game,self.bootstrap,self.builder)
         from .outposts import MiningOutposts
         self.outposts=MiningOutposts(game,self.bootstrap,self.builder)
+        from .smelting import SmeltingDistrict
+        self.smelting=SmeltingDistrict(game,self.bootstrap,self.builder,catalog)
+
+    def starter_observation(self,obs):
+        return {**obs,'entities':[e for e in obs.get('entities',[])
+            if not self.builder.owns_automated_burner(e) and not self.smelting.owns_furnace(e,obs)]}
 
     def step(self, capability: str, obs: dict, parameters: dict | None = None) -> dict:
         if capability == "starter":
-            return self.bootstrap.next_action(obs)
+            self.builder._sync(obs)
+            return self.bootstrap.next_action(self.starter_observation(obs))
         if capability == "regularize_power_layout":
             self.builder._sync(obs)
-            fuel_obs = {**obs, "entities": [e for e in obs.get("entities", [])
-                        if not self.builder.owns_automated_burner(e)]}
+            fuel_obs = self.starter_observation(obs)
             fuel = self.bootstrap.maintain_fuel(fuel_obs)
             if fuel is not None:
                 return fuel
@@ -232,8 +240,7 @@ class StarterExecutors:
         # Retain starter supplies during power construction without handfeeding
         # burners now owned by the automatic power plan.
         self.builder._sync(obs)
-        filtered = {**obs, "entities": [e for e in obs.get("entities", [])
-                                       if not self.builder.owns_automated_burner(e)]}
+        filtered = self.starter_observation(obs)
         result = self.bootstrap.next_action(filtered)
         if result.get("status") != "succeeded":
             return result
@@ -258,6 +265,10 @@ class StarterExecutors:
             result=self.builder.ensure_power(obs)
             if result.get("status")!="succeeded":return result
             return self.outposts.step(obs,parameters or {})
+        if capability == "smelting_district":
+            result=self.builder.ensure_power(obs)
+            if result.get("status")!="succeeded":return result
+            return self.smelting.step(obs)
         raise ValueError("no executor for capability: " + capability)
 
     def proof(self, capability: str, obs: dict, result: dict, parameters: dict | None = None) -> dict | None:
@@ -273,6 +284,8 @@ class StarterExecutors:
             return self.electric_coal.proof(obs)
         if capability == "mining_outpost":
             return self.outposts.proof(obs,parameters or {})
+        if capability == "smelting_district":
+            return self.smelting.proof(obs)
         produced = obs.get("production", {})
         if not all(produced.get(name, {}).get("produced", 0) > 0 for name in ("iron-plate", "copper-plate")):
             return None

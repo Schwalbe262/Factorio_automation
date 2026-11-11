@@ -251567,3 +251567,22 @@ Goal: expandblue-sciencefluidproduction toaggregategraphdemand. Hypothesis: stab
 - Validation:40 v2 tests +38 builder tests pass. Production window and all-known-plan construction diagnostics added.
 - Next: closed ore/coal-to-plate smelting districts and controlled underground/splitter connections, then permanent science/mall/defense/oil/rail/rocket.
 - Usage: parent 32144956 -> 45438772 = 13293816 tokens incl cached input; weekly account 6.0% -> 8.0% (+2.0pp); exact task quota and child tokens unavailable.
+
+
+## 2026-11-11T12:18:21.377521+00:00 | Part3 | PCB smelting development failures and fixes
+- Goal/hypothesis: whole reserved district + orthogonal crossings gives normal belt-fed smelting without per-frame model routing.
+- Actions/options: native full preflight, fixed dual-lane furnace rows, balanced coal splitter, bounded underground crossings; port escapes adjusted within original turn/detour limits.
+- Metrics/result: accepted32x32 site;6furnaces,12inserters,281belts,4UGends,1splitter. First attempt blocked474554 (tuple/list persistence mismatch), fixed roundtrip. Retry built actual hardware but bootstrap globally seeded8coal into each new furnace.
+- Failure/recovery: stopped worker2456 safely tick495960/actions67; all6products0/burning0. Added ownership exclusion to all bootstrap paths and normal48coal recovery before clean baseline. No delete/grant/energy edits.
+- Validation:50v2tests pass; final native flow pending restarted Luna job.
+- Next: prove clean fuel baseline, distinct lanes, real furnace output/pairs; record outcome and push. Tokens sampled at part delivery.
+
+
+## 2026-11-11T12:23:21.852315+00:00 | Part3 | native automatic PCB smelting verified
+- Goal/hypothesis: validate paid orthogonal connections, separate fuel lanes and furnace output after empty-fuel baseline.
+- Actions/options: continued same Luna job after ownership fix; six normal fuel takes returned48coal, confirmed event receipts. Preserved old power feed and constructed one balanced splitter plus two underground pairs.
+- Metrics/result: baseline505800 had0products/0burning/empty fuel; zero subsequent district insert actions. Job110actions/zero failures; proof517019 all6furnaces produced12iron/6copper. Independent powered-inserter proof520099:76iron/38copper products,46iron/24copper on belts, distinct ore/coal lanes. Whole-world430surfacebelts/4UGends/58poles. Solved for this district.
+- Validation:50v2+38builder tests pass; native exact partner/geometry/current power/production/lane checks pass; live PCB engineering image inspected.
+- Limits/failure status: two development bugs fixed (JSON shape and legacy fuel ownership); intervention invalidates a wholly Luna-only history. Sustained throughput, permanent science/mall/defense/oil/rail/rocket remain incomplete.
+- Next: permanent automatic science/labs from fixed plate ports; apply ordinary consumption window before rate claims.
+- Usage delivery sample: parent 45679186 -> 51829715 = 6150529 tokens incl cached input; weekly account 8.0% -> 9.0% (+1.0pp); child tokens and exact per-task weekly share unavailable.

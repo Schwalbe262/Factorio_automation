@@ -60,8 +60,10 @@ explicit material balance; they are not forced into a single-product recipe DAG.
 - A failed corridor gate is an explicit planning failure. Reconsider port,
   block position or corridor; do not fall back to a free-form maze route.
 - Underground crossings are research-gated, resource-backed links with actual
-  span/orientation checks. Splitters are explicit branching components with
-  declared priority/rates. These broader crossing/branch executors are pending.
+  span/orientation/partner checks. Preserve the foreign surface belt and reject
+  parallel reuse, accidental merges and endpoints that could steal pairing.
+  Splitters are explicit branching components with declared policies; the first
+  smelting district uses ordinary balanced coal outputs and a separate source.
 - Avoid interference with other item/fluid networks. Separate trunk allocation,
   local routing, construction and observed-throughput validation.
 - Rank future power coast candidates using coal distance as well as access to
@@ -75,10 +77,13 @@ was 128 versus 126 previously, so this is not a route-length speedup claim.
 The first reserved16x16 cell now assembles finite red science to unlock logistics
 naturally. Aligned electric mining banks expose collector ports and preserve
 existing banks when adding capacity. These are verified development components;
-automatic smelting, permanent science supply and district crossings are pending.
-They must not be described as a complete PCB factory or sustained30SPM.
+automatic smelting with controlled crossings passed native development checks
+(EXP-0006). Permanent science supply and later processing remain pending. They must not be
+described as a complete PCB factory or sustained30SPM.
 
 ![Previous and rebuilt coal layout plans](images/coal-layout-comparison.png)
+
+![Live PCB blocks, fixed ports and constructed corridors](images/pcb-layout-current.png)
 
 ## Evaluation
 

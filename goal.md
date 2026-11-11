@@ -29,6 +29,11 @@ only the framework interface and its documented state, with no parent decisions.
    counter increase and natural platform arrival. Luna-only end-to-end runs.
 
 ## Evaluation
+Current sprint (2026-11-11): native electric extraction and belt-fed PCB smelting
+now work in the development world (EXP-0005/0006). Next connect permanent machine
+science and labs to the fixed plate ports, then construction mall/ammunition.
+Do not close the continuous-rate gate from filling output buffers. No rocket yet.
+
 Freeze code, model/effort, seed/save and settings per attempt. Classify failures
 as model/observation/executor/missing capability/environment. Compare target-only,
 diagnosis and candidate-choice interfaces. Repeat fixed development seeds and
