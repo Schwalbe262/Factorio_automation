@@ -11,6 +11,7 @@ from .board import entity
 from .power_grid import plan_connection
 from .transport import VECTORS,xy,plan_connection as belt_connection,underground_proof
 from .planning import overlap
+from .resource_policy import mark_mining_core
 
 
 RESOURCES={"iron-ore","copper-ore","coal","stone"}
@@ -30,10 +31,11 @@ def mining_bank(x,y,count,resource):
     es=[entity("electric-mining-drill",x+4*i,y,8) for i in range(count)]
     es += [entity("transport-belt",x+dx,y+2,4) for dx in range(-1,4*(count-1)+3)]
     es += [entity("small-electric-pole",x+4*i+2,y) for i in range(count)]
+    footprint=mark_mining_core(es,resource)
     port={"kind":"item","item":resource,"direction":"output","facing":4,
-          "position":{"x":x+4*(count-1)+2,"y":y+2}}
+          "position":{"x":x+4*(count-1)+2,"y":y+2},"mining_resource":resource}
     return _plan(es,[port],template="electric_mining_bank",resource_cell=True,
-                 resource=resource,drill_count=count,layout_policy="pcb-mining-row-v1")
+                 resource=resource,drill_count=count,mining_footprint=footprint,layout_policy="pcb-mining-row-v1")
 
 
 class MiningOutposts:
@@ -121,7 +123,7 @@ return {ok=true,candidates=best,nominal_drill_rate=proto.mining_speed*60/mined.m
             all_entities={(e["name"],e["position"]["x"],e["position"]["y"]):e
                           for e in power["entities"]+base["entities"]}
             full=_plan(list(all_entities.values()),base["ports"],resource_cell=True,
-                       resource=resource,drill_count=count,layout_policy="pcb-mining-row-v1")
+                       resource=resource,drill_count=count,mining_footprint=base['mining_footprint'],layout_policy="pcb-mining-row-v1")
             footprints=[self.builder._occupied_by_plan([e]) for e in full["entities"]]
             if sum(map(len,footprints))!=len(set().union(*footprints)):continue
             return {"ok":True,"plan":full,"nominal_rate_per_minute":count*candidates["nominal_drill_rate"],

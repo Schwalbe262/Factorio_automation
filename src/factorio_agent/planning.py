@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from .transport import xy
+from .resource_policy import policy_specs,mining_reservations,RESOURCE_CHECK_LUA
 
 
 def overlap(a,b):
@@ -41,19 +42,25 @@ def preflight(game,builder,obs,entities,*,ignored_units=()):
     boxes=[builder._occupied_by_plan([e]) for e in entities]
     if sum(map(len,boxes))!=len(set().union(*boxes)):
         return {'ok':False,'reason':'whole_block_prospective_overlap'}
-    specs=[]
-    for e,box in zip(entities,boxes):
-        xs=[p[0] for p in box];ys=[p[1] for p in box]
-        specs.append(dict(e,survey_area=[[min(xs)-.49,min(ys)-.49],[max(xs)+.49,max(ys)+.49]]))
-    payload=json.dumps(json.dumps({'specs':specs,'ignored':list(ignored_units)},separators=(',',':')))
-    result=game.query('''
+    try:
+        specs=policy_specs(builder,obs,entities,ignored_units=ignored_units)
+        zones=mining_reservations(game,obs['world_id'])
+    except (ValueError,KeyError,TypeError) as exc:
+        return {'ok':False,'reason':'invalid_mining_resource_scope','detail':str(exc)}
+    payload=json.dumps(json.dumps({'specs':specs,'ignored':list(ignored_units),'zones':zones},separators=(',',':')))
+    result=game.query(RESOURCE_CHECK_LUA+'''
 local args=helpers.json_to_table('''+payload+''');local specs=args.specs;local obstacles={};local seen={};local ignored={}
 for _,unit in ipairs(args.ignored) do ignored[unit]=true end
 for _,spec in ipairs(specs) do
+ local resource_reason=resource_violation(spec,args.zones,ignored,args.specs)
+ if resource_reason then return {ok=false,reason=resource_reason,entity=spec.name,position=spec.position} end
+ if not spec.resource_virtual_tunnel then
  local old=target(spec.position,spec.name)
  if old and ignored[old.unit_number] then old=nil end
  if old then
-  if old.force~=f or (old.direction~=spec.direction and old.type~="electric-pole" and not spec.recipe) then return {ok=false,reason="owned_block_entity_configuration_changed"} end
+  local same_direction=old.direction==(spec.direction or 0)
+  if spec.name=="steam-engine" or spec.name=="steam-turbine" then same_direction=old.direction%8==(spec.direction or 0)%8 end
+  if old.force~=f or (not same_direction and old.type~="electric-pole" and not spec.recipe) then return {ok=false,reason="owned_block_entity_configuration_changed"} end
  else
   local legal=s.can_place_entity{name=spec.name,position=spec.position,direction=spec.direction or 0,force=f,
     type=spec.belt_to_ground_type,build_check_type=defines.build_check_type.manual_ghost,forced=true}
@@ -78,6 +85,7 @@ for _,spec in ipairs(specs) do
     if not seen[key] then seen[key]=true;obstacles[#obstacles+1]={name=e.name,position=pos(e.position),unit_number=e.unit_number} end
    end
   end
+ end
  end
 end
 return {ok=true,clear_obstacles=obstacles}

@@ -56,6 +56,10 @@ Current capabilities:
 | steam_expansion | none | electric_coal; ordinary paired coal bank and another boiler/engine pair |
 | defense_perimeter | none | starter; native gun-turret research and recipes |
 | main_bus_factory | none | paired_smelting, logistic_science, defense_perimeter; migrate to shared bus and compact green |
+| dedicated_materials | `--resource coal` or stone | paired_mining; independent opposing drill pair and identity-bound material outlets |
+| green_bus_reroute | none | main_bus_factory; move only green raw branches off resources, preserve production core |
+| steam_coal_reroute | none | steam_expansion; prebuild alternative, verify loaded engines, recover obsolete owned transport |
+| legacy_coal_cleanup | none | steam_expansion and dedicated_materials; isolated burner/cache recovery after replacement supply and headroom proof |
 | research | `--technology` native catalog name | automation_science; native prerequisites and continuous supported science supply |
 
 Use the typed parameter flags above to avoid Windows shell JSON quoting issues.
@@ -67,6 +71,16 @@ Permanent green science, strategic armed posts and shared-bus migration are
 implemented. Construction mall, automatic ammunition production, repair, oil,
 rail and rocket jobs remain unimplemented.
 Do not claim a rocket-capable system.
+
+New construction checks resource tiles and registered mining growth space before
+clearing or collecting materials. Ordinary factories, buses and long routes
+avoid both. Only explicitly scoped mining cores and a verified minimal surface
+exit may overlap their matching ore; a blanket `resource_cell` flag is insufficient.
+An existing asset is retained by exact native identity. Losing it does not
+authorize rebuilding it on ore. Migration jobs prebuild clear alternatives,
+pay for the cutover, then prove real supply before recovering old transport.
+See [resource policy](RESOURCE_POLICY.md). Dedicated coal's two outlets share
+one 60/min nominal source; a splitter does not double production.
 
 Bootstrap logistics builds a small reserved16x16 PCB cell with two assemblers,
 four real inserters and finite iron/copper chest inputs. Gear and red-science

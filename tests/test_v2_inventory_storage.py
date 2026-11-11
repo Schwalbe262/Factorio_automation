@@ -118,6 +118,21 @@ class InventoryStorageTests(unittest.TestCase):
         routine._snapshot.side_effect = [snapshot([]), {'ok': True, 'world_id': 'other'}]
         self.assertEqual(routine.step({'world_id': 'w', 'entities': [chest]})['status'], 'blocked')
 
+    def test_large_cleanup_headroom_is_explicit_and_cached_when_sufficient(self):
+        chest = {'name':'iron-chest','position':{'x':.5,'y':.5},'unit_number':7,'space':{'iron-plate':1000}}
+        routine = self.routine(snapshot([stack('iron-plate',1000)], [chest], empty=10))
+        self.assertEqual(routine.step({'world_id':'w','inventory_empty_slots':10},minimum_slots=18)['type'],'deposit')
+        routine._snapshot.reset_mock()
+        self.assertIsNone(routine.step({'world_id':'w','inventory_empty_slots':18},minimum_slots=18))
+        routine._snapshot.assert_not_called()
+
+    def test_impossible_or_invalid_headroom_never_discards_goods_or_builds_unused_chests(self):
+        routine = self.routine(dict(snapshot([],empty=0),inventory_size=80))
+        self.assertEqual(routine.step({'world_id':'w'},minimum_slots=81)['reason'],'requested_inventory_headroom_exceeds_capacity')
+        self.assertEqual(routine.step({'world_id':'w'},minimum_slots=18)['reason'],'insufficient_unreserved_plain_items_for_requested_headroom')
+        for target in (0,True,1.5):
+            with self.subTest(target=target),self.assertRaises(ValueError):routine.step({'world_id':'w'},minimum_slots=target)
+
     def test_site_candidates_exclude_board_blocks_and_future_bus_columns(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -37,6 +37,30 @@ def metrics(path):
             "detour_ratio": length / direct if direct else 1.0}
 
 
+def clearance_lanes(blocked, a, b, limits):
+    """Bounded lanes beside hard component edges near either port corridor."""
+    result=[]
+    for axis in (0,1):
+        other=1-axis;lo=limits['min_x' if axis==0 else 'min_y'];hi=limits['max_x' if axis==0 else 'max_y']
+        candidates=set();outer=set()
+        for anchor in (a,b):
+            rows={}
+            for p in blocked:
+                if abs(p[other]-anchor[other])<=4 and lo<=p[axis]<=hi:
+                    rows.setdefault(p[other],set()).add(p[axis])
+            values=set().union(*rows.values()) if rows else set()
+            if values:
+                outer.update(min(values)-n for n in (2,3));outer.update(max(values)+n for n in (2,3))
+            for values in rows.values():
+                for value in values:
+                    if value-1 not in values:candidates.update(value-n for n in (1,2,3))
+                    if value+1 not in values:candidates.update(value+n for n in (1,2,3))
+        outer={n for n in outer if lo<=n<=hi}
+        near=sorted((n for n in candidates if lo<=n<=hi),key=lambda n:(min(abs(n-a[axis]),abs(n-b[axis])),n))[:24]
+        result.append(outer|set(near))
+    return result
+
+
 def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
                  end_direction=None, max_nodes=25000, max_turns=6,
                  max_detour_ratio=1.35, grid_pitch=8, candidate_validator=None):
@@ -104,9 +128,9 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
             for y in sorted(set(trunk_lanes[1]+[pa4[1],pb4[1]])):
                 skeletons.append([a,pa4,(pa4[0],y),(x,y),(x,pb4[1]),pb4,b])
                 skeletons.append([a,pa4,(x,pa4[1]),(x,y),(pb4[0],y),pb4,b])
-        # Parallel trunks with one crossbar permit independent port escapes.
-        # Four nearby grid lanes, short local escapes and eight crossbars.
-        # These are complete corridor candidates, never a free-cell maze search.
+        # Preserve the established corridor family and its ranking first. A
+        # shorter new escape may occupy a channel needed by the next connection
+        # in an existing bundle, even when both choices are individually valid.
         for axis in (0,1):
             other=1-axis
             lanes=trunk_lanes[axis]
@@ -118,8 +142,6 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
             if bv[axis]==0:last.update(pb[axis]+n for n in (-2,-1,1,2))
             midpoint=(pa[other]+pb[other])/2
             bars=sorted(trunk_lanes[other],key=lambda n:(abs(n-pa[other])+abs(n-pb[other]),abs(n-midpoint)))[:8]
-            # Keep end-adjacent crossbars: the midpoint can lie inside a large
-            # production block while its destination has a narrow clear entry.
             bars=sorted(set(bars+sorted(trunk_lanes[other],key=lambda n:abs(n-pa[other]))[:2]
                                   +sorted(trunk_lanes[other],key=lambda n:abs(n-pb[other]))[:2]))
             for p in first:
@@ -129,37 +151,82 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
                             skeletons.append([a,pa,(p,pa[1]),(p,bar),(q,bar),(q,pb[1]),pb,b])
                         else:
                             skeletons.append([a,pa,(pa[0],p),(bar,p),(bar,q),(pb[0],q),pb,b])
-        skeletons.sort(key=lambda vs: sum(abs(p[0]-q[0])+abs(p[1]-q[1]) for p,q in zip(vs,vs[1:])))
+        legacy_skeletons=skeletons
+        skeletons=[]
+        # Only if that family has no accepted whole corridor, add obstacle-edge
+        # clearance and independent short endpoint escapes.
+        # Every candidate still consists of complete trunks/crossbars, with
+        # exactly the same turn, length, hard-obstacle and crossing-layer gates.
+        clearance=clearance_lanes(blocked,a,b,limits)
+        escape_pairs=((1,1),) if not blocked and candidate_validator is None else ((1,1),(1,2),(1,3),(1,4),(2,1),(3,1),(4,1),(4,4))
+        for start_escape,end_escape in escape_pairs:
+          pe=(a[0]+start_escape*av[0],a[1]+start_escape*av[1])
+          qe=(b[0]-end_escape*bv[0],b[1]-end_escape*bv[1])
+          for axis in (0,1):
+            other=1-axis
+            lanes=trunk_lanes[axis]
+            first=set(sorted(lanes,key=lambda n:abs(n-pe[axis]))[:4]+sorted(lanes,key=lambda n:abs(n-qe[axis]))[:2])
+            last=set(sorted(lanes,key=lambda n:abs(n-qe[axis]))[:4]+sorted(lanes,key=lambda n:abs(n-pe[axis]))[:2])
+            lower,upper=min(a[axis],b[axis]),max(a[axis],b[axis])
+            outside=sorted((n for n in clearance[axis] if n<lower),reverse=True)[:4]+sorted(n for n in clearance[axis] if n>upper)[:4]
+            first.update(outside);last.update(outside)
+            first.update(a[axis]+av[axis]*n for n in (2,3,4))
+            last.update(b[axis]-bv[axis]*n for n in (2,3,4))
+            if av[axis]==0:first.update(pe[axis]+n for n in (-4,-3,-2,-1,1,2,3,4))
+            if bv[axis]==0:last.update(qe[axis]+n for n in (-4,-3,-2,-1,1,2,3,4))
+            midpoint=(pe[other]+qe[other])/2
+            bars=sorted(trunk_lanes[other],key=lambda n:(abs(n-pe[other])+abs(n-qe[other]),abs(n-midpoint)))[:8]
+            # Keep end-adjacent crossbars: the midpoint can lie inside a large
+            # production block while its destination has a narrow clear entry.
+            bars=sorted(set(bars+sorted(trunk_lanes[other],key=lambda n:abs(n-pe[other]))[:2]
+                                  +sorted(trunk_lanes[other],key=lambda n:abs(n-qe[other]))[:2])|clearance[other]|{pe[other],qe[other]})
+            for p in first:
+                for q in last:
+                    for bar in bars:
+                        if axis==0:
+                            skeletons.append([a,pe,(p,pe[1]),(p,bar),(q,bar),(q,qe[1]),qe,b])
+                        else:
+                            skeletons.append([a,pe,(pe[0],p),(bar,p),(bar,q),(qe[0],q),qe,b])
         valid = [];seen_paths=set()
         visited = 0
         direct = abs(a[0]-b[0]) + abs(a[1]-b[1])
-        for skeleton in skeletons:
-            estimated = sum(abs(p[0]-q[0])+abs(p[1]-q[1]) for p,q in zip(skeleton,skeleton[1:]))
-            if estimated > max_detour_ratio * direct + 4:
-                continue
-            path = expand(skeleton)
-            identity=tuple(path)
-            if identity in seen_paths:continue
-            seen_paths.add(identity)
-            visited += len(path)
-            if visited > max_nodes:
-                break
-            if len(path) != len(set(path)) or any(p in blocked for p in path):
-                continue
-            if any(not (limits["min_x"] <= x <= limits["max_x"] and limits["min_y"] <= y <= limits["max_y"]) for x,y in path):
-                continue
-            m = metrics(path)
-            if m["turns"] <= max_turns:
-                if candidate_validator:
-                    segments=[]
-                    for index,p in enumerate(path):
-                        d=end_direction
-                        if index+1<len(path):
-                            q=path[index+1];d=next(d for d,v in VECTORS.items() if v==(round(q[0]-p[0]),round(q[1]-p[1])))
-                        elif d is None:d=segments[-1]['direction'] if segments else start_direction or 0
-                        segments.append({'position':{'x':p[0],'y':p[1]},'direction':d})
-                    if not candidate_validator({'ok':True,'segments':segments,'metrics':m}):continue
-                valid.append(((m["turns"], m["length"], tuple(path)), path, m))
+        for legacy,candidates in ((True,legacy_skeletons),(False,skeletons)):
+            if visited > max_nodes:break
+            candidates.sort(key=lambda vs: sum(abs(p[0]-q[0])+abs(p[1]-q[1]) for p,q in zip(vs,vs[1:])))
+            for skeleton in candidates:
+                estimated = sum(abs(p[0]-q[0])+abs(p[1]-q[1]) for p,q in zip(skeleton,skeleton[1:]))
+                if estimated > max_detour_ratio * direct + 4:
+                    continue
+                path = expand(skeleton)
+                identity=tuple(path)
+                if identity in seen_paths:continue
+                seen_paths.add(identity)
+                # Keep the original family budget/selection unchanged. The
+                # fallback charges only admissible corridor evaluations; cheap
+                # hard-obstacle rejects do not consume its remaining budget.
+                if legacy:
+                    visited += len(path)
+                    if visited > max_nodes:break
+                if len(path) != len(set(path)) or any(p in blocked for p in path):
+                    continue
+                if any(not (limits["min_x"] <= x <= limits["max_x"] and limits["min_y"] <= y <= limits["max_y"]) for x,y in path):
+                    continue
+                m = metrics(path)
+                if m["turns"] <= max_turns:
+                    if not legacy:
+                        visited += len(path)
+                        if visited > max_nodes:break
+                    if candidate_validator:
+                        segments=[]
+                        for index,p in enumerate(path):
+                            d=end_direction
+                            if index+1<len(path):
+                                q=path[index+1];d=next(d for d,v in VECTORS.items() if v==(round(q[0]-p[0]),round(q[1]-p[1])))
+                            elif d is None:d=segments[-1]['direction'] if segments else start_direction or 0
+                            segments.append({'position':{'x':p[0],'y':p[1]},'direction':d})
+                        if not candidate_validator({'ok':True,'segments':segments,'metrics':m}):continue
+                    valid.append(((m["turns"], m["length"], tuple(path)), path, m))
+            if valid:break
         if not valid:
             return {**failure, "visited": visited}
         _, path, m = min(valid)

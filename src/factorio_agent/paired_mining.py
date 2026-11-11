@@ -11,6 +11,7 @@ from .transport import xy
 from .smelting import port,merge_entities
 from .planning import preflight,overlap
 from .power_grid import plan_connection as power_connection
+from .resource_policy import mark_mining_core
 from .paired_smelting import key
 
 
@@ -21,9 +22,10 @@ def mining_pair(right_x,top_y,pairs,resource):
             x=left+4*i;drill=entity('electric-mining-drill',x,top_y+dy,direction)
             rows[lane].append(drill);es += [drill,entity('small-electric-pole',x+2,top_y+dy)]
     es += [entity('transport-belt',left+dx,top_y+2,4) for dx in range(-1,4*(pairs-1)+3)]
-    output=dict(port(resource,right_x+2,top_y+2,4,'output'),lane_items={'left':resource,'right':resource})
+    footprint=mark_mining_core(es,resource)
+    output=dict(port(resource,right_x+2,top_y+2,4,'output'),lane_items={'left':resource,'right':resource},mining_resource=resource)
     return _plan(es,[output],resource_cell=True,resource=resource,drill_count=2*pairs,pair_count=pairs,
-                 producer_rows=rows,paired=True,layout_policy='pcb-paired-mining-v1')
+                 producer_rows=rows,paired=True,mining_footprint=footprint,layout_policy='pcb-paired-mining-v1')
 
 
 def resource_survey(game,plan):
@@ -48,7 +50,7 @@ return {ok=true,unique_remaining_resource=amount,unique_resource_tiles=unique,
 
 def retain_output(core,output):
     """A short two-turn collar preserves an installed downstream interface."""
-    source=core['ports'][0];output=dict(output,lane_items=source['lane_items'])
+    source=core['ports'][0];output=dict(output,lane_items=source['lane_items'],mining_resource=core['resource'])
     sx,sy=xy(source);tx,ty=xy(output)
     if (sx,sy)==(tx,ty):return dict(core,collector_port=source,collector_connection=[])
     if sx+2>tx or sy>ty:return None

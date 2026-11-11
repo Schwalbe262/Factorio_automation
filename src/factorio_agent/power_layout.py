@@ -27,8 +27,11 @@ def compact_coal_cell(position):
         entities.append({"name":"transport-belt","position":{"x":x+dx,"y":y+dy},"direction":direction})
     # Direction is the pickup side: east pickup, west drop into the drill.
     entities.append({"name":"burner-inserter","position":{"x":x+1.5,"y":y+.5},"direction":4})
+    from .resource_policy import mark_mining_core,MINING_NAMES
+    footprint=mark_mining_core([e for e in entities if e['name'] in MINING_NAMES],'coal')
     return _plan(entities,[{"kind":"item","item":"coal","direction":"output","facing":4,
-                          "position":{"x":x+2.5,"y":y+1.5}}],drill=drill,template="compact_starter_coal")
+                          "position":{"x":x+2.5,"y":y+1.5},"mining_resource":"coal"}],drill=drill,
+                 mining_footprint=footprint,template="compact_starter_coal")
 
 
 class V2FactoryBuilder(FactoryBuilder):
@@ -62,6 +65,14 @@ return {ok=true,world_id=d.world_id,ground=ground}
                     reason='normally collect spilled construction-site items without discarding materials')
 
     def ensure_plan(self,observation,plan):
+        clearance_only=(plan.get('entities')==[] and isinstance(plan.get('clear_obstacles'),list)
+                        and 'clearance_world_id' in plan)
+        if clearance_only and plan['clearance_world_id']!=observation['world_id']:
+            return {'status':'blocked','reason':'clearance_plan_world_changed'}
+        from .resource_policy import ensure_resource_policy
+        resource_check=ensure_resource_policy(self.game,self,observation,plan)
+        if not resource_check.get('ok'):
+            return {'status':'blocked',**resource_check}
         if plan.get('clear_obstacles'):
             if plan.get('clearance_world_id')!=observation['world_id']:
                 return {'status':'blocked','reason':'clearance_plan_world_changed'}
@@ -83,6 +94,8 @@ return {ok=true}
             if result.get('obstacle'):
                 return {'type':'mine',**result['obstacle'],'count':1,
                         'reason':'normally mine approved tree or rock on reserved straight corridor'}
+        if clearance_only:
+            return {'status':'succeeded','reason':'approved clearance-only plan complete'}
         result=super().ensure_plan(observation,plan)
         if result.get('status')!='succeeded':return result
         for wanted in plan['entities']:

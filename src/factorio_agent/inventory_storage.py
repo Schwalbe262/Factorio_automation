@@ -103,7 +103,7 @@ for _,name in ipairs(args.recipes) do local recipe=f.recipes[name]
   recipes[name]={enabled=recipe.enabled,handcraftable=hand}
  end
 end
-return {ok=true,world_id=d.world_id,actor_unit_number=a.unit_number,slots=slots,empty_slots=empty,
+return {ok=true,world_id=d.world_id,actor_unit_number=a.unit_number,inventory_size=#inv,slots=slots,empty_slots=empty,
  crafting=a.crafting_queue_size>0,chests=chests,recipes=recipes}
 ''')
 
@@ -132,10 +132,12 @@ end
 return {ok=false,reason="no_clear_storage_site_outside_reserved_blocks"}
 ''')
 
-    def step(self, obs):
+    def step(self, obs, *, minimum_slots=4):
+        if type(minimum_slots) is not int or minimum_slots < 1:
+            raise ValueError('minimum inventory headroom must be a positive integer')
         if self.state and self.state.get('world_id') != obs['world_id']:
             return {'status': 'blocked', 'reason': 'inventory_storage_world_changed'}
-        if obs.get('inventory_empty_slots', 0) >= 4 and not self.state.get('pending_build'):
+        if obs.get('inventory_empty_slots', 0) >= minimum_slots and not self.state.get('pending_build'):
             return None
         snapshot = self._snapshot()
         if not snapshot.get('ok') or snapshot.get('world_id') != obs['world_id']:
@@ -155,7 +157,9 @@ return {ok=false,reason="no_clear_storage_site_outside_reserved_blocks"}
                 snapshot = self._snapshot()
                 if not snapshot.get('ok') or snapshot.get('world_id') != obs['world_id']:
                     return {'status': 'blocked', 'reason': snapshot.get('reason', 'storage_snapshot_world_changed')}
-        if snapshot['empty_slots'] >= 4:
+        if snapshot.get('inventory_size') is not None and minimum_slots > snapshot['inventory_size']:
+            return {'status': 'blocked', 'reason': 'requested_inventory_headroom_exceeds_capacity', 'minimum_slots': minimum_slots}
+        if snapshot['empty_slots'] >= minimum_slots:
             return None
         slots = snapshot.get('slots', []) or []
         held = {}
@@ -163,6 +167,9 @@ return {ok=false,reason="no_clear_storage_site_outside_reserved_blocks"}
             if stack.get('quality') == 'normal' and stack.get('type') == 'item':
                 held[stack['name']] = held.get(stack['name'], 0)+stack['count']
         chests = snapshot.get('chests', []) or []
+        surplus_items = {item: held.get(item, 0)-keep for item, keep in KEEP.items() if held.get(item, 0)>keep}
+        if not surplus_items and not self.state.get('pending_build'):
+            return {'status': 'blocked', 'reason': 'insufficient_unreserved_plain_items_for_requested_headroom', 'minimum_slots': minimum_slots}
         for item, keep in KEEP.items():
             surplus = held.get(item, 0)-keep
             if surplus <= 0:

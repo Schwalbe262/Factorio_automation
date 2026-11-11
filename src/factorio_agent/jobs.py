@@ -49,6 +49,14 @@ CAPABILITIES = {
                           "effect":"normally build and arm strategic gun posts, native land/range/identity checks; refill known posts during later jobs; native gun research required"},
     "main_bus_factory": {"parameters":{},"requires":["paired_smelting","logistic_science","defense_perimeter"],
                          "effect":"replace separate raw plate corridors with shared northbound iron/copper buses and native priority taps; commission compact green then normally retire obsolete western hardware; no throughput certification"},
+    "dedicated_materials": {"parameters":{"resource":"coal|stone"},"requires":["paired_mining"],
+                           "effect":"normally build an independent opposing drill pair and publish proven material ports; coal distribution stays outside resources"},
+    "steam_coal_reroute": {"parameters":{},"requires":["steam_expansion"],
+                          "effect":"prebuild an alternative off-resource coal corridor, normally cut over owned corners, verify loaded steam and recover obsolete transport"},
+    "green_bus_reroute": {"parameters":{},"requires":["main_bus_factory"],
+                         "effect":"move green bus taps and raw adapters around resources, prebuild the alternative and recover old owned transport only after fresh production proof"},
+    "legacy_coal_cleanup": {"parameters":{},"requires":["steam_expansion","dedicated_materials"],
+                          "effect":"normally recover a proven isolated burner-to-coal-cache cell after automatic supply, loaded steam and inventory headroom checks; preserve all electric miners and power assets"},
     "research": {"parameters":{"technology":"catalog technology name"},"requires":["automation_science"],
                  "effect":"select normal native research; machine packs and belt-fed labs only; missing science tiers are explicit blockers"},
 }
@@ -89,6 +97,9 @@ class Request:
         elif self.capability == "logistic_science":
             from .green_science import validate_rate
             validate_rate(self.parameters)
+        elif self.capability == "dedicated_materials":
+            from .material_supply import validate_material
+            validate_material(self.parameters)
         elif self.capability == "research":
             from .normal_research import validate_parameters
             validate_parameters(self.parameters)
@@ -293,6 +304,14 @@ class StarterExecutors:
         self.bus_factory=BusFactory(game,self.builder,catalog,self.smelting,self.science,self.green)
         from .inventory_storage import InventoryStorage
         self.storage=InventoryStorage(game,catalog)
+        from .material_supply import DedicatedMaterials
+        self.material_supply=DedicatedMaterials(game,self.builder,catalog,self.outposts)
+        from .resource_reroute import SteamCoalReroute
+        self.steam_coal_reroute=SteamCoalReroute(game,self.builder,catalog,self.steam_expansion,self.outposts)
+        from .green_bus_reroute import GreenBusReroute
+        self.green_bus_reroute=GreenBusReroute(game,self.builder,catalog,self.bus_factory,self.science,self.green,self.smelting)
+        from .legacy_coal_cleanup import LegacyCoalCleanup
+        self.legacy_coal_cleanup=LegacyCoalCleanup(game,self.bootstrap,self.builder,catalog,self.storage,self.steam_expansion,self.outposts)
         from .normal_research import NormalResearch
         self.normal_research=NormalResearch(game,catalog,self.science,self.green)
         ledger=Ledger(Path(game.cfg.runtime_dir)).data
@@ -304,6 +323,7 @@ class StarterExecutors:
             if not self.builder.owns_automated_burner(e) and not self.smelting.owns_furnace(e,obs)
             and not (getattr(self,'paired',None) and self.paired.owns_furnace(e,obs))
             and not (getattr(self,'paired_mining',None) and self.paired_mining.retires_legacy(e,obs))
+            and not (getattr(self,'legacy_coal_cleanup',None) and self.legacy_coal_cleanup.retires_legacy(e,obs))
             and not (getattr(self,'steam_expansion',None) and self.steam_expansion.owns_burner(e,obs))]}
 
     def starter_upkeep(self,obs):
@@ -390,6 +410,14 @@ class StarterExecutors:
             return self.perimeter.step(obs)
         if capability == "main_bus_factory":
             return self.bus_factory.step(obs,parameters or {})
+        if capability == "dedicated_materials":
+            return self.material_supply.step(obs,parameters or {})
+        if capability == "steam_coal_reroute":
+            return self.steam_coal_reroute.step(obs,parameters or {})
+        if capability == "green_bus_reroute":
+            return self.green_bus_reroute.step(obs,parameters or {})
+        if capability == "legacy_coal_cleanup":
+            return self.legacy_coal_cleanup.step(obs,parameters or {})
         raise ValueError("no executor for capability: " + capability)
 
     def proof(self, capability: str, obs: dict, result: dict, parameters: dict | None = None) -> dict | None:
@@ -423,6 +451,14 @@ class StarterExecutors:
             return self.perimeter.proof(obs)
         if capability == "main_bus_factory":
             return self.bus_factory.proof(obs)
+        if capability == "dedicated_materials":
+            return self.material_supply.proof(obs,parameters or {})
+        if capability == "steam_coal_reroute":
+            return self.steam_coal_reroute.proof(obs)
+        if capability == "green_bus_reroute":
+            return self.green_bus_reroute.proof(obs)
+        if capability == "legacy_coal_cleanup":
+            return self.legacy_coal_cleanup.proof(obs)
         produced = obs.get("production", {})
         if not all(produced.get(name, {}).get("produced", 0) > 0 for name in ("iron-plate", "copper-plate")):
             return None

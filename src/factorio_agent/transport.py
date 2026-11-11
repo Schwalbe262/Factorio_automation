@@ -6,6 +6,8 @@ import json
 from factorio_ai.deterministic_builder import _plan
 from .board import entity
 from .routing import VECTORS,route_trunks
+from .resource_policy import (RESOURCES, mining_reservations, annotate_mining_exit,
+                              mining_exit_candidates, exit_directions, MINING_EXIT_LUA)
 
 
 def xy(e):
@@ -73,19 +75,52 @@ def compile_crossings(route,foreign,*,maximum_span=5):
 def plan_connection(game,builder,obs,source,destination,reserved=(),*,ignored_units=()):
     if source.get('item')!=destination.get('item'):
         return {'ok':False,'reason':'port_item_mismatch'}
+    mining_resource=source.get('mining_resource')
+    if mining_resource is not None and (mining_resource not in RESOURCES or mining_resource!=source.get('item') or source.get('facing')!=4):
+        return {'ok':False,'reason':'invalid_registered_mining_exit_source'}
     a,b=source['position'],destination['position'];ends={(a['x'],a['y']),(b['x'],b['y'])}
     bounds={'min_x':min(a['x'],b['x'])-16,'max_x':max(a['x'],b['x'])+16,
             'min_y':min(a['y'],b['y'])-16,'max_y':max(a['y'],b['y'])+16}
     if (bounds['max_x']-bounds['min_x']+1)*(bounds['max_y']-bounds['min_y']+1)>40000:
         return {'ok':False,'reason':'belt_corridor_survey_budget_exceeded'}
-    payload=json.dumps(json.dumps({'bounds':bounds,'ignored':list(ignored_units)},separators=(',',':')))
+    zones=mining_reservations(game,obs['world_id'])
+    payload=json.dumps(json.dumps({'bounds':bounds,'ignored':list(ignored_units),'source':source,
+                                  'destination':destination,'zones':zones,
+                                  'exit_candidates':mining_exit_candidates(a)},separators=(',',':')))
     survey=game.query('''
 local args=helpers.json_to_table('''+payload+''');local b=args.bounds;local blocked={};local clearable={}
 local ignored={};for _,unit in ipairs(args.ignored) do ignored[unit]=true end
+local function key(p)return p.x..":"..p.y end
+'''+MINING_EXIT_LUA+'''
+local function patch_at(p)
+ return mining_patch_at(p,args.source.mining_resource,args.zones)
+end
+local exit_allowed={};local exit_shared={};local exit_prefix={};local exit_length=-1;local exit_directions={}
+local source_patch=patch_at(args.source.position)
+if source_patch then
+ if not args.source.mining_resource or args.source.facing~=4 then return {ok=false,reason="corridor_resource_source_requires_registered_exit"} end
+ local chosen=select_mining_exit(args.source,args.zones,ignored,{},args.exit_candidates,nil,true)
+ if not chosen.ok then return chosen end
+ exit_prefix=chosen.exit_prefix;exit_length=chosen.exit_length
+ for index,p in ipairs(exit_prefix) do
+  exit_shared[key(p)]=true
+  if index<#exit_prefix then
+   exit_allowed[key(p)]=index-1;local q=exit_prefix[index+1]
+   exit_directions[key(p)]=q.y<p.y and 0 or q.y>p.y and 8 or 4
+  end
+ end
+end
+local destination_patch=patch_at(args.destination.position)
+if destination_patch then return {ok=false,reason="corridor_destination_on_resource_or_mining_reservation"} end
 for x=b.min_x,b.max_x do for y=b.min_y,b.max_y do
  local p={x=x,y=y};local old=target(p,"transport-belt")
  if old and ignored[old.unit_number] then old=nil end
  local entities=s.find_entities_filtered{area={{x-.4,y-.4},{x+.4,y+.4}}}
+ local on_patch=false
+ for _,e in pairs(entities) do if e.type=="resource" then on_patch=true;break end end
+ if not on_patch then for _,zone in ipairs(args.zones) do local q=zone.area
+  if x+.4>q[1][1] and x-.4<q[2][1] and y+.4>q[1][2] and y-.4<q[2][2] then on_patch=true;break end
+ end end
  local legal=(old and old.force==f) or s.can_place_entity{name="transport-belt",position=p,force=f,
   build_check_type=defines.build_check_type.manual_ghost,forced=true}
  if not legal then
@@ -97,6 +132,13 @@ for x=b.min_x,b.max_x do for y=b.min_y,b.max_y do
   end
  end
  local natural={}
+ if on_patch and exit_allowed[key(p)]==nil then legal=false end
+ if old and exit_shared[key(p)] then
+  if exit_directions[key(p)] and old.direction~=exit_directions[key(p)] then return {ok=false,reason="mining_exit_existing_belt_direction_changed",position=p} end
+  for lane=1,2 do for _,item in pairs(old.get_transport_line(lane).get_contents()) do
+   if item.name~=args.source.item then return {ok=false,reason="mining_exit_existing_belt_contaminated",position=p} end
+  end end
+ end
  if legal then for _,e in pairs(entities) do
   if e~=a and e.type~="resource" and e~=old and not ignored[e.unit_number] and not e.prototype.collision_mask.colliding_with_tiles_only then
    local rock=e.type=="simple-entity" and (e.name=="big-rock" or e.name=="huge-rock" or e.name=="big-sand-rock")
@@ -109,12 +151,19 @@ for x=b.min_x,b.max_x do for y=b.min_y,b.max_y do
   clearable[#clearable+1]={position=p,entities=natural}
  end
 end end
-return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["underground-belt"].max_underground_distance}
+return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["underground-belt"].max_underground_distance,
+ exit_prefix=exit_prefix,exit_length=exit_length}
 ''')
     if not survey.get('ok'):return survey
     # Surface belts are crossable, all other prospective footprints are hard.
-    all_entities={ (e['name'],*xy(e)):e for e in obs['entities']+list(reserved) }
-    foreign=[e for e in all_entities.values() if e['name'] in {'transport-belt','underground-belt'} and xy(e) not in ends]
+    all_entities={ (e['name'],*xy(e)):e for e in obs['entities']+list(reserved) if e.get('unit_number') not in ignored_units }
+    prefix=survey.get('exit_prefix',[])
+    if prefix=={}:prefix=[]
+    try: prefix_directions=exit_directions(prefix) if prefix else []
+    except ValueError as exc:return {'ok':False,'reason':'invalid_native_mining_exit','detail':str(exc)}
+    prefix_headings={(p['x'],p['y']):d for p,d in zip(prefix,prefix_directions)}
+    foreign=[e for e in all_entities.values() if e['name'] in {'transport-belt','underground-belt'} and xy(e) not in ends
+             and not (e['name']=='transport-belt' and e['direction']==prefix_headings.get(xy(e)))]
     hard={(p['x'],p['y']) for p in survey['blocked']}
     hard.update(builder._occupied_by_plan([e for e in reserved if e['name']!='transport-belt']))
     hard-=ends
@@ -122,7 +171,16 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
     rejected=0
     def accepts_layers(candidate):
         nonlocal rejected
-        accepted=compile_crossings(candidate,foreign,maximum_span=survey['max_span']).get('ok',False)
+        if prefix:
+            segments=candidate.get('segments',[])
+            if len(segments)<len(prefix) or any(xy(segments[i])!=(p['x'],p['y'])
+                    or (i<len(prefix)-1 and segments[i]['direction']!=prefix_directions[i]) for i,p in enumerate(prefix)):
+                return False
+        layered=compile_crossings(candidate,foreign,maximum_span=survey['max_span'])
+        accepted=layered.get('ok',False)
+        if accepted and prefix:
+            by_position={xy(e):e for e in layered['entities']}
+            accepted=all(by_position.get((p['x'],p['y']),{}).get('name')=='transport-belt' for p in prefix[:-1])
         if not accepted:rejected+=1
         return accepted
     distance=abs(a['x']-b['x'])+abs(a['y']-b['y'])
@@ -141,6 +199,9 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
         hard.update(fresh)
     else:return {'ok':False,'reason':'bounded_layered_corridor_replanning_exhausted'}
     compiled['routing_attempts']=attempt+1
+    if survey.get('exit_length',-1)>=0:
+        annotate_mining_exit(compiled['entities'],mining_resource,a,survey['exit_length'],path=prefix)
+        compiled['mining_exit']={'resource':mining_resource,'source_position':dict(a),'last_step':survey['exit_length']}
     compiled['layer_candidates_rejected']=rejected
     compiled['ports']=[source,destination]
     positions={xy(e) for e in compiled['entities']}
