@@ -37,16 +37,39 @@ class RateEvidenceTests(unittest.TestCase):
     def test_independent_lane_limits_do_not_credit_unused_capacity_on_other_lane(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
-            bank={'resource':'iron-ore','product':'iron-plate','producer_rows':{'left':[{}]*10,'right':[{}]}}
+            bank={'resource':'iron-ore','product':'iron-plate','producer_rows':{
+                'left':[{'name':'stone-furnace','position':{'x':i*4,'y':0}} for i in range(10)],
+                'right':[{'name':'stone-furnace','position':{'x':0,'y':5}}]}}
             (root/'smelting-district.json').write_text(json.dumps({'world_id':'w','banks':[bank]}))
             (root/'mining-outposts.json').write_text(json.dumps({'world_id':'w','banks':[
                 {'plan':{'resource':'iron-ore'},'ready':True,'nominal_rate_per_minute':1000}]}))
-            catalog=SimpleNamespace(entities={'stone-furnace':{'crafting_speed':1}},recipes={'iron-plate':{'energy':1}})
+            catalog=SimpleNamespace(entities={'stone-furnace':{'crafting_speed':1}},
+                                    recipes={'iron-plate':{'energy':1,'products':[{'name':'iron-plate','amount':1}]}})
             obs={'world_id':'w','belt_lane_observation':{'ports':[
                 {'item':'iron-plate','nominal_unstacked_items_per_second_per_lane':7.5}]}}
             row=smelting_throughput_bounds(root,obs,catalog)['banks'][0]
             self.assertEqual(row['independent_producer_capacity_per_lane'],{'left':600,'right':60})
             self.assertEqual(row['partial_upper_bound_per_minute'],510)
+
+    def test_mixed_furnace_types_and_exhausted_miners_change_independent_upper_bounds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            bank={'resource':'iron-ore','product':'iron-plate','producer_rows':{
+                'left':[{'name':'steel-furnace','position':{'x':0,'y':0}}],
+                'right':[{'name':'stone-furnace','position':{'x':0,'y':5}}]}}
+            miners=[{'name':'electric-mining-drill','position':{'x':i*4,'y':20}} for i in range(2)]
+            (root/'smelting-district.json').write_text(json.dumps({'world_id':'w','banks':[bank]}))
+            (root/'mining-outposts.json').write_text(json.dumps({'world_id':'w','banks':[
+                {'plan':{'resource':'iron-ore','entities':miners},'ready':True,'nominal_rate_per_minute':60}]}))
+            catalog=SimpleNamespace(entities={'stone-furnace':{'crafting_speed':1},'steel-furnace':{'crafting_speed':2}},
+                recipes={'iron-plate':{'energy':3.2,'products':[{'name':'iron-plate','amount':1}]}})
+            obs={'world_id':'w','entities':[dict(e,energy=100,electric_network_connected=True,
+                status_name='no_minable_resources' if i==0 else 'working') for i,e in enumerate(miners)]}
+            row=smelting_throughput_bounds(root,obs,catalog)['banks'][0]
+            self.assertEqual(row['independent_producer_capacity_per_lane'],{'left':37.5,'right':18.75})
+            self.assertEqual(row['installed_nominal_ore_supply'],60)
+            self.assertEqual(row['observed_remaining_nominal_ore_supply'],30)
+            self.assertEqual(row['partial_upper_bound_per_minute'],30)
 
     def test_electrical_peak_excludes_burner_thermal_consumption(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -44,6 +44,7 @@ return {ok=true,tick=game.tick,ports=ports,scope="instantaneous lane inventories
 
 
 def smelting_throughput_bounds(root,obs,catalog):
+    from .smelting import bank_capacities
     path=Path(root)/'smelting-district.json'
     if not path.exists():return {'status':'no_registered_smelting'}
     state=json.loads(path.read_text(encoding='utf-8'))
@@ -54,9 +55,22 @@ def smelting_throughput_bounds(root,obs,catalog):
     rows=[]
     for bank in state['banks']:
         if not bank.get('producer_rows'):continue
-        each=catalog.entities['stone-furnace']['crafting_speed']*60/catalog.recipes[bank['product']]['energy']
-        capacities={lane:len(producers)*each for lane,producers in bank['producer_rows'].items()}
-        ore=sum(b['nominal_rate_per_minute'] for b in mining['banks'] if b.get('ready') and b['plan']['resource']==bank['resource'])
+        capacities={lane:bank_capacities(catalog,[dict(bank,entities=producers)])[bank['resource']] if producers else 0
+                    for lane,producers in bank['producer_rows'].items()}
+        sources=[b for b in mining['banks'] if b.get('ready') and b['plan']['resource']==bank['resource']]
+        installed_ore=sum(b['nominal_rate_per_minute'] for b in sources)
+        actual={(e['name'],e['position']['x'],e['position']['y']):e for e in obs.get('entities',[]) if e.get('position')}
+        remaining=[]
+        for source in sources:
+            drills=[e for e in source['plan'].get('entities',[]) if e['name']=='electric-mining-drill']
+            if not drills:
+                remaining.append(None);continue
+            live=[actual.get((e['name'],e['position']['x'],e['position']['y'])) for e in drills]
+            active=sum(bool(e and e.get('electric_network_connected') and e.get('energy',0)>0
+                            and e.get('status_name') not in {'no_minable_resources','no_mineable_resources','no_power'}) for e in live)
+            remaining.append(source['nominal_rate_per_minute']*active/len(drills))
+        observed_ore=sum(remaining) if all(v is not None for v in remaining) else None
+        ore=observed_ore if observed_ore is not None else installed_ore
         native=[p['nominal_unstacked_items_per_second_per_lane']*60
                 for p in obs.get('belt_lane_observation',{}).get('ports',[])
                 if p['item']==bank['product']]
@@ -64,6 +78,8 @@ def smelting_throughput_bounds(root,obs,catalog):
         per_lane=[min(v,belt_per_lane) if belt_per_lane is not None else v for v in capacities.values()]
         rows.append({'product':bank['product'],'independent_producer_capacity_per_lane':capacities,
             'unstacked_belt_capacity_per_lane':belt_per_lane,'connected_nominal_ore_supply':ore,
+            'installed_nominal_ore_supply':installed_ore,'observed_remaining_nominal_ore_supply':observed_ore,
+            'ore_basis':'observed remaining nameplate' if observed_ore is not None else 'installed nameplate; live source unknown',
             'partial_upper_bound_per_minute':min(ore,sum(per_lane))})
     return {'banks':rows,'scope':'design upper bounds, not measured flow; fuel, power, inserters and downstream demand can impose further limits'}
 

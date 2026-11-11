@@ -7,7 +7,7 @@ from factorio_ai.deterministic_builder import _plan
 from .board import entity
 from .routing import VECTORS,route_trunks
 from .resource_policy import (RESOURCES, mining_reservations, annotate_mining_exit,
-                              mining_exit_candidates, exit_directions, MINING_EXIT_LUA)
+                              mining_exit_candidates, exit_directions, MINING_EXIT_LUA, validate_annotations)
 
 
 def xy(e):
@@ -72,6 +72,35 @@ def compile_crossings(route,foreign,*,maximum_span=5):
     return _plan(result,[],underground_pairs=pairs,route_metrics=route['metrics'],layout_policy='pcb-layered-trunks-v1')
 
 
+def _prospective_mining_source(game,builder,obs,source,reserved):
+    """Only an original, native-preflighted tagged core can declare a future port."""
+    resource=source.get('mining_resource')
+    actual=next((e for e in obs.get('entities',[]) if e['name']=='transport-belt'
+                 and e['position']==source['position']),None)
+    if not resource or actual:return {'ok':True,'entities':[]}
+    matching=[e for e in reserved if e['name']=='transport-belt' and e['position']==source['position']]
+    if not matching:return {'ok':True,'entities':[]}
+    if (not obs.get('ok',True) or not isinstance(obs.get('world_id'),str) or not obs['world_id']
+            or source.get('kind')!='item' or source.get('direction')!='output'):
+        return {'ok':False,'reason':'invalid_prospective_mining_source_identity_or_port'}
+    try:validate_annotations(reserved,builder)
+    except (ValueError,KeyError,TypeError) as exc:
+        return {'ok':False,'reason':'invalid_prospective_mining_core','detail':str(exc)}
+    core=[e for e in reserved if e.get('mining_resource')==resource and e.get('mining_footprint')]
+    sources=[e for e in matching if e in core and e.get('direction')==4]
+    nearby=[e for e in core if e['name'] in ('electric-mining-drill','burner-mining-drill')
+            and any(e['mining_footprint']==p['mining_footprint'] for p in sources)
+            and abs(e['position']['x']-source['position']['x'])<=3
+            and abs(e['position']['y']-source['position']['y'])<=3]
+    if len(sources)!=1 or not nearby or len(core)>96:
+        return {'ok':False,'reason':'prospective_mining_source_requires_exact_core_belt_and_nearby_drill'}
+    from .planning import preflight
+    check=preflight(game,builder,obs,core)
+    if not check.get('ok'):
+        return {'ok':False,'reason':'prospective_mining_core_native_preflight_failed','preflight':check}
+    return {'ok':True,'entities':core}
+
+
 def plan_connection(game,builder,obs,source,destination,reserved=(),*,ignored_units=()):
     if source.get('item')!=destination.get('item'):
         return {'ok':False,'reason':'port_item_mismatch'}
@@ -83,9 +112,12 @@ def plan_connection(game,builder,obs,source,destination,reserved=(),*,ignored_un
             'min_y':min(a['y'],b['y'])-16,'max_y':max(a['y'],b['y'])+16}
     if (bounds['max_x']-bounds['min_x']+1)*(bounds['max_y']-bounds['min_y']+1)>40000:
         return {'ok':False,'reason':'belt_corridor_survey_budget_exceeded'}
+    prospective=_prospective_mining_source(game,builder,obs,source,reserved)
+    if not prospective.get('ok'):return prospective
     zones=mining_reservations(game,obs['world_id'])
     payload=json.dumps(json.dumps({'bounds':bounds,'ignored':list(ignored_units),'source':source,
                                   'destination':destination,'zones':zones,
+                                  'prospective_core':prospective['entities'],
                                   'exit_candidates':mining_exit_candidates(a)},separators=(',',':')))
     survey=game.query('''
 local args=helpers.json_to_table('''+payload+''');local b=args.bounds;local blocked={};local clearable={}
@@ -99,7 +131,17 @@ local exit_allowed={};local exit_shared={};local exit_prefix={};local exit_lengt
 local source_patch=patch_at(args.source.position)
 if source_patch then
  if not args.source.mining_resource or args.source.facing~=4 then return {ok=false,reason="corridor_resource_source_requires_registered_exit"} end
- local chosen=select_mining_exit(args.source,args.zones,ignored,{},args.exit_candidates,nil,true)
+ for _,spec in ipairs(args.prospective_core)do
+  if spec.name=="electric-mining-drill" or spec.name=="burner-mining-drill" then
+   local radius=prototypes.entity[spec.name].mining_drill_radius;local count=0
+   for _,ore in pairs(s.find_entities_filtered{area={{spec.position.x-radius,spec.position.y-radius},{spec.position.x+radius,spec.position.y+radius}},type="resource"})do
+    if ore.name~=args.source.mining_resource then return {ok=false,reason="prospective_mining_core_mixed_resource"}end
+    count=count+ore.amount
+   end
+   if count<=0 then return {ok=false,reason="prospective_mining_core_has_no_resource"}end
+  end
+ end
+ local chosen=select_mining_exit(args.source,args.zones,ignored,args.prospective_core,args.exit_candidates,nil,true)
  if not chosen.ok then return chosen end
  exit_prefix=chosen.exit_prefix;exit_length=chosen.exit_length
  for index,p in ipairs(exit_prefix) do

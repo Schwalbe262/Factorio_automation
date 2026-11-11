@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 import re
 from factorio_ai.deterministic_state import _atomic_json
@@ -15,13 +16,19 @@ def validate_parameters(parameters):
 
 
 def ready_options(catalog,obs):
-    rows=[]
+    rows=[];triggers=[]
     for name,tech in catalog.technologies.items():
-        if obs.get('technologies',{}).get(name) or tech.get('research_trigger') or tech.get('enabled') is False:continue
+        if obs.get('technologies',{}).get(name) or tech.get('enabled') is False:continue
         if any(not obs.get('technologies',{}).get(p) for p in tech['prerequisites']):continue
+        if tech.get('research_trigger'):
+            triggers.append({'technology':name,'trigger':deepcopy(tech['research_trigger']),
+                             'unlocks':list(tech.get('unlocks',[])),
+                             'completion':'perform the native gameplay trigger; do not submit ordinary science research'})
+            continue
         rows.append({'technology':name,'unit_count':tech.get('unit_count'),'unit_energy_ticks':tech.get('unit_energy'),
                      'science_ingredients':tech['ingredients']})
     return {'technologies':sorted(rows,key=lambda r:r['technology']),
+            'natural_triggers':sorted(triggers,key=lambda r:r['technology']),
             'scope':'native prerequisite-ready research costs; pack availability and continuous supply are checked by research job'}
 
 

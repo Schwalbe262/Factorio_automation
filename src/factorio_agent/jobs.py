@@ -302,6 +302,7 @@ class StarterExecutors:
         self.steam_expansion=SteamExpansion(game,self.builder,catalog,self.outposts)
         from .defense_perimeter import DefensePerimeter
         self.perimeter=DefensePerimeter(game,self.bootstrap,catalog)
+        self.outposts.perimeter=self.perimeter
         from .bus_factory import BusFactory
         self.bus_factory=BusFactory(game,self.builder,catalog,self.smelting,self.science,self.green)
         from .inventory_storage import InventoryStorage

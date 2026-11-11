@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 from pathlib import Path
 
@@ -10,8 +11,8 @@ from factorio_ai.deterministic_state import _atomic_json
 from .board import entity
 from .power_grid import plan_connection
 from .transport import VECTORS,xy,plan_connection as belt_connection,underground_proof
-from .planning import overlap
-from .resource_policy import mark_mining_core
+from .planning import overlap,preflight
+from .resource_policy import mark_mining_core,mining_reservations
 
 
 RESOURCES={"iron-ore","copper-ore","coal","stone"}
@@ -39,8 +40,9 @@ def mining_bank(x,y,count,resource):
 
 
 class MiningOutposts:
-    def __init__(self,game,bootstrap,builder):
+    def __init__(self,game,bootstrap,builder,*,perimeter=None):
         self.game,self.bootstrap,self.builder=game,bootstrap,builder
+        self.perimeter=perimeter
         self.path=Path(game.cfg.runtime_dir)/"mining-outposts.json"
         self.state=json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
 
@@ -57,26 +59,32 @@ class MiningOutposts:
         if board.get('world_id')!=obs['world_id']:return {'status':'blocked','reason':'mining_reservation_board_world_changed'}
         counts={}
         for bank in banks:
+            declared=bank.get('pending_extension',bank)
             resource=bank['plan']['resource'];index=counts.get(resource,0);counts[resource]=index+1
             name=resource+'_mining'+('_'+str(index) if index else '')
-            area=bank['reserved_area']
+            area=declared['reserved_area']
             if any(key!=name and overlap(area,b['reserved_area']) for key,b in board['blocks'].items()):
                 return {'status':'blocked','reason':'paired_mining_reserved_area_conflicts_with_registered_block','block':name}
-            board['blocks'][name]=dict(bank['plan'],reserved_area=area)
+            board['blocks'][name]=dict(declared['plan'],reserved_area=area)
         _atomic_json(path,board)
         return None
 
-    def prepare(self,obs,resource,count):
+    def prepare(self,obs,resource,count,*,extra_reservations=()):
         if resource in ('iron-ore','copper-ore'):
             from .paired_mining import prepare_new_bank
             board_path=self.path.parent/'pcb-board.json'
             board=json.loads(board_path.read_text(encoding='utf-8')) if board_path.exists() else {}
             reservations=[b['reserved_area'] for b in board.get('blocks',{}).values()]
+            reservations += [r['area'] for r in board.get('shared_main_bus',{}).get('reservations',[]) if r.get('area')]
             reservations += [b['reserved_area'] for b in self.state.get('banks',[]) if b.get('reserved_area')]
+            reservations += list(extra_reservations)
             return prepare_new_bank(self.game,self.builder,obs,resource,count,reservations)
         areas=[];board=self.path.parent/"pcb-board.json"
         if board.exists():
-            areas=[p["reserved_area"] for p in json.loads(board.read_text(encoding="utf-8")).get("blocks",{}).values()]
+            saved=json.loads(board.read_text(encoding="utf-8"))
+            areas=[p["reserved_area"] for p in saved.get("blocks",{}).values()]
+            areas += [r['area'] for r in saved.get('shared_main_bus',{}).get('reservations',[]) if r.get('area')]
+        areas += list(extra_reservations)
         args=json.dumps(json.dumps({"resource":resource,"count":count,"reserved":areas},separators=(",",":")))
         candidates=self.game.query('''
 local args=helpers.json_to_table('''+args+''');local resource=args.resource;local count=args.count
@@ -131,6 +139,11 @@ return {ok=true,candidates=best,nominal_drill_rate=proto.mining_speed*60/mined.m
         return {"ok":False,"reason":"no_clear_electric_mining_row_with_power"}
 
     def bank_proof(self,obs,bank):
+        defense=None
+        if bank.get('defense_scope_id'):
+            perimeter=getattr(self,'perimeter',None)
+            defense=perimeter.coverage_proof(obs,bank['defense_scope_id']) if perimeter is not None else None
+            if not defense:return None
         if not underground_proof(obs,bank['plan']):return None
         lane_proof=None
         if bank['plan'].get('paired'):
@@ -163,7 +176,28 @@ return {ok=true,candidates=best,nominal_drill_rate=proto.mining_speed*60/mined.m
         return {"nominal_rate_per_minute":available,"installed_nominal_rate_per_minute":installed,
                 "exhausted_drill_units":depleted,"drill_units":unit_ids,
                 "native_output_evidence":evidence,"output_port":bank["plan"]["ports"][0],
-                "consumer_connection":connection,"native_producer_lanes":lane_proof}
+                "consumer_connection":connection,"native_producer_lanes":lane_proof,
+                "defense_coverage":defense}
+
+    def _construction_coverage(self,obs,bank):
+        perimeter=getattr(self,'perimeter',None)
+        if perimeter is None:return None
+        area=bank.get('reserved_area') or bank['plan'].get('mining_footprint')
+        if area is None:
+            cells=self.builder._occupied_by_plan([e for e in bank['plan']['entities']
+                                                  if e.get('mining_resource')==bank['plan']['resource']])
+            if not cells:return {'status':'blocked','reason':'mining_defense_footprint_missing'}
+            area=[[min(x for x,y in cells)-.5,min(y for x,y in cells)-.5],
+                  [max(x for x,y in cells)+.5,max(y for x,y in cells)+.5]]
+        areas=[area]
+        scope='mining-'+hashlib.sha256(json.dumps([bank['plan']['resource'],bank['plan']['ports'],areas],
+                                                 sort_keys=True).encode()).hexdigest()[:20]
+        if bank.get('defense_scope_id') not in (None,scope) or bank.get('defense_areas',areas)!=areas:
+            return {'status':'blocked','reason':'mining_defense_scope_geometry_changed'}
+        if not bank.get('defense_scope_id'):
+            bank.update(defense_scope_id=scope,defense_areas=areas)
+            _atomic_json(self.path,self.state)
+        return perimeter.ensure_coverage(obs,scope,areas)
 
     def prepare_connected_bank(self,obs,primary,count):
         """Feed a paid extra module into an identity-bound same-item trunk T."""
@@ -172,14 +206,32 @@ return {ok=true,candidates=best,nominal_drill_rate=proto.mining_speed*60/mined.m
         if consumer.get('world_id')!=obs['world_id']:
             return {'ok':False,'reason':'connected_smelting_consumer_required_for_extra_bank'}
         owned={(e['name'],*xy(e),e.get('direction',0)) for e in consumer['plan']['entities']}
-        extra=self.prepare(obs,primary['plan']['resource'],count)
-        if not extra.get('ok'):return extra
         surface={xy(e):e for e in obs['entities'] if e['name']=='transport-belt'}
         start=primary['plan']['ports'][0]['position'];p=(start['x'],start['y']);previous=None
-        failures=[]
-        for step in range(30):
+        destination=next((p for bank in consumer.get('banks',[]) if bank.get('resource')==primary['plan']['resource']
+                          for p in bank['ports'] if p.get('item')==primary['plan']['resource'] and p.get('direction')=='input'),None)
+        traced=None
+        if destination:
+            from .bus_factory import trace_corridor
+            traced=trace_corridor(consumer['plan'],primary['plan']['ports'][0],destination)
+            if not traced.get('ok'):return {'ok':False,'reason':'owned_ore_trunk_trace_failed','trace':traced}
+            if not underground_proof(obs,consumer['plan']):
+                return {'ok':False,'reason':'owned_ore_trunk_underground_pair_changed'}
+            actual={(e['name'],*xy(e)):e for e in obs['entities']}
+            for spec in traced['entities']:
+                live=actual.get((spec['name'],*xy(spec)))
+                if (not live or live.get('direction',0)!=spec.get('direction',0)
+                        or type(live.get('unit_number'))is not int):
+                    return {'ok':False,'reason':'owned_ore_trunk_changed_before_expansion','position':spec['position']}
+        targets=[]
+        for step in range(min(160,len(traced['entities'])) if traced else 30):
+            spec=traced['entities'][step] if traced else None
+            if spec and spec['name']!='transport-belt':previous=None;continue
+            if spec:p=xy(spec)
             target=surface.get(p)
-            if target is None:break
+            if target is None:
+                if traced:return {'ok':False,'reason':'owned_ore_trunk_missing_before_expansion','position':list(p)}
+                break
             direction=target['direction'];v=VECTORS[direction]
             if (step>=3 and step%3==0 and previous==direction
                     and ('transport-belt',*p,direction) in owned):
@@ -189,25 +241,52 @@ return {ok=true,candidates=best,nominal_drill_rate=proto.mining_speed*60/mined.m
                     facing=next(d for d,vector in VECTORS.items() if vector==(-delta[0],-delta[1]))
                     destination={'item':primary['plan']['resource'],'kind':'item','direction':'input',
                                  'position':{'x':q[0],'y':q[1]},'facing':facing}
-                    route=belt_connection(self.game,self.builder,obs,extra['plan']['ports'][0],destination,extra['plan']['entities'])
-                    if not route.get('ok'):
-                        failures.append(route.get('reason'));continue
-                    es={(e['name'],*xy(e)):e for e in extra['plan']['entities']+route['entities']}
-                    metadata={k:v for k,v in extra['plan'].items() if k not in
-                        ('ok','reason','entities','ports','required_items','underground_pairs','clear_obstacles','clearance_world_id')}
-                    clearance=extra['plan'].get('clear_obstacles',[])+route['clear_obstacles']
-                    plan=_plan(list(es.values()),extra['plan']['ports'],**metadata,
-                        underground_pairs=extra['plan'].get('underground_pairs',[])+route['underground_pairs'],
-                        clear_obstacles=clearance,clearance_world_id=obs['world_id'])
-                    footprints=[self.builder._occupied_by_plan([e]) for e in plan['entities']]
-                    if sum(map(len,footprints))!=len(set().union(*footprints)):continue
-                    extra['plan']=plan
-                    extra['consumer_connection']={'kind':'same-item perpendicular side-load','item':primary['plan']['resource'],
-                        'target':{k:target[k] for k in ('name','position','direction','unit_number')},
-                        'entry_port':destination,'route_metrics':route['route_metrics']}
-                    return extra
+                    targets.append({'destination':destination,'target':{k:target[k] for k in ('name','position','direction','unit_number')}})
             previous=direction;p=(p[0]+v[0],p[1]+v[1])
-        return {'ok':False,'reason':'no_clean_extra_bank_connection_to_owned_ore_trunk','candidates':failures}
+        payload=json.dumps(json.dumps({'targets':targets,'zones':mining_reservations(self.game,obs['world_id'])},separators=(',',':')))
+        legal=self.game.query('''local args=helpers.json_to_table('''+payload+''');local indices={}
+for index,row in ipairs(args.targets)do local p=row.destination.position;local clear=s.count_entities_filtered{area={{p.x-.49,p.y-.49},{p.x+.49,p.y+.49}},type="resource"}==0
+ local target=target(row.target.position,"transport-belt");if not target or target.unit_number~=row.target.unit_number or target.direction~=row.target.direction or target.force~=f then clear=false end
+ if clear then for i=1,2 do for _,item in pairs(target.get_transport_line(i).get_contents())do if item.name~=row.destination.item then clear=false;break end end end end
+ if clear then for _,zone in ipairs(args.zones)do local b=zone.area;if p.x+.49>b[1][1]and p.x-.49<b[2][1]and p.y+.49>b[1][2]and p.y-.49<b[2][2]then clear=false;break end end end
+ if clear then indices[#indices+1]=index end
+end;return {ok=true,indices=indices}''')
+        if not legal.get('ok'):return legal
+        targets=[targets[i-1]for i in legal.get('indices',[])]
+        failures=[];rejected=[];attempts=0
+        for site_index in range(6):
+            extra=(self.prepare(obs,primary['plan']['resource'],count,extra_reservations=rejected) if rejected
+                   else self.prepare(obs,primary['plan']['resource'],count))
+            if not extra.get('ok'):
+                failures.append(extra.get('reason'));break
+            source=extra['plan']['ports'][0]
+            ranked=sorted(targets,key=lambda row:sum(abs(a-b)for a,b in zip(xy(source),xy(row['destination']))))
+            probes=[ranked[i]for i in sorted({0,len(ranked)//2,len(ranked)-1})] if ranked else []
+            for row in probes:
+                destination,target=row['destination'],row['target'];attempts+=1
+                route=belt_connection(self.game,self.builder,obs,source,destination,extra['plan']['entities'])
+                if not route.get('ok'):
+                    failures.append(route.get('reason'))
+                    if route.get('reason') in {'no_safe_bounded_mining_exit','mining_exit_requires_owned_source',
+                                               'prospective_mining_core_native_preflight_failed'}:break
+                    continue
+                es={(e['name'],*xy(e)):e for e in extra['plan']['entities']+route['entities']}
+                metadata={k:v for k,v in extra['plan'].items() if k not in
+                    ('ok','reason','entities','ports','required_items','underground_pairs','clear_obstacles','clearance_world_id')}
+                plan=_plan(list(es.values()),extra['plan']['ports'],**metadata,
+                    underground_pairs=extra['plan'].get('underground_pairs',[])+route['underground_pairs'])
+                check=preflight(self.game,self.builder,obs,plan['entities'])
+                if not check.get('ok'):failures.append(check.get('reason'));continue
+                plan.update(clear_obstacles=check['clear_obstacles'],clearance_world_id=obs['world_id'])
+                extra['plan']=plan
+                extra['consumer_connection']={'kind':'same-item perpendicular side-load','item':primary['plan']['resource'],
+                    'target':target,'entry_port':destination,'route_metrics':route['route_metrics']}
+                extra['planning_attempts']={'sites':site_index+1,'routes':attempts}
+                return extra
+            if not extra.get('reserved_area'):break
+            rejected.append(extra['reserved_area'])
+        return {'ok':False,'reason':'no_clean_extra_bank_connection_to_owned_ore_trunk','candidates':failures,
+                'planning_attempts':{'sites':len(rejected),'routes':attempts}}
 
     def prepare_extension(self,obs,bank,added_drills):
         """Grow upstream while keeping the installed downstream port untouched."""
@@ -296,6 +375,10 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
                     self.state['banks'].append(connected);_atomic_json(self.path,self.state)
                     return {'status':'waiting','reason':'reserved extra mining module and same-item trunk connection'}
                 bank['pending_extension']=extension;_atomic_json(self.path,self.state)
+            reservation=self.publish_reservations(obs)
+            if reservation:return reservation
+            coverage=self._construction_coverage(obs,extension)
+            if coverage is not None:return coverage
             result=self.builder.ensure_plan(obs,extension['plan'])
             if result.get('status')!='succeeded':return result
             proof=self.bank_proof(obs,extension)
@@ -311,6 +394,10 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             pending=self.prepare(obs,resource,count)
             if not pending.get("ok"):return {"status":"blocked","reason":pending.get("reason","mining_bank_preflight_failed")}
             self.state["banks"].append(pending);_atomic_json(self.path,self.state)
+        reservation=self.publish_reservations(obs)
+        if reservation:return reservation
+        coverage=self._construction_coverage(obs,pending)
+        if coverage is not None:return coverage
         result=self.builder.ensure_plan(obs,pending["plan"])
         if result.get("status")!="succeeded":return result
         proof=self.bank_proof(obs,pending)

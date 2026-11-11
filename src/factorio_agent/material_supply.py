@@ -13,6 +13,7 @@ from .planning import overlap, preflight
 from .smelting import port, merge_entities
 from .transport import xy
 from .resource_policy import annotate_mining_exit, mining_exit_candidates, MINING_EXIT_LUA
+from .power_grid import plan_connection as power_connection
 
 
 def validate_material(parameters):
@@ -52,9 +53,18 @@ class DedicatedMaterials:
 local args=helpers.json_to_table('''+payload+''');
 '''+MINING_EXIT_LUA+'''
 local function hub_clear(p)
- local x=p.x;local y=p.y;local area={{x+.5,y-.5},{x+3.5,y+1.5}};local reserved=false
+ local x=p.x;local y=p.y;local area={{x+.5,y-1.5},{x+4.5,y+2.5}};local reserved=false
  for _,r in ipairs(args.areas) do
   if area[1][1]<r[2][1] and area[2][1]>r[1][1] and area[1][2]<r[2][2] and area[2][2]>r[1][2] then reserved=true;break end
+ end
+ for _,spec in ipairs(args.planned)do
+  local proto=prototypes.entity[spec.name];local w=spec._width or proto.tile_width;local h=spec._height or proto.tile_height
+  if spec.direction==4 or spec.direction==12 then w,h=h,w end
+  local q=spec.position
+  if q.x-w/2<area[2][1]and q.x+w/2>area[1][1]and q.y-h/2<area[2][2]and q.y+h/2>area[1][2]then return false end
+ end
+ for _,offset in ipairs{{3,0},{4,0},{4,-1},{3,1},{4,1},{4,2}}do
+  if not s.can_place_entity{name="transport-belt",position={x=x+offset[1],y=y+offset[2]},direction=4,force=f}then return false end
  end
  return not reserved and s.count_entities_filtered{area=area,type="resource"}==0
   and s.can_place_entity{name="splitter",position={x=x+1,y=y+.5},direction=4,force=f}
@@ -81,10 +91,30 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
         path, x, y = self._hub_geometry(bank['plan']['ports'][0], hub)
         area = deepcopy(bank['reserved_area'])
         area[0][0] = min(area[0][0], min(p['x']-.5 for p in path))
-        area[0][1] = min(area[0][1], min(p['y']-.5 for p in path))
-        area[1][0] = max(area[1][0], x+3.5, max(p['x']+.5 for p in path))
-        area[1][1] = max(area[1][1], y+1.5, max(p['y']+.5 for p in path))
+        area[0][1] = min(area[0][1], y-1.5, min(p['y']-.5 for p in path))
+        area[1][0] = max(area[1][0], x+4.5, max(p['x']+.5 for p in path))
+        area[1][1] = max(area[1][1], y+2.5, max(p['y']+.5 for p in path))
         return area
+
+    @staticmethod
+    def _output_access(x,y):
+        return {'coal':[{'x':x+2,'y':y},{'x':x+3,'y':y},{'x':x+4,'y':y},{'x':x+4,'y':y-1}],
+                'brick-coal':[{'x':x+2,'y':y+1},{'x':x+3,'y':y+1},{'x':x+4,'y':y+1},{'x':x+4,'y':y+2}]}
+
+    @staticmethod
+    def _published_power_keepouts(banks):
+        points=set()
+        for bank in banks:
+            distribution=bank.get('material_distribution',{})
+            paths=distribution.get('output_access')
+            if paths:
+                points.update((p['x'],p['y'])for path in paths.values()for p in path[1:])
+            else:
+                ports=list(distribution.get('ports',{}).values())or bank['plan']['ports']
+                for source in ports:
+                    if source.get('direction')=='output'and source.get('facing')==4:
+                        x,y=xy(source);points.update(((x+1,y),(x+2,y)))
+        return [entity('transport-belt',x,y,4)for x,y in sorted(points)]
 
     def prepare(self, obs, parameters):
         validate_material(parameters)
@@ -173,7 +203,23 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
                 area = self._distribution_area(bank, hub)
                 if any(overlap(area, r) for r in reservations):
                     return {'ok': False, 'reason': 'coal_distribution_reservation_conflict'}
-                es = merge_entities(bank['plan']['entities'], additions)
+                es = merge_entities(core, additions)
+                access=self._output_access(hub_x,hub_y)
+                empty={(p['x'],p['y'])for path in access.values()for p in path[1:]}
+                old_bridge=[e for e in bank['plan']['entities']if(e['name'],*xy(e))not in core_keys]
+                if empty & self.builder._occupied_by_plan(es+old_bridge):
+                    return {'ok':False,'reason':'coal_output_access_obstructed_by_prospective_entity'}
+                keepouts=self._published_power_keepouts(saved.get('banks',[]))
+                keepouts += [entity('transport-belt',x,y,4)for x,y in sorted(empty)]
+                pole=next(e for e in core if e['name']=='small-electric-pole')
+                power=power_connection(self.game,self.builder,obs,pole['position'],
+                    [e for e in es if e['name']!='small-electric-pole']+keepouts)
+                if not power.get('ok'):
+                    return {'ok':False,'reason':'coal_power_bridge_cannot_preserve_output_access','power':power}
+                es=merge_entities(power['entities'],es)
+                if empty & self.builder._occupied_by_plan(es):
+                    return {'ok':False,'reason':'coal_output_access_obstructed_by_prospective_entity'}
+                bank['wire_hops']=power['wire_hops']
                 last_resource = hub.get('exit_length', hub.get('last_resource_step', 0))
                 if last_resource >= 0 and len(mining_path)>1:
                     annotate_mining_exit(es, resource, source['position'], last_resource, path=mining_path)
@@ -188,10 +234,11 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
                 old = bank['plan']
                 extra = {k: v for k, v in old.items() if k not in ('ok', 'reason', 'entities', 'ports', 'required_items', 'clear_obstacles')}
                 obstacles = merge_entities(old.get('clear_obstacles', []), check.get('clear_obstacles', []))
-                bank['plan'] = _plan(es, old['ports'], **extra, clear_obstacles=obstacles)
+                bank['plan'] = _plan(es, old['ports'], **extra, clear_obstacles=obstacles,output_access=access)
                 bank['reserved_area'] = area
                 bank['material_distribution'] = {'splitter': splitter,
-                    'ports': {'coal': port('coal', hub_x+2, hub_y, 4, 'output'), 'brick-coal': port('coal', hub_x+2, hub_y+1, 4, 'output')}}
+                    'ports': {'coal': port('coal', hub_x+2, hub_y, 4, 'output'), 'brick-coal': port('coal', hub_x+2, hub_y+1, 4, 'output')},
+                    'output_access':access,'output_access_policy':'reserve two clear east cells then independent outward turns; no power or production entities'}
         return {'ok': True, 'world_id': obs['world_id'], 'catalog_fingerprint': self.catalog.fingerprint,
                 'resource': resource, 'material_supply_id': supply_id, 'bank': bank,
                 'entity_units': deepcopy(bank.get('material_entity_units', [])), 'phase': 'build'}
@@ -289,6 +336,11 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
         entry = self.state.get('supplies', {}).get(parameters['resource'])
         if not entry or self._bind(obs, entry):
             return None
+        defense = None
+        if self.perimeter is not None:
+            defense = self.perimeter.coverage_proof(obs, entry['material_supply_id'])
+            if defense is None:
+                return None
         bank = entry['bank']
         actual = {(e['name'], *xy(e)): e for e in obs['entities']}
         if any((e['name'], *xy(e)) not in actual for e in bank['plan']['entities']):
@@ -321,4 +373,5 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
                 capacity_scope='shared bank capacity; separate outlets do not multiply production')
         return {'tick': obs['tick'], 'resource': item, 'material_supply_id': entry['material_supply_id'],
                 'sources': sources, 'native_bank': native, 'both_lane_witness': deepcopy(witness),
+                'defense_coverage': defense,
                 'scope': 'normal independent extraction and typed output commissioning; nominal rates are not measured throughput'}

@@ -45,6 +45,7 @@ class MaterialSupplyTests(unittest.TestCase):
         self.prepare_bank = patch('factorio_agent.material_supply.prepare_new_bank', side_effect=lambda game,builder,obs,resource,count,reservations:
                                   bank(resource, 30.5 if resource == 'coal' else 70.5)).start()
         self.preflight = patch('factorio_agent.material_supply.preflight', return_value={'ok': True, 'clear_obstacles': []}).start()
+        self.power = patch('factorio_agent.material_supply.power_connection', return_value={'ok':True,'entities':[],'wire_hops':0}).start()
         self.addCleanup(patch.stopall)
         self.outposts.bank_proof = Mock(side_effect=self.native_proof)
 
@@ -90,6 +91,16 @@ class MaterialSupplyTests(unittest.TestCase):
         perimeter.ensure_coverage.return_value = None
         self.controller.step(self.obs, {'resource': 'stone'})
         self.builder.ensure_plan.assert_called_once()
+
+    def test_material_proof_requires_current_coverage_even_after_production_succeeded(self):
+        self.assertEqual(self.build('stone')['status'], 'succeeded')
+        self.controller.perimeter = Mock()
+        self.controller.perimeter.coverage_proof.return_value = None
+        self.assertIsNone(self.controller.proof(self.obs, {'resource': 'stone'}))
+        coverage = {'tick': self.obs['tick'], 'covering_posts': ['stone_post']}
+        self.controller.perimeter.coverage_proof.return_value = coverage
+        proof = self.controller.proof(self.obs, {'resource': 'stone'})
+        self.assertEqual(proof['defense_coverage'], coverage)
 
     def test_paid_coal_distribution_preserves_original_port_and_has_real_nonoverlapping_footprints(self):
         prepared = self.controller.prepare(self.obs, {'resource': 'coal'})
@@ -251,7 +262,7 @@ class MaterialSupplyTests(unittest.TestCase):
         self.assertNotIn('mining_resource', by_position[hub_x, hub_y])
         self.assertNotIn('mining_resource', new['material_distribution']['splitter'])
         self.assertEqual(new['nominal_rate_per_minute'], 60)
-        self.assertEqual(new['reserved_area'][1][1], hub_y+1.5)
+        self.assertEqual(new['reserved_area'][1][1], hub_y+2.5)
         self.assertEqual(plan['mining_reserved_area'], bank('coal')['reserved_area'])
         self.controller.step(self.obs, {'resource': 'coal'})
         zones = mining_reservations(self.game, 'w')
@@ -281,8 +292,61 @@ class MaterialSupplyTests(unittest.TestCase):
         self.assertTrue(all(e['mining_exit']['path']==path and e['mining_exit']['length']==5 for e in exits))
         self.assertEqual([xy(p) for p in new['material_distribution']['ports'].values()],
                          [(anchor['x']+2, anchor['y']), (anchor['x']+2, anchor['y']+1)])
-        self.assertEqual(new['reserved_area'][1][0], anchor['x']+3.5)
+        self.assertEqual(new['reserved_area'][1][0], anchor['x']+4.5)
         self.assertEqual(new['nominal_rate_per_minute'], 60)
+
+    def test_planned_power_bridge_cannot_occupy_published_output_continuation(self):
+        prospective=bank('coal');source=prospective['plan']['ports'][0]
+        x,y=xy(source)
+        prospective['plan']['entities'].append({'name':'small-electric-pole','position':{'x':x+3,'y':y},'direction':0})
+        self.prepare_bank.side_effect=lambda *args:deepcopy(prospective)
+        before=(self.root/'pcb-board.json').read_bytes()
+        result=self.controller.prepare(self.obs,{'resource':'coal'})
+        self.assertEqual(result['reason'],'coal_output_access_obstructed_by_prospective_entity')
+        self.assertEqual((self.root/'pcb-board.json').read_bytes(),before)
+        self.assertFalse(self.controller.path.exists())
+
+    def test_two_clear_east_cells_and_diverging_turns_are_empty_and_reserved(self):
+        result=self.controller.prepare(self.obs,{'resource':'coal'})
+        self.assertTrue(result['ok'],result)
+        new=result['bank'];access=new['material_distribution']['output_access']
+        occupied=self.builder._occupied_by_plan(new['plan']['entities'])
+        self.assertEqual(set(access),{'coal','brick-coal'})
+        for name,path in access.items():
+            self.assertEqual(path[0],new['material_distribution']['ports'][name]['position'])
+            self.assertEqual([p['x']-path[0]['x']for p in path],[0,1,2,2])
+            self.assertEqual(path[-1]['y']-path[0]['y'],-1 if name=='coal'else 1)
+            for p in path[1:]:
+                self.assertNotIn((p['x'],p['y']),occupied)
+                for axis in (0,1):
+                    value=p['x']if axis==0 else p['y']
+                    self.assertLessEqual(new['reserved_area'][0][axis],value-.5)
+                    self.assertGreaterEqual(new['reserved_area'][1][axis],value+.5)
+        script=self.game.query.call_args.args[0]
+        self.assertIn('for _,spec in ipairs(args.planned)',script)
+        self.assertIn('{4,-1}',script)
+        self.assertIn('{4,2}',script)
+        self.assertNotIn('--',' '.join(script.splitlines()))
+        blockers=self.power.call_args.args[4]
+        blocked=self.builder._occupied_by_plan(blockers)
+        self.assertTrue(all((p['x'],p['y'])in blocked for path in access.values()for p in path[1:]))
+        self.assertEqual(new['plan']['output_access'],access)
+
+    def test_recomputed_power_must_keep_access_empty_and_removes_only_unbuilt_old_bridge(self):
+        prospective=bank('coal');source=prospective['plan']['ports'][0];x,y=xy(source)
+        unused={'name':'small-electric-pole','position':{'x':x+8,'y':y+5},'direction':0}
+        prospective['plan']['entities'].append(unused)
+        self.prepare_bank.side_effect=lambda *args:deepcopy(prospective)
+        replacement={'name':'small-electric-pole','position':{'x':x-8,'y':y-5},'direction':0}
+        self.power.return_value={'ok':True,'entities':[replacement],'wire_hops':1}
+        result=self.controller.prepare(self.obs,{'resource':'coal'})
+        self.assertTrue(result['ok'],result)
+        self.assertNotIn(unused,result['bank']['plan']['entities'])
+        self.assertIn(replacement,result['bank']['plan']['entities'])
+        self.assertEqual(result['bank']['wire_hops'],1)
+        self.power.return_value={'ok':True,'entities':[{'name':'small-electric-pole','position':{'x':x+3,'y':y},'direction':0}],'wire_hops':1}
+        self.assertEqual(self.controller.prepare(self.obs,{'resource':'coal'})['reason'],
+                         'coal_output_access_obstructed_by_prospective_entity')
 
 
 if __name__=='__main__':

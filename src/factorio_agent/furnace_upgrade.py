@@ -54,9 +54,10 @@ def _replan(plan, positions):
 
 
 class FurnaceUpgrade:
-    def __init__(self, game, builder, catalog, smelting, paired):
+    def __init__(self, game, builder, catalog, smelting, paired, *, outposts=None):
         self.game, self.builder, self.catalog = game, builder, catalog
         self.smelting, self.paired = smelting, paired
+        self.outposts = outposts
         self.path = Path(game.cfg.runtime_dir)/'furnace-upgrade.json'
         self.state = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
 
@@ -66,6 +67,31 @@ class FurnaceUpgrade:
 
     def _save(self):
         _atomic_json(self.path, self.state)
+
+    def _mining_supply(self, obs, resource):
+        path = self.path.parent/'mining-outposts.json'
+        mining = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+        if mining.get('world_id') != obs['world_id']:
+            return {'ok': False, 'reason': 'furnace_upgrade_mining_world_changed'}
+        banks = [b for b in mining.get('banks', []) if b.get('ready') and b['plan']['resource'] == resource]
+        if getattr(self, 'outposts', None) is not None:
+            proofs = [self.outposts.bank_proof(obs, deepcopy(b)) for b in banks]
+            if any(p is None for p in proofs):
+                return {'ok': False, 'reason': 'restore_existing_mining_before_furnace_upgrade'}
+            return {'ok': True, 'available': sum(p['nominal_rate_per_minute'] for p in proofs),
+                    'basis': 'native remaining mining capacity', 'banks': proofs}
+        return {'ok': True, 'available': sum(b['nominal_rate_per_minute'] for b in banks),
+                'basis': 'registered installed mining capacity'}
+
+    def _mining_guard(self, obs, resource, requested):
+        supply = self._mining_supply(obs, resource)
+        if not supply['ok']:
+            return supply
+        if supply['available'] < requested:
+            return {'ok': False, 'reason': 'expand_connected_mining_before_furnace_upgrade',
+                    'required_nominal_ore_rate': requested, 'available_nominal_ore_rate': supply['available'],
+                    'capacity_basis': supply['basis']}
+        return None
 
     def prepare(self, obs, parameters):
         validate_upgrade(parameters)
@@ -113,13 +139,9 @@ class FurnaceUpgrade:
             target_rate = bank_capacities(self.catalog, [_replace(bank, positions)])[bank['resource']]
         targets = selected
         final_plan = _replan(source['plan'], positions)
-        mining_path = self.path.parent/'mining-outposts.json'
-        mining = json.loads(mining_path.read_text(encoding='utf-8')) if mining_path.exists() else {}
-        available = sum(b['nominal_rate_per_minute'] for b in mining.get('banks', [])
-                        if b.get('ready') and b['plan']['resource'] == bank['resource'])
-        if mining.get('world_id') != obs['world_id'] or available < requested:
-            return {'ok': False, 'reason': 'expand_connected_mining_before_furnace_upgrade',
-                    'required_nominal_ore_rate': requested, 'available_nominal_ore_rate': available}
+        mining_error = self._mining_guard(obs, bank['resource'], requested)
+        if mining_error:
+            return mining_error
         check = preflight(self.game, self.builder, obs, final_plan['entities'], ignored_units=[e['unit_number'] for e in targets])
         if not check.get('ok'):
             return {'ok': False, 'reason': 'whole_upgraded_smelting_preflight_failed', 'preflight': check}
@@ -252,6 +274,11 @@ class FurnaceUpgrade:
         done = {xy(e) for e in self.state['completed']}
         target = next((e for e in self.state['targets'] if xy(e) not in done), None)
         if target:
+            # Finish a committed replacement above; validate remaining supply
+            # again before starting another physical replacement transaction.
+            mining_error = self._mining_guard(obs, self.state['resource'], self.state['requested_rate'])
+            if mining_error:
+                return {'status': 'blocked', **mining_error}
             current = actual.get(('stone-furnace', *xy(target)))
             if not current or current['unit_number'] != target['unit_number'] or current.get('direction', 0) != target['direction']:
                 return {'status': 'blocked', 'reason': 'unstarted_upgrade_source_identity_changed'}

@@ -95,6 +95,33 @@ class FurnaceUpgradeTests(unittest.TestCase):
         self.assertEqual(self.source.state, before)
         self.assertFalse(self.controller.path.exists())
 
+    def test_runtime_prepare_uses_live_remaining_ore_not_installed_nameplate(self):
+        self.controller.outposts = Mock()
+        self.controller.outposts.bank_proof.return_value = {
+            'nominal_rate_per_minute': 60, 'installed_nominal_rate_per_minute': 600}
+        result = self.controller.prepare(self.obs, self.request)
+        self.assertEqual(result['reason'], 'expand_connected_mining_before_furnace_upgrade')
+        self.assertEqual(result['available_nominal_ore_rate'], 60)
+        self.assertIn('native remaining', result['capacity_basis'])
+        self.controller.outposts.bank_proof.return_value = None
+        self.assertEqual(self.controller.prepare(self.obs, self.request)['reason'],
+                         'restore_existing_mining_before_furnace_upgrade')
+        self.assertFalse(self.controller.path.exists())
+
+    def test_supply_drop_blocks_new_transaction_but_finishes_an_already_mined_gap(self):
+        self.controller.state = self.controller.prepare(self.obs, self.request)
+        self.controller.outposts = Mock()
+        self.controller.outposts.bank_proof.return_value = {'nominal_rate_per_minute': 0}
+        result = self.controller.step(self.obs, self.request)
+        self.assertEqual(result['status'], 'blocked')
+        self.assertNotIn('pending', self.controller.state)
+        self.controller.outposts.bank_proof.return_value = {'nominal_rate_per_minute': 600}
+        mine = self.controller.step(self.obs, self.request)
+        self.obs['entities'] = [e for e in self.obs['entities'] if e['unit_number'] != mine['expected_entity_unit']]
+        self.controller.outposts.bank_proof.return_value = {'nominal_rate_per_minute': 0}
+        build = self.controller.step(self.obs, self.request)
+        self.assertEqual((build['type'], build['name']), ('build', 'steel-furnace'))
+
     def test_payment_precedes_any_recovery_and_rare_aggregate_stock_is_not_accepted(self):
         self.game.query.return_value = {'count': 0}
         result = self.controller.step(self.obs, self.request)

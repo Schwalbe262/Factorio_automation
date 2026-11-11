@@ -46,11 +46,15 @@ compact production core; new dedicated coal supplies independent normal inputs.
 Shared resource keepouts reject new non-mining construction on ore. Remaining
 green/steam-coal and foreign-copper-crossing iron corridors have been migrated
 with native production proofs (EXP-0014). One iron drill exhausted its patch;
-remaining source capacity is330/min. Restore capacity before further industry.
+remaining source capacity dropped to330/min, then a defended additional pair
+restored390active/420installed (EXP-0016). Stone60nominal and automatic bricks
+are commissioned, with new paid coverage posts. A surplus iron bus outlet is
+ready; steel's coal path is being moved to an explicit shared brick-coal header.
 These are assisted development outcomes, not a Luna-only score.
 Next prove loaded continuous rates, build permanent steel/mall/automatic ammo
 and repair. Full-rated red36+green35 requires264.5iron/min above225supply.
-Rail/oil/rocket remain.
+Oil gathering research is complete; real pumpjack extraction must trigger oil
+processing. Refinery/blue, rail and rocket remain.
 Do not close the continuous-rate gate from filling output buffers. No rocket yet.
 
 Freeze code, model/effort, seed/save and settings per attempt. Classify failures
