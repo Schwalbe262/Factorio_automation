@@ -1,10 +1,10 @@
 # Current Handoff
-- Active: approved arrays-v2 redesign through REAL Space Age rocket; frozen seeds20260908/101/202 acceptance; no gameplay LLM/grants/research/counter edits.
-- User requested2.1.20 and external friends access; installed/server2.1.20 verified. Same paid world20c82012-8fa7-45c4-bf11-2e7432c76ea3 preserved; ZIP-verified backup runtime/deterministic/arrays-v2-seed20260908/backups/pre-2.1.20-20260930.
-- LIVE same runtime/server62928 UDP34230/RCON127.0.0.1:27035; assisted exec24025/log layout-v2/live-run-stable-supply-triggers.log.91649 terminal exit1/no objective progress at1058138; reconnected ONLY after actual persisted-clearance and trigger fixes/server unchanged.
-- Automation client59532 FactoryAutomaton/actor17 hidden; user client36780 NEC/actor415 visible. User completed separate login; preserve user window/control. Game password/address only ignored friends-access.txt.
-- Router inspected user rule TCPUDP34230->192.168.0.19:34230; existing firewall allows Factorio. Actual OUTSIDE-client reachability not yet verified; RCON confirmed loopback-only.
-- Branch feat/deterministic-space-age-autoplayer; part1 pushed310c020. Hosting fixes: persistent world settings, game password client, loopback RCON; focused20/full deterministic1130 PASS104skip.
-- Part2 compiler afd5eee/runtime2b69134. User requested direct drill->shared belt; normal guarded recovery converts chest/arm cells, fixed downstream root ports. Native coal/copper direct cells complete/powered/output15; drill30/min, conservative shared belt450/min. Raw20 PASS/full1138 PASS104skip; science throughput unproven.
-- Foundation39729592c4da complete; science c9b96af96d63 unpublished. Pending array_supply_clearance original anchor(-80.5,-47.5),80new route segments/created1066716; fresh checker16remaining at1068626. Cache binds owner/world/surface/catalog/local/sources/reserved, invalidates rollback, freshly rechecks district+whole path, then replans routes after clearance. Arrays now use shared paid item/oil/fluid research-trigger handler. Native rocket-silo catalog needs red/green/blue ONLY (purple/yellow not first-rocket blockers). Focused100/full deterministic1165 PASS104skip/12.819s. Remaining science30/min5min/cost30%/waiting50%/oil-rocket3seeds. Tokens71519107 inclcached/interval2943934; accountweekly0.0%, perpartquota unavailable.
-- Legacy saves ALL preserved; old MAIN2cc5423e remains separate. Protected insight.md+16899 lines NEVER stage/overwrite; journals search-only; handoff <=10lines.
+- Active objective: v2 framework + Luna medium autonomous real Space Age rocket; NOT complete.
+- User permits RCON construction with normal costs/production/research; default enemies/resources/cliffs; pin installed 2.1.20.
+- Main session builds framework; fresh GPT-6 Luna medium evaluates without parent strategic help.
+- Active branch v2; current checkout: C:/Users/NEC/Documents/git/factorio_automation; old dirty main checkout/saves preserved at C:/Users/NEC/Documents/Factorio.
+- Both clones/GitHub now have only v1/v2; default v2. Removed 50 auxiliary worktrees after verified ZIPs + all-refs bundle.
+- Cleanup finished; backups runtime/housekeeping/ must be preserved. docs/v2/WORKSPACE.md documents recovery.
+- Architecture docs/v2/ARCHITECTURE.md; attempt experiments/EXP-0001-workspace-consolidation.md; old README section is v1 archive.
+- No v2 gameplay implementation or live proof yet. Next: isolated runtime/catalog/jobs + real starter test.
+- Never read note.md/insight.md wholesale; commit/push completed parts and report measured token interval + weekly account meter.

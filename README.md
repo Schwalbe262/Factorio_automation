@@ -1,4 +1,21 @@
-# Factorio AI Autoplayer
+# Factorio Space Age Autoplayer v2
+
+Active development: `v2`. Preserved previous implementation: `v1`.
+
+The first v2 goal is an autonomous, resource-backed Space Age rocket launch,
+using a GPT-6 Luna medium subagent for strategic decisions. The main Codex
+session develops the framework; it must not supply decisions during evaluation.
+The game uses the default map/enemy rules and the installed 2.1.20 expansion.
+
+Start from [HANDOFF_CURRENT.md](HANDOFF_CURRENT.md) and [goal.md](goal.md).
+V2 is under construction; an autonomous v2 rocket launch is **not verified**.
+
+## Archived v1 documentation
+
+Everything below describes the inherited v1 implementation and its commands.
+It does not specify the v2 model policy or v2 acceptance criteria.
+
+# Factorio AI Autoplayer (v1)
 
 The active implementation is a deterministic Space Age player. Gameplay makes
 no local or cloud LLM calls. Start a new Codex thread from
