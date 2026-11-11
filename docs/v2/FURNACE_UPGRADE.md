@@ -1,11 +1,13 @@
 # Paid steel-furnace replacement
 
-`FurnaceUpgrade(game, builder, catalog, smelting, paired)` exposes read-only
+`FurnaceUpgrade(game, builder, catalog, smelting, paired, outposts=...)` exposes read-only
 `prepare(obs, {"resource": "iron-ore"})`, resumable `step` with the same
 parameters, and `proof(obs)`. Copper uses `"copper-ore"`. Optional
 `"rate_per_minute": 300` selects the minimum replacements needed to reach
-that catalog capacity, alternating rows by column. No public job or runtime
-wiring is included in this module.
+that catalog capacity, alternating rows by column. The public `furnace_upgrade`
+job accepts the same resource/rate flags and binds the live outpost inspector.
+It checks remaining active mining before preparation and each new replacement
+transaction; a committed gap is completed before checking the next transaction.
 
 The controller requires naturally completed `advanced-material-processing`,
 the enabled native steel-furnace recipe, a commissioned paired smelting
@@ -28,6 +30,12 @@ ordinary build. A different stone-furnace unit is never adopted as a recovery
 target. A replacement must complete real production before the next old
 furnace is removed. An uncertain executor action must be reconciled by the
 normal durable job boundary; this controller never retries transport errors.
+
+A working input arm can drop a stack into the temporarily empty footprint.
+If placement fails, a native check accepts only normal coal or the requested
+ore inside that exact committed gap, with no other obstruction. The controller
+returns an ordinary conserved pickup and reobserves before building; it never
+removes neighboring belts, poles or unrelated ground items to clear the site.
 
 Preparation preflights the complete prospective source plan while ignoring
 only the exact old units selected for replacement. Stone and steel furnaces
@@ -67,5 +75,6 @@ before recovery, exact identities, fresh-observation builds, restart recovery,
 authority synchronization, consumer identity/revision guards, interrupted
 publication recovery, unchanged ports, subsequent 450/min expansion and
 native-proof requirements. No live replacement or throughput acceptance has
-been performed by the implementation worker. Cached bus/science capacity
-reports may need a separate metadata refresh after the upgrade.
+been performed by the implementation worker. After verified completion, derived
+bus capacity profiles refresh from registered furnace types without changing
+layout or port contracts. Live-rate diagnostics remain separate.

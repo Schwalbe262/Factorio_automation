@@ -11,7 +11,8 @@ from factorio_ai.deterministic_state import _atomic_json
 from .manufacturing import connect_power_groups
 from .planning import overlap, preflight, survey_slots
 from .smelting import merge_entities
-from .steel_production import audit_steel_core, paired_smelting_core, smelting_rates
+from .steel_production import (IDLE_FURNACE_WITNESS_LUA,automatic_furnace_witness,
+                               audit_steel_core,paired_smelting_core,smelting_rates)
 from .transport import VECTORS, plan_connection, underground_proof, xy
 
 
@@ -180,17 +181,21 @@ return {ok=true,tick=game.tick}''')
         return {'status':'succeeded','reason':'normally belt-supplied opposing brick furnaces commissioned','evidence':evidence}
 
     def proof(self, obs):
+        self.last_proof_failure=None
         if (not self.state or self.state['world_id']!=obs['world_id']
                 or self.state['catalog_fingerprint']!=self.catalog.fingerprint
                 or not underground_proof(obs,self.state['plan'])):return None
         if not self._inspect_sources(self.state['sources']).get('ok'):return None
-        actual={(e['name'],*xy(e)):e for e in obs['entities']};furnaces=[]
+        actual={(e['name'],*xy(e)):e for e in obs['entities']};furnaces=[];idle_furnaces=[]
         for wanted in self.state['plan']['entities']:
             live=actual.get((wanted['name'],*xy(wanted)))
             if not live or (wanted['name']!='stone-furnace' and live.get('direction')!=wanted['direction']):return None
             if wanted['name']=='stone-furnace':
-                if live.get('recipe')!='stone-brick' or live.get('products_finished',0)<=0:return None
-                if live.get('remaining_burning_fuel',0)<=0 and live.get('inventory',{}).get('coal',0)<=0:return None
+                witness=automatic_furnace_witness(live,'stone','stone-brick')
+                if not witness['ok']:
+                    self.last_proof_failure=dict(witness,unit_number=live['unit_number']);return None
+                if witness['requires_native_idle_witness']:
+                    idle_furnaces.append(dict(name=live['name'],position=live['position'],unit_number=live['unit_number'],raw='stone',product='stone-brick'))
                 furnaces.append(live)
             if wanted['name'] in ('inserter','fast-inserter') and (not live.get('electric_network_connected') or live.get('energy',0)<=0):return None
             if wanted['name']=='splitter' and any(live.get(key)!=wanted[key] for key in ('splitter_input_priority','splitter_output_priority')):return None
@@ -202,8 +207,11 @@ return {ok=true,tick=game.tick}''')
             if wanted['position']['x']>=first['x']-1.5 and wanted['position']['y'] in (first['y']-2.5,first['y']+7.5):groups['input'].append(dict(wanted))
         for specs in groups.values():
             for spec in specs:spec['unit_number']=actual[(spec['name'],*xy(spec))]['unit_number']
+        groups['idle_furnaces']=idle_furnaces
         payload=json.dumps(json.dumps(groups,separators=(',',':')))
-        lanes=self.game.query('''local args=helpers.json_to_table('''+payload+''');local result={ok=true,tick=game.tick}
+        lanes=self.game.query(IDLE_FURNACE_WITNESS_LUA+'''local args=helpers.json_to_table('''+payload+''');local checked=idle_furnace_witness(args.idle_furnaces)
+if not checked.ok then return checked end
+local result={ok=true,tick=game.tick}
 for _,group in ipairs({"input","output"}) do local lanes={{},{}}
  for _,spec in ipairs(args[group]) do local e=target(spec.position,"transport-belt")
   if not e or e.unit_number~=spec.unit_number or e.force~=f or e.surface~=s or e.direction~=4 then return {ok=false} end
@@ -212,7 +220,8 @@ for _,group in ipairs({"input","output"}) do local lanes={{},{}}
  if group=="input" then result.input_left=lanes[1];result.input_right=lanes[2] else result.left=lanes[1];result.right=lanes[2] end
 end
 return result''')
-        if not lanes.get('ok'):return None
+        if not lanes.get('ok'):
+            self.last_proof_failure=lanes;return None
         for side,item in (('left','stone-brick'),('right','stone-brick'),('input_left','stone'),('input_right','coal')):
             content=lanes.get(side,{})
             if set(content)-{item} or content.get(item,0)<=0:return None

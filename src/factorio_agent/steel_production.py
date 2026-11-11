@@ -20,6 +20,50 @@ from .smelting import merge_entities, port
 from .transport import VECTORS, plan_connection, underground_proof, xy
 
 
+def automatic_furnace_witness(live,raw_item,product_item):
+    """A full automatic furnace can release its recipe while holding output."""
+    if live.get('products_finished',0)<=0:return {'ok':False,'reason':'automatic_furnace_has_no_finished_products'}
+    if live.get('recipe') not in (None,product_item):return {'ok':False,'reason':'automatic_furnace_wrong_recipe'}
+    if set(live.get('inventory',{}))-{raw_item,product_item,'coal'}:
+        return {'ok':False,'reason':'automatic_furnace_mixed_raw_or_fuel'}
+    output=live.get('output_inventory',{})
+    if set(output)-{product_item}:return {'ok':False,'reason':'automatic_furnace_wrong_output'}
+    if live.get('remaining_burning_fuel',0)<=0 and live.get('inventory',{}).get('coal',0)<=0:
+        return {'ok':False,'reason':'automatic_furnace_has_no_fuel'}
+    if live.get('recipe') is None and output.get(product_item,0)<=0:
+        return {'ok':False,'reason':'automatic_furnace_idle_without_expected_output'}
+    return {'ok':True,'requires_native_idle_witness':live.get('recipe') is None}
+
+
+IDLE_FURNACE_WITNESS_LUA=r'''
+local function idle_furnace_witness(rows)
+ for _,spec in ipairs(rows or {}) do local e=target(spec.position,spec.name)
+  if not e or e.force~=f or e.surface~=s or e.unit_number~=spec.unit_number then
+   return {ok=false,reason="automatic_furnace_idle_identity_changed",position=spec.position} end
+  local recipe=e.get_recipe()
+  if recipe and recipe.name~=spec.product then return {ok=false,reason="automatic_furnace_wrong_recipe",position=spec.position} end
+  if e.products_finished<=0 then return {ok=false,reason="automatic_furnace_has_no_finished_products",position=spec.position} end
+  local output=e.get_output_inventory();local input=e.get_inventory(defines.inventory.crafter_input);local fuel=e.get_fuel_inventory()
+  if not output or not input or not fuel then return {ok=false,reason="automatic_furnace_idle_inventory_missing"} end
+  local produced=0;local coal=0
+  for _,group in ipairs({{inventory=output,item=spec.product,kind="output"},{inventory=input,item=spec.raw,kind="input"},{inventory=fuel,item="coal",kind="fuel"}}) do
+   for index=1,#group.inventory do local stack=group.inventory[index]
+    if stack.valid_for_read then
+     if stack.name~=group.item or stack.quality.name~="normal" then
+      return {ok=false,reason="automatic_furnace_idle_contaminated_"..group.kind,position=spec.position} end
+     if group.kind=="output" then produced=produced+stack.count elseif group.kind=="fuel" then coal=coal+stack.count end
+    end
+   end
+  end
+  if produced<=0 then return {ok=false,reason="automatic_furnace_idle_without_expected_normal_output",position=spec.position} end
+  local burner=e.burner
+  if coal<=0 and (not burner or burner.remaining_burning_fuel<=0) then return {ok=false,reason="automatic_furnace_has_no_fuel",position=spec.position} end
+ end
+ return {ok=true}
+end
+'''
+
+
 def smelting_rates(catalog, raw_item, product_item, furnace_count=2, furnace_name='stone-furnace'):
     """Catalog-derived rated balances; energy_usage is exported J/game tick."""
     if type(furnace_count) is not int or furnace_count < 2:
@@ -207,26 +251,38 @@ return {ok=true}
         board = json.loads(board_path.read_text(encoding='utf-8'))
         if board.get('world_id') != obs['world_id'] or board.get('catalog_fingerprint') != self.catalog.fingerprint:
             return {'ok': False, 'reason': 'steel_board_identity_changed'}
-        candidates = [steel_core(self.catalog, x, y) for x, y in anchors]
-        candidates = [c for c in candidates if not any(overlap(c['reserved_area'], b['reserved_area'])
-                      for b in board['blocks'].values() if 'reserved_area' in b)]
+        candidates=[];failures=[]
+        def failed(core,stage,result,**extra):
+            first=core['producer_rows']['right'][0]['position']
+            return {'candidate':dict(first),'reserved_area':core['reserved_area'],'stage':stage,
+                    'reason':result.get('reason','unspecified_native_failure'),
+                    **{key:result[key] for key in ('visited','native_reason','position') if key in result},**extra}
+        for x,y in anchors:
+            core=steel_core(self.catalog,x,y)
+            conflicts=[name for name,b in board['blocks'].items() if 'reserved_area' in b and overlap(core['reserved_area'],b['reserved_area'])]
+            if conflicts:failures.append(failed(core,'reservation',{'reason':'steel_site_overlaps_reserved_block'},blocks=conflicts))
+            else:candidates.append(core)
         legal = survey_slots(self.game, [[c['reserved_area']] for c in candidates])
         if not legal.get('ok'): return legal
-        failures = []
-        for index in legal.get('legal', []):
+        legal_indices=legal.get('legal',[])
+        for index,core in enumerate(candidates,1):
+            if index not in legal_indices:
+                failures.append(failed(core,'site_survey',{'reason':'native_land_resource_or_structure_rejected'}))
+        for index in legal_indices:
             core = candidates[index - 1]; audit = audit_steel_core(core, self.catalog)
             if not audit['ok']: return {'ok': False, 'reason': 'steel_core_audit_failed', 'audit': audit}
             es, routes = core['entities'][:], []
             for source, destination in zip(sources, core['ports'][:2]):
                 route = plan_connection(self.game, self.builder, obs, source, destination, es)
-                if not route.get('ok'): failures.append(route); break
+                if not route.get('ok'):
+                    failures.append(failed(core,'raw_feed',route,item=source['item'],source=source['position'],destination=destination['position']));break
                 routes.append(route); es = merge_entities(es, route['entities'])
             if len(routes) != 2: continue
             power = connect_power_groups(self.game, self.builder, obs, [core], es)
-            if not power.get('ok'): failures.append(power); continue
+            if not power.get('ok'): failures.append(failed(core,'power',power)); continue
             es = merge_entities(es, power['entities'])
             check = preflight(self.game, self.builder, obs, es)
-            if not check.get('ok'): failures.append(check); continue
+            if not check.get('ok'): failures.append(failed(core,'whole_preflight',check)); continue
             obstacles = {(e['name'], *xy(e)): e for r in routes + [check] for e in r['clear_obstacles']}
             plan = _plan(es, core['ports'], reserved_area=core['reserved_area'],
                          underground_pairs=[p for r in routes for p in r['underground_pairs']],
@@ -234,7 +290,8 @@ return {ok=true}
             return {'ok': True, 'world_id': obs['world_id'], 'catalog_fingerprint': self.catalog.fingerprint,
                     'phase': 'build', 'plan': plan, 'core': core, 'audit': audit,
                     'sources': sources, 'surplus_splitter': splitter, 'route_metrics': [r['route_metrics'] for r in routes]}
-        return {'ok': False, 'reason': 'no_steel_site_with_complete_native_connections', 'failures': failures}
+        evidence={'candidate_count':len(anchors),'legal_site_count':len(legal_indices),'candidate_failures':failures}
+        return {'ok': False, 'reason': 'no_steel_site_with_complete_native_connections','failures':failures,'evidence':evidence}
 
     def step(self, obs):
         if not self.state:
@@ -259,10 +316,11 @@ return {ok=true}
         return {'status': 'succeeded', 'reason': 'normally belt-supplied opposing steel furnaces commissioned', 'evidence': evidence}
 
     def proof(self, obs):
+        self.last_proof_failure=None
         if (not self.state or self.state['world_id'] != obs['world_id']
                 or self.state['catalog_fingerprint'] != self.catalog.fingerprint
                 or not underground_proof(obs, self.state['plan'])): return None
-        actual = {(e['name'], *xy(e)): e for e in obs['entities']}; furnaces = []
+        actual = {(e['name'], *xy(e)): e for e in obs['entities']}; furnaces = [];idle_furnaces=[]
         for source in self.state['sources']:
             live = actual.get(('transport-belt', *xy(source)))
             if (not live or live['unit_number'] != source['unit_number'] or live['direction'] != source['facing']
@@ -274,19 +332,24 @@ return {ok=true}
             live = actual.get((wanted['name'], *xy(wanted)))
             if not live or (wanted['name'] != 'stone-furnace' and live['direction'] != wanted['direction']): return None
             if wanted['name'] == 'stone-furnace':
-                if live.get('recipe') != 'steel-plate' or live.get('products_finished', 0) <= 0: return None
-                if live.get('remaining_burning_fuel', 0) <= 0 and live.get('inventory', {}).get('coal', 0) <= 0: return None
+                witness=automatic_furnace_witness(live,'iron-plate','steel-plate')
+                if not witness['ok']:
+                    self.last_proof_failure=dict(witness,unit_number=live['unit_number']);return None
+                if witness['requires_native_idle_witness']:
+                    idle_furnaces.append(dict(name=live['name'],position=live['position'],unit_number=live['unit_number'],raw='iron-plate',product='steel-plate'))
                 furnaces.append(live)
             if wanted['name'] == 'inserter' and (not live.get('electric_network_connected') or live.get('energy', 0) <= 0): return None
             if wanted['name'] == 'splitter' and any(live.get(k) != wanted[k] for k in ('splitter_input_priority', 'splitter_output_priority')): return None
-        belt_specs = [e for e in self.state['core']['entities'] if e['name'] == 'transport-belt'
+        belt_specs = [e for e in self.state['core']['entities'] if e['name'] == 'transport-belt' and e['direction'] == 4
                       and e['position']['y'] == self.state['core']['ports'][-1]['position']['y']]
         first_furnace = self.state['core']['producer_rows']['right'][0]['position']
         input_belts = [e for e in self.state['core']['entities'] if e['name'] == 'transport-belt'
                        and e['direction'] == 4 and e['position']['x'] >= first_furnace['x'] - 1.5
                        and e['position']['y'] in (first_furnace['y'] - 2.5, first_furnace['y'] + 7.5)]
-        payload = json.dumps(json.dumps({'output': belt_specs, 'input': input_belts}, separators=(',', ':')))
-        lanes = self.game.query('''local args=helpers.json_to_table(''' + payload + ''');local result={ok=true,tick=game.tick}
+        payload = json.dumps(json.dumps({'output': belt_specs, 'input': input_belts,'idle_furnaces':idle_furnaces}, separators=(',', ':')))
+        lanes = self.game.query(IDLE_FURNACE_WITNESS_LUA+'''local args=helpers.json_to_table(''' + payload + ''');local checked=idle_furnace_witness(args.idle_furnaces)
+if not checked.ok then return checked end
+local result={ok=true,tick=game.tick}
 for _,group in ipairs({"input","output"}) do local lanes={{},{}}
  for _,spec in ipairs(args[group]) do local e=target(spec.position,"transport-belt")
   if not e or e.force~=f or e.direction~=4 then return {ok=false} end
@@ -295,6 +358,7 @@ for _,group in ipairs({"input","output"}) do local lanes={{},{}}
  if group=="input" then result.input_left=lanes[1];result.input_right=lanes[2] else result.left=lanes[1];result.right=lanes[2] end
 end
 return result''')
+        if not lanes.get('ok'):self.last_proof_failure=lanes
         if not lanes.get('ok') or any(set(lanes.get(side, {})) - {'steel-plate'} or lanes.get(side, {}).get('steel-plate', 0) <= 0 for side in ('left', 'right')): return None
         for side, item in self.state['core']['input_lane_items'].items():
             content = lanes.get('input_' + side, {})

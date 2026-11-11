@@ -130,6 +130,21 @@ class FurnaceUpgradeTests(unittest.TestCase):
         self.assertEqual(self.builder.bootstrap.ensure_item.call_args.args[0]['inventory']['steel-furnace'], 0)
         self.assertTrue(all(e['name'] != 'steel-furnace' for e in self.source.state['plan']['entities']))
 
+    def test_mined_gap_recovers_native_spill_without_mining_other_infrastructure(self):
+        mine = self.controller.step(self.obs, self.request)
+        self.obs['entities'] = [e for e in self.obs['entities'] if e['unit_number'] != mine['expected_entity_unit']]
+        self.builder.can_place.return_value = {'ok': False}
+        self.builder._move = Mock(return_value=None)
+        spill = {'name': 'item-on-ground', 'position': {'x': -39.5, 'y': -32.3}, 'item': 'coal', 'count': 1}
+        self.game.query.side_effect = [{'count': 1}, {'ok': True, 'ground': [spill]}]
+        result = self.controller.step(self.obs, self.request)
+        self.assertEqual((result['type'], result['item'], result['quality'], result['count']),
+                         ('take', 'coal', 'normal', 1))
+        self.assertIn('pending', self.controller.state)
+        self.game.query.side_effect = [{'count': 1}, {'ok': False}]
+        result = self.controller.step(self.obs, self.request)
+        self.assertEqual(result['reason'], 'steel_furnace_replacement_footprint_obstructed')
+
     def test_mine_is_exactly_guarded_and_fresh_gap_build_survives_controller_reload(self):
         mine = self.controller.step(self.obs, self.request)
         self.assertEqual(mine['type'], 'mine')

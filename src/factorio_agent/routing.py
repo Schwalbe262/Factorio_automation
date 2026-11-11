@@ -61,6 +61,24 @@ def clearance_lanes(blocked, a, b, limits):
     return result
 
 
+def blocked_port_prefix(vertices, blocked, limit=4):
+    """Reject known hard cells in a candidate's short forced port escapes."""
+    for points in (vertices,list(reversed(vertices))):
+        current=points[0];direction=None;checked=0
+        for end in points[1:]:
+            dx,dy=end[0]-current[0],end[1]-current[1]
+            if not dx and not dy:continue
+            step=((dx>0)-(dx<0),(dy>0)-(dy<0))
+            if direction is not None and step!=direction:break
+            direction=step;distance=int(abs(dx)+abs(dy))
+            for offset in range(1,min(distance,limit-checked)+1):
+                if (current[0]+step[0]*offset,current[1]+step[1]*offset) in blocked:return True
+            checked+=distance
+            if checked>=limit:break
+            current=end
+    return False
+
+
 def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
                  end_direction=None, max_nodes=25000, max_turns=6,
                  max_detour_ratio=1.35, grid_pitch=8, candidate_validator=None):
@@ -197,6 +215,7 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
                 estimated = sum(abs(p[0]-q[0])+abs(p[1]-q[1]) for p,q in zip(skeleton,skeleton[1:]))
                 if estimated > max_detour_ratio * direct + 4:
                     continue
+                if blocked_port_prefix(skeleton,blocked):continue
                 path = expand(skeleton)
                 identity=tuple(path)
                 if identity in seen_paths:continue

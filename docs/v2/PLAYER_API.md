@@ -63,6 +63,14 @@ Current capabilities:
 | dedicated_materials | `--resource coal` or stone | paired_mining; independent opposing drill pair and identity-bound material outlets |
 | green_bus_reroute | none | main_bus_factory; move only green raw branches off resources, preserve production core |
 | ore_transport_reroute | none | paired_mining and paired_smelting; move iron delivery after the last join, preserve mining, prove new ore flow and iron production |
+| steel_supply | none | main_bus_factory; dynamic surplus-priority iron outlet |
+| steel_coal_supply | none | brick_production; explicit splitter on the existing coal header, shared source capacity |
+| steel_production | none | steel_supply and dedicated coal; defended automatic opposing furnace rows |
+| brick_production | none | commissioned stone and brick-coal outputs; defended automatic furnace rows |
+| furnace_upgrade | `--resource iron-ore` or copper-ore; optional `--rate-per-minute` absolute target | paired_smelting, native research, enough remaining active mining and normally produced steel/bricks |
+| oil_gathering | none | native oil-gathering research and normal steel; defended pumpjack, real crude outlet and natural oil-processing trigger |
+| basic_petroleum | none | oil_gathering; preserve the exact crude source, isolated bounded pipeline and defended basic refinery, prove real petroleum |
+| ammo_production | none | main_bus_factory; critical-priority iron tap, compact automatic magazine production and bounded full normal ammunition buffer |
 | steam_coal_reroute | none | steam_expansion; prebuild alternative, verify loaded engines, recover obsolete owned transport |
 | legacy_coal_cleanup | none | steam_expansion and dedicated_materials; isolated burner/cache recovery after replacement supply and headroom proof |
 | research | `--technology` native catalog name | automation_science; native prerequisites and continuous supported science supply |
@@ -73,8 +81,10 @@ it still requires starter fuel upkeep. This is not the final scalable mining
 system. Starter research uses finite normally crafted science budgets to unlock
 the first machines; it cannot handcraft its way through later research.
 Permanent green science, strategic armed posts and shared-bus migration are
-implemented. Construction mall, automatic ammunition production, repair, oil,
-rail and rocket jobs remain unimplemented.
+implemented. Steel/brick construction and pumpjack extraction interfaces are
+implemented and commissioned in the development world. Automatic ammunition and
+basic petroleum interfaces are implemented; their live commissioning remains
+pending. Construction mall, repair, blue science, rail and rocket remain pending.
 Do not claim a rocket-capable system.
 
 New construction checks resource tiles and registered mining growth space before
@@ -92,6 +102,21 @@ is geometric/armed commissioning, not evidence of winning an enemy attack.
 Mining receipts separate installed capacity from remaining capacity after
 exhaustion; an exhausted powered drill does not erase healthy neighboring
 miners. Capacity expansion decisions use the remaining rate.
+
+`available_research.natural_triggers` lists prerequisite-ready technologies that
+require gameplay instead of ordinary lab research. For example, oil gathering
+unlocks the pumpjack recipe; extracting actual crude triggers oil processing.
+Use the listed native trigger, never a scripted unlock.
+
+Research can overlap construction: after a bounded `run` selects native
+research, pause its frontend job while the game keeps researching. Other jobs
+can then own the writer. Resume the same research job later to record native
+completion. Do not switch its technology or claim success before its proof.
+
+Steel may reuse the proven brick coal header through `steel_coal_supply` when
+the original dedicated output has no legal route. This is an explicit paid
+splitter migration, preserving brick ports and sharing one 60/min source.
+Never multiply source capacity by its number of outlets.
 
 Bootstrap logistics builds a small reserved16x16 PCB cell with two assemblers,
 four real inserters and finite iron/copper chest inputs. Gear and red-science

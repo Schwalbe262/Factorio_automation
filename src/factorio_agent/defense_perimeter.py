@@ -44,6 +44,7 @@ def _result(status, reason, **evidence):
 class DefensePerimeter:
     def __init__(self, game, bootstrap, catalog):
         self.game, self.bootstrap, self.catalog = game, bootstrap, catalog
+        self.ammo_source = None
         self.path = Path(game.cfg.runtime_dir) / 'defense-perimeter.json'
         self.state = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
 
@@ -188,7 +189,7 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
             needed = AMMO_TARGET - live['ammo']
             held = report['actor_full_magazines']
             if not held:
-                return self.bootstrap.ensure_item(self._ammo_observation(obs, report), 'firearm-magazine', needed)
+                return self._ensure_magazines(obs, report, needed)
             return {'type': 'insert', 'name': 'gun-turret', 'position': spec['position'],
                     'item': 'firearm-magazine', 'inventory': 'turret_ammo', 'count': min(held, needed),
                     'expected_entity_unit': live['unit_number'], 'expected_entity_world_id': obs['world_id'],
@@ -201,6 +202,13 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
         # Ordinary crafting must see only full normal actor stock for this job.
         return {**obs, 'inventory': {**obs.get('inventory', {}),
                                     'firearm-magazine': report['actor_full_magazines']}}
+
+    def _ensure_magazines(self, obs, report, count):
+        source = getattr(self, 'ammo_source', None)
+        if source is not None and source.commissioned:
+            action = source.ensure_full_magazines(obs, count)
+            return action if action is not None else _result('waiting', 'factory_magazines_available_reobserve_before_loading')
+        return self.bootstrap.ensure_item(self._ammo_observation(obs, report), 'firearm-magazine', count)
 
     def upkeep(self, obs):
         """Refill known posts during other jobs; never start a new perimeter."""
@@ -234,7 +242,7 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
             if not live.get('missing'):
                 continue
             if report['actor_full_magazines'] < AMMO_TARGET:
-                return self.bootstrap.ensure_item(self._ammo_observation(obs, report), 'firearm-magazine', AMMO_TARGET)
+                return self._ensure_magazines(obs, report, AMMO_TARGET)
             if int(obs.get('inventory', {}).get('gun-turret', 0)) < 1:
                 return self.bootstrap.ensure_item(obs, 'gun-turret', 1)
             payload = json.dumps(json.dumps(spec['position'], separators=(',', ':')))
@@ -410,7 +418,7 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
                     continue
                 held = report['actor_full_magazines']
                 if not held:
-                    return self.bootstrap.ensure_item(self._ammo_observation(obs, report), 'firearm-magazine', needed)
+                    return self._ensure_magazines(obs, report, needed)
                 return {'type': 'insert', 'name': 'gun-turret', 'position': spec['position'],
                         'item': 'firearm-magazine', 'inventory': 'turret_ammo', 'count': min(held, needed),
                         'expected_entity_unit': live['unit_number'], 'expected_entity_world_id': obs['world_id'],

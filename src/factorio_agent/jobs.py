@@ -57,6 +57,22 @@ CAPABILITIES = {
                          "effect":"move green bus taps and raw adapters around resources, prebuild the alternative and recover old owned transport only after fresh production proof"},
     "ore_transport_reroute": {"parameters":{},"requires":["paired_mining","paired_smelting"],
                              "effect":"move the iron delivery suffix off foreign resource patches after the final mining join; preserve mines and prove new raw flow and smelting before recovery"},
+    "furnace_upgrade": {"parameters":{"resource":"iron-ore|copper-ore","rate_per_minute":"optional positive absolute nominal target"},
+                        "requires":["paired_smelting"],"effect":"normally pay steel furnaces before exact owned replacements, preserve supply ports and prove real production; active mining must cover the target"},
+    "steel_supply": {"parameters":{},"requires":["main_bus_factory"],
+                     "effect":"normally install and prove a surplus-priority iron bus outlet at a bounded resource-free station"},
+    "steel_production": {"parameters":{},"requires":["steel_supply","dedicated_materials"],
+                         "effect":"normally build defended automatic iron/coal steel furnaces with fixed ports and prove native output"},
+    "steel_coal_supply": {"parameters":{},"requires":["brick_production"],
+                         "effect":"normally split the proven brick coal header into a shared steel outlet, preserve existing consumers and the total source capacity"},
+    "brick_production": {"parameters":{},"requires":["dedicated_materials"],
+                         "effect":"normally build defended automatic stone/coal brick furnaces with fixed ports and prove native output"},
+    "oil_gathering": {"parameters":{},"requires":["steel_production"],
+                      "effect":"normally build a defended powered pumpjack and real crude pipe outlet; naturally trigger native oil-processing research by extraction"},
+    "basic_petroleum": {"parameters":{},"requires":["oil_gathering"],
+                        "effect":"normally connect the exact proven crude source to a defended refinery using isolated bounded pipe segments; prove native petroleum production and publish a fixed gas outlet"},
+    "ammo_production": {"parameters":{},"requires":["main_bus_factory"],
+                       "effect":"normally build a defended automatic magazine factory from a critical iron bus tap, bound its real output buffer, then supply full normal magazines through guarded inventory transfers"},
     "legacy_coal_cleanup": {"parameters":{},"requires":["steam_expansion","dedicated_materials"],
                           "effect":"normally recover a proven isolated burner-to-coal-cache cell after automatic supply, loaded steam and inventory headroom checks; preserve all electric miners and power assets"},
     "research": {"parameters":{"technology":"catalog technology name"},"requires":["automation_science"],
@@ -102,6 +118,9 @@ class Request:
         elif self.capability == "dedicated_materials":
             from .material_supply import validate_material
             validate_material(self.parameters)
+        elif self.capability == "furnace_upgrade":
+            from .furnace_upgrade import validate_upgrade
+            validate_upgrade(self.parameters)
         elif self.capability == "research":
             from .normal_research import validate_parameters
             validate_parameters(self.parameters)
@@ -318,6 +337,22 @@ class StarterExecutors:
         from .ore_transport_reroute import OreTransportReroute
         self.ore_transport_reroute=OreTransportReroute(game,self.builder,catalog,self.smelting,self.outposts,
                                                      bus_factory=self.bus_factory,green=self.green)
+        from .furnace_upgrade import FurnaceUpgrade
+        self.furnace_upgrade=FurnaceUpgrade(game,self.builder,catalog,self.smelting,self.paired,outposts=self.outposts)
+        from .industrial import IndustrialOperations
+        self.industrial_operations=IndustrialOperations(game,self.builder,catalog,self.perimeter,
+                                                        bus_factory=self.bus_factory,science=self.science,green=self.green)
+        from .shared_coal_tap import SharedCoalTap
+        self.steel_coal_supply=SharedCoalTap(game,self.builder,catalog,self.industrial_operations.brick,
+                                           industrial=self.industrial_operations)
+        from .oil_gathering import OilGathering
+        self.oil_gathering=OilGathering(game,self.builder,catalog,self.perimeter)
+        from .petroleum import BasicPetroleum
+        self.petroleum=BasicPetroleum(game,self.builder,catalog,self.perimeter)
+        from .ammo_production import AmmoProduction
+        self.ammo=AmmoProduction(game,self.builder,catalog,self.perimeter,
+                                bus_factory=self.bus_factory,science=self.science,green=self.green)
+        self.perimeter.ammo_source=self.ammo
         from .normal_research import NormalResearch
         self.normal_research=NormalResearch(game,catalog,self.science,self.green)
         ledger=Ledger(Path(game.cfg.runtime_dir)).data
@@ -426,6 +461,22 @@ class StarterExecutors:
             return self.legacy_coal_cleanup.step(obs,parameters or {})
         if capability == "ore_transport_reroute":
             return self.ore_transport_reroute.step(obs,parameters or {})
+        if capability == "furnace_upgrade":
+            return self.furnace_upgrade.step(obs,parameters or {})
+        if capability == "steel_supply":
+            return self.industrial_operations.steel_supply(obs)
+        if capability == "steel_production":
+            return self.industrial_operations.steel_production(obs)
+        if capability == "steel_coal_supply":
+            return self.steel_coal_supply.step(obs)
+        if capability == "brick_production":
+            return self.industrial_operations.brick_production(obs)
+        if capability == "oil_gathering":
+            return self.oil_gathering.step(obs)
+        if capability == "basic_petroleum":
+            return self.petroleum.step(obs)
+        if capability == "ammo_production":
+            return self.ammo.step(obs)
         raise ValueError("no executor for capability: " + capability)
 
     def proof(self, capability: str, obs: dict, result: dict, parameters: dict | None = None) -> dict | None:
@@ -469,6 +520,29 @@ class StarterExecutors:
             return self.legacy_coal_cleanup.proof(obs)
         if capability == "ore_transport_reroute":
             return self.ore_transport_reroute.proof(obs)
+        if capability == "furnace_upgrade":
+            proof=self.furnace_upgrade.proof(obs)
+            if proof:
+                from .capacity_profiles import refresh_bus_capacity
+                profile=refresh_bus_capacity(self.game,self.catalog,self.bus_factory)
+                if profile is not None and not profile.get('ok'):
+                    return None
+                proof={**proof,'bus_capacity_profile':profile}
+            return proof
+        if capability == "steel_supply":
+            return self.industrial_operations.steel_supply_proof(obs)
+        if capability == "steel_production":
+            return self.industrial_operations.steel_production_proof(obs)
+        if capability == "steel_coal_supply":
+            return self.steel_coal_supply.proof(obs)
+        if capability == "brick_production":
+            return self.industrial_operations.brick_production_proof(obs)
+        if capability == "oil_gathering":
+            return self.oil_gathering.proof(obs)
+        if capability == "basic_petroleum":
+            return self.petroleum.proof(obs)
+        if capability == "ammo_production":
+            return self.ammo.proof(obs)
         produced = obs.get("production", {})
         if not all(produced.get(name, {}).get("produced", 0) > 0 for name in ("iron-plate", "copper-plate")):
             return None

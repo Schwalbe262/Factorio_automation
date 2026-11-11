@@ -36,9 +36,11 @@ than adopting an unknown replacement.
 
 Upkeep runs while a job is executing; it is not an idle background service.
 Missing posts are reported and can be rebuilt by `defense_perimeter`, but
-upkeep does not rebuild them. Damaged health is observable; automatic repair,
-continuous ammunition assemblers and belt-fed supply remain unfinished. Those
-are required before claiming unattended long-term defense.
+upkeep does not rebuild them. Damaged health is observable; automatic repair
+and belt-fed turret supply remain unfinished. The optional
+[automatic magazine factory](AMMO.md) supplies the job-driven guarded loader
+after commissioning. Armed-post and factory proofs do not certify unattended
+long-term defense.
 
 Industrial and outpost controllers can gate their first production build with
 `ensure_coverage(obs, scope_id, areas)`. The stable scope ID and rectangle list
@@ -68,7 +70,9 @@ Before a new scope opens, its added and covering posts each need ten **full
 normal** magazines. A partly used magazine is counted separately and cannot
 satisfy this requirement. Existing commissioned scopes use the usual five
 magazine upkeep threshold so consumption does not permanently stop construction.
-There is no automatic ammunition factory or idle ammunition service.
+An optional commissioned [magazine factory](AMMO.md) supplies these refills.
+Until it commissions, deployment uses ordinary bootstrap crafting. Upkeep
+remains job driven.
 
 Read-only development-world survey at tick2105961 found complete coverage
 possible for the prospective stone bank `[[-23,41],[-15,48]]` with one added

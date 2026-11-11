@@ -269,6 +269,9 @@ class FurnaceUpgrade:
                 replacement.update(name='steel-furnace')
                 check = self.builder.can_place([replacement])
                 if not check.get('ok'):
+                    recovery = self._recover_gap_spill(obs, pending)
+                    if recovery is not None:
+                        return recovery
                     return {'status': 'blocked', 'reason': 'steel_furnace_replacement_footprint_obstructed', 'preflight': check}
                 return dict(replacement, type='build', item='steel-furnace', reason='normally build the prepaid replacement in the freshly observed owned gap')
         done = {xy(e) for e in self.state['completed']}
@@ -298,6 +301,38 @@ class FurnaceUpgrade:
             return {'status': 'waiting', 'reason': 'waiting for every native furnace, automatic fuel/feed and both producer lanes'}
         self.state['phase'] = 'verified'; self._save()
         return {'status': 'succeeded', 'reason': 'paired furnace bank meets requested catalog capacity after paid replacement', 'evidence': proof}
+
+    def _recover_gap_spill(self, obs, pending):
+        """Recover a normal raw/fuel stack dropped into this committed gap."""
+        args = {'position': pending['position'], 'world_id': obs['world_id'],
+                'resource': self.state['resource']}
+        payload = json.dumps(json.dumps(args, separators=(',', ':')))
+        result = self.game.query('''local q=helpers.json_to_table('''+payload+''')
+if not d or d.world_id~=q.world_id or target(q.position,"stone-furnace") or target(q.position,"steel-furnace") then return {ok=false} end
+if not s.can_place_entity{name="steel-furnace",position=q.position,force=f,
+ build_check_type=defines.build_check_type.manual_ghost,forced=true} then return {ok=false} end
+local box=prototypes.entity["steel-furnace"].collision_box;local ground={}
+local area={{q.position.x+box.left_top.x,q.position.y+box.left_top.y},
+ {q.position.x+box.right_bottom.x,q.position.y+box.right_bottom.y}}
+for _,e in pairs(s.find_entities_filtered{area=area})do
+ if e~=a and e.type~="resource"then
+  if e.type~="item-entity"then return {ok=false}end
+  local st=e.stack
+  if not st.valid_for_read or st.prototype.type~="item"or st.quality.name~="normal"
+   or(st.name~=q.resource and st.name~="coal")then return {ok=false}end
+  ground[#ground+1]={name=e.name,position=pos(e.position),item=st.name,count=math.min(50,st.count)}
+ end
+end
+return {ok=#ground>0,ground=ground}''')
+        if not result.get('ok') or not isinstance(result.get('ground'), list):
+            return None
+        ground = sorted(result['ground'], key=lambda e: (e['position']['x'], e['position']['y'], e['item']))
+        if not ground:
+            return None
+        row = ground[0]
+        move = self.builder._move(obs, row['position'])
+        return move or dict(row, type='take', quality='normal',
+                            reason='recover normally spilled raw material from the exact prepaid furnace replacement gap')
 
     def _normal_stock(self):
         result = self.game.query('''

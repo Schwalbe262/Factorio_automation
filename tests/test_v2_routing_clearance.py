@@ -4,12 +4,24 @@ from types import SimpleNamespace
 from factorio_ai.deterministic_builder import FactoryBuilder
 from factorio_agent.board import entity
 from factorio_agent.manufacturing import green_core
-from factorio_agent.routing import clearance_lanes, route_trunks
+from factorio_agent.routing import blocked_port_prefix, clearance_lanes, route_trunks
 from factorio_agent.smelting import merge_entities
 from factorio_agent.transport import compile_crossings, plan_connection
 
 
 class ObstacleClearanceRoutingTests(unittest.TestCase):
+    def test_hard_first_port_step_fails_without_spending_expansion_budget(self):
+        result=route_trunks((.5,.5),(100.5,-70.5),occupied={(1.5,.5)},start_direction=4,end_direction=0)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['reason'],'no_clean_trunk_corridor')
+        self.assertEqual(result['visited'],0)
+
+    def test_short_escape_can_turn_before_a_later_blocked_forward_cell(self):
+        short=[(.5,.5),(1.5,.5),(1.5,-5.5),(10.5,-5.5),(10.5,-6.5)]
+        self.assertFalse(blocked_port_prefix(short,{(2.5,.5)}))
+        self.assertTrue(blocked_port_prefix(short,{(10.5,-5.5)}))
+        self.assertTrue(blocked_port_prefix([(.5,.5),(1.5,.5),(4.5,.5),(4.5,-5.5)],{(2.5,.5)}))
+
     def test_accepted_legacy_bundle_corridor_keeps_channel_for_later_gear_feed(self):
         core=green_core(.5,.5,7)
         geometry=FactoryBuilder.__new__(FactoryBuilder)

@@ -49,12 +49,13 @@ with native production proofs (EXP-0014). One iron drill exhausted its patch;
 remaining source capacity dropped to330/min, then a defended additional pair
 restored390active/420installed (EXP-0016). Stone60nominal and automatic bricks
 are commissioned, with new paid coverage posts. A surplus iron bus outlet is
-ready; steel's coal path is being moved to an explicit shared brick-coal header.
+ready; normally paid shared brick-coal header and steel production are commissioned.
 These are assisted development outcomes, not a Luna-only score.
-Next prove loaded continuous rates, build permanent steel/mall/automatic ammo
-and repair. Full-rated red36+green35 requires264.5iron/min above225supply.
-Oil gathering research is complete; real pumpjack extraction must trigger oil
-processing. Refinery/blue, rail and rocket remain.
+Next prove loaded continuous rates, finish paid iron-furnace upgrades and build
+mall/automatic ammo and repair. Full-rated red36+green35 requires264.5iron/min
+above225supply. Real pumpjack extraction naturally unlocked oil processing;
+basic refinery and automatic ammo interfaces await live commissioning.
+Blue science, rail and rocket remain.
 Do not close the continuous-rate gate from filling output buffers. No rocket yet.
 
 Freeze code, model/effort, seed/save and settings per attempt. Classify failures

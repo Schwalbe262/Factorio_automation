@@ -37,7 +37,15 @@ arms, both furnaces having normally produced bricks with coal available, exact
 underground pairs, native splitter priorities, separate stone/coal input lanes
 and bricks on both output lanes. It does not certify sustained throughput.
 
-Integration still needs the stone bank commissioned and its exact source
-published, native preparation of a clear site/routes, and parent CLI/job wiring.
-The independent coal outlet is taken from its registry identity, never from a
-hardcoded unit. This module performs no bus or existing producer migration.
+An automatic furnace can report no recipe while output is full and fewer than
+two raw stone remain. This idle state requires finished products, positive
+expected output and compatible pure raw/fuel inventory, plus a same-query native
+witness of normal output/input/fuel slots on the exact furnace unit. Wrong
+recipes, products, qualities or mixed raw items still fail. The pinned native
+input inventory is `defines.inventory.crafter_input`.
+
+The public `brick_production` job is wired. Native commissioning in EXP-0016
+passed at2276064: two normally fed furnaces, both brick lanes and complete paid
+defense coverage. Its coal source remains bound by registry identity. The
+separate SharedCoalTap migration can preserve this consumer while adding a
+steel branch; this production module itself performs no source migration.

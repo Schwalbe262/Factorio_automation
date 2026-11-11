@@ -50,6 +50,17 @@ def mark_mining_core(entities, resource):
     return area
 
 
+def mark_pumpjack(entity):
+    """Only the three-by-three extractor may occupy its exact crude well."""
+    if entity.get('name')!='pumpjack':raise ValueError('crude extraction scope requires a pumpjack')
+    x,y=_position(entity)
+    if any(type(v)not in(int,float)or not math.isfinite(v)for v in(x,y)):
+        raise ValueError('pumpjack requires a finite native well position')
+    area=[[x-1.5,y-1.5],[x+1.5,y+1.5]]
+    entity.update(mining_resource='crude-oil',mining_footprint=deepcopy(area))
+    return area
+
+
 def mining_exit_candidates(source_position, *, extra_clear_steps=0):
     """Three bounded whole prefixes, in preference order; never maze search."""
     if type(extra_clear_steps) is not int or not 0 <= extra_clear_steps <= 4:
@@ -115,6 +126,15 @@ def validate_annotations(entities, builder):
             if 'mining_exit' in e or 'mining_footprint' in e:
                 raise ValueError('mining scope requires its explicit resource')
             continue
+        if e['mining_resource']=='crude-oil':
+            area=e.get('mining_footprint');x,y=_position(e)
+            if (e['name']!='pumpjack' or e.get('mining_exit') is not None
+                    or not _area(area) or area!=[[x-1.5,y-1.5],[x+1.5,y+1.5]]
+                    or any(not(area[0][0]<=px-.5 and px+.5<=area[1][0]
+                               and area[0][1]<=py-.5 and py+.5<=area[1][1])
+                           for px,py in builder._occupied_by_plan([e]))):
+                raise ValueError('crude resource exemption is limited to one exact pumpjack footprint')
+            continue
         if e['mining_resource'] not in RESOURCES or e['name'] not in MINING_NAMES:
             raise ValueError('resource exemption is limited to local mining drills, belts and small poles')
         exit_spec = e.get('mining_exit')
@@ -160,8 +180,14 @@ def mining_reservations(game, world_id):
     result = []
     for block in board.get('blocks', {}).values():
         resource = block.get('resource')
-        if resource in RESOURCES and any(e.get('name') in ('electric-mining-drill', 'burner-mining-drill') for e in block.get('entities', [])):
+        solid=resource in RESOURCES and any(e.get('name') in ('electric-mining-drill','burner-mining-drill')for e in block.get('entities',[]))
+        crude=resource=='crude-oil' and any(e.get('name')=='pumpjack'and e.get('mining_resource')=='crude-oil'for e in block.get('entities',[]))
+        if solid or crude:
             area = block.get('mining_reserved_area', block.get('reserved_area', block.get('mining_footprint')))
+            if crude and (not _area(area) or 'mining_reserved_area'not in block
+                          or not any(e.get('name')=='pumpjack'and e.get('mining_footprint')==area
+                                     for e in block.get('entities',[]))):
+                raise ValueError('crude mining reservation requires its exact pumpjack footprint')
             if 'mining_reserved_area' in block:
                 outer = block.get('reserved_area')
                 if (not _area(area) or not _area(outer)
@@ -311,6 +337,13 @@ local function resource_violation(spec,reservations,ignored,specs)
  local ores=s.find_entities_filtered{area=spec.survey_area,type="resource"};local zones={}
  for _,zone in ipairs(reservations) do local box=zone.area;local q=spec.survey_area
   if q[1][1]<box[2][1] and q[2][1]>box[1][1] and q[1][2]<box[2][2] and q[2][2]>box[1][2] then zones[#zones+1]=zone end
+ end
+ if spec.name=="pumpjack" and spec.mining_resource=="crude-oil" then
+  local well=target(spec.position,"crude-oil")
+  if not well or well.position.x~=spec.position.x or well.position.y~=spec.position.y or well.amount<=0 then return "pumpjack_requires_exact_live_crude_well",nil end
+  for _,ore in pairs(ores)do if ore.name~="crude-oil"then return "pumpjack_cannot_overlap_solid_resource",nil end end
+  for _,zone in ipairs(zones)do if zone.resource~="crude-oil"then return "pumpjack_cannot_overlap_solid_mining_reservation",nil end end
+  return nil,nil
  end
  if #ores==0 and #zones==0 then return nil,nil end
  if spec.resource_virtual_tunnel then

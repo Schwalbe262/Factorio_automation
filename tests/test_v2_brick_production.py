@@ -219,5 +219,26 @@ class BrickControllerTests(unittest.TestCase):
             c,obs,lanes=self.proof_fixture();lanes[side]=content
             self.assertIsNone(c.proof(obs))
 
+    def test_automatic_idle_without_recipe_requires_finished_expected_output_and_pure_input(self):
+        c,obs,_=self.proof_fixture()
+        obs['entities'][0].update(recipe=None,products_finished=144,output_inventory={'stone-brick':100},
+                                  inventory={'stone':1,'stone-brick':100,'coal':5},remaining_burning_fuel=2520300)
+        self.assertIsNotNone(c.proof(obs))
+        self.assertIn('idle_furnaces',c.game.query.call_args.args[0])
+        for change in ({'output_inventory':{}},{'output_inventory':{'iron-plate':100}},
+                       {'inventory':{'stone':1,'iron-ore':1,'coal':5}},
+                       {'recipe':'iron-plate'},{'products_finished':0}):
+            c,obs,_=self.proof_fixture()
+            obs['entities'][0].update(recipe=None,output_inventory={'stone-brick':100},inventory={'stone':1,'coal':5})
+            obs['entities'][0].update(change)
+            self.assertIsNone(c.proof(obs),change)
+
+    def test_native_idle_quality_or_identity_rejection_is_exposed(self):
+        c,obs,_=self.proof_fixture()
+        obs['entities'][0].update(recipe=None,output_inventory={'stone-brick':100})
+        c.game.query.side_effect=lambda code: {'ok':False,'reason':'automatic_furnace_idle_contaminated_output'} if 'local result={ok=true,tick=game.tick}' in code else {'ok':True}
+        self.assertIsNone(c.proof(obs))
+        self.assertEqual(c.last_proof_failure['reason'],'automatic_furnace_idle_contaminated_output')
+
 
 if __name__=='__main__':unittest.main()

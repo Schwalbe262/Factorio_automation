@@ -131,6 +131,21 @@ class SteelControllerTests(unittest.TestCase):
                 write.assert_not_called(); c.builder.ensure_plan.assert_not_called()
                 self.assertFalse(c.path.exists())
 
+    def test_failed_coal_route_names_candidate_stage_and_exact_handoffs_in_evidence(self):
+        with tempfile.TemporaryDirectory() as root:
+            Path(root,'pcb-board.json').write_text(json.dumps({'world_id':'w','catalog_fingerprint':'catalog','blocks':{}}))
+            c=self.coordinator(root);iron,coal=sources()
+            good=_plan([],[],underground_pairs=[],clear_obstacles=[],route_metrics={'turns':2,'length':10})
+            with patch('factorio_agent.steel_production.survey_slots',return_value={'ok':True,'legal':[1]}), \
+                 patch('factorio_agent.steel_production.plan_connection',side_effect=[good,{'ok':False,'reason':'no_clean_trunk_corridor','visited':17403}]):
+                result=c.prepare(self.obs(),iron_source=iron,coal_source=coal,anchors=((82,-40),))
+            failure=result['evidence']['candidate_failures'][0]
+            self.assertEqual(failure['candidate'],{'x':82,'y':-40})
+            self.assertEqual((failure['stage'],failure['item'],failure['visited']),('raw_feed','coal',17403))
+            self.assertEqual(failure['source'],coal['position'])
+            self.assertEqual(failure['destination'],{'x':77.5,'y':-40.5})
+            c.builder.ensure_plan.assert_not_called()
+
     def proof_fixture(self):
         c = self.coordinator('unused'); core = steel_core(catalog()); iron, coal = sources()
         extra = [entity('transport-belt', *iron['position'].values(), 4), entity('transport-belt', *coal['position'].values(), 4),
@@ -161,9 +176,42 @@ class SteelControllerTests(unittest.TestCase):
         c, obs = self.proof_fixture(); obs['entities'][0]['inventory'] = {}
         self.assertIsNone(c.proof(obs))
 
+    def test_output_lane_query_excludes_vertical_raw_feed_crossing_the_output_row(self):
+        c,obs=self.proof_fixture()
+        y=c.state['core']['ports'][-1]['position']['y']
+        crossings=[e for e in c.state['core']['entities']
+                   if e['name']=='transport-belt' and e['position']['y']==y and e['direction']!=4]
+        self.assertTrue(crossings)
+        native_lanes=deepcopy(c.game.query.return_value)
+        captured=[]
+        def native_direction_guard(body):
+            marker='local args=helpers.json_to_table('
+            serialized,_=json.JSONDecoder().raw_decode(body[body.index(marker)+len(marker):])
+            args=json.loads(serialized);captured.extend(args['output'])
+            if any(e['direction']!=4 for group in ('input','output') for e in args[group]):
+                return {'ok':False,'reason':'native_direction_mismatch'}
+            return native_lanes
+        c.game.query.side_effect=native_direction_guard
+        self.assertIsNotNone(c.proof(obs))
+        self.assertTrue(captured)
+        self.assertFalse(any(e['position']==raw['position'] for e in captured for raw in crossings))
+
     def test_commissioning_rejects_changed_surplus_policy_and_contaminated_coal(self):
         c, obs = self.proof_fixture(); obs['entities'][-1]['splitter_output_priority'] = 'right'
         self.assertIsNone(c.proof(obs))
+
+    def test_automatic_idle_steel_furnace_needs_correct_output_and_compatible_raw(self):
+        c,obs=self.proof_fixture()
+        obs['entities'][0].update(recipe=None,products_finished=144,output_inventory={'steel-plate':100},
+                                  inventory={'iron-plate':1,'steel-plate':100,'coal':5})
+        self.assertIsNotNone(c.proof(obs))
+        for change in ({'output_inventory':{}},{'output_inventory':{'iron-plate':100}},
+                       {'inventory':{'iron-plate':1,'stone':1,'coal':5}},
+                       {'recipe':'stone-brick'},{'products_finished':0}):
+            c,obs=self.proof_fixture()
+            obs['entities'][0].update(recipe=None,output_inventory={'steel-plate':100},inventory={'iron-plate':1,'coal':5})
+            obs['entities'][0].update(change)
+            self.assertIsNone(c.proof(obs),change)
         c, obs = self.proof_fixture(); obs['entities'][-2]['belt_inventory'] = {'iron-ore': 1}
         self.assertIsNone(c.proof(obs))
 

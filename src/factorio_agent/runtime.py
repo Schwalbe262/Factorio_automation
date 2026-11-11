@@ -31,6 +31,12 @@ class WorldBoundGame(DeterministicGame):
         return super().query(body)
 
     def act(self,action:dict)->dict:
+        if action.get('type')=='take_full_magazines':
+            from .ammo_transfer import execute_take_full_magazines
+            return self._record_action(action,execute_take_full_magazines(self,action))
+        if action.get('type')=='configure_ammo_buffer':
+            from .ammo_transfer import execute_configure_ammo_buffer
+            return self._record_action(action,execute_configure_ammo_buffer(self,action))
         if action.get('type')=='deposit':
             from .storage_transfer import execute_deposit
             return self._record_action(action,execute_deposit(self,action))

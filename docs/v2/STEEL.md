@@ -46,6 +46,12 @@ production in every furnace, coal/burning fuel, powered inserters, unchanged
 source identities and surplus priority, exact underground partners, correctly
 typed mixed input lanes and real steel on both native output lanes.
 
+If an automatic furnace releases its recipe while idle with full output,
+acceptance additionally requires positive expected output and pure compatible
+input/fuel. The exact native unit's normal output, raw input and fuel slots are
+checked in the same query as lane evidence. An unset recipe alone is never
+production evidence; wrong recipes, products, qualities and mixed raw items fail.
+
 Tests cover catalog-driven recipe/fuel calculations, footprint/feed/output
 audits, stable expansion, missing/unsafe handoffs, read-only preparation and
 commissioning gates. No sustained-rate, capacity-upgrade or rocket acceptance
