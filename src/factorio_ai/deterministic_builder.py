@@ -24,7 +24,8 @@ def _report(status: str, reason: str, **evidence: Any) -> dict[str, Any]:
 
 def power_flow_ready(evidence: dict[str, Any]) -> bool:
     return bool(evidence.get("ok") and evidence.get("water", 0) > 0 and evidence.get("steam", 0) > 0
-                and evidence.get("boiler_fuel", 0) > 0 and evidence.get("drill_fuel", 0) > 0
+                and evidence.get("boiler_fuel", 0) > 0
+                and (evidence.get("drill_fuel", 0) > 0 or evidence.get("drill_powered") is True)
                 and evidence.get("coal_on_belts", 0) > 0 and evidence.get("connected_engines") == 2)
 
 
@@ -623,6 +624,9 @@ return success{sites=out}
         actual = _find(observation, entity)
         if actual is None:
             return _report("blocked", "cannot seed a missing burner", entity=entity)
+        if entity["name"]=="electric-mining-drill":
+            return (None if actual.get("electric_network_connected") and actual.get("energy",0)>0
+                    else _report("waiting","electric mining startup needs its real power connection"))
         state = self.state["seeds"].setdefault(key, {"attempts": 0, "observed": False})
         fuel = int(actual.get("inventory", {}).get("coal", 0))
         if fuel > 0 or actual.get("remaining_burning_fuel", 0) > 0:
@@ -681,7 +685,9 @@ if drill then
  local mined=prototypes.entity.coal.mineable_properties
  coal_rate=drill.prototype.mining_speed*60/mined.mining_time
 end
-return success{boiler_fuel=fuel(boiler),drill_fuel=fuel(drill),water=fluid(boiler,"water"),steam=steam,
+return success{boiler_fuel=fuel(boiler),drill_fuel=fuel(drill),
+ drill_powered=drill and not drill.burner and drill.energy>0 and drill.is_connected_to_electric_network() or false,
+ water=fluid(boiler,"water"),steam=steam,
  connected_engines=connected,energized_engines=energized,generation_kw=generation_kw,total_energy_generated=total_energy,
  coal_on_belts=coal_on_belts,coal_mining_per_minute=coal_rate,coal_feed_needs_expansion_for_full_engine_capacity=true,tick=game.tick}
 ''')

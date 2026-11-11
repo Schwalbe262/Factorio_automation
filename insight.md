@@ -6534,3 +6534,10 @@ Promote to insight.md only if:
 
 ## 2026-11-11 / EXP-0002 ? Power poles need network identity
 - Improvement: associate pole electric_network_id with energized generator network IDs when selecting powered consumer sites. Before: all three real connected poles reported false for the consumer connectivity predicate and the planner blocked no_powered_lab_site. After: ordinary lab placed/connected,35 normal red packs consumed, both startup technologies unlocked; measured generation60kW under load. Evidence: seed101/world32a34974, EXP-0002, native network1 at tick209556. Remaining risk: current site selector handles the starter steam network; other power types and district capacity require their own verification.
+
+
+## 2026-11-11T11:54:30.570844+00:00 | EXP-0005 | native flow proof survives transport movement
+- Before: exact sample tile had to remain occupied at independent postcondition, causing a false failure after working electric mining.
+- Improvement/after: require current powered entity identities and retain native output evidence for at most600ticks.
+- Evidence: Luna retry succeeded tick344894 without rebuilding, observed coal344787; regression checks movement and expiry.
+- Remaining risk: this proves recent output, not sustained throughput; use a separate timed production/consumption window for capacity.

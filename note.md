@@ -251557,3 +251557,13 @@ Goal: expandblue-sciencefluidproduction toaggregategraphdemand. Hypothesis: stab
 
 ## 2026-11-11 Part reference library / EXP-0003
 - Goal: parallel public design study. Actions: Luna imported four small public strings ignored, provenance/hash tracked; bounded zlib/base64/book reader,7 focused tests; found initial smelting/steam labels are late train/Fulgora designs; found early AM1 red-science candidate303 entities. Result: structural import solved, operation/tech substitutions unverified; no save/profile imported or published. Main thread interval shared with Part1; child counters unavailable, not zero. Next: adapt small technology-valid modules to PCB contracts and verify real production. Capacity follow-up:4 productive iron cells/2 copper cells succeeded natively, only nominal60/30 ore per minute; no sustained/automatic plate proof.
+
+
+## 2026-11-11T11:54:30.570844+00:00 | Part2 | machine logistics and electric source banks
+- Goal/hypothesis: normally funded machine science + aligned electric mining expose useful bounded jobs to Luna.
+- Actions/options: fixed16x16 gear/red cell instead of more handcrafted science; preserve coal trunk with paid drill cutover; add iron2/copper1/coal1 electric banks instead of extending irregular burner cells.
+- Metrics/result: native logistics tick324072 (20 machine red consumed), electric source tick344894, iron60/copper30/coal30 nominal banks output ticks411413/415807/419489; five electric drills. All development jobs succeeded after one temporal-proof fix.
+- Failure: electric output moved off sample tile between success checks. Fixed bounded recent native evidence tied to entity identities; regression verifies expiry. No full-load or sustained30SPM proof.
+- Validation:40 v2 tests +38 builder tests pass. Production window and all-known-plan construction diagnostics added.
+- Next: closed ore/coal-to-plate smelting districts and controlled underground/splitter connections, then permanent science/mall/defense/oil/rail/rocket.
+- Usage: parent 32144956 -> 45438772 = 13293816 tokens incl cached input; weekly account 6.0% -> 8.0% (+2.0pp); exact task quota and child tokens unavailable.

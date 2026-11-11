@@ -25,6 +25,12 @@ CAPABILITIES = {
                          "effect": "finite normally handcrafted startup science; natural research, maximum one budget per technology"},
     "regularize_power_layout": {"parameters": {}, "requires": ["starter"],
                                "effect": "recover obsolete unfinished coal feed and install validated straight trunks; no hot cutover"},
+    "bootstrap_logistics": {"parameters": {}, "requires": ["power"],
+                            "effect": "reserve a PCB cell, normally assemble finite red science, naturally unlock underground belts/splitters"},
+    "electric_coal": {"parameters": {}, "requires": ["power"],
+                      "effect": "normally craft electric drill, prebuild grid, reserve-backed cutover and real coal output onto retained trunk"},
+    "mining_outpost": {"parameters": {"resource":"iron-ore|copper-ore|coal|stone","rate_per_minute":"finite number 0..240, absolute nominal target"},
+                       "requires":["power"],"effect":"add aligned powered electric drills/collector banks with fixed output ports; never replace operating banks to expand"},
 }
 
 
@@ -50,6 +56,9 @@ class Request:
             validate_parameters(self.parameters)
         elif self.capability == "starter_research":
             from .research import validate_parameters
+            validate_parameters(self.parameters)
+        elif self.capability == "mining_outpost":
+            from .outposts import validate_parameters
             validate_parameters(self.parameters)
         elif not isinstance(self.parameters, dict) or self.parameters:
             raise ValueError("this capability accepts no parameters")
@@ -98,9 +107,11 @@ def summary(obs: dict, ledger: Ledger) -> dict:
             "production": obs.get("production", {}), "technologies": sorted(obs.get("technologies", {})),
             "research": obs.get("research"), "enemies_near_start": obs.get("enemies"),
             "research_progress": obs.get("research_progress"), "electricity": obs.get("electricity"),
+            "production_rate_measurement":obs.get("production_rate_measurement"),
+            "known_project_construction_budget":obs.get("known_project_construction_budget"),
             "capabilities": CAPABILITIES,
             "jobs": [{k: v for k, v in job.items() if k in
-                      {"key", "capability", "status", "reason", "evidence", "actions", "last_tick"}}
+                      {"key", "capability", "status", "reason", "actions", "last_tick"}}
                      for job in ledger.data["jobs"].values()],
             "rocket_launch_verified": False}
 
@@ -200,6 +211,12 @@ class StarterExecutors:
         self.research = StarterResearch(game, self.bootstrap, catalog)
         from .power_layout import RegularizePower
         self.power_layout = RegularizePower(game, self.builder)
+        from .industry import BootstrapLogistics
+        self.industry = BootstrapLogistics(game,self.bootstrap,self.builder,catalog)
+        from .electric_mining import ElectricCoal
+        self.electric_coal=ElectricCoal(game,self.bootstrap,self.builder)
+        from .outposts import MiningOutposts
+        self.outposts=MiningOutposts(game,self.bootstrap,self.builder)
 
     def step(self, capability: str, obs: dict, parameters: dict | None = None) -> dict:
         if capability == "starter":
@@ -229,6 +246,18 @@ class StarterExecutors:
             if result.get("status") != "succeeded":
                 return result
             return self.research.step(obs, parameters or {})
+        if capability == "bootstrap_logistics":
+            result=self.builder.ensure_power(obs)
+            if result.get("status")!="succeeded":return result
+            return self.industry.step(obs)
+        if capability == "electric_coal":
+            # During cutover the old source may be absent for one observed
+            # action. Do not run ensure_power here and rebuild that old drill.
+            return self.electric_coal.step(obs)
+        if capability == "mining_outpost":
+            result=self.builder.ensure_power(obs)
+            if result.get("status")!="succeeded":return result
+            return self.outposts.step(obs,parameters or {})
         raise ValueError("no executor for capability: " + capability)
 
     def proof(self, capability: str, obs: dict, result: dict, parameters: dict | None = None) -> dict | None:
@@ -238,6 +267,12 @@ class StarterExecutors:
             return self.research.proof(obs, parameters or {})
         if capability == "regularize_power_layout":
             return self.power_layout.proof(obs)
+        if capability == "bootstrap_logistics":
+            return self.industry.proof(obs)
+        if capability == "electric_coal":
+            return self.electric_coal.proof(obs)
+        if capability == "mining_outpost":
+            return self.outposts.proof(obs,parameters or {})
         produced = obs.get("production", {})
         if not all(produced.get(name, {}).get("produced", 0) > 0 for name in ("iron-plate", "copper-plate")):
             return None
@@ -256,9 +291,10 @@ class StarterExecutors:
 
 def progress_key(obs: dict, capability: str) -> str:
     # Relevant effects only: unrelated inventory churn must not hide a stall.
-    value = {"production": {n: obs.get("production", {}).get(n) for n in ("iron-plate", "copper-plate", "coal")},
-             "techs": [n for n in ("steam-power", "electronics", "automation-science-pack")
+    value = {"production": {n: obs.get("production", {}).get(n) for n in ("iron-plate", "copper-plate", "coal", "automation-science-pack", "logistic-science-pack", "chemical-science-pack")},
+             "techs": [n for n in ("steam-power", "electronics", "automation-science-pack", "automation", "electric-mining-drill", "logistics")
                        if obs.get("technologies", {}).get(n)],
+             "research":obs.get("research"),"research_progress":obs.get("research_progress"),
              "entities": [(e.get("unit_number"), e.get("name")) for e in obs.get("entities", [])]}
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 

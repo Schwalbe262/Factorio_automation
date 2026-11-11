@@ -44,6 +44,9 @@ Current capabilities:
 | starter_capacity | `--resource iron-ore` (or copper-ore/coal/stone), `--cells 1..8` absolute productive cell target | starter |
 | starter_research | `--technology automation` or electric-mining-drill | power |
 | regularize_power_layout | none | starter; existing unfinished power plan |
+| bootstrap_logistics | none | power and naturally unlocked Automation |
+| electric_coal | none | power and naturally unlocked electric-mining-drill |
+| mining_outpost | `--resource iron-ore` (or copper-ore/coal/stone), `--rate-per-minute 1..240` absolute nominal target | power and electric-mining-drill |
 
 Use the typed parameter flags above to avoid Windows shell JSON quoting issues.
 Starter capacity funds initial construction using extra drill-fed starter cells;
@@ -52,6 +55,34 @@ system. Starter research uses finite normally crafted science budgets to unlock
 the first machines; it cannot handcraft its way through later research.
 Broader automatic production, defense, rail and rocket jobs remain unimplemented.
 Do not claim a rocket-capable system.
+
+Bootstrap logistics builds a small reserved16x16 PCB cell with two assemblers,
+four real inserters and finite iron/copper chest inputs. Gear and red-science
+crafting occur in the actual machines, never through player handcrafts. The
+normally produced packs fund the native logistics research, unlocking initial
+underground belts/splitters. This is finite bootstrap funding, not automated raw
+supply or a sustained30SPM proof. Native preflight checks the entire cell and
+its straight-hop power connection before any construction.
+
+Electric coal preserves the existing regular trunk. It crafts the replacement
+normally, prebuilds paid poles, waits for an ordinary boiler/belt reserve, then
+recovers the exact owned burner drill and installs an electric drill whose
+actual prototype drop is prechecked against the retained belt. Proof requires
+electric power and native coal reappearing at the cleared direct output tile.
+The obsolete self-fuel inserter is recovered after output is verified. This is
+one source upgrade; full-load fuel capacity and ore/smelter logistics need their
+own throughput evidence.
+
+Mining outposts add aligned electric-drill rows and shared collector belts with
+fixed output ports. The framework derives drill counts from actual prototype
+rates and surveys pure resource coverage, complete placements and power before
+construction. Existing productive banks stay in place when capacity is added.
+The receipt proves powered extraction/native item output. Nominal capacity is
+not a measured downstream smelting or science rate; those require further jobs.
+`observe` reports time-window production rates only after two timed samples;
+lifetime counters are never labeled throughput. Saved-project construction
+budgets are separate from the next immediate component deficit and exclude
+unplanned future factory stages. `status --key <key>` gives one full receipt.
 
 The layout migration recovers obsolete paid belts through normal mining and
 installs a prevalidated regular corridor. It refuses an operating supply that

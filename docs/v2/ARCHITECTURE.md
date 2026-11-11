@@ -72,8 +72,11 @@ its paid drill and existing power plant. Native preflight, ordinary guarded
 hardware recovery and fresh entity checks verified a four-belt self-feed and
 four-turn trunk. Whole-plan belts changed from 140 to 132; route length itself
 was 128 versus 126 previously, so this is not a route-length speedup claim.
-The production-district allocator and full science/logistics system are not yet
-implemented. This first corridor must not be described as a complete PCB factory.
+The first reserved16x16 cell now assembles finite red science to unlock logistics
+naturally. Aligned electric mining banks expose collector ports and preserve
+existing banks when adding capacity. These are verified development components;
+automatic smelting, permanent science supply and district crossings are pending.
+They must not be described as a complete PCB factory or sustained30SPM.
 
 ![Previous and rebuilt coal layout plans](images/coal-layout-comparison.png)
 

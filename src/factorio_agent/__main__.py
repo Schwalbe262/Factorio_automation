@@ -20,8 +20,9 @@ def main(argv=None):
     create.add_argument("--seed", type=int, default=101)
     create.add_argument("--server-port", type=int, default=34260)
     create.add_argument("--rcon-port", type=int, default=27060)
-    for command in ("start", "connect-player", "observe", "capabilities", "status"):
+    for command in ("start", "connect-player", "observe", "capabilities"):
         commands.add_parser(command)
+    commands.add_parser("status").add_argument("--key")
     request = commands.add_parser("request")
     request.add_argument("--key", required=True)
     request.add_argument("--world-id", required=True)
@@ -31,6 +32,7 @@ def main(argv=None):
     request.add_argument("--resource")
     request.add_argument("--cells", type=int)
     request.add_argument("--technology")
+    request.add_argument("--rate-per-minute",type=float)
     execute = commands.add_parser("run")
     execute.add_argument("--key", required=True)
     execute.add_argument("--seconds", type=float, default=25)
@@ -55,17 +57,22 @@ def main(argv=None):
     elif args.command == "capabilities":
         result = CAPABILITIES
     elif args.command == "status":
-        result = Ledger(root).data
+        data=Ledger(root).data
+        result=data["jobs"].get(args.key,{"status":"error","reason":"unknown_job_key"}) if args.key else data
     elif args.command == "observe":
         game = runtime.game_for(root)
         obs = game.observe()
         if not obs.get("ok"):
             raise RuntimeError(obs.get("reason", "observation_failed"))
         obs["electricity"] = runtime.electricity_snapshot(game)
+        from .diagnostics import production_rates,construction_budget
+        obs["production_rate_measurement"]=production_rates(root,obs)
+        if (root/"catalog.json").exists():
+            obs["known_project_construction_budget"]=construction_budget(root,obs,runtime.catalog_for(root,game))
         result = summary(obs, Ledger(root))
     elif args.command == "request":
         parameters = json.loads(args.parameters)
-        typed = {name: getattr(args, name) for name in ("resource", "cells", "technology") if getattr(args, name) is not None}
+        typed = {name: getattr(args, name) for name in ("resource", "cells", "technology","rate_per_minute") if getattr(args, name) is not None}
         if typed:
             if parameters:
                 raise ValueError("use typed parameters or JSON, not both")
