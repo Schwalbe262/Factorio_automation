@@ -61,6 +61,7 @@ Current capabilities:
 | defense_perimeter | none | starter; native gun-turret research and recipes |
 | main_bus_factory | none | paired_smelting, logistic_science, defense_perimeter; migrate to shared bus and compact green |
 | dedicated_materials | `--resource coal` or stone | paired_mining; independent opposing drill pair and identity-bound material outlets |
+| chemical_coal_supply | none | paired_mining; separate defended chemistry coal pair, preserve current supplies and publish only plastic-coal |
 | green_bus_reroute | none | main_bus_factory; move only green raw branches off resources, preserve production core |
 | ore_transport_reroute | none | paired_mining and paired_smelting; move iron delivery after the last join, preserve mining, prove new ore flow and iron production |
 | steel_supply | none | main_bus_factory; dynamic surplus-priority iron outlet |

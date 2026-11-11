@@ -51,6 +51,8 @@ CAPABILITIES = {
                          "effect":"replace separate raw plate corridors with shared northbound iron/copper buses and native priority taps; commission compact green then normally retire obsolete western hardware; no throughput certification"},
     "dedicated_materials": {"parameters":{"resource":"coal|stone"},"requires":["paired_mining"],
                            "effect":"normally build an independent opposing drill pair and publish proven material ports; coal distribution stays outside resources"},
+    "chemical_coal_supply": {"parameters":{},"requires":["paired_mining"],
+                             "effect":"normally build a separate defended opposing coal pair for chemistry, preserve existing coal consumers and publish one exact plastic-coal outlet without multiplying bank capacity"},
     "steam_coal_reroute": {"parameters":{},"requires":["steam_expansion"],
                           "effect":"prebuild an alternative off-resource coal corridor, normally cut over owned corners, verify loaded steam and recover obsolete transport"},
     "green_bus_reroute": {"parameters":{},"requires":["main_bus_factory"],
@@ -331,6 +333,8 @@ class StarterExecutors:
         self.storage=InventoryStorage(game,catalog)
         from .material_supply import DedicatedMaterials
         self.material_supply=DedicatedMaterials(game,self.builder,catalog,self.outposts,perimeter=self.perimeter)
+        self.chemical_coal=DedicatedMaterials(game,self.builder,catalog,self.outposts,perimeter=self.perimeter,
+                                             purpose='chemistry')
         from .resource_reroute import SteamCoalReroute
         self.steam_coal_reroute=SteamCoalReroute(game,self.builder,catalog,self.steam_expansion,self.outposts)
         from .green_bus_reroute import GreenBusReroute
@@ -460,6 +464,8 @@ class StarterExecutors:
             return self.bus_factory.step(obs,parameters or {})
         if capability == "dedicated_materials":
             return self.material_supply.step(obs,parameters or {})
+        if capability == "chemical_coal_supply":
+            return self.chemical_coal.step(obs,{'resource':'coal'})
         if capability == "steam_coal_reroute":
             return self.steam_coal_reroute.step(obs,parameters or {})
         if capability == "green_bus_reroute":
@@ -521,6 +527,8 @@ class StarterExecutors:
             return self.bus_factory.proof(obs)
         if capability == "dedicated_materials":
             return self.material_supply.proof(obs,parameters or {})
+        if capability == "chemical_coal_supply":
+            return self.chemical_coal.proof(obs,{'resource':'coal'})
         if capability == "steam_coal_reroute":
             return self.steam_coal_reroute.proof(obs)
         if capability == "green_bus_reroute":

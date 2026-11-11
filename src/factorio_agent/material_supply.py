@@ -14,6 +14,7 @@ from .smelting import port, merge_entities
 from .transport import xy
 from .resource_policy import annotate_mining_exit, mining_exit_candidates, MINING_EXIT_LUA
 from .power_grid import plan_connection as power_connection
+from .industrial import PlanningBudget
 
 
 def validate_material(parameters):
@@ -26,10 +27,14 @@ def _same_plan(a, b):
 
 
 class DedicatedMaterials:
-    def __init__(self, game, builder, catalog, outposts, *, perimeter=None):
+    def __init__(self, game, builder, catalog, outposts, *, perimeter=None, purpose=None):
+        if purpose not in (None, 'chemistry'):
+            raise ValueError('material purpose must be omitted or chemistry')
         self.game, self.builder, self.catalog, self.outposts = game, builder, catalog, outposts
         self.perimeter = perimeter
-        self.path = Path(game.cfg.runtime_dir)/'material-supply.json'
+        self.purpose = purpose
+        filename = 'material-supply-chemistry.json' if purpose else 'material-supply.json'
+        self.path = Path(game.cfg.runtime_dir)/filename
         self.sources_path = self.path.parent/'material-sources.json'
         self.state = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
 
@@ -43,13 +48,29 @@ class DedicatedMaterials:
     def _valid(self, state, world):
         return state.get('world_id') == world and state.get('catalog_fingerprint', self.catalog.fingerprint) == self.catalog.fingerprint
 
-    def _coal_hub(self, source, reservations, planned=(), mining_area=None):
+    def _supply_id(self, world, resource):
+        return 'dedicated-material:'+world+':'+resource+(':chemistry' if self.purpose else '')
+
+    def _checkpoint_valid(self, state, world):
+        return (self._valid(state, world) and state.get('purpose') == self.purpose
+                and (not self.purpose or state.get('catalog_fingerprint') == self.catalog.fingerprint)
+                and all(self._entry_valid(entry, world, resource) for resource, entry in state.get('supplies', {}).items()))
+
+    def _entry_valid(self, entry, world, resource):
+        expected = self._supply_id(world, resource)
+        return (entry.get('resource') == resource and entry.get('material_supply_id') == expected and entry.get('purpose') == self.purpose
+                and entry.get('bank', {}).get('material_supply_id') == expected
+                and entry['bank'].get('material_supply_purpose') == self.purpose
+                and entry['bank'].get('plan', {}).get('resource') == resource
+                and (self.purpose is None or resource == 'coal'))
+
+    def _coal_hub(self, source, reservations, planned=(), mining_area=None, *, game=None):
         zones = [{'area': area, 'resource': '__other_reserved_area__'} for area in reservations]
         if mining_area:
             zones.append({'area': mining_area, 'resource': 'coal'})
         payload = json.dumps(json.dumps({'source': source, 'areas': reservations, 'zones': zones,
             'planned': list(planned), 'exit_candidates': mining_exit_candidates(source['position'], extra_clear_steps=4)}, separators=(',', ':')))
-        return self.game.query('''
+        return (game or self.game).query('''
 local args=helpers.json_to_table('''+payload+''');
 '''+MINING_EXIT_LUA+'''
 local function hub_clear(p)
@@ -119,6 +140,12 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
     def prepare(self, obs, parameters):
         validate_material(parameters)
         resource = parameters['resource']
+        if self.purpose and resource != 'coal':
+            return {'ok': False, 'reason': 'chemistry_material_supply_requires_coal'}
+        if self.state and not self._checkpoint_valid(self.state, obs['world_id']):
+            return {'ok': False, 'reason': 'material_supply_purpose_or_identity_changed'}
+        if self.purpose and self.perimeter is None:
+            return {'ok': False, 'reason': 'chemistry_material_supply_requires_perimeter'}
         if not obs.get('technologies', {}).get('electric-mining-drill'):
             return {'ok': False, 'reason': 'native_electric_mining_required'}
         saved = self._outposts()
@@ -128,15 +155,18 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
         board = json.loads(board_path.read_text(encoding='utf-8'))
         if not self._valid(board, obs['world_id']):
             return {'ok': False, 'reason': 'material_board_world_or_catalog_changed'}
-        supply_id = 'dedicated-material:'+obs['world_id']+':'+resource
+        supply_id = self._supply_id(obs['world_id'], resource)
         existing = [b for b in saved.get('banks', []) if b.get('material_supply_id') == supply_id]
         if len(existing) > 1:
             return {'ok': False, 'reason': 'duplicate_dedicated_material_bank_identity'}
         if existing:
             bank = deepcopy(existing[0])
-            if bank['plan'].get('resource') != resource or not bank['plan'].get('paired'):
+            if (bank['plan'].get('resource') != resource or not bank['plan'].get('paired')
+                    or bank.get('material_supply_purpose') != self.purpose):
                 return {'ok': False, 'reason': 'dedicated_material_bank_configuration_changed'}
         else:
+            budget = PlanningBudget(self.game) if self.purpose else None
+            planning_game = budget.game if budget else self.game
             reservations = [b['reserved_area'] for b in board.get('blocks', {}).values() if b.get('reserved_area')]
             reservations += [r['area'] for r in board.get('shared_main_bus', {}).get('reservations', [])]
             reservations += [b.get('reserved_area', b['plan'].get('reserved_area')) for b in saved.get('banks', [])
@@ -147,12 +177,14 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
             hub = None
             failures = []
             for attempt in range(6 if resource == 'coal' else 1):
-                bank = prepare_new_bank(self.game, self.builder, obs, resource, 2, planning_reservations)
+                if budget and budget.expired():
+                    return budget.failure(candidate_failures=failures, attempted_banks=attempt)
+                bank = prepare_new_bank(planning_game, self.builder, obs, resource, 2, planning_reservations)
                 if not bank.get('ok'):
                     return dict(bank, candidate_failures=failures, attempted_banks=attempt+1)
                 if resource != 'coal':
                     break
-                hub = self._coal_hub(bank['plan']['ports'][0], reservations, bank['plan']['entities'], bank['reserved_area'])
+                hub = self._coal_hub(bank['plan']['ports'][0], reservations, bank['plan']['entities'], bank['reserved_area'], game=planning_game)
                 if hub.get('ok'):
                     grown = self._distribution_area(bank, hub)
                     if not any(overlap(grown, r) for r in reservations):
@@ -165,6 +197,8 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
                         'candidate_failures': failures, 'attempted_banks': 6}
             bank = deepcopy(bank)
             bank.update(material_supply_id=supply_id, ready=False, consumer_connection=None)
+            if self.purpose:
+                bank['material_supply_purpose'] = self.purpose
             drills = [e for row in bank['plan']['producer_rows'].values() for e in row]
             drill_positions = {xy(e) for e in drills}
             pole_positions = {(x+2, y) for x, y in drill_positions}
@@ -205,6 +239,8 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
                     return {'ok': False, 'reason': 'coal_distribution_reservation_conflict'}
                 es = merge_entities(core, additions)
                 access=self._output_access(hub_x,hub_y)
+                if self.purpose:
+                    access = {'plastic-coal': access['coal'], 'chemical-coal-reserve': access['brick-coal']}
                 empty={(p['x'],p['y'])for path in access.values()for p in path[1:]}
                 old_bridge=[e for e in bank['plan']['entities']if(e['name'],*xy(e))not in core_keys]
                 if empty & self.builder._occupied_by_plan(es+old_bridge):
@@ -212,7 +248,7 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
                 keepouts=self._published_power_keepouts(saved.get('banks',[]))
                 keepouts += [entity('transport-belt',x,y,4)for x,y in sorted(empty)]
                 pole=next(e for e in core if e['name']=='small-electric-pole')
-                power=power_connection(self.game,self.builder,obs,pole['position'],
+                power=power_connection(planning_game,self.builder,obs,pole['position'],
                     [e for e in es if e['name']!='small-electric-pole']+keepouts)
                 if not power.get('ok'):
                     return {'ok':False,'reason':'coal_power_bridge_cannot_preserve_output_access','power':power}
@@ -228,7 +264,7 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
                         spec['resource_role'] = 'mining_escape'
                     bank['plan']['resource_escape_area'] = [[min(p['x'] for p in mining_path[:-1])-.5, min(p['y'] for p in mining_path[:-1])-.5],
                                                            [max(p['x'] for p in mining_path[:-1])+.5, max(p['y'] for p in mining_path[:-1])+.5]]
-                check = preflight(self.game, self.builder, obs, es)
+                check = preflight(planning_game, self.builder, obs, es)
                 if not check.get('ok'):
                     return {'ok': False, 'reason': 'whole_coal_distribution_preflight_failed', 'preflight': check}
                 old = bank['plan']
@@ -237,18 +273,28 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
                 bank['plan'] = _plan(es, old['ports'], **extra, clear_obstacles=obstacles,output_access=access)
                 bank['reserved_area'] = area
                 bank['material_distribution'] = {'splitter': splitter,
-                    'ports': {'coal': port('coal', hub_x+2, hub_y, 4, 'output'), 'brick-coal': port('coal', hub_x+2, hub_y+1, 4, 'output')},
+                    'ports': {('plastic-coal' if self.purpose else 'coal'): port('coal', hub_x+2, hub_y, 4, 'output'),
+                              ('chemical-coal-reserve' if self.purpose else 'brick-coal'): port('coal', hub_x+2, hub_y+1, 4, 'output')},
                     'output_access':access,'output_access_policy':'reserve two clear east cells then independent outward turns; no power or production entities'}
+        extra = {}
+        if self.purpose:
+            defense = self.perimeter.prepare_coverage(obs, supply_id, [bank['reserved_area']])
+            if not defense.get('ok'):
+                return {'ok': False, 'reason': 'chemistry_coal_defense_preflight_failed', 'evidence': defense}
+            extra = {'purpose': self.purpose, 'defense_preview': defense}
         return {'ok': True, 'world_id': obs['world_id'], 'catalog_fingerprint': self.catalog.fingerprint,
                 'resource': resource, 'material_supply_id': supply_id, 'bank': bank,
-                'entity_units': deepcopy(bank.get('material_entity_units', [])), 'phase': 'build'}
+                'entity_units': deepcopy(bank.get('material_entity_units', [])), 'phase': 'build', **extra}
 
     def _register(self, obs, entry, *, ready=False):
+        if not self._entry_valid(entry, obs['world_id'], entry['resource']):
+            return {'status': 'blocked', 'reason': 'material_supply_purpose_or_identity_changed'}
         saved = self._outposts()
         if not self._valid(saved, obs['world_id']):
             return {'status': 'blocked', 'reason': 'material_outposts_world_or_catalog_changed'}
         matches = [b for b in saved.get('banks', []) if b.get('material_supply_id') == entry['material_supply_id']]
-        if len(matches) > 1 or (matches and not _same_plan(matches[0], entry['bank'])):
+        if len(matches) > 1 or (matches and (not _same_plan(matches[0], entry['bank'])
+                or matches[0].get('material_supply_purpose') != self.purpose)):
             return {'status': 'blocked', 'reason': 'registered_material_bank_changed'}
         bank = deepcopy(entry['bank'])
         bank['ready'] = ready
@@ -269,7 +315,7 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
         actual = {(e['name'], *xy(e)): e for e in obs['entities']}
         bound = {(e['name'], *xy(e)): e for e in entry['entity_units']}
         for spec in entry['bank']['plan']['entities']:
-            if spec['name'] == 'small-electric-pole':
+            if spec['name'] == 'small-electric-pole' and not self.purpose:
                 continue
             key = spec['name'], *xy(spec)
             live, previous = actual.get(key), bound.get(key)
@@ -284,10 +330,18 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
 
     def step(self, obs, parameters):
         validate_material(parameters)
+        if self.purpose and parameters['resource'] != 'coal':
+            return {'status': 'blocked', 'reason': 'chemistry_material_supply_requires_coal'}
+        if self.purpose and self.perimeter is None:
+            return {'status': 'blocked', 'reason': 'chemistry_material_supply_requires_perimeter'}
         if self.state and not self._valid(self.state, obs['world_id']):
             return {'status': 'blocked', 'reason': 'material_supply_world_or_catalog_changed'}
+        if self.state and not self._checkpoint_valid(self.state, obs['world_id']):
+            return {'status': 'blocked', 'reason': 'material_supply_purpose_or_identity_changed'}
         if not self.state:
             self.state = {'world_id': obs['world_id'], 'catalog_fingerprint': self.catalog.fingerprint, 'supplies': {}}
+            if self.purpose:
+                self.state['purpose'] = self.purpose
         resource = parameters['resource']
         if resource not in self.state['supplies']:
             prepared = self.prepare(obs, parameters)
@@ -331,7 +385,9 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
 
     def proof(self, obs, parameters):
         validate_material(parameters)
-        if not self.state or not self._valid(self.state, obs['world_id']):
+        if self.purpose and self.perimeter is None:
+            return None
+        if not self.state or not self._checkpoint_valid(self.state, obs['world_id']):
             return None
         entry = self.state.get('supplies', {}).get(parameters['resource'])
         if not entry or self._bind(obs, entry):
@@ -364,6 +420,8 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
                 return None
         sources = {}
         for key, spec in ports.items():
+            if self.purpose and key != 'plastic-coal':
+                continue
             live = actual.get(('transport-belt', *xy(spec)))
             if not live or live.get('direction') != spec['facing']:
                 return None
@@ -371,6 +429,14 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
                 world_id=obs['world_id'], material_supply_id=entry['material_supply_id'],
                 nominal_shared_rate_per_minute=bank['nominal_rate_per_minute'],
                 capacity_scope='shared bank capacity; separate outlets do not multiply production')
+        if self.purpose:
+            checked = self.game.query('''local q=helpers.json_to_table('''+json.dumps(json.dumps(sources['plastic-coal'],separators=(',',':')))+''');local e=target(q.position,"transport-belt")
+if not e or e.force~=f or e.surface~=s or e.unit_number~=q.unit_number or e.direction~=q.facing or e.position.x~=q.position.x or e.position.y~=q.position.y then return {ok=false,reason="chemistry_coal_output_identity_changed"}end
+local count=0;for lane=1,2 do for _,row in pairs(e.get_transport_line(lane).get_contents())do
+ if row.name~="coal"or row.quality~="normal"then return {ok=false,reason="chemistry_coal_output_contaminated"}end;count=count+row.count end end
+return {ok=count>0,coal=count,tick=game.tick}''')
+            if not checked.get('ok'):
+                return None
         return {'tick': obs['tick'], 'resource': item, 'material_supply_id': entry['material_supply_id'],
                 'sources': sources, 'native_bank': native, 'both_lane_witness': deepcopy(witness),
                 'defense_coverage': defense,
