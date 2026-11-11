@@ -251596,3 +251596,13 @@ Goal: expandblue-sciencefluidproduction toaggregategraphdemand. Hypothesis: stab
 - Validation:54v2+38builder tests; native distinct fuel lanes/pairs/current output. No sustained-rate claim.
 - Next: permanent science assemblers/labs and ordinary belt-fed research; avoid globally rebuilding retired starter supply.
 - Usage sample: parent 53002727 -> 58742039 = 5739312 tokens incl cached input; weekly account9% ->10% (+1pp); exact task share and child tokens unavailable.
+
+
+## 2026-11-11T13:09:15.420753+00:00 | Part5 | explicit lane contracts and both-lane plate output
+- Goal/hypothesis: user correctly observed half-belt plate output; same-side inserters fill the far lane. Splitter output division alone does not distribute lanes.
+- Actions/options: read official engine/wiki rules and actual drop positions; add drop-lane helper/contracts and typed-port native lane observation. Keep furnace collection rows, add14belt+1splitter opposite-side-load output module per product. Strict genericUG mouths now reject turns/side-loading; all4existingmouths audited straight.
+- Metrics/result: sourceports left0/right4; Luna first trial16actions/0failures,665299 both new ports left4/right4. Fresh670056:30entitydirs, splitters1550/1565 defaultnone priorities, both outputlanes sameplate. New balancedports(-9.5,-29.5)/(-9.5,-17.5). Solved current output distribution/observation gap.
+- Validation:58v2+38builder tests; native full prospective preflight, current entity directions/defaultpolicies/actual both-lane content; updated diagram inspected.
+- Limits: collection remains one lane by declared design; stationary4/4 is not loaded throughput or equal input-lane draw. Science/lab/mall/defense/oil/rail/rocket still incomplete.
+- Next: permanent science/labs use balancedports; retain typed lane planning and independent native checks.
+- Usage sample: parent 60016947 -> 63236564 = 3219617 tokens incl cached input; weekly account10% ->10% (display unchanged); exact task share and child tokens unavailable.

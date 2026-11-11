@@ -2,7 +2,7 @@ import json
 import unittest
 from types import SimpleNamespace
 from factorio_agent.board import entity
-from factorio_agent.routing import route_trunks
+from factorio_agent.routing import route_trunks,expand,metrics
 from factorio_agent.transport import compile_crossings,underground_proof,plan_connection
 from factorio_agent.power_layout import V2FactoryBuilder
 
@@ -22,6 +22,18 @@ class LayeredCorridorTests(unittest.TestCase):
 
     def test_parallel_surface_belt_is_not_silently_reused(self):
         self.assertFalse(compile_crossings(self.route(),[entity('transport-belt',5.5,.5,4)])['ok'])
+
+    def test_generic_underground_crossing_does_not_side_load_a_mouth_or_change_the_exit(self):
+        def route(vertices,last_direction):
+            points=expand(vertices);segments=[];vectors={0:(0,-1),4:(1,0),8:(0,1),12:(-1,0)}
+            for i,p in enumerate(points):
+                direction=last_direction if i==len(points)-1 else next(d for d,v in vectors.items() if v==(points[i+1][0]-p[0],points[i+1][1]-p[1]))
+                segments.append({'position':{'x':p[0],'y':p[1]},'direction':direction})
+            return {'ok':True,'segments':segments,'metrics':metrics(points)}
+        entering=route([(.5,.5),(2.5,.5),(2.5,-4.5)],0)
+        exiting=route([(.5,.5),(5.5,.5),(5.5,2.5)],8)
+        self.assertFalse(compile_crossings(entering,[entity('transport-belt',2.5,-.5,4)])['ok'])
+        self.assertFalse(compile_crossings(exiting,[entity('transport-belt',4.5,.5,0)])['ok'])
 
     def test_close_crossings_share_one_tunnel_without_overlapping_mouths(self):
         plan=compile_crossings(self.route(),[entity('transport-belt',3.5,.5,0),entity('transport-belt',5.5,.5,0)])

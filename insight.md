@@ -6555,3 +6555,10 @@ Promote to insight.md only if:
 - Improvement/after: output runs to the six-slot reservation boundary for every count; machines grow inside it. Migrate older movable ports before attaching consumers, then enforce registered source positions.
 - Evidence: port-stability regression across1..6machines; actual iron5/copper3 expansion retained the district and exposed fixed east ports.
 - Remaining risk: generic consumer registry and permanent science connection are next; rated capacity still requires sustained downstream measurements.
+
+
+## 2026-11-11T13:09:15.420753+00:00 | EXP-0008 | transport proof must retain lane identity
+- Before: aggregate belt inventories hid source left0/right4; splitter-only reasoning could incorrectly imply both lanes were supplied.
+- Improvement/after: native left/right typed-port observations plus declared lane items; same-side furnace collection feeds a splitter and opposite side-loads into a straight output. GenericUG crossings forbid turns at mouths to avoid lane gating.
+- Evidence: unchanged furnace rows,16paidactions, both plate outputs4/4 at665299 and670056, native splitter policies/directions verified; geometry and lane-rule regression tests.
+- Remaining risk: inventory occupancy does not prove continuous balanced flow. Input-lane draw/full-load throughput still require deliberate downstream consumption and a timed window.

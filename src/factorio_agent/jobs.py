@@ -35,6 +35,8 @@ CAPABILITIES = {
                          "effect":"reserve a PCB district, connect iron60/copper30 nominal banks and separate coal source with actual splitter/underground crossing, normally belt-feed furnaces"},
     "smelting_capacity": {"parameters":{"resource":"iron-ore|copper-ore","rate_per_minute":"finite number (0,100], absolute nominal target"},
                           "requires":["smelting_district"],"effect":"add furnaces inside six-slot reserved rows; boundary output stays fixed after initial migration"},
+    "balance_smelter_lanes": {"parameters":{},"requires":["smelting_district"],
+                              "effect":"keep furnace rows/ports, add splitter and opposite side-loads; prove native plate output on both lanes"},
 }
 
 
@@ -116,6 +118,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
             "research_progress": obs.get("research_progress"), "electricity": obs.get("electricity"),
             "production_rate_measurement":obs.get("production_rate_measurement"),
             "known_project_construction_budget":obs.get("known_project_construction_budget"),
+            "belt_lane_observation":obs.get("belt_lane_observation"),
             "capabilities": CAPABILITIES,
             "jobs": [{k: v for k, v in job.items() if k in
                       {"key", "capability", "status", "reason", "actions", "last_tick"}}
@@ -226,6 +229,8 @@ class StarterExecutors:
         self.outposts=MiningOutposts(game,self.bootstrap,self.builder)
         from .smelting import SmeltingDistrict
         self.smelting=SmeltingDistrict(game,self.bootstrap,self.builder,catalog)
+        from .lanes import SmelterLaneBalance
+        self.lanes=SmelterLaneBalance(game,self.builder,catalog)
 
     def starter_observation(self,obs):
         return {**obs,'entities':[e for e in obs.get('entities',[])
@@ -278,6 +283,10 @@ class StarterExecutors:
             result=self.builder.ensure_power(obs)
             if result.get("status")!="succeeded":return result
             return self.smelting.capacity_step(obs,parameters or {})
+        if capability == "balance_smelter_lanes":
+            result=self.builder.ensure_power(obs)
+            if result.get("status")!="succeeded":return result
+            return self.lanes.step(obs)
         raise ValueError("no executor for capability: " + capability)
 
     def proof(self, capability: str, obs: dict, result: dict, parameters: dict | None = None) -> dict | None:
@@ -295,6 +304,8 @@ class StarterExecutors:
             return self.outposts.proof(obs,parameters or {})
         if capability in {"smelting_district","smelting_capacity"}:
             return self.smelting.proof(obs)
+        if capability == "balance_smelter_lanes":
+            return self.lanes.proof(obs)
         produced = obs.get("production", {})
         if not all(produced.get(name, {}).get("produced", 0) > 0 for name in ("iron-plate", "copper-plate")):
             return None

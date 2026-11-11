@@ -49,6 +49,7 @@ Current capabilities:
 | mining_outpost | `--resource iron-ore` (or copper-ore/coal/stone), `--rate-per-minute 1..240` absolute nominal target | power and electric-mining-drill |
 | smelting_district | none; initial district has iron60/copper30 nominal inputs | power, bootstrap_logistics, mining_outpost; one ready bank each iron60/copper30/coal30 |
 | smelting_capacity | `--resource iron-ore` or copper-ore, `--rate-per-minute` finite (0,100] absolute nominal target | smelting_district; connected ore supply must cover the target |
+| balance_smelter_lanes | none | smelting_district; fixed east boundary outputs |
 
 Use the typed parameter flags above to avoid Windows shell JSON quoting issues.
 Starter capacity funds initial construction using extra drill-fed starter cells;
@@ -99,6 +100,12 @@ and a measured window. The actor never inserts ore/fuel into these new furnaces.
 Capacity grows inside six reserved furnace slots per row. The output stays at
 the block's east boundary for every count. Old movable ports can migrate only
 before a consumer is registered; preserve connected ports thereafter.
+Lane balancing preserves the collection rows and adds one splitter/opposite
+side-load module per product. New supply ports are iron(-9.5,-29.5) and
+copper(-9.5,-17.5), both facing east with the same plate declared on both lanes.
+`observe.belt_lane_observation` exposes native left/right contents and contracts;
+left/right is relative to travel direction. Stock is not measured throughput.
+See [the lane rules and tested layout](BELT_LANES.md).
 
 `observe` reports time-window production rates only after two timed samples;
 lifetime counters are never labeled throughput. Saved-project construction

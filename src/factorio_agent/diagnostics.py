@@ -9,6 +9,40 @@ from pathlib import Path
 from factorio_ai.deterministic_state import RunLock,_atomic_json
 
 
+def port_lane_snapshot(root,game,obs):
+    path=Path(root)/'pcb-board.json'
+    if not path.exists():return {'scope':'no reserved board ports yet','ports':[]}
+    board=json.loads(path.read_text(encoding='utf-8'))
+    if board.get('world_id')!=obs['world_id']:return {'status':'world_changed','ports':[]}
+    specs={}
+    for block in board.get('blocks',{}).values():
+        ports=list(block.get('ports',[]))
+        if block.get('source_port'):ports.append(block['source_port'])
+        for p in ports:
+            key=p['item'],p['position']['x'],p['position']['y']
+            specs[key]=p
+    by_position={(e['position']['x'],e['position']['y']):e for e in obs['entities'] if e['name']=='transport-belt'}
+    selected=[dict(p,expected_unit=by_position[(p['position']['x'],p['position']['y'])]['unit_number'])
+              for p in specs.values() if (p['position']['x'],p['position']['y']) in by_position]
+    payload=json.dumps(json.dumps(selected,separators=(',',':')))
+    return game.query('''
+local specs=helpers.json_to_table('''+payload+''');local ports={}
+for _,p in ipairs(specs) do
+ local e=target(p.position,"transport-belt")
+ if e and e.unit_number==p.expected_unit then
+  local left={};local right={}
+  for _,pair in ipairs({{defines.transport_line.left_line,left},{defines.transport_line.right_line,right}}) do
+   for _,item in pairs(e.get_transport_line(pair[1]).get_contents()) do pair[2][item.name]=(pair[2][item.name] or 0)+item.count end
+  end
+  ports[#ports+1]={item=p.item,position=p.position,direction=e.direction,left=left,right=right,
+   declared_lane_items=p.lane_items,declared_lane_policy=p.lane_policy,
+   nominal_unstacked_items_per_second_per_lane=e.prototype.belt_speed*60*4}
+ end
+end
+return {ok=true,tick=game.tick,ports=ports,scope="instantaneous lane inventories at typed board ports; left/right relative to belt movement; not measured throughput"}
+''')
+
+
 def production_rates(root,obs):
     path=Path(root)/"rate-samples.json"
     with RunLock(Path(root)/"observer.lock"):

@@ -65,8 +65,9 @@ def main(argv=None):
         if not obs.get("ok"):
             raise RuntimeError(obs.get("reason", "observation_failed"))
         obs["electricity"] = runtime.electricity_snapshot(game)
-        from .diagnostics import production_rates,construction_budget
+        from .diagnostics import production_rates,construction_budget,port_lane_snapshot
         obs["production_rate_measurement"]=production_rates(root,obs)
+        obs["belt_lane_observation"]=port_lane_snapshot(root,game,obs)
         if (root/"catalog.json").exists():
             obs["known_project_construction_budget"]=construction_budget(root,obs,runtime.catalog_for(root,game))
         result = summary(obs, Ledger(root))

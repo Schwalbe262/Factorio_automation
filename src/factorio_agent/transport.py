@@ -33,6 +33,8 @@ def compile_crossings(route,foreign,*,maximum_span=5):
         if first<=0 or last>=len(segments)-1 or last-first>maximum_span:
             return {'ok':False,'reason':'crossing_has_no_clear_straight_mouths_or_exceeds_span'}
         direction=segments[first]['direction'];v=VECTORS[direction]
+        if segments[first-1]['direction']!=direction or segments[last]['direction']!=direction:
+            return {'ok':False,'reason':'underground_mouth_requires_straight_approach_and_exit'}
         for i in range(first,last):
             if segments[i]['direction']!=direction or positions[i+1]!=(positions[i][0]+v[0],positions[i][1]+v[1]):
                 return {'ok':False,'reason':'underground_crossing_would_include_a_turn'}
