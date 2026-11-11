@@ -255,14 +255,16 @@ local function setup(q)
  q.force=f;q.surface=s;q.energy=100;q.products_finished=1
  q.is_connected_to_electric_network=function()return powered end
  q.get_recipe=function()return{name=wrong_recipe and"advanced-oil-processing"or"basic-oil-processing"}end
- q.get_fluid=function(index)if wrong_box then return{name="crude-oil",amount=10}end;if index==2 then return{name="crude-oil",amount=10}elseif index==5 then return{name="petroleum-gas",amount=45}end end
+ q.get_fluid_box_prototype=function(index)if index>2 then error("runtime storage out of bounds")end;return{index=index==1 and 2 or 5}end
+ q.get_fluid=function(index)if index>2 then error("runtime storage out of bounds")end;if wrong_box then return{name="crude-oil",amount=10}end;if index==1 then return{name="crude-oil",amount=10}elseif index==2 then return{name="petroleum-gas",amount=45}end end
  q.get_fluid_contents=function()if contaminated then return{water=1}end;if q.name=="oil-refinery"then return{["crude-oil"]=10,["petroleum-gas"]=45}end;if q.position.y<-50 then return{["petroleum-gas"]=45}else return{["crude-oil"]=10}end end
  q.has_fluid_segment=function()return true end
  q.get_fluid_segment_extent_bounding_box=function()return{left_top={x=0,y=0},right_bottom={x=10,y=oversize and 321 or 10}}end
  q.get_fluid_box_neighbours=function(index)local result={}
+  local function storage(spec)return spec.name=="oil-refinery"and(spec.fluidbox_index==2 and 1 or 2)or spec.fluidbox_index end
   for _,edge in ipairs(edges)do
-   if k(edge.a)==k(q)and edge.a.fluidbox_index==index then result[#result+1]={entity=entities[k(edge.b)],index=wrong_index and 3 or edge.b.fluidbox_index}end
-   if not one_way and k(edge.b)==k(q)and edge.b.fluidbox_index==index then result[#result+1]={entity=entities[k(edge.a)],index=edge.a.fluidbox_index}end
+   if k(edge.a)==k(q)and storage(edge.a)==index then result[#result+1]={entity=entities[k(edge.b)],index=wrong_index and 3 or storage(edge.b)}end
+   if not one_way and k(edge.b)==k(q)and storage(edge.b)==index then result[#result+1]={entity=entities[k(edge.a)],index=storage(edge.a)}end
   end
   if foreign_peer then result[#result+1]={entity={unit_number=999},index=1}end
   return result end

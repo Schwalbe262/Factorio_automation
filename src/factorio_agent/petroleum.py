@@ -425,7 +425,7 @@ return {ok=true,extent=e.get_fluid_segment_extent_bounding_box(1),limit=prototyp
 
 
 PETROLEUM_PROOF_LUA=r'''
-local args=helpers.json_to_table(PAYLOAD);local live={};local gas={};local expected={};local limit=prototypes.utility_constants.default_pipeline_extent
+local args=helpers.json_to_table(PAYLOAD);local live={};local gas={};local expected={};local storage_maps={};local storage_indices={};local limit=prototypes.utility_constants.default_pipeline_extent
 local function key(q)return q.name..":"..q.position.x..":"..q.position.y end
 local function id(q,index)return key(q).."@"..index end
 for _,p in ipairs(args.gas_positions)do gas[p.x..":"..p.y]=true end
@@ -436,9 +436,23 @@ for _,q in ipairs(args.nodes)do local e=target(q.position,q.name)
  for name in pairs(fluids)do if(q.name=="oil-refinery"and name~="crude-oil"and name~="petroleum-gas")or(q.name~="oil-refinery"and name~=(isgas and"petroleum-gas"or"crude-oil"))then return {ok=false,reason="petroleum_native_fluid_contamination",position=q.position}end end
  if q.name=="oil-refinery"then local recipe=e.get_recipe()
   if not recipe or recipe.name~="basic-oil-processing"or e.products_finished<=0 or not e.is_connected_to_electric_network()or e.energy<=0 then return {ok=false,reason="petroleum_refinery_not_normally_producing",position=q.position}end
-  for index=1,5 do local fluid=e.get_fluid(index);local allowed=index==2 and"crude-oil"or(index==5 and"petroleum-gas"or nil)
-   if fluid and fluid.amount>0 and fluid.name~=allowed then return {ok=false,reason="petroleum_wrong_physical_fluid_box",index=index,position=q.position}end
+  local mapping={};local indices={}
+  for index=1,5 do local ok,proto=pcall(function()return e.get_fluid_box_prototype(index)end)
+   if ok and proto then
+    local prototypes=proto.index and{proto}or proto;local allowed=nil
+    for _,p in pairs(prototypes)do
+     local item=p.index==2 and"crude-oil"or(p.index==5 and"petroleum-gas"or nil)
+     if not item or(allowed and allowed~=item)or mapping[p.index]then return {ok=false,reason="petroleum_runtime_storage_mapping_invalid"}end
+     allowed=item;mapping[p.index]=index
+    end
+    if not allowed then return {ok=false,reason="petroleum_runtime_storage_mapping_invalid"}end
+    local fluid=e.get_fluid(index)
+    if fluid and fluid.amount>0 and fluid.name~=allowed then return {ok=false,reason="petroleum_wrong_physical_fluid_box",index=index,position=q.position}end
+    indices[#indices+1]=index
+   end
   end
+  if not mapping[2]or not mapping[5]or mapping[2]==mapping[5]then return {ok=false,reason="petroleum_required_runtime_storages_missing"}end
+  storage_maps[e.unit_number]=mapping;storage_indices[e.unit_number]=indices
  else
   if not e.has_fluid_segment(1)then return {ok=false,reason="petroleum_native_segment_missing"}end
   local b=e.get_fluid_segment_extent_bounding_box(1)
@@ -446,7 +460,9 @@ for _,q in ipairs(args.nodes)do local e=target(q.position,q.name)
  end
  live[key(q)]=e
 end
-for _,edge in ipairs(args.edges)do local a=live[key(edge.a)];local b=live[key(edge.b)];local ai=edge.a.fluidbox_index;local bi=edge.b.fluidbox_index
+for _,edge in ipairs(args.edges)do local a=live[key(edge.a)];local b=live[key(edge.b)]
+ local ai=storage_maps[a.unit_number]and storage_maps[a.unit_number][edge.a.fluidbox_index]or edge.a.fluidbox_index
+ local bi=storage_maps[b.unit_number]and storage_maps[b.unit_number][edge.b.fluidbox_index]or edge.b.fluidbox_index
  local forward=false;local reverse=false
  for _,peer in pairs(a.get_fluid_box_neighbours(ai)or{})do if peer.entity==b and peer.index==bi then forward=true end end
  for _,peer in pairs(b.get_fluid_box_neighbours(bi)or{})do if peer.entity==a and peer.index==ai then reverse=true end end
@@ -465,7 +481,7 @@ for _,handoff in ipairs(args.handoffs or{})do local q=handoff.first_neighbor;loc
  expected[id(args.outlet,1)]=expected[id(args.outlet,1)]or{};expected[id(args.outlet,1)][e.unit_number..":1"]=true
 end
 for _,q in ipairs(args.nodes)do if q.unit_number~=args.source.unit_number then
- local e=live[key(q)];local indices=q.name=="oil-refinery"and{1,2,3,4,5}or{1}
+ local e=live[key(q)];local indices=storage_indices[e.unit_number]or{1}
  for _,index in ipairs(indices)do for _,peer in pairs(e.get_fluid_box_neighbours(index)or{})do
   if not(expected[id(q,index)]or{})[peer.entity.unit_number..":"..peer.index]then return {ok=false,reason="petroleum_unexpected_foreign_fluid_peer",position=q.position}end
  end end

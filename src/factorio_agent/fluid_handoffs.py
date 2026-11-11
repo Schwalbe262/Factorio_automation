@@ -48,7 +48,8 @@ def _context(game, catalog, obs, consumer_id, fluid, source, neighbor, *, bound=
     path = Path(game.cfg.runtime_dir)/'fluid-sources.json'
     registry = json.loads(path.read_text(encoding='utf-8'))
     if (registry.get('world_id') != obs['world_id'] or registry.get('catalog_fingerprint') != catalog.fingerprint
-            or registry.get('sources', {}).get(fluid) != source
+            or not isinstance(source,dict) or not isinstance(registry.get('sources'),dict)
+            or source not in registry['sources'].values()
             or source.get('kind') != 'fluid' or source.get('item') != fluid
             or source.get('direction') != 'output' or source.get('name') != 'pipe'
             or source.get('fluidbox_index') != 1 or source.get('world_id') != obs['world_id']

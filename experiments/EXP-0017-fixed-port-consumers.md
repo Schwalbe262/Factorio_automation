@@ -16,6 +16,11 @@ frozen Luna-only or sustained-rate acceptance is claimed.
 | profile-only rebase | same ammo key succeeded,34total actions/0failures |2598944: assembler6591 made3 normal full magazines into exact barred chest6582; actor held0 |
 | plastics research | selected normally, frontend paused |200red+200green catalog cost; native0.003178 continued0.019022 at2601083; completion pending |
 | basic petroleum | worker33103 building,60actions/0failures at2616688 | normal pipe crafting/construction; no petroleum production claim yet |
+| petroleum proof correction | initially paused110actions2636402; same key succeeded2645174 | runtime storages compress unused prototype boxes; dynamic mapping fixed purity and reciprocal checks;6967finished51/outlet6963gas100 |
+| chemistry coal |29actions/0failures, proof2654521 |drills6985/6986, both real lanes; published6983(-45.5,24.5)E;6973post400health/10full magazines |
+| plastics research proof |completed2657602 |200red+200green normally consumed; paused frontend resumed under same key |
+| independent water |5actions/0failures, proof2669609 |pump6990+pipe6987..6989 water100each; outlet6989(90.5,-25.5)E; steam166/397 preserved |
+| Engine/Plastic fresh prepare |blocked2646418/2661239,0actions |new actual crude pipe is a hard barrier in old belt router; bound ordinary-pipe underground-belt crossing fix in progress |
 
 `build_furnace_gap` performs the normally conserved ground pickup and prepaid
 one-item build in one native command, preventing the inserter from dropping
@@ -34,7 +39,9 @@ Ammo is rated30magazines/min with120iron/min while filling its bounded100magazin
 chest. This critical burst can reduce lower-priority science supply. It is not
 a concurrent full-rate science claim. All three perimeter acquisition paths use
 the manufactured full-normal-magazine provider after commissioning; real
-downstream transfer during new post deployment is pending verification.
+downstream transfer during new post deployment is now verified: four actual
+guarded chest6582takes moved10full magazines each and conserved round totals.
+These receipts confirm40factory magazines, independently of turret snapshots.
 
 The engine module is implemented/frozen, not yet built: compact31x19 with two
 engine AM1s plus gear/pipe AM1s, four future engine slots, fixed steel output and
@@ -48,7 +55,12 @@ gas output connection without accepting unrelated fluid peers. Seven handoff and
 nineteen petroleum tests cover reciprocal edges, contamination and replaced units.
 Live chemistry requires normal plastics research, a new independent coal supply
 and proven gas; sulfur also needs independent water and explicit gas distribution.
-These remain open, as do mall/repair/blue/rail/rocket and sustained30SPM.
+Water and coal are now published; normal sulfur-processing research150red/green
+was selected and paused2672344 so native labs continue. Plastic routing and
+independent sulfur gas distribution remain open, as do mall/repair/blue/rail/
+rocket and sustained30SPM. Stage diagnostics identify the material/anchor/source
+and bounded routing failure instead of treating an empty evidence field as a
+successful preparation.
 
 Usage checkpoint shared with Part9:72,818,543parent tokens including cached input;
 account23to28%(+5percentage points). Child absolute counts and exact per-module

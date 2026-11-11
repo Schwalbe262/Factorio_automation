@@ -71,6 +71,8 @@ CAPABILITIES = {
                          "effect":"normally build defended automatic stone/coal brick furnaces with fixed ports and prove native output"},
     "oil_gathering": {"parameters":{},"requires":["steel_production"],
                       "effect":"normally build a defended powered pumpjack and real crude pipe outlet; naturally trigger native oil-processing research by extraction"},
+    "water_gathering": {"parameters":{},"requires":["power"],
+                        "effect":"normally build an independent defended shore intake with a typed water output while preserving existing steam-water pumps and their connections"},
     "basic_petroleum": {"parameters":{},"requires":["oil_gathering"],
                         "effect":"normally connect the exact proven crude source to a defended refinery using isolated bounded pipe segments; prove native petroleum production and publish a fixed gas outlet"},
     "engine_production": {"parameters":{},"requires":["steel_production","main_bus_factory"],
@@ -354,6 +356,8 @@ class StarterExecutors:
                                            industrial=self.industrial_operations)
         from .oil_gathering import OilGathering
         self.oil_gathering=OilGathering(game,self.builder,catalog,self.perimeter)
+        from .water_gathering import WaterGathering
+        self.water=WaterGathering(game,self.builder,catalog,self.perimeter)
         from .petroleum import BasicPetroleum
         self.petroleum=BasicPetroleum(game,self.builder,catalog,self.perimeter)
         from .ammo_production import AmmoProduction
@@ -486,6 +490,8 @@ class StarterExecutors:
             return self.industrial_operations.brick_production(obs)
         if capability == "oil_gathering":
             return self.oil_gathering.step(obs)
+        if capability == "water_gathering":
+            return self.water.step(obs)
         if capability == "basic_petroleum":
             return self.petroleum.step(obs)
         if capability == "ammo_production":
@@ -556,6 +562,8 @@ class StarterExecutors:
             return self.industrial_operations.brick_production_proof(obs)
         if capability == "oil_gathering":
             return self.oil_gathering.proof(obs)
+        if capability == "water_gathering":
+            return self.water.proof(obs)
         if capability == "basic_petroleum":
             return self.petroleum.proof(obs)
         if capability == "ammo_production":

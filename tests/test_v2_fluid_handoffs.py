@@ -54,6 +54,15 @@ class FluidHandoffTests(unittest.TestCase):
         self.game.query.return_value={'ok':False,'reason':'handoff_source_identity_changed'}
         before=self.path.read_bytes();self.assertFalse(self.declare()['ok']);self.assertEqual(self.path.read_bytes(),before)
 
+    def test_explicit_published_alias_uses_same_fluid_without_moving_canonical_source(self):
+        self.registry['sources']={'plastic-gas':deepcopy(self.source),'petroleum-gas':dict(self.source,unit_number=99)}
+        self.path.write_text(json.dumps(self.registry))
+        self.assertTrue(self.declare()['ok'])
+        saved=json.loads(self.path.read_text())
+        self.assertEqual(saved['sources'],self.registry['sources'])
+        self.source['unit_number']=12
+        with self.assertRaises(ValueError):self.declare()
+
 
 @unittest.skipUnless(LuaRuntime,'optional executable Lua runtime')
 class NativeFluidHandoffTests(FluidHandoffTests):

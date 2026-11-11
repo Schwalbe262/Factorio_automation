@@ -51,11 +51,16 @@ restored390active/420installed (EXP-0016). Stone60nominal and automatic bricks
 are commissioned, with new paid coverage posts. A surplus iron bus outlet is
 ready; normally paid shared brick-coal header and steel production are commissioned.
 These are assisted development outcomes, not a Luna-only score.
-Next prove loaded continuous rates, finish paid iron-furnace upgrades and build
-mall/automatic ammo and repair. Full-rated red36+green35 requires264.5iron/min
-above225supply. Real pumpjack extraction naturally unlocked oil processing;
-basic refinery and automatic ammo interfaces await live commissioning.
-Blue science, rail and rocket remain.
+Eight paid steel-furnace replacements now provide375iron/min catalog capacity;
+native production and both lanes are verified. Automatic magazines, basic
+petroleum, independent chemistry coal and water are commissioned (EXP0017).
+Forty actual full factory magazines were transferred with conserved round totals.
+Full-rated red36+green35 requires264.5iron/min before additional industrial demand;
+ammo's bounded critical fill and surplus industrial buffers can temporarily reduce
+science supply. Neither nameplate budgets nor full buffers certify sustained rates.
+Engine and plastic currently need a legal underground-belt crossing under the
+new crude pipe; native preparation blocks before building. Next finish those
+consumers and explicit sulfur gas distribution, mall/repair, blue, rail and rocket.
 Do not close the continuous-rate gate from filling output buffers. No rocket yet.
 
 Freeze code, model/effort, seed/save and settings per attempt. Classify failures

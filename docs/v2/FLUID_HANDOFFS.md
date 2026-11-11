@@ -7,6 +7,9 @@ port, fluid and defense scope. The first neighbor is one orthogonal step in the
 source's facing; a surface pipe or correctly facing underground mouth is allowed.
 No pipe may exist there before its first declaration. Only one consumer may own
 the edge; a later shared fluid trunk needs explicit additional output contracts.
+An explicitly published alias may carry the same fluid at a different fixed
+outlet. The descriptor must equal one complete registered source; an arbitrary
+same-fluid pipe is never adopted. The canonical source remains unchanged.
 
 `bind_handoff` accepts that same descriptor plus the consumer layout's saved
 native `unit_number`. It checks exact force/surface/position/identity, fluid purity
@@ -22,6 +25,6 @@ Consumer routes must separately prove land, resource keepouts, bounded pipeline
 extent, underground partners and power/production. A fixed output edge does not
 grant permission to cross an entire producer reservation or multiply its capacity.
 
-Seven focused handoff tests and the nineteen petroleum tests pass, including
+Nine focused handoff tests and the nineteen petroleum tests pass, including
 executed Lua for source replacement, contamination, one-way peers and declared
 versus foreign consumers. Live downstream chemical commissioning is pending.

@@ -31,6 +31,17 @@ prototype positions and rejects unsupported geometry. This distinction follows
 the official [fluid product definition](https://lua-api.factorio.com/latest/types/FluidProductPrototype.html)
 and [fluid ingredient definition](https://lua-api.factorio.com/latest/types/FluidIngredientPrototype.html).
 
+Runtime storage indices differ from those static prototype indices. Actual
+2.1.20 refinery6967 with the basic recipe exposed only storage1 (prototype2,
+crude) and storage2 (prototype5, gas); querying storage3 was out of bounds.
+Proof now enumerates bounded active storages with `get_fluid_box_prototype`,
+maps their prototype identities to runtime indices, then checks purity and both
+directions of every connection using those actual indices. Merged prototype
+arrays are validated explicitly; incompatible fluid mappings fail. No recipe
+or physical port is changed. Native2643020 passed51actual refinery cycles,
+100gas at outlet6963 and349reciprocal edges; Luna completion2645174 published
+the typed gas source. This is buffer commissioning, not a measured output rate.
+
 Planning tries six district-relative sites with a 20-second budget checked between
 native queries. Existing production reservations, mining growth areas, water and
 all resource tiles are hard constraints, including tiles under buried pipe spans.

@@ -69,3 +69,11 @@ input route. The critical station was y=-113.5. The existing laboratory post
 already covered the whole core, so no additional turret or bootstrap magazines
 were needed at that snapshot. No live factory construction, ammo transfer or
 combat test was performed by the implementation worker.
+
+Luna commissioned the actual factory at2598944: assembler6591 produced three
+full normal magazines into barred chest6582, with actor stock zero. Targeted
+native action receipts later record four guarded takes of ten full magazines
+each from6582. Every take succeeded and preserved round totals (300/300,
+300/300,310/310,1000/1000). Petroleum's three new posts and the independent
+chemistry-coal post were normally stocked. This confirms40manufactured magazine
+transfers, not combat survival or sustained30magazines/minute.
