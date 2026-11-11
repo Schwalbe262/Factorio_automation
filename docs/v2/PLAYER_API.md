@@ -76,6 +76,7 @@ Current capabilities:
 | engine_production | none | steel_production and main_bus_factory; fixed steel port and surplus iron tap, compact gear/pipe/engine cells with reserved expansion |
 | chemical_production | `--product plastic-bar` or sulfur | basic_petroleum; natural product research, exact gas handoff and independent typed coal or water source |
 | gas_distribution | none | basic_petroleum; protected shared header before consumers, separate Plastic/Sulfur outlets and one unchanged source capacity |
+| advanced_circuit_production | none | chemical_production and main_bus_factory; exact Plastic proof, dedicated green/wire cells, fresh iron/copper surplus taps and reserved expansion |
 | steam_coal_reroute | none | steam_expansion; prebuild alternative, verify loaded engines, recover obsolete owned transport |
 | legacy_coal_cleanup | none | steam_expansion and dedicated_materials; isolated burner/cache recovery after replacement supply and headroom proof |
 | research | `--technology` native catalog name | automation_science; native prerequisites and continuous supported science supply |
