@@ -291,6 +291,8 @@ class StarterExecutors:
         self.perimeter=DefensePerimeter(game,self.bootstrap,catalog)
         from .bus_factory import BusFactory
         self.bus_factory=BusFactory(game,self.builder,catalog,self.smelting,self.science,self.green)
+        from .inventory_storage import InventoryStorage
+        self.storage=InventoryStorage(game,catalog)
         from .normal_research import NormalResearch
         self.normal_research=NormalResearch(game,catalog,self.science,self.green)
         ledger=Ledger(Path(game.cfg.runtime_dir)).data
@@ -305,6 +307,9 @@ class StarterExecutors:
             and not (getattr(self,'steam_expansion',None) and self.steam_expansion.owns_burner(e,obs))]}
 
     def starter_upkeep(self,obs):
+        if getattr(self,'storage',None):
+            storage=self.storage.step(obs)
+            if storage:return storage
         if getattr(self,'perimeter',None):
             defense=self.perimeter.upkeep(obs)
             if defense:return defense
@@ -494,7 +499,7 @@ def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> 
                 started = time.perf_counter()
                 try:
                     receipt = game.act(result)
-                    if receipt.get('reason') in ('build_batch_outcome_unknown','mine_batch_outcome_unknown'):
+                    if receipt.get('reason') in ('build_batch_outcome_unknown','mine_batch_outcome_unknown','storage_transfer_outcome_unknown'):
                         job['uncertain_batch_receipt']=receipt
                         raise RuntimeError('batch outcome unknown; observe and reconcile before continuing')
                 except Exception:

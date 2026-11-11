@@ -179,6 +179,17 @@ class JobBoundaryTests(unittest.TestCase):
         result=run_slice(self.root,self.game,Executor({'status':'succeeded'},{'native':True}),'test')
         self.assertEqual(result['reason'],'job_deadline_exceeded')
 
+    def test_uncertain_storage_deposit_keeps_intent_and_forbids_retry(self):
+        submit(self.root,self.game,self.request())
+        self.game.act=lambda _: {'ok':False,'reason':'storage_transfer_outcome_unknown','confirmed_moved':10}
+        with self.assertRaisesRegex(RuntimeError,'batch outcome unknown'):
+            run_slice(self.root,self.game,Executor({'type':'deposit','item':'wood','count':20}),'test')
+        job=Ledger(self.root).data['jobs']['test']
+        self.assertEqual(job['reason'],'action_outcome_unknown_reconcile_required')
+        self.assertIn('pending_action',job)
+        self.assertEqual(job['uncertain_batch_receipt']['confirmed_moved'],10)
+        with self.assertRaises(ValueError):control(self.root,self.game,'test','retry')
+
     def test_intentional_pause_does_not_spend_execution_deadline(self):
         submit(self.root, self.game, self.request())
         control(self.root, self.game, "test", "pause")

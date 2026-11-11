@@ -6592,3 +6592,9 @@ Promote to insight.md only if:
 - After: joinx47.5 upstream of all8; static directed pickup audit plus live per-lab receipt and row-wide/recent-unit-bound lane evidence.
 - Evidence: same job normally migrated four entry assets; proof1282753 all8labs16packs and both row lanes128packs. Missed-last-lab regression rejected by layout audit.
 - Remaining risk: buffered stock/commissioning do not prove sustained science consumption; native full route/power/identity still checked.
+
+## Confirmed: recovery jobs need paid inventory headroom
+- Source loop: EXP-0012 tree failure and EXP-0013 storage recovery. Before:80fullslots/wood298capacity2 causedthree identical mining failures despite abundant materials.
+- Improvement/after: conservatively craft a chest batch that consumes an ingredient stack before assuming output room; paid dedicated chest and exact-slot normal deposits free recovery capacity, preserving goods and excluding metadata/ammo/science. Existing observation free-slot count avoids per-action extraRPC.
+- Evidence: native13ironchest cycles accepted, chest4234 built,371/371ore deposited, samejob advanced130blocked to181actions/0consecutivefail in normal construction.203v2tests incl uncertain-deposit durable intent.
+- Remaining risk: four spare slots are bounded bootstrap headroom, not an unlimited storage/mall system; no automated science-pack unloading or metadata transfer is claimed.

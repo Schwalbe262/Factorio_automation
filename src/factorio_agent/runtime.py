@@ -31,6 +31,9 @@ class WorldBoundGame(DeterministicGame):
         return super().query(body)
 
     def act(self,action:dict)->dict:
+        if action.get('type')=='deposit':
+            from .storage_transfer import execute_deposit
+            return self._record_action(action,execute_deposit(self,action))
         if action.get('type')=='insert' and {'expected_entity_unit','expected_entity_world_id'}.intersection(action):
             p=action.get('position');unit=action.get('expected_entity_unit');world=action.get('expected_entity_world_id')
             allowed={'type','name','position','item','inventory','count','expected_entity_unit','expected_entity_world_id','reason'}

@@ -71,6 +71,11 @@ this checkpoint. Next add normally paid recovery storage/headroom upkeep, retry
 the original known-blocked key, then require native12machine/all8lab/bus priority
 proof and complete old hardware retirement. Render the actual finished layout.
 
+The inventory block was subsequently resolved through paid dedicated storage
+(EXP-0013): chest4234 normally received371ironore and the same key resumed to
+181actions/zero consecutive failures in build phase. Final migration proof is
+still pending; this update does not promote partial construction to completion.
+
 Validation checkpoint:178v2tests plus53legacy game/builder tests pass. Per-part
 measured usage is in note.md; it includes cached parent input, with no child
 counter or exact weekly task quota exposed. No sustained30SPM/5min or rocket

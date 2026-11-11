@@ -375,6 +375,7 @@ for _,name in ipairs({'iron-plate','copper-plate','coal','automation-science-pac
 end
 local current=f.current_research
 return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.position),inventory=contents(a.get_main_inventory()),
+ inventory_empty_slots=a.get_main_inventory().count_empty_stacks(),
  actor_unit_number=a.unit_number,equipped_ammo=contents(equipped),recoverable_equipped_ammo=recoverable,
  repair_pending=d.native_repair and {request=d.native_repair.request} or nil,
  crafting_queue=a.crafting_queue,entities=rows,resources=resources,technologies=techs,enabled_recipes=enabled,

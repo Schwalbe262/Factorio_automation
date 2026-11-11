@@ -168,6 +168,17 @@ unplanned future factory stages. `status --key <key>` gives one full receipt.
 power faults, electrical peak demand and generation nameplates. These are
 diagnostics, not a measured sustained factory rate.
 
+Construction upkeep reserves four empty actor inventory slots. At low space it
+normally crafts/builds dedicated recovery chests on surveyed clear land outside
+factory and bus reservations, then deposits surplus plain normal items with
+exact chest identity and source-slot conservation. Full-inventory crafting
+accounts for ingredient stacks that must be consumed to fit its chest outputs.
+Science packs, ammunition and metadata-bearing stacks are excluded. The regular
+construction collector can later retrieve eligible stock from these chests.
+Sufficient observed headroom skips the extra native inventory query. Uncertain
+deposits retain durable intent and require reconciliation, exactly like an
+uncertain construction or recovery action.
+
 The layout migration recovers obsolete paid belts through normal mining and
 installs a prevalidated regular corridor. It refuses an operating supply that
 would need a parallel cutover. A layout receipt proves geometry only. The power
