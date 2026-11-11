@@ -14,8 +14,10 @@ $entities = @{}
 foreach ($e in @($observation.entities) + @($plans | ForEach-Object { $_.entities })) {
     $entities["$($e.name):$($e.position.x):$($e.position.y)"] = $e
 }
-$scale = 8
-$bitmap = New-Object System.Drawing.Bitmap(1160, 1070)
+$scale = 7
+$minY = -128
+$maxY = 32
+$bitmap = New-Object System.Drawing.Bitmap(1160, 1300)
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
 $graphics.Clear([System.Drawing.ColorTranslator]::FromHtml('#f8fafc'))
 $font = New-Object System.Drawing.Font('Segoe UI', 13)
@@ -26,13 +28,13 @@ $zone = New-Object System.Drawing.Pen([System.Drawing.ColorTranslator]::FromHtml
 $arrow = New-Object System.Drawing.Pen([System.Drawing.Color]::White, 1)
 $zone.DashStyle = [System.Drawing.Drawing2D.DashStyle]::Dash
 function Px([double]$x) { return [single](36 + ($x + 68) * $scale) }
-function Py([double]$y) { return [single](90 + ($y + 80) * $scale) }
+function Py([double]$y) { return [single](90 + ($y - $minY) * $scale) }
 try {
     $graphics.DrawString('PCB factory: reserved blocks, fixed ports, orthogonal corridors', $font, [System.Drawing.Brushes]::Black, 30, 18)
     $graphics.DrawString("Live entities at tick $($observation.tick). Filled = placed; outline = planned. Grid: 8 tiles.", $small, [System.Drawing.Brushes]::DimGray, 30, 48)
-    for ($x = -64; $x -le 64; $x += 8) { $graphics.DrawLine($grid, (Px $x), (Py -80), (Px $x), (Py 32)) }
-    for ($y = -80; $y -le 32; $y += 8) { $graphics.DrawLine($grid, (Px -68), (Py $y), (Px 68), (Py $y)) }
-    $graphics.SetClip((New-Object System.Drawing.RectangleF((Px -68), (Py -80), 1088, 896)))
+    for ($x = -64; $x -le 64; $x += 8) { $graphics.DrawLine($grid, (Px $x), (Py $minY), (Px $x), (Py $maxY)) }
+    for ($y = $minY; $y -le $maxY; $y += 8) { $graphics.DrawLine($grid, (Px -68), (Py $y), (Px 68), (Py $y)) }
+    $graphics.SetClip((New-Object System.Drawing.RectangleF((Px -68), (Py $minY), (136*$scale), (($maxY-$minY)*$scale))))
     foreach ($property in $board.blocks.PSObject.Properties) {
         $a = $property.Value.reserved_area
         $graphics.DrawRectangle($zone, (Px $a[0][0]), (Py $a[0][1]), [single](($a[1][0]-$a[0][0])*$scale), [single](($a[1][1]-$a[0][1])*$scale))
@@ -71,8 +73,8 @@ try {
         $graphics.DrawString($bank.plan.resource, $small, [System.Drawing.Brushes]::DarkGreen, [single]((Px $p.x)+7), [single]((Py $p.y)-18))
     }
     $graphics.ResetClip()
-    $graphics.DrawString('Teal: electric mine | orange: furnace | pink: assembler | blue: underground | purple: splitter', $small, [System.Drawing.Brushes]::DimGray, 30, 1010)
-    $graphics.DrawString('Geometric engineering diagram. Native item output and sustained throughput require separate game evidence.', $small, [System.Drawing.Brushes]::DimGray, 30, 1032)
+    $graphics.DrawString('Teal: electric mine | orange: furnace | pink: assembler | blue: underground | purple: splitter', $small, [System.Drawing.Brushes]::DimGray, 30, 1240)
+    $graphics.DrawString('Geometric engineering diagram. Native item output and sustained throughput require separate game evidence.', $small, [System.Drawing.Brushes]::DimGray, 30, 1262)
     $bitmap.Save([System.IO.Path]::GetFullPath($Output), [System.Drawing.Imaging.ImageFormat]::Png)
     Write-Output $Output
 } finally {

@@ -78,6 +78,19 @@ class LayeredCorridorTests(unittest.TestCase):
         self.assertFalse(result['ok'])
         self.assertEqual(result['native_reason'],'world_identity_changed')
 
+    def test_parallel_foreign_trunk_causes_bounded_whole_corridor_replanning(self):
+        game=SimpleNamespace(query=lambda _: {'ok':True,'blocked':[],'max_span':5})
+        geometry=__import__('factorio_ai.deterministic_builder',fromlist=['FactoryBuilder']).FactoryBuilder.__new__(
+            __import__('factorio_ai.deterministic_builder',fromlist=['FactoryBuilder']).FactoryBuilder)
+        builder=SimpleNamespace(_occupied_by_plan=geometry._occupied_by_plan,can_place=lambda _: {'ok':True})
+        foreign=[entity('transport-belt',20.5,.5+i,0) for i in range(6)]
+        a={'item':'iron-ore','position':{'x':.5,'y':.5},'facing':4}
+        b={'item':'iron-ore','position':{'x':20.5,'y':10.5},'facing':8}
+        result=plan_connection(game,builder,{'world_id':'w','entities':foreign},a,b)
+        self.assertTrue(result['ok'])
+        self.assertGreater(result['routing_attempts'],1)
+        self.assertLessEqual(result['route_metrics']['turns'],6)
+
     def test_approved_nature_is_normally_mined_and_bound_to_current_world(self):
         builder=V2FactoryBuilder.__new__(V2FactoryBuilder)
         obstacle={'name':'tree-01','position':{'x':.5,'y':.5}}

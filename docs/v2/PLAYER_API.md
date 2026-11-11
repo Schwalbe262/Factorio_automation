@@ -48,15 +48,18 @@ Current capabilities:
 | electric_coal | none | power and naturally unlocked electric-mining-drill |
 | mining_outpost | `--resource iron-ore` (or copper-ore/coal/stone), `--rate-per-minute 1..240` absolute nominal target | power and electric-mining-drill |
 | smelting_district | none; initial district has iron60/copper30 nominal inputs | power, bootstrap_logistics, mining_outpost; one ready bank each iron60/copper30/coal30 |
-| smelting_capacity | `--resource iron-ore` or copper-ore, `--rate-per-minute` finite (0,100] absolute nominal target | smelting_district; connected ore supply must cover the target |
-| balance_smelter_lanes | none | smelting_district; fixed east boundary outputs |
+| smelting_capacity | `--resource iron-ore` or copper-ore, `--rate-per-minute` finite (0,225] absolute nominal target | paired_smelting; connected ore supply must cover the target |
+| paired_smelting | none | smelting_district; migrate to independent upper/lower producer rows |
+| paired_mining | none | paired_smelting; normally recover legacy ore cells, directly feed both collector lanes |
+| automation_science | `--rate-per-minute` finite (0,30] requested red-science rate | paired_smelting; normally connect raw plate belts, machines and labs |
+| research | `--technology` native catalog name | automation_science; native prerequisites and continuous supported science supply |
 
 Use the typed parameter flags above to avoid Windows shell JSON quoting issues.
 Starter capacity funds initial construction using extra drill-fed starter cells;
 it still requires starter fuel upkeep. This is not the final scalable mining
 system. Starter research uses finite normally crafted science budgets to unlock
 the first machines; it cannot handcraft its way through later research.
-Broader automatic production, defense, rail and rocket jobs remain unimplemented.
+Automatic green science, construction mall, defense, rail and rocket jobs remain unimplemented.
 Do not claim a rocket-capable system.
 
 Bootstrap logistics builds a small reserved16x16 PCB cell with two assemblers,
@@ -100,12 +103,28 @@ and a measured window. The actor never inserts ore/fuel into these new furnaces.
 Capacity grows inside six reserved furnace slots per row. The output stays at
 the block's east boundary for every count. Old movable ports can migrate only
 before a consumer is registered; preserve connected ports thereafter.
-Lane balancing preserves the collection rows and adds one splitter/opposite
-side-load module per product. New supply ports are iron(-9.5,-29.5) and
-copper(-9.5,-17.5), both facing east with the same plate declared on both lanes.
+Paired smelting replaces output redistribution with independent furnace rows
+feeding opposite sides of one collector. Supply ports stay iron(-9.5,-29.5) and
+copper(-9.5,-17.5), east/both lanes. Paired mining similarly uses opposing drill
+rows, retaining connected ore outputs. Extend only within native resource-backed
+reservations; additional ore capacity uses another paired block when the mineral
+edge prevents a full new column. Both-lane inventory is not a throughput proof.
 `observe.belt_lane_observation` exposes native left/right contents and contracts;
 left/right is relative to travel direction. Stock is not measured throughput.
 See [the lane rules and tested layout](BELT_LANES.md).
+
+Permanent red science reserves a six-assembler row plus one gear assembler,
+two iron input inserters, separate copper/gear input lanes and eight belt-fed
+labs. A 30/min request has nominal36/min machine capacity; it does not itself
+prove five minutes of consumption. `research` selects native technology only;
+it never crafts or inserts packs. `observe.available_research` reports native
+prerequisite-ready costs; unsupported science tiers block explicitly.
+
+`retry --key KEY` reopens a known blocked outcome after a fix and always replans
+from fresh observation. It preserves the request, action history and original
+deadline. Unknown action outcomes require `reconcile`; retries cannot bypass
+world rollback or replay an old pending action. `resume` is for intentionally
+paused jobs, including the same science job after supply construction.
 
 `observe` reports time-window production rates only after two timed samples;
 lifetime counters are never labeled throughput. Saved-project construction

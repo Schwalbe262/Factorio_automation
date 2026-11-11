@@ -46,6 +46,13 @@ class MiningOutposts:
         return next((a for a in obs["entities"] if a["name"]==e["name"] and a["position"]==e["position"]),None)
 
     def prepare(self,obs,resource,count):
+        if resource in ('iron-ore','copper-ore'):
+            from .paired_mining import prepare_new_bank
+            board_path=self.path.parent/'pcb-board.json'
+            board=json.loads(board_path.read_text(encoding='utf-8')) if board_path.exists() else {}
+            reservations=[b['reserved_area'] for b in board.get('blocks',{}).values()]
+            reservations += [b['reserved_area'] for b in self.state.get('banks',[]) if b.get('reserved_area')]
+            return prepare_new_bank(self.game,self.builder,obs,resource,count,reservations)
         areas=[];board=self.path.parent/"pcb-board.json"
         if board.exists():
             areas=[p["reserved_area"] for p in json.loads(board.read_text(encoding="utf-8")).get("blocks",{}).values()]
@@ -104,6 +111,11 @@ return {ok=true,candidates=best,nominal_drill_rate=proto.mining_speed*60/mined.m
 
     def bank_proof(self,obs,bank):
         if not underground_proof(obs,bank['plan']):return None
+        lane_proof=None
+        if bank['plan'].get('paired'):
+            from .paired_mining import lane_evidence
+            lane_proof=lane_evidence(self.game,obs,bank)
+            if not lane_proof.get('ok'):return None
         connection=bank.get('consumer_connection')
         if connection:
             target=self.find(obs,connection['target'])
@@ -125,7 +137,7 @@ return {ok=true,candidates=best,nominal_drill_rate=proto.mining_speed*60/mined.m
         if not evidence or evidence["drill_units"]!=unit_ids or not 0<=obs["tick"]-evidence["tick"]<=600:return None
         return {"nominal_rate_per_minute":bank["nominal_rate_per_minute"],"drill_units":unit_ids,
                 "native_output_evidence":evidence,"output_port":bank["plan"]["ports"][0],
-                "consumer_connection":connection}
+                "consumer_connection":connection,"native_producer_lanes":lane_proof}
 
     def prepare_connected_bank(self,obs,primary,count):
         """Feed a paid extra module into an identity-bound same-item trunk T."""
@@ -155,10 +167,12 @@ return {ok=true,candidates=best,nominal_drill_rate=proto.mining_speed*60/mined.m
                     if not route.get('ok'):
                         failures.append(route.get('reason'));continue
                     es={(e['name'],*xy(e)):e for e in extra['plan']['entities']+route['entities']}
-                    plan=_plan(list(es.values()),extra['plan']['ports'],resource_cell=True,resource=primary['plan']['resource'],
-                        drill_count=count,layout_policy='pcb-connected-mining-row-v1',
-                        underground_pairs=route['underground_pairs'],clear_obstacles=route['clear_obstacles'],
-                        clearance_world_id=obs['world_id'])
+                    metadata={k:v for k,v in extra['plan'].items() if k not in
+                        ('ok','reason','entities','ports','required_items','underground_pairs','clear_obstacles','clearance_world_id')}
+                    clearance=extra['plan'].get('clear_obstacles',[])+route['clear_obstacles']
+                    plan=_plan(list(es.values()),extra['plan']['ports'],**metadata,
+                        underground_pairs=extra['plan'].get('underground_pairs',[])+route['underground_pairs'],
+                        clear_obstacles=clearance,clearance_world_id=obs['world_id'])
                     footprints=[self.builder._occupied_by_plan([e]) for e in plan['entities']]
                     if sum(map(len,footprints))!=len(set().union(*footprints)):continue
                     extra['plan']=plan
@@ -171,6 +185,9 @@ return {ok=true,candidates=best,nominal_drill_rate=proto.mining_speed*60/mined.m
 
     def prepare_extension(self,obs,bank,added_drills):
         """Grow upstream while keeping the installed downstream port untouched."""
+        if bank['plan'].get('paired'):
+            from .paired_mining import prepare_extension
+            return prepare_extension(self.game,self.builder,obs,bank,added_drills)
         old=bank['plan'];drills=[e for e in old['entities'] if e['name']=='electric-mining-drill']
         if len(drills)+added_drills>8:return {'ok':False,'reason':'connected_bank_exceeds_eight_drills'}
         first=min(drills,key=lambda e:e['position']['x'])

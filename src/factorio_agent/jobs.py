@@ -33,10 +33,16 @@ CAPABILITIES = {
                        "requires":["power"],"effect":"add aligned powered electric drills/collector banks with fixed output ports; never replace operating banks to expand"},
     "smelting_district": {"parameters":{},"requires":["power","bootstrap_logistics","mining_outpost"],
                          "effect":"reserve a PCB district, connect iron60/copper30 nominal banks and separate coal source with actual splitter/underground crossing, normally belt-feed furnaces"},
-    "smelting_capacity": {"parameters":{"resource":"iron-ore|copper-ore","rate_per_minute":"finite number (0,100], absolute nominal target"},
-                          "requires":["smelting_district"],"effect":"add furnaces inside six-slot reserved rows; boundary output stays fixed after initial migration"},
-    "balance_smelter_lanes": {"parameters":{},"requires":["smelting_district"],
-                              "effect":"keep furnace rows/ports, add splitter and opposite side-loads; prove native plate output on both lanes"},
+    "smelting_capacity": {"parameters":{"resource":"iron-ore|copper-ore","rate_per_minute":"finite number (0,225], absolute nominal target"},
+                          "requires":["paired_smelting"],"effect":"add independent upper/lower furnaces inside reserved rows; consumer ports remain fixed"},
+    "paired_smelting": {"parameters":{},"requires":["smelting_district"],
+                        "effect":"replace cosmetic output splitting with independent upper/lower furnace rows directly feeding opposite lanes"},
+    "paired_mining": {"parameters":{},"requires":["paired_smelting"],
+                      "effect":"normally recover old ore starter cells; opposing electric drill pairs feed both collector lanes, fixed outputs and surveyed expansion columns"},
+    "automation_science": {"parameters":{"rate_per_minute":"finite number (0,30], requested red-science rate with nominal headroom"},
+                           "requires":["paired_smelting"],"effect":"reserve normal machine science and labs, connect raw plate belts and power; no actor-fed science inputs"},
+    "research": {"parameters":{"technology":"catalog technology name"},"requires":["automation_science"],
+                 "effect":"select normal native research; machine packs and belt-fed labs only; missing science tiers are explicit blockers"},
 }
 
 
@@ -69,6 +75,12 @@ class Request:
         elif self.capability == "smelting_capacity":
             from .smelting import validate_capacity
             validate_capacity(self.parameters)
+        elif self.capability == "automation_science":
+            from .science import validate_rate
+            validate_rate(self.parameters)
+        elif self.capability == "research":
+            from .normal_research import validate_parameters
+            validate_parameters(self.parameters)
         elif not isinstance(self.parameters, dict) or self.parameters:
             raise ValueError("this capability accepts no parameters")
 
@@ -119,6 +131,8 @@ def summary(obs: dict, ledger: Ledger) -> dict:
             "production_rate_measurement":obs.get("production_rate_measurement"),
             "known_project_construction_budget":obs.get("known_project_construction_budget"),
             "belt_lane_observation":obs.get("belt_lane_observation"),
+            "smelting_throughput_bounds":obs.get("smelting_throughput_bounds"),
+            "available_research":obs.get("available_research"),
             "capabilities": CAPABILITIES,
             "jobs": [{k: v for k, v in job.items() if k in
                       {"key", "capability", "status", "reason", "actions", "last_tick"}}
@@ -159,7 +173,7 @@ def submit(root: Path, game, request: Request) -> dict:
 
 
 def control(root: Path, game, key: str, operation: str) -> dict:
-    if operation not in {"pause", "resume", "reconcile"}:
+    if operation not in {"pause", "resume", "reconcile", "retry"}:
         raise ValueError("unsupported job control")
     with RunLock(root / "writer.lock"):
         ledger = Ledger(root)
@@ -179,6 +193,11 @@ def control(root: Path, game, key: str, operation: str) -> dict:
                 raise ValueError("another job is active")
             if operation == "resume" and job["status"] != "paused":
                 raise ValueError("only a paused job can be resumed")
+            if operation == "retry":
+                if (job['status']!='blocked' or job.get('pending_action')
+                        or job['reason']=='action_outcome_unknown_reconcile_required' or 'rollback_tick' in ledger.data):
+                    raise ValueError('only a known blocked outcome in the same world can be retried')
+                ledger.event(key,'retry_requested',old_reason=job['reason'],tick=ledger.data['last_tick'])
             if operation == "resume":
                 if "paused_at_tick" not in job:
                     # Upgrade receipts created before pause-budget accounting.
@@ -229,17 +248,39 @@ class StarterExecutors:
         self.outposts=MiningOutposts(game,self.bootstrap,self.builder)
         from .smelting import SmeltingDistrict
         self.smelting=SmeltingDistrict(game,self.bootstrap,self.builder,catalog)
-        from .lanes import SmelterLaneBalance
-        self.lanes=SmelterLaneBalance(game,self.builder,catalog)
+        from .paired_smelting import PairedSmelting
+        self.paired=PairedSmelting(game,self.builder,catalog,self.smelting)
+        from .paired_mining import PairedMining
+        self.paired_mining=PairedMining(game,self.bootstrap,self.builder,catalog,self.outposts,self.smelting)
+        from .science import AutomaticScience
+        self.science=AutomaticScience(game,self.builder,catalog)
+        from .normal_research import NormalResearch
+        self.normal_research=NormalResearch(game,catalog,self.science)
+        ledger=Ledger(Path(game.cfg.runtime_dir)).data
+        self.industrial_mode=any(j['capability']=='smelting_district' and j['status']=='succeeded'
+                                 for j in ledger['jobs'].values())
 
     def starter_observation(self,obs):
         return {**obs,'entities':[e for e in obs.get('entities',[])
-            if not self.builder.owns_automated_burner(e) and not self.smelting.owns_furnace(e,obs)]}
+            if not self.builder.owns_automated_burner(e) and not self.smelting.owns_furnace(e,obs)
+            and not (getattr(self,'paired',None) and self.paired.owns_furnace(e,obs))
+            and not (getattr(self,'paired_mining',None) and self.paired_mining.retires_legacy(e,obs))]}
+
+    def starter_upkeep(self,obs):
+        filtered=self.starter_observation(obs)
+        if not getattr(self,'industrial_mode',False):return self.bootstrap.next_action(filtered)
+        if self.smelting.state.get('world_id')!=obs['world_id']:
+            return {'status':'blocked','reason':'industrial_supply_world_changed'}
+        required={'steam-power','electronics','automation-science-pack'}
+        if not required.issubset(obs.get('technologies',{})):
+            return {'status':'blocked','reason':'industrial_natural_unlocks_missing'}
+        upkeep=self.bootstrap.maintain_fuel(filtered)
+        return upkeep or {'status':'succeeded','reason':'industrial supplies retain ordinary starter fuel upkeep'}
 
     def step(self, capability: str, obs: dict, parameters: dict | None = None) -> dict:
         if capability == "starter":
             self.builder._sync(obs)
-            return self.bootstrap.next_action(self.starter_observation(obs))
+            return self.starter_upkeep(obs)
         if capability == "regularize_power_layout":
             self.builder._sync(obs)
             fuel_obs = self.starter_observation(obs)
@@ -251,7 +292,7 @@ class StarterExecutors:
         # burners now owned by the automatic power plan.
         self.builder._sync(obs)
         filtered = self.starter_observation(obs)
-        result = self.bootstrap.next_action(filtered)
+        result = self.starter_upkeep(obs)
         if result.get("status") != "succeeded":
             return result
         if capability == "starter_capacity":
@@ -283,10 +324,18 @@ class StarterExecutors:
             result=self.builder.ensure_power(obs)
             if result.get("status")!="succeeded":return result
             return self.smelting.capacity_step(obs,parameters or {})
-        if capability == "balance_smelter_lanes":
+        if capability == "paired_smelting":
             result=self.builder.ensure_power(obs)
             if result.get("status")!="succeeded":return result
-            return self.lanes.step(obs)
+            return self.paired.step(obs)
+        if capability == "paired_mining":
+            return self.paired_mining.step(obs)
+        if capability == "automation_science":
+            result=self.builder.ensure_power(obs)
+            if result.get("status")!="succeeded":return result
+            return self.science.step(obs,parameters or {})
+        if capability == "research":
+            return self.normal_research.step(obs,parameters or {})
         raise ValueError("no executor for capability: " + capability)
 
     def proof(self, capability: str, obs: dict, result: dict, parameters: dict | None = None) -> dict | None:
@@ -304,8 +353,14 @@ class StarterExecutors:
             return self.outposts.proof(obs,parameters or {})
         if capability in {"smelting_district","smelting_capacity"}:
             return self.smelting.proof(obs)
-        if capability == "balance_smelter_lanes":
-            return self.lanes.proof(obs)
+        if capability == "paired_smelting":
+            return self.paired.proof(obs)
+        if capability == "paired_mining":
+            return self.paired_mining.proof(obs)
+        if capability == "automation_science":
+            return self.science.proof(obs)
+        if capability == "research":
+            return self.normal_research.proof(obs,parameters or {})
         produced = obs.get("production", {})
         if not all(produced.get(name, {}).get("produced", 0) > 0 for name in ("iron-plate", "copper-plate")):
             return None

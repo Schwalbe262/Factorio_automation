@@ -35,6 +35,33 @@ class V2FactoryBuilder(FactoryBuilder):
     """Use fixed trunk routing and compact starter cells for future v2 plans."""
     _coal_plan=staticmethod(compact_coal_cell)
 
+    def _recover_resource_cell_obstruction(self,observation,plan,entity):
+        recovery=super()._recover_resource_cell_obstruction(observation,plan,entity)
+        if recovery is not None:return recovery
+        if not plan.get('resource_cell'):return None
+        payload=json.dumps(json.dumps(entity,separators=(',',':')))
+        survey=self.game.query('''
+local spec=helpers.json_to_table('''+payload+''');local box=prototypes.entity[spec.name].collision_box
+local function rotate(p)
+ local d=spec.direction or 0
+ if d==4 then return {x=-p.y,y=p.x} elseif d==8 then return {x=-p.x,y=-p.y} elseif d==12 then return {x=p.y,y=-p.x} end
+ return p
+end
+local p,q=rotate(box.left_top),rotate(box.right_bottom)
+local area={{spec.position.x+math.min(p.x,q.x),spec.position.y+math.min(p.y,q.y)},
+ {spec.position.x+math.max(p.x,q.x),spec.position.y+math.max(p.y,q.y)}}
+local ground={}
+for _,e in pairs(s.find_entities_filtered{area=area}) do if e~=a and e.type~="resource" then
+ if e.type~="item-entity" or not e.stack.valid_for_read or e.stack.prototype.type~="item" then return {ok=false} end
+ ground[#ground+1]={name=e.name,position=pos(e.position),item=e.stack.name,quality=e.stack.quality.name,count=e.stack.count}
+end end
+return {ok=true,world_id=d.world_id,ground=ground}
+''')
+        if not survey.get('ok') or survey.get('world_id')!=observation['world_id'] or not survey.get('ground'):return None
+        row=sorted(survey['ground'],key=lambda e:(e['position']['x'],e['position']['y']))[0]
+        return dict(row,type='take',count=min(50,row['count']),
+                    reason='normally collect spilled construction-site items without discarding materials')
+
     def ensure_plan(self,observation,plan):
         if plan.get('clear_obstacles'):
             if plan.get('clearance_world_id')!=observation['world_id']:

@@ -136,6 +136,27 @@ class JobBoundaryTests(unittest.TestCase):
         run_slice(self.root, self.game, Executor({"status": "succeeded"}, {"observed_lab": True}), "test")
         self.assertEqual(len(self.game.actions), 1)
 
+    def test_retry_replans_known_block_without_erasing_history_or_replaying_actions(self):
+        submit(self.root,self.game,self.request())
+        run_slice(self.root,self.game,Executor({'status':'blocked','reason':'placement obstructed'}),'test')
+        before=Ledger(self.root).data['jobs']['test'].copy()
+        control(self.root,self.game,'test','retry')
+        current=Ledger(self.root).data['jobs']['test']
+        self.assertEqual(current['created_tick'],before['created_tick'])
+        self.assertEqual(current['actions'],before['actions'])
+        self.assertEqual(self.game.actions,[])
+        result=run_slice(self.root,self.game,Executor({'status':'succeeded'},{'native':True}),'test')
+        self.assertEqual(result['status'],'succeeded')
+        with self.assertRaisesRegex(ValueError,'known blocked'):
+            control(self.root,self.game,'test','retry')
+
+    def test_retry_cannot_skip_uncertain_action_reconciliation(self):
+        submit(self.root,self.game,self.request());self.game.lose_receipt=True
+        with self.assertRaises(TimeoutError):
+            run_slice(self.root,self.game,Executor({'type':'build','name':'lab'}),'test')
+        with self.assertRaisesRegex(ValueError,'known blocked'):
+            control(self.root,self.game,'test','retry')
+
     def test_intentional_pause_does_not_spend_execution_deadline(self):
         submit(self.root, self.game, self.request())
         control(self.root, self.game, "test", "pause")

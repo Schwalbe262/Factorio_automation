@@ -251606,3 +251606,45 @@ Goal: expandblue-sciencefluidproduction toaggregategraphdemand. Hypothesis: stab
 - Limits: collection remains one lane by declared design; stationary4/4 is not loaded throughput or equal input-lane draw. Science/lab/mall/defense/oil/rail/rocket still incomplete.
 - Next: permanent science/labs use balancedports; retain typed lane planning and independent native checks.
 - Usage sample: parent 60016947 -> 63236564 = 3219617 tokens incl cached input; weekly account10% ->10% (display unchanged); exact task share and child tokens unavailable.
+
+## 2026-11-11T14:48:05.687100+00:00 | Part6 | paired furnace correction
+- Goal: Increase independent lane production rather than redistribute a single row.
+- Hypothesis: Opposing furnace rows and input splitters give separate productive lane sources.
+- Actions: Recovered152owned obsolete assets, retained external ports, built5+5iron/3+3copper; fixed electrical island with4paid pole hops, normally withdrew8old plates to prove fresh cycles.
+- Candidates/options: Rejected cosmetic output splitters; kept only real input sharing.
+- Metrics: 234actions; proof899150; all16fresh producers; collector iron1/4,copper4/4.
+- Result: Native component success, no sustained-rate proof.
+- Failure reason: Initial iron network island and full old output buffers hid new production.
+- Next action: Pair electric mining and resume original science key.
+- Tokens: shared Part6 measured delivery sample follows; child counters unavailable.
+
+## 2026-11-11T14:48:05.687100+00:00 | Part6 | paired mining migration
+- Goal: Build clean expandable drill pairs feeding both collector lanes.
+- Hypothesis: Opposing native drops feed independent sides while fixed outputs survive migration.
+- Actions: Surveyed whole blocks/ore; recovered58old assets incl11legacy cells; shifted copper with two-turn collar; added ordinary ground pickup and known-outcome retry.
+- Candidates/options: Original copper row lacked enough remaining ore; selected richer bounded offset; future expansion uses extra paired blocks when mineral edges cap columns.
+- Metrics: First60actions blocked tick998448 on one spilled iron ore; same-key retry77total actions/proof1011081; iron6drills180nominal,copper4drills120nominal; lane stocks43/4,31/3.
+- Result: Native component success after one documented placement failure; sustained rate unresolved.
+- Failure reason: Receiver-first recovery briefly allowed an emitting drill to spill ore; inventory-full cause was not established.
+- Next action: Recover emitters first; retain mineral-edge limits and test auxiliary block connection when demanded.
+- Tokens: shared Part6 measured delivery sample follows; child counters unavailable.
+
+## 2026-11-11T14:48:05.687100+00:00 | Part6 | permanent science and research
+- Goal: Run actual machine science into labs with ordinary research.
+- Hypothesis: Fixed production cells and whole corridor routing let Luna choose rate/technology.
+- Actions: Kept paid partial science plan; paused at163actions for lane correction; resumed SAME key; completed six red AM1 plus gear AM1/eight labs; selected normal gun-turret research.
+- Candidates/options: Rejected finite actor-fed startup packs as permanent supply; searched native slots and retained north science/lab cells.
+- Metrics: Science171actions0fail/proof1018137; all6produced; fresh1033772 all8labs powered/2packs each. Gun research1action0fail/native proof1021932; native cost10, world consumed counter+16.
+- Result: Commissioning and one native technology succeeded; no30SPM five-minute consumption claim.
+- Failure reason: Early candidate corridors failed normal gates; resolved bounded complete-corridor replanning. Green/mall/ammo/defense/rail/oil/rocket not implemented.
+- Next action: Loaded continuous verification, native green/steel research and production/defense next.
+- Tokens: shared Part6 measured delivery sample follows; child counters unavailable.
+
+## 2026-11-11T14:49:08.323037+00:00 | Part6 | delivery validation and measured usage
+- Goal/hypothesis: deliver the native paired-production and permanent-science component after independent verification.
+- Actions/options: reviewed exact changed source/hunks, retained explicit unsolved gates; rendered/inspected updated PCB drawing.
+- Metrics:70v2tests passed;41builder tests ran38pass/3skip; fresh paired+science proofs passed; latest all8labs hold2packs.
+- Result: component work ready to commit/push v2; rocket goal remains active.
+- Failure reason: no sustained30SPM/5min gate, auxiliary paired-bank connection, green/mall/defense/oil/rail/rocket proof yet.
+- Next action: loaded verification and normal green/steel progression with Luna.
+- Token usage (measured sample): parent 22,674,297 tokens including cached input; cumulative 64,506,556->87,180,853; weekly ACCOUNT meter 10%->12% (+2percentage points). Child counters/exact per-task weekly allocation unavailable; account meter includes concurrent activity.

@@ -22,8 +22,8 @@ def validate_capacity(parameters):
     if parameters['resource'] not in ('iron-ore','copper-ore'):
         raise ValueError('only iron/copper plate rows can expand here')
     rate=parameters['rate_per_minute']
-    if type(rate) not in (int,float) or not math.isfinite(rate) or not 0<rate<=100:
-        raise ValueError('smelting rate must be finite in (0,100]')
+    if type(rate) not in (int,float) or not math.isfinite(rate) or not 0<rate<=225:
+        raise ValueError('smelting rate must be finite in (0,225]')
 
 
 def furnace_bank(x,y,count,resource):
@@ -94,10 +94,14 @@ class SmeltingDistrict:
             return {'status':'blocked','reason':'expand_connected_mining_before_smelting','available_nominal_ore_rate':available}
         old=next(b for b in self.state['banks'] if b['resource']==resource)
         each=self.catalog.entities['stone-furnace']['crafting_speed']*60/self.catalog.recipes[old['product']]['energy']
-        count=max(old['count'],math.ceil(rate/each))
+        paired=self.state.get('paired',False)
+        count=max(old.get('per_side_count',old['count']),math.ceil(rate/each/(2 if paired else 1)))
         if count>6:return {'status':'blocked','reason':'reserved_row_has_six_furnace_slots'}
         first=next(e for e in old['entities'] if e['name']=='stone-furnace')
-        new=furnace_bank(first['position']['x'],first['position']['y'],count,resource)
+        if paired:
+            from .paired_smelting import paired_bank
+            new=paired_bank(first['position']['x'],first['position']['y'],count,resource)
+        else:new=furnace_bank(first['position']['x'],first['position']['y'],count,resource)
         if new!=old:
             board_path=self.path.parent/'pcb-board.json';board=json.loads(board_path.read_text(encoding='utf-8'))
             if board.get('world_id')!=obs['world_id'] or board.get('catalog_fingerprint')!=self.catalog.fingerprint:
@@ -112,9 +116,10 @@ class SmeltingDistrict:
             if not native.get('ok'):return {'status':'blocked','reason':'expanded_row_native_preflight_failed','blocked':native.get('blocked')}
             banks=[new if b['resource']==resource else b for b in self.state['banks']]
             extra={k:v for k,v in self.state['plan'].items() if k not in ('ok','reason','entities','ports','required_items')}
-            plan=_plan(es,[p for b in banks for p in b['ports'] if p['direction']=='output'],**extra)
+            ports=self.state['plan']['ports'] if paired else [p for b in banks for p in b['ports'] if p['direction']=='output']
+            plan=_plan(es,ports,**extra)
             self.state.update(plan=plan,banks=banks)
-            self.state.setdefault('nominal_smelting_capacity_per_minute',{})[resource]=count*each
+            self.state.setdefault('nominal_smelting_capacity_per_minute',{})[resource]=count*each*(2 if paired else 1)
             _atomic_json(self.path,self.state)
             board['blocks']['smelting_district']=plan;_atomic_json(board_path,board)
         result=self.builder.ensure_plan(obs,self.state['plan'])

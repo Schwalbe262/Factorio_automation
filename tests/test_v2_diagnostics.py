@@ -4,7 +4,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
-from factorio_agent.diagnostics import production_rates,construction_budget
+from factorio_agent.diagnostics import production_rates,construction_budget,smelting_throughput_bounds
 
 
 class RateEvidenceTests(unittest.TestCase):
@@ -33,6 +33,20 @@ class RateEvidenceTests(unittest.TestCase):
             result=construction_budget(root,obs,catalog)
             self.assertEqual(result['remaining_placement_items'],{'electric-mining-drill':1})
             self.assertEqual(result['base_material_upper_bound'],{'iron-plate':23})
+
+    def test_independent_lane_limits_do_not_credit_unused_capacity_on_other_lane(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            bank={'resource':'iron-ore','product':'iron-plate','producer_rows':{'left':[{}]*10,'right':[{}]}}
+            (root/'smelting-district.json').write_text(json.dumps({'world_id':'w','banks':[bank]}))
+            (root/'mining-outposts.json').write_text(json.dumps({'world_id':'w','banks':[
+                {'plan':{'resource':'iron-ore'},'ready':True,'nominal_rate_per_minute':1000}]}))
+            catalog=SimpleNamespace(entities={'stone-furnace':{'crafting_speed':1}},recipes={'iron-plate':{'energy':1}})
+            obs={'world_id':'w','belt_lane_observation':{'ports':[
+                {'item':'iron-plate','nominal_unstacked_items_per_second_per_lane':7.5}]}}
+            row=smelting_throughput_bounds(root,obs,catalog)['banks'][0]
+            self.assertEqual(row['independent_producer_capacity_per_lane'],{'left':600,'right':60})
+            self.assertEqual(row['partial_upper_bound_per_minute'],510)
 
 
 if __name__=='__main__':unittest.main()

@@ -43,6 +43,31 @@ return {ok=true,tick=game.tick,ports=ports,scope="instantaneous lane inventories
 ''')
 
 
+def smelting_throughput_bounds(root,obs,catalog):
+    path=Path(root)/'smelting-district.json'
+    if not path.exists():return {'status':'no_registered_smelting'}
+    state=json.loads(path.read_text(encoding='utf-8'))
+    mining_path=Path(root)/'mining-outposts.json'
+    mining=json.loads(mining_path.read_text(encoding='utf-8')) if mining_path.exists() else {}
+    if state.get('world_id')!=obs['world_id'] or mining.get('world_id')!=obs['world_id']:
+        return {'status':'world_changed'}
+    rows=[]
+    for bank in state['banks']:
+        if not bank.get('producer_rows'):continue
+        each=catalog.entities['stone-furnace']['crafting_speed']*60/catalog.recipes[bank['product']]['energy']
+        capacities={lane:len(producers)*each for lane,producers in bank['producer_rows'].items()}
+        ore=sum(b['nominal_rate_per_minute'] for b in mining['banks'] if b.get('ready') and b['plan']['resource']==bank['resource'])
+        native=[p['nominal_unstacked_items_per_second_per_lane']*60
+                for p in obs.get('belt_lane_observation',{}).get('ports',[])
+                if p['item']==bank['product']]
+        belt_per_lane=min(native) if native else None
+        per_lane=[min(v,belt_per_lane) if belt_per_lane is not None else v for v in capacities.values()]
+        rows.append({'product':bank['product'],'independent_producer_capacity_per_lane':capacities,
+            'unstacked_belt_capacity_per_lane':belt_per_lane,'connected_nominal_ore_supply':ore,
+            'partial_upper_bound_per_minute':min(ore,sum(per_lane))})
+    return {'banks':rows,'scope':'design upper bounds, not measured flow; fuel, power, inserters and downstream demand can impose further limits'}
+
+
 def production_rates(root,obs):
     path=Path(root)/"rate-samples.json"
     with RunLock(Path(root)/"observer.lock"):
@@ -91,6 +116,10 @@ def construction_budget(root,obs,catalog):
         state=json.loads(path.read_text(encoding="utf-8"))
         if state.get("world_id")==obs["world_id"]:
             plans += [bank["plan"] for bank in state.get("banks",[])]
+    path=Path(root)/'automation-science.json'
+    if path.exists():
+        state=json.loads(path.read_text(encoding='utf-8'))
+        if state.get('world_id')==obs['world_id']:plans.append(state['plan'])
     actual={(e["name"],e["position"]["x"],e["position"]["y"]):e for e in obs["entities"]}
     wanted={}
     for plan in plans:
@@ -124,4 +153,4 @@ def construction_budget(root,obs,catalog):
     return {"remaining_placement_items":dict(missing),"base_material_upper_bound":dict(base),
             "furnace_output_stock":dict(outputs),"base_shortfall_after_held_and_furnace_outputs":shortfall,
             "configuration_pending":configuration,"unplanned_power_steps":unplanned,"unresolved_materials":unresolved,
-            "scope":"all currently saved power/board/mining plans, not future science/oil/rocket; excludes queued outputs and intermediate stock credit"}
+            "scope":"all currently saved power/board/mining/science plans, not unplanned future stages; excludes queued outputs and intermediate stock credit"}

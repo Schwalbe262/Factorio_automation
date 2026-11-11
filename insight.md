@@ -6562,3 +6562,19 @@ Promote to insight.md only if:
 - Improvement/after: native left/right typed-port observations plus declared lane items; same-side furnace collection feeds a splitter and opposite side-loads into a straight output. GenericUG crossings forbid turns at mouths to avoid lane gating.
 - Evidence: unchanged furnace rows,16paidactions, both plate outputs4/4 at665299 and670056, native splitter policies/directions verified; geometry and lane-rule regression tests.
 - Remaining risk: inventory occupancy does not prove continuous balanced flow. Input-lane draw/full-load throughput still require deliberate downstream consumption and a timed window.
+
+## 2026-11-11T14:48:05.687100+00:00 | EXP-0009 | Independent producers determine useful lane capacity
+- Source loop: Part6 paired furnace/mining migrations.
+- Improvement: Put independent producer rows on opposite sides of a shared straight collector; bound each lane separately. Verify actual drill drop positions instead of transferring the inserter far-side rule.
+- Before: output splitters populated both lanes while preserving the old single-row production limit; identical inserter orientation filled one side.
+- After: iron5+5/copper3+3furnaces and iron3/copper2opposing drill pairs directly feed both lanes with unchanged consumer ports.
+- Evidence: all16furnaces freshly produced at899150; live powered drill/drop/receiver and ore-on-both-lanes proof1011081; fresh checks1027038/1033772.
+- Remaining risk: native spot inventory is not loaded sustained throughput; finite ore edges cap same-row expansion; auxiliary paired-bank connection still needs live execution.
+
+## 2026-11-11T14:48:05.687100+00:00 | EXP-0009 | Recover emitters before their receivers
+- Source loop: paired mining first blocked at998448, same-key retry succeeded1011081.
+- Improvement: Recover obsolete emitting drills before belts/receivers, and conserve spilled ordinary items through normal pickup when they obstruct a reserved resource build footprint.
+- Before: one spilled iron ore blocked a pole after receiver-first recovery.
+- After: exact-footprint ordinary take cleared the site; no item destruction/grants and no unknown-action replay.
+- Evidence: native planned take1iron-ore, successful same-key77action mining receipt; historical failure retained in events.
+- Remaining risk: unsupported item metadata or inventory saturation can still block and must remain explicit.

@@ -1,0 +1,87 @@
+"""Read-only whole-block surveys with explicit ordinary natural clearance."""
+from __future__ import annotations
+
+import json
+from .transport import xy
+
+
+def overlap(a,b):
+    return a[0][0]<b[1][0] and a[1][0]>b[0][0] and a[0][1]<b[1][1] and a[1][1]>b[0][1]
+
+
+def survey_slots(game,slots):
+    payload=json.dumps(json.dumps(slots,separators=(',',':')))
+    return game.query('''
+local slots=helpers.json_to_table('''+payload+''');local legal={}
+for index,areas in ipairs(slots) do
+ local clear=true
+ for _,area in ipairs(areas) do
+  if s.count_entities_filtered{area=area,type="resource"}>0 then clear=false;break end
+  for _,e in pairs(s.find_entities_filtered{area=area}) do
+   local rock=e.type=="simple-entity" and (e.name=="big-rock" or e.name=="huge-rock" or e.name=="big-sand-rock")
+   local nature=e.force.name=="neutral" and e.minable and (e.type=="tree" or rock)
+   if e~=a and e.type~="electric-pole" and not nature and not e.prototype.collision_mask.colliding_with_tiles_only then clear=false;break end
+  end
+  if not clear then break end
+  for _,tile in pairs(s.find_tiles_filtered{area=area}) do
+   for layer in pairs(prototypes.entity["assembling-machine-1"].collision_mask.layers) do
+    if tile.collides_with(layer) then clear=false;break end
+   end
+   if not clear then break end
+  end
+  if not clear then break end
+ end
+ if clear then legal[#legal+1]=index end
+end
+return {ok=true,legal=legal}
+''')
+
+
+def preflight(game,builder,obs,entities,*,ignored_units=()):
+    boxes=[builder._occupied_by_plan([e]) for e in entities]
+    if sum(map(len,boxes))!=len(set().union(*boxes)):
+        return {'ok':False,'reason':'whole_block_prospective_overlap'}
+    specs=[]
+    for e,box in zip(entities,boxes):
+        xs=[p[0] for p in box];ys=[p[1] for p in box]
+        specs.append(dict(e,survey_area=[[min(xs)-.49,min(ys)-.49],[max(xs)+.49,max(ys)+.49]]))
+    payload=json.dumps(json.dumps({'specs':specs,'ignored':list(ignored_units)},separators=(',',':')))
+    result=game.query('''
+local args=helpers.json_to_table('''+payload+''');local specs=args.specs;local obstacles={};local seen={};local ignored={}
+for _,unit in ipairs(args.ignored) do ignored[unit]=true end
+for _,spec in ipairs(specs) do
+ local old=target(spec.position,spec.name)
+ if old and ignored[old.unit_number] then old=nil end
+ if old then
+  if old.force~=f or (old.direction~=spec.direction and old.type~="electric-pole" and not spec.recipe) then return {ok=false,reason="owned_block_entity_configuration_changed"} end
+ else
+  local legal=s.can_place_entity{name=spec.name,position=spec.position,direction=spec.direction or 0,force=f,
+    type=spec.belt_to_ground_type,build_check_type=defines.build_check_type.manual_ghost,forced=true}
+  local colliders=s.find_entities_filtered{area=spec.survey_area}
+  if not legal then
+   for _,e in pairs(colliders) do if ignored[e.unit_number] then legal=true;break end end
+   if legal then for _,tile in pairs(s.find_tiles_filtered{area=spec.survey_area}) do
+    for layer in pairs(prototypes.entity[spec.name].collision_mask.layers) do if tile.collides_with(layer) then legal=false;break end end
+    if not legal then break end
+   end end
+  end
+  if not legal then
+   return {ok=false,reason="block_terrain_or_immovable_obstruction",entity=spec.name,position=spec.position}
+  end
+  for _,e in pairs(colliders) do
+   if e~=a and e.type~="resource" and not ignored[e.unit_number] and not e.prototype.collision_mask.colliding_with_tiles_only then
+    local rock=e.type=="simple-entity" and (e.name=="big-rock" or e.name=="huge-rock" or e.name=="big-sand-rock")
+    if e.force.name~="neutral" or not e.minable or not (e.type=="tree" or rock) then
+     return {ok=false,reason="block_protected_entity_obstruction",entity=e.name,position=pos(e.position)}
+    end
+    local key=e.name..":"..e.position.x..":"..e.position.y
+    if not seen[key] then seen[key]=true;obstacles[#obstacles+1]={name=e.name,position=pos(e.position),unit_number=e.unit_number} end
+   end
+  end
+ end
+end
+return {ok=true,clear_obstacles=obstacles}
+''')
+    if not result.get('ok'):return result
+    if len(result.get('clear_obstacles',[]))>96:return {'ok':False,'reason':'block_clearance_budget_exceeded'}
+    return {**result,'clearance_world_id':obs['world_id']}

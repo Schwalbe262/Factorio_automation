@@ -29,9 +29,12 @@ only the framework interface and its documented state, with no parent decisions.
    counter increase and natural platform arrival. Luna-only end-to-end runs.
 
 ## Evaluation
-Current sprint (2026-11-11): native electric extraction and belt-fed PCB smelting
-now work in the development world (EXP-0005/0006). Next connect permanent machine
-science and labs to the fixed plate ports, then construction mall/ammunition.
+Current sprint (2026-11-11): independent paired furnace rows and electric drill
+rows now feed both collector lanes, with fixed ports (EXP-0009). Permanent red
+science, belt-fed labs and normal gun-turret research work (EXP-0010). Nominal
+ore180/120 and red36/min are not sustained measured rates. Next prove loaded
+continuous production, unlock/build green science and steel, and add a
+construction mall plus ammunition/turret replenishment. Rail/oil/rocket remain.
 Do not close the continuous-rate gate from filling output buffers. No rocket yet.
 
 Freeze code, model/effort, seed/save and settings per attempt. Classify failures

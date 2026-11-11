@@ -70,7 +70,7 @@ def compile_crossings(route,foreign,*,maximum_span=5):
     return _plan(result,[],underground_pairs=pairs,route_metrics=route['metrics'],layout_policy='pcb-layered-trunks-v1')
 
 
-def plan_connection(game,builder,obs,source,destination,reserved=()):
+def plan_connection(game,builder,obs,source,destination,reserved=(),*,ignored_units=()):
     if source.get('item')!=destination.get('item'):
         return {'ok':False,'reason':'port_item_mismatch'}
     a,b=source['position'],destination['position'];ends={(a['x'],a['y']),(b['x'],b['y'])}
@@ -78,16 +78,27 @@ def plan_connection(game,builder,obs,source,destination,reserved=()):
             'min_y':min(a['y'],b['y'])-16,'max_y':max(a['y'],b['y'])+16}
     if (bounds['max_x']-bounds['min_x']+1)*(bounds['max_y']-bounds['min_y']+1)>40000:
         return {'ok':False,'reason':'belt_corridor_survey_budget_exceeded'}
-    payload=json.dumps(json.dumps(bounds,separators=(',',':')))
+    payload=json.dumps(json.dumps({'bounds':bounds,'ignored':list(ignored_units)},separators=(',',':')))
     survey=game.query('''
-local b=helpers.json_to_table('''+payload+''');local blocked={};local clearable={}
+local args=helpers.json_to_table('''+payload+''');local b=args.bounds;local blocked={};local clearable={}
+local ignored={};for _,unit in ipairs(args.ignored) do ignored[unit]=true end
 for x=b.min_x,b.max_x do for y=b.min_y,b.max_y do
  local p={x=x,y=y};local old=target(p,"transport-belt")
+ if old and ignored[old.unit_number] then old=nil end
+ local entities=s.find_entities_filtered{area={{x-.4,y-.4},{x+.4,y+.4}}}
  local legal=(old and old.force==f) or s.can_place_entity{name="transport-belt",position=p,force=f,
   build_check_type=defines.build_check_type.manual_ghost,forced=true}
+ if not legal then
+  local replacing=false;for _,e in pairs(entities) do if ignored[e.unit_number] then replacing=true end end
+  if replacing then
+   legal=true;for layer in pairs(prototypes.entity["transport-belt"].collision_mask.layers) do
+    if s.get_tile(p).collides_with(layer) then legal=false;break end
+   end
+  end
+ end
  local natural={}
- if legal then for _,e in pairs(s.find_entities_filtered{area={{x-.4,y-.4},{x+.4,y+.4}}}) do
-  if e~=a and e.type~="resource" and e~=old and not e.prototype.collision_mask.colliding_with_tiles_only then
+ if legal then for _,e in pairs(entities) do
+  if e~=a and e.type~="resource" and e~=old and not ignored[e.unit_number] and not e.prototype.collision_mask.colliding_with_tiles_only then
    local rock=e.type=="simple-entity" and (e.name=="big-rock" or e.name=="huge-rock" or e.name=="big-sand-rock")
    if e.force.name=="neutral" and e.minable and (e.type=="tree" or rock) then
     natural[#natural+1]={name=e.name,position=pos(e.position),unit_number=e.unit_number}
@@ -107,10 +118,21 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
     hard={(p['x'],p['y']) for p in survey['blocked']}
     hard.update(builder._occupied_by_plan([e for e in reserved if e['name']!='transport-belt']))
     hard-=ends
-    route=route_trunks(a,b,occupied=hard,bounds=bounds,start_direction=source['facing'],
-                       end_direction=destination['facing'],max_nodes=150000)
-    compiled=compile_crossings(route,foreign,maximum_span=survey['max_span'])
-    if not compiled.get('ok'):return compiled
+    surface={xy(e) for e in foreign if e['name']=='transport-belt'}
+    for attempt in range(8):
+        route=route_trunks(a,b,occupied=hard,bounds=bounds,start_direction=source['facing'],
+                           end_direction=destination['facing'],max_nodes=150000)
+        compiled=compile_crossings(route,foreign,maximum_span=survey['max_span'])
+        if compiled.get('ok'):break
+        if not route.get('ok'):return compiled
+        conflicts={xy(e) for e in route['segments']} & surface - ends
+        fresh=conflicts-hard
+        if not fresh:return compiled
+        # Reject these unsafe crossing cells, then choose another COMPLETE
+        # corridor under the same original turn/detour gates. Never maze-route.
+        hard.update(fresh)
+    else:return {'ok':False,'reason':'bounded_layered_corridor_replanning_exhausted'}
+    compiled['routing_attempts']=attempt+1
     compiled['ports']=[source,destination]
     positions={xy(e) for e in compiled['entities']}
     allowed_tiles=set();obstacles={}

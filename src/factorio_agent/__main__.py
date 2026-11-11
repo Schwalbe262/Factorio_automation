@@ -39,7 +39,7 @@ def main(argv=None):
     worker = commands.add_parser("worker")
     worker.add_argument("--key", required=True)
     worker.add_argument("--max-seconds", type=float, default=900)
-    for name in ("pause", "resume", "reconcile"):
+    for name in ("pause", "resume", "reconcile", "retry"):
         commands.add_parser(name).add_argument("--key", required=True)
     watch = commands.add_parser("watch")
     watch.add_argument("--hide", action="store_true")
@@ -65,11 +65,14 @@ def main(argv=None):
         if not obs.get("ok"):
             raise RuntimeError(obs.get("reason", "observation_failed"))
         obs["electricity"] = runtime.electricity_snapshot(game)
-        from .diagnostics import production_rates,construction_budget,port_lane_snapshot
+        from .diagnostics import production_rates,construction_budget,port_lane_snapshot,smelting_throughput_bounds
         obs["production_rate_measurement"]=production_rates(root,obs)
         obs["belt_lane_observation"]=port_lane_snapshot(root,game,obs)
         if (root/"catalog.json").exists():
             obs["known_project_construction_budget"]=construction_budget(root,obs,runtime.catalog_for(root,game))
+            obs["smelting_throughput_bounds"]=smelting_throughput_bounds(root,obs,runtime.catalog_for(root,game))
+            from .normal_research import ready_options
+            obs["available_research"]=ready_options(runtime.catalog_for(root,game),obs)
         result = summary(obs, Ledger(root))
     elif args.command == "request":
         parameters = json.loads(args.parameters)
@@ -80,7 +83,7 @@ def main(argv=None):
             parameters = typed
         result = submit(root, runtime.game_for(root), Request(args.key, args.world_id,
                         args.observed_tick, args.capability, parameters))
-    elif args.command in {"pause", "resume", "reconcile"}:
+    elif args.command in {"pause", "resume", "reconcile", "retry"}:
         result = control(root, runtime.game_for(root), args.key, args.command)
     elif args.command in {"run", "worker"}:
         game = runtime.game_for(root)

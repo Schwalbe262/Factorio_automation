@@ -1,5 +1,11 @@
 # EXP-0008: observe lane identity and distribute smelter output
 
+> Correction, EXP-0009: this successfully redistributed existing output but
+> added no independent production bandwidth. The user rejected it as the
+> production solution. Both output modules have since been normally recovered
+> and replaced with paired furnace producer rows. Keep the results below as
+> historical lane-observation evidence, not the current layout or acceptance.
+
 - Date: 2026-11-11 UTC; same default2.1.20 development world as EXP-0007.
 - User finding: iron/copper collection belts used only half the belt.
 - Hypothesis: same-side furnace output inserters naturally fill only the far

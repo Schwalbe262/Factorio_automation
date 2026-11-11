@@ -114,6 +114,8 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
             last=set(sorted(lanes,key=lambda n:abs(n-pb[axis]))[:4])
             first.update(a[axis]+av[axis]*n for n in (2,3,4))
             last.update(b[axis]-bv[axis]*n for n in (2,3,4))
+            if av[axis]==0:first.update(pa[axis]+n for n in (-2,-1,1,2))
+            if bv[axis]==0:last.update(pb[axis]+n for n in (-2,-1,1,2))
             midpoint=(pa[other]+pb[other])/2
             bars=sorted(trunk_lanes[other],key=lambda n:(abs(n-pa[other])+abs(n-pb[other]),abs(n-midpoint)))[:8]
             for p in first:

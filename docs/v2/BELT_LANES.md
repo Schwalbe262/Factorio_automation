@@ -32,19 +32,46 @@ A splitter divides flow between output **belts** while preserving lane identity.
 Feed it one lane and its two outputs can still have only that lane populated.
 See [belt transport mechanics](https://wiki.factorio.com/Belt_transport_system).
 
-The new `lane_balancer` template splits one same-item belt into two branches,
-then side-loads those branches from opposite sides into a straight output.
-It costs14yellow belts and1splitter per output. It distributes onto both output
-lanes; it does not claim equal draw from both input lanes or full throughput
-under every downstream blockage.
+The earlier EXP-0008 output distributor populated both lanes but did not add
+producer capacity. The user correctly rejected this as the production fix.
+`balance_smelter_lanes` and its executor have been removed. Its paid hardware
+was ordinarily recovered; historical receipts remain as historical evidence.
+The pure optional `lane_balancer` adapter remains for redistribution needs.
 
-The existing furnace collection rows stay in place. Each now feeds a small
-reserved output module, so later consumers use its both-lane port:
+## Independent producers on both sides
 
-| Product | Collection port | Declared collection lane | Both-lane supply port |
+`paired_smelting` installs upper/lower furnace rows around one shared belt.
+Upper inserters drop onto its south/right lane; lower inserters drop onto its
+north/left lane. Real input splitters divide ore/coal before the two production
+rows. There are no output splitters. Consumer ports remain unchanged.
+
+| Product | Independent furnaces left/right | Nominal capacity left/right, per min | Shared collector | Consumer port |
+|---|---|---|---|---|
+| Iron plate | 5 / 5 | 93.75 / 93.75 | (-17.5,-29.5), east | (-9.5,-29.5), east |
+| Copper plate | 3 / 3 | 56.25 / 56.25 | (-17.5,-13.5), east | (-9.5,-17.5), east |
+
+`paired_mining` uses facing electric drill rows around an eastbound collector.
+Drill drops are checked natively: the north row drops onto the north/left lane,
+and the south row onto the south/right lane. Do not apply the inserter far-side
+rule to a mining drill. Four-tile column pitch leaves ordinary pole space.
+
+| Resource | Opposing pairs / drills | Nominal supply per min | Fixed downstream port |
 |---|---|---|---|
-| Iron plate | (-17.5,-29.5), east | right | (-9.5,-29.5), east |
-| Copper plate | (-17.5,-17.5), east | right | (-9.5,-17.5), east |
+| Iron ore | 3 / 6 | 180 | (18.5,-62.5), east |
+| Copper ore | 2 / 4 | 120 | (12.5,-33.5), east |
+
+Copper's collector ends at (10.5,-35.5); a two-turn collar retains its downstream
+port. Expansion adds complete upstream pairs without moving the port. Survey
+each future column for actual pure ore, terrain and protected buildings before
+reserving it. These two mineral edges currently have no additional eligible
+same-row columns. Further capacity uses another paired block and an explicitly
+checked connection to the existing ore trunk. Never bend individual drills or
+weave the collector around an obstacle. A new auxiliary iron pair passed native
+placement/resource/power preflight; its construction/connection is not yet tested.
+
+The design bound is the minimum of connected ore supply, independent producer
+capacity on each lane and belt capacity. Inserters, fuel, power and downstream
+demand may lower actual flow. Redistributing stock never raises that bound.
 
 ## Observation and acceptance
 
@@ -53,8 +80,9 @@ ports, declared lane items/policy, and unstacked nominal capacity per lane.
 Counts are instantaneous inventories, never flow rates or utilization.
 Normal yellow belts in this pinned world report7.5items/sec per lane.
 
-`balance_smelter_lanes` requires real same-item content in both output lanes,
-correct installed directions and native default splitter policies. EXP-0008
-records Luna's first successful construction and an independent fresh check.
+Paired smelting requires fresh production from every furnace and native plate
+content on both shared lanes. Paired mining requires correctly oriented powered
+drill groups, actual drop positions/receivers and real ore on both collector
+lanes. EXP-0009 records the correction and Luna's actual construction attempts.
 Sustained throughput still requires downstream load and timed machine/consumer
 counters; full stationary lanes do not satisfy that gate.
