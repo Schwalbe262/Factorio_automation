@@ -15,6 +15,10 @@ steam setup, finite starter research, and regular coal-trunk migration. The live
 starter and layout are verified; broader science/oil/rail/rocket execution is
 unfinished. See the [gameplay API](docs/v2/PLAYER_API.md).
 
+Public blueprint examples and the bounded structural importer are documented in
+[reference sources](docs/v2/REFERENCE_SOURCES.md). Imported examples remain
+unverified until tested in the pinned game; original exchange strings stay ignored.
+
 To watch the existing development world, run `watch_factorio_v2.bat`. Viewing
 does not stop automation; movement/build controls share the automation actor.
 

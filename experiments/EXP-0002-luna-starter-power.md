@@ -57,6 +57,12 @@
 - Next: automatic science/mall/defense and scalable extraction. A new Luna
   starter-capacity development test may be active; inspect its current handle.
   Rocket execution remains missing.
+
+- Capacity follow-up result: four productive drill-to-furnace iron cells at
+  tick231781 and two copper cells at235081; each has native output. Nominal
+  60/30 ore per minute from catalog drill rates, NOT a sustained throughput
+  proof. They still use bounded starter fuel upkeep. No automated belt-fed
+  plate supply or30SPM science is claimed.
 - Tokens: sample parent and evaluator counters separately at part completion.
 
 - Delivery usage sample: parent thread 3193689 -> 30059441 = 26865752 tokens including cached input; weekly account meter 4% -> 6% (+2pp). Concurrent child token counters unavailable; not an exact per-part quota percentage.
