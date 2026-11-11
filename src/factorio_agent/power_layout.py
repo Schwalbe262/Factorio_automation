@@ -35,6 +35,30 @@ class V2FactoryBuilder(FactoryBuilder):
     """Use fixed trunk routing and compact starter cells for future v2 plans."""
     _coal_plan=staticmethod(compact_coal_cell)
 
+    def ensure_plan(self,observation,plan):
+        if plan.get('clear_obstacles'):
+            if plan.get('clearance_world_id')!=observation['world_id']:
+                return {'status':'blocked','reason':'clearance_plan_world_changed'}
+            payload=json.dumps(json.dumps(plan['clear_obstacles'],separators=(',',':')))
+            result=self.game.query('''
+local approved=helpers.json_to_table('''+payload+''')
+for _,wanted in ipairs(approved) do
+ local e=target(wanted.position,wanted.name)
+ if e then
+  local rock=e.type=="simple-entity" and (e.name=="big-rock" or e.name=="huge-rock" or e.name=="big-sand-rock")
+  if e.force.name~="neutral" or not e.minable or not (e.type=="tree" or rock)
+   or (wanted.unit_number and e.unit_number~=wanted.unit_number) then return {ok=false,reason="approved_natural_obstacle_changed"} end
+  return {ok=true,obstacle={name=e.name,position=pos(e.position)}}
+ end
+end
+return {ok=true}
+''')
+            if not result.get('ok'):return {'status':'blocked','reason':result.get('reason','clearance_survey_failed')}
+            if result.get('obstacle'):
+                return {'type':'mine',**result['obstacle'],'count':1,
+                        'reason':'normally mine approved tree or rock on reserved straight corridor'}
+        return super().ensure_plan(observation,plan)
+
     def plan_route(self,name,source,destination,**kwargs):
         if name=="transport-belt":
             return route_trunks(source,destination,**kwargs)

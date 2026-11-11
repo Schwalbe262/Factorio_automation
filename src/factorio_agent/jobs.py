@@ -33,6 +33,8 @@ CAPABILITIES = {
                        "requires":["power"],"effect":"add aligned powered electric drills/collector banks with fixed output ports; never replace operating banks to expand"},
     "smelting_district": {"parameters":{},"requires":["power","bootstrap_logistics","mining_outpost"],
                          "effect":"reserve a PCB district, connect iron60/copper30 nominal banks and separate coal source with actual splitter/underground crossing, normally belt-feed furnaces"},
+    "smelting_capacity": {"parameters":{"resource":"iron-ore|copper-ore","rate_per_minute":"finite number (0,100], absolute nominal target"},
+                          "requires":["smelting_district"],"effect":"add furnaces inside six-slot reserved rows; boundary output stays fixed after initial migration"},
 }
 
 
@@ -62,6 +64,9 @@ class Request:
         elif self.capability == "mining_outpost":
             from .outposts import validate_parameters
             validate_parameters(self.parameters)
+        elif self.capability == "smelting_capacity":
+            from .smelting import validate_capacity
+            validate_capacity(self.parameters)
         elif not isinstance(self.parameters, dict) or self.parameters:
             raise ValueError("this capability accepts no parameters")
 
@@ -269,6 +274,10 @@ class StarterExecutors:
             result=self.builder.ensure_power(obs)
             if result.get("status")!="succeeded":return result
             return self.smelting.step(obs)
+        if capability == "smelting_capacity":
+            result=self.builder.ensure_power(obs)
+            if result.get("status")!="succeeded":return result
+            return self.smelting.capacity_step(obs,parameters or {})
         raise ValueError("no executor for capability: " + capability)
 
     def proof(self, capability: str, obs: dict, result: dict, parameters: dict | None = None) -> dict | None:
@@ -284,7 +293,7 @@ class StarterExecutors:
             return self.electric_coal.proof(obs)
         if capability == "mining_outpost":
             return self.outposts.proof(obs,parameters or {})
-        if capability == "smelting_district":
+        if capability in {"smelting_district","smelting_capacity"}:
             return self.smelting.proof(obs)
         produced = obs.get("production", {})
         if not all(produced.get(name, {}).get("produced", 0) > 0 for name in ("iron-plate", "copper-plate")):

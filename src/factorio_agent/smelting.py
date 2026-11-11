@@ -16,6 +16,16 @@ def port(item,x,y,facing,direction='input'):
     return {'kind':'item','item':item,'position':{'x':x,'y':y},'facing':facing,'direction':direction}
 
 
+def validate_capacity(parameters):
+    if not isinstance(parameters,dict) or set(parameters)!={'resource','rate_per_minute'}:
+        raise ValueError('smelting_capacity requires resource and rate_per_minute')
+    if parameters['resource'] not in ('iron-ore','copper-ore'):
+        raise ValueError('only iron/copper plate rows can expand here')
+    rate=parameters['rate_per_minute']
+    if type(rate) not in (int,float) or not math.isfinite(rate) or not 0<rate<=100:
+        raise ValueError('smelting rate must be finite in (0,100]')
+
+
 def furnace_bank(x,y,count,resource):
     """Separate ore/coal lanes side-load a straight shared furnace input belt."""
     product={'iron-ore':'iron-plate','copper-ore':'copper-plate'}[resource]
@@ -27,12 +37,13 @@ def furnace_bank(x,y,count,resource):
     # The empty west stub makes the coal junction a straight belt, so the
     # south feed side-loads one lane instead of turning both lanes around a bend.
     es += [entity('transport-belt',x+dx+.5,y-2.5,4) for dx in range(-4,4*(count-1)+1)]
-    es += [entity('transport-belt',x+dx+.5,y+2.5,4) for dx in range(4*(count-1)+3)]
+    # Keep the output at the six-slot block boundary as machines are added.
+    es += [entity('transport-belt',x+dx+.5,y+2.5,4) for dx in range(23)]
     es += [entity('transport-belt',x-1.5,y-4.5,8),entity('transport-belt',x-1.5,y-3.5,8),
            entity('transport-belt',x-2.5,y-.5,0),entity('transport-belt',x-2.5,y-1.5,0)]
     ports=[port(resource,x-1.5,y-4.5,8),port('coal',x-2.5,y-.5,0),
-           port(product,x+4*(count-1)+2.5,y+2.5,4,'output')]
-    return _plan(es,ports,template='dual_lane_furnace_row',resource=resource,product=product,count=count)
+           port(product,x+22.5,y+2.5,4,'output')]
+    return _plan(es,ports,template='dual_lane_furnace_row',resource=resource,product=product,count=count,capacity_slots=6)
 
 
 def merge_entities(*groups):
@@ -71,6 +82,46 @@ class SmeltingDistrict:
             'products_finished':0,'remaining_burning_fuel':0,'fuel_inventory_empty':True}
         _atomic_json(self.path,self.state)
         return None
+
+    def capacity_step(self,obs,parameters):
+        validate_capacity(parameters)
+        if not self.state or self.state.get('world_id')!=obs['world_id']:
+            return {'status':'blocked','reason':'current_world_smelting_district_required'}
+        resource=parameters['resource'];rate=parameters['rate_per_minute']
+        mining=json.loads((self.path.parent/'mining-outposts.json').read_text(encoding='utf-8'))
+        available=sum(b['nominal_rate_per_minute'] for b in mining.get('banks',[]) if b.get('ready') and b['plan']['resource']==resource)
+        if mining.get('world_id')!=obs['world_id'] or available<rate:
+            return {'status':'blocked','reason':'expand_connected_mining_before_smelting','available_nominal_ore_rate':available}
+        old=next(b for b in self.state['banks'] if b['resource']==resource)
+        each=self.catalog.entities['stone-furnace']['crafting_speed']*60/self.catalog.recipes[old['product']]['energy']
+        count=max(old['count'],math.ceil(rate/each))
+        if count>6:return {'status':'blocked','reason':'reserved_row_has_six_furnace_slots'}
+        first=next(e for e in old['entities'] if e['name']=='stone-furnace')
+        new=furnace_bank(first['position']['x'],first['position']['y'],count,resource)
+        if new!=old:
+            board_path=self.path.parent/'pcb-board.json';board=json.loads(board_path.read_text(encoding='utf-8'))
+            if board.get('world_id')!=obs['world_id'] or board.get('catalog_fingerprint')!=self.catalog.fingerprint:
+                return {'status':'blocked','reason':'board_identity_or_catalog_changed'}
+            if old['ports'][-1]!=new['ports'][-1] and any(c['source']==old['ports'][-1]['position'] for c in board.get('connections',[])):
+                return {'status':'blocked','reason':'old_movable_output_has_registered_consumer_requires_parallel_cutover'}
+            es=merge_entities(self.state['plan']['entities'],new['entities'])
+            boxes=[self.builder._occupied_by_plan([e]) for e in es]
+            if sum(map(len,boxes))!=len(set().union(*boxes)):
+                return {'status':'blocked','reason':'expanded_row_prospective_overlap'}
+            native=self.builder.can_place(es)
+            if not native.get('ok'):return {'status':'blocked','reason':'expanded_row_native_preflight_failed','blocked':native.get('blocked')}
+            banks=[new if b['resource']==resource else b for b in self.state['banks']]
+            extra={k:v for k,v in self.state['plan'].items() if k not in ('ok','reason','entities','ports','required_items')}
+            plan=_plan(es,[p for b in banks for p in b['ports'] if p['direction']=='output'],**extra)
+            self.state.update(plan=plan,banks=banks)
+            self.state.setdefault('nominal_smelting_capacity_per_minute',{})[resource]=count*each
+            _atomic_json(self.path,self.state)
+            board['blocks']['smelting_district']=plan;_atomic_json(board_path,board)
+        result=self.builder.ensure_plan(obs,self.state['plan'])
+        if result.get('status')!='succeeded':return result
+        proof=self.proof(obs)
+        if proof:return {'status':'succeeded','reason':'expanded furnace row produces with fixed boundary output','evidence':proof}
+        return {'status':'waiting','reason':'waiting for added furnaces to smelt ordinary belt inputs'}
 
     def prepare(self,obs):
         if not obs.get('technologies',{}).get('logistics'):

@@ -78,14 +78,25 @@ def plan_connection(game,builder,obs,source,destination,reserved=()):
         return {'ok':False,'reason':'belt_corridor_survey_budget_exceeded'}
     payload=json.dumps(json.dumps(bounds,separators=(',',':')))
     survey=game.query('''
-local b=helpers.json_to_table('''+payload+''');local blocked={}
+local b=helpers.json_to_table('''+payload+''');local blocked={};local clearable={}
 for x=b.min_x,b.max_x do for y=b.min_y,b.max_y do
  local p={x=x,y=y};local old=target(p,"transport-belt")
- if not (old and old.force==f) and not s.can_place_entity{name="transport-belt",position=p,force=f} then
-  blocked[#blocked+1]=p
+ local legal=(old and old.force==f) or s.can_place_entity{name="transport-belt",position=p,force=f,
+  build_check_type=defines.build_check_type.manual_ghost,forced=true}
+ local natural={}
+ if legal then for _,e in pairs(s.find_entities_filtered{area={{x-.4,y-.4},{x+.4,y+.4}}}) do
+  if e~=a and e.type~="resource" and e~=old and not e.prototype.collision_mask.colliding_with_tiles_only then
+   local rock=e.type=="simple-entity" and (e.name=="big-rock" or e.name=="huge-rock" or e.name=="big-sand-rock")
+   if e.force.name=="neutral" and e.minable and (e.type=="tree" or rock) then
+    natural[#natural+1]={name=e.name,position=pos(e.position),unit_number=e.unit_number}
+   else legal=false;break end
+  end
+ end end
+ if not legal then blocked[#blocked+1]=p elseif #natural>0 then
+  clearable[#clearable+1]={position=p,entities=natural}
  end
 end end
-return {ok=true,blocked=blocked,max_span=prototypes.entity["underground-belt"].max_underground_distance}
+return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["underground-belt"].max_underground_distance}
 ''')
     if not survey.get('ok'):return survey
     # Surface belts are crossable, all other prospective footprints are hard.
@@ -99,9 +110,21 @@ return {ok=true,blocked=blocked,max_span=prototypes.entity["underground-belt"].m
     compiled=compile_crossings(route,foreign,maximum_span=survey['max_span'])
     if not compiled.get('ok'):return compiled
     compiled['ports']=[source,destination]
+    positions={xy(e) for e in compiled['entities']}
+    allowed_tiles=set();obstacles={}
+    for row in survey.get('clearable',[]):
+        p=row['position']['x'],row['position']['y']
+        if p not in positions:continue
+        allowed_tiles.add(p)
+        for e in row['entities']:obstacles[(e['name'],*xy(e))]=e
+    if len(obstacles)>64:return {'ok':False,'reason':'corridor_natural_clearance_budget_exceeded'}
+    compiled['clear_obstacles']=list(obstacles.values())
+    compiled['clearance_world_id']=obs['world_id']
     preflight=builder.can_place(compiled['entities'])
     # Prospective destination/source mouths are deliberately shared with blocks.
-    if not preflight.get('ok'):return {'ok':False,'reason':'native_corridor_preflight_failed','blocked':preflight.get('blocked')}
+    failures=[e for e in preflight.get('blocked',[]) if xy(e) not in allowed_tiles or e.get('reason')!='terrain_or_entity_collision']
+    if not preflight.get('ok') and (not preflight.get('blocked') or failures):
+        return {'ok':False,'reason':'native_corridor_preflight_failed','blocked':failures,'native_reason':preflight.get('reason')}
     return compiled
 
 

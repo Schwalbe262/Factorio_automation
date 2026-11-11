@@ -1,8 +1,10 @@
 import json
 import unittest
+from types import SimpleNamespace
 from factorio_agent.board import entity
 from factorio_agent.routing import route_trunks
-from factorio_agent.transport import compile_crossings,underground_proof
+from factorio_agent.transport import compile_crossings,underground_proof,plan_connection
+from factorio_agent.power_layout import V2FactoryBuilder
 
 
 class LayeredCorridorTests(unittest.TestCase):
@@ -53,6 +55,25 @@ class LayeredCorridorTests(unittest.TestCase):
                 underground_neighbour={'unit_number':999})
               for i,e in enumerate(plan['entities']) if e['name']=='underground-belt']}
         self.assertFalse(underground_proof(obs,plan))
+
+    def test_native_query_failure_is_not_treated_as_clearable_nature(self):
+        game=SimpleNamespace(query=lambda _: {'ok':True,'blocked':[],'max_span':5})
+        builder=SimpleNamespace(_occupied_by_plan=lambda _:set(),
+            can_place=lambda _: {'ok':False,'reason':'world_identity_changed'})
+        a={'item':'iron-ore','position':{'x':.5,'y':.5},'facing':4}
+        b={'item':'iron-ore','position':{'x':10.5,'y':.5},'facing':4}
+        result=plan_connection(game,builder,{'world_id':'w','entities':[]},a,b)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['native_reason'],'world_identity_changed')
+
+    def test_approved_nature_is_normally_mined_and_bound_to_current_world(self):
+        builder=V2FactoryBuilder.__new__(V2FactoryBuilder)
+        obstacle={'name':'tree-01','position':{'x':.5,'y':.5}}
+        plan={'clear_obstacles':[obstacle],'clearance_world_id':'w'}
+        builder.game=SimpleNamespace(query=lambda _: {'ok':True,'obstacle':obstacle})
+        self.assertEqual(builder.ensure_plan({'world_id':'other'},plan)['status'],'blocked')
+        action=builder.ensure_plan({'world_id':'w'},plan)
+        self.assertEqual((action['type'],action['name'],action['count']),('mine','tree-01',1))
 
 
 if __name__=='__main__':unittest.main()

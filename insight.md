@@ -6548,3 +6548,10 @@ Promote to insight.md only if:
 - Improvement/after: filter registered automatic furnaces from every bootstrap path, including explicit starter requests; normally recover accidental seeds before recording zero-product/empty-fuel baseline. Reject already-burning or previously productive contaminated baselines.
 - Evidence: regression covers starter-vs-district ownership and normal recovery; actual48coal returned, baseline505800, zero later actor inserts, all6furnaces produced via separated ore/coal belt lanes at517019 and520099.
 - Remaining risk: old starter upkeep still funds capital; retire it after permanent supply/mall is proven. Baseline/initial output does not replace sustained-rate validation.
+
+
+## 2026-11-11T12:50:20.500385+00:00 | EXP-0007 | reserve stable block outputs independently of machine count
+- Before: furnace output position depended on initial count; expansion would move consumer interfaces.
+- Improvement/after: output runs to the six-slot reservation boundary for every count; machines grow inside it. Migrate older movable ports before attaching consumers, then enforce registered source positions.
+- Evidence: port-stability regression across1..6machines; actual iron5/copper3 expansion retained the district and exposed fixed east ports.
+- Remaining risk: generic consumer registry and permanent science connection are next; rated capacity still requires sustained downstream measurements.

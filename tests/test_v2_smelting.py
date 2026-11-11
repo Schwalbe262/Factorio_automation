@@ -22,6 +22,12 @@ class FurnaceBankGeometryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             merge_entities([entity('transport-belt',.5,.5,4)],[entity('transport-belt',.5,.5,0)])
 
+    def test_output_port_is_at_reserved_boundary_for_every_furnace_count(self):
+        plans=[furnace_bank(-40,-32,count,'iron-ore') for count in range(1,7)]
+        self.assertTrue(all(p['ports'][-1]==plans[0]['ports'][-1] for p in plans))
+        for before,after in zip(plans,plans[1:]):
+            for entity in before['entities']:self.assertIn(entity,after['entities'])
+
     def test_automatic_furnace_is_excluded_from_starter_upkeep_and_old_fuel_is_recovered(self):
         with TemporaryDirectory() as directory:
             routine=SmeltingDistrict.__new__(SmeltingDistrict);routine.path=Path(directory)/'district.json'

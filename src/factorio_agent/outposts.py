@@ -9,6 +9,7 @@ from factorio_ai.deterministic_builder import _plan
 from factorio_ai.deterministic_state import _atomic_json
 from .board import entity
 from .power_grid import plan_connection
+from .transport import VECTORS,xy,plan_connection as belt_connection,underground_proof
 
 
 RESOURCES={"iron-ore","copper-ore","coal","stone"}
@@ -71,7 +72,7 @@ for _,ore in pairs(s.find_entities_filtered{position={0,0},radius=384,name=resou
    amount=amount+available;coverage=coverage+covered
    if not s.can_place_entity{name="small-electric-pole",position={x=p.x+2,y=y},force=f} then legal=false;break end
   end
-  if legal then for dx=-1,4*(count-1)+2 do
+  if legal then for dx=-1,4*(count-1)+4 do
    if not s.can_place_entity{name="transport-belt",position={x=x+dx,y=y+2},direction=4,force=f} then legal=false;break end
   end end
   if legal then
@@ -102,6 +103,13 @@ return {ok=true,candidates=best,nominal_drill_rate=proto.mining_speed*60/mined.m
         return {"ok":False,"reason":"no_clear_electric_mining_row_with_power"}
 
     def bank_proof(self,obs,bank):
+        if not underground_proof(obs,bank['plan']):return None
+        connection=bank.get('consumer_connection')
+        if connection:
+            target=self.find(obs,connection['target'])
+            if (not target or target['unit_number']!=connection['target']['unit_number']
+                    or target['direction']!=connection['target']['direction']
+                    or set(target.get('belt_inventory',{}))-{bank['plan']['resource']}):return None
         drills=[self.find(obs,e) for e in bank["plan"]["entities"] if e["name"]=="electric-mining-drill"]
         if any(not e or not e.get("electric_network_connected") or e.get("energy",0)<=0
                or e.get("status_name") in {"no_minable_resources","no_mineable_resources","no_power"} for e in drills):return None
@@ -116,7 +124,98 @@ return {ok=true,candidates=best,nominal_drill_rate=proto.mining_speed*60/mined.m
         evidence=bank.get("output_evidence")
         if not evidence or evidence["drill_units"]!=unit_ids or not 0<=obs["tick"]-evidence["tick"]<=600:return None
         return {"nominal_rate_per_minute":bank["nominal_rate_per_minute"],"drill_units":unit_ids,
-                "native_output_evidence":evidence,"output_port":bank["plan"]["ports"][0]}
+                "native_output_evidence":evidence,"output_port":bank["plan"]["ports"][0],
+                "consumer_connection":connection}
+
+    def prepare_connected_bank(self,obs,primary,count):
+        """Feed a paid extra module into an identity-bound same-item trunk T."""
+        path=self.path.parent/'smelting-district.json'
+        consumer=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+        if consumer.get('world_id')!=obs['world_id']:
+            return {'ok':False,'reason':'connected_smelting_consumer_required_for_extra_bank'}
+        owned={(e['name'],*xy(e),e.get('direction',0)) for e in consumer['plan']['entities']}
+        extra=self.prepare(obs,primary['plan']['resource'],count)
+        if not extra.get('ok'):return extra
+        surface={xy(e):e for e in obs['entities'] if e['name']=='transport-belt'}
+        start=primary['plan']['ports'][0]['position'];p=(start['x'],start['y']);previous=None
+        failures=[]
+        for step in range(30):
+            target=surface.get(p)
+            if target is None:break
+            direction=target['direction'];v=VECTORS[direction]
+            if (step>=3 and step%3==0 and previous==direction
+                    and ('transport-belt',*p,direction) in owned):
+                for side in (-1,1):
+                    delta=(-v[1]*side,v[0]*side);q=(p[0]+delta[0],p[1]+delta[1])
+                    if q in surface:continue
+                    facing=next(d for d,vector in VECTORS.items() if vector==(-delta[0],-delta[1]))
+                    destination={'item':primary['plan']['resource'],'kind':'item','direction':'input',
+                                 'position':{'x':q[0],'y':q[1]},'facing':facing}
+                    route=belt_connection(self.game,self.builder,obs,extra['plan']['ports'][0],destination,extra['plan']['entities'])
+                    if not route.get('ok'):
+                        failures.append(route.get('reason'));continue
+                    es={(e['name'],*xy(e)):e for e in extra['plan']['entities']+route['entities']}
+                    plan=_plan(list(es.values()),extra['plan']['ports'],resource_cell=True,resource=primary['plan']['resource'],
+                        drill_count=count,layout_policy='pcb-connected-mining-row-v1',
+                        underground_pairs=route['underground_pairs'],clear_obstacles=route['clear_obstacles'],
+                        clearance_world_id=obs['world_id'])
+                    footprints=[self.builder._occupied_by_plan([e]) for e in plan['entities']]
+                    if sum(map(len,footprints))!=len(set().union(*footprints)):continue
+                    extra['plan']=plan
+                    extra['consumer_connection']={'kind':'same-item perpendicular side-load','item':primary['plan']['resource'],
+                        'target':{k:target[k] for k in ('name','position','direction','unit_number')},
+                        'entry_port':destination,'route_metrics':route['route_metrics']}
+                    return extra
+            previous=direction;p=(p[0]+v[0],p[1]+v[1])
+        return {'ok':False,'reason':'no_clean_extra_bank_connection_to_owned_ore_trunk','candidates':failures}
+
+    def prepare_extension(self,obs,bank,added_drills):
+        """Grow upstream while keeping the installed downstream port untouched."""
+        old=bank['plan'];drills=[e for e in old['entities'] if e['name']=='electric-mining-drill']
+        if len(drills)+added_drills>8:return {'ok':False,'reason':'connected_bank_exceeds_eight_drills'}
+        first=min(drills,key=lambda e:e['position']['x'])
+        base=mining_bank(first['position']['x']-4*added_drills,first['position']['y'],len(drills)+added_drills,old['resource'])
+        if base['ports']!=old['ports']:return {'ok':False,'reason':'extension_changed_owned_output_port'}
+        old_keys={(e['name'],e['position']['x'],e['position']['y']) for e in old['entities']}
+        fresh=[e for e in base['entities'] if (e['name'],e['position']['x'],e['position']['y']) not in old_keys]
+        native=self.builder.can_place(fresh)
+        if not native.get('ok'):return {'ok':False,'reason':'upstream_extension_placement_obstructed','blocked':native.get('blocked')}
+        board=self.path.parent/'pcb-board.json'
+        areas=[p['reserved_area'] for p in json.loads(board.read_text(encoding='utf-8')).get('blocks',{}).values()] if board.exists() else []
+        payload=json.dumps(json.dumps({'entities':fresh,'resource':old['resource'],'reserved':areas},separators=(',',':')))
+        survey=self.game.query('''
+local args=helpers.json_to_table('''+payload+''');local amount=0;local proto=prototypes.entity["electric-mining-drill"]
+for _,e in ipairs(args.entities) do
+ for _,area in ipairs(args.reserved) do
+  if e.position.x+2>area[1][1] and e.position.x-2<area[2][1] and e.position.y+2>area[1][2] and e.position.y-2<area[2][2] then
+   return {ok=false,reason="extension_intrudes_reserved_block"}
+  end
+ end
+ if e.name=="electric-mining-drill" then
+  local p=e.position;local r=proto.mining_drill_radius;local count=0;local available=0
+  for _,ore in pairs(s.find_entities_filtered{area={{p.x-r,p.y-r},{p.x+r,p.y+r}},type="resource"}) do
+   if ore.name~=args.resource then return {ok=false,reason="extension_mixed_resource"} end
+   count=count+1;available=available+ore.amount
+  end
+  if count<4 or available<1800 then return {ok=false,reason="extension_insufficient_resource_coverage"} end
+  amount=amount+available
+ end
+end
+return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[args.resource].mineable_properties.mining_time}
+''')
+        if not survey.get('ok'):return survey
+        pole=next(e for e in fresh if e['name']=='small-electric-pole')
+        power=plan_connection(self.game,self.builder,obs,pole['position'],[e for e in base['entities'] if e['name']!='small-electric-pole'])
+        if not power.get('ok'):return power
+        all_entities={(e['name'],e['position']['x'],e['position']['y']):e for e in old['entities']+power['entities']+base['entities']}
+        full=_plan(list(all_entities.values()),base['ports'],resource_cell=True,resource=old['resource'],
+                   drill_count=len(drills)+added_drills,layout_policy='pcb-mining-row-v1')
+        footprints=[self.builder._occupied_by_plan([e]) for e in full['entities']]
+        if sum(map(len,footprints))!=len(set().union(*footprints)):return {'ok':False,'reason':'extension_prospective_footprints_overlap'}
+        return {'ok':True,'plan':full,'nominal_rate_per_minute':survey['rate']*(len(drills)+added_drills),
+                'remaining_resource_survey':bank.get('remaining_resource_survey',0)+survey['remaining'],
+                'wire_hops':bank.get('wire_hops',0)+power['wire_hops'],'ready':False,
+                'expansion_policy':'preserve existing drills, collector and output port; grow upstream'}
 
     def step(self,obs,parameters):
         validate_parameters(parameters)
@@ -137,6 +236,26 @@ return {ok=true,candidates=best,nominal_drill_rate=proto.mining_speed*60/mined.m
             _atomic_json(self.path,self.state)
             return {"status":"succeeded","reason":"powered electric mining banks have native output","evidence":self.proof(obs,parameters)}
         pending=next((b for b in banks if not b.get("ready")),None)
+        if active and pending is None:
+            bank=active[0]
+            extension=bank.get('pending_extension')
+            if extension is None:
+                count=sum(e['name']=='electric-mining-drill' for e in bank['plan']['entities'])
+                per_drill=bank['nominal_rate_per_minute']/count
+                extension=self.prepare_extension(obs,bank,math.ceil((target-rate)/per_drill))
+                if not extension.get('ok'):
+                    connected=self.prepare_connected_bank(obs,bank,math.ceil((target-rate)/per_drill))
+                    if not connected.get('ok'):return {'status':'blocked',**connected,'upstream_extension_failure':extension.get('reason')}
+                    self.state['banks'].append(connected);_atomic_json(self.path,self.state)
+                    return {'status':'waiting','reason':'reserved extra mining module and same-item trunk connection'}
+                bank['pending_extension']=extension;_atomic_json(self.path,self.state)
+            result=self.builder.ensure_plan(obs,extension['plan'])
+            if result.get('status')!='succeeded':return result
+            proof=self.bank_proof(obs,extension)
+            if not proof:return {'status':'waiting','reason':'waiting for expanded powered bank output'}
+            bank.pop('pending_extension');bank.update(extension);bank['ready']=True
+            _atomic_json(self.path,self.state)
+            return {'status':'waiting','reason':'upstream mining extension proved; remeasure absolute target'}
         if pending is None:
             metadata=self.game.query('return {rate=prototypes.entity["electric-mining-drill"].mining_speed*60/prototypes.entity['+json.dumps(resource)+'].mineable_properties.mining_time}')
             if not isinstance(metadata.get("rate"),(int,float)) or metadata["rate"]<=0:

@@ -251586,3 +251586,13 @@ Goal: expandblue-sciencefluidproduction toaggregategraphdemand. Hypothesis: stab
 - Limits/failure status: two development bugs fixed (JSON shape and legacy fuel ownership); intervention invalidates a wholly Luna-only history. Sustained throughput, permanent science/mall/defense/oil/rail/rocket remain incomplete.
 - Next: permanent automatic science/labs from fixed plate ports; apply ordinary consumption window before rate claims.
 - Usage delivery sample: parent 45679186 -> 51829715 = 6150529 tokens incl cached input; weekly account 8.0% -> 9.0% (+1.0pp); child tokens and exact per-task weekly share unavailable.
+
+
+## 2026-11-11T12:50:20.500385+00:00 | Part4 | connected expansion and stable ports
+- Goal/hypothesis: add supply headroom without rebuilding working mines or changing established production interfaces.
+- Actions/options: upstream growth was physically blocked by old starter cells; added one aligned module per ore and explicit same-item trunk side-load instead. Normal mining cleared one approved dead tree. Reserved two-tile output escapes; preserved target belt identities.
+- Metrics/result: Luna iron90/copper60 nominal source expansion passed596623/600929; added1368/1389, original982/983/989 preserved. Clean routes19/15tiles and2turns each. Smelting expansion iron5/copper3 furnaces passed610612/615227; fixed outputs(-17.5,-29.5)/(-17.5,-17.5), machine nominal93.75/56.25. No failed gameplay actions.
+- Failure reason: upstream space occupied; initial site could trap output; natural tree blocked clean corridor. All handled with full native preflight/explicit normal recovery, no maze fallback or destruction.
+- Validation:54v2+38builder tests; native distinct fuel lanes/pairs/current output. No sustained-rate claim.
+- Next: permanent science assemblers/labs and ordinary belt-fed research; avoid globally rebuilding retired starter supply.
+- Usage sample: parent 53002727 -> 58742039 = 5739312 tokens incl cached input; weekly account9% ->10% (+1pp); exact task share and child tokens unavailable.

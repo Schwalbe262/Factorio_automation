@@ -20,6 +20,12 @@ class AlignedMiningBankTests(unittest.TestCase):
                   {'resource':'iron-ore','rate_per_minute':0}):
             with self.assertRaises(ValueError):validate_parameters(p)
 
+    def test_upstream_extension_preserves_existing_entities_and_fixed_output_port(self):
+        old=mining_bank(12.5,-64.5,2,'iron-ore')
+        extended=mining_bank(8.5,-64.5,3,'iron-ore')
+        self.assertEqual(old['ports'],extended['ports'])
+        for entity in old['entities']:self.assertIn(entity,extended['entities'])
+
     def test_power_loss_does_not_trigger_duplicate_mining_bank(self):
         outpost=MiningOutposts.__new__(MiningOutposts)
         plan=mining_bank(.5,.5,1,'iron-ore')

@@ -48,6 +48,7 @@ Current capabilities:
 | electric_coal | none | power and naturally unlocked electric-mining-drill |
 | mining_outpost | `--resource iron-ore` (or copper-ore/coal/stone), `--rate-per-minute 1..240` absolute nominal target | power and electric-mining-drill |
 | smelting_district | none; initial district has iron60/copper30 nominal inputs | power, bootstrap_logistics, mining_outpost; one ready bank each iron60/copper30/coal30 |
+| smelting_capacity | `--resource iron-ore` or copper-ore, `--rate-per-minute` finite (0,100] absolute nominal target | smelting_district; connected ore supply must cover the target |
 
 Use the typed parameter flags above to avoid Windows shell JSON quoting issues.
 Starter capacity funds initial construction using extra drill-fed starter cells;
@@ -80,6 +81,11 @@ rates and surveys pure resource coverage, complete placements and power before
 construction. Existing productive banks stay in place when capacity is added.
 The receipt proves powered extraction/native item output. Nominal capacity is
 not a measured downstream smelting or science rate; those require further jobs.
+Expansion first tries the upstream row while preserving its output. If blocked,
+reserve an additional aligned bank and connect it to an identity-bound same-item
+smelter trunk through a declared side-load. Its native output and consumer
+connection must both be valid. Natural obstacles on a preflighted corridor are
+cleared only by ordinary mining of approved neutral minable trees/rocks.
 Smelting reserves a32x32 expansion footprint before construction. Parameterized
 furnace rows have separate ore/coal side-load lanes, ordinary inserters and fixed
 plate outputs. A separate coal bank supplies one real balanced splitter; the
@@ -90,6 +96,9 @@ surface belts are preserved. Native proof requires every furnace to produce,
 plate output, actual underground partners and distinct ore/coal feed lanes.
 Its initial inputs are rated60/30; sustained output needs downstream consumption
 and a measured window. The actor never inserts ore/fuel into these new furnaces.
+Capacity grows inside six reserved furnace slots per row. The output stays at
+the block's east boundary for every count. Old movable ports can migrate only
+before a consumer is registered; preserve connected ports thereafter.
 
 `observe` reports time-window production rates only after two timed samples;
 lifetime counters are never labeled throughput. Saved-project construction
