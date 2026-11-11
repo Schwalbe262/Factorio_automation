@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from factorio_ai.deterministic_builder import _plan
 from factorio_ai.deterministic_state import _atomic_json
 from .board import entity,pole_chain
-from .smelting import port,merge_entities,bank_capacities
+from .smelting import port,merge_entities,bank_capacities,FURNACE_NAMES
 from .transport import xy,VECTORS,plan_connection,underground_proof
 from .planning import preflight
 from .power_grid import plan_connection as power_connection
@@ -18,13 +18,13 @@ from .power_grid import plan_connection as power_connection
 def key(e):return e['name'],*xy(e),e.get('direction',0),e.get('belt_to_ground_type')
 
 
-def paired_bank(x,y,count,resource):
+def paired_bank(x,y,count,resource,*,furnace_name='stone-furnace'):
     """Split the mixed INPUT before any consumer, never split final output."""
     product={'iron-ore':'iron-plate','copper-ore':'copper-plate'}[resource]
     es=[];rows={'right':[],'left':[]};outputs=[]
     for side,dy in (('right',0),('left',5)):
         for i in range(count):
-            cx=x+4*i;furnace=entity('stone-furnace',cx,y+dy);rows[side].append(furnace);es.append(furnace)
+            cx=x+4*i;furnace=entity(furnace_name,cx,y+dy);rows[side].append(furnace);es.append(furnace)
             if side=='right':input_y,output_y,pickup=y-1.5,y+1.5,0
             else:input_y,output_y,pickup=y+6.5,y+3.5,8
             es += [entity('inserter',cx+.5,input_y,pickup),entity('inserter',cx+.5,output_y,pickup),
@@ -71,8 +71,8 @@ class PairedSmelting:
         self.state=json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
 
     def owns_furnace(self,e,obs):
-        return self.state.get('world_id')==obs['world_id'] and e['name']=='stone-furnace' and any(
-            w['name']==e['name'] and w['position']==e['position'] for w in self.state.get('plan',{}).get('entities',[]))
+        return self.state.get('world_id')==obs['world_id'] and e['name'] in FURNACE_NAMES and any(
+            w['name'] in FURNACE_NAMES and w['position']==e['position'] for w in self.state.get('plan',{}).get('entities',[]))
 
     def prepare(self,obs):
         old=self.smelting.state;root=self.path.parent
@@ -126,7 +126,7 @@ class PairedSmelting:
         return {'ok':True,'world_id':obs['world_id'],'catalog_fingerprint':self.catalog.fingerprint,
                 'plan':plan,'banks':banks,'remove':remove,'phase':'recover','old_smelting':deepcopy(old),
                 'old_lane_state':lane,'route_metrics':[r['route_metrics'] for r in routes],
-                'baseline_products':{str(e['unit_number']):e.get('products_finished',0) for e in obs['entities'] if e['name']=='stone-furnace'}}
+                'baseline_products':{str(e['unit_number']):e.get('products_finished',0) for e in obs['entities'] if e['name'] in FURNACE_NAMES}}
 
     def step(self,obs):
         if not self.state:
@@ -170,14 +170,14 @@ class PairedSmelting:
         # production. Recover at most two real plates per old furnace so the
         # independent engine can complete new cycles under a bounded load.
         for bank in self.state['banks']:
-            for wanted in (e for e in bank['entities'] if e['name']=='stone-furnace'):
+            for wanted in (e for e in bank['entities'] if e['name'] in FURNACE_NAMES):
                 machine=actual[(wanted['name'],*xy(wanted))];unit=str(machine['unit_number'])
                 if (unit in self.state['baseline_products'] and machine.get('products_finished',0)==self.state['baseline_products'][unit]
                         and machine.get('output_inventory',{}).get(bank['product'],0)>0
                         and unit not in self.state.get('commissioning_withdrawals',{})):
                     count=min(2,machine['output_inventory'][bank['product']])
                     self.state.setdefault('commissioning_withdrawals',{})[unit]=count;_atomic_json(self.path,self.state)
-                    return {'type':'take','name':'stone-furnace','position':machine['position'],'item':bank['product'],'count':count,
+                    return {'type':'take','name':machine['name'],'position':machine['position'],'item':bank['product'],'count':count,
                             'reason':'normally recover bounded existing output to verify fresh independent production'}
         proof=self.proof(obs)
         if not proof:return {'status':'waiting','reason':'waiting for independent upper/lower furnace production onto both shared-belt lanes'}
@@ -219,7 +219,7 @@ class PairedSmelting:
                 if any(e.get('products_finished',0)<=self.state['baseline_products'].get(str(e['unit_number']),0) for e in machines):return None
                 row['production_by_lane'][side]={'furnace_units':[e['unit_number'] for e in machines],
                     'products_finished':[e['products_finished'] for e in machines],
-                    'catalog_capacity_per_minute':len(machines)*60/self.catalog.recipes[bank['product']]['energy']}
+                    'catalog_capacity_per_minute':bank_capacities(self.catalog,[dict(bank,entities=furnaces)])[bank['resource']]}
             rows.append(row)
         payload=json.dumps(json.dumps([b['ports'][-1] for b in current['banks']],separators=(',',':')))
         result=self.game.query('''

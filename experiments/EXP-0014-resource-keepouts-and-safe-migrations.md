@@ -94,3 +94,5 @@ Part 8 parent usage sample: 57,412,163 tokens including cached input;
 account weekly meter 17% to 22% (+5 percentage points). This includes the larger
 Part 8 interval, not only this experiment. Child usage and this part's exact
 share of the weekly quota are unavailable.
+
+Part8 final measured checkpoint: 74,975,472 parent tokens including cached input; account weekly meter17% to23% (+6pp). This is the combined Part8 interval; child/per-module tokens and exact weekly quota share are unavailable.

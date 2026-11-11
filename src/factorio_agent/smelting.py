@@ -11,6 +11,8 @@ from .board import entity
 from .power_grid import plan_connection as power_connection
 from .transport import plan_connection as belt_connection,underground_proof,xy
 
+FURNACE_NAMES = frozenset({'stone-furnace', 'steel-furnace', 'electric-furnace'})
+
 
 def port(item,x,y,facing,direction='input'):
     return {'kind':'item','item':item,'position':{'x':x,'y':y},'facing':facing,'direction':direction}
@@ -22,17 +24,17 @@ def validate_capacity(parameters):
     if parameters['resource'] not in ('iron-ore','copper-ore'):
         raise ValueError('only iron/copper plate rows can expand here')
     rate=parameters['rate_per_minute']
-    if type(rate) not in (int,float) or not math.isfinite(rate) or not 0<rate<=225:
-        raise ValueError('smelting rate must be finite in (0,225]')
+    if type(rate) not in (int,float) or not math.isfinite(rate) or not 0<rate<=450:
+        raise ValueError('smelting rate must be finite in (0,450]')
 
 
-def furnace_bank(x,y,count,resource):
+def furnace_bank(x,y,count,resource,*,furnace_name='stone-furnace'):
     """Separate ore/coal lanes side-load a straight shared furnace input belt."""
     product={'iron-ore':'iron-plate','copper-ore':'copper-plate'}[resource]
     es=[]
     for i in range(count):
         dx=4*i
-        es.extend([entity('stone-furnace',x+dx,y),entity('inserter',x+dx+.5,y-1.5,0),
+        es.extend([entity(furnace_name,x+dx,y),entity('inserter',x+dx+.5,y-1.5,0),
                    entity('inserter',x+dx+.5,y+1.5,0),entity('small-electric-pole',x+dx+1.5,y+.5)])
     # The empty west stub makes the coal junction a straight belt, so the
     # south feed side-loads one lane instead of turning both lanes around a bend.
@@ -113,8 +115,8 @@ class SmeltingDistrict:
         self.state=json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
 
     def owns_furnace(self,e,obs):
-        if self.state.get('world_id')!=obs['world_id'] or e['name']!='stone-furnace':return False
-        return any(w['name']==e['name'] and w['position']==e['position'] for w in self.state.get('plan',{}).get('entities',[]))
+        if self.state.get('world_id')!=obs['world_id'] or e['name'] not in FURNACE_NAMES:return False
+        return any(w['name'] in FURNACE_NAMES and w['position']==e['position'] for w in self.state.get('plan',{}).get('entities',[]))
 
     def clean_feed_baseline(self,obs):
         if self.state.get('automatic_feed_baseline'):return None
@@ -141,15 +143,30 @@ class SmeltingDistrict:
         if mining.get('world_id')!=obs['world_id'] or available<rate:
             return {'status':'blocked','reason':'expand_connected_mining_before_smelting','available_nominal_ore_rate':available}
         old=next(b for b in self.state['banks'] if b['resource']==resource)
-        each=self.catalog.entities['stone-furnace']['crafting_speed']*60/self.catalog.recipes[old['product']]['energy']
+        existing={xy(e):e['name'] for e in old['entities'] if e['name'] in FURNACE_NAMES}
+        if not existing or set(existing.values())-{'stone-furnace','steel-furnace'}:
+            return {'status':'blocked','reason':'row_expansion_requires_existing_two_by_two_burner_furnaces'}
+        preferred=old.get('furnace_name',next(iter(existing.values())))
+        if preferred not in {'stone-furnace','steel-furnace'}:
+            return {'status':'blocked','reason':'unsupported_expansion_furnace_type'}
+        each=self.catalog.entities[preferred]['crafting_speed']*60/self.catalog.recipes[old['product']]['energy']
         paired=self.state.get('paired',False)
-        count=max(old.get('per_side_count',old['count']),math.ceil(rate/each/(2 if paired else 1)))
+        current=bank_capacities(self.catalog,[old])[resource]
+        count=old.get('per_side_count',old['count'])+max(0,math.ceil((rate-current)/each/(2 if paired else 1)))
         if count>6:return {'status':'blocked','reason':'reserved_row_has_six_furnace_slots'}
-        first=next(e for e in old['entities'] if e['name']=='stone-furnace')
+        first=next(e for e in old['entities'] if e['name'] in FURNACE_NAMES)
         if paired:
             from .paired_smelting import paired_bank
-            new=paired_bank(first['position']['x'],first['position']['y'],count,resource)
-        else:new=furnace_bank(first['position']['x'],first['position']['y'],count,resource)
+            new=paired_bank(first['position']['x'],first['position']['y'],count,resource,furnace_name=preferred)
+        else:new=furnace_bank(first['position']['x'],first['position']['y'],count,resource,furnace_name=preferred)
+        for e in new['entities']:
+            if e['name'] in FURNACE_NAMES and xy(e) in existing:e['name']=existing[xy(e)]
+        for row in new.get('producer_rows',{}).values():
+            for e in row:
+                if xy(e) in existing:e['name']=existing[xy(e)]
+        extra={k:v for k,v in new.items() if k not in ('ok','reason','entities','ports','required_items')}
+        if preferred!='stone-furnace':extra['furnace_name']=preferred
+        new=_plan(new['entities'],new['ports'],**extra)
         if new!=old:
             board_path=self.path.parent/'pcb-board.json';board=json.loads(board_path.read_text(encoding='utf-8'))
             if board.get('world_id')!=obs['world_id'] or board.get('catalog_fingerprint')!=self.catalog.fingerprint:
@@ -303,8 +320,12 @@ return {ok=true,legal=legal}
             if wanted['name']=='inserter' and (not found.get('electric_network_connected') or found.get('energy',0)<=0):return None
         evidence=[]
         for bank in self.state['banks']:
-            furnaces=[actual[(e['name'],*xy(e))] for e in bank['entities'] if e['name']=='stone-furnace']
-            if any(e.get('products_finished',0)<1 for e in furnaces):return None
+            furnaces=[actual[(e['name'],*xy(e))] for e in bank['entities'] if e['name'] in FURNACE_NAMES]
+            if not furnaces or any(e.get('products_finished',0)<1 for e in furnaces):return None
+            for furnace in furnaces:
+                if furnace['name'] in {'stone-furnace','steel-furnace'}:
+                    if not (furnace.get('remaining_burning_fuel',0)>0 or any(furnace.get('inventory',{}).get(fuel,0)>0 for fuel in ('coal','wood'))):return None
+                elif not furnace.get('electric_network_connected') or furnace.get('energy',0)<=0:return None
             poles=[actual[(e['name'],*xy(e))] for e in bank['entities'] if e['name']=='small-electric-pole']
             if any(not e.get('electric_network_id') for e in poles):return None
             plate_count=sum(actual[(e['name'],*xy(e))].get('belt_inventory',{}).get(bank['product'],0)

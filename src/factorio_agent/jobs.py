@@ -33,7 +33,7 @@ CAPABILITIES = {
                        "requires":["power"],"effect":"add aligned powered electric drills/collector banks with fixed output ports; never replace operating banks to expand"},
     "smelting_district": {"parameters":{},"requires":["power","bootstrap_logistics","mining_outpost"],
                          "effect":"reserve a PCB district, connect iron60/copper30 nominal banks and separate coal source with actual splitter/underground crossing, normally belt-feed furnaces"},
-    "smelting_capacity": {"parameters":{"resource":"iron-ore|copper-ore","rate_per_minute":"finite number (0,225], absolute nominal target"},
+    "smelting_capacity": {"parameters":{"resource":"iron-ore|copper-ore","rate_per_minute":"finite number (0,450], absolute nominal target"},
                           "requires":["paired_smelting"],"effect":"add independent upper/lower furnaces inside reserved rows; consumer ports remain fixed"},
     "paired_smelting": {"parameters":{},"requires":["smelting_district"],
                         "effect":"replace cosmetic output splitting with independent upper/lower furnace rows directly feeding opposite lanes"},

@@ -52,7 +52,7 @@ Current capabilities:
 | electric_coal | none | power and naturally unlocked electric-mining-drill |
 | mining_outpost | `--resource iron-ore` (or copper-ore/coal/stone), `--rate-per-minute 1..960` absolute nominal target | power and electric-mining-drill |
 | smelting_district | none; initial district has iron60/copper30 nominal inputs | power, bootstrap_logistics, mining_outpost; one ready bank each iron60/copper30/coal30 |
-| smelting_capacity | `--resource iron-ore` or copper-ore, `--rate-per-minute` finite (0,225] absolute nominal target | paired_smelting; connected ore supply must cover the target |
+| smelting_capacity | `--resource iron-ore` or copper-ore, `--rate-per-minute` finite (0,450] absolute nominal target | paired_smelting; connected ore and installed furnace types must cover the target within six reserved pairs |
 | paired_smelting | none | smelting_district; migrate to independent upper/lower producer rows |
 | paired_mining | none | paired_smelting; normally recover legacy ore cells, directly feed both collector lanes |
 | automation_science | `--rate-per-minute` finite (0,30] requested red-science rate | paired_smelting; normally connect raw plate belts, machines and labs |
