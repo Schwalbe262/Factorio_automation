@@ -9,7 +9,7 @@ from unittest.mock import Mock,patch
 from factorio_ai.deterministic_builder import FactoryBuilder,_plan
 from factorio_agent.board import entity
 from factorio_agent.engine_production import (ENGINE_PROOF_LUA,EngineProduction,_hash,_key,
-    audit_engine_core,engine_core,engine_rates)
+    audit_engine_core,engine_core,engine_rates,_clear_planned_power_group)
 from factorio_agent.main_bus import BusMaterial,ConsumerTap,plan_main_bus
 from factorio_agent.transport import xy
 
@@ -72,7 +72,7 @@ class EngineCoreTests(unittest.TestCase):
 class EngineControllerTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name)
-        self.cat=catalog();self.game=SimpleNamespace(cfg=SimpleNamespace(runtime_dir=self.root),query=Mock(return_value={'ok':True}))
+        self.cat=catalog();self.game=SimpleNamespace(cfg=SimpleNamespace(runtime_dir=self.root),query=Mock(return_value={'ok':True,'pole_index':1}))
         self.builder=SimpleNamespace(_occupied_by_plan=FactoryBuilder.__new__(FactoryBuilder)._occupied_by_plan,
             ensure_plan=Mock(return_value={'type':'craft','recipe':'assembling-machine-1','count':1}))
         self.defense=SimpleNamespace(prepare_coverage=Mock(return_value={'ok':True}),ensure_coverage=Mock(return_value=None),
@@ -143,6 +143,73 @@ class EngineControllerTests(unittest.TestCase):
         self.assertEqual(result['evidence']['failures'][0]['detail']['visited'],123)
         self.assertFalse(self.c.path.exists());self.tap.step.assert_not_called()
 
+    def test_round_robin_considers_third_core_before_second_station_at_first_core(self):
+        self.land.return_value={'ok':True,'legal':[1,2,3]};calls=[]
+        def route(game,builder,obs,source,destination,reserved):
+            calls.append((source['item'],dict(destination['position'])))
+            if source['item']=='iron-plate'and destination['position']['y']==-92.5:
+                return {'ok':False,'reason':'no_clean_trunk_corridor','visited':0}
+            return _plan([],[],underground_pairs=[],route_metrics={'length':10,'turns':1})
+        self.route.side_effect=route
+        result=self.c.prepare(self.obs);self.assertTrue(result['ok'],result)
+        self.assertEqual(result['core']['anchor'],{'x':118.5,'y':-114.5})
+        self.assertEqual([item for item,_ in calls],['steel-plate','iron-plate']*3)
+        self.assertEqual(self.preview.return_value.prepare.call_count,3);self.assertEqual(result['route_attempts'],6)
+        self.assertEqual(self.c.state,{})
+
+    def test_second_station_pass_reuses_only_current_prepare_steel_routes(self):
+        self.land.return_value={'ok':True,'legal':[1,2]};counts={'iron':0,'steel':0}
+        def route(game,builder,obs,source,destination,reserved):
+            if source['item']=='steel-plate':counts['steel']+=1
+            else:
+                counts['iron']+=1
+                if counts['iron']<=2:return {'ok':False,'reason':'no_clean_trunk_corridor'}
+            return _plan([],[],underground_pairs=[],route_metrics={'length':10,'turns':1})
+        self.route.side_effect=route
+        result=self.c.prepare(self.obs);self.assertTrue(result['ok'],result)
+        self.assertEqual(counts,{'iron':3,'steel':2});self.assertEqual(result['route_attempts'],5)
+        self.assertEqual(self.c.state,{})
+
+    def test_power_group_chooses_only_an_existing_planned_pole_without_changing_plan(self):
+        core=engine_core(self.cat,118.5,-114.5);before=deepcopy(core)
+        poles=[e for e in core['entities']if e['name']=='small-electric-pole']
+        for index in(1,2):
+            self.game.query.return_value={'ok':True,'pole_index':index}
+            result=_clear_planned_power_group(self.game,core);self.assertTrue(result['ok'])
+            selected=next(e for e in result['group']['entities']if e['name']=='small-electric-pole')
+            self.assertEqual(selected,poles[index-1]);self.assertEqual(core,before)
+            self.assertCountEqual(result['group']['entities'],core['entities'])
+        self.game.query.return_value={'ok':True,'pole_index':99}
+        self.assertFalse(_clear_planned_power_group(self.game,core)['ok'])
+
+    @unittest.skipUnless(LuaRuntime,'optional executable Lua runtime')
+    def test_native_power_group_skips_obstructed_first_pole_and_preserves_owned_first(self):
+        lua=LuaRuntime(unpack_returned_tuples=True);core=engine_core(self.cat,118.5,-114.5)
+        poles=[e for e in core['entities']if e['name']=='small-electric-pole'];before=deepcopy(core)
+        def table(v):
+            if isinstance(v,dict):return lua.table_from({k:table(a)for k,a in v.items()})
+            if isinstance(v,list):return lua.table_from([table(a)for a in v])
+            return v
+        lua.globals().helpers=lua.table_from({'json_to_table':lambda raw:table(json.loads(raw))})
+        lua.globals().first=table(poles[0]['position']);lua.globals().second=table(poles[1]['position'])
+        lua.execute('''f={};s={};owned=false;blocked_all=false
+s.can_place_entity=function(q)return not blocked_all and q.position.x==second.x and q.position.y==second.y end
+function target(p,name)if owned and p.x==first.x and p.y==first.y then return{force=f,surface=s,position=p}end end''')
+        game=SimpleNamespace(query=lambda body:dict(lua.execute('return(function() '+' '.join(body.splitlines())+' end)()').items()))
+        result=_clear_planned_power_group(game,core);self.assertTrue(result['ok']);self.assertEqual(result['group']['entities'][0],poles[1])
+        lua.execute('owned=true');result=_clear_planned_power_group(game,core)
+        self.assertEqual(result['group']['entities'][0],poles[0]);self.assertEqual(core,before)
+        lua.execute('owned=false;blocked_all=true');self.assertFalse(_clear_planned_power_group(game,core)['ok'])
+
+    def test_round_robin_keeps_one_twelve_route_budget(self):
+        self.land.return_value={'ok':True,'legal':[1,2,3,4]}
+        def route(game,builder,obs,source,destination,reserved):
+            if source['item']=='iron-plate':return {'ok':False,'reason':'no_clean_trunk_corridor'}
+            return _plan([],[],underground_pairs=[],route_metrics={'length':10,'turns':1})
+        self.route.side_effect=route
+        result=self.c.prepare(self.obs);self.assertFalse(result['ok']);self.assertEqual(result['route_attempts'],12)
+        self.assertEqual(self.route.call_count,12);self.assertEqual(self.c.state,{})
+
     def test_native_vectors_or_total_planning_budget_fail_before_cutover(self):
         self.game.query.return_value={'ok':False,'reason':'unsupported_native_engine_inserter_vectors'}
         self.assertEqual(self.c.prepare(self.obs)['reason'],'unsupported_native_engine_inserter_vectors')
@@ -165,6 +232,13 @@ class EngineControllerTests(unittest.TestCase):
         self.install();self.assertEqual(self.c.step(self.obs)['recipe'],'assembling-machine-1')
         self.obs['entities'].pop();self.assertEqual(self.c.step(self.obs)['reason'],'owned_engine_asset_missing_or_replaced')
         self.assertNotIn('insert',str(self.builder.ensure_plan.call_args.kwargs))
+
+    def test_preserved_pipe_peer_change_blocks_before_builder_and_invalidates_proof(self):
+        self.install();self.builder.ensure_plan.reset_mock()
+        with patch('factorio_agent.engine_production.surface_pipe_proof',return_value={'ok':False,'reason':'preserved_surface_pipe_peer_identity_changed'}):
+            self.assertEqual(self.c.step(self.obs)['reason'],'engine_preserved_pipe_network_changed')
+            self.builder.ensure_plan.assert_not_called();self.assertIsNone(self.c.proof(self.obs))
+            self.assertEqual(self.c.last_proof_failure['reason'],'preserved_surface_pipe_peer_identity_changed')
 
     def test_bound_steel_plan_change_or_unpaired_mouth_fails_closed(self):
         self.install();self.steel.state['plan']['entities'].append(entity('transport-belt',109.5,-37.5,4))

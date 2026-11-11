@@ -74,6 +74,7 @@ Current capabilities:
 | basic_petroleum | none | oil_gathering; preserve the exact crude source, isolated bounded pipeline and defended basic refinery, prove real petroleum |
 | ammo_production | none | main_bus_factory; critical-priority iron tap, compact automatic magazine production and bounded full normal ammunition buffer |
 | engine_production | none | steel_production and main_bus_factory; fixed steel port and surplus iron tap, compact gear/pipe/engine cells with reserved expansion |
+| chemical_production | `--product plastic-bar` or sulfur | basic_petroleum; natural product research, exact gas handoff and independent typed coal or water source |
 | steam_coal_reroute | none | steam_expansion; prebuild alternative, verify loaded engines, recover obsolete owned transport |
 | legacy_coal_cleanup | none | steam_expansion and dedicated_materials; isolated burner/cache recovery after replacement supply and headroom proof |
 | research | `--technology` native catalog name | automation_science; native prerequisites and continuous supported science supply |
@@ -88,7 +89,7 @@ implemented. Steel/brick construction and pumpjack extraction interfaces are
 implemented and commissioned in the development world. Iron steel-furnace upgrades
 and automatic ammunition are also commissioned. Basic petroleum, independent
 chemistry coal and independent water are commissioned in the development world.
-The engine interface is implemented; live commissioning remains
+Engine and chemical interfaces are implemented; live commissioning remains
 pending. Construction mall, repair, blue science, rail and rocket remain pending.
 Do not claim a rocket-capable system.
 

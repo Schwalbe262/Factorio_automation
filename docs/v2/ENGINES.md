@@ -36,7 +36,11 @@ consumer and lab ports and bus copies. The tap's changed corner is normally
 stocked before its one guarded recovery.
 
 Six district-relative core sites and at most twelve complete material routes share
-a twenty-second planning budget. Native land/resource surveys, both whole adapters,
+a twenty-second planning budget. Each legal site gets its best station before
+any site gets a second station; steel routes and future footprints are cached
+only during that preparation. The power connector uses the first physically
+clear pole already in the planned group, without changing the blueprint or its
+build order. Native land/resource surveys, both whole adapters,
 future machine footprints, power and armed coverage must pass before the operation
 is accepted. Shared corridor gates remain six turns and `1.35×Manhattan + 4`.
 Resources are forbidden under underground spans as well as surface construction.
@@ -53,13 +57,18 @@ the shared component lanes must remain gear/pipe. Actual normal engines must rea
 the fixed output belt. `proof()['output']` is the typed exact-unit handoff for later
 blue science consumers. Empty finite belts eventually backpressure production.
 
-Read-only native whole preparation passed at tick **2597954**: anchor
-`(118.5,-92.5)`, iron input `(115.5,-92.5) E`, steel input `(143.5,-86.5) W` and
-engine output `(144.5,-76.5) E`. It preserved steel outlet 6213 and producing
-furnaces 6172/6176. The new surplus tap selected station -91.5. Steel and iron
-adapters were 90 tiles/two turns and 109 tiles/four turns respectively, passing
-current and future whole-plan preflight. The plan needs 289 belts, sixteen
-underground belts, four AM1s, eight normal inserters, two long inserters and
-eighteen poles, plus normal tap assets and four armed coverage posts. There were
-42 ordinary tree/rock clearables. This records preparation, not live engine
-construction or commissioned throughput.
+Read-only native whole preparation passed at tick **2803699**: anchor
+`(118.5,-114.5)`, iron input `(115.5,-114.5) E`, steel input `(143.5,-108.5) W`
+and engine output `(144.5,-98.5) E`. Six material-route attempts reached this
+third legal site. Steel and iron adapters were 112 and 118 tiles, each four turns
+and within the unchanged detour gate. The production plan has 370 entities and
+requires four additional armed coverage posts. Current and future whole-plan
+preflight passed; no new entity or buried span enters the refinery, red science
+or laboratory reservations, and the fixed gas exit stays clear.
+
+Underground belts preserve crude pipes 6905 and 6801 with their exact reciprocal
+native peers. Engine construction and proof both call `surface_pipe_proof` before
+acceptance. Observed preparation wall time was 20.765 seconds; the existing
+twenty-second routing/preflight query budget remains unchanged. Initial source
+checks and perimeter coverage retain their existing call scope. This records prospective preparation and
+pipe preservation, not live engine construction or commissioned throughput.

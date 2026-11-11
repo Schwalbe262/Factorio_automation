@@ -126,6 +126,14 @@ class JobBoundaryTests(unittest.TestCase):
         self.assertEqual((saved['status'],saved['reason'],saved['evidence']),
                          ('blocked','postcondition_verification_error',{}))
 
+    def test_blocked_capacity_guard_preserves_exact_scalar_metrics_in_receipt(self):
+        submit(self.root,self.game,self.request())
+        result=run_slice(self.root,self.game,Executor(dict(status='blocked',reason='expand_mining',
+            required_nominal_ore_rate=150,available_nominal_ore_rate=120,capacity_basis='native remaining')), 'test')
+        self.assertEqual(result['evidence'],dict(required_nominal_ore_rate=150,
+            available_nominal_ore_rate=120,capacity_basis='native remaining'))
+        self.assertEqual(Ledger(self.root).data['jobs']['test']['evidence'],result['evidence'])
+
     def test_verified_success_survives_process_restart_but_rollback_invalidates_it(self):
         submit(self.root, self.game, self.request())
         result = run_slice(self.root, self.game, Executor({"status": "succeeded"}, {"measured": True}), "test")

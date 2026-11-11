@@ -20,7 +20,7 @@ from .manufacturing import connect_power_groups
 from .planning import overlap,preflight,survey_slots
 from .smelting import merge_entities,port
 from .steel_production import SteelProduction
-from .transport import VECTORS,plan_connection,underground_proof,xy
+from .transport import VECTORS,plan_connection,underground_proof,surface_pipe_proof,xy
 
 
 TAP_NAME='engine-iron'
@@ -196,6 +196,23 @@ def _core_keepout(core):
             if(a[0]+.5+i,a[1]+.5+j)not in allowed]
 
 
+def _clear_planned_power_group(game,core):
+    """Order a copy around an already-planned physically clear pole."""
+    poles=[e for e in core['entities']if e['name']=='small-electric-pole']
+    if not poles or len(poles)>32:return {'ok':False,'reason':'bounded_existing_engine_pole_group_required'}
+    result=game.query('''local poles=helpers.json_to_table('''+_payload(poles)+''');for index,q in ipairs(poles)do
+ local e=target(q.position,"small-electric-pole")
+ local owned=e and e.force==f and e.surface==s and e.position.x==q.position.x and e.position.y==q.position.y
+ if owned or s.can_place_entity{name="small-electric-pole",position=q.position,force=f}then return {ok=true,pole_index=index}end
+end;return {ok=false,reason="all_planned_engine_power_targets_obstructed"}''')
+    index=result.get('pole_index')
+    if not result.get('ok')or type(index)is not int or not 1<=index<=len(poles):
+        return {'ok':False,'reason':result.get('reason','native_engine_power_target_unavailable')}
+    chosen=poles[index-1];group=deepcopy(core)
+    group['entities']=[deepcopy(chosen)]+[e for e in group['entities']if e!=chosen]
+    return {'ok':True,'group':group}
+
+
 class EngineProduction:
     def __init__(self,game,builder,catalog,perimeter,*,bus_factory=None,science=None,green=None,tap=None,steel=None):
         self.game,self.builder,self.catalog,self.perimeter=game,builder,catalog,perimeter
@@ -262,23 +279,34 @@ return {ok=true}''')
         if not land.get('ok'):return land
         cores=[cores[i-1]for i in land.get('legal',[])];failures=[];routes=0
         preview=BusTap(budget.game,adapter,self.catalog)
+        contexts=[]
         for core in cores:
-            if budget.expired():return budget.failure(failures=failures[-6:],route_attempts=routes)
             x,y=xy({'position':core['anchor']});future=engine_core(self.catalog,x,y,4)
             reserved=merge_entities(core['entities'],future['entities'])+_core_keepout(core)
-            steel_route=plan_connection(budget.game,adapter,obs,steel['source'],core['ports'][1],reserved);routes+=1
-            if not steel_route.get('ok'):
-                failures.append({'stage':'steel_route','anchor':core['anchor'],'detail':steel_route});continue
             ranked=sorted(choices,key=lambda p:abs(p['splitter_y']-1-core['ports'][0]['position']['y']))
-            for parameters in ranked[:4]:
+            contexts.append({'core':core,'future':future,'reserved':reserved,'ranked':ranked[:4],'steel_route':None})
+        for rank in range(4):
+            for context in contexts:
+                core,future,reserved=context['core'],context['future'],context['reserved']
+                if rank>=len(context['ranked'])or context.get('steel_failed'):continue
                 if budget.expired()or routes>=12:return budget.failure(failures=failures[-6:],route_attempts=routes)
+                steel_route=context['steel_route']
+                if steel_route is None:
+                    steel_route=plan_connection(budget.game,adapter,obs,steel['source'],core['ports'][1],reserved);routes+=1
+                    context['steel_route']=steel_route
+                    if not steel_route.get('ok'):
+                        context['steel_failed']=True;failures.append({'stage':'steel_route','anchor':core['anchor'],'detail':steel_route});continue
+                if budget.expired()or routes>=12:return budget.failure(failures=failures[-6:],route_attempts=routes)
+                parameters=context['ranked'][rank]
                 tap=preview.prepare(obs,parameters)
                 if not tap.get('ok'):failures.append({'stage':'tap','parameters':parameters,'detail':tap});continue
                 iron=next(p for p in tap['new_bus']['ports']if p['name']==TAP_NAME)
                 iron_route=plan_connection(budget.game,adapter,obs,iron,core['ports'][0],reserved+steel_route['entities']+tap['added_entities']);routes+=1
-                if not iron_route.get('ok'):failures.append({'stage':'iron_route','parameters':parameters,'detail':iron_route});continue
+                if not iron_route.get('ok'):failures.append({'stage':'iron_route','anchor':core['anchor'],'parameters':parameters,'detail':iron_route});continue
                 es=merge_entities(core['entities'],steel_route['entities'],iron_route['entities'])
-                power=connect_power_groups(budget.game,adapter,obs,[core],merge_entities(es,future['entities']))
+                group=_clear_planned_power_group(budget.game,core)
+                if not group.get('ok'):failures.append({'stage':'power_target','anchor':core['anchor'],'detail':group});continue
+                power=connect_power_groups(budget.game,adapter,obs,[group['group']],merge_entities(es,future['entities']))
                 if not power.get('ok'):failures.append({'stage':'power','detail':power});continue
                 es=merge_entities(es,power['entities'])
                 whole=preflight(budget.game,self.builder,obs,merge_entities(es,tap['added_entities']),ignored_units=[tap['remove']['unit_number']])
@@ -327,7 +355,9 @@ return {ok=true}''')
     def step(self,obs):
         if not self.state:
             ready=self.prepare(obs)
-            if not ready.get('ok'):return {'status':'blocked',**ready}
+            if not ready.get('ok'):
+                evidence=ready.get('evidence')or{key:ready[key]for key in('failures','queries','elapsed_seconds','planning_seconds_budget','route_attempts')if key in ready}
+                return {'status':'blocked',**ready,'evidence':evidence}
             self.state=ready;self._save()
         if not self._identity(obs,self.state):return {'status':'blocked','reason':'engine_world_or_catalog_changed'}
         if _hash(self.steel.state.get('plan'))!=self.state['steel_plan_revision']:
@@ -349,6 +379,8 @@ return {ok=true}''')
             check=preflight(self.game,self.builder,obs,self.state['plan']['entities'])
             if not check.get('ok'):return {'status':'blocked','reason':'engine_site_changed_after_defense','evidence':check}
             self.state['construction_authorized']=True;self._save()
+        pipes=surface_pipe_proof(self.game,obs,self.state['plan'])
+        if not pipes.get('ok'):return {'status':'blocked','reason':'engine_preserved_pipe_network_changed','evidence':pipes}
         result=self.builder.ensure_plan(obs,self.state['plan'])
         if result.get('status')!='succeeded':return result
         proof=self.proof(obs)
@@ -362,6 +394,8 @@ return {ok=true}''')
         defense=self.perimeter.coverage_proof(obs,SCOPE_ID)
         if not defense:self.last_proof_failure={'reason':'engine_defense_coverage_missing'};return None
         if not underground_proof(obs,self.state['plan']):self.last_proof_failure={'reason':'engine_native_underground_pairs_unverified'};return None
+        pipes=surface_pipe_proof(self.game,obs,self.state['plan'])
+        if not pipes.get('ok'):self.last_proof_failure=pipes;return None
         actual={(e['name'],*xy(e)):e for e in obs['entities']}
         for spec in self.state['plan']['entities']:
             live=actual.get((spec['name'],*xy(spec)));unit=self.state['bindings'].get(_key(spec))

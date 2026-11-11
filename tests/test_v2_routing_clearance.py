@@ -1,15 +1,49 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from factorio_ai.deterministic_builder import FactoryBuilder
 from factorio_agent.board import entity
 from factorio_agent.manufacturing import green_core
-from factorio_agent.routing import blocked_port_prefix, clearance_lanes, route_trunks
+from factorio_agent.routing import blocked_port_prefix,clear_skeleton,clearance_lanes,expand,obstacle_index,route_trunks
 from factorio_agent.smelting import merge_entities
 from factorio_agent.transport import compile_crossings, plan_connection
 
 
 class ObstacleClearanceRoutingTests(unittest.TestCase):
+    def test_indexed_segment_prune_finds_far_hard_cells_and_preserves_canonical_geometry(self):
+        bounds={'min_x':-.5,'max_x':60.5,'min_y':-.5,'max_y':20.5}
+        points=[(.5,.5),(40.5,.5),(40.5,10.5)]
+        self.assertFalse(blocked_port_prefix(points,{(20.5,.5)}))
+        rows,cols=obstacle_index({(20.5,.5)})
+        self.assertIsNone(clear_skeleton(points,rows,cols,bounds,6))
+        rows,cols=obstacle_index(set())
+        redundant=[(.5,.5),(.5,.5),(10.5,.5),(40.5,.5),(40.5,10.5)]
+        self.assertEqual(clear_skeleton(redundant,rows,cols,bounds,6),tuple(points))
+        self.assertEqual(expand(redundant),expand(points))
+        self.assertIsNone(clear_skeleton(points,rows,cols,dict(bounds,max_x=39.5),6))
+        self.assertIsNone(clear_skeleton(points,rows,cols,bounds,0))
+        loop=[(.5,.5),(10.5,.5),(10.5,10.5),(5.5,10.5),(5.5,.5)]
+        self.assertIsNone(clear_skeleton(loop,rows,cols,bounds,6))
+
+    def test_rejected_long_segments_never_materialize_and_fallback_shares_one_total_budget(self):
+        hard={(x+.5,y+.5)for x in range(1,36)for y in range(1,25)}
+        hard.update((1.5,y+.5)for y in range(25,29))
+        required={(38.5,.5),(38.5,25.5),(27.5,25.5),(27.5,28.5)}
+        expanded=[]
+        def tracked(vertices):
+            path=expand(vertices);self.assertFalse(set(path)&hard);expanded.append(len(path));return path
+        with patch('factorio_agent.routing.expand',side_effect=tracked):
+            result=route_trunks((.5,.5),(28.5,28.5),occupied=hard,
+                bounds={'min_x':-15.5,'max_x':44.5,'min_y':-15.5,'max_y':44.5},
+                start_direction=4,end_direction=4,max_nodes=24000,
+                candidate_validator=lambda c:required<={(e['position']['x'],e['position']['y'])for e in c['segments']})
+        self.assertTrue(result['ok'],result)
+        self.assertEqual(sum(expanded),result['visited']);self.assertLessEqual(sum(expanded),24000)
+        self.assertGreater(result['rejected_skeletons'],0)
+        self.assertEqual(result['metrics']['length'],78)
+        self.assertLessEqual(result['metrics']['turns'],6)
+
     def test_hard_first_port_step_fails_without_spending_expansion_budget(self):
         result=route_trunks((.5,.5),(100.5,-70.5),occupied={(1.5,.5)},start_direction=4,end_direction=0)
         self.assertFalse(result['ok'])

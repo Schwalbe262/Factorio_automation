@@ -77,6 +77,8 @@ CAPABILITIES = {
                         "effect":"normally connect the exact proven crude source to a defended refinery using isolated bounded pipe segments; prove native petroleum production and publish a fixed gas outlet"},
     "engine_production": {"parameters":{},"requires":["steel_production","main_bus_factory"],
                           "effect":"normally build a defended compact engine district with a surplus iron tap, fixed steel supply and reserved machine expansion; prove real engines on its output"},
+    "chemical_production": {"parameters":{"product":"plastic-bar|sulfur"},"requires":["basic_petroleum"],
+                            "effect":"normally build compact defended chemical cells with exact declared fluid handoffs and paid typed ingredient connections; prove actual solid chemical output"},
     "ammo_production": {"parameters":{},"requires":["main_bus_factory"],
                        "effect":"normally build a defended automatic magazine factory from a critical iron bus tap, bound its real output buffer, then supply full normal magazines through guarded inventory transfers"},
     "legacy_coal_cleanup": {"parameters":{},"requires":["steam_expansion","dedicated_materials"],
@@ -127,6 +129,9 @@ class Request:
         elif self.capability == "furnace_upgrade":
             from .furnace_upgrade import validate_upgrade
             validate_upgrade(self.parameters)
+        elif self.capability == "chemical_production":
+            from .chemical_production import validate_chemical
+            validate_chemical(self.parameters)
         elif self.capability == "research":
             from .normal_research import validate_parameters
             validate_parameters(self.parameters)
@@ -368,6 +373,8 @@ class StarterExecutors:
         self.engines=EngineProduction(game,self.builder,catalog,self.perimeter,
                                      bus_factory=self.bus_factory,science=self.science,green=self.green,
                                      steel=self.industrial_operations.steel)
+        from .chemical_production import ChemicalProduction
+        self.chemicals=ChemicalProduction(game,self.builder,catalog,self.perimeter)
         from .normal_research import NormalResearch
         self.normal_research=NormalResearch(game,catalog,self.science,self.green)
         ledger=Ledger(Path(game.cfg.runtime_dir)).data
@@ -498,6 +505,8 @@ class StarterExecutors:
             return self.ammo.step(obs)
         if capability == "engine_production":
             return self.engines.step(obs)
+        if capability == "chemical_production":
+            return self.chemicals.step(obs,parameters or {})
         raise ValueError("no executor for capability: " + capability)
 
     def proof(self, capability: str, obs: dict, result: dict, parameters: dict | None = None) -> dict | None:
@@ -570,6 +579,8 @@ class StarterExecutors:
             return self.ammo.proof(obs)
         if capability == "engine_production":
             return self.engines.proof(obs)
+        if capability == "chemical_production":
+            return self.chemicals.proof(obs,parameters or {})
         produced = obs.get("production", {})
         if not all(produced.get(name, {}).get("produced", 0) > 0 for name in ("iron-plate", "copper-plate")):
             return None
@@ -686,7 +697,11 @@ def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> 
                         job.update(status="succeeded",reason=result.get("reason",""),evidence=proof)
                     game.save()
                 else:
-                    job.update(status=status, reason=result.get("reason", ""), evidence=result.get("evidence", {}))
+                    evidence=result.get('evidence',{})
+                    if not evidence and status in {'blocked','failed'}:
+                        evidence={k:v for k,v in result.items()if k not in {'status','reason','ok','evidence'}
+                                  and type(v)in(int,float,bool,str)and(not isinstance(v,str)or len(v)<=500)}
+                    job.update(status=status, reason=result.get("reason", ""), evidence=evidence)
             ledger.save()
             if job["status"] in TERMINAL:
                 if job['status']=='blocked':job.update(blocked_at_tick=obs['tick'],blocked_at_time=time.time());ledger.save()

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from bisect import bisect_left
 
 
 VECTORS = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}
@@ -79,6 +80,49 @@ def blocked_port_prefix(vertices, blocked, limit=4):
     return False
 
 
+def obstacle_index(blocked):
+    """Sorted row/column positions for cheap whole straight-segment rejection."""
+    rows={};columns={}
+    for x,y in blocked:
+        rows.setdefault(y,[]).append(x);columns.setdefault(x,[]).append(y)
+    return ({y:sorted(xs)for y,xs in rows.items()},{x:sorted(ys)for x,ys in columns.items()})
+
+
+def clear_skeleton(vertices,rows,columns,bounds,max_turns):
+    """Canonical valid polyline, without walking or allocating any tile path."""
+    points=[];directions=[]
+    for p in vertices:
+        if points and p==points[-1]:continue
+        if points:
+            dx,dy=p[0]-points[-1][0],p[1]-points[-1][1]
+            if dx and dy:return None
+            direction=((dx>0)-(dx<0),(dy>0)-(dy<0))
+            if directions and direction==tuple(-v for v in directions[-1]):return None
+            if directions and direction==directions[-1]:points[-1]=p;continue
+            directions.append(direction)
+        points.append(p)
+    if len(directions)-1>max_turns:return None
+    if any(not(bounds['min_x']<=x<=bounds['max_x']and bounds['min_y']<=y<=bounds['max_y'])for x,y in points):return None
+    segments=list(zip(points,points[1:]))
+    for a,b in segments:
+        horizontal=a[1]==b[1];values=rows.get(a[1],[])if horizontal else columns.get(a[0],[])
+        low,high=sorted((a[0],b[0])if horizontal else(a[1],b[1]));i=bisect_left(values,low)
+        if i<len(values)and values[i]<=high:return None
+    # A repeated tile would also be rejected after expansion; reject crossings now.
+    for i,(a,b)in enumerate(segments):
+        for c,d in segments[i+2:]:
+            ah=a[1]==b[1];ch=c[1]==d[1]
+            if ah and ch:
+                hit=a[1]==c[1]and max(min(a[0],b[0]),min(c[0],d[0]))<=min(max(a[0],b[0]),max(c[0],d[0]))
+            elif not ah and not ch:
+                hit=a[0]==c[0]and max(min(a[1],b[1]),min(c[1],d[1]))<=min(max(a[1],b[1]),max(c[1],d[1]))
+            else:
+                h,v=((a,b),(c,d))if ah else((c,d),(a,b))
+                hit=min(h[0][0],h[1][0])<=v[0][0]<=max(h[0][0],h[1][0])and min(v[0][1],v[1][1])<=h[0][1]<=max(v[0][1],v[1][1])
+            if hit:return None
+    return tuple(points)
+
+
 def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
                  end_direction=None, max_nodes=25000, max_turns=6,
                  max_detour_ratio=1.35, grid_pitch=8, candidate_validator=None):
@@ -100,6 +144,7 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
         if any(abs((b[i] - a[i]) - round(b[i] - a[i])) > 1e-6 for i in (0, 1)):
             raise ValueError("ports must share the same tile lattice")
         blocked = {point(p) for p in occupied}
+        hard_rows,hard_columns=obstacle_index(blocked)
         if a in blocked or b in blocked:
             raise ValueError("route endpoint occupied")
         limits = bounds or {"min_x": min(a[0], b[0])-24, "max_x": max(a[0], b[0])+24,
@@ -205,36 +250,28 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
                             skeletons.append([a,pe,(p,pe[1]),(p,bar),(q,bar),(q,qe[1]),qe,b])
                         else:
                             skeletons.append([a,pe,(pe[0],p),(bar,p),(bar,q),(qe[0],q),qe,b])
-        valid = [];seen_paths=set()
-        visited = 0
+        valid = [];seen_skeletons=set()
+        visited = 0;rejected_skeletons=0
         direct = abs(a[0]-b[0]) + abs(a[1]-b[1])
         for legacy,candidates in ((True,legacy_skeletons),(False,skeletons)):
-            if visited > max_nodes:break
+            if visited >= max_nodes:break
             candidates.sort(key=lambda vs: sum(abs(p[0]-q[0])+abs(p[1]-q[1]) for p,q in zip(vs,vs[1:])))
             for skeleton in candidates:
                 estimated = sum(abs(p[0]-q[0])+abs(p[1]-q[1]) for p,q in zip(skeleton,skeleton[1:]))
                 if estimated > max_detour_ratio * direct + 4:
                     continue
-                if blocked_port_prefix(skeleton,blocked):continue
-                path = expand(skeleton)
-                identity=tuple(path)
-                if identity in seen_paths:continue
-                seen_paths.add(identity)
-                # Keep the original family budget/selection unchanged. The
-                # fallback charges only admissible corridor evaluations; cheap
-                # hard-obstacle rejects do not consume its remaining budget.
-                if legacy:
-                    visited += len(path)
-                    if visited > max_nodes:break
-                if len(path) != len(set(path)) or any(p in blocked for p in path):
-                    continue
-                if any(not (limits["min_x"] <= x <= limits["max_x"] and limits["min_y"] <= y <= limits["max_y"]) for x,y in path):
-                    continue
+                canonical=clear_skeleton(skeleton,hard_rows,hard_columns,limits,max_turns)
+                if canonical is None:rejected_skeletons+=1;continue
+                if canonical in seen_skeletons:continue
+                seen_skeletons.add(canonical)
+                # One shared budget covers every materialized node in BOTH
+                # families. Impossible polylines are rejected by indexed ranges
+                # before expand(), rather than spending the fallback's budget.
+                if visited+int(estimated)+1>max_nodes:break
+                path = expand(canonical)
+                visited += len(path)
                 m = metrics(path)
                 if m["turns"] <= max_turns:
-                    if not legacy:
-                        visited += len(path)
-                        if visited > max_nodes:break
                     if candidate_validator:
                         segments=[]
                         for index,p in enumerate(path):
@@ -247,7 +284,7 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
                     valid.append(((m["turns"], m["length"], tuple(path)), path, m))
             if valid:break
         if not valid:
-            return {**failure, "visited": visited}
+            return {**failure, "visited": visited,"rejected_skeletons":rejected_skeletons}
         _, path, m = min(valid)
         segments = []
         for index, (x,y) in enumerate(path):
@@ -259,6 +296,7 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
                 direction = segments[-1]["direction"] if segments else start_direction or 0
             segments.append({"position": {"x":x,"y":y}, "direction":direction})
         return {"ok":True,"reason":"","path":[{"x":x,"y":y} for x,y in path],
-                "segments":segments,"visited":visited,"metrics":m,"policy":"pcb-trunks-v1"}
+                    "segments":segments,"visited":visited,"metrics":m,"policy":"pcb-trunks-v1",
+                    "rejected_skeletons":rejected_skeletons}
     except (ValueError, TypeError, KeyError) as exc:
         return {**failure, "reason":str(exc)}

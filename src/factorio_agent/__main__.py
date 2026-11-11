@@ -34,6 +34,7 @@ def main(argv=None):
     request.add_argument("--resource")
     request.add_argument("--cells", type=int)
     request.add_argument("--technology")
+    request.add_argument("--product")
     request.add_argument("--rate-per-minute",type=float)
     execute = commands.add_parser("run")
     execute.add_argument("--key", required=True)
@@ -96,7 +97,7 @@ def main(argv=None):
         result = summary(obs, Ledger(root))
     elif args.command == "request":
         parameters = json.loads(args.parameters)
-        typed = {name: getattr(args, name) for name in ("resource", "cells", "technology","rate_per_minute") if getattr(args, name) is not None}
+        typed = {name: getattr(args, name) for name in ("resource", "cells", "technology","product","rate_per_minute") if getattr(args, name) is not None}
         if typed:
             if parameters:
                 raise ValueError("use typed parameters or JSON, not both")

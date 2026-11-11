@@ -58,9 +58,11 @@ Forty actual full factory magazines were transferred with conserved round totals
 Full-rated red36+green35 requires264.5iron/min before additional industrial demand;
 ammo's bounded critical fill and surplus industrial buffers can temporarily reduce
 science supply. Neither nameplate budgets nor full buffers certify sustained rates.
-Engine and plastic currently need a legal underground-belt crossing under the
-new crude pipe; native preparation blocks before building. Next finish those
-consumers and explicit sulfur gas distribution, mall/repair, blue, rail and rocket.
+Normal underground-belt pipe crossings and whole producer-reservation keepouts
+now pass native consumer preparation. Engine construction stopped before its
+core because a newly commissioned defense post occupies an unbuilt adapter;
+retain the post and replan the unbuilt feeds. Plastic is held for independent
+gas distribution. Next finish these consumers, mall/repair, blue, rail and rocket.
 Do not close the continuous-rate gate from filling output buffers. No rocket yet.
 
 Freeze code, model/effort, seed/save and settings per attempt. Classify failures
