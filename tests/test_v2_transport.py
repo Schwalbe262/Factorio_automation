@@ -78,7 +78,7 @@ class LayeredCorridorTests(unittest.TestCase):
         self.assertFalse(result['ok'])
         self.assertEqual(result['native_reason'],'world_identity_changed')
 
-    def test_parallel_foreign_trunk_causes_bounded_whole_corridor_replanning(self):
+    def test_complete_corridor_selection_checks_foreign_layers_before_choosing(self):
         game=SimpleNamespace(query=lambda _: {'ok':True,'blocked':[],'max_span':5})
         geometry=__import__('factorio_ai.deterministic_builder',fromlist=['FactoryBuilder']).FactoryBuilder.__new__(
             __import__('factorio_ai.deterministic_builder',fromlist=['FactoryBuilder']).FactoryBuilder)
@@ -88,7 +88,7 @@ class LayeredCorridorTests(unittest.TestCase):
         b={'item':'iron-ore','position':{'x':20.5,'y':10.5},'facing':8}
         result=plan_connection(game,builder,{'world_id':'w','entities':foreign},a,b)
         self.assertTrue(result['ok'])
-        self.assertGreater(result['routing_attempts'],1)
+        self.assertGreater(result['layer_candidates_rejected'],0)
         self.assertLessEqual(result['route_metrics']['turns'],6)
 
     def test_approved_nature_is_normally_mined_and_bound_to_current_world(self):

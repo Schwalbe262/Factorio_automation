@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -28,6 +29,73 @@ class WorldBoundGame(DeterministicGame):
             body = ('if not d or d.world_id~=' + json.dumps(self.expected_world)
                     + ' then return failure("bound_world_changed") end; ' + body)
         return super().query(body)
+
+    def act(self,action:dict)->dict:
+        if action.get('type')=='insert' and {'expected_entity_unit','expected_entity_world_id'}.intersection(action):
+            p=action.get('position');unit=action.get('expected_entity_unit');world=action.get('expected_entity_world_id')
+            allowed={'type','name','position','item','inventory','count','expected_entity_unit','expected_entity_world_id','reason'}
+            if (set(action)-allowed or action.get('name')!='gun-turret' or action.get('item')!='firearm-magazine'
+                    or action.get('inventory')!='turret_ammo' or type(action.get('count')) is not int or not 1<=action['count']<=100
+                    or type(unit) is not int or unit<1 or not isinstance(world,str) or not world
+                    or not isinstance(p,dict) or set(p)!={'x','y'}
+                    or any(type(p[k]) not in (int,float) or not math.isfinite(p[k]) for k in ('x','y'))):
+                raise ValueError('guarded turret loading requires bounded normal ammo and exact world/unit identity')
+            payload=json.dumps(json.dumps(action,separators=(',',':')))
+            body='''
+local x=helpers.json_to_table('''+payload+''')
+if not d or d.world_id~=x.expected_entity_world_id then return failure("turret_world_changed") end
+if not a or not a.valid or a.force~=f then return failure("agent_dead_or_force_changed") end
+local e=target(x.position,"gun-turret")
+if not e or e.unit_number~=x.expected_entity_unit or e.force~=f then return failure("owned_turret_changed") end
+'''
+            if self.backend=='character':body+='if not a.can_reach_entity(e) then return failure("out_of_reach") end; '
+            body+='''
+local inv=a.get_main_inventory();local dest=e.get_inventory(defines.inventory.turret_ammo)
+if not dest then return failure("turret_ammo_inventory_missing") end
+local size=prototypes.item[x.item].magazine_size;local moved=0
+for i=1,#inv do
+ if moved>=x.count then break end
+ local stack=inv[i]
+ if stack.valid_for_read and stack.name==x.item and stack.quality.name=="normal" then
+  local available=stack.count-(stack.ammo<size and 1 or 0)
+  local n=math.min(x.count-moved,available)
+  if n>0 then
+   local inserted=dest.insert{name=x.item,quality="normal",count=n}
+   if inserted>0 then stack.count=stack.count-inserted;moved=moved+inserted end
+  end
+ end
+end
+return success{status=moved>0 and "succeeded" or "waiting",moved=moved,unit_number=e.unit_number}
+'''
+            return self._record_action(action,self.query(body))
+        if action.get('type')=='take_many':
+            from .construction_supply import execute_take_many
+            return self._record_action(action,execute_take_many(self,action))
+        if action.get('type')=='mine_many':
+            from .mining_batch import execute_mine_many
+            return self._record_action(action,execute_mine_many(self,action))
+        if action.get('type')!='configure_splitter':return super().act(action)
+        allowed={'type','name','position','input_priority','output_priority','expected_splitter_unit','expected_splitter_world_id','reason'}
+        p=action.get('position');unit=action.get('expected_splitter_unit');world=action.get('expected_splitter_world_id')
+        if (set(action)-allowed or action.get('name')!='splitter' or type(unit) is not int or unit<1
+                or not isinstance(world,str) or not world or not isinstance(p,dict) or set(p)!={'x','y'}
+                or any(type(p[a]) not in (int,float) or not math.isfinite(p[a]) for a in ('x','y'))
+                or any(action.get(k) not in ('none','left','right') for k in ('input_priority','output_priority'))):
+            raise ValueError('splitter configuration requires finite position, priorities and exact world/unit identity')
+        payload=json.dumps(json.dumps(action,separators=(',',':')))
+        body='''
+local x=helpers.json_to_table('''+payload+''')
+if not d or d.world_id~=x.expected_splitter_world_id then return failure("splitter_world_changed") end
+if not a or not a.valid or a.force~=f then return failure("agent_dead_or_force_changed") end
+local e=target(x.position,"splitter")
+if not e or e.unit_number~=x.expected_splitter_unit or e.force~=f then return failure("owned_splitter_changed") end
+'''
+        if self.backend=='character':body+='if not a.can_reach_entity(e) then return failure("out_of_reach") end; '
+        body+='''
+e.splitter_input_priority=x.input_priority;e.splitter_output_priority=x.output_priority
+return success{status="succeeded",unit_number=e.unit_number,input_priority=e.splitter_input_priority,output_priority=e.splitter_output_priority}
+'''
+        return self._record_action(action,self.query(body))
 
 
 def configuration(root: Path):

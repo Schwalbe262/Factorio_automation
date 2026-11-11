@@ -46,12 +46,16 @@ Current capabilities:
 | regularize_power_layout | none | starter; existing unfinished power plan |
 | bootstrap_logistics | none | power and naturally unlocked Automation |
 | electric_coal | none | power and naturally unlocked electric-mining-drill |
-| mining_outpost | `--resource iron-ore` (or copper-ore/coal/stone), `--rate-per-minute 1..240` absolute nominal target | power and electric-mining-drill |
+| mining_outpost | `--resource iron-ore` (or copper-ore/coal/stone), `--rate-per-minute 1..960` absolute nominal target | power and electric-mining-drill |
 | smelting_district | none; initial district has iron60/copper30 nominal inputs | power, bootstrap_logistics, mining_outpost; one ready bank each iron60/copper30/coal30 |
 | smelting_capacity | `--resource iron-ore` or copper-ore, `--rate-per-minute` finite (0,225] absolute nominal target | paired_smelting; connected ore supply must cover the target |
 | paired_smelting | none | smelting_district; migrate to independent upper/lower producer rows |
 | paired_mining | none | paired_smelting; normally recover legacy ore cells, directly feed both collector lanes |
 | automation_science | `--rate-per-minute` finite (0,30] requested red-science rate | paired_smelting; normally connect raw plate belts, machines and labs |
+| logistic_science | `--rate-per-minute` finite (0,30] requested green-science rate | automation_science; native green-science and fast-inserter unlocks |
+| steam_expansion | none | electric_coal; ordinary paired coal bank and another boiler/engine pair |
+| defense_perimeter | none | starter; native gun-turret research and recipes |
+| main_bus_factory | none | paired_smelting, logistic_science, defense_perimeter; migrate to shared bus and compact green |
 | research | `--technology` native catalog name | automation_science; native prerequisites and continuous supported science supply |
 
 Use the typed parameter flags above to avoid Windows shell JSON quoting issues.
@@ -59,7 +63,9 @@ Starter capacity funds initial construction using extra drill-fed starter cells;
 it still requires starter fuel upkeep. This is not the final scalable mining
 system. Starter research uses finite normally crafted science budgets to unlock
 the first machines; it cannot handcraft its way through later research.
-Automatic green science, construction mall, defense, rail and rocket jobs remain unimplemented.
+Permanent green science, strategic armed posts and shared-bus migration are
+implemented. Construction mall, automatic ammunition production, repair, oil,
+rail and rocket jobs remain unimplemented.
 Do not claim a rocket-capable system.
 
 Bootstrap logistics builds a small reserved16x16 PCB cell with two assemblers,
@@ -120,9 +126,37 @@ prove five minutes of consumption. `research` selects native technology only;
 it never crafts or inserts packs. `observe.available_research` reports native
 prerequisite-ready costs; unsupported science tiers block explicitly.
 
+Green science uses seven science assemblers plus local gear, cable, circuit,
+belt and inserter machines. The requested30/minute has35/minute nominal machine
+capacity. It consumes normally belt-fed plates and joins the other lane of the
+existing lab belt upstream of all eight pickups. Commissioning requires actual
+products, powered machines, native routes and evidence that every lab received
+green; it does not establish a sustained rate. Research supports red and green
+only after their real production proofs are healthy.
+
+`main_bus_factory` replaces separate raw delivery corridors with one shared
+northbound iron trunk and one copper trunk, with a second line reserved for
+each. Four native-priority splitters supply red and compact green. It preserves
+producer/lab ports and recovers only saved owned assets. The old green site is
+retired only while fresh replacement AND source-smelting proofs remain healthy.
+See [bus contracts](MAIN_BUS.md) and [compact layout](COMPACT_GREEN.md).
+
+`defense_perimeter` normally builds eight strategic gun posts and loads ten
+full normal magazines each. During later jobs, upkeep replenishes live known
+posts below five magazines to ten. There is no idle background worker, automatic
+ammo factory, or general repair system. Missing posts require another perimeter
+job; an unexpected replacement identity blocks. See [defense evidence](DEFENSE.md).
+
+`steam_expansion` preserves the original plant, adds a dedicated paired coal
+bank and another boiler/two-engine cell, then samples actual native generation
+for thirty game seconds. Added1800kW is nameplate capacity; loaded positive
+generation alone does not prove delivery of the full rating.
+
 `retry --key KEY` reopens a known blocked outcome after a fix and always replans
-from fresh observation. It preserves the request, action history and original
-deadline. Unknown action outcomes require `reconcile`; retries cannot bypass
+from fresh observation. It preserves the request, action history and consumed
+execution budget. Recorded terminal-blocked intervals are excluded from active
+budget; original creation time and full elapsed time remain visible. Unknown
+action outcomes require `reconcile`; retries cannot bypass
 world rollback or replay an old pending action. `resume` is for intentionally
 paused jobs, including the same science job after supply construction.
 
@@ -130,6 +164,9 @@ paused jobs, including the same science job after supply construction.
 lifetime counters are never labeled throughput. Saved-project construction
 budgets are separate from the next immediate component deficit and exclude
 unplanned future factory stages. `status --key <key>` gives one full receipt.
+`observe.factory_constraints` separates nominal supply/demand deficits, live
+power faults, electrical peak demand and generation nameplates. These are
+diagnostics, not a measured sustained factory rate.
 
 The layout migration recovers obsolete paid belts through normal mining and
 installs a prevalidated regular corridor. It refuses an operating supply that

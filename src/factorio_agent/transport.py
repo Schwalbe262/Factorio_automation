@@ -119,9 +119,17 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
     hard.update(builder._occupied_by_plan([e for e in reserved if e['name']!='transport-belt']))
     hard-=ends
     surface={xy(e) for e in foreign if e['name']=='transport-belt'}
+    rejected=0
+    def accepts_layers(candidate):
+        nonlocal rejected
+        accepted=compile_crossings(candidate,foreign,maximum_span=survey['max_span']).get('ok',False)
+        if not accepted:rejected+=1
+        return accepted
+    distance=abs(a['x']-b['x'])+abs(a['y']-b['y'])
+    node_budget=max(150000,min(400000,int(distance+1)*2000))
     for attempt in range(8):
         route=route_trunks(a,b,occupied=hard,bounds=bounds,start_direction=source['facing'],
-                           end_direction=destination['facing'],max_nodes=150000)
+                           end_direction=destination['facing'],max_nodes=node_budget,candidate_validator=accepts_layers)
         compiled=compile_crossings(route,foreign,maximum_span=survey['max_span'])
         if compiled.get('ok'):break
         if not route.get('ok'):return compiled
@@ -133,6 +141,7 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
         hard.update(fresh)
     else:return {'ok':False,'reason':'bounded_layered_corridor_replanning_exhausted'}
     compiled['routing_attempts']=attempt+1
+    compiled['layer_candidates_rejected']=rejected
     compiled['ports']=[source,destination]
     positions={xy(e) for e in compiled['entities']}
     allowed_tiles=set();obstacles={}

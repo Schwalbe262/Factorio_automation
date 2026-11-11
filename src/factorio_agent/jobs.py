@@ -29,7 +29,7 @@ CAPABILITIES = {
                             "effect": "reserve a PCB cell, normally assemble finite red science, naturally unlock underground belts/splitters"},
     "electric_coal": {"parameters": {}, "requires": ["power"],
                       "effect": "normally craft electric drill, prebuild grid, reserve-backed cutover and real coal output onto retained trunk"},
-    "mining_outpost": {"parameters": {"resource":"iron-ore|copper-ore|coal|stone","rate_per_minute":"finite number 0..240, absolute nominal target"},
+    "mining_outpost": {"parameters": {"resource":"iron-ore|copper-ore|coal|stone","rate_per_minute":"finite number (0,960], absolute nominal target"},
                        "requires":["power"],"effect":"add aligned powered electric drills/collector banks with fixed output ports; never replace operating banks to expand"},
     "smelting_district": {"parameters":{},"requires":["power","bootstrap_logistics","mining_outpost"],
                          "effect":"reserve a PCB district, connect iron60/copper30 nominal banks and separate coal source with actual splitter/underground crossing, normally belt-feed furnaces"},
@@ -41,6 +41,14 @@ CAPABILITIES = {
                       "effect":"normally recover old ore starter cells; opposing electric drill pairs feed both collector lanes, fixed outputs and surveyed expansion columns"},
     "automation_science": {"parameters":{"rate_per_minute":"finite number (0,30], requested red-science rate with nominal headroom"},
                            "requires":["paired_smelting"],"effect":"reserve normal machine science and labs, connect raw plate belts and power; no actor-fed science inputs"},
+    "logistic_science": {"parameters":{"rate_per_minute":"finite number (0,30], requested design rate; commissioning does not certify sustained throughput"},
+                         "requires":["automation_science"],"effect":"normally belt-feed local gear/wire/circuit/belt/inserter cells and green science into a distinct lab belt lane; native research required"},
+    "steam_expansion": {"parameters":{},"requires":["electric_coal"],
+                        "effect":"normally add an engine pair with dedicated paired coal and shared water; preserve old plant and verify thirty game seconds of native generation"},
+    "defense_perimeter": {"parameters":{},"requires":["starter"],
+                          "effect":"normally build and arm strategic gun posts, native land/range/identity checks; refill known posts during later jobs; native gun research required"},
+    "main_bus_factory": {"parameters":{},"requires":["paired_smelting","logistic_science","defense_perimeter"],
+                         "effect":"replace separate raw plate corridors with shared northbound iron/copper buses and native priority taps; commission compact green then normally retire obsolete western hardware; no throughput certification"},
     "research": {"parameters":{"technology":"catalog technology name"},"requires":["automation_science"],
                  "effect":"select normal native research; machine packs and belt-fed labs only; missing science tiers are explicit blockers"},
 }
@@ -77,6 +85,9 @@ class Request:
             validate_capacity(self.parameters)
         elif self.capability == "automation_science":
             from .science import validate_rate
+            validate_rate(self.parameters)
+        elif self.capability == "logistic_science":
+            from .green_science import validate_rate
             validate_rate(self.parameters)
         elif self.capability == "research":
             from .normal_research import validate_parameters
@@ -132,6 +143,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
             "known_project_construction_budget":obs.get("known_project_construction_budget"),
             "belt_lane_observation":obs.get("belt_lane_observation"),
             "smelting_throughput_bounds":obs.get("smelting_throughput_bounds"),
+            "factory_constraints":obs.get("factory_constraints"),
             "available_research":obs.get("available_research"),
             "capabilities": CAPABILITIES,
             "jobs": [{k: v for k, v in job.items() if k in
@@ -197,6 +209,23 @@ def control(root: Path, game, key: str, operation: str) -> dict:
                 if (job['status']!='blocked' or job.get('pending_action')
                         or job['reason']=='action_outcome_unknown_reconcile_required' or 'rollback_tick' in ledger.data):
                     raise ValueError('only a known blocked outcome in the same world can be retried')
+                now=time.time();blocked_time=job.get('blocked_at_time',now)
+                if 'blocked_at_time' not in job:
+                    path=root/'job-events.jsonl'
+                    with path.open('rb') as events:
+                        events.seek(max(0,path.stat().st_size-2*1024*1024));tail=events.read().splitlines()
+                    for line in reversed(tail):
+                        try:event=json.loads(line)
+                        except (ValueError,UnicodeDecodeError):continue
+                        if event.get('key')==key and event.get('event')=='terminal' and event.get('status')=='blocked':
+                            blocked_time=event['time'];break
+                ticks=max(0,ledger.data['last_tick']-job.get('blocked_at_tick',job['last_tick']))
+                seconds=max(0,now-blocked_time)
+                job['paused_ticks']=job.get('paused_ticks',0)+ticks
+                job['paused_seconds']=job.get('paused_seconds',0)+seconds
+                job['progress_at_tick']+=ticks;job['progress_at_time']+=seconds
+                ledger.event(key,'blocked_interval_excluded',tick=ledger.data['last_tick'],ticks=ticks,seconds=seconds)
+                job.pop('blocked_at_tick',None);job.pop('blocked_at_time',None)
                 ledger.event(key,'retry_requested',old_reason=job['reason'],tick=ledger.data['last_tick'])
             if operation == "resume":
                 if "paused_at_tick" not in job:
@@ -230,9 +259,9 @@ def control(root: Path, game, key: str, operation: str) -> dict:
 class StarterExecutors:
     """Explicit temporary v1 executor reuse, with no v1 strategic supervisor."""
     def __init__(self, game, catalog):
-        from factorio_ai.deterministic_bootstrap import DeterministicBootstrap
+        from .construction_supply import V2Bootstrap
         from .power_layout import V2FactoryBuilder
-        self.bootstrap = DeterministicBootstrap(game, catalog)
+        self.bootstrap = V2Bootstrap(game, catalog)
         self.builder = V2FactoryBuilder(game, self.bootstrap, catalog)
         from .mining import StarterCapacity
         from .research import StarterResearch
@@ -254,8 +283,16 @@ class StarterExecutors:
         self.paired_mining=PairedMining(game,self.bootstrap,self.builder,catalog,self.outposts,self.smelting)
         from .science import AutomaticScience
         self.science=AutomaticScience(game,self.builder,catalog)
+        from .green_science import LogisticScience
+        self.green=LogisticScience(game,self.builder,catalog,self.smelting,self.science)
+        from .steam_expansion import SteamExpansion
+        self.steam_expansion=SteamExpansion(game,self.builder,catalog,self.outposts)
+        from .defense_perimeter import DefensePerimeter
+        self.perimeter=DefensePerimeter(game,self.bootstrap,catalog)
+        from .bus_factory import BusFactory
+        self.bus_factory=BusFactory(game,self.builder,catalog,self.smelting,self.science,self.green)
         from .normal_research import NormalResearch
-        self.normal_research=NormalResearch(game,catalog,self.science)
+        self.normal_research=NormalResearch(game,catalog,self.science,self.green)
         ledger=Ledger(Path(game.cfg.runtime_dir)).data
         self.industrial_mode=any(j['capability']=='smelting_district' and j['status']=='succeeded'
                                  for j in ledger['jobs'].values())
@@ -264,9 +301,13 @@ class StarterExecutors:
         return {**obs,'entities':[e for e in obs.get('entities',[])
             if not self.builder.owns_automated_burner(e) and not self.smelting.owns_furnace(e,obs)
             and not (getattr(self,'paired',None) and self.paired.owns_furnace(e,obs))
-            and not (getattr(self,'paired_mining',None) and self.paired_mining.retires_legacy(e,obs))]}
+            and not (getattr(self,'paired_mining',None) and self.paired_mining.retires_legacy(e,obs))
+            and not (getattr(self,'steam_expansion',None) and self.steam_expansion.owns_burner(e,obs))]}
 
     def starter_upkeep(self,obs):
+        if getattr(self,'perimeter',None):
+            defense=self.perimeter.upkeep(obs)
+            if defense:return defense
         filtered=self.starter_observation(obs)
         if not getattr(self,'industrial_mode',False):return self.bootstrap.next_action(filtered)
         if self.smelting.state.get('world_id')!=obs['world_id']:
@@ -336,6 +377,14 @@ class StarterExecutors:
             return self.science.step(obs,parameters or {})
         if capability == "research":
             return self.normal_research.step(obs,parameters or {})
+        if capability == "logistic_science":
+            return self.green.step(obs,parameters or {})
+        if capability == "steam_expansion":
+            return self.steam_expansion.step(obs)
+        if capability == "defense_perimeter":
+            return self.perimeter.step(obs)
+        if capability == "main_bus_factory":
+            return self.bus_factory.step(obs,parameters or {})
         raise ValueError("no executor for capability: " + capability)
 
     def proof(self, capability: str, obs: dict, result: dict, parameters: dict | None = None) -> dict | None:
@@ -361,6 +410,14 @@ class StarterExecutors:
             return self.science.proof(obs)
         if capability == "research":
             return self.normal_research.proof(obs,parameters or {})
+        if capability == "logistic_science":
+            return self.green.proof(obs)
+        if capability == "steam_expansion":
+            return self.steam_expansion.proof(obs)
+        if capability == "defense_perimeter":
+            return self.perimeter.proof(obs)
+        if capability == "main_bus_factory":
+            return self.bus_factory.proof(obs)
         produced = obs.get("production", {})
         if not all(produced.get(name, {}).get("produced", 0) > 0 for name in ("iron-plate", "copper-plate")):
             return None
@@ -437,6 +494,9 @@ def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> 
                 started = time.perf_counter()
                 try:
                     receipt = game.act(result)
+                    if receipt.get('reason') in ('build_batch_outcome_unknown','mine_batch_outcome_unknown'):
+                        job['uncertain_batch_receipt']=receipt
+                        raise RuntimeError('batch outcome unknown; observe and reconcile before continuing')
                 except Exception:
                     # Durable intent survives connection errors; explicit
                     # reconciliation is necessary before further mutations.
@@ -468,6 +528,7 @@ def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> 
                     game.save()
             ledger.save()
             if job["status"] in TERMINAL:
+                if job['status']=='blocked':job.update(blocked_at_tick=obs['tick'],blocked_at_time=time.time());ledger.save()
                 ledger.event(key, "terminal", status=job["status"], reason=job["reason"], evidence=job["evidence"])
                 return job
             if time.monotonic() >= deadline:

@@ -10,6 +10,7 @@ from factorio_ai.deterministic_state import _atomic_json
 from .board import entity
 from .power_grid import plan_connection
 from .transport import VECTORS,xy,plan_connection as belt_connection,underground_proof
+from .planning import overlap
 
 
 RESOURCES={"iron-ore","copper-ore","coal","stone"}
@@ -21,8 +22,8 @@ def validate_parameters(parameters):
     if not isinstance(parameters["resource"],str) or parameters["resource"] not in RESOURCES:
         raise ValueError("unsupported solid resource")
     rate=parameters["rate_per_minute"]
-    if type(rate) not in (int,float) or not math.isfinite(rate) or not 0<rate<=240:
-        raise ValueError("mining rate must be finite in (0,240]")
+    if type(rate) not in (int,float) or not math.isfinite(rate) or not 0<rate<=960:
+        raise ValueError("mining rate must be finite in (0,960]")
 
 
 def mining_bank(x,y,count,resource):
@@ -44,6 +45,24 @@ class MiningOutposts:
     @staticmethod
     def find(obs,e):
         return next((a for a in obs["entities"] if a["name"]==e["name"] and a["position"]==e["position"]),None)
+
+    def publish_reservations(self,obs):
+        banks=[b for b in self.state.get('banks',[]) if b['plan'].get('paired') and b.get('reserved_area')]
+        if not banks:return None
+        path=self.path.parent/'pcb-board.json'
+        if not path.exists():return None
+        board=json.loads(path.read_text(encoding='utf-8'))
+        if board.get('world_id')!=obs['world_id']:return {'status':'blocked','reason':'mining_reservation_board_world_changed'}
+        counts={}
+        for bank in banks:
+            resource=bank['plan']['resource'];index=counts.get(resource,0);counts[resource]=index+1
+            name=resource+'_mining'+('_'+str(index) if index else '')
+            area=bank['reserved_area']
+            if any(key!=name and overlap(area,b['reserved_area']) for key,b in board['blocks'].items()):
+                return {'status':'blocked','reason':'paired_mining_reserved_area_conflicts_with_registered_block','block':name}
+            board['blocks'][name]=dict(bank['plan'],reserved_area=area)
+        _atomic_json(path,board)
+        return None
 
     def prepare(self,obs,resource,count):
         if resource in ('iron-ore','copper-ore'):
@@ -240,6 +259,8 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             return {"status":"blocked","reason":"electric_mining_research_required"}
         if not self.state:self.state={"world_id":obs["world_id"],"banks":[]}
         if self.state["world_id"]!=obs["world_id"]:return {"status":"blocked","reason":"outpost_world_changed"}
+        reservation=self.publish_reservations(obs)
+        if reservation:return reservation
         resource,target=parameters["resource"],parameters["rate_per_minute"]
         banks=[b for b in self.state["banks"] if b["plan"]["resource"]==resource]
         for bank in banks:
@@ -259,9 +280,10 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             if extension is None:
                 count=sum(e['name']=='electric-mining-drill' for e in bank['plan']['entities'])
                 per_drill=bank['nominal_rate_per_minute']/count
-                extension=self.prepare_extension(obs,bank,math.ceil((target-rate)/per_drill))
+                added=min(8,math.ceil((target-rate)/per_drill))
+                extension=self.prepare_extension(obs,bank,added)
                 if not extension.get('ok'):
-                    connected=self.prepare_connected_bank(obs,bank,math.ceil((target-rate)/per_drill))
+                    connected=self.prepare_connected_bank(obs,bank,added)
                     if not connected.get('ok'):return {'status':'blocked',**connected,'upstream_extension_failure':extension.get('reason')}
                     self.state['banks'].append(connected);_atomic_json(self.path,self.state)
                     return {'status':'waiting','reason':'reserved extra mining module and same-item trunk connection'}
@@ -277,8 +299,7 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             metadata=self.game.query('return {rate=prototypes.entity["electric-mining-drill"].mining_speed*60/prototypes.entity['+json.dumps(resource)+'].mineable_properties.mining_time}')
             if not isinstance(metadata.get("rate"),(int,float)) or metadata["rate"]<=0:
                 return {"status":"blocked","reason":"mining_rate_query_failed"}
-            count=math.ceil((target-rate)/metadata["rate"])
-            if count>8:return {"status":"blocked","reason":"one_new_bank_exceeds_eight_drills"}
+            count=min(8,math.ceil((target-rate)/metadata["rate"]))
             pending=self.prepare(obs,resource,count)
             if not pending.get("ok"):return {"status":"blocked","reason":pending.get("reason","mining_bank_preflight_failed")}
             self.state["banks"].append(pending);_atomic_json(self.path,self.state)

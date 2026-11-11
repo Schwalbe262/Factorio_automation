@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from factorio_ai.deterministic_builder import _plan
 from factorio_ai.deterministic_state import _atomic_json
 from .board import entity,pole_chain
-from .smelting import port,merge_entities
+from .smelting import port,merge_entities,bank_capacities
 from .transport import xy,VECTORS,plan_connection,underground_proof
 from .planning import preflight
 from .power_grid import plan_connection as power_connection
@@ -185,7 +185,8 @@ class PairedSmelting:
         return {'status':'succeeded','reason':'independent furnace rows directly feed opposite lanes of the shared output','evidence':proof}
 
     def publish(self,obs):
-        self.smelting.state.update(plan=self.state['plan'],banks=self.state['banks'],paired=True)
+        self.smelting.state.update(plan=self.state['plan'],banks=self.state['banks'],paired=True,
+            nominal_smelting_capacity_per_minute=bank_capacities(self.catalog,self.state['banks']))
         _atomic_json(self.smelting.path,self.smelting.state)
         board_path=self.path.parent/'pcb-board.json';board=json.loads(board_path.read_text(encoding='utf-8'))
         obsolete=[name for name in board['blocks'] if name.endswith('_lane_distribution')]

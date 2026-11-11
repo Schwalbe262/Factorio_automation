@@ -69,7 +69,7 @@ for _,spec in ipairs(specs) do
    return {ok=false,reason="block_terrain_or_immovable_obstruction",entity=spec.name,position=spec.position}
   end
   for _,e in pairs(colliders) do
-   if e~=a and e.type~="resource" and not ignored[e.unit_number] and not e.prototype.collision_mask.colliding_with_tiles_only then
+   if e~=a and e.type~="resource" and e.type~="corpse" and not ignored[e.unit_number] and not e.prototype.collision_mask.colliding_with_tiles_only then
     local rock=e.type=="simple-entity" and (e.name=="big-rock" or e.name=="huge-rock" or e.name=="big-sand-rock")
     if e.force.name~="neutral" or not e.minable or not (e.type=="tree" or rock) then
      return {ok=false,reason="block_protected_entity_obstruction",entity=e.name,position=pos(e.position)}
@@ -84,4 +84,7 @@ return {ok=true,clear_obstacles=obstacles}
 ''')
     if not result.get('ok'):return result
     if len(result.get('clear_obstacles',[]))>96:return {'ok':False,'reason':'block_clearance_budget_exceeded'}
-    return {**result,'clearance_world_id':obs['world_id']}
+    obstacles=result.get('clear_obstacles',[])
+    if obstacles=={}:obstacles=[]
+    if not isinstance(obstacles,list):return {'ok':False,'reason':'invalid_native_clearance_shape'}
+    return {**result,'clear_obstacles':obstacles,'clearance_world_id':obs['world_id']}

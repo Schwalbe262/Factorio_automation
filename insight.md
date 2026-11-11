@@ -6578,3 +6578,17 @@ Promote to insight.md only if:
 - After: exact-footprint ordinary take cleared the site; no item destruction/grants and no unknown-action replay.
 - Evidence: native planned take1iron-ore, successful same-key77action mining receipt; historical failure retained in events.
 - Remaining risk: unsupported item metadata or inventory saturation can still block and must remain explicit.
+
+## Confirmed: moving construction stock needs live aggregate collection
+- Source loop: EXP-0011 iron expansion → EXP-0012 defense construction, Part7 2026-11-12.
+- Improvement/before: select first observed belt/output and cap request to that snapshot;402iron takes moved41plates, with91.7%zero-result belt calls while aggregate belts held1740iron.
+- After: rank verified construction buffers/output/chests/belts, pool up to16sources and recheck actual normal stock natively under one global50item cap with unit/world/conservation guards.
+- Evidence: first8take_many calls moved314/314requested iron for normally paid defense;15focused tests. This confirms collection efficiency for available stock, not a broad gameplay speedup or production-rate increase.
+- Remaining risk: actor collection can still consume production buffers; ammo/partial magazines require separate handling and remain excluded.
+
+## Confirmed: science joins must precede every actual pickup
+- Source loop: EXP-0011 green original job573→608actions.
+- Improvement/before: joinx43.5 lay downstream of eighth labx45.5;7labs receivedgreen and1never did. Sparse single-tile sampling also rejected packets between observations.
+- After: joinx47.5 upstream of all8; static directed pickup audit plus live per-lab receipt and row-wide/recent-unit-bound lane evidence.
+- Evidence: same job normally migrated four entry assets; proof1282753 all8labs16packs and both row lanes128packs. Missed-last-lab regression rejected by layout audit.
+- Remaining risk: buffered stock/commissioning do not prove sustained science consumption; native full route/power/identity still checked.

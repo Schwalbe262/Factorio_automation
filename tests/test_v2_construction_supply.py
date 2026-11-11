@@ -1,0 +1,172 @@
+from copy import deepcopy
+from types import SimpleNamespace
+import unittest
+from unittest.mock import Mock, patch
+
+from factorio_agent.construction_supply import (
+    V2Bootstrap, execute_take_many, validate_take_many, TAKE_MANY_LUA,
+)
+from factorio_ai.deterministic_bootstrap import DeterministicBootstrap
+
+
+def source(unit=1, name="transport-belt", kind="belt", x=1.5):
+    return {"name": name, "kind": kind, "unit_number": unit, "position": {"x": x, "y": .5}}
+
+
+def action():
+    return {"type": "take_many", "item": "iron-plate", "count": 50,
+            "world_id": "world", "sources": [source()]}
+
+
+def entity(unit, stock, name="transport-belt", field="belt_inventory"):
+    return {"unit_number": unit, "name": name, "position": {"x": unit+.5, "y": .5},
+            field: {"iron-plate": stock}}
+
+
+class ConstructionSupplyTests(unittest.TestCase):
+    def setUp(self):
+        self.game = Mock(backend="assisted", expected_world="world")
+        self.game.query.return_value = {"ok": True, "status": "succeeded", "moved": 8,
+                                        "sources": [{"unit_number": 1, "moved": 8}]}
+        self.bootstrap = V2Bootstrap(self.game)
+
+    def test_global_request_does_not_shrink_to_single_stale_tile_stock(self):
+        obs = {"world_id": "world", "entities": [entity(1, 1), entity(2, 8),
+                entity(3, 12, "stone-furnace", "output_inventory")]}
+        result = self.bootstrap._take_output(obs, "iron-plate", 120)
+        self.assertEqual(result["count"], 50)
+        self.assertEqual([s["unit_number"] for s in result["sources"]], [3, 2, 1])
+        self.assertEqual([s["kind"] for s in result["sources"]], ["output", "belt", "belt"])
+        validate_take_many(result)
+        self.game.query.assert_not_called()
+
+    def test_verified_buffer_precedes_fuller_candidates_but_does_not_exclude_them(self):
+        chest = entity(1, 0, "wooden-chest", "inventory")
+        self.bootstrap.construction_buffers["iron-plate"] = dict(source(1, "wooden-chest", "chest"),
+                                                                  world_id="world")
+        obs = {"world_id": "world", "entities": [entity(2, 8), chest]}
+        result = self.bootstrap._take_output(obs, "iron-plate", 30)
+        self.assertEqual([s["unit_number"] for s in result["sources"]], [1, 2])
+        self.assertEqual(result["count"], 30)
+        self.bootstrap.construction_buffers["iron-plate"]["world_id"] = "stale"
+        self.assertEqual([s["unit_number"] for s in self.bootstrap._take_output(obs, "iron-plate", 30)["sources"]], [2])
+
+    def test_machine_ingredient_inventory_and_labs_are_never_candidates(self):
+        obs = {"world_id": "world", "entities": [entity(1, 200, "assembling-machine-1", "inventory"),
+                entity(2, 200, "lab", "inventory"), entity(3, 1)]}
+        result = self.bootstrap._take_output(obs, "iron-plate", 50)
+        self.assertEqual([s["unit_number"] for s in result["sources"]], [3])
+
+    def test_at_most_sixteen_distinct_sources_ranked_by_stock(self):
+        rows = [entity(i, i) for i in range(1, 22)]
+        result = self.bootstrap._take_output({"world_id": "world", "entities": rows+rows}, "iron-plate", 50)
+        self.assertEqual([s["unit_number"] for s in result["sources"]], list(range(21, 5, -1)))
+        validate_take_many(result)
+
+    def test_fuel_raw_items_and_science_keep_parent_behavior(self):
+        for item in ("coal", "wood", "iron-ore", "automation-science-pack", "logistic-science-pack"):
+            with self.subTest(item=item), patch.object(DeterministicBootstrap, "_take_output", return_value={"parent": True}) as parent:
+                self.assertEqual(self.bootstrap._take_output({"world_id": "world"}, item, 5), {"parent": True})
+                parent.assert_called_once()
+
+    def test_partial_ammo_is_never_recreated_from_chests_belts_or_machine_outputs(self):
+        rows = [entity(1, 20), entity(2, 20, "wooden-chest", "inventory"),
+                entity(3, 20, "assembling-machine-1", "output_inventory")]
+        for row in rows:
+            for field in ("inventory", "output_inventory", "belt_inventory"):
+                if field in row:
+                    row[field] = {"firearm-magazine": 20}
+            row["ammo_remaining"] = 1
+        obs = {"world_id": "world", "entities": rows}
+        with patch.object(DeterministicBootstrap, "_take_output") as parent:
+            self.assertIsNone(self.bootstrap._take_output(obs, "firearm-magazine", 50))
+            parent.assert_not_called()
+        request = action();request["item"] = "firearm-magazine"
+        with self.assertRaises(ValueError):
+            execute_take_many(self.game, request)
+        self.game.query.assert_not_called()
+
+    def test_catalog_ammo_types_are_protected_and_guns_cannot_use_batch_transfer(self):
+        self.bootstrap.catalog = SimpleNamespace(items={"future-ammo": {"type": "ammo"}})
+        self.assertIsNone(self.bootstrap._take_output({"world_id": "world"}, "future-ammo", 1))
+        request = action();request["item"] = "submachine-gun"
+        with self.assertRaises(ValueError):
+            execute_take_many(self.game, request)
+        self.game.query.assert_not_called()
+
+    def test_malformed_envelopes_are_rejected_before_any_io(self):
+        variants = []
+        for field, values in {"count": [0, 51, True, 1.5], "world_id": [None, ""],
+                              "item": ["coal", "iron-ore", "logistic-science-pack", "sulfuric-acid"],
+                              "sources": [[], "bad", [source(i, x=i+.5) for i in range(1, 18)]]}.items():
+            for value in values:
+                request = action();request[field] = value;variants.append(request)
+        request = action();request["inventory"] = "input";variants.append(request)
+        request = action();request["reason"] = 2;variants.append(request)
+        for request in variants:
+            with self.subTest(request=request), self.assertRaises(ValueError):
+                execute_take_many(self.game, request)
+        self.game.query.assert_not_called()
+
+    def test_finite_positions_exact_identity_and_source_kinds_are_mandatory(self):
+        variants = []
+        for field, values in {"unit_number": [True, 0, "1"], "kind": ["input", "fuel", "science"],
+                              "name": ["lab", "electric-mining-drill", "underground-belt"]}.items():
+            for value in values:
+                request = action();request["sources"][0][field] = value;variants.append(request)
+        for value in (float("inf"), float("nan"), True, "1"):
+            request = action();request["sources"][0]["position"]["x"] = value;variants.append(request)
+        request = action();request["sources"][0]["position"]["z"] = 1;variants.append(request)
+        request = action();request["sources"][0]["count"] = 50;variants.append(request)
+        request = action();request["sources"].append(deepcopy(request["sources"][0]));variants.append(request)
+        for request in variants:
+            with self.subTest(request=request), self.assertRaises(ValueError):
+                execute_take_many(self.game, request)
+        self.game.query.assert_not_called()
+
+    def test_python_world_mismatch_stops_before_native_io(self):
+        request = action();request["world_id"] = "other"
+        with self.assertRaises(ValueError):
+            execute_take_many(self.game, request)
+        self.game.query.assert_not_called()
+
+    def test_one_native_sweep_receipt_uses_aggregate_not_per_source_limit(self):
+        request = action();request["sources"] = [source(1), source(2, x=2.5), source(3, x=3.5)]
+        receipt = {"ok": True, "status": "succeeded", "moved": 50, "requested": 50,
+                   "sources": [{"unit_number": 1, "moved": 0, "reason": "source_identity_changed"},
+                               {"unit_number": 2, "moved": 32}, {"unit_number": 3, "moved": 18}]}
+        self.game.query.return_value = receipt
+        self.assertEqual(execute_take_many(self.game, request), receipt)
+        self.game.query.assert_called_once()
+
+    def test_inconsistent_or_overdrawn_mocked_receipts_are_not_silently_accepted(self):
+        for moved, rows in ((51, [{"unit_number": 1, "moved": 51}]),
+                            (8, [{"unit_number": 1, "moved": 7}]),
+                            (8, [{"unit_number": 2, "moved": 8}]),
+                            (8, [{"unit_number": 1, "moved": 4}, {"unit_number": 1, "moved": 4}])):
+            with self.subTest(moved=moved, rows=rows):
+                self.game.query.return_value = {"ok": True, "status": "succeeded", "moved": moved, "sources": rows}
+                with self.assertRaisesRegex(RuntimeError, "reconcile"):
+                    execute_take_many(self.game, action())
+
+    def test_full_inventory_or_empty_stocks_returns_waiting_without_fake_movement(self):
+        self.game.query.return_value = {"ok": True, "status": "waiting", "moved": 0, "sources": {}}
+        self.assertEqual(execute_take_many(self.game, action())["sources"], [])
+
+    def test_uncertain_mutation_is_never_retried(self):
+        self.game.query.side_effect = TimeoutError("unknown native outcome")
+        with self.assertRaises(TimeoutError):
+            execute_take_many(self.game, action())
+        self.game.query.assert_called_once()
+
+    def test_native_query_line_flattening_cannot_turn_comments_into_missing_code(self):
+        execute_take_many(self.game, action())
+        body = self.game.query.call_args.args[0]
+        flattened = " ".join(body.splitlines())
+        self.assertNotIn("--", TAKE_MANY_LUA)
+        self.assertNotIn("--", flattened)
+        self.assertIn("return success{status=total>0", flattened)
+
+
+if __name__ == "__main__":
+    unittest.main()

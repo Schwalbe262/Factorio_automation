@@ -38,7 +38,6 @@ class V2FactoryBuilder(FactoryBuilder):
     def _recover_resource_cell_obstruction(self,observation,plan,entity):
         recovery=super()._recover_resource_cell_obstruction(observation,plan,entity)
         if recovery is not None:return recovery
-        if not plan.get('resource_cell'):return None
         payload=json.dumps(json.dumps(entity,separators=(',',':')))
         survey=self.game.query('''
 local spec=helpers.json_to_table('''+payload+''');local box=prototypes.entity[spec.name].collision_box
@@ -51,7 +50,7 @@ local p,q=rotate(box.left_top),rotate(box.right_bottom)
 local area={{spec.position.x+math.min(p.x,q.x),spec.position.y+math.min(p.y,q.y)},
  {spec.position.x+math.max(p.x,q.x),spec.position.y+math.max(p.y,q.y)}}
 local ground={}
-for _,e in pairs(s.find_entities_filtered{area=area}) do if e~=a and e.type~="resource" then
+for _,e in pairs(s.find_entities_filtered{area=area}) do if e~=a and e.type~="resource" and e.type~="corpse" then
  if e.type~="item-entity" or not e.stack.valid_for_read or e.stack.prototype.type~="item" then return {ok=false} end
  ground[#ground+1]={name=e.name,position=pos(e.position),item=e.stack.name,quality=e.stack.quality.name,count=e.stack.count}
 end end
@@ -84,7 +83,20 @@ return {ok=true}
             if result.get('obstacle'):
                 return {'type':'mine',**result['obstacle'],'count':1,
                         'reason':'normally mine approved tree or rock on reserved straight corridor'}
-        return super().ensure_plan(observation,plan)
+        result=super().ensure_plan(observation,plan)
+        if result.get('status')!='succeeded':return result
+        for wanted in plan['entities']:
+            if wanted['name']!='splitter' or not any(k in wanted for k in ('splitter_input_priority','splitter_output_priority')):continue
+            priorities={k:wanted.get('splitter_'+k,'none') for k in ('input_priority','output_priority')}
+            if any(v not in ('none','left','right') for v in priorities.values()):
+                return {'status':'blocked','reason':'invalid_declared_splitter_priority'}
+            actual=next((e for e in observation['entities'] if e['name']=='splitter' and e['position']==wanted['position']),None)
+            if not actual:return {'status':'waiting','reason':'reobserve paid splitter before configuring priorities'}
+            if any(actual.get('splitter_'+k)!=v for k,v in priorities.items()):
+                return dict(priorities,type='configure_splitter',name='splitter',position=wanted['position'],
+                    expected_splitter_unit=actual['unit_number'],expected_splitter_world_id=observation['world_id'],
+                    reason='apply declared main-bus input/output priority through normal native splitter settings')
+        return result
 
     def plan_route(self,name,source,destination,**kwargs):
         if name=="transport-belt":

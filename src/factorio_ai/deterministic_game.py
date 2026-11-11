@@ -344,6 +344,9 @@ for _,e in pairs(s.find_entities_filtered{force=f}) do
      r.belt_inventory[row.name]=(r.belt_inventory[row.name] or 0)+row.count
     end
    end
+  elseif e.type=="splitter" then
+   r.splitter_input_priority=e.splitter_input_priority
+   r.splitter_output_priority=e.splitter_output_priority
   end
   local has_fluid,fluids=pcall(function() return e.get_fluid_contents() end)
   if has_fluid and fluids then r.fluids=fluids end

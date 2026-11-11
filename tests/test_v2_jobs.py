@@ -157,6 +157,28 @@ class JobBoundaryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'known blocked'):
             control(self.root,self.game,'test','retry')
 
+    def test_unknown_batch_receipt_keeps_durable_intent_for_explicit_reconciliation(self):
+        submit(self.root,self.game,self.request())
+        self.game.act=lambda _: {'ok':False,'reason':'build_batch_outcome_unknown','completed':2}
+        with self.assertRaisesRegex(RuntimeError,'batch outcome unknown'):
+            run_slice(self.root,self.game,Executor({'type':'build_many','actions':[]}),'test')
+        job=Ledger(self.root).data['jobs']['test']
+        self.assertEqual(job['reason'],'action_outcome_unknown_reconcile_required')
+        self.assertIn('pending_action',job)
+
+    def test_retry_excludes_only_blocked_wait_and_preserves_consumed_execution_budget(self):
+        submit(self.root,self.game,self.request());self.game.observation['tick']=50000
+        run_slice(self.root,self.game,Executor({'status':'blocked','reason':'repair needed'}),'test')
+        created=Ledger(self.root).data['jobs']['test']['created_tick']
+        self.game.observation['tick']=200000
+        control(self.root,self.game,'test','retry')
+        job=Ledger(self.root).data['jobs']['test']
+        self.assertEqual(job['created_tick'],created)
+        self.assertEqual(job['paused_ticks'],150000)
+        self.game.observation['tick']=300000
+        result=run_slice(self.root,self.game,Executor({'status':'succeeded'},{'native':True}),'test')
+        self.assertEqual(result['reason'],'job_deadline_exceeded')
+
     def test_intentional_pause_does_not_spend_execution_deadline(self):
         submit(self.root, self.game, self.request())
         control(self.root, self.game, "test", "pause")

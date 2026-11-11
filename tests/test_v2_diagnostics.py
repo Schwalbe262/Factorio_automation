@@ -4,7 +4,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
-from factorio_agent.diagnostics import production_rates,construction_budget,smelting_throughput_bounds
+from factorio_agent.diagnostics import production_rates,construction_budget,smelting_throughput_bounds,factory_constraints
 
 
 class RateEvidenceTests(unittest.TestCase):
@@ -47,6 +47,19 @@ class RateEvidenceTests(unittest.TestCase):
             row=smelting_throughput_bounds(root,obs,catalog)['banks'][0]
             self.assertEqual(row['independent_producer_capacity_per_lane'],{'left':600,'right':60})
             self.assertEqual(row['partial_upper_bound_per_minute'],510)
+
+    def test_electrical_peak_excludes_burner_thermal_consumption(self):
+        with tempfile.TemporaryDirectory() as directory:
+            catalog=SimpleNamespace(entities={
+                'boiler':{'electric':False,'energy_usage':30000},
+                'steam-engine':{'electric':True,'energy_production':15000},
+                'assembling-machine-1':{'electric':True,'energy_usage':1250}})
+            obs={'world_id':'w','entities':[{'name':'boiler'},{'name':'steam-engine'},
+                {'name':'assembling-machine-1','status_name':'low_power'}]}
+            result=factory_constraints(Path(directory),obs,catalog)
+            self.assertEqual(result['installed_consumer_peak_kw'],75)
+            self.assertEqual(result['installed_generation_nameplate_kw'],900)
+            self.assertEqual(result['live_low_or_no_power_entities'],{'assembling-machine-1':1})
 
 
 if __name__=='__main__':unittest.main()

@@ -29,12 +29,18 @@ only the framework interface and its documented state, with no parent decisions.
    counter increase and natural platform arrival. Luna-only end-to-end runs.
 
 ## Evaluation
-Current sprint (2026-11-11): independent paired furnace rows and electric drill
-rows now feed both collector lanes, with fixed ports (EXP-0009). Permanent red
-science, belt-fed labs and normal gun-turret research work (EXP-0010). Nominal
-ore180/120 and red36/min are not sustained measured rates. Next prove loaded
-continuous production, unlock/build green science and steel, and add a
-construction mall plus ammunition/turret replenishment. Rail/oil/rocket remain.
+Current sprint (2026-11-12): independent paired producers retain fixed ports
+(EXP-0009); permanent red and green production reaches all eight labs through
+ordinary belts (EXP-0010/0011). Loaded second steam pair, nominal iron ore300
+and plates225/min, and eight normally armed strategic posts are commissioned.
+The user manually repelled a destructive enemy attack; this is human assistance.
+Shared iron/copper main bus and compact32x28 green migration are in execution
+(EXP-0012); current results must be checked in HANDOFF_CURRENT.md. Construction
+stock collection now pools live sources instead of repeatedly taking empty
+moving belts. These are assisted development outcomes, not a Luna-only score.
+Next prove loaded continuous rates, build permanent steel/mall/automatic ammo
+and repair. Full-rated red36+green35 requires264.5iron/min above225supply.
+Rail/oil/rocket remain.
 Do not close the continuous-rate gate from filling output buffers. No rocket yet.
 
 Freeze code, model/effort, seed/save and settings per attempt. Classify failures

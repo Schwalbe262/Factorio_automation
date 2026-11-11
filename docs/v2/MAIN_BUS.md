@@ -1,0 +1,125 @@
+# Shared material bus
+
+`main_bus.py` compiles one real NORTH trunk for each declared material line.
+Several consumer splitters draw from that same trunk. The initial layout uses
+one iron belt at x=-11.5 and one copper belt at x=-3.5. A spare column four tiles
+west of each is reserved: iron x=-15.5, copper x=-7.5. Spare belts are not built
+and do not count as production. More parallel lines require sufficient reserved
+space and an independent declared source rate for every active line.
+
+All consumer outlets face EAST at a fixed x. Their splitter row is one tile
+south of their outlet. Native underground crossings are installed across both
+active and reserved future columns, so activating a reserved line preserves
+existing branch entities and ports. The blueprint accepts foreign belts and
+uses the existing crossing compiler; unsafe crossings fail without a maze
+fallback. Source and consumer adapters use `transport.plan_connection` with the
+existing six-turn and `1.35 * Manhattan distance + 4` length gates.
+
+```python
+from factorio_agent.main_bus import BusMaterial, ConsumerTap, plan_main_bus
+
+plan = plan_main_bus(
+    [BusMaterial('iron-plate', -11.5, (225,), reserved_lines=2),
+     BusMaterial('copper-plate', -3.5, (112.5,), reserved_lines=2)],
+    [ConsumerTap('green-iron', 'iron-plate', -76.5, 'critical',
+                 demand_per_minute=192.5),
+     ConsumerTap('green-copper', 'copper-plate', -79.5, 'critical',
+                 demand_per_minute=52.5)],
+    north_y=-118.5, south_y=-12.5, port_x=12.5,
+    foreign_entities=observed_belts,
+)
+```
+
+`source_rates` are design contracts, never measured throughput. Yellow belts
+carry at most 900 items/minute across both lanes, 450/minute on one lane.
+Capacity reporting separates producer shortage, belt shortage and lane limits.
+The pinned live prototype reported speed .03125, underground span 5 and NORTH
+splitter footprint 2x1 in Factorio 2.1.20. At full machine ratings, red36 plus
+green35 need264.5iron/minute; a225iron/minute source still has39.5iron/minute
+deficit. Extra belt columns do not solve that producer deficit.
+
+## Native priorities
+
+For NORTH splitters, left is WEST and right is EAST. The continuing trunk uses
+the left input/output; the eastbound consumer uses the right output.
+
+| Tap policy | Native input priority | Native output priority |
+| --- | --- | --- |
+| critical | left | right |
+| normal | left | none |
+| surplus | left | left |
+
+`SourceMerge` accepts a second source on the right input and combines both
+inputs into the single left/continuing output. Its explicit input priority is
+left, right or none; output priority is left. This shares one belt's bandwidth.
+The planner emits `splitter_input_priority` and `splitter_output_priority`;
+the executor must configure those native properties after paid placement.
+
+Priorities are local. An upstream normal/surplus consumer can consume material
+before a downstream critical consumer sees it. `priority_inversions` exposes
+that ordering. No absolute rate reservation or global fairness is claimed.
+
+## Compact factory migration
+
+`BusFactory(game,builder,catalog,smelting,science,green)` provides read-only
+`prepare(obs)` and resumable `step(obs)` / `proof(obs)`. Preparation reloads
+current production state, traces exact saved belt corridors through their
+declared underground pairs, binds present entities to observed unit identities,
+and validates the complete alternate layout before any mining or construction.
+Absent obsolete hardware is omitted from recovery and from new authoritative
+plans; changed present hardware blocks preparation. No ownership comes from an
+area selection.
+
+The migration preserves the producer ports iron(-9.5,-29.5)E and
+copper(-9.5,-17.5)E. It normally recovers both old consumer corridors and the two
+owned old source splitters, then restores ordinary source belts so the full
+producer stream enters the shared bus. It retains red machines, labs, coal,
+source producers and all old poles. Four paid bus splitters serve red and the
+compact green block. Bus handoffs are x12.5; bounded adapters reach green
+iron(40.5,-77.5)E and copper(40.5,-80.5)E. The adapter avoids the existing pole
+at(14.5,-77.5), which prevents a direct straight extension to x40.5.
+
+Recovery disconnects the old raw-material corridors before the replacement is
+built. Retaining the old machines protects recoverable assets; this version
+does not guarantee uninterrupted science production during the cutover. It is
+a normally paid, resumable migration, not a parallel hot-switch procedure.
+
+The new 12-machine green block occupies30x22 tiles with a32x28 reservation at
+[[39,-82],[71,-54]]. Output(69.5,-59.5)E reaches the retained green lab entry
+(47.5,-108.5)N. Existing final underground mouths and the lab join remain.
+
+Execution phases are recovery, build, commission, retirement and verified.
+Recovery emits batches of at most eight ordinary guarded mining actions.
+Completed recovery identities are removed from pending state before building
+replacement entities at the same coordinates. Production plans are published
+only after initial recoveries finish. Old western assemblers/inserters and
+belts are retired only after new production and all eight labs are proven.
+Their reservation remains until cleanup completes. Every pole is retained
+initially to avoid breaking unrelated electrical connections.
+Fresh source-smelting and replacement proofs are required before every
+retirement batch and final success; stored commissioning evidence alone is
+insufficient after later damage.
+
+## Validation evidence and limits
+
+The first full read-only native preparation at tick1377188 passed with596belts,
+36underground mouths,4splitters,12AM1,13fast/14normal inserters and21poles. It
+identified658 initial owned recoveries,459 later retirement entities and55
+normally clearable trees. Seven adapters passed the unchanged route gates;
+the longest was green output:77tiles,5turns for71Manhattan distance. The bus
+itself used260belts,20underground mouths and4splitters. No game or runtime state
+was changed by preparation. Later live destruction can change recovery counts,
+so a fresh preparation is authoritative.
+
+The static compact audit proves ordinary input/lane paths to all12 machines;
+the lab audit proves green reaches all8 pickups. Live commissioning additionally
+requires all12 machine recipes/products/power, native underground partners,
+native splitter priorities, correctly typed occupied bus lines, red/green
+production proof and green stock in every powered lab. This does not certify a
+sustained science rate, full-game completion or a rocket launch.
+
+Targeted tests cover shared geometry, native priority sides, source merge
+semantics, preserved ports/entities during parallel activation, reserved-line
+crossings, source/belt/lane budgets, exact corridor tracing and recovery guards,
+publication freshness and commissioning gates. Per-agent token and weekly
+quota usage are unavailable; the root task records the project/account meters.

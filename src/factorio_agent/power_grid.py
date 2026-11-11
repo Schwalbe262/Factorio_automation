@@ -58,5 +58,6 @@ return {ok=true,clear=clear}
     while path[-1] not in starts:path.append(parents[path[-1]])
     path.reverse()
     return _plan([entity("small-electric-pole",x,y) for x,y in path[1:]],[],
-                 template="power_grid_extension",source_unit_number=starts[path[0]]["unit_number"],
+                 template="power_grid_extension",source_unit_number=starts[path[0]].get("unit_number"),
+                 source_position={"x":path[0][0],"y":path[0][1]},
                  destination=dict(destination),wire_hops=len(path)-1,maximum_hop_tiles=7)

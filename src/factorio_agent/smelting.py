@@ -58,6 +58,54 @@ def merge_entities(*groups):
     return list(result.values())
 
 
+def bank_capacities(catalog, banks):
+    """Derive planned product/minute from unique furnace entities, never row counts.
+
+    These are catalog nameplate capacities, independent of current ore, fuel,
+    power or downstream load. Rates retain the resource keys used by the state.
+    """
+    supported = {'stone-furnace', 'steel-furnace', 'electric-furnace'}
+    rates, seen = {}, {}
+    for bank in banks:
+        resource, product = bank['resource'], bank['product']
+        recipe = catalog.recipes.get(product)
+        if not recipe:
+            raise ValueError('missing smelting product recipe: '+product)
+        duration = recipe.get('energy', 0)
+        products = [p for p in recipe.get('products', []) if p['name'] == product]
+        if (type(duration) not in (int, float) or not math.isfinite(duration) or duration <= 0
+                or any(p.get('probability', 1) != 1 or p.get('independent_probability', 1) != 1
+                       or type(p.get('amount')) not in (int, float) for p in products)):
+            raise ValueError('deterministic smelting recipe required: '+product)
+        amount = sum(p['amount'] for p in products)
+        if not math.isfinite(amount) or amount <= 0:
+            raise ValueError('positive smelting product yield required: '+product)
+        rates.setdefault(resource, 0.0)
+        found = False
+        for furnace in bank['entities']:
+            name = furnace['name']
+            prototype = catalog.entities.get(name, {})
+            if name not in supported:
+                if prototype.get('type') == 'furnace':
+                    raise ValueError('unsupported planned furnace: '+name)
+                continue
+            found = True
+            key = name, *xy(furnace)
+            owner = resource, product
+            if key in seen:
+                if seen[key] != owner:
+                    raise ValueError('one furnace assigned to multiple smelting products')
+                continue
+            speed = prototype.get('crafting_speed', 0)
+            if type(speed) not in (int, float) or not math.isfinite(speed) or speed <= 0:
+                raise ValueError('missing furnace crafting speed: '+name)
+            seen[key] = owner
+            rates[resource] += speed*60/duration*amount
+        if not found:
+            raise ValueError('smelting bank has no supported furnace entities: '+resource)
+    return rates
+
+
 class SmeltingDistrict:
     def __init__(self,game,bootstrap,builder,catalog):
         self.game,self.bootstrap,self.builder,self.catalog=game,bootstrap,builder,catalog
@@ -119,9 +167,13 @@ class SmeltingDistrict:
             ports=self.state['plan']['ports'] if paired else [p for b in banks for p in b['ports'] if p['direction']=='output']
             plan=_plan(es,ports,**extra)
             self.state.update(plan=plan,banks=banks)
-            self.state.setdefault('nominal_smelting_capacity_per_minute',{})[resource]=count*each*(2 if paired else 1)
+            self.state['nominal_smelting_capacity_per_minute']=bank_capacities(self.catalog,banks)
             _atomic_json(self.path,self.state)
             board['blocks']['smelting_district']=plan;_atomic_json(board_path,board)
+        rates=bank_capacities(self.catalog,self.state['banks'])
+        if self.state.get('nominal_smelting_capacity_per_minute')!=rates:
+            self.state['nominal_smelting_capacity_per_minute']=rates
+            _atomic_json(self.path,self.state)
         result=self.builder.ensure_plan(obs,self.state['plan'])
         if result.get('status')!='succeeded':return result
         proof=self.proof(obs)
@@ -283,5 +335,6 @@ return {ok=true,banks=result}
             if any(len(k)!=1 for k in kinds) or kinds[0]&kinds[1] or set.union(*kinds)!={row['resource'],'coal'}:return None
         return {'tick':obs['tick'],'automatic_feed_baseline':self.state['automatic_feed_baseline'],
                 'reserved_area':self.state['plan']['reserved_area'],'banks':evidence,'native_feed_lanes':lanes['banks'],
-                'underground_pairs':len(self.state['plan']['underground_pairs']),'splitter_count':1,
+                'underground_pairs':len(self.state['plan']['underground_pairs']),
+                'splitter_count':sum(e['name']=='splitter' for e in self.state['plan']['entities']),
                 'scope':'ordinary mined/belt-fed smelting and output, no actor furnace feeding; sustained rate requires a downstream load and timed proof'}

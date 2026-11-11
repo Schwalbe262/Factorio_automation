@@ -116,10 +116,11 @@ def construction_budget(root,obs,catalog):
         state=json.loads(path.read_text(encoding="utf-8"))
         if state.get("world_id")==obs["world_id"]:
             plans += [bank["plan"] for bank in state.get("banks",[])]
-    path=Path(root)/'automation-science.json'
-    if path.exists():
-        state=json.loads(path.read_text(encoding='utf-8'))
-        if state.get('world_id')==obs['world_id']:plans.append(state['plan'])
+    for filename in ('automation-science.json','logistic-science.json','steam-expansion.json'):
+        path=Path(root)/filename
+        if path.exists():
+            state=json.loads(path.read_text(encoding='utf-8'))
+            if state.get('world_id')==obs['world_id']:plans.append(state['plan'])
     actual={(e["name"],e["position"]["x"],e["position"]["y"]):e for e in obs["entities"]}
     wanted={}
     for plan in plans:
@@ -154,3 +155,40 @@ def construction_budget(root,obs,catalog):
             "furnace_output_stock":dict(outputs),"base_shortfall_after_held_and_furnace_outputs":shortfall,
             "configuration_pending":configuration,"unplanned_power_steps":unplanned,"unresolved_materials":unresolved,
             "scope":"all currently saved power/board/mining/science plans, not unplanned future stages; excludes queued outputs and intermediate stock credit"}
+
+
+def factory_constraints(root,obs,catalog):
+    """Nameplate design constraints are separate from live flow measurements."""
+    from .manufacturing import raw_demand
+    def read(filename):
+        p=Path(root)/filename
+        state=json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
+        return state if state.get('world_id')==obs['world_id'] else {}
+    mining=read('mining-outposts.json');smelting=read('smelting-district.json')
+    nominal={};lines=[];demand=Counter()
+    for item,ore in (('iron-plate','iron-ore'),('copper-plate','copper-ore')):
+        supply=sum(b['nominal_rate_per_minute'] for b in mining.get('banks',[]) if b.get('ready') and b['plan']['resource']==ore)
+        producers=sum(b['count']*catalog.entities['stone-furnace']['crafting_speed']*60/catalog.recipes[item]['energy']
+                      for b in smelting.get('banks',[]) if b['product']==item)
+        nominal[item]=min(supply,producers)
+    red=read('automation-science.json')
+    if red:
+        needs=raw_demand(catalog,'automation-science-pack',red['nominal_machine_rate'])['raw_items_per_minute']
+        demand.update(needs);lines.append({'product':'automation-science-pack','nominal_per_minute':red['nominal_machine_rate'],'raw_demand':needs})
+    green=read('logistic-science.json')
+    if green:
+        needs=green['rated_demand']['raw_items_per_minute'];demand.update(needs)
+        lines.append({'product':'logistic-science-pack','nominal_per_minute':green['nominal_machine_rate'],
+                      'raw_demand':needs,'phase':green['phase']})
+    peak=0;generation=0;low_power=Counter()
+    for e in obs['entities']:
+        proto=catalog.entities.get(e['name'],{})
+        if proto.get('electric'):peak+=proto.get('energy_usage',0)*60/1000
+        generation+=proto.get('energy_production',0)*60/1000
+        if e.get('status_name') in ('low_power','no_power'):low_power[e['name']]+=1
+    return {'registered_design_lines':lines,'nominal_plate_supply_per_minute':nominal,
+            'simultaneous_rated_plate_demand_per_minute':dict(demand),
+            'rated_plate_deficit_per_minute':{item:max(0,n-nominal.get(item,0)) for item,n in demand.items()},
+            'installed_generation_nameplate_kw':generation,'installed_consumer_peak_kw':peak,
+            'live_low_or_no_power_entities':dict(low_power),
+            'scope':'catalog design bounds and instantaneous native status; peak is not average demand; construction/mall/ammo/steel add further demand; no measured throughput claim'}

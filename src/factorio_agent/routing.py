@@ -39,7 +39,7 @@ def metrics(path):
 
 def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
                  end_direction=None, max_nodes=25000, max_turns=6,
-                 max_detour_ratio=1.35, grid_pitch=8):
+                 max_detour_ratio=1.35, grid_pitch=8, candidate_validator=None):
     """Select whole straight trunk corridors, never incremental squiggles.
 
     Candidates consist of whole orthogonal trunks and crossbars with bounded
@@ -118,6 +118,10 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
             if bv[axis]==0:last.update(pb[axis]+n for n in (-2,-1,1,2))
             midpoint=(pa[other]+pb[other])/2
             bars=sorted(trunk_lanes[other],key=lambda n:(abs(n-pa[other])+abs(n-pb[other]),abs(n-midpoint)))[:8]
+            # Keep end-adjacent crossbars: the midpoint can lie inside a large
+            # production block while its destination has a narrow clear entry.
+            bars=sorted(set(bars+sorted(trunk_lanes[other],key=lambda n:abs(n-pa[other]))[:2]
+                                  +sorted(trunk_lanes[other],key=lambda n:abs(n-pb[other]))[:2]))
             for p in first:
                 for q in last:
                     for bar in bars:
@@ -126,7 +130,7 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
                         else:
                             skeletons.append([a,pa,(pa[0],p),(bar,p),(bar,q),(pb[0],q),pb,b])
         skeletons.sort(key=lambda vs: sum(abs(p[0]-q[0])+abs(p[1]-q[1]) for p,q in zip(vs,vs[1:])))
-        valid = []
+        valid = [];seen_paths=set()
         visited = 0
         direct = abs(a[0]-b[0]) + abs(a[1]-b[1])
         for skeleton in skeletons:
@@ -134,6 +138,9 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
             if estimated > max_detour_ratio * direct + 4:
                 continue
             path = expand(skeleton)
+            identity=tuple(path)
+            if identity in seen_paths:continue
+            seen_paths.add(identity)
             visited += len(path)
             if visited > max_nodes:
                 break
@@ -143,6 +150,15 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
                 continue
             m = metrics(path)
             if m["turns"] <= max_turns:
+                if candidate_validator:
+                    segments=[]
+                    for index,p in enumerate(path):
+                        d=end_direction
+                        if index+1<len(path):
+                            q=path[index+1];d=next(d for d,v in VECTORS.items() if v==(round(q[0]-p[0]),round(q[1]-p[1])))
+                        elif d is None:d=segments[-1]['direction'] if segments else start_direction or 0
+                        segments.append({'position':{'x':p[0],'y':p[1]},'direction':d})
+                    if not candidate_validator({'ok':True,'segments':segments,'metrics':m}):continue
                 valid.append(((m["turns"], m["length"], tuple(path)), path, m))
         if not valid:
             return {**failure, "visited": visited}
