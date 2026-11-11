@@ -52,6 +52,14 @@ after commissioning. `DedicatedMaterials` calls the gate after reserving its
 new bank and before building its miners. Existing post identities are preserved;
 a missing known post requires explicit perimeter repair.
 
+Register the complete prospective production plan before `ensure_coverage`.
+The placement filter protects every board reservation, including empty future
+machine space and bus bands, plus all external planned entity footprints and
+fixed-port continuation cells. Published typed material/fluid exits also retain
+their empty continuation tiles. A read-only preview before registration only
+knows the geometry already supplied or registered; the build gate rechecks the
+complete registered plan before emitting a post build.
+
 The coverage metric partitions each rectangle into cells at most four tiles
 wide. Every complete cell must have all four corners within a single turret
 disk of native attack range minus two tiles. A disk is convex, so this proves

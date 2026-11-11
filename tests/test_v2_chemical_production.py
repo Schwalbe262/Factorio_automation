@@ -183,6 +183,26 @@ class ChemicalControllerTests(unittest.TestCase):
         self.c.state={'world_id':'w','catalog_fingerprint':'c','products':{'plastic-bar':entry}}
         return entry
 
+    def test_unbuilt_products_choose_their_explicit_gas_aliases(self):
+        self.sources_patch.stop()
+        plastic=dict(self.gas,unit_number=10,position={'x':10.5,'y':-30.5})
+        sulfur=dict(self.gas,unit_number=20,position={'x':20.5,'y':-30.5})
+        water=dict(self.gas,item='water',unit_number=30,position={'x':30.5,'y':-30.5})
+        self.registry['sources'].update({'plastic-gas':plastic,'sulfur-gas':sulfur,'water':water})
+        (self.root/'fluid-sources.json').write_text(json.dumps(self.registry))
+        self.assertEqual(self.c._sources(self.obs,'plastic-bar')['sources']['petroleum-gas'],plastic)
+        self.assertEqual(self.c._sources(self.obs,'sulfur')['sources']['petroleum-gas'],sulfur)
+
+    def test_new_alias_does_not_retarget_a_previously_bound_product(self):
+        self.sources_patch.stop()
+        alias=dict(self.gas,unit_number=10,position={'x':10.5,'y':-30.5})
+        self.registry['sources']['plastic-gas']=alias
+        (self.root/'fluid-sources.json').write_text(json.dumps(self.registry))
+        self.c.state={'products':{'plastic-bar':{'sources':{'petroleum-gas':self.gas,'coal':self.coal}}}}
+        self.assertEqual(self.c._sources(self.obs,'plastic-bar')['sources']['petroleum-gas'],self.gas)
+        self.c.overrides['petroleum-gas']=alias
+        self.assertEqual(self.c._sources(self.obs,'plastic-bar')['reason'],'chemical_bound_source_override_changed')
+
     def test_prepare_readonly_paid_core_complete_sources_and_natural_technology(self):
         with patch('factorio_agent.chemical_production._atomic_json')as write:
             entry=self.c.prepare(self.obs,self.params);write.assert_not_called()

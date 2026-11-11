@@ -41,6 +41,61 @@ def _result(status, reason, **evidence):
     return {'status': status, 'reason': reason, 'evidence': evidence}
 
 
+def protected_factory_areas(game,world_id,catalog_fingerprint,*,runtime_dir=None):
+    """Protect future blocks, external planned hardware and fixed-port exits."""
+    from factorio_ai.deterministic_builder import FactoryBuilder
+    root=runtime_dir if runtime_dir is not None else getattr(getattr(game,'cfg',None),'runtime_dir',None)
+    if root is None:return []
+    root=Path(root);path=root/'pcb-board.json'
+    if not path.exists():return []
+    board=json.loads(path.read_text(encoding='utf-8'))
+    if board.get('world_id')!=world_id or board.get('catalog_fingerprint')!=catalog_fingerprint:
+        raise ValueError('defense_board_identity_changed')
+    blocks=list(board.get('blocks',{}).values());bus=board.get('shared_main_bus',{})
+    areas=[deepcopy(b['reserved_area'])for b in blocks if b.get('reserved_area')]
+    areas += [deepcopy(r['area'])for r in bus.get('reservations',[])if r.get('area')]
+    geometry=FactoryBuilder.__new__(FactoryBuilder)
+    cells=geometry._occupied_by_plan([e for b in blocks+[bus]for e in b.get('entities',[])])
+    ports=[p for b in blocks+[bus]for p in b.get('ports',[])]
+    for filename in('material-sources.json','fluid-sources.json'):
+        registry_path=root/filename
+        if not registry_path.exists():continue
+        registry=json.loads(registry_path.read_text(encoding='utf-8'))
+        if registry.get('world_id')!=world_id or registry.get('catalog_fingerprint')!=catalog_fingerprint:
+            raise ValueError('defense_source_registry_identity_changed')
+        ports += list(registry.get('sources',{}).values())
+    vectors={0:(0,-1),4:(1,0),8:(0,1),12:(-1,0)}
+    for port in ports:
+        if port.get('facing')not in vectors or port.get('direction')not in('input','output'):continue
+        p=port['position'];dx,dy=vectors[port['facing']]
+        if port['direction']=='input':dx,dy=-dx,-dy
+        containing=[a for a in areas if a[0][0]<=p['x']<=a[1][0]and a[0][1]<=p['y']<=a[1][1]]
+        length=2
+        for step in range(1,5):
+            q={'x':p['x']+step*dx,'y':p['y']+step*dy}
+            if containing and not any(q['x']+.49>a[0][0]and q['x']-.49<a[1][0]
+                    and q['y']+.49>a[0][1]and q['y']-.49<a[1][1]for a in containing):
+                length=max(length,step);break
+        cells.update((p['x']+i*dx,p['y']+i*dy)for i in range(length+1))
+    rows={}
+    for x,y in cells:rows.setdefault(y,set()).add(x)
+    active={};last=None
+    for y,xs in sorted(rows.items()):
+        if last is not None and y!=last+1:areas.extend(active.values());active={}
+        runs=[]
+        for x in sorted(xs):
+            if runs and x==runs[-1][1]+1:runs[-1]=(runs[-1][0],x)
+            else:runs.append((x,x))
+        remaining={}
+        for lo,hi in runs:
+            run=(lo,hi);rectangle=active.pop(run,None)
+            if rectangle:rectangle[1][1]=y+.5
+            else:rectangle=[[lo-.5,y-.5],[hi+.5,y+.5]]
+            remaining[run]=rectangle
+        areas.extend(active.values());active=remaining;last=y
+    areas.extend(active.values());return areas
+
+
 class DefensePerimeter:
     def __init__(self, game, bootstrap, catalog):
         self.game, self.bootstrap, self.catalog = game, bootstrap, catalog
@@ -273,14 +328,7 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
 
     def _coverage_reservations(self, obs, areas):
         reserved = deepcopy(list(FUTURE_AREAS)) + deepcopy(areas)
-        board_path = self.path.parent / 'pcb-board.json'
-        if board_path.exists():
-            board = json.loads(board_path.read_text(encoding='utf-8'))
-            if (board.get('world_id') != obs['world_id']
-                    or board.get('catalog_fingerprint') != self.catalog.fingerprint):
-                raise ValueError('defense_board_identity_changed')
-            reserved.extend(b['reserved_area'] for b in board.get('blocks', {}).values() if b.get('reserved_area'))
-            reserved.extend(r['area'] for r in board.get('shared_main_bus', {}).get('reservations', []) if r.get('area'))
+        reserved.extend(protected_factory_areas(self.game,obs['world_id'],self.catalog.fingerprint,runtime_dir=self.path.parent))
         for scope in self.state.get('coverage_scopes', {}).values():
             reserved.extend(deepcopy(scope['areas']))
         return reserved

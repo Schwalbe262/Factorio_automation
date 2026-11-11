@@ -23,7 +23,10 @@ requires 60 plastic and 10 sulfur/minute: 30 coal, 750 petroleum gas and 150
 water/minute. That gas demand requires two basic refineries at their 540/minute
 catalog nameplate; one existing refinery cannot promise the complete demand.
 
-Default source registry keys are `petroleum-gas` and `water` in
+Unbuilt products prefer their published `plastic-gas` or `sulfur-gas` alias.
+If no such alias exists, the unowned original `petroleum-gas` port is considered.
+Accepted product sources remain pinned even if a new alias later appears;
+changing their explicit override blocks. Other default registry keys are `water` in
 `fluid-sources.json`, and `plastic-coal` in `material-sources.json`. An override
 must still equal an explicitly published typed source. Every source preserves
 its exact world, unit, fixed position, direction and item/fluid. Existing coal,

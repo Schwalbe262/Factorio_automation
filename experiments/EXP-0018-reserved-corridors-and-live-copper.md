@@ -44,7 +44,11 @@ and setup retain their original separate calls. Exact total prepare wall20.765s
 is not an end-to-end20s bound. Actual Engine deployment then commissioned its
 four armed posts, but the post-deployment whole-plan check found a turret on an
 unbuilt adapter. It blocked before any core machine was built. The fixed core,
-ports, paid tap and defenses are retained; unbuilt feed replanning is pending.
+ports and paid tap are retained. Follow-up inspection also found post7154
+blocking the mandatory fixed input apron, so rerouting feeds alone cannot solve
+both conflicts. A separately guarded, prepaid replacement is in development:
+7152(135,-95) to(135,-93),7154(146,-109) to(146,-111). Read-only native combined
+preflight2951770 passed; neither post has been moved yet.
 
 Copper restoration preserved the old exhausted drills, collector and joins.
 Its new28tile/four-turn route joins owned1217; post7063 had400health and10full
@@ -54,9 +58,18 @@ and nominal capacity proofs, not a sustained150/min measurement. The refreshed
 bus declares375iron/150copper supply. Its422iron declared demand includes the
 bounded critical ammo fill, so the47nominal deficit is not hidden.
 
-Chemical production is implemented and its full normal-cost plan is proven,
-but remains unbuilt. An explicit gas manifold is being prepared before Plastic
-claims the original gas edge, with separate Plastic/Sulfur aliases sharing the
-existing refinery capacity. Blue, mall, repair, rail, rocket and sustained-rate
+Gas distribution completed2888709, proof2889194: five actions/zero failures,
+13paid normal pipes, no undergrounds or new posts,13reciprocal edges. Alias
+7228(160.5,-61.5)E feeds Plastic;7231(155.5,-64.5)N feeds Sulfur. Each contained
+69.4286gas. Original6963 remains fixed; the two outlets share one540/min nominal
+source. Planning21.94s/execution4.88s, without a sustained throughput claim.
+
+Unbuilt Chemical products select their own published alias; accepted sources
+remain pinned. Future post placement protects all registered external assets,
+empty producer slots, bus expansion bands and fixed input/output continuations.
+Five focused negatives plus existing regressions pass. Fresh complete Plastic
+preparation2968151 passed13.11s with336entities using exact alias7228 and coal6983;
+Luna resumed the same blocked0-action key. Actual Plastic commissioning remains
+pending at this checkpoint. Blue, mall, repair, rail, rocket and sustained-rate
 gates remain open. Part9 measured usage is reported as a shared interval;
 child/per-module absolute tokens and exact weekly shares are unavailable.

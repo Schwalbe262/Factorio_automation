@@ -60,9 +60,14 @@ ammo's bounded critical fill and surplus industrial buffers can temporarily redu
 science supply. Neither nameplate budgets nor full buffers certify sustained rates.
 Normal underground-belt pipe crossings and whole producer-reservation keepouts
 now pass native consumer preparation. Engine construction stopped before its
-core because a newly commissioned defense post occupies an unbuilt adapter;
-retain the post and replan the unbuilt feeds. Plastic is held for independent
-gas distribution. Next finish these consumers, mall/repair, blue, rail and rocket.
+core because two newly commissioned posts obstruct a feed and its fixed input
+apron. Normally paid, armed replacements must preserve coverage before old
+posts are recovered; this guarded relocation remains under development.
+The independent shared gas header is commissioned with exact Plastic/Sulfur
+aliases and one shared540/min nominal source. Future defense placement now
+protects complete registered plans, expansion spaces and fixed port exits.
+Plastic full native preparation2968151 passed13.11s; actual construction is
+in progress. Next finish these consumers, mall/repair, blue, rail and rocket.
 Do not close the continuous-rate gate from filling output buffers. No rocket yet.
 
 Freeze code, model/effort, seed/save and settings per attempt. Classify failures

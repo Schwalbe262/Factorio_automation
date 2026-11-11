@@ -339,8 +339,15 @@ class ChemicalProduction:
             fluid=item!='coal';path=self.path.parent/('fluid-sources.json'if fluid else'material-sources.json')
             registry=json.loads(path.read_text(encoding='utf-8'))if path.exists()else{}
             if not _identity(obs,registry,self.catalog):return {'ok':False,'reason':'chemical_source_registry_missing_or_changed','item':item}
-            source=self.overrides[item]or registry.get('sources',{}).get(SOURCE_KEYS[item])
-            if not source:return {'ok':False,'reason':'explicit_usable_chemical_source_missing','item':item,'registry_key':SOURCE_KEYS[item]}
+            saved=self.state.get('products',{}).get(product,{}).get('sources',{}).get(item)
+            if saved and self.overrides[item]is not None and self.overrides[item]!=saved:
+                return {'ok':False,'reason':'chemical_bound_source_override_changed','item':item}
+            source_key=SOURCE_KEYS[item]
+            if item=='petroleum-gas':
+                preferred='plastic-gas'if product=='plastic-bar'else'sulfur-gas'
+                if preferred in registry.get('sources',{}):source_key=preferred
+            source=saved or self.overrides[item]or registry.get('sources',{}).get(source_key)
+            if not source:return {'ok':False,'reason':'explicit_usable_chemical_source_missing','item':item,'registry_key':source_key}
             if not isinstance(source,dict)or source not in registry.get('sources',{}).values():
                 return {'ok':False,'reason':'chemical_source_not_exactly_published','item':item}
             if fluid:

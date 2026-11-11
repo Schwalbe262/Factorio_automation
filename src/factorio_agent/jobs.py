@@ -79,6 +79,8 @@ CAPABILITIES = {
                           "effect":"normally build a defended compact engine district with a surplus iron tap, fixed steel supply and reserved machine expansion; prove real engines on its output"},
     "chemical_production": {"parameters":{"product":"plastic-bar|sulfur"},"requires":["basic_petroleum"],
                             "effect":"normally build compact defended chemical cells with exact declared fluid handoffs and paid typed ingredient connections; prove actual solid chemical output"},
+    "gas_distribution": {"parameters":{},"requires":["basic_petroleum"],
+                         "effect":"normally build a protected shared gas header before chemical consumers, preserve the original outlet and publish separate plastic/sulfur edges without multiplying source capacity"},
     "ammo_production": {"parameters":{},"requires":["main_bus_factory"],
                        "effect":"normally build a defended automatic magazine factory from a critical iron bus tap, bound its real output buffer, then supply full normal magazines through guarded inventory transfers"},
     "legacy_coal_cleanup": {"parameters":{},"requires":["steam_expansion","dedicated_materials"],
@@ -375,6 +377,9 @@ class StarterExecutors:
                                      steel=self.industrial_operations.steel)
         from .chemical_production import ChemicalProduction
         self.chemicals=ChemicalProduction(game,self.builder,catalog,self.perimeter)
+        from .gas_distribution import GasDistribution
+        self.gas_distribution=GasDistribution(game,self.builder,catalog,self.perimeter,
+                                             petroleum=self.petroleum,chemical=self.chemicals)
         from .normal_research import NormalResearch
         self.normal_research=NormalResearch(game,catalog,self.science,self.green)
         ledger=Ledger(Path(game.cfg.runtime_dir)).data
@@ -507,6 +512,8 @@ class StarterExecutors:
             return self.engines.step(obs)
         if capability == "chemical_production":
             return self.chemicals.step(obs,parameters or {})
+        if capability == "gas_distribution":
+            return self.gas_distribution.step(obs)
         raise ValueError("no executor for capability: " + capability)
 
     def proof(self, capability: str, obs: dict, result: dict, parameters: dict | None = None) -> dict | None:
@@ -581,6 +588,8 @@ class StarterExecutors:
             return self.engines.proof(obs)
         if capability == "chemical_production":
             return self.chemicals.proof(obs,parameters or {})
+        if capability == "gas_distribution":
+            return self.gas_distribution.proof(obs)
         produced = obs.get("production", {})
         if not all(produced.get(name, {}).get("produced", 0) > 0 for name in ("iron-plate", "copper-plate")):
             return None
