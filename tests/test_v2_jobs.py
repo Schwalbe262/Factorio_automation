@@ -1,5 +1,7 @@
 """Safety/recovery tests for real multi-process gameplay job boundaries."""
 import json
+import io
+from contextlib import redirect_stdout
 from pathlib import Path
 import subprocess
 import sys
@@ -8,6 +10,7 @@ import unittest
 
 from factorio_ai.deterministic_state import RunLock
 from factorio_agent.jobs import Ledger, Request, control, run_slice, submit
+from factorio_agent.__main__ import main
 
 
 class Game:
@@ -52,6 +55,34 @@ class JobBoundaryTests(unittest.TestCase):
 
     def request(self, key="test", capability="starter", tick=100):
         return Request(key, "world", tick, capability)
+
+    def test_worker_stop_is_lock_independent_input_and_stops_before_next_action(self):
+        submit(self.root, self.game, self.request())
+        before = (self.root / 'jobs.json').read_bytes()
+        with RunLock(self.root / 'writer.lock'), redirect_stdout(io.StringIO()):
+            main(['--runtime', str(self.root), 'stop-worker'])
+        self.assertEqual((self.root / 'jobs.json').read_bytes(), before)
+        executor = Executor({'type': 'craft', 'recipe': 'transport-belt', 'count': 1})
+        result = run_slice(self.root, self.game, executor, 'test', seconds=.1)
+        self.assertEqual(result['reason'], 'operator_stop_requested')
+        self.assertEqual(executor.calls, 0)
+        self.assertEqual(self.game.actions, [])
+        control(self.root, self.game, 'test', 'pause')
+        with redirect_stdout(io.StringIO()):
+            main(['--runtime', str(self.root), 'clear-worker-stop'])
+        self.assertFalse((self.root / 'stop.json').exists())
+        self.assertEqual(Ledger(self.root).data['jobs']['test']['status'], 'paused')
+
+    def test_cli_does_not_clear_another_operator_stop_marker(self):
+        marker = self.root / 'stop.json'
+        marker.write_text('{"source":"human-emergency-stop"}', encoding='utf-8')
+        before = marker.read_bytes()
+        with redirect_stdout(io.StringIO()):
+            main(['--runtime', str(self.root), 'stop-worker'])
+        self.assertEqual(marker.read_bytes(), before)
+        with self.assertRaisesRegex(ValueError, 'another operator'):
+            main(['--runtime', str(self.root), 'clear-worker-stop'])
+        self.assertEqual(marker.read_bytes(), before)
 
     def test_retry_is_idempotent_but_key_cannot_change_effect(self):
         original = submit(self.root, self.game, self.request())

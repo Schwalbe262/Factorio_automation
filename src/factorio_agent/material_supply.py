@@ -25,8 +25,9 @@ def _same_plan(a, b):
 
 
 class DedicatedMaterials:
-    def __init__(self, game, builder, catalog, outposts):
+    def __init__(self, game, builder, catalog, outposts, *, perimeter=None):
         self.game, self.builder, self.catalog, self.outposts = game, builder, catalog, outposts
+        self.perimeter = perimeter
         self.path = Path(game.cfg.runtime_dir)/'material-supply.json'
         self.sources_path = self.path.parent/'material-sources.json'
         self.state = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
@@ -255,6 +256,10 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
         result = self._register(obs, entry, ready=entry['phase'] == 'verified')
         if result:
             return result
+        if self.perimeter is not None:
+            result = self.perimeter.ensure_coverage(obs, entry['material_supply_id'], [entry['bank']['reserved_area']])
+            if result is not None:
+                return result
         result = self.builder.ensure_plan(obs, entry['bank']['plan'])
         if result.get('status') != 'succeeded':
             return result

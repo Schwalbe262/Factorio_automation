@@ -144,8 +144,12 @@ return {ok=true,candidates=best,nominal_drill_rate=proto.mining_speed*60/mined.m
                     or target['direction']!=connection['target']['direction']
                     or set(target.get('belt_inventory',{}))-{bank['plan']['resource']}):return None
         drills=[self.find(obs,e) for e in bank["plan"]["entities"] if e["name"]=="electric-mining-drill"]
-        if any(not e or not e.get("electric_network_connected") or e.get("energy",0)<=0
-               or e.get("status_name") in {"no_minable_resources","no_mineable_resources","no_power"} for e in drills):return None
+        if not drills or any(not e or not e.get("electric_network_connected") or e.get("energy",0)<=0
+                             or e.get("status_name")=="no_power" for e in drills):return None
+        depleted = [e['unit_number'] for e in drills
+                    if e.get('status_name') in {'no_minable_resources','no_mineable_resources'}]
+        installed = bank['nominal_rate_per_minute']
+        available = installed * (len(drills)-len(depleted)) / len(drills)
         unit_ids=sorted(e["unit_number"] for e in drills)
         counts=0
         for wanted in bank["plan"]["entities"]:
@@ -156,7 +160,8 @@ return {ok=true,candidates=best,nominal_drill_rate=proto.mining_speed*60/mined.m
             bank["output_evidence"]={"tick":obs["tick"],"count":counts,"drill_units":unit_ids}
         evidence=bank.get("output_evidence")
         if not evidence or evidence["drill_units"]!=unit_ids or not 0<=obs["tick"]-evidence["tick"]<=600:return None
-        return {"nominal_rate_per_minute":bank["nominal_rate_per_minute"],"drill_units":unit_ids,
+        return {"nominal_rate_per_minute":available,"installed_nominal_rate_per_minute":installed,
+                "exhausted_drill_units":depleted,"drill_units":unit_ids,
                 "native_output_evidence":evidence,"output_port":bank["plan"]["ports"][0],
                 "consumer_connection":connection,"native_producer_lanes":lane_proof}
 
@@ -270,8 +275,9 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
                 return {"status":"blocked","reason":"existing_outpost_damaged_requires_repair_before_expansion"}
             if bank.get("ready") and self.bank_proof(obs,bank) is None:
                 return {"status":"waiting","reason":"restore existing outpost power/output before adding capacity"}
-        active=[b for b in banks if b.get("ready") and self.bank_proof(obs,b)]
-        rate=sum(b["nominal_rate_per_minute"] for b in active)
+        active_proofs=[(b,self.bank_proof(obs,b)) for b in banks if b.get("ready")]
+        active=[b for b,p in active_proofs if p]
+        rate=sum(p["nominal_rate_per_minute"] for _,p in active_proofs if p)
         if rate>=target:
             _atomic_json(self.path,self.state)
             return {"status":"succeeded","reason":"powered electric mining banks have native output","evidence":self.proof(obs,parameters)}

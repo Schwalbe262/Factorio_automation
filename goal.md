@@ -35,7 +35,7 @@ only the framework interface and its documented state, with no parent decisions.
 ## Evaluation
 Current sprint (2026-11-12): independent paired producers retain fixed ports
 (EXP-0009); permanent red and green production reaches all eight labs through
-ordinary belts (EXP-0010/0011). Loaded second steam pair, nominal iron ore360
+ordinary belts (EXP-0010/0011). Loaded second steam pair, installed iron ore360
 and plates225/min, and eight normally armed strategic posts are commissioned.
 The user manually repelled a destructive enemy attack; this is human assistance.
 Shared iron/copper main bus and compact32x28 green migration are commissioned,
@@ -44,7 +44,9 @@ stock collection now pools live sources instead of repeatedly taking empty
 moving belts. Green raw branches now avoid the iron patch without moving the
 compact production core; new dedicated coal supplies independent normal inputs.
 Shared resource keepouts reject new non-mining construction on ore. Remaining
-legacy ore/coal corridors are being migrated with production proofs (EXP-0014).
+green/steam-coal and foreign-copper-crossing iron corridors have been migrated
+with native production proofs (EXP-0014). One iron drill exhausted its patch;
+remaining source capacity is330/min. Restore capacity before further industry.
 These are assisted development outcomes, not a Luna-only score.
 Next prove loaded continuous rates, build permanent steel/mall/automatic ammo
 and repair. Full-rated red36+green35 requires264.5iron/min above225supply.

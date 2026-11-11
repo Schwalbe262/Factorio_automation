@@ -62,13 +62,33 @@ Full v2 suite at this checkpoint: 353 total, 11 optional Lua-runtime skips,
 legacy proofs above are stronger than fixture-only success; they do not prove
 sustained science rates or defense against an actual attack.
 
-Remaining old iron delivery crosses copper ore; a downstream-only alternative
-has passed read-only native planning but is not commissioned. Existing local
-collectors/necessary short exits remain
-on their own patches. Stone, steel, bricks, furnace upgrade and coverage extension
-are not commissioned. Mall, automatic ammunition/repair, oil, rail and rocket
-remain unresolved. Next finish native resource migrations, then guarded supply
-expansion and steel/brick commissioning.
+Iron job `luna-iron-resource-reroute-20261112` now succeeded on its original key:
+24 actions/0 failures, proof2131116,86tiles/4turns/ratio1.04878, joins1119/1122
+preserved. Initially stopped at fresh-production commissioning: all12furnaces
+held100plates and one primary drill2422 had exhausted its patch. Kept the old
+route buffers while diagnosing. Added safe CLI worker-stop input; the earlier
+pause attempt correctly failed while another process owned the lock. After
+safe stop/pause, native fluid-handling research50units completed2124329,
+creating real demand. Updated mining proof to retain powered exhausted assets
+while reporting150+120+60=330remaining capacity, installed360; no fake counters.
+Resumed original job: new-path ore554 and136newironplates at final receipt.
+Planning119.61s/execution23.86s/paused199.94s. Fresh2137264 proofTRUE,
+205newironplates, all23oldcopper-patch belt identities gone, no pending recovery,
+same joins and healthy compact factory. Local collectors/necessary exits remain.
+
+Resource policy exposed a real fresh-start compatibility issue: the old selector
+could latch an on-ore self-fuel arm. V2 now surveys off-ore boundary arms/ports,
+uses shared transport and whole-plan preflight before persisting any new plan.
+Existing plans remain fixed. Native boundary core passed; hypothetical full
+selection against the occupied existing boiler failed safely in20.61s under a
+10-route/20s budget. This is not a successful fresh-seed startup test.
+
+Additive defense coverage is connected before dedicated mining construction.
+Native readonly stone and steel candidate coverage passed; an impossible brick
+site beside water correctly blocked. No new coverage post or stone bank has
+been built. Steel/bricks/furnace upgrade are offline modules only. Mall,
+automatic ammunition/repair, oil, rail and rocket remain unresolved. Next restore
+active ore capacity, then guarded supply expansion and industry commissioning.
 
 Part 8 parent usage sample: 57,412,163 tokens including cached input;
 account weekly meter 17% to 22% (+5 percentage points). This includes the larger

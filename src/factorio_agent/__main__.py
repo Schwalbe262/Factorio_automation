@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 import time
 
-from factorio_ai.deterministic_state import RunLock
+from factorio_ai.deterministic_state import RunLock, _atomic_json
 from . import runtime
 from .jobs import CAPABILITIES, Ledger, Request, StarterExecutors, control, run_slice, submit, summary
 
@@ -22,6 +22,8 @@ def main(argv=None):
     create.add_argument("--rcon-port", type=int, default=27060)
     for command in ("start", "connect-player", "observe", "capabilities"):
         commands.add_parser(command)
+    commands.add_parser("stop-worker")
+    commands.add_parser("clear-worker-stop")
     commands.add_parser("status").add_argument("--key")
     request = commands.add_parser("request")
     request.add_argument("--key", required=True)
@@ -59,6 +61,23 @@ def main(argv=None):
     elif args.command == "status":
         data=Ledger(root).data
         result=data["jobs"].get(args.key,{"status":"error","reason":"unknown_job_key"}) if args.key else data
+    elif args.command == "stop-worker":
+        if not root.is_dir():
+            raise ValueError("runtime directory does not exist")
+        # Out-of-band input, consumed between durable actions by run_slice.
+        # Do not contend for its writer lock or edit the job ledger here.
+        stop = root / "stop.json"
+        if not stop.exists():
+            _atomic_json(stop, {"source": "gameplay-worker-cli", "requested_at": time.time()})
+        result = {"ok": True, "status": "stop_requested"}
+    elif args.command == "clear-worker-stop":
+        stop = root / "stop.json"
+        if stop.exists():
+            marker = json.loads(stop.read_text(encoding="utf-8"))
+            if marker.get("source") != "gameplay-worker-cli":
+                raise ValueError("stop marker belongs to another operator")
+            stop.unlink()
+        result = {"ok": True, "status": "worker_stop_cleared"}
     elif args.command == "observe":
         game = runtime.game_for(root)
         obs = game.observe()

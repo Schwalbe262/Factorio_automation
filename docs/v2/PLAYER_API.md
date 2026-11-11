@@ -28,6 +28,10 @@ The command format is `python -B -m factorio_agent --runtime <directory> <comman
   concise heartbeat about every 50 seconds and stops on a real terminal status.
 - `pause --key <key>` / `resume --key <key>`: suspend an unfinished goal while
   another goal runs, preserving partial construction. Only one unpaused goal.
+- `stop-worker`: request a safe stop between durable actions, even while a
+  worker holds the writer lock. Poll that exact worker to completion, then use
+  `pause` on its job. `clear-worker-stop` removes only this CLI's marker before
+  starting another worker; it preserves stops created by another operator.
 - `reconcile --key <key>`: explicitly reobserve an uncertain action outcome and
   replan from actual state; never replay the old mutation. World rollback needs
   separate reconciliation and is not accepted by this command.
@@ -58,6 +62,7 @@ Current capabilities:
 | main_bus_factory | none | paired_smelting, logistic_science, defense_perimeter; migrate to shared bus and compact green |
 | dedicated_materials | `--resource coal` or stone | paired_mining; independent opposing drill pair and identity-bound material outlets |
 | green_bus_reroute | none | main_bus_factory; move only green raw branches off resources, preserve production core |
+| ore_transport_reroute | none | paired_mining and paired_smelting; move iron delivery after the last join, preserve mining, prove new ore flow and iron production |
 | steam_coal_reroute | none | steam_expansion; prebuild alternative, verify loaded engines, recover obsolete owned transport |
 | legacy_coal_cleanup | none | steam_expansion and dedicated_materials; isolated burner/cache recovery after replacement supply and headroom proof |
 | research | `--technology` native catalog name | automation_science; native prerequisites and continuous supported science supply |
@@ -81,6 +86,12 @@ authorize rebuilding it on ore. Migration jobs prebuild clear alternatives,
 pay for the cutover, then prove real supply before recovering old transport.
 See [resource policy](RESOURCE_POLICY.md). Dedicated coal's two outlets share
 one 60/min nominal source; a splitter does not double production.
+New dedicated supply construction also waits for complete native turret coverage
+of its reservation and ten full normal magazines in the covering posts. This
+is geometric/armed commissioning, not evidence of winning an enemy attack.
+Mining receipts separate installed capacity from remaining capacity after
+exhaustion; an exhausted powered drill does not erase healthy neighboring
+miners. Capacity expansion decisions use the remaining rate.
 
 Bootstrap logistics builds a small reserved16x16 PCB cell with two assemblers,
 four real inserters and finite iron/copper chest inputs. Gear and red-science

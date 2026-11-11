@@ -55,6 +55,8 @@ CAPABILITIES = {
                           "effect":"prebuild an alternative off-resource coal corridor, normally cut over owned corners, verify loaded steam and recover obsolete transport"},
     "green_bus_reroute": {"parameters":{},"requires":["main_bus_factory"],
                          "effect":"move green bus taps and raw adapters around resources, prebuild the alternative and recover old owned transport only after fresh production proof"},
+    "ore_transport_reroute": {"parameters":{},"requires":["paired_mining","paired_smelting"],
+                             "effect":"move the iron delivery suffix off foreign resource patches after the final mining join; preserve mines and prove new raw flow and smelting before recovery"},
     "legacy_coal_cleanup": {"parameters":{},"requires":["steam_expansion","dedicated_materials"],
                           "effect":"normally recover a proven isolated burner-to-coal-cache cell after automatic supply, loaded steam and inventory headroom checks; preserve all electric miners and power assets"},
     "research": {"parameters":{"technology":"catalog technology name"},"requires":["automation_science"],
@@ -305,13 +307,16 @@ class StarterExecutors:
         from .inventory_storage import InventoryStorage
         self.storage=InventoryStorage(game,catalog)
         from .material_supply import DedicatedMaterials
-        self.material_supply=DedicatedMaterials(game,self.builder,catalog,self.outposts)
+        self.material_supply=DedicatedMaterials(game,self.builder,catalog,self.outposts,perimeter=self.perimeter)
         from .resource_reroute import SteamCoalReroute
         self.steam_coal_reroute=SteamCoalReroute(game,self.builder,catalog,self.steam_expansion,self.outposts)
         from .green_bus_reroute import GreenBusReroute
         self.green_bus_reroute=GreenBusReroute(game,self.builder,catalog,self.bus_factory,self.science,self.green,self.smelting)
         from .legacy_coal_cleanup import LegacyCoalCleanup
         self.legacy_coal_cleanup=LegacyCoalCleanup(game,self.bootstrap,self.builder,catalog,self.storage,self.steam_expansion,self.outposts)
+        from .ore_transport_reroute import OreTransportReroute
+        self.ore_transport_reroute=OreTransportReroute(game,self.builder,catalog,self.smelting,self.outposts,
+                                                     bus_factory=self.bus_factory,green=self.green)
         from .normal_research import NormalResearch
         self.normal_research=NormalResearch(game,catalog,self.science,self.green)
         ledger=Ledger(Path(game.cfg.runtime_dir)).data
@@ -418,6 +423,8 @@ class StarterExecutors:
             return self.green_bus_reroute.step(obs,parameters or {})
         if capability == "legacy_coal_cleanup":
             return self.legacy_coal_cleanup.step(obs,parameters or {})
+        if capability == "ore_transport_reroute":
+            return self.ore_transport_reroute.step(obs,parameters or {})
         raise ValueError("no executor for capability: " + capability)
 
     def proof(self, capability: str, obs: dict, result: dict, parameters: dict | None = None) -> dict | None:
@@ -459,6 +466,8 @@ class StarterExecutors:
             return self.green_bus_reroute.proof(obs)
         if capability == "legacy_coal_cleanup":
             return self.legacy_coal_cleanup.proof(obs)
+        if capability == "ore_transport_reroute":
+            return self.ore_transport_reroute.proof(obs)
         produced = obs.get("production", {})
         if not all(produced.get(name, {}).get("produced", 0) > 0 for name in ("iron-plate", "copper-plate")):
             return None

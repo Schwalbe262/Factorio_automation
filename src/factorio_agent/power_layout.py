@@ -9,10 +9,15 @@ from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
+import time
 
 from factorio_ai.deterministic_builder import FactoryBuilder, _plan
 from factorio_ai.deterministic_state import _atomic_json
 from .routing import route_trunks
+
+
+STARTER_MAX_ROUTE_ATTEMPTS=10
+STARTER_PLANNING_SECONDS=20.0
 
 
 def identity(entity):
@@ -37,6 +42,96 @@ def compact_coal_cell(position):
 class V2FactoryBuilder(FactoryBuilder):
     """Use fixed trunk routing and compact starter cells for future v2 plans."""
     _coal_plan=staticmethod(compact_coal_cell)
+
+    def _choose_coal_plan(self,power):
+        """Choose a new boundary cell and complete resource-free boiler route.
+
+        Existing checkpoints remain authoritative. Normal ensure_plan checks
+        either preserve their exact live assets or explicitly block repairs;
+        this selector never deletes a saved plan or moves an operating plant.
+        """
+        if 'coal_plan' in self.state:
+            return deepcopy(self.state['coal_plan'])
+        from types import SimpleNamespace
+        from .planning import preflight
+        from .resource_policy import RESOURCE_CHECK_LUA,mining_reservations,policy_specs
+        from .smelting import merge_entities
+        from .transport import plan_connection,xy
+        destinations=[p for p in power.get('ports',[]) if p.get('item')=='coal' and p.get('direction')=='input']
+        if len(destinations)!=1:
+            return {'ok':False,'reason':'starter_power_requires_one_typed_coal_input'}
+        started=time.monotonic();attempts=0;examined=0;failures=[];indices=[]
+        def expired():return time.monotonic()-started>=STARTER_PLANNING_SECONDS
+        def failure(reason):
+            return {'ok':False,'reason':reason,'route_attempts':attempts,'route_attempt_budget':STARTER_MAX_ROUTE_ATTEMPTS,
+                    'planning_seconds_budget':STARTER_PLANNING_SECONDS,'elapsed_seconds':round(time.monotonic()-started,3),
+                    'boundary_candidates':len(indices),'candidates_examined':examined,'failures':failures[-8:]}
+        def budget_query(script):
+            if expired():return {'ok':False,'reason':'starter_coal_planning_budget_exhausted'}
+            result=self.game.query(script)
+            return {'ok':False,'reason':'starter_coal_planning_budget_exhausted'} if expired() else result
+        planning_game=SimpleNamespace(query=budget_query,cfg=getattr(self.game,'cfg',None))
+        obs=self.game.observe()
+        if expired():return failure('starter_coal_planning_budget_exhausted')
+        cells=[self._coal_plan(position) for position in self.coal_sites()[:256]]
+        if expired():return failure('starter_coal_planning_budget_exhausted')
+        if not cells:return {'ok':False,'reason':'no_starter_coal_candidates'}
+        # The fuel return arm and outgoing port must both be off ore and mining
+        # reservations. No inserter exception or prospective on-patch source is
+        # required; only the drill and its remaining local collector are scoped.
+        boundaries=[]
+        for cell in cells:
+            arm=next(e for e in cell['entities'] if e['name']=='burner-inserter')
+            source=cell['ports'][0]
+            output={'name':'transport-belt','position':source['position'],'direction':source['facing']}
+            boundaries.append(policy_specs(self,{'world_id':obs['world_id'],'entities':[]},[arm,output]))
+        payload=json.dumps(json.dumps({'boundaries':boundaries,'zones':mining_reservations(self.game,obs['world_id'])},separators=(',',':')))
+        survey=budget_query(RESOURCE_CHECK_LUA+'''
+local args=helpers.json_to_table('''+payload+''');local legal={}
+for index,specs in ipairs(args.boundaries) do local clear=true
+ for _,spec in ipairs(specs) do if resource_violation(spec,args.zones,{},specs) then clear=false;break end end
+ if clear then legal[#legal+1]=index end
+end
+return {ok=true,legal=legal}
+''')
+        if not survey.get('ok'):
+            return failure('starter_coal_planning_budget_exhausted') if expired() else survey
+        indices=survey.get('legal',[])
+        if indices=={}:indices=[]
+        if (not isinstance(indices,list)
+                or any(type(index) is not int or not 1<=index<=len(cells) for index in indices)
+                or len(indices)!=len(set(indices))):
+            return {'ok':False,'reason':'invalid_starter_boundary_survey'}
+        adapter=SimpleNamespace(_occupied_by_plan=self._occupied_by_plan,
+                                can_place=lambda entities:preflight(planning_game,self,obs,entities))
+        for index in indices:
+            if expired() or attempts>=STARTER_MAX_ROUTE_ATTEMPTS:return failure('starter_coal_planning_budget_exhausted')
+            examined+=1
+            cell=cells[index-1]
+            check=preflight(planning_game,self,obs,cell['entities'])
+            if not check.get('ok'):
+                failures.append({'candidate':index,'stage':'cell','reason':check.get('reason')});continue
+            try:
+                reserved=merge_entities(power['entities'],cell['entities'])
+                if expired():return failure('starter_coal_planning_budget_exhausted')
+                attempts+=1
+                route=plan_connection(planning_game,adapter,obs,cell['ports'][0],destinations[0],reserved)
+                if not route.get('ok'):
+                    failures.append({'candidate':index,'stage':'route','reason':route.get('reason')});continue
+                entities=merge_entities(cell['entities'],route['entities'])
+                whole=preflight(planning_game,self,obs,merge_entities(power['entities'],entities))
+            except ValueError as exc:
+                failures.append({'candidate':index,'stage':'geometry','reason':str(exc)});continue
+            if not whole.get('ok'):
+                failures.append({'candidate':index,'stage':'whole','reason':whole.get('reason')});continue
+            if expired():return failure('starter_coal_planning_budget_exhausted')
+            obstacles={(e['name'],*xy(e)):e for row in (check,route,whole) for e in row.get('clear_obstacles',[])}
+            return _plan(entities,cell['ports'],drill=cell['drill'],template='dedicated_boundary_coal_feed_v2',
+                mining_footprint=cell['mining_footprint'],underground_pairs=route.get('underground_pairs',[]),
+                route_metrics=route['route_metrics'],clear_obstacles=list(obstacles.values()),
+                clearance_world_id=obs['world_id'],layout_policy='pcb-starter-boundary-coal-v2')
+        return failure('starter_coal_planning_budget_exhausted' if expired() else
+                       'no_boundary_coal_cell_with_complete_resource_avoiding_boiler_route')
 
     def _recover_resource_cell_obstruction(self,observation,plan,entity):
         recovery=super()._recover_resource_cell_obstruction(observation,plan,entity)

@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import Mock, patch
 
 from factorio_ai.deterministic_builder import FactoryBuilder
 from factorio_agent.outposts import MiningOutposts,mining_bank,validate_parameters
@@ -36,6 +37,44 @@ class AlignedMiningBankTests(unittest.TestCase):
         result=outpost.step(obs,{'resource':'iron-ore','rate_per_minute':60})
         self.assertEqual(result['status'],'waiting')
         self.assertEqual(len(outpost.state['banks']),1)
+
+    def test_depleted_drill_preserves_bank_health_but_reduces_available_capacity(self):
+        outpost = MiningOutposts.__new__(MiningOutposts)
+        plan = mining_bank(.5, .5, 2, 'iron-ore')
+        bank = {'plan': plan, 'nominal_rate_per_minute': 60}
+        obs = {'world_id': 'w', 'tick': 400, 'entities': [
+            dict(e, unit_number=i+1, energy=100, electric_network_connected=True,
+                 belt_inventory={'iron-ore': 4}) for i,e in enumerate(plan['entities'])]}
+        drills = [e for e in obs['entities'] if e['name'] == 'electric-mining-drill']
+        drills[0]['status_name'] = 'no_minable_resources'
+        with patch('factorio_agent.outposts.underground_proof', return_value=True):
+            proof = outpost.bank_proof(obs, bank)
+            self.assertEqual(proof['nominal_rate_per_minute'], 30)
+            self.assertEqual(proof['installed_nominal_rate_per_minute'], 60)
+            self.assertEqual(proof['exhausted_drill_units'], [drills[0]['unit_number']])
+            self.assertEqual(bank['nominal_rate_per_minute'], 60)
+            drills[1]['status_name'] = 'no_mineable_resources'
+            self.assertEqual(outpost.bank_proof(obs, bank)['nominal_rate_per_minute'], 0)
+            drills[0]['electric_network_connected'] = False
+            self.assertIsNone(outpost.bank_proof(obs, bank))
+
+    def test_capacity_goal_uses_remaining_rate_and_requests_expansion_after_depletion(self):
+        outpost = MiningOutposts.__new__(MiningOutposts)
+        plan = mining_bank(.5, .5, 2, 'iron-ore')
+        bank = {'ready': True, 'plan': plan, 'nominal_rate_per_minute': 60}
+        outpost.state = {'world_id': 'w', 'banks': [bank]}
+        outpost.publish_reservations = Mock(return_value=None)
+        outpost.bank_proof = Mock(return_value={'nominal_rate_per_minute': 30,
+                                              'installed_nominal_rate_per_minute': 60})
+        outpost.prepare_extension = Mock(return_value={'ok': False, 'reason': 'local ore exhausted'})
+        outpost.prepare_connected_bank = Mock(return_value={'ok': False, 'reason': 'no safe additional bank'})
+        obs = {'world_id': 'w', 'technologies': {'electric-mining-drill': True},
+               'entities': [dict(e, unit_number=i+1) for i,e in enumerate(plan['entities'])]}
+        result = outpost.step(obs, {'resource': 'iron-ore', 'rate_per_minute': 60})
+        self.assertEqual(result['status'], 'blocked')
+        outpost.prepare_extension.assert_called_once_with(obs, bank, 1)
+        outpost.prepare_connected_bank.assert_called_once_with(obs, bank, 1)
+        self.assertEqual(len(outpost.state['banks']), 1)
 
 
 if __name__=='__main__':unittest.main()

@@ -7,9 +7,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import math
 from pathlib import Path
+import re
 
 from factorio_ai.deterministic_state import _atomic_json
+from .defense_coverage import COVERAGE_MARGIN, coverage_cells, coverage_report, native_candidate_survey, select_cover
 
 
 AMMO_TARGET = 10
@@ -128,14 +131,15 @@ for _,spec in ipairs(specs) do
  local e=target(spec.position,"gun-turret")
  if e and e.force==f and e.position.x==spec.position.x and e.position.y==spec.position.y then
   row.unit_number=e.unit_number;row.identity_changed=spec.unit_number and spec.unit_number~=e.unit_number or false
-  row.health=e.health;row.max_health=e.max_health;row.status=e.status;row.ammo=0;row.ammo_rounds=0
+  row.health=e.health;row.max_health=e.max_health;row.status=e.status;row.ammo=0;row.ammo_rounds=0;row.full_magazines=0
   local inv=e.get_inventory(defines.inventory.turret_ammo)
   if inv then for i=1,#inv do local stack=inv[i]
    if stack.valid_for_read and stack.name=="firearm-magazine" and stack.quality.name=="normal" then
     row.ammo=row.ammo+stack.count;row.ammo_rounds=row.ammo_rounds+(stack.count-1)*stack.prototype.magazine_size+stack.ammo
+    row.full_magazines=row.full_magazines+stack.count-(stack.ammo<stack.prototype.magazine_size and 1 or 0)
    end
   end end
- else row.missing=true;row.ammo=0;row.ammo_rounds=0 end
+ else row.missing=true;row.ammo=0;row.ammo_rounds=0;row.full_magazines=0 end
  row.nearby_enemies=s.count_entities_filtered{position=spec.position,radius=36,force="enemy",type={"unit","unit-spawner","turret"}}
  posts[#posts+1]=row
 end
@@ -258,3 +262,182 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
 
     def proof(self, obs):
         return self._proof(self.inspect(obs)) if self.state else None
+
+    def _coverage_reservations(self, obs, areas):
+        reserved = deepcopy(list(FUTURE_AREAS)) + deepcopy(areas)
+        board_path = self.path.parent / 'pcb-board.json'
+        if board_path.exists():
+            board = json.loads(board_path.read_text(encoding='utf-8'))
+            if (board.get('world_id') != obs['world_id']
+                    or board.get('catalog_fingerprint') != self.catalog.fingerprint):
+                raise ValueError('defense_board_identity_changed')
+            reserved.extend(b['reserved_area'] for b in board.get('blocks', {}).values() if b.get('reserved_area'))
+            reserved.extend(r['area'] for r in board.get('shared_main_bus', {}).get('reservations', []) if r.get('area'))
+        for scope in self.state.get('coverage_scopes', {}).values():
+            reserved.extend(deepcopy(scope['areas']))
+        return reserved
+
+    def prepare_coverage(self, obs, scope_id, areas):
+        """Read-only additive planning; every complete cell fits in one disk."""
+        error = self._identity_error(obs)
+        if error:
+            return {'ok': False, 'reason': error}
+        if not isinstance(scope_id, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,80}', scope_id):
+            return {'ok': False, 'reason': 'invalid_defense_coverage_scope_id'}
+        try:
+            cells = coverage_cells(areas)
+        except ValueError as exc:
+            return {'ok': False, 'reason': 'invalid_defense_coverage_areas', 'detail': str(exc)}
+        if not self.state:
+            return {'ok': False, 'reason': 'initial_defense_perimeter_required'}
+        prior = self.state.get('coverage_scopes', {}).get(scope_id)
+        if prior:
+            if prior['areas'] != areas:
+                return {'ok': False, 'reason': 'defense_coverage_scope_geometry_changed'}
+            return {'ok': True, 'scope': deepcopy(prior), 'new_posts': [], 'existing': True}
+        if not all(obs.get('enabled_recipes', {}).get(item) for item in ('gun-turret', 'firearm-magazine')):
+            return {'ok': False, 'reason': 'native_gun_turret_and_normal_magazine_recipes_required'}
+        report = self.inspect(obs)
+        if not self._proof(report):
+            return {'ok': False, 'reason': 'existing_defense_perimeter_not_healthy', 'native': report}
+        try:
+            reserved = self._coverage_reservations(obs, areas)
+            radius = self.state['range'] - COVERAGE_MARGIN
+            if not 0 < radius <= 128:
+                raise ValueError('native defense range outside bounded survey budget')
+            bounds = [[math.floor(min(a[0][0] for a in areas)-radius-3),
+                       math.floor(min(a[0][1] for a in areas)-radius-3)],
+                      [math.ceil(max(a[1][0] for a in areas)+radius+3),
+                       math.ceil(max(a[1][1] for a in areas)+radius+3)]]
+            if (bounds[1][0]-bounds[0][0]+1)*(bounds[1][1]-bounds[0][1]+1) > 65536:
+                raise ValueError('local defense walk-grid budget exceeded; split distant scopes')
+            candidates = []
+            for x in range(bounds[0][0]+2, bounds[1][0]-1):
+                for y in range(bounds[0][1]+2, bounds[1][1]-1):
+                    position = {'x': x, 'y': y}
+                    if any(all(math.hypot(cx-x, cy-y) <= radius for cx, cy in c['corners']) for c in cells):
+                        candidates.append(position)
+            if len(candidates) > 12000:
+                raise ValueError('defense placement candidate budget exceeded')
+        except ValueError as exc:
+            return {'ok': False, 'reason': 'defense_coverage_survey_budget_or_board_failed', 'detail': str(exc)}
+        native = native_candidate_survey(self.game, candidates, areas, reserved, bounds)
+        if not native.get('ok'):
+            return {'ok': False, 'reason': native.get('reason', 'native_defense_coverage_survey_failed')}
+        if (native.get('range') != self.state['range']
+                or type(native.get('magazine_size')) not in (int, float) or native['magazine_size'] <= 0):
+            return {'ok': False, 'reason': 'native_defense_range_or_magazine_prototype_changed'}
+        existing = deepcopy(self.state['posts'])
+        chosen = select_cover(cells, existing, native.get('candidates', []), radius)
+        if chosen is None:
+            return {'ok': False, 'reason': 'no_clear_accessible_complete_defense_coverage',
+                    'native_candidates': len(native.get('candidates', [])), 'effective_range': radius}
+        new_posts = []
+        for i, site in enumerate(chosen):
+            new_posts.append({**site, 'name': 'coverage_' + scope_id + '_' + str(i+1),
+                              'coverage_scope': scope_id, 'commissioned': False})
+        cover = select_cover(cells, [], existing+new_posts, radius,
+                             maximum_new_posts=len(existing)+len(new_posts))
+        if cover is None:
+            return {'ok': False, 'reason': 'defense_coverage_selection_failed'}
+        scope = {'areas': deepcopy(areas), 'cells': cells, 'effective_range': radius,
+                 'native_range': native['range'], 'coverage_margin': COVERAGE_MARGIN,
+                 'magazine_size': native['magazine_size'], 'prepared_tick': obs.get('tick'),
+                 'covering_posts': [p['name'] for p in cover], 'new_posts': [p['name'] for p in new_posts],
+                 'commissioned': False, 'access_scope': native.get('access_scope'),
+                 'survey_bounds': bounds,
+                 'geometry': coverage_report(cells, existing+new_posts, radius)}
+        return {'ok': True, 'scope': scope, 'new_posts': new_posts,
+                'requirements': {'gun-turret': len(new_posts), 'firearm-magazine': AMMO_TARGET*len(new_posts)}}
+
+    def _coverage_evidence(self, report, scope, *, initial=False):
+        if not self._proof(report):
+            return None
+        live = {p['name']: p for p in report['posts']}
+        names = set(scope['covering_posts']) | set(scope['new_posts'])
+        selected = [live[name] for name in names if name in live]
+        if len(selected) != len(names):
+            return None
+        if initial and any(p.get('full_magazines', -1) < AMMO_TARGET for p in selected):
+            return None
+        geometry = coverage_report(scope['cells'], selected, scope['effective_range'])
+        if not geometry['complete']:
+            return None
+        return {'tick': report['tick'], 'geometry': geometry, 'posts': selected,
+                'initial_full_normal_magazines': AMMO_TARGET, 'ongoing_refill_below': REFILL_BELOW,
+                'access_scope': scope.get('access_scope'),
+                'scope': 'geometric armed-post coverage at this snapshot; no combat-stress certification'}
+
+    def ensure_coverage(self, obs, scope_id, areas):
+        """Ordinary paid deployment gate; None means this scope is ready."""
+        error = self._identity_error(obs)
+        if error:
+            return _result('blocked', error)
+        prepared = self.prepare_coverage(obs, scope_id, areas)
+        if not self.state and prepared.get('reason') == 'initial_defense_perimeter_required':
+            action = self.step(obs)
+            if action.get('status') == 'succeeded':
+                return _result('waiting', 'initial_perimeter_ready_prepare_additive_coverage_next')
+            return action
+        if not prepared.get('ok'):
+            return _result('blocked', prepared['reason'], native=prepared)
+        if not prepared.get('existing'):
+            self.state['posts'].extend(deepcopy(prepared['new_posts']))
+            self.state.setdefault('coverage_scopes', {})[scope_id] = deepcopy(prepared['scope'])
+            self._save()
+        scope = self.state['coverage_scopes'][scope_id]
+        report = self.inspect(obs)
+        if not report.get('ok'):
+            return _result('blocked', report.get('reason', 'native_defense_status_failed'))
+        if report.get('changed'):
+            return _result('blocked', 'defense_post_identity_changed', posts=report['changed'])
+        by_name = {p['name']: p for p in report['posts']}
+        for spec in self.state['posts']:
+            live = by_name.get(spec['name'], {})
+            if live.get('missing') and (spec.get('unit_number') or spec.get('lost_unit_number')):
+                return _result('blocked', 'existing_defense_post_missing_requires_explicit_repair', post=spec['name'])
+        self._bind(report)
+        if not scope['commissioned']:
+            names = set(scope['covering_posts']) | set(scope['new_posts'])
+            for spec in self.state['posts']:
+                live = by_name.get(spec['name'], {})
+                if spec['name'] not in names or live.get('missing'):
+                    continue
+                if 'full_magazines' not in live:
+                    return _result('blocked', 'native_full_normal_magazine_evidence_required', post=spec['name'])
+                needed = AMMO_TARGET-live['full_magazines']
+                if needed <= 0:
+                    continue
+                held = report['actor_full_magazines']
+                if not held:
+                    return self.bootstrap.ensure_item(self._ammo_observation(obs, report), 'firearm-magazine', needed)
+                return {'type': 'insert', 'name': 'gun-turret', 'position': spec['position'],
+                        'item': 'firearm-magazine', 'inventory': 'turret_ammo', 'count': min(held, needed),
+                        'expected_entity_unit': live['unit_number'], 'expected_entity_world_id': obs['world_id'],
+                        'reason': 'load ten full normal magazines before industrial coverage ' + scope_id}
+        evidence = self._coverage_evidence(report, scope, initial=not scope['commissioned'])
+        if evidence:
+            if not scope['commissioned']:
+                scope['commissioned'] = True
+                scope['commissioned_tick'] = report['tick']
+                self._save()
+            return None
+        action = self.step(obs)
+        if action.get('type') == 'build':
+            try:
+                reserved = self._coverage_reservations(obs, areas)
+            except ValueError as exc:
+                return _result('blocked', str(exc))
+            native = native_candidate_survey(self.game, [action['position']], areas, reserved, scope['survey_bounds'])
+            if (not native.get('ok') or not any(p.get('position') == action['position']
+                                               for p in native.get('candidates', []))):
+                return _result('blocked', 'prepared_defense_coverage_site_or_access_changed', position=action['position'])
+        if action.get('status') == 'succeeded':
+            return _result('waiting', 'waiting_for_complete_native_coverage_proof')
+        return action
+
+    def coverage_proof(self, obs, scope_id):
+        scope = self.state.get('coverage_scopes', {}).get(scope_id)
+        if not scope or not scope.get('commissioned'):
+            return None
+        return self._coverage_evidence(self.inspect(obs), scope)

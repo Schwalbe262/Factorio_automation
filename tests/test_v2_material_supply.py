@@ -73,6 +73,24 @@ class MaterialSupplyTests(unittest.TestCase):
         self.assertFalse(self.controller.path.exists())
         self.assertFalse(self.controller.sources_path.exists())
 
+    def test_defense_action_or_wait_precedes_any_new_mining_construction(self):
+        perimeter = Mock()
+        self.controller.perimeter = perimeter
+        action = {'type': 'build', 'name': 'gun-turret'}
+        perimeter.ensure_coverage.return_value = action
+        self.assertEqual(self.controller.step(self.obs, {'resource': 'stone'}), action)
+        self.builder.ensure_plan.assert_not_called()
+        entry = self.controller.state['supplies']['stone']
+        perimeter.ensure_coverage.assert_called_once_with(
+            self.obs, entry['material_supply_id'], [entry['bank']['reserved_area']])
+        self.assertFalse(self.controller.sources_path.exists())
+        perimeter.ensure_coverage.return_value = {'status': 'waiting', 'reason': 'arming new post'}
+        self.assertEqual(self.controller.step(self.obs, {'resource': 'stone'})['status'], 'waiting')
+        self.builder.ensure_plan.assert_not_called()
+        perimeter.ensure_coverage.return_value = None
+        self.controller.step(self.obs, {'resource': 'stone'})
+        self.builder.ensure_plan.assert_called_once()
+
     def test_paid_coal_distribution_preserves_original_port_and_has_real_nonoverlapping_footprints(self):
         prepared = self.controller.prepare(self.obs, {'resource': 'coal'})
         new = prepared['bank']
