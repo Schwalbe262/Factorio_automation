@@ -151,9 +151,12 @@ def _plan(entities: list[dict], ports: list[dict], **extra: Any) -> dict:
     }
 
 
-# Coal under a dedicated power drill's 3x3 search area, in items. A burner
-# drill mines 15 coal/min, so this is several hours of boiler fuel.
-DEDICATED_COAL_MINIMUM = 4000
+# Coal in the 3x3 tiles around a dedicated power drill, in items. The cell
+# must sit on the patch fringe (its outlet leaves the ore), where tiles are
+# thin: 4000 left no fringe site at all on a live map, while an unchecked
+# site ran dry in twenty minutes. 1500 keeps a burner drill (15 coal/min)
+# fed until electric mining takes over.
+DEDICATED_COAL_MINIMUM = 1500
 
 
 class FactoryBuilder:
