@@ -99,7 +99,7 @@ class ConstructionSupplyTests(unittest.TestCase):
     def test_verified_buffer_precedes_fuller_candidates_but_does_not_exclude_them(self):
         chest = entity(1, 0, "wooden-chest", "inventory")
         self.bootstrap.construction_buffers["iron-plate"] = dict(source(1, "wooden-chest", "chest"), world_id="world")
-        obs = {"world_id": "world", "entities": [entity(2, 8), chest]}
+        obs = {"world_id": "world", "entities": [entity(2, 12), chest]}
         result = self.bootstrap._take_output(obs, "iron-plate", 30)
         self.assertEqual([s["unit_number"] for s in result["sources"]], [1, 2])
         self.assertEqual(result["count"], 30)
@@ -112,11 +112,19 @@ class ConstructionSupplyTests(unittest.TestCase):
             "entities": [
                 entity(1, 200, "assembling-machine-1", "inventory"),
                 entity(2, 200, "lab", "inventory"),
-                entity(3, 1),
+                entity(3, 10),
             ],
         }
         result = self.bootstrap._take_output(obs, "iron-plate", 50)
         self.assertEqual([s["unit_number"] for s in result["sources"]], [3])
+
+    def test_single_items_are_left_to_pile_up_into_a_batch(self):
+        obs = {"world_id": "world", "entities": [entity(3, 4), entity(4, 5)]}
+        self.assertIsNone(self.bootstrap._take_output(obs, "iron-plate", 50))
+        obs["entities"].append(entity(5, 1))
+        self.assertEqual(len(self.bootstrap._take_output(obs, "iron-plate", 50)["sources"]), 3)
+        small = {"world_id": "world", "entities": [entity(3, 4)]}
+        self.assertEqual(self.bootstrap._take_output(small, "iron-plate", 3)["count"], 3)
 
     def test_at_most_sixteen_distinct_sources_ranked_by_stock(self):
         rows = [entity(i, i) for i in range(1, 22)]

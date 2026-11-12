@@ -136,6 +136,7 @@ def validate_take_many(action):
 BURNERS = frozenset({"burner-mining-drill", "stone-furnace"})
 FUELS = ("coal", "wood")
 FUEL_BATCH = 8  # coal pieces worth one fetch-and-fuel trip
+COLLECT_BATCH = 10  # construction items worth one collection trip
 FUEL_SKIP_STOCK = 50  # finished items in a cell that make more fuel pointless
 
 
@@ -391,6 +392,12 @@ class V2Bootstrap(DeterministicBootstrap):
             if len(sources) == MAX_SOURCES:
                 break
         if not sources:
+            return None
+        # Fetching each plate as it leaves the furnace costs one action per
+        # plate. Let a batch pile up unless less than a batch is needed or a
+        # registered buffer chest (whose snapshot may be stale) is involved.
+        on_hand = sum(-row[1] for row in candidates)
+        if on_hand < min(count, COLLECT_BATCH) and all(row[0] for row in candidates):
             return None
         return {
             "type": "take_many",
