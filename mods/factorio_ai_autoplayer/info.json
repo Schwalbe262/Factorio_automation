@@ -1,9 +1,0 @@
-{
-  "name": "factorio_ai_autoplayer",
-  "version": "0.1.0",
-  "title": "Factorio AI Autoplayer",
-  "author": "NEC",
-  "factorio_version": "2.0",
-  "dependencies": ["base"],
-  "description": "Small RCON command surface for a Python AI autoplayer."
-}

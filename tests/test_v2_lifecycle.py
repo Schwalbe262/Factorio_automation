@@ -317,19 +317,12 @@ class LifecycleTests(unittest.TestCase):
 
 
 class BatchMenuTests(unittest.TestCase):
-    def test_one_root_launcher_and_byte_preserved_inactive_legacy_archive(self):
+    def test_one_root_launcher_with_native_line_endings(self):
         repo=Path(__file__).resolve().parents[1]
         self.assertEqual([p.name for p in repo.glob('*.bat')],['Factorio.bat'])
         attributes=(repo/'.gitattributes').read_text()
-        for pattern in ('/Factorio.bat -text','/tools/windows/*.bat -text','/tools/legacy_bat/*.bat.txt -text'):
+        for pattern in ('/Factorio.bat -text','/tools/windows/*.bat -text'):
             self.assertIn(pattern,attributes)
-        archive=repo/'tools/legacy_bat';manifest=(archive/'SHA256SUMS.txt').read_text().splitlines()
-        self.assertEqual(len(manifest),31)
-        self.assertEqual(len(list(archive.glob('*.bat'))),0)
-        for row in manifest:
-            digest,name=row.split('  ',1)
-            self.assertTrue(name.endswith('.bat.txt'));self.assertEqual(Path(name).name,name)
-            self.assertEqual(hashlib.sha256((archive/name).read_bytes()).hexdigest(),digest)
         for path in [repo/'Factorio.bat',*(repo/'tools/windows').glob('*.bat')]:
             data=path.read_bytes();self.assertNotIn(b'\n',data.replace(b'\r\n',b''))
             self.assertFalse(data.startswith(b'\xef\xbb\xbf'))

@@ -1,4 +1,3 @@
-# Preserve native BAT CRLF and byte-for-byte inactive launcher archives.
+# Preserve native BAT CRLF.
 /Factorio.bat -text whitespace=cr-at-eol
 /tools/windows/*.bat -text whitespace=cr-at-eol
-/tools/legacy_bat/*.bat.txt -text whitespace=cr-at-eol
