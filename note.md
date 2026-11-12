@@ -252027,3 +252027,11 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - Validation:78focusedPASS inclold15characterclient; index1481total/1479PASS/2reference skips56.206s. Earlytesteditincorrectmainreturnassumption/testplacementcorrected; standalonehelperunknownlaunchdoesnotkill/retry, commandsecretsprivatepipe. InitialBATnoticeanchor matchedcallsaswellaslabel, correctednewlineanchor/CRLFpreserved.
 - Failure/next: userreportsresource-onlyloops. Newworld actualFe112covers85budget/Cu100; coal15.1/minvs14.5consumption. CGauditpowerlast50=26takes+24fuel,0craft/build; root33urgent-fuelhysteresishotfix68PASS nowinworkingtreeonly, verifyliveprogressandfinishstock/ROI/capacitydecisions. Currentcoal2producerbuilt; no firsthour/rocketclaim.
 - Tokens:18452272rootcached-inclusive; sharedaccount70.0->71.0%(+1pp), exactfeatureweeklyshare/childtotalsunknown;33earlyworkoverlaps32.
+
+## 2026-11-13 Part33 ? recover actual startup inactivity
+- Goal: stop replay stalls before future rocket features; user reported several idle minutes.
+- Hypotheses/actions: priority fuel maintenance repeatedly spent each newly collected coal; changed it to urgent empty/near-exhausted productive burners only. Quiet-map native enemy sequences serialize as `{}`; normalize only empty survey sequences, retain malformed-data rejection.
+- Options: automatic grant/reset/duplicate jobs rejected; normal source fixes plus explicit root typed retry of the original defense/mining keys. This recovery is assisted, not Luna-only proof.
+- Metrics/result: focused 88 tests PASS. Before fuel fix last50 power actions=26 stocktakes+24 fuel, no build/craft. After fix power succeeded210actions/native91748 (water200/steam400/2ready engines; idle flow, not measured load). Current quiet survey valid; defense succeeded11actions/native218983; existing iron outpost retried unchanged, native construction verification ongoing.
+- Failure/next: unexpected empty enemy encoding blocked both jobs and Luna kept waiting. Continue actual mining/smelting progress; integrate bounded supply advice and approved preparation during native waits, then benchmark fresh-map speed. No rocket/speed-success claim.
+- Usage: root16,679,413 tokens including cached input; account weekly71?73%=+2percentage points. Includes overlapping Part34 preparation; exact task weekly share/child totals unavailable.

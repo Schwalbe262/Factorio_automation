@@ -6723,3 +6723,9 @@ Improvement: distinguish a sole perpendicular belt corner from true side loading
 - Before/after: directDETACHEDflags leftrealFactorioserver/GUIcoupledtolaunchconsole; aconsole-freebroker nowspawnsboth, returnsrealchildhandle, passescredentialsbyprivatepipe. Lunasupervisoralreadyconsoleindependent. Worldsave/pauseworkwhencharacterunavailable, withoutgrantingrespawn/materialsorlooseningresume.
 - Evidence: actualWM_CLOSEterminatedfirsttestgamePIDs; finalWM_CLOSEparent49000leftsame server50076/GUI19852/Luna40676alive andnativegame5502->18100unpaused.1481indexedgate/2reference skips plus78focusedPASS.
 - Remainingrisk: unknownlaunchreceiptrequiresprocessinspectionratherthanduplicate; explicitstop/shutdownstillstopbydesign. Replayresourceupkeeploopsarenotfixedbyprocessdetachment, root33performanceworkneeded.
+
+## 2026-11-13 Part33 ? maintenance must yield while production remains live
+- Source: Part33 power action trace and ordinary-cost recovery.
+- Improvement: only near-exhausted empty productive burners interrupt primary construction; backed-up output and stored/live fuel yield.
+- Before: 50 consecutive actions collected/inserted coal without construction. After: primary power completed naturally with real ready water/steam/engines, retaining urgent fuel protection.
+- Evidence: focused fuel regressions plus native power proof91748; no item/research grants. Remaining risk: fresh-map elapsed speed and working-load generation still unverified.

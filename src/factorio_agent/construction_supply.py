@@ -111,7 +111,17 @@ class V2Bootstrap(DeterministicBootstrap):
         return dict(observation,entities=[e for e in observation.get('entities',[])if available(e)])
 
     def maintain_fuel(self,observation):
-        entities=observation.get('entities',[])
+        # Only imminent fuel loss may interrupt the primary build. Refilling
+        # every live burner below two items can consume all newly mined coal
+        # forever, especially when its output is already backed up.
+        def urgent(entity):
+            if entity.get('name')not in {'burner-mining-drill','stone-furnace'}:return True
+            if entity.get('status_name')in {'full_output','waiting_for_space','waiting_for_space_in_destination'}:return False
+            fuel=entity.get('inventory')or{}
+            if fuel.get('coal',0)+fuel.get('wood',0)>0:return False
+            return entity.get('remaining_burning_fuel',0)<=1_000_000
+        entities=[e for e in observation.get('entities',[])if urgent(e)]
+        observation=dict(observation,entities=entities)
         hungry=any(e.get('name')in {'burner-mining-drill','stone-furnace'}
             and sum((e.get('inventory')or{}).get(item,0)for item in ('coal','wood'))<2 for e in entities)
         if not hungry:return None

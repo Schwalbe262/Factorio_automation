@@ -109,6 +109,10 @@ class DefensePolicy:
             return deepcopy(self.cache['facts'])
         payload=json.dumps(json.dumps({'world_id':obs['world_id']},separators=(',',':')))
         facts=self.game.query(SURVEY_LUA.replace('PAYLOAD',payload))
+        # Factorio serializes an empty Lua sequence as an empty JSON object.
+        # No enemies is a valid quiet survey, not unavailable threat evidence.
+        for field in ('assets','guns','targets'):
+            if facts.get(field)=={}:facts[field]=[]
         previous={a['unit_number']:a['health']for a in self.cache['facts'].get('assets',[])}if self.cache else{}
         facts['recent_damage_units']=[a['unit_number']for a in facts.get('assets',[])
             if a.get('unit_number')in previous and type(a.get('health'))in(int,float)and a['health']<previous[a['unit_number']]]

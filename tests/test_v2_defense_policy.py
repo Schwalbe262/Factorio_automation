@@ -98,6 +98,19 @@ class AdditivePlanningTests(unittest.TestCase):
         self.assertTrue(result['new_posts'][0]['local_walk_access'])
         self.assertEqual(result['policy']['ammo_item'],'firearm-magazine')
 
+    def test_fresh_map_empty_lua_enemy_and_gun_tables_are_a_valid_quiet_survey(self):
+        self.f['targets']={};self.f['guns']={}
+        with patch('factorio_agent.defense_policy.native_candidate_survey',side_effect=self.native_site):
+            result=self.engine.prepare(self.obs,{},[])
+        self.assertTrue(result['ok'],result)
+        self.assertEqual(result['risk']['risk'],'quiet')
+        self.assertEqual(len(result['new_posts']),1)
+
+    def test_nonempty_malformed_enemy_table_still_fails_closed(self):
+        self.f['targets']={'bad':'shape'}
+        result=self.engine.prepare(self.obs,{},[])
+        self.assertFalse(result['ok']);self.assertEqual(result['reason'],'adaptive_defense_policy_unavailable')
+
     def test_unbuilt_accepted_target_is_idempotent_instead_of_appending_guns_every_action(self):
         with patch('factorio_agent.defense_policy.native_candidate_survey',side_effect=self.native_site)as survey:
             first=self.engine.prepare(self.obs,{},[])
