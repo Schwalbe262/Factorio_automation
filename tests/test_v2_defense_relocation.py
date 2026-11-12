@@ -441,13 +441,31 @@ a.mine_entity=function(e)local ok=mine(e);main[3]=empty();main[4]=empty();main[6
         self.assertFalse(execute_retire_post(self.game,action)['ok']);new.position.x=135
         self.assertEqual(self.lua.globals().mined_calls,0)
 
-    def test_native_partial_old_magazine_metadata_and_aggregate_capacity_fail_before_mine(self):
+    def test_native_nonplain_old_magazine_metadata_and_aggregate_capacity_fail_before_mine(self):
         action=self.publish_paid();old=self.lua.globals().world['gun-turret:135:-95'];stack=old.ammo_inventory[1]
-        for field,value,restore in(('ammo',5,10),('is_item_with_tags',True,False)):
+        for field,value,restore in(('ammo',0,10),('is_item_with_tags',True,False)):
             stack[field]=value;self.assertEqual(execute_retire_post(self.game,action)['reason'],'old_post_partial_or_nonplain_ammo_requires_explicit_handling');stack[field]=restore
         self.lua.execute('main[1]=stack("stone",100);main[2]=stack("stone",100);main[3]=stack("stone",100)')
         self.assertEqual(execute_retire_post(self.game,action)['reason'],'aggregate_post_recovery_inventory_capacity_missing')
         self.assertEqual(self.lua.globals().mined_calls,0)
+
+    def test_partial_old_magazine_recovery_conserves_actual_97_rounds_and_autoequip(self):
+        action=self.publish_paid();self.lua.execute('autoequip=true;world["gun-turret:135:-95"].ammo_inventory[1].ammo=7')
+        result=execute_retire_post(self.game,action);self.assertTrue(result['ok'],result)
+        self.assertEqual((result['recovered_magazines'],result['recovered_rounds']),(10,97))
+        marker=self.lua.globals().d.defense_relocations[self.c.state['id']+':'+self.entry['name']]
+        self.assertEqual(marker.retirement_intent.version,3)
+        self.assertEqual(marker.retirement_receipt.after.rounds-marker.retirement_receipt.before.rounds,97)
+        self.assertEqual(self.lua.globals().equipped[1].ammo,7)
+        marker.retired=None;marker.retirement_receipt=None
+        self.assertTrue(execute_retire_post(self.game,action)['recovered_from_intent'])
+        self.assertEqual(self.lua.globals().mined_calls,1)
+
+    def test_partial_old_magazine_normalization_is_detected_not_accepted(self):
+        action=self.publish_paid();self.lua.execute('world["gun-turret:135:-95"].ammo_inventory[1].ammo=7')
+        self.assertEqual(execute_retire_post(self.game,action)['reason'],'post_recovery_count_or_round_conservation_failed')
+        marker=self.lua.globals().d.defense_relocations[self.c.state['id']+':'+self.entry['name']]
+        self.assertFalse(marker.retired);self.assertEqual(marker.retirement_intent.old_rounds,97)
 
     def test_native_scripts_are_flattenable_and_never_set_ammo_health_or_research(self):
         for script in(BUILD_REPLACEMENT_LUA,RETIRE_POST_LUA,RECONCILE_RETIREMENT_LUA):

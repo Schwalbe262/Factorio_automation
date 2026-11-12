@@ -6650,3 +6650,9 @@ Improvement: distinguish a sole perpendicular belt corner from true side loading
 - Before: shared Yellow upkeep competed with assault stock; repeated character batches and staged deployment prolonged setup/exposure. After:2localYellow/4Red machines, cap200, exact50factoryRed collection and one10gun wave, with historical paid150stock retained.
 - Evidence: six paid native counters advanced; Factory4137210, actual200cap4174070; paired3500round conservation; all10original stationarytargets killed by own native gun projectiles4156939 after541ticks,0gunloss4173981.
 - Remaining risk: assisted rawplate couriers/Steel7.5 limit sustainable Red rate; focused combat success is not a full-game Luna-only result. Recheck source capacity, native defenses and target geometry for each new operation.
+
+## 2026-11-12T15:00:29+09:00 | Source Part16 immutable continuation and actual ammunition rounds
+- Improvement: append an explicitly reviewed continuation epoch after legitimate owner/post succession; keep original receipt/unknown-baseline claims immutable and carry actual ammunition rounds through ordinary retirement.
+- Before: strict old identity blocked Engine despite paid normal repairs; full-magazine assumptions rejected or overcounted97 remaining rounds as100. After: current canonical coverage and native owner succession are independently validated; version3 receipt conserves actual main+equipped rounddelta and supports interrupted retirement.
+- Evidence: parentSHA unchanged after metadata4258772, ROwhole/future/pipe/coverage4251442PASS,91focusedtests; native4267346 ordinary7154retirement to paid15937 recovered1gun/10mags/97rounds with actor100to197. No historical7152 baseline/counts fabricated.
+- Remaining risk: recovery code supports this narrowly admitted single continuation shape; later unrelated state loss requires fresh honest evidence. Engine machine-output and broad end-to-end rocket acceptance remain separate gates.

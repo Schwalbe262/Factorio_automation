@@ -120,14 +120,16 @@ wall bastions are commissioned with24 paid walls and three armed posts. Native
 repair receipts prove real health gain and tool wear. The exact pinned player's
 successor10915 is rebound after actor11's death;4103 corpse items were recovered
 with conserved rounds/durability, one spare repair tool remains in the corpse.
-Nearby-nest assault preparation now runs through the typed Luna worker; actual
-combat victory, automatic construction mall and sustained rates remain unproved.
+The automatic construction mall and sustained production rates remain unproved.
 One normally paid, defended radar is working at105.5,-27.5, native3941213 with
 positive scan progress. The installation gate uses fresh local coverage,
 walk access and actual hostile ranges, without waiting for unrelated global
 refills. User-rejected staged assault is retired; one concentrated prepaid wave
-replaces it. No target death or nest-clear victory has been accepted yet.
-Finish defense/radar/nearby-nest combat, these consumers, bulk bus growth, blue,
+replaces it. Native4156939 accepted all six nearby spawners and four worms killed
+by the single paid ten-gun wave, with no turret losses. The capped2Yellow/4Red
+factory is commissioned4137210 and independently held200 output at4174070;
+raw delivery remains assisted finite couriers rather than continuous belt supply.
+Finish construction malls, Engine/chemical consumers, bulk bus growth, blue,
 rail and rocket. No enemy deletion, granted health or retroactive conservation claim.
 Do not close the continuous-rate gate from filling output buffers. No rocket yet.
 

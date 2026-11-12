@@ -63,8 +63,9 @@ Retirement totals explicitly count the main inventory and
 `defines.inventory.character_ammo`. Native mining may auto-equip recovered
 magazines. Inventory enum aliases are never iterated: a character corpse alias
 can refer to the main inventory and would count it twice. Existing actor partial
-magazines retain their exact rounds. Old turret ammunition must still be full
-and normal, and the aggregate main-inventory capacity guard remains unchanged.
+magazines retain their exact rounds. Old turret ammunition may be partially
+used but must remain normal with supported plain metadata; the aggregate
+main-inventory capacity guard remains mandatory.
 Unrelated material conservation aggregates inventory/name/quality counts, so
 ordinary automatic sorting and stack merging cannot create false losses. Exact
 slot snapshots remain mandatory for reviewed legacy inventory compare-and-swap.
@@ -75,9 +76,13 @@ through that stable origin after recent history rolls over. Referenced posts and
 scope hashes remain exact, and new unrelated scopes must be fully commissioned.
 Earlier missing origins require actual ledger review; they are never invented.
 
-Before calling ordinary mining, the native operation persists a version2
+Before calling ordinary mining, the native operation persists a version3
 `retirement_intent` with exact world/actor/old/new identities, observed actor
-totals and old stock. The resulting receipt stores actual before/after totals.
+totals and actual old magazine/round counts. The resulting receipt stores
+actual before/after totals. Existing version2 full-magazine intents remain
+readable. Ten magazines with one seven-round magazine recover97 rounds,
+without silently normalizing them to100. Automatic equipment and ordinary
+inventory sorting remain included in the conservation check.
 A missing-old retry can finish only that exact intent with its expected item and
 round deltas; changed actor inventory or unrelated missing posts fail closed.
 
@@ -97,6 +102,51 @@ a receipt only. It never mines again, transfers goods, or invents original
 totals/recovered counts. Both `baseline_available` and
 `recovered_counts_available` remain false, including in later proof reporting.
 An unapproved missing post remains blocked.
+
+## Explicit continuation after a paid repair and actor succession
+
+The original Engine transaction can be preserved when its published replacement
+was later destroyed/rebuilt and its owner character died. This requires an
+explicit continuation; the normal step never adopts a missing historical post.
+
+`relocation.prepare_continuation(obs, job_key)` is read-only. It accepts one
+historical retirement followed only by still-unbuilt replacements. It verifies
+the exact original failed ordinary-mine action pair/SHA hashes, the stale
+reviewed intent, a unique successful non-reused same-position canonical repair,
+the original native paid marker, and the actual pinned-owner succession record.
+Other referenced posts and scope revisions stay exact. Every current canonical
+post must exist as the exact native-owned normal entity. Whole current/future
+Engine geometry, remaining replacement sites, source identities, preserved pipes
+and native armed scope coverage are checked again.
+
+The returned proposal has a `proposal_id`, per-file revision guards and an
+`epoch`. After reviewing it, the owning writer holds its normal writer lock and
+calls `activate_relocation_continuation(relocation, obs, proposal)`. This helper
+repeats the native/preflight checks and compares the relocation, Engine,
+perimeter and PCB revisions before one atomic metadata-file publication. It
+does not build, mine, move items or change native receipt storage.
+
+Activation appends `continuations[0]` and `active_continuation_id`; the entire
+original checkpoint remains an immutable parent. The new epoch uses the same
+Engine plan/core/ports/shared bindings, records the stale review as superseded,
+and has only the still-pending paid replacements. The old native marker and
+its original actor/payment are never rewritten. A separate historical
+resolution links the original action, paid repair and owner succession while
+keeping `baseline_available=false` and `recovered_counts_available=false`.
+Fresh current canonical metadata does not assert missing ancient loss ancestry.
+
+Existing build/retire action handlers select the explicitly active epoch. Its
+actor, parent hash, original historical marker, current paid repair and native
+owner-succession witness remain guarded. Restarts reuse the new epoch's paid
+birth receipt; interrupted perimeter/epoch publication resumes its exact intent.
+Final proof reruns scope, current/future and pipe guards. A second continuation,
+changed parent, source, referenced post or actor is blocked.
+
+Read-only actual proposal preparation passed at tick4,251,442 in4.110seconds:
+old7152 was absent, paid repair8829 and the11-to10915 owner succession were
+verified, and only old7154 remained for paid relocation. The saved proposal is
+a planning/review snapshot, not activation or actual retirement evidence. A
+writer must prepare a new review if guarded metadata changes before activation.
 
 Read-only proposal preparation passed at tick3,209,178, observing one normal
 turret and ten full normal magazines/100rounds across the two inventories.
