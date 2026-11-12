@@ -31,6 +31,12 @@ class WorldBoundGame(DeterministicGame):
         return super().query(body)
 
     def act(self,action:dict)->dict:
+        if action.get('type')=='build_defense_replacement':
+            from .defense_relocation import execute_build_replacement
+            return self._record_action(action,execute_build_replacement(self,action))
+        if action.get('type')=='retire_defense_post':
+            from .defense_relocation import execute_retire_post
+            return self._record_action(action,execute_retire_post(self,action))
         if action.get('type')=='build_furnace_gap':
             from .furnace_gap import execute_gap_build
             return self._record_action(action,execute_gap_build(self,action))

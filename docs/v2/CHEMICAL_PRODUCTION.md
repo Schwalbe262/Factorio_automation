@@ -42,14 +42,39 @@ saved layout unit. An identity change blocks recovery instead of adopting the
 replacement. Pipes are ordinary paid items, and neither controller path inserts
 fluids or alters research or production counters.
 
-The producer-approved petroleum exit is narrow: a source inside its own PCB
+The producer-approved fluid exit is narrow: a source inside its own PCB
 reservation may leave through at most four straight outward cells, ending at
-the first clear cell outside that reservation. The exact published typed port
+the first cell outside that reservation. The exact published typed port
 must match the owning block and its defense scope. Other reservations, producer
 assets, ores, terrain and buried pipe peers retain their normal checks. The
-entire producer reservation is never removed from route keepouts. This permission
-corresponds to the current refinery's deliberately empty east output apron;
-it does not authorize a general factory crossing.
+entire producer reservation is never removed from route keepouts.
+
+An apron normally consists entirely of surface pipes. One controlled crossing
+is available when the all-surface preflight reports an immovable obstruction at
+an exact observed, owned ordinary transport belt. A fresh native survey must
+confirm that belt's unit, position, type and direction. The existing bounded
+pipe crossing compiler may then replace later apron cells with straight paired
+underground mouths and their buried interior. The first new neighbor remains a
+normal pipe, the full original apron path and all its headings remain fixed,
+and the four-step limit is unchanged. Resource, terrain, foreign/unknown asset,
+reservation and prospective producer obstructions still block.
+
+All buried fluid-route assets must be owned belts, underground belts, poles or
+inserters with exact native witnesses. New plans save `fluid_underground_pairs`
+separately from solid-belt `underground_pairs`, and save unique asset witnesses
+in `preserved_fluid_crossings` with name, type, unit, world, force, position and
+direction. They are preserved existing assets, never chemical-owned bindings.
+`fluid_crossing_proof` checks fresh observation and native identities before
+handoff/build and commissioning, and rescans every tunnel interior for added
+assets, resources, terrain and mining reservations. Legacy accepted plans
+without these fields continue without claiming newly witnessed crossings.
+
+The Water regression preserves source `(90.5,-25.5)` and its reservation. It
+keeps the first new pipe at `(91.5,-25.5)` and pairs west-facing `(92.5,-25.5)`
+with east-facing `(94.5,-25.5)` beneath existing northbound belt unit 6439 at
+`(93.5,-25.5)`. Real-router and executable native-Lua fixtures reject replaced
+units, unknown/foreign assets, resources, terrain, changed directions and new
+tunnel obstructions. These fixtures do not establish live Sulfur production.
 
 Fluid routes have bounded surveys and detours, native underground span limits,
 separate prospective networks and explicit reciprocal fluidbox edges. The

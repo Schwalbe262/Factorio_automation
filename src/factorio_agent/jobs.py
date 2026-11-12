@@ -83,6 +83,8 @@ CAPABILITIES = {
                          "effect":"normally build a protected shared gas header before chemical consumers, preserve the original outlet and publish separate plastic/sulfur edges without multiplying source capacity"},
     "advanced_circuit_production": {"parameters":{},"requires":["chemical_production","main_bus_factory"],
                                     "effect":"normally build a compact advanced-circuit district with dedicated green/wire subcells, two fresh surplus bus taps and an exact proven plastic supply; preserve fixed ports and expansion space"},
+    "chemical_science": {"parameters":{},"requires":["engine_production","advanced_circuit_production","chemical_production","automation_science"],
+                         "effect":"normally build compact blue science from exact automatic engine, advanced-circuit and sulfur sources; preserve original labs and red/green feeds while adding a guarded south-side blue supply"},
     "ammo_production": {"parameters":{},"requires":["main_bus_factory"],
                        "effect":"normally build a defended automatic magazine factory from a critical iron bus tap, bound its real output buffer, then supply full normal magazines through guarded inventory transfers"},
     "legacy_coal_cleanup": {"parameters":{},"requires":["steam_expansion","dedicated_materials"],
@@ -377,6 +379,8 @@ class StarterExecutors:
         self.engines=EngineProduction(game,self.builder,catalog,self.perimeter,
                                      bus_factory=self.bus_factory,science=self.science,green=self.green,
                                      steel=self.industrial_operations.steel)
+        from .defense_relocation import DefenseRelocation
+        self.engines.relocation=DefenseRelocation(game,self.bootstrap,self.builder,catalog,self.perimeter,self.engines)
         from .chemical_production import ChemicalProduction
         self.chemicals=ChemicalProduction(game,self.builder,catalog,self.perimeter)
         from .gas_distribution import GasDistribution
@@ -386,8 +390,12 @@ class StarterExecutors:
         self.advanced_circuits=AdvancedCircuitProduction(game,self.builder,catalog,self.perimeter,
                                                         bus_factory=self.bus_factory,science=self.science,
                                                         green=self.green,chemical=self.chemicals)
+        from .chemical_science import ChemicalScience
+        self.blue=ChemicalScience(game,self.builder,catalog,self.perimeter,engine=self.engines,
+                                  advanced=self.advanced_circuits,chemical=self.chemicals,
+                                  science=self.science,green=self.green,bus_factory=self.bus_factory)
         from .normal_research import NormalResearch
-        self.normal_research=NormalResearch(game,catalog,self.science,self.green)
+        self.normal_research=NormalResearch(game,catalog,self.science,self.green,blue=self.blue)
         ledger=Ledger(Path(game.cfg.runtime_dir)).data
         self.industrial_mode=any(j['capability']=='smelting_district' and j['status']=='succeeded'
                                  for j in ledger['jobs'].values())
@@ -522,6 +530,8 @@ class StarterExecutors:
             return self.gas_distribution.step(obs)
         if capability == "advanced_circuit_production":
             return self.advanced_circuits.step(obs)
+        if capability == "chemical_science":
+            return self.blue.step(obs)
         raise ValueError("no executor for capability: " + capability)
 
     def proof(self, capability: str, obs: dict, result: dict, parameters: dict | None = None) -> dict | None:
@@ -600,6 +610,8 @@ class StarterExecutors:
             return self.gas_distribution.proof(obs)
         if capability == "advanced_circuit_production":
             return self.advanced_circuits.proof(obs)
+        if capability == "chemical_science":
+            return self.blue.proof(obs)
         produced = obs.get("production", {})
         if not all(produced.get(name, {}).get("produced", 0) > 0 for name in ("iron-plate", "copper-plate")):
             return None

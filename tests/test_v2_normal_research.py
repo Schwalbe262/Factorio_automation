@@ -52,5 +52,38 @@ class EngineResearchTests(unittest.TestCase):
             obj.green=SimpleNamespace(proof=lambda o:{'science_units':[2]})
             self.assertEqual(obj.step(obs,request)['type'],'research')
 
+    def test_blue_research_requires_fresh_supply_and_records_actual_consumption(self):
+        with TemporaryDirectory()as directory:
+            obj=NormalResearch.__new__(NormalResearch);obj.path=Path(directory)/'research.json';obj.state={}
+            names=('automation-science-pack','logistic-science-pack','chemical-science-pack')
+            obj.catalog=SimpleNamespace(fingerprint='f',technologies={'processing-unit':{
+                'prerequisites':[],'ingredients':[{'name':name,'amount':1}for name in names]}})
+            obj.science=SimpleNamespace(proof=lambda o:{'science_units':[1]})
+            obj.green=SimpleNamespace(proof=lambda o:{'science_units':[2]})
+            obs={'world_id':'w','tick':10,'technologies':{},'research':None,
+                 'production':{name:{'consumed':10}for name in names}}
+            request={'technology':'processing-unit'}
+            self.assertEqual(obj.step(obs,request)['packs'],['chemical-science-pack'])
+            obj.blue=SimpleNamespace(state={'phase':'verified'},proof=lambda o:None)
+            self.assertEqual(obj.step(obs,request)['status'],'waiting');self.assertFalse(obj.path.exists())
+            obj.blue.proof=lambda o:{'science_units':[3,4],'lab_units':list(range(20,28)),'actual_blue_in_all_labs':True}
+            self.assertEqual(obj.step(obs,request)['type'],'research')
+            obs['technologies']['processing-unit']=True
+            self.assertIsNone(obj.proof(obs,request))
+            for name in names:obs['production'][name]['consumed']=11
+            proof=obj.proof(obs,request)
+            self.assertEqual(proof['blue_supply_units_at_start'],[3,4])
+            self.assertEqual(proof['science_consumed_since_first_request'],{name:1 for name in names})
+
+    def test_uncommissioned_blue_is_an_explicit_unsupported_tier(self):
+        with TemporaryDirectory()as directory:
+            obj=NormalResearch(SimpleNamespace(cfg=SimpleNamespace(runtime_dir=directory)),SimpleNamespace(fingerprint='f',technologies={'next':{
+                'prerequisites':[],'ingredients':[{'name':'chemical-science-pack','amount':1}]}}),None,
+                blue=SimpleNamespace(state={},proof=lambda o:None))
+            obj.path=Path(directory)/'research.json'
+            result=obj.step({'world_id':'w','technologies':{}},{'technology':'next'})
+            self.assertEqual(result['reason'],'continuous_science_supply_not_implemented')
+            self.assertEqual(result['packs'],['chemical-science-pack'])
+
 
 if __name__=='__main__':unittest.main()

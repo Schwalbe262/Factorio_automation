@@ -167,7 +167,7 @@ def unbuilt_external_keepouts(builder,obs,blocks,*,released_block=None):
         for e in missing:
             if e['name']in('transport-belt','underground-belt','pipe','pipe-to-ground'):
                 x,y=xy(e);cells.update((x+dx,y+dy)for dx,dy in VECTORS.values())
-        for pair in block.get('underground_pairs',[]):
+        for pair in block.get('underground_pairs',[])+block.get('fluid_underground_pairs',[]):
             first=pair.get('input',pair.get('first'));last=pair.get('output',pair.get('last'))
             if first is None or last is None:continue
             mouths=[e for e in block.get('entities',[])if xy(e)in(tuple(first),tuple(last))]

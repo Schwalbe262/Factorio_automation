@@ -8,9 +8,9 @@ from unittest.mock import Mock,patch
 
 from factorio_ai.deterministic_builder import FactoryBuilder,_plan
 from factorio_agent.board import entity
-from factorio_agent.chemical_production import (ChemicalProduction,CHEMICAL_PROOF_LUA,CHEMICAL_PIPE_SURVEY_LUA,
+from factorio_agent.chemical_production import (ChemicalProduction,CHEMICAL_PROOF_LUA,CHEMICAL_PIPE_SURVEY_LUA,CHEMICAL_CROSSING_PROOF_LUA,
     _key,_payload,chemical_core,chemical_rates,chemical_fluid_ports,blue_chemistry_demand,
-    source_owned_apron,plan_typed_fluid_connection,chemical_plan_isolation,typed_fluid_edges,_handoff)
+    source_owned_apron,plan_typed_fluid_connection,chemical_plan_isolation,typed_fluid_edges,fluid_crossing_proof,_handoff)
 
 try:
     from lupa import LuaRuntime
@@ -158,6 +158,74 @@ class ChemicalApronTests(unittest.TestCase):
                 result=plan_typed_fluid_connection(game,self.builder,{'world_id':'w'},self.source,core['fluid_ports']['petroleum-gas'],core)
             self.assertEqual(result['reason'],'chemical_fluid_endpoint_conflicts_with_unbuilt_external_plan')
 
+    def water_crossing(self,*,survey=None,observed=None,preflight_result=None):
+        source=dict(self.source,item='water',position={'x':90.5,'y':-25.5},unit_number=6989,defense_scope_id='water')
+        block={'reserved_area':[[86.0117,-26.0977],[93,-24.9023]],'ports':[source],
+            'entities':[entity('pipe',90.5,-25.5)],'defense_scope_id':'water'}
+        core=chemical_core(catalog(),'sulfur',108.5,-21.5)
+        witness=dict(entity('transport-belt',93.5,-25.5),type='transport-belt',unit_number=6439,world_id='w',force_index=1)
+        if survey is None:survey={'ok':True,'hard':[],'soft':[witness['position']],
+            'crossings':[{'position':witness['position'],'assets':[witness]}]}
+        if observed is None:observed=[witness]
+        if preflight_result is None:preflight_result={'ok':False,'reason':'block_terrain_or_immovable_obstruction',
+            'entity':'pipe','position':witness['position']}
+        with tempfile.TemporaryDirectory()as root:
+            Path(root,'pcb-board.json').write_text(json.dumps({'world_id':'w','blocks':{'water':block}}))
+            game=SimpleNamespace(cfg=SimpleNamespace(runtime_dir=root),query=Mock(side_effect=[{'ok':True,'spans':[10]},survey]))
+            with patch('factorio_agent.chemical_production.preflight',return_value=preflight_result):
+                result=plan_typed_fluid_connection(game,self.builder,{'world_id':'w','entities':observed},source,core['fluid_ports']['water'],core)
+        return result,witness,block,game
+
+    def test_real_router_buries_exact_observed_belt_beyond_unchanged_water_first_neighbor(self):
+        result,witness,block,_=self.water_crossing()
+        self.assertTrue(result['ok'],result)
+        self.assertEqual(result['source_apron_exit']['path'],[{'x':x,'y':-25.5}for x in(90.5,91.5,92.5,93.5)])
+        self.assertEqual(result['first_neighbor'],dict(entity('pipe',91.5,-25.5),fluidbox_index=1))
+        self.assertEqual(result['underground_pairs'],[{'first':[92.5,-25.5],'last':[94.5,-25.5],'direction':4,'span':2}])
+        self.assertIn(entity('pipe-to-ground',92.5,-25.5,12),result['entities'])
+        self.assertIn(entity('pipe-to-ground',94.5,-25.5,4),result['entities'])
+        self.assertFalse(any(e['position']==witness['position']for e in result['entities']))
+        self.assertEqual(result['preserved_fluid_crossings'],[witness])
+        self.assertEqual(block['reserved_area'],[[86.0117,-26.0977],[93,-24.9023]])
+
+    def test_apron_crossing_rejects_missing_observation_changed_native_unit_resource_and_unknown(self):
+        for change in('unobserved','replaced','resource','unknown','foreign'):
+            with self.subTest(change=change):
+                witness=dict(entity('transport-belt',93.5,-25.5),type='transport-belt',unit_number=6439,world_id='w',force_index=1)
+                observed=[witness];fresh=deepcopy(witness);hard=[]
+                if change=='unobserved':observed=[]
+                elif change=='replaced':fresh['unit_number']=9999
+                elif change in('resource','foreign'):hard=[witness['position']]
+                elif change=='unknown':observed=[dict(witness,name='assembling-machine-1',type='assembling-machine')]
+                survey={'ok':True,'hard':hard,'soft':[witness['position']],
+                    'crossings':[{'position':witness['position'],'assets':[fresh]}]}
+                result,_,_,game=self.water_crossing(survey=survey,observed=observed)
+                self.assertFalse(result['ok'],result)
+                self.assertEqual(result['reason'],'chemical_source_apron_native_obstruction')
+                if change in('unobserved','unknown'):self.assertEqual(game.query.call_count,1)
+
+    def test_first_neighbor_belt_resource_preflight_and_unwitnessed_soft_cells_remain_blocked(self):
+        first=dict(entity('transport-belt',91.5,-25.5),type='transport-belt',unit_number=1)
+        failure={'ok':False,'reason':'block_terrain_or_immovable_obstruction','entity':'pipe','position':first['position']}
+        result,_,_,_=self.water_crossing(observed=[first],preflight_result=failure)
+        self.assertEqual(result['reason'],'chemical_source_apron_native_obstruction')
+        failure.update(reason='new_nonmining_entity_on_resource',position={'x':93.5,'y':-25.5})
+        result,_,_,_=self.water_crossing(preflight_result=failure)
+        self.assertEqual(result['reason'],'chemical_source_apron_native_obstruction')
+        result,_,_,_=self.water_crossing(survey={'ok':True,'hard':[],'soft':[{'x':93.5,'y':-25.5}]})
+        self.assertEqual(result['reason'],'chemical_source_apron_native_obstruction')
+
+    def test_normal_apron_retains_every_later_buried_asset_identity(self):
+        witnesses=[dict(entity(name,x,-25.5),type=type_,unit_number=unit,world_id='w',force_index=1)
+            for name,type_,x,unit in(('transport-belt','transport-belt',97.5,1),('small-electric-pole','electric-pole',98.5,2))]
+        survey={'ok':True,'hard':[],'soft':[q['position']for q in witnesses],
+            'crossings':[{'position':q['position'],'assets':[q]}for q in witnesses]}
+        result,_,_,_=self.water_crossing(survey=survey,observed=witnesses,preflight_result={'ok':True})
+        self.assertTrue(result['ok'],result)
+        self.assertEqual(result['preserved_fluid_crossings'],witnesses)
+        self.assertEqual(result['underground_pairs'],[{'first':[96.5,-25.5],'last':[99.5,-25.5],'direction':4,'span':3}])
+        self.assertTrue(all(entity('pipe',x,-25.5)in result['entities']for x in(91.5,92.5,93.5)))
+
 
 class ChemicalControllerTests(unittest.TestCase):
     def setUp(self):
@@ -292,6 +360,35 @@ class ChemicalControllerTests(unittest.TestCase):
             self.assertIsNone(self.c.proof(self.obs,self.params))
             self.assertEqual(self.c.last_proof_failure,failure)
 
+    def test_fluid_crossing_guard_blocks_handoff_build_and_commissioning(self):
+        entry=self.install();failure={'ok':False,'reason':'chemical_fluid_crossing_unrecorded_asset'}
+        with patch('factorio_agent.chemical_production.fluid_crossing_proof',return_value=failure):
+            result=self.c.step(self.obs,self.params)
+            self.assertEqual(result['reason'],'chemical_preserved_fluid_crossing_changed')
+            self.assertEqual(result['evidence'],failure)
+            self.builder.ensure_plan.assert_not_called();self.handoff.assert_not_called()
+            self.obs['entities']=[dict(e,unit_number=i+10)for i,e in enumerate(entry['plan']['entities'])]
+            self.c._bind(self.obs,entry)
+            self.assertIsNone(self.c.proof(self.obs,self.params));self.assertEqual(self.c.last_proof_failure,failure)
+
+    def test_prepared_fluid_pairs_and_foreign_witnesses_are_separate_from_belt_pairs_and_owned_assets(self):
+        crossing=dict(entity('transport-belt',3.5,-30.5),type='transport-belt',unit_number=99,world_id='w',force_index=1)
+        pair={'first':[2.5,-30.5],'last':[4.5,-30.5],'direction':4,'span':2}
+        points=[entity('pipe',1.5,-30.5),entity('pipe-to-ground',2.5,-30.5,12),entity('pipe-to-ground',4.5,-30.5,4)]
+        self.connection.side_effect=None
+        self.connection.return_value={'ok':True,'entities':points,'underground_pairs':[pair],
+            'maximum_underground_span':10,'first_neighbor':dict(points[0],fluidbox_index=1),'preserved_fluid_crossings':[crossing]}
+        entry=self.install()
+        self.assertEqual(entry['plan']['underground_pairs'],[])
+        self.assertEqual(entry['plan']['fluid_underground_pairs'],[pair])
+        self.assertEqual(entry['plan']['preserved_fluid_crossings'],[crossing])
+        self.assertFalse(any(e['name']=='transport-belt'and e['position']==crossing['position']for e in entry['plan']['entities']))
+
+    def test_legacy_plan_without_fluid_crossing_witnesses_makes_no_new_claim_or_query(self):
+        game=SimpleNamespace(query=Mock())
+        self.assertEqual(fluid_crossing_proof(game,self.obs,{}),{'ok':True,'preserved_assets':0,'fluid_pairs':0})
+        game.query.assert_not_called()
+
     def test_defense_gate_then_declaration_before_any_builder_action(self):
         entry=self.install();self.perimeter.ensure_coverage.return_value={'status':'waiting','reason':'arm post'}
         self.assertEqual(self.c.step(self.obs,self.params)['reason'],'arm post');self.handoff.assert_not_called();self.builder.ensure_plan.assert_not_called()
@@ -348,6 +445,83 @@ class ChemicalControllerTests(unittest.TestCase):
         (self.root/'fluid-sources.json').write_text(json.dumps(self.registry))
         self.obs['entities'][0]['unit_number']=999
         self.assertIsNone(self.c.proof(self.obs,self.params))
+
+
+@unittest.skipUnless(LuaRuntime,'optional executable Lua runtime')
+class NativeChemicalCrossingTests(unittest.TestCase):
+    def setUp(self):
+        self.lua=LuaRuntime(unpack_returned_tuples=True)
+        def table(v):
+            if isinstance(v,dict):return self.lua.table_from({k:table(a)for k,a in v.items()})
+            if isinstance(v,list):return self.lua.table_from([table(a)for a in v])
+            return v
+        self.lua.globals().helpers=self.lua.table_from({'json_to_table':lambda raw:table(json.loads(raw))})
+        self.lua.execute('''f={index=1,name="player"};s={};a={};d={world_id="w"};resource=false;terrain=false;extra=nil
+prototypes={entity={pipe={collision_mask={layers={object=true}}},["pipe-to-ground"]={fluidbox_prototypes={{
+ pipe_connections={{connection_type="underground",max_underground_distance=10}}}}}}}
+e={name="transport-belt",type="transport-belt",valid=true,unit_number=6439,force=f,surface=s,
+ position={x=93.5,y=-25.5},direction=0,minable=true,prototype={collision_mask={colliding_with_tiles_only=false},fluidbox_prototypes={}}}
+function pos(p)return{x=p.x,y=p.y}end
+function target(p,name)if e and e.name==name and e.position.x==p.x and e.position.y==p.y then return e end end
+local function inside(q,area)return q.position.x+.49>area[1][1]and q.position.x-.49<area[2][1]
+ and q.position.y+.49>area[1][2]and q.position.y-.49<area[2][2]end
+s.count_entities_filtered=function(q)return resource and 1 or 0 end
+s.find_tiles_filtered=function(q)return{{collides_with=function(layer)return terrain end}}end
+s.find_entities_filtered=function(q)local rows={};if e and inside(e,q.area)then rows[#rows+1]=e end
+ if extra and inside(extra,q.area)then rows[#rows+1]=extra end;return rows end''')
+        self.witness=dict(entity('transport-belt',93.5,-25.5),type='transport-belt',unit_number=6439,world_id='w',force_index=1)
+        self.obs={'ok':True,'world_id':'w','entities':[self.witness]}
+        self.plan={'fluid_underground_pairs':[{'first':[92.5,-25.5],'last':[94.5,-25.5],'direction':4,'span':2}],
+            'preserved_fluid_crossings':[self.witness]}
+        self.game=SimpleNamespace(query=Mock(side_effect=self.execute))
+
+    def execute(self,script):
+        return dict(self.lua.execute('return(function() '+' '.join(script.splitlines())+' end)()').items())
+
+    def survey(self):
+        args={'world_id':'w','bounds':{'min_x':93.5,'max_x':93.5,'min_y':-25.5,'max_y':-25.5},
+            'source':{'unit_number':6989,'position':{'x':90.5,'y':-25.5}},'apron_path':[],
+            'owner_index':None,'zones':[],'reservations':[]}
+        return self.execute(CHEMICAL_PIPE_SURVEY_LUA.replace('PAYLOAD',_payload(args)))
+
+    def test_flattened_native_survey_captures_owned_exact_asset_and_rejects_unknown_foreign_resource_terrain(self):
+        result=self.survey();self.assertEqual(len(result['soft']),1);self.assertEqual(len(result['hard']),0)
+        witness=result['crossings'][1]['assets'][1]
+        self.assertEqual(witness['unit_number'],6439);self.assertEqual(witness['force_index'],1)
+        for change,restore in(('e.type="splitter"','e.type="transport-belt"'),
+                ('e.type="rail";e.prototype.collision_mask.colliding_with_tiles_only=true',
+                 'e.type="transport-belt";e.prototype.collision_mask.colliding_with_tiles_only=false'),
+                ('e.force={index=2,name="enemy"}','e.force=f'),('resource=true','resource=false'),('terrain=true','terrain=false')):
+            self.lua.execute(change);result=self.survey()
+            self.assertEqual(len(result['hard']),1,change);self.assertEqual(len(result['soft']),0,change)
+            self.lua.execute(restore)
+
+    def test_flattened_native_guard_checks_identity_force_direction_world_resource_and_extra_assets(self):
+        self.assertTrue(fluid_crossing_proof(self.game,self.obs,self.plan)['ok'])
+        changes=[('e.unit_number=9999','e.unit_number=6439'),('e.direction=4','e.direction=0'),
+            ('e.force={index=2,name="enemy"}','e.force=f'),('e.position.x=94.5','e.position.x=93.5'),
+            ('d.world_id="other"','d.world_id="w"'),('resource=true','resource=false'),('terrain=true','terrain=false'),
+            ('extra={name="assembler",type="assembling-machine",valid=true,unit_number=9999,force=f,surface=s,position=e.position,prototype=e.prototype}',
+             'extra=nil')]
+        for change,restore in changes:
+            self.lua.execute(change)
+            self.assertFalse(fluid_crossing_proof(self.game,self.obs,self.plan)['ok'],change)
+            self.lua.execute(restore)
+
+    def test_guard_rejects_changed_observation_or_malformed_pairs_before_native_query(self):
+        for change in('unit','direction','world','pair'):
+            obs=deepcopy(self.obs);plan=deepcopy(self.plan);self.game.query.reset_mock()
+            if change=='unit':obs['entities'][0]['unit_number']=9999
+            elif change=='direction':obs['entities'][0]['direction']=4
+            elif change=='world':plan['preserved_fluid_crossings'][0]['world_id']='other'
+            else:plan['fluid_underground_pairs'][0]['last'][1]+=1
+            self.assertFalse(fluid_crossing_proof(self.game,obs,plan)['ok'],change);self.game.query.assert_not_called()
+
+    def test_guard_retains_mining_reservations_and_native_span_limit(self):
+        with patch('factorio_agent.chemical_production.mining_reservations',return_value=[{'area':[[93,-26],[94,-25]]}]):
+            self.assertEqual(fluid_crossing_proof(self.game,self.obs,self.plan)['reason'],'chemical_fluid_crossing_mining_reservation_changed')
+        self.lua.execute('prototypes.entity["pipe-to-ground"].fluidbox_prototypes[1].pipe_connections[1].max_underground_distance=1')
+        self.assertEqual(fluid_crossing_proof(self.game,self.obs,self.plan)['reason'],'chemical_fluid_crossing_native_span_changed')
 
 
 @unittest.skipUnless(LuaRuntime,'optional executable Lua runtime')
@@ -434,7 +608,7 @@ function target(p,name)return entities[name..":"..p.x..":"..p.y]end''')
         self.assertEqual(self.run_proof()['reason'],'chemical_required_physical_fluidbox_inactive')
 
     def test_lua_survives_native_flattening_and_has_no_game_mutation(self):
-        for script in(CHEMICAL_PROOF_LUA,CHEMICAL_PIPE_SURVEY_LUA):
+        for script in(CHEMICAL_PROOF_LUA,CHEMICAL_PIPE_SURVEY_LUA,CHEMICAL_CROSSING_PROOF_LUA):
             self.assertNotIn('--',script)
             for forbidden in('insert_fluid','set_fluid','create_entity','.researched=true','insert{','remove{'):
                 self.assertNotIn(forbidden,script)

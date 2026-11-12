@@ -33,8 +33,8 @@ def ready_options(catalog,obs):
 
 
 class NormalResearch:
-    def __init__(self,game,catalog,science,green=None):
-        self.game,self.catalog,self.science,self.green=game,catalog,science,green
+    def __init__(self,game,catalog,science,green=None,*,blue=None):
+        self.game,self.catalog,self.science,self.green,self.blue=game,catalog,science,green,blue
         self.path=Path(game.cfg.runtime_dir)/'normal-research.json'
         self.state=json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
 
@@ -56,6 +56,12 @@ class NormalResearch:
             if green_supply:supported.add('logistic-science-pack')
             elif getattr(self.green,'state',{}).get('phase')=='verified':
                 return {'status':'waiting','reason':'waiting for commissioned green supply and powered labs to recover'}
+        blue_supply=None
+        if 'chemical-science-pack' in packs and getattr(self,'blue',None):
+            blue_supply=self.blue.proof(obs)
+            if blue_supply:supported.add('chemical-science-pack')
+            elif getattr(self.blue,'state',{}).get('phase')=='verified':
+                return {'status':'waiting','reason':'waiting for commissioned blue supply and powered labs to recover'}
         unsupported=packs-supported
         if unsupported:return {'status':'blocked','reason':'continuous_science_supply_not_implemented','packs':sorted(unsupported)}
         if obs.get('research') not in (None,name):return {'status':'blocked','reason':'another_research_is_running'}
@@ -65,6 +71,7 @@ class NormalResearch:
         if name not in self.state['targets']:
             self.state['targets'][name]={'tick':obs['tick'],'was_active':obs.get('research')==name,
                 'research_progress':obs.get('research_progress',0),'supply_proof':supply,'green_supply_proof':green_supply,
+                'blue_supply_proof':blue_supply,
                 'consumed':{p['name']:obs['production'][p['name']]['consumed'] for p in tech['ingredients']}}
             _atomic_json(self.path,self.state)
         if obs.get('research')!=name:return {'type':'research','technology':name,'reason':'research model-selected technology with automatically belt-fed machine packs'}
@@ -83,4 +90,5 @@ class NormalResearch:
                 'science_consumed_since_first_request':consumed,'started_tick':target['tick'],
                 'machine_supply_units_at_start':target['supply_proof']['science_units'],
                 'green_supply_units_at_start':(target.get('green_supply_proof') or {}).get('science_units'),
+                'blue_supply_units_at_start':(target.get('blue_supply_proof') or {}).get('science_units'),
                 'scope':'native technology completion from normal machine packs and belt-fed labs; consumption counters are world totals over this request interval'}

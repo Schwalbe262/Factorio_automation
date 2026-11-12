@@ -66,8 +66,14 @@ posts are recovered; this guarded relocation remains under development.
 The independent shared gas header is commissioned with exact Plastic/Sulfur
 aliases and one shared540/min nominal source. Future defense placement now
 protects complete registered plans, expansion spaces and fixed port exits.
-Plastic full native preparation2968151 passed13.11s; actual construction is
-in progress. Next finish these consumers, mall/repair, blue, rail and rocket.
+Plastic is commissioned2991431. Advanced circuits are commissioned3100796
+after a paid one-belt mixer repair and conserved recovery of83copper plates.
+The shared analyzer now distinguishes corners from true side loading; Engine
+and Blue designs include the same required empty approach. Blue recipe research
+completed3104834; no Blue factory is commissioned yet. Engine and Sulfur remain
+blocked at bounded route planning. New guarded prebuild/replacement capabilities
+must pass fresh native whole plans before gameplay costs. Next finish these
+consumers, mall/repair, blue, rail and rocket.
 Do not close the continuous-rate gate from filling output buffers. No rocket yet.
 
 Freeze code, model/effort, seed/save and settings per attempt. Classify failures

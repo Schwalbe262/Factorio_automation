@@ -139,19 +139,30 @@ def _transport(es, pairs):
     """Return a lane-preserving physical graph; mouths pair exactly as declared."""
     belts = {xy(e): e for e in es if e["name"] in ("transport-belt", "underground-belt")}
     jumps = {tuple(p["input"]): tuple(p["output"]) for p in pairs}
-    graph = {}
+    graph = {}; outputs = {}; incoming = defaultdict(list)
     for p, e in belts.items():
         if e.get("belt_to_ground_type") == "input":
             q = jumps.get(p)
         else:
-            vx, vy = VECTORS[e["direction"]]
-            q = p[0]+vx, p[1]+vy
+            vx, vy = VECTORS[e["direction"]]; q = p[0]+vx, p[1]+vy
+        outputs[p] = q
+        if q in belts and (e["direction"]-belts[q]["direction"]) % 16 != 8:
+            incoming[q].append(e["direction"])
+    for p, e in belts.items():
+        q = outputs[p]
         other = belts.get(q)
         if other is None:
             continue
         if e["direction"] == other["direction"]:
             graph[p] = (q, {"left": "left", "right": "right"})
         elif (e["direction"]-other["direction"]) % 16 != 8:
+            # A sole perpendicular feed bends an ordinary belt. Native curves
+            # carry BOTH lanes through the bend; they do not merge both onto a
+            # single lane. An inline tail or two opposite perpendicular feeds
+            # keeps the recipient straight and produces a real side-load.
+            if other["name"] == "transport-belt" and len(set(incoming[q])) == 1:
+                graph[p] = (q, {"left": "left", "right": "right"})
+                continue
             vx, vy = VECTORS[other["direction"]]
             # A perpendicular feeder occupies the recipient's approached side.
             lane = "left" if (p[0]-q[0])*vy-(p[1]-q[1])*vx > 0 else "right"

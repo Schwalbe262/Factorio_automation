@@ -127,6 +127,7 @@ def advanced_circuit_core(catalog, x, y, count=2):
     for xx in range(-3, 0): belt(xx, 2)
     belt(0, 2, 0); belt(0, 1, 0)
     for xx in range(-1, 12): belt(xx, 0)
+    belt(-2, 0)  # Empty inline tail forces a straight recipient for Cu side-load.
     wires = [add('assembling-machine-1', 3, 3, recipe='copper-cable')]
     green = add('assembling-machine-1', 7, 3, recipe='electronic-circuit')
     arm(3, 1, role='copper-input'); arm(7, 1, role='iron-input')
@@ -166,7 +167,7 @@ def advanced_circuit_core(catalog, x, y, count=2):
                  output_access=[entity('transport-belt', x+dx, y+18, 4) for dx in (27, 28)],
                  raw_feed_lanes={'left': 'copper-plate', 'right': 'iron-plate'},
                  component_feed_lanes={'left': 'copper-cable', 'right': 'electronic-circuit'},
-                 layout_policy='dedicated-advanced-circuit-subcells-v1')
+                 raw_mixer_inline_tail=True, layout_policy='dedicated-advanced-circuit-subcells-v2')
 
 
 def audit_advanced_circuit_core(plan, catalog):
@@ -468,10 +469,99 @@ class AdvancedCircuitProduction:
         except (OSError, ValueError) as exc: return {'status': 'blocked', 'reason': 'advanced_circuit_board_unavailable', 'detail': str(exc)}
         if not self._identity(obs, board): return {'status': 'blocked', 'reason': 'advanced_circuit_board_identity_changed'}
         name = 'advanced_circuit_production'; old = board['blocks'].get(name); plan = self.state['plan']
-        if old and old != plan: return {'status': 'blocked', 'reason': 'advanced_circuit_reserved_plan_changed'}
+        repairing = self.state.get('mixer_repair', {})
+        permitted_old = old and _hash(old) == repairing.get('old_plan_hash')
+        if old and old != plan and not permitted_old: return {'status': 'blocked', 'reason': 'advanced_circuit_reserved_plan_changed'}
         if any(k != name and overlap(plan['reserved_area'], b['reserved_area']) for k, b in board['blocks'].items() if b.get('reserved_area')):
             return {'status': 'blocked', 'reason': 'advanced_circuit_reservation_conflict'}
-        if not old: board['blocks'][name] = plan; _atomic_json(path, board)
+        if not old or permitted_old: board['blocks'][name] = plan; _atomic_json(path, board)
+        return None
+
+    def prepare_mixer_repair(self, obs):
+        """Read-only, one-belt canonical adoption for an already accepted v1 plan."""
+        s = self.state
+        if not s or not self._identity(obs, s): return {'ok': False, 'reason': 'advanced_mixer_repair_checkpoint_identity_missing'}
+        try:
+            old_core = s['core']; x, y = xy({'position': old_core['anchor']})
+            tail = entity('transport-belt', x-2, y, 4)
+            if tail in old_core['entities']: return {'ok': True, 'needed': False}
+            new_core = advanced_circuit_core(self.catalog, x, y, len(old_core['red_machines']))
+            if (any(e not in new_core['entities'] for e in old_core['entities'])
+                    or [e for e in new_core['entities'] if e not in old_core['entities']] != [tail]
+                    or any(old_core[k] != new_core[k] for k in ('ports', 'reserved_area', 'underground_pairs', 'output_access'))):
+                return {'ok': False, 'reason': 'advanced_mixer_repair_requires_exact_add_only_canonical_delta'}
+            audit = audit_advanced_circuit_core(new_core, self.catalog)
+            if not audit['ok']: return {'ok': False, 'reason': 'advanced_repaired_mixer_audit_failed', 'evidence': audit}
+            actual = {(e['name'], *xy(e)): e for e in obs['entities']}
+            for e in s['plan']['entities']:
+                unit = s['bindings'].get(_key(e)); live = actual.get((e['name'], *xy(e)))
+                if unit is not None and (not live or live.get('unit_number') != unit
+                        or (e['name'] != 'small-electric-pole' and live.get('direction') != e['direction'])):
+                    return {'ok': False, 'reason': 'advanced_mixer_repair_old_bound_asset_changed', 'entity': e}
+            tail_cells = self.builder._occupied_by_plan([tail])
+            if any(self.builder._occupied_by_plan([e]) & tail_cells for e in obs['entities'] if e.get('type') not in ('tree', 'item-entity', 'corpse')):
+                return {'ok': False, 'reason': 'advanced_mixer_repair_tail_occupied_without_owned_binding'}
+            old_plan = s['plan']; extra = {k: deepcopy(v) for k, v in old_plan.items() if k not in ('ok', 'reason', 'entities', 'ports', 'required_items')}
+            new_plan = _plan(merge_entities(old_plan['entities'], [tail]), old_plan['ports'], **extra)
+            board = json.loads((self.path.parent/'pcb-board.json').read_text(encoding='utf-8'))
+            registered = board.get('blocks', {}).get('advanced_circuit_production')
+            if not self._identity(obs, board) or (registered is not None and registered != old_plan):
+                return {'ok': False, 'reason': 'advanced_mixer_repair_registered_plan_changed'}
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            return {'ok': False, 'reason': 'advanced_mixer_repair_context_incompatible', 'detail': str(exc)}
+        check = preflight(self.game, self.builder, obs, merge_entities(new_plan['entities'], new_core['output_access']))
+        if not check.get('ok'): return {'ok': False, 'reason': 'advanced_mixer_repair_whole_preflight_failed', 'evidence': check}
+        return {'ok': True, 'needed': True, 'core': new_core, 'plan': new_plan, 'audit': audit, 'tail': tail,
+                'old_plan_hash': _hash(old_plan), 'required_items': {'transport-belt': 1},
+                'preserved_bindings': deepcopy(s['bindings']), 'preflight': check,
+                'scope': 'one normally paid inline tail; all old assets, sources, ports and producer capacity preserved'}
+
+    def _adopt_mixer_repair(self, obs):
+        s = self.state; x, y = xy({'position': s['core']['anchor']})
+        if entity('transport-belt', x-2, y, 4) in s['core']['entities']: return None
+        ready = self.prepare_mixer_repair(obs)
+        if not ready.get('ok'): return {'status': 'blocked', **ready}
+        s.update(core=ready['core'], plan=ready['plan'], audit=ready['audit'], construction_authorized=False)
+        s['mixer_repair'] = {'phase': 'await_native_pure_lanes', 'old_plan_hash': ready['old_plan_hash'],
+            'tail': ready['tail'], 'prepared_tick': obs.get('tick'), 'required_items': ready['required_items']}
+        self._save(); return None
+
+    def _mixer_cleanup(self, obs):
+        s = self.state; repair = s.get('mixer_repair')
+        if not repair or repair['phase'] == 'verified': return None
+        x, y = xy({'position': s['core']['anchor']})
+        header = sorted([e for e in s['core']['entities'] if e['name'] == 'transport-belt' and xy(e)[1] == y and e['direction'] == 4], key=lambda e: -xy(e)[0])
+        if len(header) > 16: return {'status': 'blocked', 'reason': 'advanced_mixer_repair_bounded_header_required'}
+        if any(type(s['bindings'].get(_key(e))) is not int for e in header):
+            return {'status': 'waiting', 'reason': 'advanced_mixer_repair_waiting_for_bound_paid_tail'}
+        arms = [e for e in s['audit']['arm_targets'] if e.get('arm_role') in ('copper-input', 'iron-input')]
+        args = {'header': [dict(e, unit_number=s['bindings'][_key(e)]) for e in header],
+            'recipient': {'x': x-1, 'y': y},
+            'arms': [dict(e, unit_number=s['bindings'][_key(e)]) for e in arms]}
+        native = self.game.query(ADVANCED_MIXER_INSPECTION_LUA.replace('PAYLOAD', _payload(args)))
+        if not native.get('ok'): return {'status': 'blocked', 'reason': 'advanced_mixer_repair_native_guard_failed', 'evidence': native}
+        if (not isinstance(native.get('wrong'), dict) or any(type(native.get(k)) not in (int, float)
+                or not math.isfinite(native[k]) or native[k] < 0 for k in ('copper_left', 'iron_right'))):
+            return {'status': 'blocked', 'reason': 'advanced_mixer_repair_inspection_receipt_invalid'}
+        for item in ('copper-plate', 'iron-plate'):
+            sources = native.get('wrong', {}).get(item, [])
+            if not sources: continue
+            expected = {e['unit_number']: e for e in args['header']}
+            if (not isinstance(sources, list) or len(sources) > 16 or any(not isinstance(q, dict) or
+                    q.get('unit_number') not in expected or q.get('position') != expected[q['unit_number']]['position'] or q.get('name') != 'transport-belt'
+                    for q in sources)):
+                return {'status': 'blocked', 'reason': 'advanced_mixer_repair_inspection_receipt_invalid'}
+            attempts = repair.get('cleanup_attempts', 0)
+            if type(attempts) is not int or not 0 <= attempts < 16:
+                return {'status': 'blocked', 'reason': 'mixer_cleanup_budget_exceeded',
+                        'evidence': {'attempts': attempts, 'maximum_attempts': 16, 'native': native}}
+            repair['cleanup_attempts'] = attempts+1; self._save()
+            return {'type': 'take_many', 'item': item, 'count': 50, 'world_id': obs['world_id'],
+                    'sources': [{'name': 'transport-belt', 'position': q['position'], 'unit_number': q['unit_number'], 'kind': 'belt'} for q in sources],
+                    'reason': 'normally recover legacy mixer plate stock from exact owned header belts; preserve goods and refill naturally'}
+        if not native.get('copper_left') or not native.get('iron_right'):
+            return {'status': 'waiting', 'reason': 'advanced_mixer_repair_waiting_for_both_normal_plate_lanes', 'evidence': native}
+        repair.update(phase='verified', native_proof=native, verified_tick=obs.get('tick')); self._save()
         return None
 
     def _tap_step(self, obs):
@@ -515,6 +605,8 @@ class AdvancedCircuitProduction:
         live = next((e for e in obs['entities'] if e['name'] == 'transport-belt' and xy(e) == xy(s['plastic_source'])), None)
         if not live or live.get('unit_number') != s['plastic_source']['unit_number'] or live.get('direction') != s['plastic_source']['facing']:
             return {'status': 'blocked', 'reason': 'advanced_circuit_bound_plastic_outlet_changed'}
+        result = self._adopt_mixer_repair(obs)
+        if result: return result
         result = self._reserve(obs)
         if result: return result
         if s['phase'] == 'stock_taps':
@@ -534,6 +626,8 @@ class AdvancedCircuitProduction:
         if not pipes.get('ok'): return {'status': 'blocked', 'reason': 'advanced_circuit_preserved_pipe_network_changed', 'evidence': pipes}
         result = self.builder.ensure_plan(obs, s['plan'])
         if result.get('status') != 'succeeded': return result
+        result = self._mixer_cleanup(obs)
+        if result: return result
         proof = self.proof(obs)
         if not proof: return {'status': 'waiting', 'reason': 'waiting_for_normally_supplied_advanced_green_wire_production', 'evidence': self.last_proof_failure}
         s.update(phase='verified', commissioning_proof=proof); self._save()
@@ -581,6 +675,40 @@ class AdvancedCircuitProduction:
         return {'tick': result['tick'], 'native': result, 'rated': s['rated'], 'defense_coverage': defense,
                 'output': dict(core['ports'][-1], name='transport-belt', unit_number=result['outlet_unit'], world_id=obs['world_id'], defense_scope_id=SCOPE_ID),
                 'scope': 'native automatic advanced circuits with dedicated wire/green subcells and shared surplus; nameplate is not sustained-throughput certification'}
+
+
+ADVANCED_MIXER_INSPECTION_LUA = r'''
+local args=helpers.json_to_table(PAYLOAD);local wrong={["copper-plate"]={},["iron-plate"]={}};local copper=0;local iron=0
+local function exact(q)local e=target(q.position,q.name)
+ if not e or e.force~=f or e.surface~=s or e.unit_number~=q.unit_number or e.position.x~=q.position.x or e.position.y~=q.position.y or e.direction~=q.direction then return nil end;return e end
+local function quality(v)return type(v)=="string"and v or(v and v.name)end
+local recipient=target(args.recipient,"transport-belt")
+if not recipient or recipient.force~=f or recipient.surface~=s or recipient.direction~=4 or recipient.belt_shape~="straight"then
+ return {ok=false,reason="advanced_mixer_native_recipient_not_straight"}end
+for _,q in ipairs(args.header)do local e=exact(q)
+ if not e then return {ok=false,reason="advanced_mixer_exact_header_identity_changed",position=q.position}end
+ local bad_cu,bad_fe=false,false
+ for lane=1,2 do for _,row in pairs(e.get_transport_line(lane).get_contents())do
+  if(row.name~="copper-plate"and row.name~="iron-plate")or quality(row.quality)~="normal"then
+   return {ok=false,reason="advanced_mixer_unexpected_item_or_quality_requires_manual_reconciliation",position=q.position}end
+  if lane==1 and row.name=="copper-plate"then copper=copper+row.count end
+  if lane==2 and row.name=="iron-plate"then iron=iron+row.count end
+  if lane==2 and row.name=="copper-plate"then bad_cu=true end
+  if lane==1 and row.name=="iron-plate"then bad_fe=true end
+ end end
+ local spec={name=q.name,position=q.position,unit_number=q.unit_number}
+ if bad_cu then wrong["copper-plate"][#wrong["copper-plate"]+1]=spec end
+ if bad_fe then wrong["iron-plate"][#wrong["iron-plate"]+1]=spec end
+end
+for _,q in ipairs(args.arms)do local e=exact(q);if not e then return {ok=false,reason="advanced_mixer_exact_raw_arm_changed"}end
+ local stack=e.held_stack
+ if stack and stack.valid_for_read then local want=q.arm_role=="iron-input"and"iron-plate"or"copper-plate"
+  if stack.name~=want or stack.quality.name~="normal"then
+   return {ok=false,reason="advanced_mixer_incompatible_held_stack_requires_guarded_manual_recovery",position=q.position}end
+ end
+end
+return {ok=true,tick=game.tick,wrong=wrong,copper_left=copper,iron_right=iron,recipient_shape=recipient.belt_shape}
+'''
 
 
 ADVANCED_ARM_VECTORS_LUA = r'''

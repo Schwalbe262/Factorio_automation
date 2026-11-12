@@ -72,3 +72,30 @@ acceptance. Observed preparation wall time was 20.765 seconds; the existing
 twenty-second routing/preflight query budget remains unchanged. Initial source
 checks and perimeter coverage retain their existing call scope. This records prospective preparation and
 pipe preservation, not live engine construction or commissioned throughput.
+
+The component mixer includes an empty eastbound belt at local `(-2,7)`.
+Its inline approach makes the pipe input a side load onto the right lane;
+the gear input occupies the left lane. A sole perpendicular feeder would form
+a curve and preserve its incoming lane, putting both components on the left.
+The static audit checks this distinction and rejects the core without that tail.
+
+Before any consumer asset is built, `prepare_prebuild_feed_replan(obs)` can
+preview replacement feeds around subsequently commissioned foreign producers.
+It requires the original two exact source bindings, unchanged surplus tap,
+fresh steel and coverage proofs, and canonical registered plans and saved units
+for every overlapping foreign asset. Such assets remain foreign and are never
+added to Engine bindings. The original core must match the canonical design or
+its exact previous form missing only the empty mixer tail. Machines, recipes,
+ports, anchor, reservation and extension slots remain fixed.
+
+The sole automatic replan attempt releases only this receiver's old unbuilt
+external feeds through the transport revision contract. Native whole/future
+preflight and preserved pipe peers must pass, ignoring only exact conflicting
+new Engine coverage posts pending their later paid relocation. The publication
+intent retains old core/plan hashes and the immutable-state guard, plus the new
+core, fresh lane audit and replacement feeds. A board compare-and-set precedes
+one atomic Engine checkpoint update; interruption can resume with either the
+old or new board revision. Changed sources, coverage, foreign reservations or
+candidate core fail closed. Relocation can incur costs only after this adoption,
+and then binds the newly accepted core and plan. No positive native replan or
+post recovery is claimed by the focused offline tests.

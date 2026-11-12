@@ -20,7 +20,7 @@ from .manufacturing import connect_power_groups
 from .planning import overlap,preflight,survey_slots
 from .smelting import merge_entities,port
 from .steel_production import SteelProduction
-from .transport import VECTORS,plan_connection,underground_proof,surface_pipe_proof,xy
+from .transport import VECTORS,plan_connection,underground_proof,surface_pipe_proof,unbuilt_external_keepouts,xy
 
 
 TAP_NAME='engine-iron'
@@ -87,7 +87,8 @@ def engine_core(catalog,x,y,count=2):
     # Pipe returns below the mixer, crossing native input arms in two straight spans.
     for xx in(12,11,6,5):belt(xx,8,12)
     pair(10,7,8,12);pair(4,1,8,12);belt(0,8,12);belt(-1,8,0)
-    for xx in range(-1,22):
+    # Empty inline predecessor makes the pipe corner a side load onto the right lane.
+    for xx in range(-2,22):
         if xx not in(11,12,13):belt(xx,7)
     pair(11,13,7,4)
     # Steel approaches from the east. Long arms pick this dedicated belt over the mixer.
@@ -213,6 +214,14 @@ end;return {ok=false,reason="all_planned_engine_power_targets_obstructed"}''')
     return {'ok':True,'group':group}
 
 
+def _plan_cells(builder,plan):
+    result=builder._occupied_by_plan(plan['entities'])
+    for pair in plan.get('underground_pairs',[]):
+        dx,dy=VECTORS[pair['direction']]
+        result.update((pair['input'][0]+i*dx,pair['input'][1]+i*dy)for i in range(pair['span']+1))
+    return result
+
+
 class EngineProduction:
     def __init__(self,game,builder,catalog,perimeter,*,bus_factory=None,science=None,green=None,tap=None,steel=None):
         self.game,self.builder,self.catalog,self.perimeter=game,builder,catalog,perimeter
@@ -221,6 +230,7 @@ class EngineProduction:
         self.path=Path(game.cfg.runtime_dir)/'engine-production.json'
         self.state=json.loads(self.path.read_text(encoding='utf-8'))if self.path.exists()else{}
         self.last_proof_failure=None
+        self.relocation=None
 
     def _identity(self,obs,value):
         return(obs.get('ok',True)and isinstance(obs.get('world_id'),str)and bool(obs['world_id'])
@@ -331,6 +341,254 @@ return {ok=true}''')
         return {'ok':False,'reason':'no_engine_site_with_complete_native_material_connections',
                 'evidence':{'failures':failures[-8:],'legal_sites':len(cores),'route_attempts':routes}}
 
+    def _feed_guard(self):
+        mutable={'plan','feed_replan','route_metrics','route_attempts','prepared_tick','construction_authorized','preserved_foreign_assets'}
+        return _hash({k:v for k,v in self.state.items()if k not in mutable})
+
+    def _prebuild_core_upgrade(self):
+        """Accept only the canonical core or its exact previous one-belt-less form."""
+        old=self.state['core'];x,y=xy({'position':old['anchor']})
+        core=engine_core(self.catalog,x,y,len(old['engine_machines']))
+        tail=entity('transport-belt',x-2,y+7,4)
+        legacy=deepcopy(core);legacy['entities'].remove(tail)
+        legacy['required_items']['transport-belt']-=1
+        if old!=core and old!=legacy:return {'ok':False,'reason':'engine_prebuild_core_is_not_exact_canonical_or_legacy_tail'}
+        audit=audit_engine_core(core,self.catalog)
+        if not audit['ok']:return {'ok':False,'reason':'engine_prebuild_canonical_core_audit_failed','evidence':audit}
+        return {'ok':True,'core':core,'audit':audit,'old_core_revision':_hash(old),'new_core_revision':_hash(core)}
+
+    def _foreign_authorities(self,obs,board):
+        """Only exact verified producer plans and saved unit bindings identify a foreign asset."""
+        result={};root=self.path.parent
+        filenames=('chemical-production.json','advanced-circuits.json','ammo-production.json','steel-production.json',
+                   'brick-production.json','basic-petroleum.json','water-gathering.json','oil-gathering.json')
+        for filename in filenames:
+            path=root/filename
+            if not path.exists():continue
+            document=json.loads(path.read_text(encoding='utf-8'))
+            if not self._identity(obs,document):continue
+            entries=list(document.get('products',{}).values())if filename=='chemical-production.json'else[document]
+            for entry in entries:
+                if entry.get('phase')!='verified'or not entry.get('plan'):continue
+                owners=[name for name,plan in board['blocks'].items()if name!='engine_production'and plan==entry['plan']]
+                if len(owners)!=1:continue
+                for e in entry['plan']['entities']:
+                    unit=entry.get('bindings',{}).get(_key(e))
+                    if type(unit)is int and unit>0:
+                        result[(e['name'],*xy(e),unit)]={'owner':owners[0],'name':e['name'],'position':e['position'],
+                            'unit_number':unit,'direction':e.get('direction',0),'world_id':obs['world_id']}
+        return result
+
+    def _feed_replan_needed(self,obs):
+        if self.state.get('phase')!='build'or self.state.get('construction_authorized'):return False
+        shared={_key(dict(self.state[k],name='transport-belt'))for k in('iron_source','steel_source')}
+        if set(self.state.get('bindings',{}))-shared:return False
+        upgrade=self._prebuild_core_upgrade()
+        if not upgrade.get('ok')or upgrade['old_core_revision']!=upgrade['new_core_revision']:return True
+        actual={(e['name'],*xy(e))for e in obs.get('entities',[])}
+        if any(_key(e)not in shared and(e['name'],*xy(e))in actual for e in self.state['plan']['entities']):return True
+        try:
+            board=json.loads((self.path.parent/'pcb-board.json').read_text(encoding='utf-8'))
+            if not self._identity(obs,board):return True
+            future=unbuilt_external_keepouts(self.builder,obs,board['blocks'],released_block='engine_production')
+            return bool(_plan_cells(self.builder,self.state['plan'])&future)
+        except(OSError,ValueError,KeyError,TypeError):return True
+
+    def _fixed_tap_authority(self,obs):
+        s=self.state
+        if self.tap.state.get('phase')=='verified'and self.tap.state.get('parameters')==s['parameters']:
+            proof=self.tap.proof(obs)
+            return bool(proof and proof.get('port')==s['iron_source'])
+        docs=self.tap._documents();bus=docs['factory']['bus']
+        if(not all(self._identity(obs,d)for d in docs.values())or docs['factory'].get('phase')!='verified'
+                or docs['factory'].get('remove')or docs['factory'].get('cleanup')or docs['board'].get('shared_main_bus')!=bus):return False
+        source=s['iron_source'];contract={k:v for k,v in source.items()if k not in('unit_number','priority_splitter','world_id')}
+        ports=[p for p in bus['ports']if p.get('name')==source['name']]
+        stations=[p for p in bus['stations']if p.get('name')==source['name']]
+        if(len(ports)!=1 or any(ports[0].get(k)!=v for k,v in contract.items())or len(stations)!=1
+                or stations[0].get('priority')!='surplus'or stations[0].get('splitter',{}).get('position')!=source['priority_splitter']['position']):return False
+        return any(e['name']=='splitter'and e['position']==source['priority_splitter']['position']and e['direction']==0
+            and e.get('splitter_input_priority')=='left'and e.get('splitter_output_priority')=='left'for e in bus['entities'])
+
+    def _prebuild_feed_context(self,obs,*,publication=False):
+        s=self.state;record=s.get('feed_replan',{})
+        if not self._identity(obs,s)or s.get('phase')!='build':return {'ok':False,'reason':'engine_feed_replan_requires_same_unbuilt_phase'}
+        if record and(type(record.get('attempt'))is not int or record['attempt']!=1):
+            return {'ok':False,'reason':'invalid_engine_feed_replan_attempt_identity'}
+        if record and record.get('phase')not in(('publishing',)if publication else('planning',)):
+            return {'ok':False,'reason':'engine_feed_replan_already_attempted'}
+        relocation=getattr(self,'relocation',None)
+        if relocation is not None and relocation.state:return {'ok':False,'reason':'engine_feed_replan_must_precede_relocation_costs'}
+        try:
+            if json.loads(self.path.read_text(encoding='utf-8'))!=s:return {'ok':False,'reason':'engine_feed_replan_checkpoint_changed'}
+            board=json.loads((self.path.parent/'pcb-board.json').read_text(encoding='utf-8'))
+            if not self._identity(obs,board):return {'ok':False,'reason':'engine_feed_replan_board_identity_changed'}
+            old_revision=_hash(s['plan']);registered=_hash(board.get('blocks',{}).get('engine_production'))
+            allowed={old_revision}
+            if publication:
+                if(record.get('old_plan_revision')!=old_revision or record.get('guard')!=self._feed_guard()
+                        or record.get('new_plan_revision')!=_hash(record.get('candidate',{}).get('plan'))):
+                    return {'ok':False,'reason':'engine_feed_publication_intent_changed'}
+                allowed.add(record['new_plan_revision'])
+            if registered not in allowed:return {'ok':False,'reason':'engine_feed_replan_registered_plan_changed'}
+            environment=_hash({'blocks':{k:v for k,v in board['blocks'].items()if k!='engine_production'},
+                               'shared_main_bus':board.get('shared_main_bus')})
+            if publication and environment!=record['candidate']['environment_revision']:
+                return {'ok':False,'reason':'engine_feed_replan_foreign_environment_changed'}
+            shared={_key(dict(s[k],name='transport-belt')):s[k]['unit_number']for k in('iron_source','steel_source')}
+            if s.get('bindings')!=shared:return {'ok':False,'reason':'engine_owned_consumer_construction_already_started'}
+            upgrade=self._prebuild_core_upgrade()
+            if not upgrade.get('ok'):return upgrade
+            if publication:
+                candidate=record['candidate']
+                if any(candidate.get(k)!=upgrade[k]for k in('core','audit','old_core_revision','new_core_revision')):
+                    return {'ok':False,'reason':'engine_feed_publication_core_upgrade_changed'}
+            actual={(e['name'],*xy(e)):e for e in obs.get('entities',[])};core_keys={_key(e)for e in upgrade['core']['entities']}
+            if any((e['name'],*xy(e))in actual for e in upgrade['core']['entities']):
+                return {'ok':False,'reason':'engine_core_construction_already_started'}
+            authorities=self._foreign_authorities(obs,board);foreign={}
+            for e in s['plan']['entities']:
+                live=actual.get((e['name'],*xy(e)))
+                if not live or _key(e)in shared:continue
+                if _key(e)in core_keys:return {'ok':False,'reason':'engine_core_construction_already_started','entity':e}
+                retained=authorities.get((e['name'],*xy(e),live.get('unit_number')))
+                if not retained or live.get('direction',0)!=retained['direction']:
+                    return {'ok':False,'reason':'unbound_engine_asset_is_not_exact_verified_foreign_asset','entity':e}
+                foreign[(retained['name'],*xy(retained))]=retained
+            for name in('iron_source','steel_source'):
+                q=s[name];live=actual.get(('transport-belt',*xy(q)))
+                if not live or live.get('unit_number')!=q['unit_number']or live.get('direction')!=q['facing']:
+                    return {'ok':False,'reason':'engine_fixed_feed_source_changed','source':name}
+            steel=self._steel_source(obs)
+            if(not steel.get('ok')or steel['source']!=s['steel_source']or steel['plan_revision']!=s['steel_plan_revision']
+                    or sorted(steel['furnace_units'])!=sorted(s['steel_furnace_units'])):
+                return {'ok':False,'reason':'engine_fixed_steel_production_authority_changed'}
+            if not self._fixed_tap_authority(obs):return {'ok':False,'reason':'engine_fixed_tap_proof_missing'}
+            coverage=self.perimeter.coverage_proof(obs,SCOPE_ID)
+            if not coverage or not isinstance(coverage.get('posts'),list):return {'ok':False,'reason':'engine_existing_coverage_proof_required'}
+            posts=sorted(({k:p[k]for k in('name','position','unit_number')}for p in coverage['posts']),key=lambda p:p['name'])
+            scope=self.perimeter.state.get('coverage_scopes',{}).get(SCOPE_ID,{})
+            eligible={p['unit_number']:p for p in self.perimeter.state.get('posts',[])if p.get('coverage_scope')==SCOPE_ID
+                      and p['name']in scope.get('new_posts',[])and p.get('commissioned')}
+            cells=_plan_cells(self.builder,s['plan']);ignored=[]
+            for live in obs.get('entities',[]):
+                if live['name']!='gun-turret':continue
+                p=live['position'];hit=any(p['x']-1<x+.5 and p['x']+1>x-.5 and p['y']-1<y+.5 and p['y']+1>y-.5 for x,y in cells)
+                if not hit:continue
+                owned=eligible.get(live.get('unit_number'))
+                if not owned or owned['position']!=p:return {'ok':False,'reason':'engine_feed_replan_conflicting_post_is_not_owned_new_scope'}
+                ignored.append(live['unit_number'])
+            if len(ignored)>4:return {'ok':False,'reason':'engine_feed_replan_old_post_budget_exceeded'}
+            if publication and(sorted(ignored)!=record['candidate']['ignored_old_posts']or posts!=record['candidate']['coverage_units']):
+                return {'ok':False,'reason':'engine_feed_replan_defense_identity_changed'}
+            retained=list(foreign.values())
+            if publication and retained!=record['candidate']['preserved_foreign_assets']:
+                return {'ok':False,'reason':'engine_feed_replan_foreign_authority_changed'}
+            units=[dict(s[k],name='transport-belt',direction=s[k]['facing'])for k in('iron_source','steel_source')]+retained
+            native=self.game.query('''local args=helpers.json_to_table('''+_payload({'rows':units,'splitter':s['iron_source']['priority_splitter']})+''');for _,q in ipairs(args.rows)do local e=target(q.position,q.name)
+ if not e or e.force~=f or e.surface~=s or e.unit_number~=q.unit_number or e.position.x~=q.position.x
+  or e.position.y~=q.position.y or(e.type~="electric-pole"and e.direction~=q.direction)then return {ok=false,reason="engine_feed_retained_native_identity_changed"}end
+ if q.item and q.name=="transport-belt"then for lane=1,2 do for _,item in pairs(e.get_transport_line(lane).get_contents())do
+  local quality=type(item.quality)=="string"and item.quality or(item.quality and item.quality.name or"normal")
+  if item.name~=q.item or quality~="normal"then return {ok=false,reason="engine_feed_source_contaminated"}end
+ end end end
+end;local q=args.splitter;local e=target(q.position,"splitter")
+if not e or e.force~=f or e.surface~=s or e.unit_number~=q.unit_number or e.direction~=0
+ or e.position.x~=q.position.x or e.position.y~=q.position.y or e.splitter_input_priority~="left"or e.splitter_output_priority~="left"then return {ok=false,reason="engine_feed_surplus_splitter_changed"}end
+return {ok=true}''')
+            if not native.get('ok'):return native
+            return {'ok':True,'board':board,'old_plan_revision':old_revision,'guard':self._feed_guard(),'bindings':shared,
+                    'ignored_old_posts':sorted(ignored),'coverage_units':posts,'preserved_foreign_assets':retained,
+                    'environment_revision':environment,**{k:upgrade[k]for k in('core','audit','old_core_revision','new_core_revision')}}
+        except(OSError,ValueError,KeyError,TypeError,AttributeError)as exc:
+            return {'ok':False,'reason':'invalid_engine_feed_replan_authority','detail':str(exc)}
+
+    def prepare_prebuild_feed_replan(self,obs):
+        """Readonly alternative releasing only this receiver's old unbuilt external feeds."""
+        context=self._prebuild_feed_context(obs)
+        if not context.get('ok'):return context
+        core=context['core'];x,y=xy({'position':core['anchor']});future=engine_core(self.catalog,x,y,4)
+        budget=PlanningBudget(self.game);adapter=SimpleNamespace(_occupied_by_plan=self.builder._occupied_by_plan,
+            can_place=lambda entities:preflight(budget.game,self.builder,obs,entities,ignored_units=context['ignored_old_posts']))
+        reserved=merge_entities(core['entities'],future['entities'])+_core_keepout(core)
+        arguments={'ignored_units':context['ignored_old_posts'],'released_unbuilt_receiver':{
+            'block':'engine_production','plan_revision':context['old_plan_revision']}}
+        routes=0
+        def failed(stage,detail):return {'ok':False,'reason':'engine_prebuild_feed_replan_failed',
+            'evidence':{'stage':stage,'detail':{k:(v[:8]if k=='blocked'and isinstance(v,list)else v)for k,v in detail.items()
+                if k in('reason','visited','blocked','position','entity')},'route_attempts':routes}}
+        steel=plan_connection(budget.game,adapter,obs,self.state['steel_source'],core['ports'][1],reserved,**arguments)
+        routes+=1
+        if not steel.get('ok'):return failed('steel_route',steel)
+        iron=plan_connection(budget.game,adapter,obs,self.state['iron_source'],core['ports'][0],reserved+steel['entities'],**arguments)
+        routes+=1
+        if not iron.get('ok'):return failed('iron_route',iron)
+        es=merge_entities(core['entities'],steel['entities'],iron['entities'])
+        group=_clear_planned_power_group(budget.game,core)
+        if not group.get('ok'):return failed('power_target',group)
+        power=connect_power_groups(budget.game,adapter,obs,[group['group']],merge_entities(es,future['entities']))
+        if not power.get('ok'):return failed('power',power)
+        es=merge_entities(es,power['entities'])
+        whole=preflight(budget.game,self.builder,obs,es,ignored_units=context['ignored_old_posts'])
+        if not whole.get('ok'):return failed('whole_preflight',whole)
+        check=preflight(budget.game,self.builder,obs,merge_entities(es,future['entities']),ignored_units=context['ignored_old_posts'])
+        if not check.get('ok'):return failed('future_preflight',check)
+        plan=_plan(es,core['ports'],reserved_area=core['reserved_area'],underground_pairs=core['underground_pairs']+steel['underground_pairs']+iron['underground_pairs'],
+            clear_obstacles=whole['clear_obstacles'],clearance_world_id=obs['world_id'],layout_policy=self.state['plan']['layout_policy'])
+        actual={(e['name'],*xy(e)):e for e in obs.get('entities',[])}
+        if any((e['name'],*xy(e))in actual and _key(e)not in context['bindings']for e in es):return failed('bindings',{'reason':'replanned_engine_would_adopt_foreign_or_consumer_asset'})
+        pipes=surface_pipe_proof(budget.game,obs,plan)
+        if not pipes.get('ok'):return failed('preserved_pipes',pipes)
+        if budget.expired():return budget.failure(route_attempts=2)
+        return {k:v for k,v in context.items()if k!='board'}|{'world_id':obs['world_id'],'catalog_fingerprint':self.catalog.fingerprint,
+            'plan':plan,'new_plan_revision':_hash(plan),'prepared_tick':obs.get('tick'),
+            'route_attempts':2,'route_metrics':[dict(item='steel-plate',**steel['route_metrics']),dict(item='iron-plate',**iron['route_metrics'])]}
+
+    def _publish_feed_replan(self,obs):
+        context=self._prebuild_feed_context(obs,publication=True)
+        if not context.get('ok'):return {'status':'blocked',**context}
+        record=self.state['feed_replan'];candidate=record['candidate'];plan=candidate['plan']
+        x,y=xy({'position':candidate['core']['anchor']});future=engine_core(self.catalog,x,y,4)
+        whole=preflight(self.game,self.builder,obs,plan['entities'],ignored_units=candidate['ignored_old_posts'])
+        future_check=preflight(self.game,self.builder,obs,merge_entities(plan['entities'],future['entities']),ignored_units=candidate['ignored_old_posts'])
+        pipes=surface_pipe_proof(self.game,obs,plan)
+        if not whole.get('ok')or not future_check.get('ok')or not pipes.get('ok'):
+            return {'status':'blocked','reason':'engine_feed_publication_prospective_proof_changed','evidence':{'whole':whole,'future':future_check,'pipes':pipes}}
+        board=context['board']
+        if _hash(board['blocks']['engine_production'])==record['old_plan_revision']:
+            board['blocks']['engine_production']=deepcopy(plan);_atomic_json(self.path.parent/'pcb-board.json',board)
+        updated=deepcopy(self.state);updated.update(plan=deepcopy(plan),core=deepcopy(candidate['core']),audit=deepcopy(candidate['audit']),
+            route_metrics=candidate['route_metrics'],route_attempts=2,
+            prepared_tick=candidate['prepared_tick'],preserved_foreign_assets=candidate['preserved_foreign_assets'])
+        updated.pop('construction_authorized',None);updated['feed_replan']={k:v for k,v in record.items()if k!='candidate'}
+        updated['feed_replan'].update(phase='adopted',adopted_tick=obs.get('tick'))
+        _atomic_json(self.path,updated);self.state=updated
+        return {'status':'waiting','reason':'engine_unbuilt_feeds_replanned_before_defense_relocation','evidence':{
+            'old_plan_revision':record['old_plan_revision'],'new_plan_revision':record['new_plan_revision'],
+            'old_core_revision':candidate['old_core_revision'],'new_core_revision':candidate['new_core_revision'],
+            'preserved_foreign_assets':candidate['preserved_foreign_assets'],'ignored_only_future_old_post_recoveries':candidate['ignored_old_posts']}}
+
+    def _attempt_feed_replan(self,obs):
+        context=self._prebuild_feed_context(obs)
+        if not context.get('ok'):return {'status':'blocked',**context}
+        self.state['feed_replan']={'attempt':1,'phase':'planning','old_plan_revision':context['old_plan_revision'],'guard':context['guard']}
+        self._save();candidate=self.prepare_prebuild_feed_replan(obs)
+        if json.loads(self.path.read_text(encoding='utf-8'))!=self.state:
+            return {'status':'blocked','reason':'engine_feed_checkpoint_changed_during_prepare'}
+        board=json.loads((self.path.parent/'pcb-board.json').read_text(encoding='utf-8'))
+        if not self._identity(obs,board)or _hash(board['blocks'].get('engine_production'))!=context['old_plan_revision']:
+            return {'status':'blocked','reason':'engine_feed_board_changed_during_prepare'}
+        if not candidate.get('ok'):
+            self.state['feed_replan'].update(phase='blocked',failure=candidate);self._save()
+            return {'status':'blocked',**candidate}
+        self.state['feed_replan'].update(phase='publishing',candidate=candidate,new_plan_revision=candidate['new_plan_revision'])
+        self._save();return self._publish_feed_replan(obs)
+
+    def _preserved_foreign_valid(self,obs):
+        actual={(e['name'],*xy(e)):e for e in obs.get('entities',[])}
+        return all(actual.get((q['name'],*xy(q)),{}).get('unit_number')==q['unit_number']
+            and actual[(q['name'],*xy(q))].get('direction',0)==q['direction']for q in self.state.get('preserved_foreign_assets',[]))
+
     def _bind(self,obs):
         actual={(e['name'],*xy(e)):e for e in obs['entities']};changed=False
         for spec in self.state['plan']['entities']:
@@ -362,6 +620,11 @@ return {ok=true}''')
         if not self._identity(obs,self.state):return {'status':'blocked','reason':'engine_world_or_catalog_changed'}
         if _hash(self.steel.state.get('plan'))!=self.state['steel_plan_revision']:
             return {'status':'blocked','reason':'engine_bound_steel_plan_changed'}
+        feed=self.state.get('feed_replan',{})
+        if feed.get('phase')=='publishing':return self._publish_feed_replan(obs)
+        if feed.get('phase')=='planning':return {'status':'blocked','reason':'engine_feed_replan_interrupted_before_publication'}
+        if feed.get('phase')=='blocked':return {'status':'blocked','reason':'engine_feed_replan_already_attempted','evidence':feed.get('failure')}
+        relocation=getattr(self,'relocation',None)
         if self.state['phase']=='tap':
             if self.tap.state.get('parameters')!=self.state['parameters']:
                 if self.tap.state and self.tap.state.get('phase')!='verified':return {'status':'blocked','reason':'another_bus_tap_cutover_unfinished'}
@@ -369,6 +632,11 @@ return {ok=true}''')
             result=self.tap.step(obs,self.state['parameters'])
             if result.get('status')!='succeeded':return result
             self.state['iron_source']=deepcopy(result['evidence']['port']);self.state['phase']='build';self._save()
+        if not self._preserved_foreign_valid(obs):return {'status':'blocked','reason':'engine_preserved_foreign_asset_changed'}
+        if self._feed_replan_needed(obs):return self._attempt_feed_replan(obs)
+        if relocation is not None and relocation.active:
+            result=relocation.step(obs)
+            return {'status':'waiting','reason':'defense_relocation_complete_reobserve_engine_site'}if result.get('status')=='succeeded'else result
         result=self._bind(obs)
         if result:return result
         result=self._reserve(obs)
@@ -377,7 +645,11 @@ return {ok=true}''')
         if result is not None:return result
         if not self.state.get('construction_authorized'):
             check=preflight(self.game,self.builder,obs,self.state['plan']['entities'])
-            if not check.get('ok'):return {'status':'blocked','reason':'engine_site_changed_after_defense','evidence':check}
+            if not check.get('ok'):
+                if relocation is not None:
+                    result=relocation.step(obs)
+                    return {'status':'waiting','reason':'defense_relocation_complete_reobserve_engine_site'}if result.get('status')=='succeeded'else result
+                return {'status':'blocked','reason':'engine_site_changed_after_defense','evidence':check}
             self.state['construction_authorized']=True;self._save()
         pipes=surface_pipe_proof(self.game,obs,self.state['plan'])
         if not pipes.get('ok'):return {'status':'blocked','reason':'engine_preserved_pipe_network_changed','evidence':pipes}
@@ -391,6 +663,7 @@ return {ok=true}''')
     def proof(self,obs):
         self.last_proof_failure=None
         if not self.state or not self._identity(obs,self.state)or self.state.get('phase')=='tap':return None
+        if not self._preserved_foreign_valid(obs):self.last_proof_failure={'reason':'engine_preserved_foreign_asset_changed'};return None
         defense=self.perimeter.coverage_proof(obs,SCOPE_ID)
         if not defense:self.last_proof_failure={'reason':'engine_defense_coverage_missing'};return None
         if not underground_proof(obs,self.state['plan']):self.last_proof_failure={'reason':'engine_native_underground_pairs_unverified'};return None

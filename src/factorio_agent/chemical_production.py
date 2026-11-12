@@ -22,6 +22,7 @@ from .transport import plan_connection as belt_connection,surface_pipe_proof,und
 
 PRODUCTS={'plastic-bar':'plastics','sulfur':'sulfur-processing'}
 SOURCE_KEYS={'petroleum-gas':'petroleum-gas','water':'water','coal':'plastic-coal'}
+FLUID_CROSSING_TYPES={'transport-belt','underground-belt','electric-pole','inserter'}
 
 
 def _payload(v):return json.dumps(json.dumps(v,separators=(',',':')))
@@ -180,12 +181,30 @@ def source_owned_apron(builder,source,blocks,maximum_steps=4):
     return {'ok':False,'reason':'chemical_source_apron_has_no_exit_within_four_steps'}
 
 
+CHEMICAL_CROSSING_WITNESS_LUA=r'''
+local crossing_types={["transport-belt"]=true,["underground-belt"]=true,["electric-pole"]=true,inserter=true}
+local function crossing_obstacle(e)
+ local rock=e.type=="simple-entity"and(e.name=="big-rock"or e.name=="huge-rock"or e.name=="big-sand-rock")
+ local natural=e.force.name=="neutral"and e.minable and(e.type=="tree"or rock)
+ return e~=a and e.type~="resource"and e.type~="corpse"and not natural
+end
+local function crossing_witness(e)
+ if not e or not e.valid or not crossing_types[e.type]or e.force~=f or e.surface~=s or not e.unit_number then return nil end
+ return{name=e.name,type=e.type,position=pos(e.position),unit_number=e.unit_number,world_id=args.world_id,
+  force_index=f.index,direction=e.direction}
+end
+'''
+
+
 CHEMICAL_PIPE_SURVEY_LUA=r'''
-local args=helpers.json_to_table(PAYLOAD);local b=args.bounds;local hard={};local soft={};local apron={}
+local args=helpers.json_to_table(PAYLOAD)
+if not d or d.world_id~=args.world_id then return {ok=false,reason="chemical_fluid_crossing_world_changed"}end
+'''+CHEMICAL_CROSSING_WITNESS_LUA+r'''
+local b=args.bounds;local hard={};local soft={};local crossings={};local apron={}
 local function same(p,q)return p.x==q.x and p.y==q.y end
 local function key(p)return p.x..":"..p.y end
 for _,p in ipairs(args.apron_path)do apron[key(p)]=true end
-for y=b.min_y,b.max_y do for x=b.min_x,b.max_x do local p={x=x,y=y};local area={{x-.49,y-.49},{x+.49,y+.49}};local blocked=false;local crossing=false
+for y=b.min_y,b.max_y do for x=b.min_x,b.max_x do local p={x=x,y=y};local area={{x-.49,y-.49},{x+.49,y+.49}};local blocked=false;local assets={}
  for _,zone in ipairs(args.zones)do local z=zone.area;if x+.49>z[1][1]and x-.49<z[2][1]and y+.49>z[1][2]and y-.49<z[2][2]then blocked=true;break end end
  for index,z in ipairs(args.reservations)do
   if x+.49>z[1][1]and x-.49<z[2][1]and y+.49>z[1][2]and y-.49<z[2][2]
@@ -194,19 +213,107 @@ for y=b.min_y,b.max_y do for x=b.min_x,b.max_x do local p={x=x,y=y};local area={
  if s.count_entities_filtered{area=area,type="resource"}>0 then blocked=true end
  for _,tile in pairs(s.find_tiles_filtered{area=area})do for layer in pairs(prototypes.entity.pipe.collision_mask.layers)do if tile.collides_with(layer)then blocked=true;break end end end
  for _,e in pairs(s.find_entities_filtered{area=area})do
-  local rock=e.type=="simple-entity"and(e.name=="big-rock"or e.name=="huge-rock"or e.name=="big-sand-rock")
-  local natural=e.force.name=="neutral"and e.minable and(e.type=="tree"or rock)
-  if e~=a and e.type~="resource"and e.type~="corpse"and not natural and not e.prototype.collision_mask.colliding_with_tiles_only then crossing=true end
+  if crossing_obstacle(e)then local witness=crossing_witness(e)
+   if witness then assets[#assets+1]=witness else blocked=true end
+  end
  end
  for _,e in pairs(s.find_entities_filtered{area={{x-1.49,y-1.49},{x+1.49,y+1.49}}})do
   if not(e.unit_number==args.source.unit_number and same(e.position,args.source.position))then
    for _ in pairs(e.prototype.fluidbox_prototypes or{})do blocked=true;break end
   end
  end
- if same(p,args.source.position)then blocked=false;crossing=false end
- if blocked then hard[#hard+1]=p elseif crossing then soft[#soft+1]=p end
-end end;return {ok=true,hard=hard,soft=soft}
+ if same(p,args.source.position)then blocked=false;assets={}end
+ if blocked then hard[#hard+1]=p elseif #assets>0 then soft[#soft+1]=p;crossings[#crossings+1]={position=p,assets=assets}end
+end end;return {ok=true,hard=hard,soft=soft,crossings=crossings}
 '''
+
+
+def _valid_fluid_crossing(witness,world):
+    if(not isinstance(witness,dict)or witness.get('world_id')!=world or not isinstance(witness.get('name'),str)
+            or not witness['name']or not isinstance(witness.get('type'),str)or witness['type']not in FLUID_CROSSING_TYPES
+            or type(witness.get('unit_number'))is not int or witness['unit_number']<1
+            or type(witness.get('force_index'))is not int or witness['force_index']<1
+            or type(witness.get('direction'))is not int or witness['direction']not in VECTORS):return False
+    p=witness.get('position')
+    return(isinstance(p,dict)and set(p)=={'x','y'}and all(type(v)in(int,float)and math.isfinite(v)for v in p.values()))
+
+
+def _observed_fluid_crossing(obs,witness):
+    return any(all(e.get(k)==witness[k]for k in('name','type','unit_number','position','direction'))for e in obs.get('entities',[]))
+
+
+def _fluid_buried_cells(pairs):
+    cells=set()
+    for pair in pairs:
+        first,last=pair['first'],pair['last'];dx,dy=VECTORS[pair['direction']];span=pair['span']
+        if(type(span)is not int or not 2<=span<=32 or len(first)!=2 or len(last)!=2
+                or any(type(v)not in(int,float)or not math.isfinite(v)for v in first+last)
+                or tuple(last)!=(first[0]+dx*span,first[1]+dy*span)):
+            raise ValueError('bounded straight fluid pair required')
+        cells.update((first[0]+dx*i,first[1]+dy*i)for i in range(1,span))
+    return cells
+
+
+CHEMICAL_CROSSING_PROOF_LUA=r'''
+local args=helpers.json_to_table(PAYLOAD)
+if not d or d.world_id~=args.world_id then return {ok=false,reason="chemical_fluid_crossing_world_changed"}end
+'''+CHEMICAL_CROSSING_WITNESS_LUA+r'''
+local expected={};local seen={};local spans={}
+for _,box in pairs(prototypes.entity["pipe-to-ground"].fluidbox_prototypes)do for _,c in pairs(box.pipe_connections)do
+ if c.connection_type=="underground"then spans[#spans+1]=c.max_underground_distance end
+end end
+if #spans~=1 then return {ok=false,reason="chemical_fluid_crossing_native_span_unavailable"}end
+for _,pair in ipairs(args.pairs)do if pair.span>spans[1]then return {ok=false,reason="chemical_fluid_crossing_native_span_changed"}end end
+for _,q in ipairs(args.assets)do
+ local e=target(q.position,q.name);local fresh=crossing_witness(e)
+ if not fresh or q.force_index~=f.index or fresh.unit_number~=q.unit_number or fresh.type~=q.type or fresh.direction~=q.direction
+  or fresh.position.x~=q.position.x or fresh.position.y~=q.position.y then
+  return {ok=false,reason="chemical_preserved_fluid_crossing_missing_or_changed",unit_number=q.unit_number}
+ end
+ expected[q.unit_number]=q
+end
+for _,p in ipairs(args.cells)do local area={{p.x-.49,p.y-.49},{p.x+.49,p.y+.49}}
+ if s.count_entities_filtered{area=area,type="resource"}>0 then return {ok=false,reason="chemical_fluid_crossing_resource_changed",position=p}end
+ for _,zone in ipairs(args.zones)do local z=zone.area
+  if p.x+.49>z[1][1]and p.x-.49<z[2][1]and p.y+.49>z[1][2]and p.y-.49<z[2][2]then
+   return {ok=false,reason="chemical_fluid_crossing_mining_reservation_changed",position=p}
+  end
+ end
+ for _,tile in pairs(s.find_tiles_filtered{area=area})do for layer in pairs(prototypes.entity.pipe.collision_mask.layers)do
+  if tile.collides_with(layer)then return {ok=false,reason="chemical_fluid_crossing_terrain_changed",position=p}end
+ end end
+ for _,e in pairs(s.find_entities_filtered{area=area})do if crossing_obstacle(e)then
+  if not crossing_witness(e)or not expected[e.unit_number]then
+   return {ok=false,reason="chemical_fluid_crossing_unrecorded_asset",position=p}
+  end
+  seen[e.unit_number]=true
+ end end
+end
+for unit in pairs(expected)do if not seen[unit]then return {ok=false,reason="chemical_fluid_crossing_witness_outside_tunnel",unit_number=unit}end end
+return {ok=true,preserved_assets=#args.assets,fluid_pairs=#args.pairs}
+'''
+
+
+def fluid_crossing_proof(game,obs,plan):
+    """Fresh immutable crossings; legacy plans make no new preservation claim."""
+    pairs=plan.get('fluid_underground_pairs',[]);assets=plan.get('preserved_fluid_crossings',[])
+    if not isinstance(pairs,list)or not isinstance(assets,list):return {'ok':False,'reason':'chemical_fluid_crossing_witness_invalid'}
+    if not pairs and not assets:return {'ok':True,'preserved_assets':0,'fluid_pairs':0}
+    if not obs.get('ok',True)or not isinstance(obs.get('world_id'),str)or not obs['world_id']:
+        return {'ok':False,'reason':'chemical_fluid_crossing_observation_invalid'}
+    try:cells=_fluid_buried_cells(pairs)
+    except(KeyError,TypeError,ValueError):return {'ok':False,'reason':'chemical_fluid_crossing_pairs_invalid'}
+    seen=set()
+    for q in assets:
+        if not _valid_fluid_crossing(q,obs['world_id'])or q['unit_number']in seen:
+            return {'ok':False,'reason':'chemical_fluid_crossing_witness_invalid'}
+        seen.add(q['unit_number'])
+        if not _observed_fluid_crossing(obs,q):return {'ok':False,'reason':'chemical_preserved_fluid_crossing_missing_or_changed','asset':q}
+    if not cells:return {'ok':False,'reason':'chemical_fluid_crossing_witness_outside_tunnel'}
+    try:zones=mining_reservations(game,obs['world_id'])
+    except(OSError,ValueError,KeyError,TypeError):return {'ok':False,'reason':'chemical_fluid_crossing_resource_scope_invalid'}
+    args={'world_id':obs['world_id'],'assets':assets,'pairs':pairs,'cells':[{'x':x,'y':y}for x,y in sorted(cells)],'zones':zones}
+    return game.query(CHEMICAL_CROSSING_PROOF_LUA.replace('PAYLOAD',_payload(args)))
 
 
 def plan_typed_fluid_connection(game,builder,obs,source,destination,core,prior_groups=()):
@@ -227,11 +334,19 @@ for _,c in pairs(b.pipe_connections)do if c.connection_type=="underground"then s
     blocks += [{'reserved_area':r['area']}for r in board.get('shared_main_bus',{}).get('reservations',[])if r.get('area')]
     apron=source_owned_apron(builder,source,blocks)
     if not apron.get('ok'):return apron
+    apron_crossing=None
     if apron['path']:
         clear=preflight(game,builder,obs,[entity('pipe',p['x'],p['y'])for p in apron['path'][1:]])
-        if not clear.get('ok'):return {'ok':False,'reason':'chemical_source_apron_native_obstruction','preflight':clear}
+        if not clear.get('ok'):
+            p=clear.get('position');eligible=apron['path'][2:]
+            matches=[e for e in obs.get('entities',[])if e.get('name')=='transport-belt'and e.get('type')=='transport-belt'
+                and e.get('position')==p and type(e.get('unit_number'))is int and e['unit_number']>0 and e.get('direction')in VECTORS]
+            if(clear.get('reason')!='block_terrain_or_immovable_obstruction'or clear.get('entity')!='pipe'
+                    or p not in eligible or len(matches)!=1):
+                return {'ok':False,'reason':'chemical_source_apron_native_obstruction','preflight':clear}
+            apron_crossing=matches[0]
     reservations=[p['reserved_area']for p in blocks]
-    survey=game.query(CHEMICAL_PIPE_SURVEY_LUA.replace('PAYLOAD',_payload({'bounds':bounds,'source':source,
+    survey=game.query(CHEMICAL_PIPE_SURVEY_LUA.replace('PAYLOAD',_payload({'world_id':obs['world_id'],'bounds':bounds,'source':source,
         'reservations':reservations,'owner_index':apron['owner_index'],'apron_path':apron['path'],
         'zones':mining_reservations(game,obs['world_id'])})))
     if not survey.get('ok'):return survey
@@ -250,6 +365,18 @@ for _,c in pairs(b.pipe_connections)do if c.connection_type=="underground"then s
     for e in other:
         p=xy(e);hard.add(p);hard.update((p[0]+dx,p[1]+dy)for dx,dy in VECTORS.values())
     hard -= {(a['x'],a['y']),(b['x'],b['y'])};soft={(p['x'],p['y'])for p in survey.get('soft',[])}
+    crossings={}
+    for row in survey.get('crossings',[]):
+        point_=xy(row);assets=row.get('assets')
+        if(point_ in crossings or not isinstance(assets,list)or not assets
+                or any(not _valid_fluid_crossing(q,obs['world_id'])or not _observed_fluid_crossing(obs,q)for q in assets)):
+            hard.add(point_);soft.discard(point_);continue
+        crossings[point_]=assets
+    # A bare "soft" cell is not permission to bury an unidentified native asset.
+    hard.update(soft-crossings.keys());soft.intersection_update(crossings)
+    if apron_crossing and not any(all(q.get(k)==apron_crossing.get(k)for k in('name','type','unit_number','position','direction'))
+            for q in crossings.get(xy(apron_crossing),[])if xy(apron_crossing)in soft and xy(apron_crossing)not in hard):
+        return {'ok':False,'reason':'chemical_source_apron_native_obstruction','preflight':clear}
     maximum=span['spans'][0]
     def accepts(row):
         prefix=apron['path'];segments=row.get('segments',[])
@@ -258,7 +385,8 @@ for _,c in pairs(b.pipe_connections)do if c.connection_type=="underground"then s
         compiled=compile_pipe_crossings(row,soft,maximum)
         if not compiled.get('ok'):return False
         by={xy(e):e for e in compiled['entities']}
-        return all(by.get((p['x'],p['y']),{}).get('name')=='pipe'for p in prefix)
+        normal=prefix[:2]if apron_crossing else prefix
+        return all(by.get((p['x'],p['y']),{}).get('name')=='pipe'for p in normal)
     route=route_trunks(a,b,occupied=hard,bounds=bounds,start_direction=source['facing'],end_direction=destination['facing'],
         max_nodes=200000,max_turns=6,max_detour_ratio=1.35,candidate_validator=accepts)
     result=compile_pipe_crossings(route,soft,maximum)
@@ -270,6 +398,13 @@ for _,c in pairs(b.pipe_connections)do if c.connection_type=="underground"then s
     if not neighbor:return {'ok':False,'reason':'chemical_source_fixed_first_neighbor_missing'}
     result['first_neighbor']=dict(neighbor,fluidbox_index=1)
     result['source_apron_exit']=apron
+    preserved={}
+    for point_ in _fluid_buried_cells(result['underground_pairs']):
+        for q in crossings.get(point_,[]):
+            old=preserved.get(q['unit_number'])
+            if old and old!=q:return {'ok':False,'reason':'chemical_fluid_crossing_witness_conflict'}
+            preserved[q['unit_number']]=q
+    result['preserved_fluid_crossings']=[deepcopy(preserved[u])for u in sorted(preserved)]
     return result
 
 
@@ -448,6 +583,9 @@ end;return {ok=true,snapshots=snapshots}''')
             es=merge_entities([{k:v for k,v in e.items()if k!='fluidbox_index'}for e in starts],es)
             plan=_plan(es,core['ports'],reserved_area=core['reserved_area'],
                 underground_pairs=coal_route['underground_pairs']if coal_route else[],
+                fluid_underground_pairs=[deepcopy(pair)for p in fluid_plans.values()for pair in p['route']['underground_pairs']],
+                preserved_fluid_crossings=list({q['unit_number']:deepcopy(q)for p in fluid_plans.values()
+                    for q in p['route'].get('preserved_fluid_crossings',[])}.values()),
                 clear_obstacles=check['clear_obstacles'],clearance_world_id=obs['world_id'],defense_scope_id=scope,
                 layout_policy='permanent-typed-chemistry-v1')
             return {'ok':True,'world_id':obs['world_id'],'catalog_fingerprint':self.catalog.fingerprint,'product':product,
@@ -498,6 +636,8 @@ end;return {ok=true,snapshots=snapshots}''')
         if result is not None:return result
         pipe_guard=surface_pipe_proof(self.game,obs,entry['plan'])
         if not pipe_guard.get('ok'):return {'status':'blocked','reason':'chemical_preserved_surface_pipe_changed','evidence':pipe_guard}
+        crossing_guard=fluid_crossing_proof(self.game,obs,entry['plan'])
+        if not crossing_guard.get('ok'):return {'status':'blocked','reason':'chemical_preserved_fluid_crossing_changed','evidence':crossing_guard}
         for fluid,h in entry['fluid_handoffs'].items():
             planned={k:v for k,v in h['first_neighbor'].items()if k!='unit_number'}
             declared=_handoff(self.game,self.catalog,obs,h['consumer_id'],fluid,h['source'],planned)
@@ -532,6 +672,8 @@ end;return {ok=true,snapshots=snapshots}''')
         if not underground_proof(obs,entry['plan']):return None
         pipe_guard=surface_pipe_proof(self.game,obs,entry['plan'])
         if not pipe_guard.get('ok'):self.last_proof_failure=pipe_guard;return None
+        crossing_guard=fluid_crossing_proof(self.game,obs,entry['plan'])
+        if not crossing_guard.get('ok'):self.last_proof_failure=crossing_guard;return None
         defense=self.perimeter.coverage_proof(obs,entry['defense_scope_id'])
         if not defense:return None
         sources=self._sources(obs,entry['product'])

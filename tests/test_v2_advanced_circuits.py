@@ -72,7 +72,7 @@ class AdvancedCoreTests(unittest.TestCase):
         for field in ('ports', 'reserved_area', 'underground_pairs', 'output_access'):
             self.assertEqual(small[field], large[field])
         self.assertTrue(all(e in large['entities'] for e in small['entities']))
-        self.assertEqual(small['required_items'], {'transport-belt': 116, 'assembling-machine-1': 4,
+        self.assertEqual(small['required_items'], {'transport-belt': 117, 'assembling-machine-1': 4,
             'fast-inserter': 5, 'underground-belt': 8, 'inserter': 4, 'long-handed-inserter': 2, 'small-electric-pole': 6})
 
     def test_wrong_long_arm_missing_wire_and_yellow_green_upgrade_are_detected(self):
@@ -87,6 +87,11 @@ class AdvancedCoreTests(unittest.TestCase):
             p = advanced_circuit_core(c, .5, .5, 4)
             next(e for e in p['entities'] if e.get('arm_role') == role)['name'] = 'inserter'
             self.assertTrue(any(s.startswith('inserter_budget_or_target_invalid') for s in audit_advanced_circuit_core(p, c)['errors']), role)
+
+    def test_missing_empty_tail_reproduces_native_both_lane_copper_corner(self):
+        c = catalog(); p = advanced_circuit_core(c, .5, .5)
+        p['entities'] = [e for e in p['entities'] if xy(e) != (-1.5, .5)]
+        self.assertTrue(any(e.startswith('typed_lane_mismatch') for e in audit_advanced_circuit_core(p, c)['errors']))
 
     def test_native_underground_pair_theft_and_occupied_growth_slot_are_rejected(self):
         c = catalog(); p = advanced_circuit_core(c, .5, .5)
@@ -258,6 +263,59 @@ class AdvancedControllerTests(unittest.TestCase):
         self.chemical.state['products']['plastic-bar']['plan']['changed'] = True
         self.assertEqual(self.c.step(self.obs)['reason'], 'advanced_circuit_bound_plastic_plan_changed')
 
+    def legacy_mixer(self):
+        self.install(); s = self.c.state; x, y = xy({'position': s['core']['anchor']})
+        tail = entity('transport-belt', x-2, y, 4)
+        for plan in (s['core'], s['plan']):
+            plan['entities'] = [e for e in plan['entities'] if e != tail]; plan['required_items']['transport-belt'] -= 1
+        s['bindings'].pop(_key(tail)); s['core']['raw_mixer_inline_tail'] = False
+        self.obs['entities'] = [e for e in self.obs['entities'] if not(e['name'] == tail['name'] and xy(e) == xy(tail))]
+        board = json.loads((self.root/'pcb-board.json').read_text()); board['blocks']['advanced_circuit_production'] = deepcopy(s['plan'])
+        (self.root/'pcb-board.json').write_text(json.dumps(board))
+        return tail
+
+    def test_legacy_repair_prepare_is_readonly_exact_one_paid_belt_and_all_old_bindings(self):
+        tail = self.legacy_mixer(); before = deepcopy(self.c.state)
+        with patch('factorio_agent.advanced_circuits._atomic_json') as write:
+            result = self.c.prepare_mixer_repair(self.obs); write.assert_not_called()
+        self.assertTrue(result['ok'], result); self.assertTrue(result['needed']); self.assertEqual(result['tail'], tail)
+        self.assertEqual(result['required_items'], {'transport-belt': 1}); self.assertEqual(result['preserved_bindings'], before['bindings'])
+        self.assertEqual(self.c.state, before); self.assertEqual(result['core']['ports'], before['core']['ports'])
+        self.assertEqual([e for e in result['plan']['entities'] if e not in before['plan']['entities']], [tail])
+        self.assertTrue(all(e in result['plan']['entities'] for e in before['plan']['entities']))
+
+    def test_legacy_adoption_updates_only_owned_plan_and_blocks_foreign_tail_or_lost_old_asset(self):
+        tail = self.legacy_mixer(); old_plan = deepcopy(self.c.state['plan'])
+        self.obs['entities'].append(dict(tail, unit_number=99999))
+        self.assertEqual(self.c.prepare_mixer_repair(self.obs)['reason'], 'advanced_mixer_repair_tail_occupied_without_owned_binding')
+        self.obs['entities'].pop(); self.assertIsNone(self.c._adopt_mixer_repair(self.obs))
+        self.assertIsNone(self.c._reserve(self.obs)); self.assertEqual(self.c.state['mixer_repair']['phase'], 'await_native_pure_lanes')
+        saved = json.loads((self.root/'pcb-board.json').read_text())['blocks']['advanced_circuit_production']
+        self.assertEqual(saved['ports'], old_plan['ports']); self.assertTrue(all(e in saved['entities'] for e in old_plan['entities']))
+        self.assertEqual(len(saved['entities']), len(old_plan['entities'])+1)
+        self.assertFalse(self.c.state['construction_authorized']); self.builder.ensure_plan.assert_not_called()
+
+    def test_repair_recovery_uses_only_exact_owned_header_sources_and_existing_bounded_collector(self):
+        from factorio_agent.construction_supply import validate_take_many
+        self.legacy_mixer(); self.assertIsNone(self.c._adopt_mixer_repair(self.obs))
+        tail = self.c.state['mixer_repair']['tail']; self.obs['entities'].append(dict(tail, unit_number=99999)); self.c._bind(self.obs)
+        x, y = xy({'position': self.c.state['core']['anchor']})
+        q = next(e for e in self.obs['entities'] if e['name'] == 'transport-belt' and xy(e) == (x+11, y))
+        row = {key: deepcopy(q[key]) for key in ('name', 'position', 'unit_number')}
+        self.game.query.return_value = {'ok': True, 'wrong': {'copper-plate': [row]}, 'copper_left': 1, 'iron_right': 1}
+        action = self.c._mixer_cleanup(self.obs); validate_take_many(action)
+        self.assertEqual((action['type'], action['item'], action['count'], action['world_id']), ('take_many', 'copper-plate', 50, 'w'))
+        self.assertEqual(action['sources'], [dict(row, kind='belt')])
+        row['unit_number'] = -1
+        self.assertEqual(self.c._mixer_cleanup(self.obs)['reason'], 'advanced_mixer_repair_inspection_receipt_invalid')
+        row['unit_number'] = q['unit_number']; self.c.state['mixer_repair']['cleanup_attempts'] = 16
+        self.assertEqual(self.c._mixer_cleanup(self.obs)['reason'], 'mixer_cleanup_budget_exceeded')
+        self.c.state['mixer_repair']['cleanup_attempts'] = 15
+        self.assertEqual(self.c._mixer_cleanup(self.obs)['type'], 'take_many')
+        self.assertEqual(self.c.state['mixer_repair']['cleanup_attempts'], 16)
+        self.game.query.return_value = {'ok': True, 'wrong': {}, 'copper_left': 1, 'iron_right': 1}
+        self.assertIsNone(self.c._mixer_cleanup(self.obs)); self.assertEqual(self.c.state['mixer_repair']['phase'], 'verified')
+
     @unittest.skipUnless(LuaRuntime, 'optional executable Lua runtime')
     def test_actual_proof_lua_both_surplus_feeds_three_recipes_lanes_quality_and_output(self):
         self.install(); lua = LuaRuntime(unpack_returned_tuples=True)
@@ -265,7 +323,12 @@ class AdvancedControllerTests(unittest.TestCase):
             if isinstance(value, dict): return lua.table_from({k: table(v) for k, v in value.items()})
             if isinstance(value, list): return lua.table_from([table(v) for v in value])
             return value
-        def decode(value): return {k: decode(v) for k, v in value.items()} if hasattr(value, 'items') else value
+        def decode(value):
+            if not hasattr(value, 'items'): return value
+            pairs = dict(value.items())
+            if pairs and all(type(k) is int for k in pairs) and set(pairs) == set(range(1, len(pairs)+1)):
+                return [decode(pairs[i]) for i in range(1, len(pairs)+1)]
+            return {k: decode(v) for k, v in pairs.items()}
         lua.globals().helpers = lua.table_from({'json_to_table': lambda raw: table(json.loads(raw))})
         lua.execute('''f={};s={};game={tick=20};defines={inventory={crafter_input=1}};entities={}
 powered=true;wrong_recipe=false;wrong_quality=false;foreign_item=false;swapped_lanes=false;empty_output=false;buried_bad=false
@@ -328,6 +391,17 @@ function splitter(q)q.force=f;q.surface=s;q.splitter_input_priority="left";q.spl
             source_live.unit_number += 1; self.assertIsNone(self.c.proof(self.obs)); source_live.unit_number = unit
         for forbidden in ('create_entity', 'set_recipe', 'insert_fluid', 'set_research', '.insert(', '.remove('):
             self.assertNotIn(forbidden, ADVANCED_CIRCUIT_PROOF_LUA)
+        # The actual repair inspector is read-only and refuses a native curve or
+        # incompatible held stack before suggesting any guarded stock collection.
+        self.c.state['mixer_repair'] = {'phase': 'await_native_pure_lanes'}
+        anchor = core['anchor']; recipient = lua.globals().entities[_key(entity('transport-belt', anchor['x']-1, anchor['y'], 4))]
+        recipient.belt_shape = 'straight'
+        action = self.c._mixer_cleanup(self.obs); self.assertEqual(action['type'], 'take_many')
+        recipient.belt_shape = 'left'
+        self.assertEqual(self.c._mixer_cleanup(self.obs)['evidence']['reason'], 'advanced_mixer_native_recipient_not_straight'); recipient.belt_shape = 'straight'
+        arm = lua.globals().entities[_key(audit['arm_targets'][0])]
+        arm.held_stack = table({'valid_for_read': True, 'name': 'iron-plate', 'quality': {'name': 'normal'}})
+        self.assertEqual(self.c._mixer_cleanup(self.obs)['evidence']['reason'], 'advanced_mixer_incompatible_held_stack_requires_guarded_manual_recovery')
 
 
 if __name__ == '__main__': unittest.main()

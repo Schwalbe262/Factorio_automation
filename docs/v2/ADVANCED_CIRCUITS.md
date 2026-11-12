@@ -89,7 +89,7 @@ circuits at the fixed output. Every underground transport line, including buried
 lines, is inspected for contamination. Failure evidence identifies the stage or
 native subgate. This snapshot is not a sustained throughput or combat proof.
 
-Validation: fifteen focused tests cover BOM/capacity, all growth geometries,
+Validation: twenty focused tests cover BOM/capacity, all growth geometries,
 lane reachability, native mouths, future slots, preservation, both-tap whole
 preflight, fresh second-tap identities, missing prerequisites, defense/pipe/lost
 asset blockers and executable real-Lua proof rejection cases. Read-only native
@@ -101,3 +101,56 @@ is150tiles/two turns/1.0417ratio; iron121/two/1.0; copper141/four/1.1102.
 Both prospective surplus taps, all three feeds, initial/future cores, power
 and defense preview passed. Luna started actual construction afterwards;
 commissioning is still pending at this checkpoint.
+
+Subsequent same-key commissioning succeeded at **3100796**,163actions/zero
+failures, after the corner repair below. The paid tail is unit8231; all555
+original bindings remain,556total. Three ordinary transfers recovered50+27+6
+copper plates into actor inventory. Native inspection3100003 reported a straight
+recipient,52copper on the left and48iron on the right, with no wrong-lane items.
+Both Red machines7714/7726 finished10/7 products; outlet7759 held4circuits.
+Wire7637 and Green7638 finished177/49. All four covering posts7612..7615 had
+400health/10full magazines. Planning472.54s/execution178.87s are cumulative job
+times, including the unsuccessful layout and repair. This remains development
+commissioning, not a sustained10/minute or frozen Luna-only result.
+
+## Native corner correction and existing-plan repair
+
+Parent native inspection **3047938** exposed a lane error in the first accepted
+mixer. Its sole north-side feed made an ordinary belt curve and carried both
+copper lanes through the turn. Iron then competed with copper on the right
+lane. Early advanced-circuit products (5 and 3) did not prove steady green
+component delivery, and commissioning remained blocked.
+
+The shared static graph now distinguishes a curve from a straight T junction:
+a sole perpendicular input preserves both lanes; an inline tail or two opposed
+perpendicular inputs produces a side-load. The corrected core adds one empty
+east-facing belt at local `(-2,0)` to keep the copper recipient straight. Removing
+that tail reproduces the invalid mixed-lane audit. Blue and Engine templates
+have corresponding tails; compact green continues to pass its lane audit.
+
+`prepare_mixer_repair(obs)` is read-only. For an accepted older core it requires
+the exact canonical one-belt addition, unchanged ports/reservation/underground
+pairs, all old native bindings, empty new footprint and full native preflight.
+Normal `step` resumes the same production checkpoint: it saves the new
+core/plan/audit, accepts only the old registered plan hash during board adoption,
+and lets the normal paid builder place the missing belt. Old units are retained.
+
+After construction a native inspector requires the first recipient to be
+`straight`, every raw header/arm identity to match, and all stocks/held items to
+be normal and compatible. Legacy wrong-lane copper or iron is recovered using
+the existing guarded `take_many`: at most 50 items from at most 16 exact owned
+header belts, considering the far end first. Goods remain in the actor's ordinary
+inventory. Compatible held raw items finish their normal transfer; incompatible
+held stacks block for guarded reconciliation. No item is deleted or manually fed.
+
+Cleanup has a persisted **16-action limit** and returns
+`mixer_cleanup_budget_exceeded` if contamination persists. Every attempt starts
+with fresh native inspection. Zero wrong-lane stock and positive copper-left /
+iron-right stock are required before repair acceptance; full normal recipe,
+power, output and upstream proofs still run afterward.
+
+Parent read-only preflight **3082440** accepted exactly one paid belt at
+`(98.5,-138.5)E`, preserving **555** bindings and yielding a 556-entity complete
+plan. The focused family passed **75 tests** (20 advanced, 16 blue, 14 compact
+green, 5 belt-lane model, 20 engine). Actual paid repair, stock recovery and fresh
+final production proof remain the sole live executor's responsibility.

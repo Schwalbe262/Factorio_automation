@@ -53,9 +53,17 @@ class EngineCoreTests(unittest.TestCase):
         small=engine_core(catalog(),.5,.5);large=engine_core(catalog(),.5,.5,4)
         self.assertEqual(small['ports'],large['ports']);self.assertEqual(small['reserved_area'],large['reserved_area'])
         self.assertTrue(all(e in large['entities']for e in small['entities']))
-        self.assertEqual(small['required_items'],{'transport-belt':102,'assembling-machine-1':4,
+        self.assertEqual(small['required_items'],{'transport-belt':103,'assembling-machine-1':4,
             'inserter':8,'underground-belt':8,'long-handed-inserter':2,'small-electric-pole':8})
         self.assertFalse(any('drop_position'in e or 'pickup_position'in e for e in small['entities']))
+
+    def test_empty_inline_tail_separates_pipe_corner_from_gear_lane(self):
+        c=catalog();p=engine_core(c,.5,.5)
+        tail=entity('transport-belt',-1.5,7.5,4)
+        self.assertIn(tail,p['entities']);self.assertTrue(audit_engine_core(p,c)['ok'])
+        p['entities'].remove(tail)
+        errors=audit_engine_core(p,c)['errors']
+        self.assertTrue(any(e.startswith('engine_component_lane_mismatch:')for e in errors),errors)
 
     def test_bad_native_long_arm_or_lane_path_is_rejected_by_static_audit(self):
         c=catalog();p=engine_core(c,.5,.5)
@@ -239,6 +247,14 @@ function target(p,name)if owned and p.x==first.x and p.y==first.y then return{fo
             self.assertEqual(self.c.step(self.obs)['reason'],'engine_preserved_pipe_network_changed')
             self.builder.ensure_plan.assert_not_called();self.assertIsNone(self.c.proof(self.obs))
             self.assertEqual(self.c.last_proof_failure['reason'],'preserved_surface_pipe_peer_identity_changed')
+
+    def test_active_defense_relocation_gates_engine_builder_and_reobserves_after_completion(self):
+        self.install();self.builder.ensure_plan.reset_mock()
+        self.c.relocation=SimpleNamespace(active=True,step=Mock(return_value={'status':'waiting','reason':'paid replacement first'}))
+        self.assertEqual(self.c.step(self.obs)['reason'],'paid replacement first');self.builder.ensure_plan.assert_not_called()
+        self.c.relocation.step.return_value={'status':'succeeded'}
+        self.assertEqual(self.c.step(self.obs)['reason'],'defense_relocation_complete_reobserve_engine_site')
+        self.builder.ensure_plan.assert_not_called()
 
     def test_bound_steel_plan_change_or_unpaired_mouth_fails_closed(self):
         self.install();self.steel.state['plan']['entities'].append(entity('transport-belt',109.5,-37.5,4))

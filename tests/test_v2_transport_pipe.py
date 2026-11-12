@@ -170,6 +170,11 @@ class ProductionReservationTests(unittest.TestCase):
         p=self.keepouts();self.assertTrue(p['ok'],p)
         self.assertTrue({(x,-3.5)for x in(6.5,7.5,8.5,9.5,10.5)}<=p['hard'])
 
+    def test_separately_declared_future_fluid_tunnel_also_reserves_buried_cells(self):
+        self.owner['entities'] += [entity('pipe-to-ground',6.5,-3.5,12),entity('pipe-to-ground',10.5,-3.5,4)]
+        self.owner['fluid_underground_pairs']=[{'first':[6.5,-3.5],'last':[10.5,-3.5],'direction':4,'span':4}]
+        p=self.keepouts();self.assertTrue(p['ok'],p);self.assertIn((8.5,-3.5),p['hard'])
+
     def test_exact_receiver_revision_releases_only_its_unbuilt_external_footprints(self):
         receiver={'reserved_area':[[9,-1],[13,3]],'ports':[self.destination],
                   'entities':[entity('transport-belt',5.5,-3.5,4)]}
