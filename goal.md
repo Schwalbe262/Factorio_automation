@@ -104,6 +104,13 @@ planning, execution and model waits separately. Later freeze code for independen
 6. Silo, normally produced rocket parts and platform starter pack, real launch
    counter increase and natural platform arrival. Luna-only end-to-end runs.
 
+Current implementation focus: finish fresh-seed mining/smelting and native
+red/green prerequisite sequencing, then supply advanced oil, acid/lubricant,
+fluid-fed processing units/electric engines/rocket fuel/concrete and solid launch
+materials. Installed Space Age 2.1.20 rocket-silo research uses red/green/blue;
+purple/yellow science is not a first-rocket prerequisite. This leaves the other
+production, throughput, rail transport and native launch gates above intact.
+
 ## Evaluation
 Current sprint (2026-11-12): independent paired producers retain fixed ports
 (EXP-0009); permanent red and green production reaches all eight labs through

@@ -168,7 +168,7 @@ class WorkQueue:
 
     def save(self):_atomic_json(self.path,self.data)
 
-    def merge(self,nodes,capabilities,validator,tick):
+    def merge(self,nodes,capabilities,validator,tick,*,native_gates=None):
         result=deepcopy(self.data);index={q['id']:q for q in result['nodes']};incoming=set()
         for node in nodes:
             required={'id','capability','parameters','priority','depends_on','reason'}
@@ -207,6 +207,8 @@ class WorkQueue:
             for d in index[name]['depends_on']:visit(d)
             visiting.remove(name);done.add(name)
         for name in index:visit(name)
+        from .capability_gates import reject_native_recipe_cycles
+        reject_native_recipe_cycles(result['nodes'],native_gates,incoming)
         validator([dict(key=q['job_key'],world_id=self.world,observed_tick=tick,capability=q['capability'],parameters=q['parameters'])for q in result['nodes']if q['id']in incoming])
         self.data=result;self.save()
 
@@ -327,6 +329,7 @@ def compact_snapshot(observation,status,capabilities,work,actor,planner_error=No
         native_researched_technologies=observation.get('technologies',[]),current_research=observation.get('research'),
         native_enabled_recipes=observation.get('enabled_recipes',[]),
         research_progress=observation.get('research_progress'),available_research=compact(observation.get('available_research')),
+        native_capability_gates=compact(observation.get('native_capability_gates')),
         inventory=compact(observation.get('inventory',{})),entity_counts=compact(observation.get('entities',{})),
         electricity=compact(observation.get('electricity')),factory_constraints=compact(observation.get('factory_constraints')),
         enemies_near_start=compact(observation.get('enemies_near_start')),
@@ -596,7 +599,7 @@ class Supervisor:
         if len(active)>1:raise ValueError('multiple native jobs active during model decision')
         if self._stop_requested():return
         self.work.refresh(jobs,capabilities)
-        self.work.merge(decision['queue'],capabilities,self.cli.validate_requests,fresh['tick'])
+        self.work.merge(decision['queue'],capabilities,self.cli.validate_requests,fresh['tick'],native_gates=fresh.get('native_capability_gates'))
         operation=decision['operation'];self._event('decision',operation=operation,capability=decision.get('capability'),target_task_id=decision.get('target_task_id'),reason=decision['reason'],queue_nodes=len(decision['queue']))
         if operation=='request':
             if active:

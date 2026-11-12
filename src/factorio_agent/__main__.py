@@ -147,6 +147,8 @@ def main(argv=None):
             obs["factory_constraints"]=factory_constraints(root,obs,runtime.catalog_for(root,game))
             from .normal_research import ready_options
             obs["available_research"]=ready_options(runtime.catalog_for(root,game),obs)
+            from .capability_gates import native_recipe_gates
+            obs['native_capability_gates']=native_recipe_gates(runtime.catalog_for(root,game),obs,CAPABILITIES)
         result = summary(obs, Ledger(root))
     elif args.command == "request":
         parameters = json.loads(args.parameters)

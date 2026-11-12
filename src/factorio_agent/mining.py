@@ -87,6 +87,17 @@ return best or {ok=false,reason="no_clear_starter_capacity_site"}
         if self.state.get("world_id") != obs["world_id"]:
             self.state = {"world_id": obs["world_id"], "pending": {}}
         resource, wanted = parameters["resource"], parameters["cells"]
+        # Completion has priority over unrelated starter fuel chores. Otherwise
+        # a paid, productive target can loop forever replenishing other cells.
+        if len(self.cells(resource))>=wanted:
+            proof=self.proof(obs,parameters)
+            if proof:return {'status':'succeeded','reason':'starter capacity has live machine output','evidence':proof}
+        if (resource in('iron-ore','copper-ore')and wanted>2
+                and obs.get('technologies',{}).get('electric-mining-drill')is True):
+            return {'status':'blocked','reason':'bulk_starter_capacity_requires_electric_mining_after_unlock',
+                'evidence':{'resource':resource,'required':wanted,'available':2,
+                    'required_technology':'electric-mining-drill',
+                    'reason':'expand mining_outpost and smelting_district; preserve paid starter cells'}}
         fuel = self.bootstrap.maintain_fuel(obs)
         if fuel:
             return fuel

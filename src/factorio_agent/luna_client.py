@@ -40,6 +40,9 @@ work: if supply dominates the delay, pause that exact job, queue a bounded
 capacity improvement, then continue the original job after the improvement.
 Zero measured production with FULL output buffers is not evidence of a shortage.
 Use available stocks and current producer statuses before requesting expansion.
+After native electric mining unlocks, expand iron/copper through mining_outpost
+and smelting rather than new large burner starter_capacity targets. Up to two
+starter cells remain available for bootstrapping or recovery; paid cells stay.
 Finish or repair an existing funded science batch before parallel handcrafting
 or starting another instance of the same research work.
 There is one active task: ready capacity work cannot run concurrently with a
@@ -63,6 +66,10 @@ retry or pause, set target_task_id to the particular existing paused/blocked or
 active queue ID. Repeat that node's exact parameters; capability may be null or
 its exact capability. Other operations must use target_task_id=null.
 Read the latest planner error before proposing a replacement decision.
+Read native_capability_gates before planning factories. Research that unlocks a
+factory recipe must run BEFORE that factory, using science already available.
+For example, unlock logistic-science-pack and fast-inserter with existing red
+science before logistic_science; never make either unlock depend on that factory.
 Never retry unknown outcomes. If a job is running,
 normally continue it. A locked or blocked task needs a concrete prerequisite or
 repair, not repeated blind retries. Do not claim completion without native proof.
