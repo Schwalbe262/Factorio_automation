@@ -179,8 +179,9 @@ def create(root: Path, *, seed: int, server_port: int, rcon_port: int) -> dict:
         target.parent.mkdir(parents=True, exist_ok=True)
         command = build_create_no_mod_save_command(cfg, target)
         settings = Path(command[command.index("--map-gen-settings") + 1])
-        # V1's helper writes non-default cliffs/enemies. Replace all overrides.
-        _atomic_json(settings, {"seed": seed})
+        # User preference for new Nauvis maps; other generation settings default.
+        _atomic_json(settings, {"seed": seed, "cliff_settings": {
+            "cliff_elevation_interval": 0, "richness": 0}})
         with (cfg.log_dir / "create-world.log").open("wb") as output:
             subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, check=True,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

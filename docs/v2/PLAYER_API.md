@@ -13,6 +13,11 @@ $env:PYTHONPATH='src'
 
 The command format is `python -B -m factorio_agent --runtime <directory> <command>`.
 
+`create` starts future Nauvis maps with cliffs disabled (interval0/richness0),
+while resources, enemies, pollution and evolution retain normal defaults.
+This preference applies to newly created maps; the current saved world keeps
+its original generation record.
+
 Job `evidence_observed_tick` records the observation used for its evidence.
 After an action, `evidence_status=retained_from_prior_observation` identifies
 retained diagnostic history; do not interpret old machine counts as current

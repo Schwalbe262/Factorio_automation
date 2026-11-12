@@ -8,7 +8,9 @@ only the framework interface and its documented state, with no parent decisions.
 
 ## Rules
 - Pin installed Factorio/Space Age 2.1.20 and export its actual game data.
-- New isolated world, default resources/enemies/pollution/evolution/cliffs.
+- New isolated worlds keep default resources/enemies/pollution/evolution.
+  Future Nauvis maps disable cliffs by user request; dev-101 retains its original
+  generation settings. Do not alter an existing world's terrain to apply this.
 - RCON direct construction allowed; ordinary material costs are mandatory.
 - Engine crafting, machine production, science consumption and launch are real.
 - Never grant materials, unlock research by script, or edit progress counters.
@@ -37,6 +39,24 @@ only the framework interface and its documented state, with no parent decisions.
 - Radar is an active installation priority: normally paid, powered, defended
   coverage must expose the growing factory and support threat observations.
 - User instructions are persistent automatic policies, not one-time interventions.
+- Radar placement should cover every owned production, mining, utility, transport
+  and defensive footprint with actual continuous nearby-sector visibility. Expand
+  coverage as the factory grows; charted history alone is not current visibility.
+- With genuinely spare resources, add normally paid solar generation on broad
+  off-ore outer sites that preserve factory growth. Retain night supply and
+  include radar load, storage requirements and native power headroom in decisions.
+- Automate recurring belts, underground belts, splitters, assemblers and inserters
+  through normally supplied capped Mall cells, automatically replenishing stocks
+  consumed by construction. Small bootstrap handcrafts must not become bulk stock.
+- Normally recover exhausted owned electric drills only after proving no mineable
+  resources remain in their full native mining area; retire their source claims
+  so upkeep cannot rebuild them. Track patch reserves against consumption and
+  prepare external mines and paid railway transport before starter patches empty.
+- Completed nest sweeps include safe post-combat repair and recovery of raid guns
+  and their remaining ammunition for reuse, with exact item/round conservation.
+- Fresh-run performance target: reach the current Sulfur/Engine/Steel-extension
+  milestone in60 real minutes, at ordinary game speed. This is not yet validated;
+  measure construction/material waits/research/repairs separately on a clean run.
   Declare material-flow, producer-row and expansion directions before placing a
   district; preserve fixed ports and reserve growth, service, power and defense
   corridors. Existing accepted layouts require an ordinary migration to rotate.
