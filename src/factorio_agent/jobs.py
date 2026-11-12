@@ -283,7 +283,10 @@ def control(root: Path, game, key: str, operation: str) -> dict:
         raise ValueError("unsupported job control")
     with RunLock(root / "writer.lock"):
         ledger = Ledger(root)
-        ledger.sync(game.observe())
+        observation=game.observe()
+        if operation=='pause'and observation.get('ok')is False and observation.get('reason')=='agent_dead':
+            observation=game.query('return {ok=true,world_id=d.world_id,tick=game.tick}')
+        ledger.sync(observation)
         job = ledger.data["jobs"].get(key)
         if job is None:
             raise ValueError("unknown job key")

@@ -68,7 +68,7 @@ def main(argv=None):
         result = runtime.connect_player(root)
     elif args.command == "checkpoint":
         with RunLock(root/'writer.lock'):
-            game=runtime.game_for(root);obs=game.observe()
+            game=runtime.game_for(root);obs=game.query('return {ok=true,world_id=d.world_id,tick=game.tick}')
             if not obs.get('ok'):raise RuntimeError(obs.get('reason','live world observation required'))
             game.save()
             Ledger(root).event('world-lifecycle','checkpoint_requested',tick=obs['tick'],world_id=obs['world_id'])

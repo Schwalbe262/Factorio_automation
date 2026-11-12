@@ -119,6 +119,12 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(options['env']['PYTHONPATH'],str(self.repo/'src'));self.assertIn(str(self.root),cmd)
         self.assertNotIn('create',[q[0]for q in self.calls]);self.assertEqual(json.loads(self.control.pointer.read_text())['runtime'],str(self.root))
 
+    def test_start_restores_lost_gui_without_duplicating_live_supervisor(self):
+        first=self.launch();self.proc.rows.pop(11)
+        result=self.control.start()
+        self.assertTrue(result['reused']);self.assertEqual(result['supervisor_pid'],first['supervisor_pid'])
+        self.assertIn(11,self.proc.rows);self.assertEqual(len(self.proc.spawned),1)
+
     def test_stop_waits_exact_ack_pauses_and_saves_without_closing_gui(self):
         self.launch();result=self.control.stop(timeout=2)
         self.assertTrue(result['game_paused']);self.assertTrue(self.paused);self.assertEqual(self.proc.closed,[]);self.assertIn(11,self.proc.rows)

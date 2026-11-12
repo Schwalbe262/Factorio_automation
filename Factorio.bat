@@ -70,6 +70,7 @@ pause
 goto menu
 
 :print_menu
+echo 이 창을 닫아도 게임과 AI는 계속 실행됩니다.
 echo Factorio 자동화
 echo.
 echo [1] 자동 시작 / 현재 월드 재개

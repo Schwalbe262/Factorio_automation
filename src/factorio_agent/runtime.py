@@ -13,6 +13,7 @@ import time
 
 from factorio_ai.config import load_config
 from factorio_ai.deterministic_game import DeterministicGame
+from factorio_ai.process_launch import spawn_console_independent
 from factorio_ai.deterministic_state import RunLock, _atomic_json
 from factorio_ai.factorio import (build_create_no_mod_save_command,
     build_start_no_mod_server_command, no_mod_save_path, wait_for_rcon)
@@ -224,9 +225,7 @@ def start(root: Path) -> dict:
         settings.update(visibility={"public": False, "lan": False}, auto_pause=False,
                         name="Factorio Luna v2", max_players=2)
         _atomic_json(settings_path, settings)
-        with (cfg.log_dir / "server-process.log").open("ab") as output:
-            process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT,
-                                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        process=spawn_console_independent(command,log_path=cfg.log_dir/'server-process.log')
         from factorio_ai.deterministic_character import _identity
         _atomic_json(root / "server.json", {"pid": process.pid,
                      "creation_time": _identity(process.pid), "started_at": time.time()})

@@ -3,6 +3,7 @@ import json
 import io
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import Mock,patch
 import subprocess
 import sys
 import tempfile
@@ -243,6 +244,20 @@ class JobBoundaryTests(unittest.TestCase):
         run_slice(self.root, self.game, Executor({"status": "succeeded"}, {"measured": True}), "other")
         control(self.root, self.game, "test", "resume")
         self.assertEqual(Ledger(self.root).data["jobs"]["test"]["status"], "waiting")
+
+    def test_pause_can_preserve_a_job_when_its_character_is_unavailable(self):
+        submit(self.root,self.game,self.request())
+        self.game.observation={'ok':False,'reason':'agent_dead'}
+        self.game.query=Mock(return_value={'ok':True,'world_id':'world','tick':101})
+        result=control(self.root,self.game,'test','pause')
+        self.assertEqual(result['status'],'paused');self.assertEqual(self.game.actions,[])
+        with self.assertRaisesRegex(RuntimeError,'agent_dead'):control(self.root,self.game,'test','resume')
+
+    def test_checkpoint_preserves_native_world_even_when_character_observation_fails(self):
+        self.game.query=Mock(return_value={'ok':True,'world_id':'world','tick':101})
+        with patch('factorio_agent.runtime.game_for',return_value=self.game),redirect_stdout(io.StringIO()):
+            main(['--runtime',str(self.root),'checkpoint'])
+        self.assertEqual(self.game.saved,1)
 
     def test_reconciliation_discards_uncertain_intent_and_requires_fresh_planning(self):
         submit(self.root, self.game, self.request())

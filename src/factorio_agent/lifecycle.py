@@ -21,6 +21,7 @@ from factorio_ai.deterministic_state import RunLock,_atomic_json
 from factorio_ai.deterministic_character import _identity,set_client_visibility
 from factorio_ai.factorio import no_mod_save_path
 from factorio_ai.rcon import FactorioRconClient
+from factorio_ai.process_launch import independent_process_options
 from . import runtime
 from .automation_config import load_automation_config
 
@@ -74,7 +75,7 @@ class Processes:
     def spawn(self,command,*,cwd,env,log):
         with Path(log).open('ab')as output:
             child=subprocess.Popen(command,cwd=str(cwd),env=env,stdout=output,stderr=subprocess.STDOUT,
-                creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0)|getattr(subprocess,'CREATE_NEW_PROCESS_GROUP',0))
+                **independent_process_options())
         return child.pid
 
     def terminate(self,record):
@@ -224,7 +225,7 @@ class Lifecycle:
         self._ensure_server(root);existing=self._owned(root,'supervisor')
         if existing:
             if (root/STOP).exists():raise RuntimeError('supervisor safe stop is still pending')
-            if visible and self._owned(root,'client'):set_client_visibility(runtime.configuration(root),visible=True)
+            self._client(root,visible=visible)
             return dict(status='running',runtime=str(root),seed=read(root/'run.json')['seed'],supervisor_pid=existing['pid'],reused=True)
         with RunLock(root/'controller.lock'):pass
         self._client(root,visible=visible)

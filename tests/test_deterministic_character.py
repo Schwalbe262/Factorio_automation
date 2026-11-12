@@ -79,13 +79,12 @@ class DedicatedCraftingClientTests(unittest.TestCase):
             cfg = config(directory)
             game = SimpleNamespace(cfg=cfg, query=Mock(return_value={'status': 'running', 'reason': 'dedicated_client_connecting'}))
             process = Mock(pid=345)
-            with patch.object(module, '_identity', return_value=123), patch.object(module.subprocess, 'Popen', return_value=process) as spawn:
+            with patch.object(module, '_identity', return_value=123), patch.object(module, 'spawn_console_independent', return_value=process) as spawn:
                 result = module.ensure_crafting_player(game)
             self.assertEqual(result['reason'], 'dedicated_client_started')
             self.assertEqual(result['creation_time'], 123)
             self.assertEqual(spawn.call_args.kwargs['cwd'], str((Path(directory) / 'agent-client').resolve()))
-            if module.os.name == 'nt':
-                self.assertEqual(spawn.call_args.kwargs['startupinfo'].wShowWindow, 0)
+            self.assertTrue(spawn.call_args.kwargs['hide_window'])
 
     def test_timeout_is_reported_with_private_log_path(self):
         with TemporaryDirectory() as directory:

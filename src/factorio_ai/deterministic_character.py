@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from .process_launch import spawn_console_independent
 import time
 from typing import Any
 
@@ -21,7 +22,7 @@ from .deterministic_state import _atomic_json
 
 
 PLAYER_NAME = "FactoryAutomaton"
-_PROCESSES: dict[str, subprocess.Popen] = {}
+_PROCESSES: dict[str, Any] = {}
 
 
 BIND_CRAFTING_PLAYER_LUA = r'''
@@ -285,14 +286,7 @@ def ensure_crafting_player(game: Any) -> dict[str, Any]:
     if time.time() - state.get("started_at", 0) < 10:
         return {"status": "running", "reason": "dedicated_client_restart_backoff", "player_name": PLAYER_NAME}
     command, root = prepare_client(cfg)
-    startupinfo = None
-    if os.name == "nt":
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = 0
-    with (root / "client-process.log").open("ab") as log:
-        process = subprocess.Popen(command, cwd=str(root), stdout=log, stderr=subprocess.STDOUT,
-                                   startupinfo=startupinfo, creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    process=spawn_console_independent(command,cwd=str(root),log_path=root/'client-process.log',hide_window=True)
     _PROCESSES[str(root)] = process
     state = {"pid": process.pid, "creation_time": _identity(process.pid), "started_at": time.time(), "player_name": PLAYER_NAME}
     registry.write_text(json.dumps(state), encoding="utf-8")
