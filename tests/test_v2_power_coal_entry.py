@@ -1,6 +1,5 @@
 """The boiler's coal belt must face the coal source instead of looping around the steam bank."""
 
-from types import SimpleNamespace
 import unittest
 
 from factorio_agent.core.deterministic_builder import FactoryBuilder

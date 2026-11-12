@@ -26,13 +26,22 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from .capacity_planning import plan_capacity
+
 TERMINAL_STATUSES = frozenset({"succeeded", "blocked", "failed"})
 STALLED_STATUSES = frozenset({"blocked", "failed"})
+OPEN_NODE_STATUSES = frozenset({"pending", "ready", "running", "waiting"})
 RESEARCH_CAPABILITY = "research"
+RESEARCH_CAPABILITIES = frozenset({"starter_research", "bootstrap_research", RESEARCH_CAPABILITY})
+CAPACITY_CAPABILITY = "starter_capacity"
 NODE_PREFIX = "auto_"
 # Autopilot nodes rank below the planner's usual non-negative priorities, so
 # an explicit planner decision always runs first; earlier steps rank higher.
 TOP_PRIORITY = -100
+# Need-driven capacity outranks every roadmap step.
+CAPACITY_PRIORITY = TOP_PRIORITY + 50
+# Raw terminals of the lookahead bill of materials (plates count as raw).
+RAW_ITEMS = frozenset({"iron-plate", "copper-plate", "coal", "stone", "wood"})
 
 
 @dataclass(frozen=True)
@@ -43,6 +52,11 @@ class Step:
     capability: str
     parameters: dict[str, Any] = field(default_factory=dict)
     after: tuple[str, ...] = ()
+    # Main hardware the step places: item name -> count. Raw items (plates,
+    # coal, stone) may appear directly, e.g. a fuel seed. Only early steps are
+    # filled; a step without ``builds`` contributes no lookahead demand, so
+    # later stages are under-estimated.
+    builds: Mapping[str, float] | None = None
 
 
 def _research(technology: str, after: tuple[str, ...] = ()) -> Step:
@@ -50,30 +64,108 @@ def _research(technology: str, after: tuple[str, ...] = ()) -> Step:
     return Step("research_" + technology.replace("-", "_"), RESEARCH_CAPABILITY, {"technology": technology}, after)
 
 
+# ``builds`` of the early steps, counted from the executors. "estimate" marks
+# a routed part whose length depends on the map.
+# power: core/deterministic_builder.py:777-790 (pump, steam bank, pipe route),
+# core/factory_templates.py:259-280 (1 boiler, 2 engines, 3 pipes, 5 belts,
+# 1 burner inserter, 3 poles), deterministic_builder.py:811-834 (coal drill,
+# 13 belts, 1 burner inserter) and :988-991 (8 coal seeded into drill and boiler).
+POWER_BUILDS = {
+    "boiler": 1,
+    "steam-engine": 2,
+    "offshore-pump": 1,
+    "pipe": 8,  # 3 fixed + about 5 routed (estimate)
+    "transport-belt": 30,  # 5 + 13 fixed + about 12 routed (estimate)
+    "burner-inserter": 2,
+    "small-electric-pole": 3,
+    "burner-mining-drill": 1,
+    "coal": 16,
+}
+# starter_research: one lab next to power (research.py:56-63); packs come from unit_count.
+STARTER_RESEARCH_BUILDS = {"lab": 1}
+# bootstrap_logistics: startup science cell, board.py:27-38, plus a pole chain to the grid (board.py:48-62).
+BOOTSTRAP_LOGISTICS_BUILDS = {
+    "assembling-machine-1": 2,
+    "wooden-chest": 3,
+    "inserter": 4,
+    "small-electric-pole": 5,  # 2 in the cell + about 3 links (estimate)
+}
+# electric_coal: one electric drill replaces the burner coal drill (electric_mining.py:38, 146-150),
+# grid link poles (electric_mining.py:77-78, 115); the output belt is reused.
+ELECTRIC_COAL_BUILDS = {"electric-mining-drill": 1, "small-electric-pole": 3}  # poles: estimate
+# mining_outpost at 30 or 60/min: ceil(rate / 30) drills rounded up to one opposing
+# pair (outposts.py:593-600, mining_layout_policy.py:680, paired_mining.py:23-29).
+MINING_OUTPOST_BUILDS = {
+    "electric-mining-drill": 2,
+    "small-electric-pole": 8,  # 2 fixed + about 6 bridge poles (estimate)
+    "transport-belt": 10,  # 4 collector + about 6 exit belts (estimate)
+}
+# smelting_district: 4 iron + 2 copper furnaces (smelting.py:341-349), 2 inserters,
+# 1 pole per furnace and 84 fixed belts (smelting.py:64-84), 1 splitter (smelting.py:366-372).
+SMELTING_DISTRICT_BUILDS = {
+    "stone-furnace": 6,
+    "inserter": 12,
+    "small-electric-pole": 10,  # 6 fixed + about 4 grid links (estimate)
+    "transport-belt": 234,  # 84 fixed + about 150 on five routes (estimate)
+    "splitter": 1,
+    "underground-belt": 4,  # crossings only (estimate)
+}
+
 ROADMAP: tuple[Step, ...] = (
     Step("starter", "starter", {}),
-    # Burner cells and the boiler all burn coal. Two starter coal drills could
-    # not keep up on a live run, so widen coal before steam power is built.
-    Step("starter_capacity_coal", "starter_capacity", {"resource": "coal", "cells": 4}),
-    Step("power", "power", {}),
-    Step("starter_capacity_iron", "starter_capacity", {"resource": "iron-ore", "cells": 2}),
-    Step("starter_research_automation", "starter_research", {"technology": "automation"}),
+    # Starter capacity is not a fixed step: ``autopilot_nodes`` sizes it from
+    # measured supply, the current bill and ``lookahead_demand``.
+    Step("power", "power", {}, builds=POWER_BUILDS),
+    Step(
+        "starter_research_automation",
+        "starter_research",
+        {"technology": "automation"},
+        builds=STARTER_RESEARCH_BUILDS,
+    ),
     Step(
         "starter_research_electric_mining_drill",
         "starter_research",
         {"technology": "electric-mining-drill"},
         after=("starter_research_automation",),
     ),
-    Step("electric_coal", "electric_coal", {}, after=("starter_research_electric_mining_drill",)),
-    Step("bootstrap_logistics", "bootstrap_logistics", {}, after=("starter_research_automation",)),
-    Step("mining_outpost_iron", "mining_outpost", {"resource": "iron-ore", "rate_per_minute": 60}),
-    Step("mining_outpost_copper", "mining_outpost", {"resource": "copper-ore", "rate_per_minute": 60}),
-    Step("mining_outpost_coal", "mining_outpost", {"resource": "coal", "rate_per_minute": 30}),
+    Step(
+        "electric_coal",
+        "electric_coal",
+        {},
+        after=("starter_research_electric_mining_drill",),
+        builds=ELECTRIC_COAL_BUILDS,
+    ),
+    Step(
+        "bootstrap_logistics",
+        "bootstrap_logistics",
+        {},
+        after=("starter_research_automation",),
+        builds=BOOTSTRAP_LOGISTICS_BUILDS,
+    ),
+    Step(
+        "mining_outpost_iron",
+        "mining_outpost",
+        {"resource": "iron-ore", "rate_per_minute": 60},
+        builds=MINING_OUTPOST_BUILDS,
+    ),
+    Step(
+        "mining_outpost_copper",
+        "mining_outpost",
+        {"resource": "copper-ore", "rate_per_minute": 60},
+        builds=MINING_OUTPOST_BUILDS,
+    ),
+    Step(
+        "mining_outpost_coal",
+        "mining_outpost",
+        {"resource": "coal", "rate_per_minute": 30},
+        builds=MINING_OUTPOST_BUILDS,
+    ),
     Step(
         "smelting_district",
         "smelting_district",
         {},
         after=("mining_outpost_iron", "mining_outpost_copper", "mining_outpost_coal"),
+        builds=SMELTING_DISTRICT_BUILDS,
     ),
     Step("paired_smelting", "paired_smelting", {}),
     Step("paired_mining", "paired_mining", {}),
@@ -197,19 +289,99 @@ def _research_ready(step: Step, observation: Mapping) -> bool:
     return step.parameters["technology"] in listed
 
 
-def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) -> list[dict]:
-    """Up to ``limit`` new queue nodes for the earliest ready, unsatisfied, unrepresented roadmap steps.
+def _capacity_taken(resource: str, cells: int, jobs, queue_nodes) -> bool:
+    """A starter capacity node or job for ``resource`` is open, or this exact target already stalled.
 
-    Node ids are ``"auto_" + step.id``. ``depends_on`` is always empty:
-    a step is only proposed once every ``after`` step is satisfied, and
-    satisfied dependencies are dropped. Priorities descend along the
+    Open means a queue node that is pending, ready, running or waiting (or has
+    no status yet), or a job that has not reached a terminal status. A blocked
+    or failed job with the same target belongs to the planner.
+    """
+    for node in queue_nodes:
+        if node.get("capability") != CAPACITY_CAPABILITY:
+            continue
+        if (
+            node.get("parameters", {}).get("resource") == resource
+            and node.get("status", "pending") in OPEN_NODE_STATUSES
+        ):
+            return True
+    for job in jobs:
+        if job.get("capability") != CAPACITY_CAPABILITY:
+            continue
+        parameters = job.get("parameters", {})
+        if parameters.get("resource") != resource:
+            continue
+        if job.get("status") not in TERMINAL_STATUSES:
+            return True
+        if job.get("status") in STALLED_STATUSES and parameters.get("cells") == cells:
+            return True
+    return False
+
+
+def capacity_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
+    """Queue nodes for need-driven starter capacity (see ``capacity_planning``).
+
+    Only in the burner starter phase: once a ``mining_outpost`` job for a
+    resource succeeded, electric outposts replace its starter cells and the
+    item is skipped (sizing outposts from demand is a later step). Requires
+    the capability's ``requires`` (``starter``) to have succeeded jobs.
+    """
+    if CAPACITY_CAPABILITY not in capabilities:
+        return []
+    succeeded = {job.get("capability") for job in jobs if job.get("status") == "succeeded"}
+    if not set(capabilities[CAPACITY_CAPABILITY].get("requires", [])) <= succeeded:
+        return []
+    outposts = {
+        job.get("parameters", {}).get("resource")
+        for job in jobs
+        if job.get("capability") == "mining_outpost" and job.get("status") == "succeeded"
+    }
+    try:
+        decisions = plan_capacity(
+            observation.get("resource_supply_options") or {},
+            observation.get("roadmap_material_demand") or {},
+        )
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return []
+    queued_ids = {node.get("id") for node in queue_nodes}
+    nodes = []
+    for decision in decisions:
+        node_id = f"{NODE_PREFIX}capacity_{decision.resource}_{decision.target_cells}"
+        if decision.resource in outposts or node_id in queued_ids:
+            continue
+        if decision.target_cells <= decision.current_cells:
+            continue
+        if _capacity_taken(decision.resource, decision.target_cells, jobs, queue_nodes):
+            continue
+        nodes.append(
+            {
+                "id": node_id,
+                "capability": CAPACITY_CAPABILITY,
+                "parameters": {"resource": decision.resource, "cells": decision.target_cells},
+                "priority": CAPACITY_PRIORITY,
+                "depends_on": [],
+                "reason": decision.reason,
+            }
+        )
+    return nodes
+
+
+def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) -> list[dict]:
+    """Up to ``limit`` new queue nodes: need-driven capacity first, then roadmap steps.
+
+    Capacity nodes (``capacity_nodes``) rank at ``CAPACITY_PRIORITY``, above
+    every roadmap step, because jobs advance in priority order and the
+    capacity job must get scarce plates first; they count toward ``limit``.
+    Roadmap node ids are ``"auto_" + step.id``. ``depends_on`` is always
+    empty: a step is only proposed once every ``after`` step is satisfied,
+    and satisfied dependencies are dropped. Priorities descend along the
     roadmap from ``TOP_PRIORITY``.
     """
-    progress = _Progress(tuple(jobs), frozenset(_names(observation.get("technologies"))))
+    jobs = tuple(jobs)
+    progress = _Progress(jobs, frozenset(_names(observation.get("technologies"))))
     succeeded = progress.succeeded_capabilities
     steps = _by_id()
     queued_ids = {node.get("id") for node in queue_nodes}
-    proposed: list[dict] = []
+    proposed: list[dict] = capacity_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit)]
     for index, step in enumerate(ROADMAP):
         if len(proposed) >= limit:
             break
@@ -243,6 +415,92 @@ def _upcoming(jobs, researched: Iterable[str], horizon: int) -> list[Step]:
     """The next ``horizon`` roadmap steps that are not satisfied yet."""
     progress = _Progress(tuple(jobs), frozenset(researched))
     return [step for step in ROADMAP if not progress.satisfied(step)][:horizon]
+
+
+def _product_amount(recipe: Mapping, item: str) -> float:
+    """Items of ``item`` one craft of ``recipe`` yields (expected amount, default 1)."""
+    for product in recipe.get("products") or ():
+        if not isinstance(product, Mapping) or product.get("name") != item:
+            continue
+        amount = product.get("amount")
+        if not isinstance(amount, (int, float)):
+            low, high = product.get("amount_min"), product.get("amount_max")
+            amount = (low + high) / 2 if isinstance(low, (int, float)) and isinstance(high, (int, float)) else 1
+        probability = product.get("probability", 1)
+        probability = probability if isinstance(probability, (int, float)) else 1
+        if amount * probability > 0:
+            return float(amount * probability)
+    return 1.0
+
+
+def raw_cost(catalog, items: Mapping[str, float]) -> dict[str, float]:
+    """Raw plates/coal/stone/wood for ``items`` by recursive expansion of catalog recipes.
+
+    Fractional crafts are kept (an estimate, not a crafting plan); fluids and
+    items with no recipe are dropped; a dependency cycle stops at depth 24.
+    """
+    cost: dict[str, float] = {}
+
+    def expand(item: str, count: float, depth: int) -> None:
+        if count <= 0:
+            return
+        if item in RAW_ITEMS:
+            cost[item] = cost.get(item, 0.0) + count
+            return
+        if depth > 24:
+            return
+        recipe = catalog.recipe_for_product(item)
+        if not recipe:
+            return
+        crafts = count / _product_amount(recipe, item)
+        for ingredient in recipe.get("ingredients") or ():
+            if not isinstance(ingredient, Mapping) or ingredient.get("type", "item") != "item":
+                continue
+            amount = ingredient.get("amount")
+            if isinstance(amount, (int, float)) and not isinstance(amount, bool):
+                expand(ingredient["name"], amount * crafts, depth + 1)
+
+    for name, count in items.items():
+        if isinstance(count, (int, float)) and not isinstance(count, bool):
+            expand(name, float(count), 0)
+    return cost
+
+
+def _research_items(catalog, step: Step) -> dict[str, float]:
+    """Science packs of a research step: ``unit_count`` x each ingredient amount."""
+    if step.capability not in RESEARCH_CAPABILITIES or "technology" not in step.parameters:
+        return {}
+    technology = (getattr(catalog, "technologies", None) or {}).get(step.parameters["technology"])
+    if not isinstance(technology, Mapping):
+        return {}
+    units = technology.get("unit_count")
+    if not isinstance(units, (int, float)) or isinstance(units, bool):
+        return {}
+    packs: dict[str, float] = {}
+    for ingredient in technology.get("ingredients") or ():
+        if isinstance(ingredient, Mapping) and isinstance(ingredient.get("amount"), (int, float)):
+            name = ingredient.get("name")
+            packs[name] = packs.get(name, 0.0) + units * ingredient["amount"]
+    return packs
+
+
+def lookahead_demand(catalog, jobs, observation, *, horizon=4) -> dict[str, float]:
+    """Raw items the next ``horizon`` unsatisfied roadmap steps will need.
+
+    Research steps add ``unit_count`` x pack raw cost; steps with ``builds``
+    add the raw cost of that hardware. Stock is not subtracted (the supply
+    ``shortfall`` covers the current bill). Steps without ``builds`` add
+    nothing, so stages past the early game are under-estimated. Steps already
+    in flight are included and may overlap their saved construction bill.
+    """
+    researched = _names((observation or {}).get("technologies"))
+    items: dict[str, float] = {}
+    for step in _upcoming(jobs, researched, horizon):
+        for name, count in _research_items(catalog, step).items():
+            items[name] = items.get(name, 0.0) + count
+        for name, count in (step.builds or {}).items():
+            items[name] = items.get(name, 0.0) + count
+    return {name: round(amount, 3) for name, amount in raw_cost(catalog, items).items()}
 
 
 def roadmap_wanted_recipes(jobs, capabilities, *, horizon=6) -> list[str]:

@@ -1,7 +1,9 @@
 """Default roadmap data and the pure autopilot that proposes its next steps."""
 
+import json
 import re
 import unittest
+from pathlib import Path
 
 from factorio_agent import progression as pg
 from factorio_agent.jobs import CAPABILITIES, Request
@@ -79,13 +81,13 @@ class AutopilotTests(unittest.TestCase):
         )
 
     def test_after_starter_earliest_ready_steps_in_order_with_descending_priority(self):
-        nodes = self.propose([job("starter")])
-        self.assertEqual(ids(nodes), ["auto_starter_capacity_coal", "auto_power", "auto_starter_capacity_iron"])
-        self.assertGreater(nodes[0]["priority"], nodes[1]["priority"])
+        self.assertEqual(ids(self.propose([job("starter")])), ["auto_power"])
         nodes = self.propose(done_through("power"))
         self.assertEqual(
-            ids(nodes), ["auto_starter_capacity_iron", "auto_starter_research_automation", "auto_mining_outpost_iron"]
+            ids(nodes), ["auto_starter_research_automation", "auto_mining_outpost_iron", "auto_mining_outpost_copper"]
         )
+        self.assertGreater(nodes[0]["priority"], nodes[1]["priority"])
+        self.assertGreater(nodes[1]["priority"], nodes[2]["priority"])
 
     def test_limit_caps_the_proposal(self):
         self.assertEqual(len(self.propose(done_through("power"), limit=1)), 1)
@@ -94,11 +96,11 @@ class AutopilotTests(unittest.TestCase):
     def test_queue_node_or_running_job_represents_a_step(self):
         jobs = done_through("power")
         queued = {
-            "id": "luna_capacity",
-            "capability": "starter_capacity",
-            "parameters": {"resource": "iron-ore", "cells": 2},
+            "id": "luna_outpost",
+            "capability": "mining_outpost",
+            "parameters": {"resource": "iron-ore", "rate_per_minute": 60},
         }
-        self.assertNotIn("auto_starter_capacity_iron", ids(self.propose(jobs, [queued])))
+        self.assertNotIn("auto_mining_outpost_iron", ids(self.propose(jobs, [queued])))
         running = job("starter_research_automation", status="running")
         self.assertNotIn("auto_starter_research_automation", ids(self.propose(jobs + [running])))
         paused = job("starter_research_automation", status="paused")
@@ -109,9 +111,9 @@ class AutopilotTests(unittest.TestCase):
         self.assertNotIn("auto_power", ids(self.propose([job("starter")], [queued])))
 
     def test_blocked_step_is_skipped_without_stopping_independent_steps(self):
-        jobs = done_through("power") + [job("starter_capacity_iron", status="blocked")]
+        jobs = done_through("power") + [job("mining_outpost_iron", status="blocked")]
         nodes = self.propose(jobs)
-        self.assertNotIn("auto_starter_capacity_iron", ids(nodes))
+        self.assertNotIn("auto_mining_outpost_iron", ids(nodes))
         self.assertEqual(ids(nodes)[0], "auto_starter_research_automation")
 
     def test_blocked_step_holds_back_steps_ordered_after_it(self):
@@ -176,6 +178,160 @@ class AutopilotTests(unittest.TestCase):
         snapshot = [dict(row) for row in jobs]
         self.propose(jobs)
         self.assertEqual(jobs, snapshot)
+
+
+def iron_short(shortfall=133):
+    """Receipt with the live numbers: one iron cell, 133 plates short, net +0.6/min."""
+    evidence = dict(
+        shortfall=shortfall,
+        produced_per_minute=15.1,
+        consumed_per_minute=14.5,
+        net_per_minute=0.6,
+        cell_capacity_per_minute=15.0,
+        productive_cells=1,
+        installed_live_cells=1,
+        raw_cost_per_cell={"iron-plate": 9, "stone": 10},
+        available=0,
+    )
+    stone = dict(produced_per_minute=6.0, consumed_per_minute=0.0, net_per_minute=6.0, available=30)
+    return {
+        "resource_supply_options": {
+            "iron-plate": {"action": "wait", "evidence": evidence},
+            "stone": {"action": "wait", "evidence": stone},
+        }
+    }
+
+
+class CapacityAutopilotTests(unittest.TestCase):
+    def propose(self, jobs=(), queue=(), observation=None, limit=3):
+        return pg.autopilot_nodes(list(jobs), list(queue), observation or {}, CAPABILITIES, limit=limit)
+
+    def test_capacity_node_comes_first_with_higher_priority(self):
+        nodes = self.propose(done_through("power"), observation=iron_short())
+        self.assertEqual(ids(nodes)[0], "auto_capacity_iron-ore_3")
+        self.assertEqual(nodes[0]["capability"], "starter_capacity")
+        self.assertEqual(nodes[0]["parameters"], {"resource": "iron-ore", "cells": 3})
+        self.assertEqual(nodes[0]["priority"], pg.CAPACITY_PRIORITY)
+        self.assertTrue(all(nodes[0]["priority"] > node["priority"] for node in nodes[1:]))
+        self.assertEqual(len(nodes), 3)
+        self.assertIn("T(0)=", nodes[0]["reason"])
+        Request("k", "world", 0, "starter_capacity", nodes[0]["parameters"]).validate()
+        self.assertRegex(nodes[0]["id"], re.compile(r"^[A-Za-z0-9_-]{1,64}$"))
+
+    def test_capacity_counts_toward_the_limit(self):
+        self.assertEqual(
+            ids(self.propose(done_through("power"), observation=iron_short(), limit=1)), ["auto_capacity_iron-ore_3"]
+        )
+
+    def test_no_capacity_before_starter_or_without_need(self):
+        self.assertEqual(ids(self.propose(observation=iron_short())), ["auto_starter"])
+        self.assertNotIn("starter_capacity", [n["capability"] for n in self.propose([job("starter")])])
+        nodes = self.propose([job("starter")], observation=iron_short(shortfall=0))
+        self.assertNotIn("starter_capacity", [n["capability"] for n in nodes])
+
+    def test_open_capacity_node_or_job_for_the_resource_blocks_a_new_one(self):
+        jobs = done_through("power")
+        queued = {
+            "id": "luna_capacity",
+            "capability": "starter_capacity",
+            "parameters": {"resource": "iron-ore", "cells": 2},
+            "status": "ready",
+        }
+        nodes = self.propose(jobs, [queued], observation=iron_short())
+        self.assertNotIn("starter_capacity", [n["capability"] for n in nodes])
+        running = {"capability": "starter_capacity", "parameters": {"resource": "iron-ore", "cells": 2}}
+        nodes = self.propose(jobs + [dict(running, status="running")], observation=iron_short())
+        self.assertNotIn("starter_capacity", [n["capability"] for n in nodes])
+        # A finished smaller target does not block; a failed identical target does.
+        nodes = self.propose(jobs + [dict(running, status="succeeded")], observation=iron_short())
+        self.assertIn("auto_capacity_iron-ore_3", ids(nodes))
+        failed = {"capability": "starter_capacity", "parameters": {"resource": "iron-ore", "cells": 3}}
+        nodes = self.propose(jobs + [dict(failed, status="failed")], observation=iron_short())
+        self.assertNotIn("starter_capacity", [n["capability"] for n in nodes])
+
+    def test_succeeded_mining_outpost_ends_starter_capacity_for_that_resource(self):
+        jobs = done_through("power") + [job("mining_outpost_iron")]
+        nodes = self.propose(jobs, observation=iron_short())
+        self.assertNotIn("starter_capacity", [n["capability"] for n in nodes])
+
+
+class FakeCatalog:
+    """Two recipes and one technology: gear = 2 iron, red pack = 1 copper + 1 gear."""
+
+    technologies = {
+        "automation": {"unit_count": 10, "ingredients": [{"name": "automation-science-pack", "amount": 1}]},
+    }
+    recipes = {
+        "iron-gear-wheel": {
+            "ingredients": [{"name": "iron-plate", "amount": 2, "type": "item"}],
+            "products": [{"name": "iron-gear-wheel", "amount": 1}],
+        },
+        "automation-science-pack": {
+            "ingredients": [
+                {"name": "copper-plate", "amount": 1, "type": "item"},
+                {"name": "iron-gear-wheel", "amount": 1, "type": "item"},
+            ],
+            "products": [{"name": "automation-science-pack", "amount": 1}],
+        },
+        "lab": {
+            "ingredients": [{"name": "iron-gear-wheel", "amount": 10, "type": "item"}],
+            "products": [{"name": "lab", "amount": 1}],
+        },
+        "pipe": {
+            "ingredients": [{"name": "iron-plate", "amount": 1, "type": "item"}],
+            "products": [{"name": "pipe", "amount": 1}],
+        },
+    }
+
+    def recipe_for_product(self, item):
+        return self.recipes.get(item)
+
+
+REAL_CATALOG = Path("C:/Users/NEC/Documents/git/factorio_automation/runtime/v2/eval-2150100594/catalog.json")
+
+
+class LookaheadDemandTests(unittest.TestCase):
+    def test_research_step_is_unit_count_times_pack_cost(self):
+        step = pg.Step("r", "starter_research", {"technology": "automation"})
+        self.assertEqual(pg._research_items(FakeCatalog(), step), {"automation-science-pack": 10})
+        self.assertEqual(
+            pg.raw_cost(FakeCatalog(), pg._research_items(FakeCatalog(), step)),
+            {"copper-plate": 10, "iron-plate": 20},
+        )
+
+    def test_lookahead_sums_research_and_builds(self):
+        jobs = done_through("power")
+        demand = pg.lookahead_demand(FakeCatalog(), jobs, {}, horizon=1)
+        # automation research (10 x (1 copper + 2 iron)) + one lab (10 gears = 20 iron).
+        self.assertEqual(demand, {"copper-plate": 10, "iron-plate": 40})
+
+    def test_builds_expansion_keeps_raw_items_and_drops_unknown(self):
+        self.assertEqual(
+            pg.raw_cost(FakeCatalog(), {"pipe": 8, "coal": 16, "mystery": 3, "iron-gear-wheel": 2}),
+            {"iron-plate": 12, "coal": 16},
+        )
+
+    def test_researched_technology_and_horizon(self):
+        jobs = done_through("power")
+        self.assertEqual(pg.lookahead_demand(FakeCatalog(), jobs, {}, horizon=0), {})
+        demand = pg.lookahead_demand(FakeCatalog(), jobs, {"technologies": ["automation"]}, horizon=1)
+        self.assertNotIn("copper-plate", demand)
+
+    def test_steps_without_builds_add_nothing(self):
+        self.assertEqual(pg.lookahead_demand(FakeCatalog(), done_through("smelting_district"), {}, horizon=3), {})
+
+    @unittest.skipUnless(REAL_CATALOG.exists(), "live catalog not present")
+    def test_real_catalog_is_sane(self):
+        from factorio_agent.core.world_catalog import WorldCatalog
+
+        catalog = WorldCatalog.from_dict(json.loads(REAL_CATALOG.read_text(encoding="utf-8")))
+        research = pg.lookahead_demand(catalog, done_through("power"), {}, horizon=1)
+        # 10 x (1 copper + 1 gear) + lab (10 circuits, 10 gears, 4 belts).
+        self.assertEqual(research, {"copper-plate": 25, "iron-plate": 56})
+        demand = pg.lookahead_demand(catalog, [], {})
+        self.assertEqual(set(demand) - {"iron-plate", "copper-plate", "coal", "stone", "wood"}, set())
+        self.assertGreater(demand["iron-plate"], 100)
+        self.assertLess(demand["iron-plate"], 1000)
 
 
 class WantedRecipeTests(unittest.TestCase):

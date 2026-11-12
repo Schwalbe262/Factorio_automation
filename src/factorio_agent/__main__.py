@@ -220,6 +220,14 @@ def execute(argv=None, services=None):
                 obs["known_project_construction_budget"],
                 obs["production_rate_measurement"],
             )
+            from .progression import lookahead_demand
+
+            try:
+                jobs_list = list(Ledger(root).data["jobs"].values())
+                obs["roadmap_material_demand"] = lookahead_demand(services.catalog(root, game), jobs_list, obs)
+            except Exception as exc:  # a demand estimate must never break observe
+                obs["roadmap_material_demand"] = {}
+                obs["roadmap_material_demand_error"] = f"{type(exc).__name__}: {exc}"[:200]
         result = summary(obs, Ledger(root))
     elif args.command == "request":
         parameters = json.loads(args.parameters)
