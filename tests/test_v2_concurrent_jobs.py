@@ -146,6 +146,22 @@ class ConcurrentJobTests(unittest.TestCase):
         self.assertEqual(receipt["jobs"]["b"]["capability"], "defense_perimeter")
         self.assertEqual(self.jobs()["a"]["slice_yield_reason"], "execution_slice_complete")
 
+    def test_planner_fault_blocks_only_its_own_job(self):
+        # Live seed 1400895309: a stale migration job raised FileNotFoundError on
+        # every slice and the whole controller backed off for 300 s each time.
+        class Faulty(Executor):
+            def step(self, capability, obs, parameters=None):
+                if capability == "power":
+                    raise FileNotFoundError("smelter-lanes.json")
+                return super().step(capability, obs, parameters)
+
+        self.submit("a", "power", priority=5)
+        self.submit("b", "defense_perimeter")
+        receipt = run_jobs(self.root, self.game, Faulty({"defense_perimeter": [act("b")]}), seconds=0.05)
+        self.assertEqual(self.jobs()["a"]["status"], "blocked")
+        self.assertTrue(self.jobs()["a"]["reason"].startswith("planner_fault:FileNotFoundError"))
+        self.assertGreaterEqual(receipt["jobs"]["b"]["actions"], 1)
+
     def test_priority_decides_who_acts_first(self):
         self.submit("low", "power")
         self.submit("high", "defense_perimeter", priority=3)

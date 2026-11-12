@@ -686,6 +686,8 @@ def progress_key(obs: dict, capability: str) -> str:
 
 
 SAVE_INTERVAL_SECONDS = 60
+# Exceptions that mean "this planner cannot read its inputs", never a game or connection failure.
+PLANNER_FAULTS = (FileNotFoundError, LookupError, TypeError, AttributeError, ValueError, StopIteration)
 UNKNOWN_BATCH_OUTCOMES = (
     "build_batch_outcome_unknown",
     "mine_batch_outcome_unknown",
@@ -736,7 +738,17 @@ def _advance_job(root: Path, game, executors, ledger: Ledger, key: str, obs: dic
         ledger.save()
         return "terminal", {}
     started = time.perf_counter()
-    result = executors.step(job["capability"], obs, job["parameters"])
+    try:
+        result = executors.step(job["capability"], obs, job["parameters"])
+    except PLANNER_FAULTS as exc:
+        # Planning is read-only. A planner that trips over missing state or an
+        # unexpected shape blocks its own job; it must not stop the other jobs
+        # (game and world-guard errors are RuntimeError/OSError and still propagate).
+        job.update(status="blocked", reason=f"planner_fault:{type(exc).__name__}:{exc}"[:200])
+        job.update(blocked_at_tick=obs["tick"], blocked_at_time=time.time())
+        ledger.save()
+        ledger.event(key, "planner_fault", tick=obs["tick"], error=repr(exc)[:300])
+        return "terminal", {}
     job["planning_seconds"] = job.get("planning_seconds", 0) + time.perf_counter() - started
     if result.get("type"):
         job.update(
