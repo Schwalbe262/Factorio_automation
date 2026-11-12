@@ -321,8 +321,11 @@ def plan_typed_fluid_connection(game,builder,obs,source,destination,core,prior_g
     if(source.get('item')!=destination.get('item')or source.get('kind')!='fluid'or source.get('name')!='pipe'
             or source.get('facing')not in VECTORS or type(source.get('unit_number'))is not int):
         return {'ok':False,'reason':'exact_matching_typed_fluid_source_required'}
-    a,b=source['position'],destination['position'];bounds={'min_x':min(a['x'],b['x'])-12,'max_x':max(a['x'],b['x'])+12,
-        'min_y':min(a['y'],b['y'])-12,'max_y':max(a['y'],b['y'])+12}
+    a,b=source['position'],destination['position'];distance=abs(a['x']-b['x'])+abs(a['y']-b['y'])
+    # Leaving the endpoint rectangle by n tiles costs at least 2*n extra steps.
+    margin=max(12,math.floor(((1.35-1)*distance+4)/2))
+    bounds={'min_x':min(a['x'],b['x'])-margin,'max_x':max(a['x'],b['x'])+margin,
+        'min_y':min(a['y'],b['y'])-margin,'max_y':max(a['y'],b['y'])+margin}
     if(bounds['max_x']-bounds['min_x']+1)*(bounds['max_y']-bounds['min_y']+1)>40000:return {'ok':False,'reason':'chemical_pipe_survey_budget_exceeded'}
     span=game.query('''local spans={};for _,b in pairs(prototypes.entity["pipe-to-ground"].fluidbox_prototypes)do
 for _,c in pairs(b.pipe_connections)do if c.connection_type=="underground"then spans[#spans+1]=c.max_underground_distance end end end;return {ok=true,spans=spans}''')
@@ -387,8 +390,9 @@ for _,c in pairs(b.pipe_connections)do if c.connection_type=="underground"then s
         by={xy(e):e for e in compiled['entities']}
         normal=prefix[:2]if apron_crossing else prefix
         return all(by.get((p['x'],p['y']),{}).get('name')=='pipe'for p in normal)
+    minimum_start_run=(apron['path'].index(apron_crossing['position'])+2)if apron_crossing else None
     route=route_trunks(a,b,occupied=hard,bounds=bounds,start_direction=source['facing'],end_direction=destination['facing'],
-        max_nodes=200000,max_turns=6,max_detour_ratio=1.35,candidate_validator=accepts)
+        max_nodes=200000,max_turns=6,max_detour_ratio=1.35,candidate_validator=accepts,minimum_start_run=minimum_start_run)
     result=compile_pipe_crossings(route,soft,maximum)
     if not result.get('ok'):return result
     result['entities']=[e for e in result['entities']if xy(e)!=xy(source)]
@@ -529,7 +533,8 @@ end;return {ok=true,snapshots=snapshots}''')
         board=json.loads((self.path.parent/'pcb-board.json').read_text(encoding='utf-8'))
         if not _identity(obs,board,self.catalog):return {'ok':False,'reason':'chemical_board_identity_changed'}
         source=ready['sources']['petroleum-gas'];sx,sy=xy(source)
-        anchors=[(sx+10+dx,sy+4+dy)for dx,dy in((0,0),(0,14),(22,0),(22,14),(0,-14),(22,-14))]
+        anchors=[(sx+10+dx,sy+4+dy)for dx,dy in((0,0),(0,14),(22,0),(22,14),(0,-14),(22,-14),
+            (0,-28),(22,-28),(0,-42),(22,-42))]
         reservations=[b['reserved_area']for b in board['blocks'].values()if b.get('reserved_area')]
         reservations += [r['area']for r in board.get('shared_main_bus',{}).get('reservations',[])if r.get('area')]
         future_hard=unbuilt_external_keepouts(self.builder,obs,board['blocks'])

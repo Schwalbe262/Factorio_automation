@@ -158,12 +158,13 @@ class ChemicalApronTests(unittest.TestCase):
                 result=plan_typed_fluid_connection(game,self.builder,{'world_id':'w'},self.source,core['fluid_ports']['petroleum-gas'],core)
             self.assertEqual(result['reason'],'chemical_fluid_endpoint_conflicts_with_unbuilt_external_plan')
 
-    def water_crossing(self,*,survey=None,observed=None,preflight_result=None):
+    def water_crossing(self,*,survey=None,observed=None,preflight_result=None,core_position=(108.5,-21.5),
+                       crossing_x=93.5,owner_right=93):
         source=dict(self.source,item='water',position={'x':90.5,'y':-25.5},unit_number=6989,defense_scope_id='water')
-        block={'reserved_area':[[86.0117,-26.0977],[93,-24.9023]],'ports':[source],
+        block={'reserved_area':[[86.0117,-26.0977],[owner_right,-24.9023]],'ports':[source],
             'entities':[entity('pipe',90.5,-25.5)],'defense_scope_id':'water'}
-        core=chemical_core(catalog(),'sulfur',108.5,-21.5)
-        witness=dict(entity('transport-belt',93.5,-25.5),type='transport-belt',unit_number=6439,world_id='w',force_index=1)
+        core=chemical_core(catalog(),'sulfur',*core_position)
+        witness=dict(entity('transport-belt',crossing_x,-25.5),type='transport-belt',unit_number=6439,world_id='w',force_index=1)
         if survey is None:survey={'ok':True,'hard':[],'soft':[witness['position']],
             'crossings':[{'position':witness['position'],'assets':[witness]}]}
         if observed is None:observed=[witness]
@@ -226,6 +227,34 @@ class ChemicalApronTests(unittest.TestCase):
         self.assertEqual(result['underground_pairs'],[{'first':[96.5,-25.5],'last':[99.5,-25.5],'direction':4,'span':3}])
         self.assertTrue(all(entity('pipe',x,-25.5)in result['entities']for x in(91.5,92.5,93.5)))
 
+    def test_guarded_crossing_minimum_straight_run_follows_exact_native_apron_index(self):
+        for crossing_x,owner_right,minimum in((93.5,93,5),(94.5,94,6)):
+            with patch('factorio_agent.chemical_production.route_trunks',return_value={'ok':False,'reason':'fixture'})as route:
+                self.water_crossing(crossing_x=crossing_x,owner_right=owner_right)
+            self.assertEqual(route.call_args.kwargs['minimum_start_run'],minimum)
+        with patch('factorio_agent.chemical_production.route_trunks',return_value={'ok':False,'reason':'fixture'})as route:
+            self.water_crossing(preflight_result={'ok':True},survey={'ok':True,'hard':[],'soft':[]})
+        self.assertIsNone(route.call_args.kwargs['minimum_start_run'])
+
+    def test_long_route_surveys_every_quality_legal_excursion_with_same_router_budget(self):
+        with patch('factorio_agent.chemical_production.route_trunks',return_value={'ok':False,'reason':'fixture'})as route:
+            _,_,_,game=self.water_crossing(core_position=(165.5,-102.5))
+        args=route.call_args.kwargs
+        expected={'min_x':62.5,'max_x':187.5,'min_y':-134.5,'max_y':2.5}
+        self.assertEqual(args['bounds'],expected)
+        self.assertEqual((args['max_nodes'],args['max_turns'],args['max_detour_ratio']),(200000,6,1.35))
+        self.assertEqual(args['minimum_start_run'],5)
+        script=game.query.call_args.args[0]
+        raw=script.split('local args=helpers.json_to_table(',1)[1].split(')\n',1)[0]
+        self.assertEqual(json.loads(json.loads(raw))['bounds'],expected)
+        self.assertEqual((expected['max_x']-expected['min_x']+1)*(expected['max_y']-expected['min_y']+1),17388)
+
+    def test_survey_cell_budget_rejects_before_any_native_query_or_router(self):
+        with patch('factorio_agent.chemical_production.route_trunks')as route:
+            result,_,_,game=self.water_crossing(core_position=(500.5,-500.5))
+        self.assertEqual(result['reason'],'chemical_pipe_survey_budget_exceeded')
+        game.query.assert_not_called();route.assert_not_called()
+
 
 class ChemicalControllerTests(unittest.TestCase):
     def setUp(self):
@@ -284,7 +313,8 @@ class ChemicalControllerTests(unittest.TestCase):
         self.assertEqual(self.c._sources(self.obs,'plastic-bar')['reason'],'chemical_bound_source_override_changed')
 
     def test_core_candidates_preserve_other_factories_unbuilt_external_feeds(self):
-        es=[entity('transport-belt',10.5+dx,-26.5+dy,4)for dx,dy in((0,0),(0,14),(22,0),(22,14),(0,-14),(22,-14))]
+        es=[entity('transport-belt',10.5+dx,-26.5+dy,4)for dx,dy in((0,0),(0,14),(22,0),(22,14),(0,-14),(22,-14),
+            (0,-28),(22,-28),(0,-42),(22,-42))]
         (self.root/'pcb-board.json').write_text(json.dumps({'world_id':'w','catalog_fingerprint':'c',
             'blocks':{'future_owner':{'reserved_area':[[500,500],[510,510]],'entities':es}}}))
         result=self.c.prepare(self.obs,self.params)
@@ -299,6 +329,25 @@ class ChemicalControllerTests(unittest.TestCase):
         self.assertEqual(entry['plan']['entities'][0],entity('pipe',1.5,-30.5))
         self.assertEqual(self.c.prepare({**self.obs,'technologies':{}},self.params)['reason'],'natural_chemical_technology_and_recipes_required')
 
+    def test_original_candidate_priority_precedes_two_finite_additional_north_rows(self):
+        original=self.connection.side_effect;seen=[]
+        def probe(game,builder,obs,source,destination,core,prior):
+            seen.append(core['machine']['position'])
+            if len(seen)<9:return {'ok':False,'reason':'fixture_route_blocked'}
+            return original(game,builder,obs,source,destination,core,prior)
+        self.connection.side_effect=probe
+        result=self.c.prepare(self.obs,self.params)
+        self.assertTrue(result['ok'],result)
+        self.assertEqual(seen,[{'x':x,'y':y}for x,y in((10.5,-26.5),(10.5,-12.5),(32.5,-26.5),
+            (32.5,-12.5),(10.5,-40.5),(32.5,-40.5),(10.5,-54.5),(32.5,-54.5),(10.5,-68.5))])
+        self.assertEqual(result['planning_evidence']['attempted_candidates'],9)
+
+    def test_previously_accepted_plastic_keeps_exact_plan_without_new_geometry_search(self):
+        entry=self.install();self.connection.reset_mock();self.survey.reset_mock()
+        result=self.c.prepare(self.obs,self.params)
+        self.assertEqual(result,entry);self.assertIsNot(result,entry)
+        self.connection.assert_not_called();self.survey.assert_not_called()
+
     def test_malformed_request_rejects_before_io(self):
         for parameters in(None,{}, {'product':'coal'},{'product':[]},{'product':'plastic-bar','extra':1}):
             with self.assertRaises(ValueError):self.c.prepare(self.obs,parameters)
@@ -308,15 +357,15 @@ class ChemicalControllerTests(unittest.TestCase):
         self.sources.return_value={'ok':False,'reason':'explicit_usable_chemical_source_missing','item':'coal'}
         self.assertFalse(self.c.prepare(self.obs,self.params)['ok']);self.assertEqual(self.c.state,{})
         self.sources.return_value=self.ready;self.connection.side_effect=None;self.connection.return_value={'ok':False,'reason':'no_clean_trunk_corridor'}
-        self.assertFalse(self.c.prepare(self.obs,self.params)['ok']);self.assertEqual(self.connection.call_count,6)
+        self.assertFalse(self.c.prepare(self.obs,self.params)['ok']);self.assertEqual(self.connection.call_count,10)
 
     def test_failed_coal_stage_exposes_exact_candidate_sources_and_visited_without_full_path(self):
         failure={'ok':False,'reason':'no_clean_trunk_corridor','visited':400220,'path':[{'x':0,'y':0}]*1000}
         with patch('factorio_agent.chemical_production.belt_connection',return_value=failure):
             result=self.c.prepare(self.obs,self.params)
             blocked=self.c.step(self.obs,self.params)
-        self.assertEqual(result['evidence']['attempted_candidates'],6)
-        self.assertEqual(result['evidence']['legal_sites'],6)
+        self.assertEqual(result['evidence']['attempted_candidates'],10)
+        self.assertEqual(result['evidence']['legal_sites'],10)
         row=result['evidence']['candidate_failures'][0]
         self.assertEqual((row['stage'],row['item'],row['visited']),('coal_route','coal',400220))
         self.assertEqual(row['source']['position'],self.coal['position']);self.assertEqual(row['source']['unit_number'],2)

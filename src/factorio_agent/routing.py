@@ -167,21 +167,76 @@ def return_jog_skeletons(a,b,limits,start_direction,end_direction,rows,columns,t
     return candidates
 
 
+def forward_jog_skeletons(a,b,limits,start_direction,end_direction,rows,columns,trunk_lanes,clearance,
+                          max_turns,maximum_length,minimum_start_run=None):
+    """Fourth family: small local jog, forward trunk and a complete crossbar.
+
+    Middle trunks come from the existing absolute grid/native clearance edges.
+    Only after the full source prefix and middle perpendicular trunk are clear do we keep
+    up to sixteen nearest end columns with clear crossbar/arrival segments.
+    No path nodes are allocated here and no expansion budget is reset.
+    """
+    if(max_turns<6 or start_direction not in VECTORS or end_direction not in VECTORS
+            or start_direction%8!=end_direction%8):return []
+    axis=0 if start_direction%8==4 else 1;other=1-axis
+    forward=VECTORS[start_direction][axis];arrival=VECTORS[end_direction][axis]
+    def coords(u,v):
+        p=[0,0];p[axis]=u;p[other]=v;return tuple(p)
+    low,high=limits['min_x'if axis==0 else'min_y'],limits['max_x'if axis==0 else'max_y']
+    ends=[a[axis]+i for i in range(math.ceil(low-a[axis]),math.floor(high-a[axis])+1)
+          if(b[axis]-a[axis]-i)*arrival>0]
+    ends.sort(key=lambda lane:(abs(lane-b[axis]),lane))
+    bars=sorted(set(trunk_lanes[other])|clearance[other])
+    middles=sorted(set(trunk_lanes[axis])|clearance[axis])
+    tails={bar:[lane for lane in ends
+                if clear_skeleton([coords(lane,bar),coords(lane,b[other]),b],rows,columns,limits,2)is not None]
+           for bar in bars}
+    candidates=[]
+    # A longer source escape is reserved for an explicitly verified six-cell
+    # native prefix. Values seven/eight can still filter the older families.
+    maximum_escape=6 if minimum_start_run==6 else 5
+    for escape in range(max(1,minimum_start_run or 1),maximum_escape+1):
+        pe=coords(a[axis]+escape*forward,a[other])
+        for jog in(-4,-3,-2,-1,1,2,3,4):
+            corner=coords(pe[axis],a[other]+jog)
+            if clear_skeleton([a,pe,corner],rows,columns,limits,1)is None:continue
+            for middle in middles:
+                if(middle-pe[axis])*forward<=0:continue
+                for bar in bars:
+                    prefix=[a,pe,corner,coords(middle,corner[other]),coords(middle,bar)]
+                    if clear_skeleton(prefix,rows,columns,limits,3)is None:continue
+                    accepted=0
+                    for lane in tails[bar]:
+                        vertices=prefix+[coords(lane,bar),coords(lane,b[other]),b]
+                        length=sum(abs(p[0]-q[0])+abs(p[1]-q[1])for p,q in zip(vertices,vertices[1:]))
+                        if length>maximum_length:continue
+                        canonical=clear_skeleton(vertices,rows,columns,limits,max_turns)
+                        if canonical is None:continue
+                        candidates.append(canonical);accepted+=1
+                        if accepted==16:break
+    return candidates
+
+
 def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
                  end_direction=None, max_nodes=25000, max_turns=6,
-                 max_detour_ratio=1.35, grid_pitch=8, candidate_validator=None):
+                 max_detour_ratio=1.35, grid_pitch=8, candidate_validator=None,minimum_start_run=None):
     """Select whole straight trunk corridors, never incremental squiggles.
 
     Candidates consist of whole orthogonal trunks and crossbars with bounded
     straight port escapes. Port headings and obstacle ownership are hard constraints.
     Failure is explicit when no clean corridor fits; no spaghetti fallback.
     Survey/clearance and underground-layer planning are separate responsibilities.
+    minimum_start_run optionally rejects a short first straight segment before
+    expansion; it grants no obstacle, heading, quality or budget exemption.
     """
     failure = {"ok": False, "reason": "no_clean_trunk_corridor", "path": [], "segments": [], "visited": 0}
     try:
         a, b = point(start), point(end)
         if any(d is not None and d not in VECTORS for d in (start_direction, end_direction)):
             raise ValueError("port headings must be cardinal directions")
+        if minimum_start_run is not None and(type(minimum_start_run)is not int or not 1<=minimum_start_run<=8
+                or type(start_direction)is not int or start_direction not in VECTORS):
+            raise ValueError("minimum_start_run requires an integer in 1..8 and a cardinal start heading")
         if (type(grid_pitch) is not int or grid_pitch < 1 or type(max_turns) is not int or max_turns < 0
                 or not math.isfinite(max_detour_ratio) or max_detour_ratio < 1):
             raise ValueError("invalid routing quality limits")
@@ -194,6 +249,7 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
         limits = bounds or {"min_x": min(a[0], b[0])-24, "max_x": max(a[0], b[0])+24,
                            "min_y": min(a[1], b[1])-24, "max_y": max(a[1], b[1])+24}
         if a == b:
+            if minimum_start_run is not None:raise ValueError("minimum_start_run requires distinct ports")
             if start_direction is not None and end_direction is not None and start_direction != end_direction:
                 raise ValueError("coincident ports have conflicting headings")
             return {"ok": True, "path": [{"x": a[0], "y": a[1]}],
@@ -297,12 +353,14 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
         valid = [];seen_skeletons=set()
         visited = 0;rejected_skeletons=0
         direct = abs(a[0]-b[0]) + abs(a[1]-b[1])
-        for family in range(3):
+        for family in range(4):
             if visited >= max_nodes:break
             if family==0:candidates=legacy_skeletons
             elif family==1:candidates=skeletons
-            else:candidates=return_jog_skeletons(a,b,limits,start_direction,end_direction,hard_rows,hard_columns,
-                                                trunk_lanes,clearance,max_turns)
+            elif family==2:candidates=(return_jog_skeletons(a,b,limits,start_direction,end_direction,hard_rows,hard_columns,
+                                                trunk_lanes,clearance,max_turns)if minimum_start_run is None or minimum_start_run<=4 else [])
+            else:candidates=forward_jog_skeletons(a,b,limits,start_direction,end_direction,hard_rows,hard_columns,
+                                                trunk_lanes,clearance,max_turns,max_detour_ratio*direct+4,minimum_start_run)
             candidates.sort(key=lambda vs: sum(abs(p[0]-q[0])+abs(p[1]-q[1]) for p,q in zip(vs,vs[1:])))
             for skeleton in candidates:
                 estimated = sum(abs(p[0]-q[0])+abs(p[1]-q[1]) for p,q in zip(skeleton,skeleton[1:]))
@@ -310,6 +368,10 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
                     continue
                 canonical=clear_skeleton(skeleton,hard_rows,hard_columns,limits,max_turns)
                 if canonical is None:rejected_skeletons+=1;continue
+                if minimum_start_run is not None:
+                    dx,dy=canonical[1][0]-a[0],canonical[1][1]-a[1]
+                    if abs(dx)+abs(dy)<minimum_start_run or((dx>0)-(dx<0),(dy>0)-(dy<0))!=av:
+                        rejected_skeletons+=1;continue
                 if canonical in seen_skeletons:continue
                 seen_skeletons.add(canonical)
                 # One shared budget covers every materialized node in ALL

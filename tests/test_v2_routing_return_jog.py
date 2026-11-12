@@ -56,7 +56,8 @@ class ReturnJogRoutingTests(unittest.TestCase):
 
     def test_existing_families_cannot_generate_the_required_source_return(self):
         a,b,kwargs=fixture()
-        with patch.object(routing,'return_jog_skeletons',return_value=[]):old=routing.route_trunks(a,b,**kwargs)
+        with patch.object(routing,'return_jog_skeletons',return_value=[]),patch.object(routing,'forward_jog_skeletons',return_value=[]):
+            old=routing.route_trunks(a,b,**kwargs)
         self.assertFalse(old['ok']);self.assertEqual(old['visited'],0)
 
     def test_first_step_turn_detour_and_budget_constraints_still_fail_closed(self):

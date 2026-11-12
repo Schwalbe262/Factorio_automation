@@ -58,6 +58,10 @@ underground mouths and their buried interior. The first new neighbor remains a
 normal pipe, the full original apron path and all its headings remain fixed,
 and the four-step limit is unchanged. Resource, terrain, foreign/unknown asset,
 reservation and prospective producer obstructions still block.
+Only that guarded crossing passes `minimum_start_run` to the shared router:
+the native obstruction's zero-based apron index plus two, preserving a straight
+cell after the paired mouth. Belt 6439 at index 3 requires five straight steps.
+Other connections pass `None`, keeping their established routing priority.
 
 All buried fluid-route assets must be owned belts, underground belts, poles or
 inserters with exact native witnesses. New plans save `fluid_underground_pairs`
@@ -75,6 +79,27 @@ with east-facing `(94.5,-25.5)` beneath existing northbound belt unit 6439 at
 `(93.5,-25.5)`. Real-router and executable native-Lua fixtures reject replaced
 units, unknown/foreign assets, resources, terrain, changed directions and new
 tunnel obstructions. These fixtures do not establish live Sulfur production.
+
+Candidate search retains the original six source-relative sites, then appends
+two more north rows at y offsets -28 and -42, each with the same x offsets 0/22:
+ten candidates total. Accepted product plans remain pinned. Every new candidate
+still needs complete native land, resource, future-producer, power, fluid and
+defense checks within the same twenty-second planning budget.
+
+The fluid survey margin is `max(12, floor(((1.35-1)*Manhattan+4)/2))`.
+Each tile outside the endpoint rectangle costs at least two extra route steps,
+so this covers every excursion already permitted by the router's existing
+length rule. The forty-thousand-cell survey limit, 200,000 materialized nodes,
+six turns and existing detour rule remain unchanged. A distance 150 route gets
+margin 28; ordinary short Plastic connections retain margin 12.
+
+Read-only capture 3117605 and offline shortest-path diagnosis found the earlier
+Sulfur core `(165.5,-74.5)` needed at least 170 Water tiles before crossing checks,
+exceeding its existing 168-tile allowance. Larger survey margins did not fix it.
+The further grid site `(165.5,-102.5)` has an offline Water corridor of 202 tiles,
+six turns and ratio 1.34667, with two bounded underground pairs. Its unsurveyed
+core rows and complete Gas, power and defense preparation still require fresh
+native validation before construction.
 
 Fluid routes have bounded surveys and detours, native underground span limits,
 separate prospective networks and explicit reciprocal fluidbox edges. The

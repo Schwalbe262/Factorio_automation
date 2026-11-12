@@ -15,6 +15,13 @@ only the framework interface and its documented state, with no parent decisions.
 - Preserve all v1 saves and uncommitted changes. One executor owns each world.
 - Use PCB-style production zoning, fixed typed ports, reserved orthogonal trunks,
   controlled branches/crossings and expansion space; reject snake-like layouts.
+- Extend the shared main bus beyond iron/copper with dedicated expandable bulk
+  steel and electronic-circuit producers, then other frequently shared materials.
+  Budget actual source production, per-lane throughput and parallel belt capacity;
+  priority taps must preserve upstream consumers. Keep expanding-volume cable local.
+- Maintain radar coverage, normally repaired wall-backed mutually covering turrets,
+  and ordinary damage/fire-rate/productivity upgrades. Repeated losses require
+  reinforcement. Remove dangerously close nests using paid native projectile combat.
 - Early factories and transport trunks avoid resource patches. Permit only
   explicit local mining footprints and minimal bounded surface exits; prebuild safe
   replacement corridors before moving existing supplies off ore. Do not silently
@@ -71,9 +78,15 @@ after a paid one-belt mixer repair and conserved recovery of83copper plates.
 The shared analyzer now distinguishes corners from true side loading; Engine
 and Blue designs include the same required empty approach. Blue recipe research
 completed3104834; no Blue factory is commissioned yet. Engine and Sulfur remain
-blocked at bounded route planning. New guarded prebuild/replacement capabilities
-must pass fresh native whole plans before gameplay costs. Next finish these
-consumers, mall/repair, blue, rail and rocket.
+uncommissioned. Engine prebuild routes passed native preparation, but an old-post
+recovery needs an honest legacy receipt after native auto-equipping exposed an
+inventory-accounting bug. A new bounded routing family passes the captured Sulfur
+Water corridor; the complete new site still needs native preparation. Current
+priority is repeated eastern turret loss: watch restocks/rebuilds known posts and
+ordinary defense research has unlocked walls, radar and repair packs. Three-post
+wall bastions passed native preparation; live commissioning remains in progress.
+Finish defense/radar/nearby-nest combat, these consumers, bulk bus growth, blue,
+rail and rocket. No enemy deletion, granted health or retroactive conservation claim.
 Do not close the continuous-rate gate from filling output buffers. No rocket yet.
 
 Freeze code, model/effort, seed/save and settings per attempt. Classify failures
