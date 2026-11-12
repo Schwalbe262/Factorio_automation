@@ -295,6 +295,14 @@ local function failure(reason) return {ok=false,reason=reason} end
 """
 
 
+def _whole_json(text: str) -> bool:
+    """A query prints exactly one JSON object, so a parseable reply needs no further packets."""
+    try:
+        return isinstance(json.loads(text), dict)
+    except ValueError:
+        return False
+
+
 class DeterministicGame:
     def __init__(self, cfg: AppConfig, *, backend: str = "assisted"):
         if backend not in {"assisted", "character"}:
@@ -354,9 +362,43 @@ return success{world_id=d.world_id,surface=s.name,tick=game.tick,actor_unit_numb
         lua = "local good,result=pcall(function() " + _HELPERS + body + " end); "
         lua += "if not good then result={ok=false,reason=tostring(result)} end; rcon.print(helpers.table_to_json(result or {}))"
         command = "/silent-command " + " ".join(lua.splitlines())
-        with FactorioRconClient(self.cfg.rcon_host, self.cfg.rcon_port, self.cfg.rcon_password, timeout=30) as client:
-            response = client.execute(command, drain_seconds=0.02)
-        return parse_json_response(response)
+        started = time.perf_counter()
+        try:
+            return parse_json_response(self._execute(command, drain_seconds=0.02))
+        finally:
+            stats = self.__dict__.setdefault("query_stats", {"count": 0, "seconds": 0.0})
+            stats["count"] += 1
+            stats["seconds"] += time.perf_counter() - started
+
+    def _execute(self, command: str, *, drain_seconds: float) -> str:
+        """Send one command. A long-lived session sets keep_connection to reuse one authenticated socket."""
+        if not getattr(self, "keep_connection", False):
+            with FactorioRconClient(
+                self.cfg.rcon_host, self.cfg.rcon_port, self.cfg.rcon_password, timeout=30
+            ) as client:
+                return client.execute(command, drain_seconds=drain_seconds, complete=_whole_json)
+        client = getattr(self, "_client", None)
+        if client is None or client.peer_closed():
+            # Reconnecting here is safe: nothing has been sent on the dead socket.
+            if client is not None:
+                client.close()
+            client = FactorioRconClient(self.cfg.rcon_host, self.cfg.rcon_port, self.cfg.rcon_password, timeout=30)
+            client.connect()
+            self._client = client
+        try:
+            return client.execute(command, drain_seconds=drain_seconds, complete=_whole_json)
+        except BaseException:
+            # The command may or may not have run. Drop the socket and let the
+            # caller treat the outcome as unknown; never resend it here.
+            client.close()
+            self._client = None
+            raise
+
+    def close(self) -> None:
+        client = getattr(self, "_client", None)
+        if client is not None:
+            client.close()
+            self._client = None
 
     def initialize(self) -> dict[str, Any]:
         wid = str(uuid.uuid4())
@@ -802,3 +844,4 @@ return success{status="running"}
     def save(self) -> None:
         with FactorioRconClient(self.cfg.rcon_host, self.cfg.rcon_port, self.cfg.rcon_password) as c:
             c.execute("/server-save", drain_seconds=0.4)
+        self.last_save_at = time.monotonic()

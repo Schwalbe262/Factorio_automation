@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import select
 import socket
 import struct
 import time
@@ -66,7 +67,24 @@ class FactorioRconClient:
             finally:
                 self._socket = None
 
-    def execute(self, command: str, drain_seconds: float = 0.15) -> str:
+    def peer_closed(self) -> bool:
+        """True when a kept-open socket is known dead. Sends nothing, so it is safe before a mutation."""
+        if self._socket is None:
+            return True
+        try:
+            readable, _, _ = select.select([self._socket], [], [], 0)
+            if not readable:
+                return False
+            return self._socket.recv(1, socket.MSG_PEEK) == b""
+        except (OSError, ValueError):
+            return True
+
+    def execute(self, command: str, drain_seconds: float = 0.15, complete=None) -> str:
+        """Send a command and collect its reply.
+
+        The reply may span packets, so reading continues for drain_seconds after the
+        first one. complete(text) may end that wait early once the reply is whole.
+        """
         if self._socket is None:
             self.connect()
         request_id = self._next_id()
@@ -88,6 +106,8 @@ class FactorioRconClient:
                 if packet.body:
                     chunks.append(packet.body)
                     first_response_at = first_response_at or time.monotonic()
+                    if complete is not None and complete("".join(chunks)):
+                        break
                 if first_response_at is not None and time.monotonic() - first_response_at >= drain_seconds:
                     break
                 if first_response_at is not None:

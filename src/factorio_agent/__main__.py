@@ -13,7 +13,22 @@ from . import runtime
 from .jobs import CAPABILITIES, Ledger, Request, StarterExecutors, control, run_slice, submit, summary
 
 
-def main(argv=None):
+class OneShotServices:
+    """Build game access objects per command. A long-lived session supplies cached ones instead."""
+
+    def game(self, root):
+        return runtime.game_for(root)
+
+    def catalog(self, root, game):
+        return runtime.catalog_for(root, game)
+
+    def executors(self, root, game, catalog):
+        return StarterExecutors(game, catalog)
+
+
+def execute(argv=None, services=None):
+    """Run one typed command and return its receipt. Raises on failure; never prints."""
+    services = services or OneShotServices()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime", type=Path, default=Path("runtime/v2/dev-101"))
     commands = parser.add_subparsers(dest="command", required=True)
@@ -69,7 +84,7 @@ def main(argv=None):
         result = runtime.connect_player(root)
     elif args.command == "checkpoint":
         with RunLock(root / "writer.lock"):
-            game = runtime.game_for(root)
+            game = services.game(root)
             obs = game.query("return {ok=true,world_id=d.world_id,tick=game.tick}")
             if not obs.get("ok"):
                 raise RuntimeError(obs.get("reason", "live world observation required"))
@@ -85,12 +100,12 @@ def main(argv=None):
     elif args.command == "actor-status":
         from .actor_recovery import inspect_actor_recovery
 
-        result = inspect_actor_recovery(runtime.game_for(root))
+        result = inspect_actor_recovery(services.game(root))
     elif args.command == "recover-actor":
         from .actor_recovery import execute_actor_recovery
 
         with RunLock(root / "writer.lock"):
-            game = runtime.game_for(root)
+            game = services.game(root)
             action = dict(
                 type="recover_actor",
                 world_id=args.world_id,
@@ -110,14 +125,12 @@ def main(argv=None):
     elif args.command == "belongings-status":
         from .corpse_recovery import inspect_corpse_recovery
 
-        result = inspect_corpse_recovery(
-            runtime.game_for(root), args.world_id, args.expected_actor_unit, args.death_tick
-        )
+        result = inspect_corpse_recovery(services.game(root), args.world_id, args.expected_actor_unit, args.death_tick)
     elif args.command == "return-to-base":
         from .defense_repairs import return_to_spawn_action
 
         with RunLock(root / "writer.lock"):
-            game = runtime.game_for(root)
+            game = services.game(root)
             action = return_to_spawn_action(game, args.world_id, args.expected_actor_unit)
             result = game.act(action) if action.get("type") else action
             Ledger(root).event("actor-lifecycle", "return_to_base", result=result)
@@ -125,7 +138,7 @@ def main(argv=None):
         from .corpse_recovery import execute_corpse_recovery
 
         with RunLock(root / "writer.lock"):
-            game = runtime.game_for(root)
+            game = services.game(root)
             action = dict(
                 type="recover_owned_belongings",
                 world_id=args.world_id,
@@ -160,7 +173,7 @@ def main(argv=None):
             stop.unlink()
         result = {"ok": True, "status": "worker_stop_cleared"}
     elif args.command == "observe":
-        game = runtime.game_for(root)
+        game = services.game(root)
         obs = game.observe()
         if not obs.get("ok"):
             raise RuntimeError(obs.get("reason", "observation_failed"))
@@ -185,22 +198,22 @@ def main(argv=None):
         obs["production_rate_measurement"] = production_rates(root, obs)
         obs["belt_lane_observation"] = port_lane_snapshot(root, game, obs)
         if (root / "catalog.json").exists():
-            obs["known_project_construction_budget"] = construction_budget(root, obs, runtime.catalog_for(root, game))
-            obs["smelting_throughput_bounds"] = smelting_throughput_bounds(root, obs, runtime.catalog_for(root, game))
-            obs["factory_constraints"] = factory_constraints(root, obs, runtime.catalog_for(root, game))
+            obs["known_project_construction_budget"] = construction_budget(root, obs, services.catalog(root, game))
+            obs["smelting_throughput_bounds"] = smelting_throughput_bounds(root, obs, services.catalog(root, game))
+            obs["factory_constraints"] = factory_constraints(root, obs, services.catalog(root, game))
             from .normal_research import ready_options
 
-            obs["available_research"] = ready_options(runtime.catalog_for(root, game), obs)
+            obs["available_research"] = ready_options(services.catalog(root, game), obs)
             from .capability_gates import native_recipe_gates
 
-            obs["native_capability_gates"] = native_recipe_gates(runtime.catalog_for(root, game), obs, CAPABILITIES)
+            obs["native_capability_gates"] = native_recipe_gates(services.catalog(root, game), obs, CAPABILITIES)
             from .supply_planning import supply_options
 
             obs["resource_supply_options"] = supply_options(
                 root,
                 game,
                 obs,
-                runtime.catalog_for(root, game),
+                services.catalog(root, game),
                 obs["known_project_construction_budget"],
                 obs["production_rate_measurement"],
             )
@@ -218,17 +231,17 @@ def main(argv=None):
             parameters = typed
         result = submit(
             root,
-            runtime.game_for(root),
+            services.game(root),
             Request(args.key, args.world_id, args.observed_tick, args.capability, parameters),
         )
     elif args.command in {"pause", "resume", "reconcile", "retry"}:
-        result = control(root, runtime.game_for(root), args.key, args.command)
+        result = control(root, services.game(root), args.key, args.command)
     elif args.command in {"run", "worker"}:
-        game = runtime.game_for(root)
+        game = services.game(root)
         # Catalog publication and job execution share the same writer lock.
         with RunLock(root / "writer.lock"):
-            catalog = runtime.catalog_for(root, game)
-        executors = StarterExecutors(game, catalog)
+            catalog = services.catalog(root, game)
+        executors = services.executors(root, game, catalog)
         if args.command == "run":
             result = run_slice(root, game, executors, args.key, seconds=args.seconds)
         else:
@@ -249,7 +262,11 @@ def main(argv=None):
                     or time.monotonic() >= deadline
                 ):
                     break
-    print(json.dumps(result, ensure_ascii=False, allow_nan=False))
+    return result
+
+
+def main(argv=None):
+    print(json.dumps(execute(argv), ensure_ascii=False, allow_nan=False))
 
 
 if __name__ == "__main__":

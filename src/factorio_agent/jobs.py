@@ -1825,6 +1825,9 @@ def progress_key(obs: dict, capability: str) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+SAVE_INTERVAL_SECONDS = 60
+
+
 def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> dict:
     if not isinstance(seconds, (int, float)) or not 0 < seconds <= 50:
         raise ValueError("slice duration must be greater than zero and at most 50 seconds")
@@ -1982,7 +1985,11 @@ def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> 
                 else:
                     job.update(status="waiting", reason="execution_slice_complete")
                 ledger.save()
-                game.save()
+                # A one-shot CLI game has never saved, so it still saves every
+                # slice. A long-lived session saves at most once per interval.
+                last_save = getattr(game, "last_save_at", None)
+                if type(last_save) is not float or time.monotonic() - last_save >= SAVE_INTERVAL_SECONDS:
+                    game.save()
                 return job
             if not result.get("type") or result.get("type") == "wait":
                 time.sleep(min(0.5, max(0, deadline - time.monotonic())))

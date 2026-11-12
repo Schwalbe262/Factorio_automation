@@ -842,6 +842,17 @@ class Supervisor:
         )
         self._save(child=None)
 
+    def _call_event(self, command, seconds, error):
+        """Timing record for one in-process command; the run command also carries kernel totals."""
+        data = dict(command=command, seconds=round(seconds, 4))
+        if error:
+            data["error"] = error[-1600:]
+        if command == "run":
+            metrics = getattr(getattr(self.cli, "session", None), "metrics", None)
+            if callable(metrics):
+                data["kernel"] = metrics()
+        self._event("call", **data)
+
     def _world_guard(self):
         if json.loads((self.root / "world-settings.json").read_text(encoding="utf-8")).get("world_id") != self.world:
             raise ValueError("installed world changed; supervisor will not retarget")
@@ -1721,6 +1732,12 @@ def main(argv=None):
     parser.add_argument("--slice-seconds", type=float, default=25)
     parser.add_argument("--max-seconds", type=float)
     parser.add_argument("--validate-requests", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--bridge",
+        choices=("inprocess", "cli"),
+        default="inprocess",
+        help="inprocess keeps one game session in this process; cli starts a child process per command",
+    )
     args = parser.parse_args(argv)
     if args.validate_requests:
         from .jobs import Request
@@ -1737,13 +1754,18 @@ def main(argv=None):
     from .luna_client import LunaDecisionClient
 
     client = LunaDecisionClient(model="gpt-6-luna", reasoning_effort="medium", timeout_seconds=120)
-    result = Supervisor(
+    supervisor = Supervisor(
         args.runtime,
         client,
         decision_interval=args.decision_interval,
         slice_seconds=args.slice_seconds,
         max_seconds=args.max_seconds,
-    ).run()
+    )
+    if args.bridge == "inprocess":
+        from .kernel import InProcessBridge
+
+        supervisor.cli = InProcessBridge(supervisor.root, on_call=supervisor._call_event)
+    result = supervisor.run()
     print(
         json.dumps({k: result.get(k) for k in ("status", "world_id", "saved", "stop_request_id")}, ensure_ascii=False)
     )
