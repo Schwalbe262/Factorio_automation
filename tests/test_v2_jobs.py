@@ -281,6 +281,18 @@ class JobBoundaryTests(unittest.TestCase):
         control(self.root,self.game,'test','reconcile')
         self.assertNotIn('pending_action',Ledger(self.root).data['jobs']['test'])
 
+    def test_uncertain_paid_pipe_repair_keeps_intent_and_original_paid_prefix(self):
+        submit(self.root,self.game,self.request())
+        self.game.act=lambda _: {'ok':False,'reason':'infrastructure_repair_outcome_unknown',
+                                 'original_reason':'infrastructure_material_conservation_failed','paid_pipes':2}
+        with self.assertRaisesRegex(RuntimeError,'batch outcome unknown'):
+            run_slice(self.root,self.game,Executor({'type':'repair_registered_infrastructure','transaction_id':'a'*64}),'test')
+        job=Ledger(self.root).data['jobs']['test']
+        self.assertEqual(job['reason'],'action_outcome_unknown_reconcile_required')
+        self.assertEqual(job['pending_action']['transaction_id'],'a'*64)
+        self.assertEqual(job['uncertain_batch_receipt']['paid_pipes'],2)
+        with self.assertRaises(ValueError):control(self.root,self.game,'test','retry')
+
     def test_intentional_pause_does_not_spend_execution_deadline(self):
         submit(self.root, self.game, self.request())
         control(self.root, self.game, "test", "pause")

@@ -158,5 +158,45 @@ class EmergencyDispatchTests(unittest.TestCase):
         ex.water_distribution.step.return_value={'status':'waiting','reason':'waiting for actual water'}
         self.assertEqual(ex.step('water_distribution',{})['item'],'firearm-magazine')
 
+    def test_pipe_repair_runs_after_perimeter_arming_and_before_routine_factory_input(self):
+        ex=self.executor()
+        ex.infrastructure_repair=SimpleNamespace(last_diagnostic=None,
+            step=Mock(return_value={'type':'repair_registered_infrastructure'}))
+        self.assertEqual(ex.step('defense_watch',{'tick':100})['type'],'repair_registered_infrastructure')
+        ex.perimeter.step.assert_called_once()
+        ex.infrastructure_repair.step.reset_mock()
+        ex.perimeter.step.return_value={'type':'insert','item':'firearm-magazine'}
+        self.assertEqual(ex.step('defense_watch',{'tick':101})['type'],'insert')
+        ex.infrastructure_repair.step.assert_not_called()
+
+    def test_failed_pipe_survey_is_diagnostic_and_does_not_stop_defense_watch(self):
+        ex=self.executor()
+        ex.infrastructure_repair=SimpleNamespace(last_diagnostic={'ok':False,'reason':'foreign identity changed'},
+            step=Mock(return_value=None))
+        result=ex.step('defense_watch',{'tick':100})
+        self.assertEqual(result['status'],'waiting')
+        self.assertEqual(result['evidence']['infrastructure']['reason'],'foreign identity changed')
+        ex.step('defense_watch',{'tick':101})
+        ex.infrastructure_repair.step.assert_called_once()
+
+    def test_chemical_job_recovers_owned_upstream_pipes_before_requesting_new_consumer_work(self):
+        ex=self.executor();ex.starter_upkeep.return_value={'status':'succeeded'}
+        ex.starter_observation=Mock(return_value={})
+        ex.chemicals=SimpleNamespace(step=Mock(return_value={'status':'waiting'}))
+        ex.infrastructure_repair=SimpleNamespace(last_diagnostic=None,
+            step=Mock(return_value={'type':'take_many','item':'pipe','count':6}))
+        self.assertEqual(ex.step('chemical_production',{'tick':100},{'product':'sulfur'})['count'],6)
+        ex.chemicals.step.assert_not_called()
+
+    def test_paid_pipe_publication_completes_before_consumer_proof_is_reused(self):
+        ex=self.executor();ex.starter_upkeep.return_value={'status':'succeeded'}
+        ex.starter_observation=Mock(return_value={})
+        ex.chemicals=SimpleNamespace(step=Mock(return_value={'status':'waiting'}))
+        ex.infrastructure_repair=SimpleNamespace(last_diagnostic={'ok':True,'reason':'paid registered pipe recovery published'},
+            step=Mock(return_value=None))
+        self.assertEqual(ex.step('chemical_production',{'tick':100},{'product':'sulfur'})['status'],'waiting')
+        ex.infrastructure_repair.step.assert_called_once()
+        ex.chemicals.step.assert_called_once()
+
 
 if __name__=='__main__':unittest.main()

@@ -31,6 +31,9 @@ class WorldBoundGame(DeterministicGame):
         return super().query(body)
 
     def act(self,action:dict)->dict:
+        if action.get('type')=='repair_registered_infrastructure':
+            from .infrastructure_repair import execute_repair_registered_infrastructure
+            return self._record_action(action,execute_repair_registered_infrastructure(self,action))
         if action.get('type')=='build_and_arm_bastion_post':
             from .defense_deployment import execute_bastion_deployment
             return self._record_action(action,execute_bastion_deployment(self,action))

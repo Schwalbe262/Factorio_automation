@@ -427,6 +427,7 @@ class StarterExecutors:
         from .gas_distribution import GasDistribution
         self.gas_distribution=GasDistribution(game,self.builder,catalog,self.perimeter,
                                              petroleum=self.petroleum,chemical=self.chemicals)
+        self.infrastructure_repair=None
         from .advanced_circuits import AdvancedCircuitProduction
         self.advanced_circuits=AdvancedCircuitProduction(game,self.builder,catalog,self.perimeter,
                                                         bus_factory=self.bus_factory,science=self.science,
@@ -438,6 +439,9 @@ class StarterExecutors:
         from .normal_research import NormalResearch
         self.normal_research=NormalResearch(game,catalog,self.science,self.green,blue=self.blue)
         ledger=Ledger(Path(game.cfg.runtime_dir)).data
+        self.infrastructure_autodetect=(any(j['capability']=='basic_petroleum' and j['status']=='succeeded'
+            for j in ledger['jobs'].values()) and all((Path(game.cfg.runtime_dir)/name).exists()for name in
+                ('basic-petroleum.json','pcb-board.json','fluid-sources.json')))
         self.base_coal_autodetect=(any(j['capability']=='steam_expansion' and j['status']=='succeeded'
             for j in ledger['jobs'].values()) and all((Path(game.cfg.runtime_dir)/name).exists()for name in
                 ('factory-builder.json','steam-coal-reroute.json','mining-outposts.json')))
@@ -502,6 +506,23 @@ class StarterExecutors:
             if path is None or not path.exists():return None
             factory=self._piercing_factory()
         return factory.upkeep(obs) if getattr(factory,'commissioned',False) else None
+
+    def _infrastructure_upkeep(self,obs):
+        """Survey registered pipes without making a failed survey stop defenses."""
+        if obs.get('tick',0)<getattr(self,'infrastructure_retry_tick',0):return None
+        factory=getattr(self,'infrastructure_repair',None)
+        if factory is None:
+            if not getattr(self,'infrastructure_autodetect',False):return None
+            from .infrastructure_repair import InfrastructureRepair
+            factory=self.infrastructure_repair=InfrastructureRepair(self.game,self.builder,self.catalog,
+                petroleum=self.petroleum,gas=self.gas_distribution)
+        result=factory.step(obs)
+        self.infrastructure_diagnostic=factory.last_diagnostic
+        if result and result.get('type'):return result
+        # Material waits retry promptly; quiet or rejected surveys stay bounded.
+        delay=180 if (factory.last_diagnostic or {}).get('reason')=='normally prepay registered pipe replacements' else 1800
+        self.infrastructure_retry_tick=obs.get('tick',0)+delay
+        return None
 
     def starter_observation(self,obs):
         return {**obs,'entities':[e for e in obs.get('entities',[])
@@ -631,6 +652,8 @@ class StarterExecutors:
             if bastion:return bastion
             result=self.perimeter.step(obs)
             if result.get('status')=='succeeded':
+                infrastructure=self._infrastructure_upkeep(obs)
+                if infrastructure:return infrastructure
                 wall=self.hardening.upkeep(obs)
                 if wall:return wall
                 repair=self.defense_repairs.next_action(obs)
@@ -639,6 +662,7 @@ class StarterExecutors:
                 if supplied and supplied.get('type'):return supplied
                 return {'status':'waiting','reason':'watching armed defenses and replenishing normal ammunition',
                         'evidence':{**result.get('evidence',{}),**({'piercing_factory':supplied} if supplied else {}),
+                                    **({'infrastructure':self.infrastructure_diagnostic} if getattr(self,'infrastructure_diagnostic',None) else {}),
                                     **({'coal_recovery':coal} if coal else {})}}
             return result
         if capability == "starter":
@@ -658,6 +682,10 @@ class StarterExecutors:
         result = self.starter_upkeep(obs)
         if result.get("status") != "succeeded":
             return result
+        if capability in ('basic_petroleum','gas_distribution','chemical_production',
+                          'advanced_circuit_production','chemical_science'):
+            infrastructure=self._infrastructure_upkeep(obs)
+            if infrastructure:return infrastructure
         if capability not in ("research","defense_perimeter"):
             from .upgrades import next_upgrade
             upgrade=next_upgrade(obs,self.normal_research)
@@ -924,7 +952,8 @@ def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> 
                 try:
                     receipt = game.act(result)
                     if receipt.get('reason') in ('build_batch_outcome_unknown','mine_batch_outcome_unknown',
-                                                 'storage_transfer_outcome_unknown','mall_stock_transfer_outcome_unknown'):
+                                                 'storage_transfer_outcome_unknown','mall_stock_transfer_outcome_unknown',
+                                                 'infrastructure_repair_outcome_unknown'):
                         job['uncertain_batch_receipt']=receipt
                         raise RuntimeError('batch outcome unknown; observe and reconcile before continuing')
                 except Exception:

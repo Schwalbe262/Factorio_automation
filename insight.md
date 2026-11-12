@@ -6668,3 +6668,8 @@ Improvement: distinguish a sole perpendicular belt corner from true side loading
 - Before: powereddrill956hadnoresources, intactoldcoalpathwasempty/Boiler167dry, only1.8MWavailable. Repeatedactorfuelwouldnotrepairthecause. After: paidshared66potential sourcecoversbothboilers54max, twoexactrecoveries/preserved279units, fourloadedengines over30s and3.6MW offered4556084.
 - Evidence: verifiedpublishedBaseCoalRecovery native samples include bothboilerscoal5/water200/foursteamengines; originalsource retired,5docCASinterruptiontests pass. SameMallkey4561808succeeded67actions andactual4600230chest200/100nativebeltcraftcycles/WIP0. No granteditems/sourcecapacitymultiplication.
 - Remaining risk:66isresource-backedpotential, not a sustainedmeasurement; anotherbank depletion requiresfreshdiagnosis/extension. Actual guarded constructionstock transfer and broader Rocket flow remain separate gates.
+
+## 2026-11-12T17:25:00+09:00 | Source Part18 exact lost infrastructure recovery
+- Improvement: continuously distinguish absent registered nodes from a consumer throughput wait; restore exactsites using prepaidnormalitems and nativeold/newunitreceipts, then append-onlyownerCAS.
+- Before: refineryfullgas whiledownstreamgas0, sixlostinternalpipes blockedbuiltSulfur. After: Watch2actions/native4766812 paid6pipes MAIN6to0/new16915..16920,364reciprocaledges andbothownersverified; fixedsourceports preserved.
+- Evidence:60focusedPASS includeunknownposteffectintent,receiptidempotency/interrupted2ownerpublication,foreignlivepins andhistoricaljobreceipt exclusion. Remainingrisk: onlyordinaryinternalPetroleum/Gaspipes whitelist; foreignpins/publishedports/partialunknowns requireexplicitreview, actualconsumerflow stillseparateproof.

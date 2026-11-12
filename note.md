@@ -251888,3 +251888,19 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - Goal/hypothesis/actions/options: publish completed Coal/Water/Mall fixes separately from Infra/Steel/Red WIP; indexed immutable snapshot gate, ordinary costs and conserved ownership reviewed.
 - Metrics/result: 1119 tests,1117PASS/2skip57.047s; snapshot part17-coal-water-20261112-170703. Native4719458 complete ancestor graph additionally found crude pipe6932: SIX missing total,354 reciprocal edges; original five-hole diagnosis was incomplete.
 - Failure/next: Sulfur remains paused134actions; typed6pipe repair integration then same-key resume/Blue; no rocket acceptance. Part17 measured51168111 tokens includingcachedinput,account49to54%(+5pp); exacttaskweeklyshare unavailable. Part18 baseline668411775/account54%.
+
+## 2026-11-12T17:22:00+09:00 | Part18 registered infrastructure repair integration
+- Goal/hypothesis: reconnect real Sulfur supply by restoring six exact lost owned pipes with normal items; make recurrence automatically recoverable within Watch and consumer jobs.
+- Actions/options: immutablepreparedtransaction -> nativeonebatchpayment/create/reciprocalproof -> twoownerCAS/history; publishedports/registry/PCB unchanged. Runtime typedhandler and standardizedunknownoutcome preservependingintent, no blind retries. Watchafterperimeterarming, chemicalchainafterbaseupkeep; nonfataldiagnostics and bounded1800tickquiet/180tickfundingrechecks.
+- Metrics/result:59focusedPASS incl13Infra/4dispatch/1unknownjob added. Freshnative4755546wholepreparePASS6pipes/354edges,actorpipe0; nonebuilt byRoot. Watch-u stoppedPID47860 andpaused4760453/0actions byLuna; no competingwriter.
+- Failure/next: realpayment/graphflow/ownerpublication stillunproved; awaitreviewthenLunasolewriter resumesWatch-u tofund/repair, then sameSulfurkey ->Blue. Part18tokenbaseline668411775/account54%,ongoing.
+
+## 2026-11-12T17:25:00+09:00 | Part18 actual registered pipe recovery
+- Goal/hypothesis/actions/options: prove automaticLuna Watchrepair through normalpooledstock then nativepaidbatch, append-only2ownerCAS. Correctedreviewfinding: historicaljobs.jsonreceipt isnotcurrentpreservationpin; realforeignbindingchecks retained/regressionadded.
+- Metrics/result:60focusedPASS/14Infra. Watch-u resumedfreshPID40464 and2actions; native4766812 transactionbc0a06ff9a18... paid6pipe MAIN6to0, replacements16915..16920,364reciprocaledges,verifiedownerpublication. Originalports6963/7228/7231 andPCB/registryunchanged.
+- Failure/next: no actualSulfur/Blue acceptance yet; stopWatch/confirmexit then sameSulfur134history resume. TokenusagePart18ongoingbaseline668411775/account54%.
+
+## 2026-11-12T17:27:00+09:00 | Part18 publication gate and actual gas flow
+- Goal/actions/options: independently verify postrepairflow using exactcoordinate+unitidentity; immutableindexedrelease snapshot excludesSteel/RedWIP.
+- Metrics/result:1138total/1136PASS2skip55.928s snapshotpart18-infrastructure-20261112-172445. Native4777771 exactports6963/7228/7231+Sulfurstub16736 PG53.578947 each,chemicalplant16749 water120/PG120/45actualcycles. Confirmednormalgasdelivery; no actor/research/fluidsetters.
+- Failure/next: initialdirectgame.get_entity_by_unit_number returnednilforall5 without effects; positiontarget/unitvalidationcorrectedtheROprobe. SameSulfurjobacceptance thenBlue pending; no Rocketclaim. Part18 measured3357337tokensinclcachedinput/account54to55%(+1pp); exacttaskweeklyshareunavailable. Part19baseline671769112/account55%.
