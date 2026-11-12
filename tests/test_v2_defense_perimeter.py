@@ -22,10 +22,10 @@ class DefensePerimeterTests(unittest.TestCase):
         c.state = {'schema_version': 1, 'world_id': 'w', 'catalog_fingerprint': 'catalog',
                    'range': 18, 'posts': [spec], 'phase': 'deploy'}
         post = {'name': 'west_smelter', 'position': spec['position'], 'unit_number': 100,
-                'ammo': ammo, 'ammo_rounds': ammo * 10, 'health': 400, 'max_health': 400,
+                'ammo': ammo, 'full_magazines': ammo, 'ammo_rounds': ammo * 10, 'health': 400, 'max_health': 400,
                 'nearby_enemies': 0}
         if missing:
-            post.update(missing=True, ammo=0, ammo_rounds=0)
+            post.update(missing=True, ammo=0, full_magazines=0, ammo_rounds=0)
         report = {'ok': True, 'tick': 55, 'posts': [post], 'missing': ['west_smelter'] if missing else [],
                   'unarmed': ['west_smelter'] if not missing and ammo == 0 else [],
                   'refill': ['west_smelter'] if not missing and ammo < 5 else [],
@@ -136,6 +136,19 @@ class DefensePerimeterTests(unittest.TestCase):
             c, obs, _ = self.perimeter(ammo=ammo)
             self.assertIsNone(c.upkeep(obs))
             c.bootstrap.ensure_item.assert_not_called()
+
+    def test_four_full_plus_one_partial_does_not_deadlock_radar_arming(self):
+        c,obs,report=self.perimeter(ammo=5)
+        report['posts'][0].update(full_magazines=4,ammo_rounds=48)
+        action=c.upkeep(obs)
+        self.assertEqual((action['type'],action['count']),('insert',6))
+        self.assertEqual(action['expected_entity_unit'],100)
+
+    def test_missing_native_full_count_never_infers_five_full_from_item_count(self):
+        c,obs,report=self.perimeter(ammo=5)
+        report['posts'][0].pop('full_magazines')
+        self.assertEqual(c.upkeep(obs)['reason'],'native_full_magazine_count_required')
+        c.bootstrap.ensure_item.assert_not_called()
 
     def test_partial_or_other_quality_actor_ammo_cannot_make_crafting_report_success(self):
         c, obs, report = self.perimeter(ammo=4, held=0)

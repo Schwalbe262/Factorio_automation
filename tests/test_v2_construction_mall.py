@@ -64,7 +64,7 @@ class MallTests(unittest.TestCase):
             self.assertFalse(audit_mall_core(broken)['ok'])
 
     def test_red_factory_and_future_cells_are_not_advertised_as_finished_mall_products(self):
-        for name in ('piercing-rounds-magazine','inserter','medium-electric-pole','stone-wall'):
+        for name in ('piercing-rounds-magazine','medium-electric-pole','stone-wall'):
             with self.assertRaises(ValueError):_product({'product':name})
 
     def test_real_route_destination_remains_in_complete_core_before_external_feed(self):

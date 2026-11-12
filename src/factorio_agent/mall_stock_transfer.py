@@ -6,7 +6,7 @@ from pathlib import Path
 from factorio_ai.world_catalog import WorldCatalog
 
 ACTION='take_mall_stock'
-PRODUCTS=('transport-belt','gun-turret')
+PRODUCTS=('transport-belt','gun-turret','underground-belt','splitter','assembling-machine-1','inserter')
 
 
 def _key(q):return q['name']+':'+str(q['position']['x'])+':'+str(q['position']['y'])

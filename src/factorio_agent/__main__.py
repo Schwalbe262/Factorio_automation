@@ -20,7 +20,7 @@ def main(argv=None):
     create.add_argument("--seed", type=int, default=101)
     create.add_argument("--server-port", type=int, default=34260)
     create.add_argument("--rcon-port", type=int, default=27060)
-    for command in ("start", "connect-player", "observe", "capabilities", "actor-status"):
+    for command in ("start", "connect-player", "observe", "capabilities", "actor-status", "checkpoint"):
         commands.add_parser(command)
     recovery=commands.add_parser("recover-actor")
     recovery.add_argument("--world-id",required=True)
@@ -66,6 +66,13 @@ def main(argv=None):
         result = runtime.start(root)
     elif args.command == "connect-player":
         result = runtime.connect_player(root)
+    elif args.command == "checkpoint":
+        with RunLock(root/'writer.lock'):
+            game=runtime.game_for(root);obs=game.observe()
+            if not obs.get('ok'):raise RuntimeError(obs.get('reason','live world observation required'))
+            game.save()
+            Ledger(root).event('world-lifecycle','checkpoint_requested',tick=obs['tick'],world_id=obs['world_id'])
+            result={'status':'checkpoint_requested','world_id':obs['world_id'],'observed_tick':obs['tick']}
     elif args.command == "watch":
         from factorio_ai.deterministic_character import set_client_visibility
         result = set_client_visibility(runtime.configuration(root), visible=not args.hide)

@@ -73,6 +73,8 @@ proof uses `verified_postcondition`. Terminal receipts remain historical.
 - `watch` / `watch --hide`: show/hide the existing automation client.
 - `status`: persisted job receipts. Historical success needs live reinspection
   before claiming the factory is still producing after damage or rollback.
+- `checkpoint`: request a normal server save under the writer lock. Confirm the
+  saved archive finishes before stopping or copying the server.
 
 Current capabilities:
 
@@ -246,11 +248,13 @@ producer/lab ports and recovers only saved owned assets. The old green site is
 retired only while fresh replacement AND source-smelting proofs remain healthy.
 See [bus contracts](MAIN_BUS.md) and [compact layout](COMPACT_GREEN.md).
 
-`defense_perimeter` normally builds eight strategic gun posts and loads ten
-full normal magazines each. During later jobs, upkeep replenishes live known
-posts below five magazines to ten. There is no idle background worker, automatic
-ammo factory, or general repair system. Missing posts require another perimeter
-job; an unexpected replacement identity blocks. See [defense evidence](DEFENSE.md).
+`defense_perimeter` normally builds and loads strategic gun posts. Upkeep counts
+full normal magazines: four full plus a partial magazine triggers replenishment
+even though the inventory contains five items. Existing partial rounds stay intact.
+`defense_watch` also maintains factory radar visibility and capped construction
+cells, completing a pending build before opening another board reservation.
+Unexpected replacement identities require registered repair evidence.
+See [defense evidence](DEFENSE.md) and [radar coverage](RADAR_COVERAGE.md).
 
 `steel_capacity --rate-per-minute 15` adds a normally paid opposing furnace pair
 without moving the original steel assets or fixed output. A later22.5 target

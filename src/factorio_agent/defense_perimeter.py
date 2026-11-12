@@ -206,7 +206,7 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
         result.update(initialized=True,
                       missing=[p['name'] for p in result['posts'] if p.get('missing')],
                       unarmed=[p['name'] for p in result['posts'] if not p.get('missing') and p.get('ammo_rounds', 0) <= 0],
-                      refill=[p['name'] for p in result['posts'] if not p.get('missing') and p.get('ammo', 0) < REFILL_BELOW],
+                      refill=[p['name'] for p in result['posts'] if not p.get('missing') and p.get('full_magazines', -1) < REFILL_BELOW],
                       changed=[p['name'] for p in result['posts'] if p.get('identity_changed')],
                       damaged=[p['name'] for p in result['posts'] if p.get('health', 0) < p.get('max_health', 0)])
         return result
@@ -235,7 +235,7 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
             if not spec.get('unit_number'):
                 spec['unit_number'] = live['unit_number']
                 changed = True
-            if live['ammo'] >= AMMO_TARGET and not spec.get('commissioned'):
+            if live.get('full_magazines',-1) >= AMMO_TARGET and not spec.get('commissioned'):
                 spec['commissioned'] = True
                 changed = True
         if changed:
@@ -246,9 +246,11 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
             if live.get('missing') or live.get('identity_changed'):
                 continue
             threshold = AMMO_TARGET if initial and not spec.get('commissioned') else REFILL_BELOW
-            if live['ammo'] >= threshold:
+            full=live.get('full_magazines')
+            if type(full)is not int or full<0:return _result('blocked','native_full_magazine_count_required')
+            if full >= threshold:
                 continue
-            needed = AMMO_TARGET - live['ammo']
+            needed = AMMO_TARGET - full
             held = report['actor_full_magazines']
             if not held:
                 return self._ensure_magazines(obs, report, needed)

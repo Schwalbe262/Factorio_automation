@@ -42,7 +42,7 @@ class DefenseCoverageTests(unittest.TestCase):
                     'missing': [p['name'] for p in posts if p.get('missing')],
                     'changed': [p['name'] for p in posts if p.get('identity_changed')],
                     'unarmed': [p['name'] for p in posts if not p.get('missing') and p['ammo_rounds'] <= 0],
-                    'refill': [p['name'] for p in posts if not p.get('missing') and p['ammo'] < 5]}
+                    'refill': [p['name'] for p in posts if not p.get('missing') and p['full_magazines'] < 5]}
         c.inspect = Mock(side_effect=inspect)
         obs = {'ok': True, 'world_id': 'w', 'tick': 49,
                'enabled_recipes': {'gun-turret': True, 'firearm-magazine': True},
@@ -131,10 +131,11 @@ class DefenseCoverageTests(unittest.TestCase):
         c.live[name] = {'unit_number': 201, 'ammo': 10, 'full_magazines': 10, 'ammo_rounds': 100}
         self.assertIsNone(c.ensure_coverage(obs, 'stone-1', self.AREAS))
         c.live[name].update(ammo=5, full_magazines=4, ammo_rounds=41)
-        self.assertIsNone(c.ensure_coverage(obs, 'stone-1', self.AREAS))
+        action=c.ensure_coverage(obs,'stone-1',self.AREAS)
+        self.assertEqual((action['type'],action['count']),('insert',6))
         c.live[name].update(ammo=4, full_magazines=3, ammo_rounds=31)
         action = c.ensure_coverage(obs, 'stone-1', self.AREAS)
-        self.assertEqual((action['type'], action['count']), ('insert', 6))
+        self.assertEqual((action['type'], action['count']), ('insert', 7))
 
     def test_missing_existing_post_blocks_additive_gate_without_rebuild(self):
         c, obs = self.controller()

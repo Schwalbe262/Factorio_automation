@@ -6,6 +6,18 @@ a real Space Age rocket autonomously. Long-term: win at the solar system edge.
 Main-session high-capability models develop/debug; the evaluated Luna receives
 only the framework interface and its documented state, with no parent decisions.
 
+## Standalone assisted development (active)
+User selected a periodic GPT-6 Luna medium planner using authenticated Codex CLI.
+The framework owns a persistent dependency queue and executes typed functions;
+ready successors run while Luna plans. Sol monitors and fixes missing functions
+during development. This is assisted development, not a frozen Luna-only score.
+Current unseen seed1053994892 uses cliff-free Nauvis and otherwise normal defaults,
+with no old world JSON/inventory/research/board/jobs. Preserve dev-101 as an archive.
+Choose A, then B, then C from CURRENT native research, enabled recipes and suppliers,
+never prototype existence or old-world maximum tier. Measure wall time, game time,
+planning, execution and model waits separately. Later freeze code for independent
+60-minute fresh-seed acceptance; a single seed cannot certify all seeds.
+
 ## Rules
 - Pin installed Factorio/Space Age 2.1.20 and export its actual game data.
 - New isolated worlds keep default resources/enemies/pollution/evolution.

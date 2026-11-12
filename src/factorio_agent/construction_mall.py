@@ -24,10 +24,14 @@ from .mall_bus_extension import MallBusExtension, propose_mall_taps
 from .bus_budget import declared_bus_demand
 
 
-TARGETS={'transport-belt':200,'inserter':50,'medium-electric-pole':50,'gun-turret':8,'stone-wall':100}
-ACTIVE_PRODUCTS=('transport-belt','gun-turret')
+TARGETS={'transport-belt':200,'inserter':50,'medium-electric-pole':50,'gun-turret':8,'stone-wall':100,
+         'underground-belt':50,'splitter':20,'assembling-machine-1':20}
+ACTIVE_PRODUCTS=('transport-belt','gun-turret','underground-belt','splitter','assembling-machine-1','inserter')
 LOCAL={'transport-belt':('iron-gear-wheel',),'gun-turret':('iron-gear-wheel',),
        'inserter':('iron-gear-wheel','electronic-circuit','copper-cable'),
+       'underground-belt':('transport-belt','iron-gear-wheel'),
+       'splitter':('transport-belt','iron-gear-wheel','electronic-circuit','copper-cable'),
+       'assembling-machine-1':('iron-gear-wheel','electronic-circuit','copper-cable'),
        'medium-electric-pole':('iron-stick','copper-cable'),'stone-wall':()}
 RAW={'iron-plate','copper-plate','steel-plate','stone-brick','firearm-magazine'}
 
@@ -46,6 +50,8 @@ def _product(parameters):
 
 def mall_rates(catalog,product):
     if product not in TARGETS:raise ValueError('supported construction product required')
+    from .mall_cells import PRODUCTS,recipe_rates
+    if product in PRODUCTS:return recipe_rates(catalog,product,TARGETS[product])
     speed=catalog.entities['assembling-machine-1']['crafting_speed'];recipes={};needs={};raw={}
     if type(speed)not in(int,float)or not math.isfinite(speed)or speed<=0:raise ValueError('positive native assembler speed required')
     def visit(item,amount,trail=()):
@@ -69,6 +75,8 @@ def mall_rates(catalog,product):
 
 def mall_core(catalog,product,x,y):
     """Direct intermediate insertion and separate straight raw headers; no cable bus."""
+    from .mall_cells import PRODUCTS,recipe_cell
+    if product in PRODUCTS:return recipe_cell(catalog,product,x,y,TARGETS[product])
     rated=mall_rates(catalog,product)
     if any(type(v)not in(int,float)or not math.isfinite(v)or v%1!=.5 for v in(x,y)):
         raise ValueError('half-tile mall anchors required')
@@ -156,6 +164,9 @@ def audit_mall_core(core):
         # Machine footprints, rather than their centers, receive ordinary arms.
         if(xy(q)[0]+dx*length,xy(q)[1]+dy*length)not in occupied or(xy(q)[0]-dx*length,xy(q)[1]-dy*length)not in occupied:
             errors.append('inserter_endpoint_missing')
+    if core.get('component_layout'):
+        from .mall_cells import audit_recipe_cell
+        errors+=audit_recipe_cell(core)
     return {'ok':not errors,'errors':errors}
 
 
@@ -184,6 +195,9 @@ class ConstructionMall:
 
     @property
     def commissioned_items(self):return tuple(k for k,v in self.state.get('products',{}).items()if v.get('phase')=='verified')
+
+    @property
+    def pending_items(self):return tuple(k for k,v in self.state.get('products',{}).items()if v.get('phase')!='verified')
 
     def has_stock_cell(self,item):return item in self.commissioned_items
 
@@ -278,6 +292,7 @@ class ConstructionMall:
         if self.state and not self._identity(obs,self.state):return {'ok':False,'reason':'mall_world_or_catalog_changed'}
         old=self.state.get('products',{}).get(product)
         if old:return deepcopy(old)
+        if self.pending_items:return {'ok':False,'reason':'another_mall_cell_must_commission_first','product':self.pending_items[0]}
         if not obs.get('technologies',{}).get('circuit-network'):
             return {'ok':False,'reason':'mall_native_circuit_network_research_required'}
         if(product=='medium-electric-pole'and not obs.get('technologies',{}).get('electric-energy-distribution-1')):
@@ -623,6 +638,14 @@ end
 for _,q in ipairs(x.core.arms)do local e=live[key(q)]
  if not e.is_connected_to_electric_network()or e.energy<=0 then return reject("mall_inserter_unpowered")end
  local st=e.held_stack;if st.valid_for_read and st.name==x.core.product then wip=wip+st.count end
+end
+for _,q in ipairs(x.core.arm_connections or{})do local e=live[key(q.arm)]
+ local p,r=e.pickup_position,e.drop_position
+ if not p or not r or math.floor(p.x)~=math.floor(q.pickup_position.x)or math.floor(p.y)~=math.floor(q.pickup_position.y)
+  or math.floor(r.x)~=math.floor(q.drop_position.x)or math.floor(r.y)~=math.floor(q.drop_position.y)then return reject("mall_ordinary_inserter_target_changed")end
+ local st=e.held_stack
+ if st.valid_for_read and(st.name~=q.item or st.quality.name~="normal"or st.prototype.type~="item"or st.health~=1 or st.spoil_tick~=0
+  or st.is_item_with_tags or st.is_item_with_inventory or st.is_item_with_entity_data)then return reject("mall_arm_holds_unexpected_item")end
 end
 for _,q in ipairs(x.core.raw_feeds)do for _,belt in ipairs(q.belts)do local e=live[key(belt)]
  for lane=1,2 do for _,row in pairs(e.get_transport_line(lane).get_contents())do

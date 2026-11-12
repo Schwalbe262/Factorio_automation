@@ -54,11 +54,13 @@ CAPABILITIES = {
                           "effect":"normally build mutually covering gun posts and open-rear wall bastions at an observed loss hotspot; preserve production reservations and service access"},
     "radar_network": {"parameters":{},"requires":["defense_perimeter"],
                       "effect":"normally build a defended radar behind the front with measured electrical headroom; prove native scanning"},
+    "radar_coverage": {"parameters":{},"requires":["radar_network","defense_perimeter"],
+                       "effect":"normally extend powered defended radar visibility across every registered factory/mining/utility/transport footprint; chart history alone is insufficient"},
     "nest_sweep": {"parameters":{},"requires":["defense_hardening"],
                    "effect":"prestock one concentrated paid turret wave, retain armed rear cover and rapidly deploy multiple guns in actual spawner range despite reviewed worm fire; no incremental harassment or offensive rebuild loop"},
     "piercing_ammo": {"parameters":{},"requires":["ammo_production","defense_perimeter"],
                       "effect":"normally build a capped bulk ammunition factory with local yellow precursor assemblers and piercing assemblers; use real batch-fed ingredients and native machine production, never bulk character crafting"},
-    "construction_mall": {"parameters":{"product":"transport-belt|gun-turret"},
+    "construction_mall": {"parameters":{"product":"transport-belt|gun-turret|underground-belt|splitter|assembling-machine-1|inserter"},
                           "requires":["main_bus_factory","defense_perimeter"],
                           "effect":"normally belt-feed expandable construction cells from surplus bus taps, cap native finished stocks, prove actual machine output and collect it for recurring construction"},
     "base_coal_recovery": {"parameters":{},"requires":["steam_expansion","defense_perimeter"],
@@ -390,6 +392,7 @@ class StarterExecutors:
         self.piercing_ammo=None
         self.piercing_path=Path(game.cfg.runtime_dir)/'piercing-ammo.json'
         self.construction_mall=None
+        self.radar_coverage=None
         self.construction_mall_path=Path(game.cfg.runtime_dir)/'construction-mall.json'
         self.bootstrap.construction_stock_source=self._construction_stock
         self.base_coal_recovery=None
@@ -458,6 +461,8 @@ class StarterExecutors:
         from .normal_research import NormalResearch
         self.normal_research=NormalResearch(game,catalog,self.science,self.green,blue=self.blue)
         ledger=Ledger(Path(game.cfg.runtime_dir)).data
+        self.radar_auto_enabled=any(j['capability']=='radar_network'and j['status']=='succeeded'for j in ledger['jobs'].values())
+        self.mall_auto_enabled=any(j['capability']=='construction_mall'and j['status']=='succeeded'for j in ledger['jobs'].values())
         self.registered_belt_autodetect=(any(j['capability']=='advanced_circuit_production' and j['status']=='succeeded'
             for j in ledger['jobs'].values()) and (Path(game.cfg.runtime_dir)/'advanced-circuits.json').exists())
         self.infrastructure_autodetect=(any(j['capability']=='basic_petroleum' and j['status']=='succeeded'
@@ -489,6 +494,49 @@ class StarterExecutors:
             if path is None or not path.exists():return None
             factory=self._construction_factory()
         return factory.ensure_stock(obs,item,count) if factory.has_stock_cell(item) else None
+
+    def _coverage_factory(self):
+        if getattr(self,'radar_coverage',None)is None:
+            from .radar_coverage import RadarCoverage
+            self.radar_coverage=RadarCoverage(self.game,self.builder,self.catalog,self.perimeter,radars=self.radars)
+        return self.radar_coverage
+
+    def _mall_pending(self):
+        factory=getattr(self,'construction_mall',None)
+        path=getattr(self,'construction_mall_path',None)
+        if factory is None and path is not None and path.exists():factory=self._construction_factory()
+        return tuple(getattr(factory,'pending_items',()))if factory is not None else ()
+
+    def _mall_queue_upkeep(self,obs,*,pending_only=False):
+        pending=self._mall_pending()
+        if not pending and(pending_only or not getattr(self,'mall_auto_enabled',False)):return None
+        if obs.get('tick',0)<getattr(self,'mall_retry_tick',0):return getattr(self,'mall_diagnostic',None)
+        factory=self._construction_factory()
+        product=pending[0]if pending else next((q for q in('underground-belt','splitter','assembling-machine-1','inserter','gun-turret')
+            if not factory.has_stock_cell(q)),None)
+        if product is None:return None
+        result=factory.step(obs,{'product':product});self.mall_diagnostic=result if not result.get('type')else None
+        if result.get('status')=='blocked':self.mall_retry_tick=obs.get('tick',0)+1800
+        return None if result.get('status')=='succeeded'else result
+
+    def _radar_upkeep(self,obs,*,active_only=False):
+        factory=getattr(self,'radar_coverage',None)
+        active=factory is not None and bool(getattr(factory,'state',{}))and factory.state.get('phase')!='verified'
+        if active_only and not active:return None
+        if not active and not getattr(self,'radar_auto_enabled',False):return None
+        if obs.get('tick',0)<getattr(self,'radar_retry_tick',0):
+            return getattr(self,'radar_diagnostic',None)if active else None
+        factory=self._coverage_factory();result=factory.upkeep(obs)
+        self.radar_diagnostic=result if not result.get('type')else None
+        if not result.get('type'):
+            self.radar_retry_tick=obs.get('tick',0)+(1800 if result.get('status')in('succeeded','blocked')else 180)
+        return None if result.get('status')=='succeeded'else result
+
+    def _continue_background_construction(self,obs,capability):
+        # A controller's board snapshot stays valid until that build completes.
+        if capability in('power','starter','research','defense_perimeter','steam_expansion','electric_coal'):return None
+        if self._mall_pending():return self._mall_queue_upkeep(obs,pending_only=True)
+        return self._radar_upkeep(obs,active_only=True)
 
     def _coal_recovery(self):
         if self.base_coal_recovery is None:
@@ -634,6 +682,8 @@ class StarterExecutors:
             return result
         if capability == 'construction_mall':
             self.builder._sync(obs)
+            background=self._radar_upkeep(obs,active_only=True)
+            if background:return background
             recovery=getattr(self,'base_coal_recovery',None)
             if recovery is not None and recovery.state and not recovery.verified:
                 coal=self._critical_coal_upkeep(obs)
@@ -668,6 +718,19 @@ class StarterExecutors:
             if result.get('type')or result.get('status')!='waiting':return result
             upkeep=self.perimeter.upkeep(obs)
             if upkeep and(upkeep.get('type')or upkeep.get('status')=='blocked'):return upkeep
+            return result
+        if capability == 'radar_coverage':
+            self.builder._sync(obs)
+            pending=self._mall_queue_upkeep(obs,pending_only=True)
+            if pending:return pending
+            coverage=self._coverage_factory()
+            if not coverage.state or coverage.state.get('phase')=='verified':
+                upkeep=self.perimeter.upkeep(obs)
+                if upkeep:return upkeep
+            result=coverage.step(obs)
+            if result.get('type')or result.get('status')!='waiting':return result
+            upkeep=self.perimeter.upkeep(obs)
+            if upkeep and upkeep.get('type'):return upkeep
             return result
         if capability == 'nest_sweep':
             self.builder._sync(obs)
@@ -710,12 +773,23 @@ class StarterExecutors:
                 if wall:return wall
                 repair=self.defense_repairs.next_action(obs)
                 if repair:return repair
+                pending=self._mall_queue_upkeep(obs,pending_only=True)
+                if pending and pending.get('type'):return pending
+                radar=None
+                if not self._mall_pending():
+                    radar=self._radar_upkeep(obs)
+                    if radar and radar.get('type'):return radar
+                active_radar=getattr(self,'radar_coverage',None)
+                if not pending and not(active_radar and getattr(active_radar,'state',{}).get('phase')not in(None,'verified')):
+                    pending=self._mall_queue_upkeep(obs)
+                    if pending and pending.get('type'):return pending
                 supplied=self._piercing_upkeep(obs)
                 if supplied and supplied.get('type'):return supplied
                 return {'status':'waiting','reason':'watching armed defenses and replenishing normal ammunition',
                         'evidence':{**result.get('evidence',{}),**({'piercing_factory':supplied} if supplied else {}),
                                     **({'infrastructure':self.infrastructure_diagnostic} if getattr(self,'infrastructure_diagnostic',None) else {}),
                                     **({'registered_belts':self.belt_repair_diagnostic} if getattr(self,'belt_repair_diagnostic',None) else {}),
+                                    **({'radar_coverage':radar}if radar else {}),**({'construction_mall':pending}if pending else {}),
                                     **({'coal_recovery':coal} if coal else {})}}
             return result
         if capability == "starter":
@@ -735,6 +809,8 @@ class StarterExecutors:
         result = self.starter_upkeep(obs)
         if result.get("status") != "succeeded":
             return result
+        background=self._continue_background_construction(obs,capability)
+        if background:return background
         if capability in ('basic_petroleum','gas_distribution','chemical_production',
                           'advanced_circuit_production','chemical_science'):
             infrastructure=self._infrastructure_upkeep(obs)
@@ -841,6 +917,8 @@ class StarterExecutors:
         raise ValueError("no executor for capability: " + capability)
 
     def proof(self, capability: str, obs: dict, result: dict, parameters: dict | None = None) -> dict | None:
+        if capability=='radar_coverage':
+            return self.radar_coverage.proof(obs)if getattr(self,'radar_coverage',None)is not None else None
         if capability == "starter_capacity":
             return self.capacity.proof(obs, parameters or {})
         if capability == "starter_research":
