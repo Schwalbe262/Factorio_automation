@@ -25,8 +25,22 @@ _PROCESSES: dict[str, subprocess.Popen] = {}
 
 
 BIND_CRAFTING_PLAYER_LUA = r'''
-local name="FactoryAutomaton"
-local p=game.get_player(name)
+local name=d and d.crafting_player_name or"FactoryAutomaton"
+local p=nil
+if d and d.crafting_player_index then
+ p=game.get_player(d.crafting_player_index)
+ if not p or p.name~=name or game.get_player(name)~=p then
+  return {status="blocked",reason="dedicated_pinned_owner_changed",player_name=name}
+ end
+else p=game.get_player(name)end
+if (not p or not p.connected)and d and not d.crafting_player_index then
+ local candidates={}
+ for _,candidate in pairs(game.connected_players)do
+  if candidate.force==f and candidate.surface==s then candidates[#candidates+1]=candidate end
+ end
+ if #candidates>1 then return {status="blocked",reason="dedicated_client_identity_ambiguous"}end
+ if #candidates==1 then p=candidates[1];name=p.name end
+end
 if not p or not p.connected then return {status="running",reason="dedicated_client_connecting",player_name=name} end
 if d and (not a or not a.valid) and d.crafting_player_index==p.index and p.character and p.character.valid then
  if d.crafting_actor_unit_number and p.character.unit_number~=d.crafting_actor_unit_number then
@@ -53,6 +67,7 @@ if spawned~=a then
  if spawned and spawned.valid and spawned~=a then spawned.destroy() end
 end
 d.crafting_player_index=p.index
+d.crafting_player_name=p.name
 d.crafting_actor_unit_number=a.unit_number
 return {status="ready",player_name=p.name,player_index=p.index,connected=p.connected,
  character_unit_number=a.unit_number,discarded_join_inventory=discarded}

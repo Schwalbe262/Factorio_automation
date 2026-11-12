@@ -220,6 +220,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
             "crafting_queue": obs.get("crafting_queue"),
             "entities": dict(Counter(e["name"] for e in obs.get("entities", []))),
             "production": obs.get("production", {}), "technologies": sorted(obs.get("technologies", {})),
+            "enabled_recipes": sorted(k for k,v in obs.get('enabled_recipes',{}).items()if v),
             "research": obs.get("research"), "enemies_near_start": obs.get("enemies"),
             "research_progress": obs.get("research_progress"), "electricity": obs.get("electricity"),
             "production_rate_measurement":obs.get("production_rate_measurement"),

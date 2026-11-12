@@ -35,8 +35,9 @@ local function context()
  if not d or d.world_id~=args.world_id then return nil,"corpse_recovery_world_changed"end
  if type(d.crafting_player_index)~="number"or d.crafting_player_index<1 then return nil,"corpse_recovery_pinned_owner_changed"end
  local owner=game.get_player(d.crafting_player_index)
- if not owner or not owner.valid or owner.name~="FactoryAutomaton"or not owner.connected or owner.force~=f
-  or game.get_player("FactoryAutomaton")~=owner then return nil,"corpse_recovery_pinned_owner_changed"end
+ local expected_name=d.crafting_player_name or"FactoryAutomaton"
+ if not owner or not owner.valid or owner.name~=expected_name or not owner.connected or owner.force~=f
+  or game.get_player(expected_name)~=owner then return nil,"corpse_recovery_pinned_owner_changed"end
  local actor=d.actor
  if not actor or not actor.valid or actor.name~="character"or actor.unit_number~=args.actor_unit
   or d.crafting_actor_unit_number~=args.actor_unit or owner.character~=actor or actor.player~=owner

@@ -6688,3 +6688,8 @@ Improvement: distinguish a sole perpendicular belt corner from true side loading
 - Improvement: extendcanonicalreservedEnginecellswithcoldzero-process/zero-counterbaseline, thenactualnewproduction+retained-oldnativeproof; preserveimmutable24Feportandappend24moreoutsideit.
 - Before:2EngineAMnameplate6/min; internalcomponent180Fe/minburstwasinitiallymistakenforreservedtapcapacityinRO. After: fixedport24unchanged, newFe48/delta24 publishedseparately; actual5016406new17104/17114each1cycle/old360/output16066retained.
 - Evidence:71focusedPASS/indexed1195total1193PASS2skip; native5010319Mall12beltsfundedextension. Remainingrisk:12/mincatalognotmeasured,Fe707.5peakvs375source/332.5deficit;actualminingdepletionandotherconsumersstillneedcapacitywork.
+
+## 2026-11-12T20:36:47+09:00 | Source Part23 standalone queue loop
+- Improvement/before/after: preserve stable world-bound task identities plus a short completed-ID history and revalidate the exact original job after async planning. Previously hidden completed IDs caused rejected reuse and stale job context could stop progress; accepted decisions now retain identity and successors continue through planner waits.
+- Evidence: actual subscribed plan->starter69actions success->power dispatch; coalcapacity2 success; corrected planner accepted with no last_error; sameworld safe stop/pause/start;31supervisor regression cases and final1296 indexed gate (2reference skips).
+- Remaining risk: low model can still misdiagnose an executor geometry failure as supply shortage; source planning diagnostics and capability readiness must improve. End-to-end speed/rocket not established.

@@ -48,7 +48,8 @@ local function pinned_owner()
  local index=d and d.crafting_player_index
  if type(index)~="number"or index<1 then return nil,"actor_recovery_owner_not_pinned"end
  local owner=game.get_player(index)
- if not owner or not owner.valid or owner.name~="FactoryAutomaton"or game.get_player("FactoryAutomaton")~=owner then
+ local expected_name=d.crafting_player_name or"FactoryAutomaton"
+ if not owner or not owner.valid or owner.name~=expected_name or game.get_player(expected_name)~=owner then
   return nil,"actor_recovery_pinned_owner_changed"
  end
  return owner,nil
