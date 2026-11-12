@@ -132,11 +132,15 @@ ROADMAP: tuple[Step, ...] = (
         {"technology": "automation"},
         builds=STARTER_RESEARCH_BUILDS,
     ),
+    # Machine-built science from here on: once automation is researched the
+    # 25 packs come from the startup science cell, not from hand crafting.
+    # (The id keeps its old name so queues written earlier still match.)
     Step(
         "starter_research_electric_mining_drill",
-        "starter_research",
+        "bootstrap_research",
         {"technology": "electric-mining-drill"},
         after=("starter_research_automation",),
+        builds=BOOTSTRAP_LOGISTICS_BUILDS,
     ),
     Step(
         "electric_coal",
@@ -150,7 +154,6 @@ ROADMAP: tuple[Step, ...] = (
         "bootstrap_logistics",
         {},
         after=("starter_research_automation",),
-        builds=BOOTSTRAP_LOGISTICS_BUILDS,
     ),
     Step(
         "mining_outpost_iron",
