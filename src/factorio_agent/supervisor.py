@@ -1556,7 +1556,7 @@ class Supervisor:
             reason = str(job.get("reason", ""))
             if _unknown(job) or "rollback" in reason or "deadline" in reason:
                 continue
-            seen = memory.setdefault(key, {"successes": succeeded, "count": 0})
+            seen = memory.setdefault(key, {"successes": succeeded, "count": 0, "first_seen": self.clock()})
             if seen["count"] >= AUTO_RETRY_LIMIT:
                 continue
             # A stalled job waited on something (fuel, plates) that upkeep may
@@ -1564,11 +1564,14 @@ class Supervisor:
             # arrive, so a stall is also retried after a quiet interval.
             stalled_long_enough = (
                 reason == "objective_progress_stalled"
-                and self.clock() - float(job.get("blocked_at_time") or self.clock()) >= AUTO_RETRY_STALL_SECONDS
+                # The stall path does not stamp blocked_at_time on the job, so
+                # fall back to when this supervisor first saw it blocked.
+                and self.clock() - float(job.get("blocked_at_time") or seen.get("first_seen", self.clock()))
+                >= AUTO_RETRY_STALL_SECONDS
             )
             if succeeded <= seen["successes"] and not stalled_long_enough:
                 continue
-            seen.update(successes=succeeded, count=seen["count"] + 1)
+            seen.update(successes=succeeded, count=seen["count"] + 1, first_seen=self.clock())
             if self._control_command("retry", key):
                 self._event("auto_retry", key=key, capability=job.get("capability"), blocked_reason=reason[:200])
                 retried = True

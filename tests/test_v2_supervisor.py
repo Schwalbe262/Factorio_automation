@@ -854,6 +854,14 @@ class MultiJobTests(Fixture):
         self.assertTrue(self.s._auto_retry(self.s._snapshot()))
         self.assertEqual([c for c in self.cli.calls if c[0] == "retry"], [["retry", "--key", "stuck"]])
 
+    def test_stalled_job_without_a_block_timestamp_is_timed_from_first_sight(self):
+        self.cli.jobs["stuck"] = job("stuck", "c0", status="blocked", reason="objective_progress_stalled")
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        self.clock.advance(119)
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        self.clock.advance(2)
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+
     def test_same_capability_as_an_active_job_is_held_back_and_stays_ready(self):
         self.cli.jobs["manual"] = job("manual", "c0")
         self.s.work.merge(
