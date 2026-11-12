@@ -15,7 +15,7 @@ from typing import Any
 
 from .deterministic_game import BUILD_BATCH_LIMIT, BUILD_BATCH_NAMES
 from .deterministic_state import _atomic_json, stop_requested
-from .factory_templates import COAL_ENTRIES, DIRECTIONS, build_template, route_orthogonal
+from .factory_templates import COAL_ENTRIES, DIRECTIONS, build_template, coal_entry_detour, route_orthogonal
 from .deterministic_underground import underground_fields
 
 
@@ -812,12 +812,7 @@ return success{blocked=blocked,clearable=clearable}
             return banks
 
         def detour(bank: dict) -> float:
-            port = next(p for p in bank["ports"] if p["item"] == "coal")
-            dx, dy = DIRECTIONS[port["facing"]]
-            offset_x = port["position"]["x"] - coal["x"]
-            offset_y = port["position"]["y"] - coal["y"]
-            behind = max(0.0, -(offset_x * dx + offset_y * dy))
-            return abs(offset_x) + abs(offset_y) + 2 * behind
+            return coal_entry_detour(next(p for p in bank["ports"] if p["item"] == "coal"), coal)
 
         return sorted(banks, key=detour)
 

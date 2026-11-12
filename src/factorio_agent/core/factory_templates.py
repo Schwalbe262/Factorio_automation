@@ -259,6 +259,20 @@ def _fluid_row(
 COAL_ENTRIES = ("west", "east", "south")
 
 
+def coal_entry_detour(port: Mapping[str, Any], origin: Mapping[str, float]) -> float:
+    """How far a belt from ``origin`` travels to enter ``port`` in its own direction.
+
+    The straight-line (Manhattan) distance plus twice the distance it would
+    have to overshoot and turn back; the steam planners pick the coal stub
+    with the smallest value so the stub faces the coal source.
+    """
+    dx, dy = DIRECTIONS[port["facing"]]
+    offset_x = port["position"]["x"] - origin["x"]
+    offset_y = port["position"]["y"] - origin["y"]
+    behind = max(0.0, -(offset_x * dx + offset_y * dy))
+    return abs(offset_x) + abs(offset_y) + 2 * behind
+
+
 def _coal_stub(x: float, entry: str) -> tuple[list[tuple[float, float, int]], tuple[float, float, int]]:
     """Belt tiles feeding the boiler inserter at (x, 3), and the port where coal arrives.
 

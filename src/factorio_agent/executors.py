@@ -81,7 +81,7 @@ class StarterExecutors:
         self.green = LogisticScience(game, self.builder, catalog, self.smelting, self.science, site=self.site)
         from .steam_expansion import SteamExpansion
 
-        self.steam_expansion = SteamExpansion(game, self.builder, catalog, self.outposts)
+        self.steam_expansion = SteamExpansion(game, self.builder, catalog, self.outposts, site=self.site)
         from .defense_perimeter import DefensePerimeter
 
         self.perimeter = DefensePerimeter(game, self.bootstrap, catalog)

@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -5,10 +6,52 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
-from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
+from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.board import entity
 from factorio_agent.smelting import port
-from factorio_agent.steam_expansion import steam_pair, SteamExpansion
+from factorio_agent.steam_expansion import SteamExpansion
+from factorio_agent.steam_layout import plant_frame, water_connected, world_point
+from test_v2_steam_layout import plant
+
+
+def steam_pair():
+    """The core a pre-v2 state saved: the fixed development-map pair (legacy data only)."""
+    es = [
+        entity("boiler", 37.5, 1, 8),
+        entity("steam-engine", 37.5, 4.5, 8),
+        entity("steam-engine", 37.5, 9.5, 8),
+        entity("burner-inserter", 37.5, -0.5, 0),
+        entity("transport-belt", 37.5, -1.5, 8),
+    ]
+    es += [entity("small-electric-pole", 35.5, y) for y in (1.5, 5.5, 9.5)]
+    es += [entity("small-electric-pole", 40.5, 5.5)]
+    es += [entity("pipe", 39.5, 0.5), entity("pipe-to-ground", 40.5, 0.5, 12), entity("pipe-to-ground", 44.5, 0.5, 4)]
+    return _plan(
+        es,
+        [port("coal", 37.5, -1.5, 8)],
+        reserved_area=[[35, -4], [45, 13]],
+        template="additional_shared_water_steam_pair",
+    )
+
+
+CLEAR = {"ok": True, "clear_obstacles": []}
+
+
+@contextmanager
+def prepared(bank, power=None):
+    """Offline prepare: live preflight, coal bank, belt and pole planners faked."""
+    power = power or {"ok": True, "entities": [], "wire_hops": 1}
+    with (
+        patch("factorio_agent.steam_expansion.preflight", return_value=CLEAR),
+        patch("factorio_agent.steam_siting.preflight", return_value=CLEAR),
+        patch("factorio_agent.steam_expansion.prepare_new_bank", return_value=bank),
+        patch(
+            "factorio_agent.steam_expansion.plan_connection",
+            return_value={"ok": True, "entities": [], "underground_pairs": []},
+        ) as route,
+        patch("factorio_agent.steam_expansion.power_connection", return_value=power) as poles,
+    ):
+        yield route, poles
 
 
 class SteamExpansionTests(unittest.TestCase):
@@ -20,7 +63,11 @@ class SteamExpansionTests(unittest.TestCase):
         obj.path = root / "steam-expansion.json"
         obj.catalog = SimpleNamespace(fingerprint="c", entities={"steam-engine": {"energy_production": 15000}})
         obj.game = Mock()
-        obj.builder = SimpleNamespace(ensure_plan=Mock(return_value={"type": "build", "name": "boiler"}))
+        _, power = plant(4)
+        obj.site = None
+        obj.builder = SimpleNamespace(
+            ensure_plan=Mock(return_value={"type": "build", "name": "boiler"}), state={"power_plan": power}
+        )
         source = port("coal", -7.5, 50.5, 4)
         bank = {
             "ok": True,
@@ -59,14 +106,7 @@ class SteamExpansionTests(unittest.TestCase):
     def test_prepare_passes_the_ordinary_fixed_source_without_mining_annotation(self):
         obj, bank, obs = self.fixture()
         obj.state = {}
-        with (
-            patch("factorio_agent.steam_expansion.preflight", return_value={"ok": True, "clear_obstacles": []}),
-            patch("factorio_agent.steam_expansion.prepare_new_bank", return_value=bank),
-            patch(
-                "factorio_agent.steam_expansion.plan_connection",
-                return_value={"ok": True, "entities": [], "underground_pairs": []},
-            ) as route,
-        ):
+        with prepared(bank) as (route, _):
             result = obj.prepare(obs)
         self.assertTrue(result["ok"], result)
         self.assertEqual(route.call_args.args[3], bank["plan"]["ports"][0])
@@ -100,14 +140,91 @@ class SteamExpansionTests(unittest.TestCase):
         self.assertEqual(result["reason"], "steam_fixed_coal_bank_plan_changed")
         obj.builder.ensure_plan.assert_not_called()
 
-    def test_new_pair_preserves_a_tunnel_under_existing_lab(self):
-        plan = steam_pair()
-        geometry = FactoryBuilder.__new__(FactoryBuilder)
-        boxes = [geometry._occupied_by_plan([e]) for e in plan["entities"]]
-        self.assertEqual(sum(map(len, boxes)), len(set().union(*boxes)))
-        pipe = [e for e in plan["entities"] if e["name"] == "pipe-to-ground"]
-        self.assertEqual([(e["position"]["x"], e["direction"]) for e in pipe], [(40.5, 12), (44.5, 4)])
-        self.assertFalse(any(e["position"] == {"x": 42.5, "y": 1.5} for e in plan["entities"]))
+    def test_prepare_places_the_next_bank_of_the_saved_plant(self):
+        obj, bank, obs = self.fixture()
+        obj.state = {}
+        power = obj.builder.state["power_plan"]
+        frame = plant_frame(power)
+        pole = entity("small-electric-pole", *world_point(frame, 6, 0))
+        with prepared(bank, {"ok": True, "entities": [pole], "wire_hops": 2}) as (route, poles):
+            result = obj.prepare(obs)
+        self.assertTrue(result["ok"], result)
+        core = result["core"]
+        self.assertEqual(core["template"], "steam_bank_next_pair")
+        self.assertEqual(core["layout"]["kind"], "adjacent_bank")
+        self.assertFalse(core["layout"]["degraded"])
+        new = next(e for e in core["entities"] if e["name"] == "boiler")
+        side = core["layout"]["side"]
+        self.assertEqual((new["position"]["x"], new["position"]["y"]), world_point(frame, 8 * side, 0.5))
+        self.assertEqual(new["direction"], 4)
+        old = next(e for e in power["entities"] if e["name"] == "boiler")
+        self.assertTrue(water_connected(power["entities"] + result["plan"]["entities"], old, new))
+        # Coal enters the stub the bank's outlet faces; the belt ends on the core's coal port.
+        self.assertEqual(route.call_args.args[4], core["ports"][0])
+        self.assertEqual(core["ports"][0]["item"], "coal")
+        self.assertIn(pole, result["plan"]["entities"])
+        goal = next(p for p in core["entities"] if p["name"] == "small-electric-pole")
+        self.assertNotIn("small-electric-pole", {e["name"] for e in poles.call_args.args[4]})
+        self.assertTrue(any(goal["position"] == p["position"] for p in result["plan"]["entities"]))
+        x0, y0 = core["reserved_area"][0]
+        x1, y1 = core["reserved_area"][1]
+        self.assertTrue(
+            all(x0 <= e["position"]["x"] <= x1 and y0 <= e["position"]["y"] <= y1 for e in core["entities"])
+        )
+
+    def test_prepare_blocks_without_a_template_plant_or_free_site(self):
+        obj, bank, obs = self.fixture()
+        obj.state = {}
+        obj.builder.state = {"power_plan": {"entities": []}}
+        with prepared(bank):
+            result = obj.prepare(obs)
+        self.assertEqual(result["reason"], "steam_expansion_no_buildable_bank_slot")
+
+    def test_prepare_then_step_to_thirty_second_proof(self):
+        obj, bank, obs = self.fixture()
+        obj.state = {}
+        (obj.path.parent / "pcb-board.json").write_text(json.dumps({"world_id": "w", "blocks": {}}))
+        with prepared(bank):
+            first = obj.step(obs)
+        self.assertEqual(first["type"], "build")
+        board = json.loads((obj.path.parent / "pcb-board.json").read_text())
+        self.assertEqual(board["blocks"]["steam_expansion"]["reserved_area"], obj.state["core"]["reserved_area"])
+        obj.builder.ensure_plan.return_value = {"status": "succeeded"}
+        obj.sample = lambda o: {"ok": True, "tick": o["tick"], "engines": [{"unit_number": 21}, {"unit_number": 22}]}
+        retained = patch("factorio_agent.mining_layout_policy.validate_retained_units", return_value={"ok": True})
+        with retained:
+            results = []
+            for tick in (100, 700, 1300, 1900):
+                obs["tick"] = tick
+                results.append(obj.step(obs))
+        self.assertEqual([r["status"] for r in results], ["waiting"] * 3 + ["succeeded"])
+        evidence = results[-1]["evidence"]
+        self.assertEqual(evidence["layout"]["kind"], "adjacent_bank")
+        self.assertEqual(evidence["from_tick"], 100)
+        self.assertTrue(obj.outposts.state["banks"][0]["ready"])
+
+    def test_old_fixed_layout_state_keeps_validating(self):
+        obj, bank, obs = self.fixture()
+        startup = {"reserved_area": [[20, -6], [48, 14]], "entities": []}
+        (obj.path.parent / "pcb-board.json").write_text(
+            json.dumps({"world_id": "w", "blocks": {"startup_science": startup}})
+        )
+        obj.prepare = Mock(side_effect=AssertionError("a saved state is never re-planned"))
+        self.assertEqual(obj.step(obs)["type"], "build")
+        board = json.loads((obj.path.parent / "pcb-board.json").read_text())
+        self.assertEqual(board["blocks"]["startup_science"]["reserved_area"][1][0], 35)
+        self.assertEqual(board["blocks"]["steam_expansion"]["reserved_area"], [[35, -4], [45, 13]])
+        self.assertTrue(obj.owns_burner(entity("boiler", 37.5, 1, 8), obs))
+        obj.state["samples"] = [
+            {"tick": 0, "engines": [{"unit_number": 2}]},
+            {"tick": 1800, "engines": [{"unit_number": 2}]},
+        ]
+        obj.state["preserved_engine_units"] = [10]
+        obj.state["added_nominal_kw"] = 1800
+        obj.state["bank"]["nominal_rate_per_minute"] = 60
+        obj.sample = lambda _: {"ok": True, "tick": 1801, "engines": [{"unit_number": 2}]}
+        obs["entities"][0]["unit_number"] = 10
+        self.assertEqual(obj.proof(obs)["layout"], {"kind": "legacy_fixed_layout", "degraded": False})
 
     def test_history_cannot_replace_a_fresh_native_generation_check(self):
         obj = SteamExpansion.__new__(SteamExpansion)

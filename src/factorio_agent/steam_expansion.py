@@ -1,4 +1,19 @@
-"""An additive normally fueled boiler/engine pair; preserve the running plant."""
+"""An additive normally fueled boiler/engine pair; preserve the running plant.
+
+Rules:
+
+* The new pair is the next ``steam_bank`` bank of the first plant, derived
+  from the builder's saved ``power_plan`` (``steam_layout``/``steam_siting``):
+  same rotation and pitch, on whichever end of the row is buildable; only
+  when neither end is buildable a free site near the plant is used and the
+  layout is reported as degraded. No map coordinates are fixed here.
+* Water is shared with the old boiler through pipes audited to join its
+  water network; coal comes from a dedicated paired coal bank whose belt
+  enters the coal stub variant facing it; the new poles join the running
+  network through the shared pole planner.
+* A saved state is never re-planned: states from the old fixed layout keep
+  their core, plan and board block unchanged.
+"""
 
 from __future__ import annotations
 
@@ -7,39 +22,59 @@ import json
 from pathlib import Path
 from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.core.deterministic_state import _atomic_json
-from .board import entity
 from .planning import preflight
-from .smelting import port, merge_entities
+from .power_grid import plan_connection as power_connection
+from .smelting import merge_entities
 from .paired_mining import prepare_new_bank, lane_evidence
+from .steam_layout import rank_variants, reserved_area, water_connected
+from .steam_siting import board_areas, candidate_layouts, known_rows
 from .transport import plan_connection, xy, underground_proof
 
+LEGACY_TEMPLATE = "additional_shared_water_steam_pair"  # fixed development-map layout (old states only)
+TEMPLATE = "steam_bank_next_pair"
+BANK_PLAN_KEYS = (
+    "ok",
+    "reason",
+    "entities",
+    "ports",
+    "required_items",
+    "clear_obstacles",
+    "clearance_world_id",
+    "underground_pairs",
+)
 
-def steam_pair():
-    es = [
-        entity("boiler", 37.5, 1, 8),
-        entity("steam-engine", 37.5, 4.5, 8),
-        entity("steam-engine", 37.5, 9.5, 8),
-        entity("burner-inserter", 37.5, -0.5, 0),
-        entity("transport-belt", 37.5, -1.5, 8),
-    ]
-    es += [entity("small-electric-pole", 35.5, y) for y in (1.5, 5.5, 9.5)]
-    es += [entity("small-electric-pole", 40.5, 5.5)]
-    es += [entity("pipe", 39.5, 0.5), entity("pipe-to-ground", 40.5, 0.5, 12), entity("pipe-to-ground", 44.5, 0.5, 4)]
-    return _plan(
-        es,
-        [port("coal", 37.5, -1.5, 8)],
-        reserved_area=[[35, -4], [45, 13]],
-        template="additional_shared_water_steam_pair",
-    )
+
+def layout_record(layout: dict, found: dict) -> dict:
+    """What the evidence reports about where the pair went and why."""
+    record = {
+        "kind": layout["kind"],
+        "rotation": layout["rotation"],
+        "coal_entry": found["entry"],
+        "old_boiler": deepcopy(layout["old_boiler"]["position"]),
+        "new_boiler": deepcopy(found["boiler"]["position"]),
+    }
+    for key in ("side", "index", "site", "water_run_tiles"):
+        if key in layout:
+            record[key] = deepcopy(layout[key])
+    record["degraded"] = layout["kind"] != "adjacent_bank"
+    return record
+
+
+def _merge_new(entities: list[dict], extra: list[dict]) -> list[dict]:
+    """Add rows on tiles not already planned (pole planners restate the goal pole)."""
+    known = {(e["name"], *xy(e)) for e in entities}
+    return entities + [e for e in extra if (e["name"], *xy(e)) not in known]
 
 
 class SteamExpansion:
-    def __init__(self, game, builder, catalog, outposts):
+    def __init__(self, game, builder, catalog, outposts, site=None):
         self.game, self.builder, self.catalog, self.outposts = game, builder, catalog, outposts
+        self.site = site
         self.path = Path(game.cfg.runtime_dir) / "steam-expansion.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
 
     def owns_burner(self, e, obs):
+        """The new boiler and its burner inserter belong to this job, not to starter fuel upkeep."""
         return (
             self.state.get("world_id") == obs["world_id"]
             and e["name"] in ("boiler", "burner-inserter")
@@ -50,29 +85,68 @@ class SteamExpansion:
         )
 
     def prepare(self, obs):
-        core = steam_pair()
-        check = preflight(self.game, self.builder, obs, core["entities"])
-        if not check.get("ok"):
-            return check
+        """Plan the pair, its paired coal bank, coal belt, water link and poles; no action."""
+        engines = [e for e in obs["entities"] if e["name"] == "steam-engine"]
+        if not engines or not any(e.get("energy", 0) > 0 for e in engines):
+            return {"ok": False, "reason": "running_source_plant_required"}
         board = json.loads((self.path.parent / "pcb-board.json").read_text(encoding="utf-8"))
         if board.get("world_id") != obs["world_id"]:
             return {"ok": False, "reason": "steam_board_world_changed"}
-        startup = board["blocks"].get("startup_science")
-        if startup:
-            for e in startup["entities"]:
-                if e["name"] == "small-electric-pole":
-                    continue
-                if any(p[0] >= 35 for p in self.builder._occupied_by_plan([e])):
-                    return {"ok": False, "reason": "old_startup_cell_cannot_release_east_reservation"}
-        reservations = [b["reserved_area"] for b in board["blocks"].values()] + [core["reserved_area"]]
+        failures = []
+        for layout in candidate_layouts(self.game, self.builder, obs, self.site, board):
+            result = self._prepare_layout(obs, layout, board)
+            if result.get("ok"):
+                return dict(
+                    result,
+                    world_id=obs["world_id"],
+                    catalog_fingerprint=self.catalog.fingerprint,
+                    samples=[],
+                    added_nominal_kw=2 * self.catalog.entities["steam-engine"]["energy_production"] * 60 / 1000,
+                    preserved_engine_units=[e["unit_number"] for e in engines],
+                )
+            failures.append({"kind": layout["kind"], "side": layout.get("side"), **result})
+        reason = "steam_expansion_layout_unroutable" if failures else "steam_expansion_no_buildable_bank_slot"
+        return {"ok": False, "reason": reason, "failures": failures[:6]}
+
+    def _prepare_layout(self, obs, layout, board):
+        """One layout: coal bank, then stub variants in coal-facing order until one routes."""
+        union = [e for found in layout["variants"] for e in found["entities"]]
+        reservations = board_areas(board) + [reserved_area(union)]
         bank = prepare_new_bank(self.game, self.builder, obs, "coal", 2, reservations)
         if not bank.get("ok"):
             return bank
+        source = bank["plan"]["ports"][0]
+        failure = {"ok": False, "reason": "steam_no_coal_stub_variant_available"}
+        for found in rank_variants(layout["variants"], source["position"]):
+            core = _plan(
+                found["entities"],
+                [found["coal_port"]],
+                reserved_area=reserved_area(found["entities"]),
+                template=TEMPLATE,
+                layout=layout_record(layout, found),
+            )
+            result = self._finish(obs, layout, found, core, bank, board)
+            if result.get("ok"):
+                return result
+            failure = result
+        return failure
+
+    def _finish(self, obs, layout, found, core, bank, board):
+        """Coal belt, pole bridge, water audit and whole-block preflight for one variant."""
         es = merge_entities(core["entities"], bank["plan"]["entities"])
         route = plan_connection(self.game, self.builder, obs, bank["plan"]["ports"][0], core["ports"][0], es)
         if not route.get("ok"):
             return dict(route, source=bank["plan"]["ports"][0], destination=core["ports"][0])
         es = merge_entities(es, route["entities"])
+        pole = next(p for p in found["bank"]["ports"] if p["item"] == "electricity")
+        power = power_connection(
+            self.game, self.builder, obs, pole["position"], [e for e in es if e["name"] != "small-electric-pole"]
+        )
+        if not power.get("ok"):
+            return {**power, "reason": power.get("reason", "steam_pair_power_unavailable")}
+        es = _merge_new(es, power["entities"])
+        if not water_connected(known_rows(self.builder, board) + es, layout["old_boiler"], found["boiler"]):
+            return {"ok": False, "reason": "steam_new_boiler_water_not_on_old_network"}
         check = preflight(self.game, self.builder, obs, es)
         if not check.get("ok"):
             return check
@@ -84,44 +158,18 @@ class SteamExpansion:
             underground_pairs=pairs,
             clear_obstacles=check["clear_obstacles"],
             clearance_world_id=obs["world_id"],
-            layout_policy="pcb-additive-steam-v1",
+            layout_policy="pcb-additive-steam-v2",
         )
+        bank = dict(bank)
         bank["plan"] = _plan(
             merge_entities(bank["plan"]["entities"], route["entities"]),
             bank["plan"]["ports"],
-            **{
-                k: v
-                for k, v in bank["plan"].items()
-                if k
-                not in (
-                    "ok",
-                    "reason",
-                    "entities",
-                    "ports",
-                    "required_items",
-                    "clear_obstacles",
-                    "clearance_world_id",
-                    "underground_pairs",
-                )
-            },
+            **{k: v for k, v in bank["plan"].items() if k not in BANK_PLAN_KEYS},
             underground_pairs=pairs,
             clear_obstacles=check["clear_obstacles"],
             clearance_world_id=obs["world_id"],
         )
-        engines = [e for e in obs["entities"] if e["name"] == "steam-engine"]
-        if not engines or not any(e.get("energy", 0) > 0 for e in engines):
-            return {"ok": False, "reason": "running_source_plant_required"}
-        return {
-            "ok": True,
-            "world_id": obs["world_id"],
-            "catalog_fingerprint": self.catalog.fingerprint,
-            "core": core,
-            "bank": bank,
-            "plan": plan,
-            "samples": [],
-            "added_nominal_kw": 2 * self.catalog.entities["steam-engine"]["energy_production"] * 60 / 1000,
-            "preserved_engine_units": [e["unit_number"] for e in engines],
-        }
+        return {"ok": True, "core": core, "bank": bank, "plan": plan, "power_wire_hops": power.get("wire_hops")}
 
     def step(self, obs):
         if not self.state:
@@ -137,8 +185,11 @@ class SteamExpansion:
         if board.get("world_id") != obs["world_id"]:
             return {"status": "blocked", "reason": "steam_expansion_board_world_changed"}
         if "steam_expansion" not in board["blocks"]:
-            if "startup_science" in board["blocks"]:
-                board["blocks"]["startup_science"]["reserved_area"][1][0] = 35
+            core = self.state["core"]
+            if core.get("template") == LEGACY_TEMPLATE and "startup_science" in board["blocks"]:
+                # The old fixed layout borrowed the startup cell's eastern edge.
+                area = board["blocks"]["startup_science"]["reserved_area"]
+                area[1][0] = min(area[1][0], core["reserved_area"][0][0])
             board["blocks"]["steam_expansion"] = dict(
                 self.state["plan"], reserved_area=self.state["core"]["reserved_area"]
             )
@@ -284,5 +335,6 @@ return result
             "added_nominal_kw": self.state["added_nominal_kw"],
             "latest_native_sample": fresh,
             "dedicated_coal_nominal_per_minute": self.state["bank"]["nominal_rate_per_minute"],
+            "layout": self.state.get("core", {}).get("layout") or {"kind": "legacy_fixed_layout", "degraded": False},
             "scope": "native generation from both new engines over thirty-second sampled window; nominal added capacity is not a full-load stress test",
         }
