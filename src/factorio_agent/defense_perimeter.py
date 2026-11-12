@@ -118,14 +118,14 @@ class DefensePerimeter:
         if not getattr(self,'adaptive_enabled',False):return self._legacy_prepare(obs)
         error=self._identity_error(obs)
         if error:return {'ok':False,'reason':error}
-        if not all(obs.get('enabled_recipes',{}).get(name)for name in ('gun-turret','firearm-magazine')):
-            return {'ok':False,'reason':'native_gun_turret_and_normal_magazine_recipes_required'}
         try:
             reserved=protected_factory_areas(self.game,obs['world_id'],self.catalog.fingerprint,runtime_dir=self.path.parent)
             reserved += [deepcopy(scope['areas'][i])for scope in self.state.get('coverage_scopes',{}).values()for i in range(len(scope['areas']))]
         except (KeyError,TypeError,ValueError)as exc:return {'ok':False,'reason':'adaptive_defense_policy_unavailable','detail':str(exc)[:200]}
         preview=self.policy_engine.prepare(obs,self.state,reserved)
         if not preview.get('ok'):return preview
+        if preview['risk']['minimum_posts']and not all(obs.get('enabled_recipes',{}).get(name)for name in ('gun-turret','firearm-magazine')):
+            return {'ok':False,'reason':'native_gun_turret_and_normal_magazine_recipes_required'}
         state=deepcopy(self.state)if self.state else dict(schema_version=1,world_id=obs['world_id'],catalog_fingerprint=self.catalog.fingerprint,
             prepared_tick=obs['tick'],posts=[],phase='deploy',ammo_target=AMMO_TARGET,refill_below=REFILL_BELOW,
             scope='adaptive current-risk armed targets; not whole-factory coverage or combat certification')
@@ -393,7 +393,7 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
                 or policy.get('catalog_fingerprint')!=self.catalog.fingerprint):return None
         names=policy.get('active_posts',[]);rows={p['name']:p for p in report.get('posts',[])}
         specs={p['name']:p for p in self.state['posts']}
-        if not names or len(names)!=policy['risk']['minimum_posts']:return None
+        if len(names)!=policy['risk']['minimum_posts']:return None
         for name in names:
             row=rows.get(name);spec=specs.get(name)
             if(not row or not spec or row.get('missing')or row.get('identity_changed')or not spec.get('commissioned')
@@ -515,11 +515,50 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
                 'access_scope': scope.get('access_scope'),
                 'scope': 'geometric armed-post coverage at this snapshot; no combat-stress certification'}
 
+    def _quiet_scope_deferral(self,obs,scope_id,areas=None):
+        if not getattr(self,'adaptive_enabled',False):return None
+        if not isinstance(scope_id,str)or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,80}',scope_id):return None
+        if areas is None:areas=self.state.get('deferred_scopes',{}).get(scope_id,{}).get('areas')
+        if not areas:return None
+        try:
+            from .defense_policy import assess_risk
+            risk=assess_risk(self.policy_engine.survey(obs),obs['world_id'])
+            if risk['minimum_posts'] or risk['native_tier']!='early':return None
+            coverage_cells(areas)
+            payload=json.dumps(json.dumps(areas,separators=(',',':')))
+            native=self.game.query('''local areas=helpers.json_to_table('''+payload+''');local count=0
+for _,box in ipairs(areas)do
+ local expanded={{box[1][1]-96,box[1][2]-96},{box[2][1]+96,box[2][2]+96}}
+ count=count+s.count_entities_filtered{area=expanded,force=game.forces.enemy,type={"unit","unit-spawner","turret"},limit=1}
+end
+return {ok=true,world_id=d.world_id,tick=game.tick,nearby_enemies=count}''')
+            if(not native.get('ok')or native.get('world_id')!=obs['world_id']
+                    or type(native.get('tick'))is not int or native['tick']<obs['tick']
+                    or type(native.get('nearby_enemies'))is not int or native['nearby_enemies']!=0):return None
+            return dict(tick=native['tick'],world_id=obs['world_id'],defense_required=False,risk=risk,
+                scope='early quiet construction allowed after current producer and proposed-site threat surveys; no armed coverage claim')
+        except(KeyError,TypeError,ValueError,RuntimeError):return None
+
     def ensure_coverage(self, obs, scope_id, areas):
         """Ordinary paid deployment gate; None means this scope is ready."""
         error = self._identity_error(obs)
         if error:
             return _result('blocked', error)
+        for group in ('deferred_scopes','coverage_scopes'):
+            prior=self.state.get(group,{}).get(scope_id)if isinstance(scope_id,str)else None
+            if prior and prior.get('areas')!=areas:
+                return _result('blocked','defense_coverage_scope_geometry_changed')
+        deferred=self._quiet_scope_deferral(obs,scope_id,areas)
+        if deferred:
+            if not self.state:
+                prepared=self.prepare(obs)
+                if not prepared.get('ok'):return _result('blocked',prepared.get('reason','defense_risk_unavailable'))
+                self.state=prepared
+            stored={'areas':deepcopy(areas)}
+            if self.state.get('deferred_scopes',{}).get(scope_id)!=stored:
+                self.state.setdefault('deferred_scopes',{})[scope_id]=stored;self._save()
+            self.coverage_policy_diagnostic=deferred
+            return None
         prepared = self.prepare_coverage(obs, scope_id, areas)
         if not self.state and prepared.get('reason') == 'initial_defense_perimeter_required':
             action = self.step(obs)
@@ -587,6 +626,9 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
         return action
 
     def coverage_proof(self, obs, scope_id):
+        if self._identity_error(obs):return None
+        deferred=self._quiet_scope_deferral(obs,scope_id)
+        if deferred:return deferred
         scope = self.state.get('coverage_scopes', {}).get(scope_id)
         if not scope or not scope.get('commissioned'):
             return None

@@ -12,6 +12,115 @@ RESOURCES = frozenset({'iron-ore', 'copper-ore', 'coal', 'stone'})
 MINING_NAMES = frozenset({'electric-mining-drill', 'burner-mining-drill', 'transport-belt', 'small-electric-pole'})
 
 
+def resource_decision(item, available, required, produced_per_minute,
+                      consumed_per_minute, current_cells, extra_cell_raw_cost,
+                      build_seconds=15, *, stage=None):
+    """Compare a finite remaining bill with at most two current supply cells.
+
+    No files, native queries, recipes or future technologies are consulted.
+    ``available`` is total usable stock (including held stock); ``required`` is
+    the current bill, not an aspirational future reserve. ``extra_cell_raw_cost``
+    is the literal construction spend of this item per added cell. The caller
+    must independently verify affordability of every other raw input; there is
+    no invented exchange rate between different resources.
+
+    Optional ``stage`` contains current facts only: held, output_full,
+    downstream_blocked, ore_stock, ore_per_minute, cell_capacity_per_minute.
+    The last field is an explicitly verified current per-cell rate, never a
+    future upgrade. Otherwise the observed produced/current_cells rate is used.
+    None rates mean unknown. None times mean no known finite completion, not zero.
+    Times assume constant supplied rates and uninterrupted normal construction.
+    """
+    def number(value, name, *, unknown=False):
+        if value is None and unknown: return None
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+            raise ValueError(name + ' must be finite and nonnegative')
+        return float(value)
+    if not isinstance(item, str) or not item:
+        raise ValueError('explicit resource item required')
+    if type(current_cells) is not int or current_cells < 0:
+        raise ValueError('current_cells must be a nonnegative integer')
+    if stage is not None and not isinstance(stage, dict):
+        raise ValueError('stage must contain current native facts')
+    stage = dict(stage or {})
+    allowed = {'held', 'output_full', 'downstream_blocked', 'ore_stock',
+               'ore_per_minute', 'cell_capacity_per_minute'}
+    if set(stage) - allowed: raise ValueError('unsupported resource stage fact')
+    for flag in ('output_full', 'downstream_blocked'):
+        if flag in stage and type(stage[flag]) is not bool:
+            raise ValueError(flag + ' must be a boolean')
+    stock = number(available, 'available'); bill = number(required, 'required')
+    cost = number(extra_cell_raw_cost, 'extra_cell_raw_cost')
+    build = number(build_seconds, 'build_seconds')
+    produced = number(produced_per_minute, 'produced_per_minute', unknown=True)
+    consumed = number(consumed_per_minute, 'consumed_per_minute', unknown=True)
+    facts = {k: number(stage.get(k), k, unknown=True) for k in
+             ('held', 'ore_stock', 'ore_per_minute', 'cell_capacity_per_minute')}
+    if facts['held'] is not None and facts['held'] > stock:
+        raise ValueError('held stock cannot exceed total available stock')
+    shortfall = max(0., bill - stock)
+    net = None if produced is None or consumed is None else produced - consumed
+    wait = 60 * shortfall / net if net is not None and net > 0 else (0. if not shortfall else None)
+    evidence = dict(item=item, available=stock, required=bill, shortfall=shortfall,
+                    produced_per_minute=produced, consumed_per_minute=consumed,
+                    net_per_minute=net, wait_seconds=wait, extra_cells=0,
+                    target_cells=current_cells, extra_cell_raw_cost=cost,
+                    build_seconds=build, projected_wait_seconds=wait,
+                    projected_net_per_minute=net, roi_seconds=None,
+                    save_seconds=0., bottleneck='supply', alternatives=[])
+    def result(action, reason):
+        return {'action': action, 'reason': reason, 'evidence': evidence}
+    if not shortfall:
+        if facts['held'] is not None and facts['held'] < bill:
+            return result('collect_stock', 'existing_stock_funds_current_bill')
+        return result('advance', 'current_bill_already_funded')
+    if stage.get('output_full') and stock > (facts['held'] or 0):
+        return result('collect_stock', 'full_output_is_available_stock_not_a_production_shortage')
+    if stage.get('downstream_blocked') or stage.get('output_full'):
+        evidence['bottleneck'] = 'downstream'
+        return result('repair_downstream', 'clear_native_output_or_transport_blockage_before_expansion')
+    if net is None:
+        return result('wait', 'current_production_or_consumption_rate_unknown')
+    marginal = facts['cell_capacity_per_minute']
+    if marginal is None: marginal = produced / current_cells if current_cells else None
+    if marginal is None or marginal <= 0:
+        return result('wait', 'current_cell_productive_capacity_not_established')
+    evidence['cell_capacity_per_minute'] = marginal
+    ore_rate = facts['ore_per_minute'] if item in ('iron-plate', 'copper-plate') else None
+    ore_stock = facts['ore_stock'] or 0.
+    if ore_rate is not None and ore_stock < shortfall and ore_rate <= max(produced, consumed):
+        evidence['bottleneck'] = 'ore'
+        return result('wait', 'upstream_ore_supply_limited_evaluate_ore_cells_first')
+    if item in ('iron-plate', 'copper-plate'): evidence['bottleneck'] = 'smelting'
+    options = []
+    for extra in (1, 2):
+        total_cost = extra * cost
+        funding = 60 * max(0., total_cost - stock) / net if net > 0 else 0.
+        if net <= 0 and total_cost > stock: continue
+        gross = produced + extra * marginal
+        if ore_rate is not None and ore_stock < shortfall + total_cost:
+            gross = min(gross, ore_rate)
+        gain = gross - produced; new_net = gross - consumed
+        if gain <= 0 or new_net <= 0: continue
+        setup = funding + build
+        remaining = max(0., shortfall + total_cost - net * setup / 60)
+        projected = setup + 60 * remaining / new_net
+        roi = build + 60 * total_cost / gain
+        row = dict(extra_cells=extra, target_cells=current_cells + extra,
+                   raw_cost=total_cost, funding_seconds=funding,
+                   projected_wait_seconds=projected, projected_net_per_minute=new_net,
+                   roi_seconds=roi, save_seconds=None if wait is None else wait - projected)
+        evidence['alternatives'].append(row)
+        if wait is None or projected < wait: options.append(row)
+    if options:
+        best = min(options, key=lambda row: (row['projected_wait_seconds'], row['extra_cells']))
+        evidence.update({k: best[k] for k in ('extra_cells', 'target_cells', 'projected_wait_seconds',
+                                            'projected_net_per_minute', 'roi_seconds', 'save_seconds')})
+        return result('expand_supply', 'bounded_expansion_restores_positive_net' if net <= 0 else
+                      'bounded_expansion_finishes_current_bill_sooner')
+    return result('wait', 'ordinary_wait_is_faster_or_bounded_expansion_cannot_be_funded')
+
+
 def _position(e):
     return e['position']['x'], e['position']['y']
 

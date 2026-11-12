@@ -138,6 +138,10 @@ def main(argv=None):
         if not obs.get("ok"):
             raise RuntimeError(obs.get("reason", "observation_failed"))
         obs["electricity"] = runtime.electricity_snapshot(game)
+        from .defense_policy import DefensePolicy,assess_risk
+        try:obs['adaptive_defense_risk']=assess_risk(DefensePolicy(game,None).survey(obs),obs['world_id'])
+        except(ValueError,KeyError,TypeError,RuntimeError):
+            obs['adaptive_defense_risk']={'status':'unavailable','reason':'bounded current producer and threat facts unavailable'}
         from .diagnostics import production_rates,construction_budget,port_lane_snapshot,smelting_throughput_bounds,factory_constraints
         obs["production_rate_measurement"]=production_rates(root,obs)
         obs["belt_lane_observation"]=port_lane_snapshot(root,game,obs)
@@ -149,6 +153,9 @@ def main(argv=None):
             obs["available_research"]=ready_options(runtime.catalog_for(root,game),obs)
             from .capability_gates import native_recipe_gates
             obs['native_capability_gates']=native_recipe_gates(runtime.catalog_for(root,game),obs,CAPABILITIES)
+            from .supply_planning import supply_options
+            obs['resource_supply_options']=supply_options(root,game,obs,runtime.catalog_for(root,game),
+                obs['known_project_construction_budget'],obs['production_rate_measurement'])
         result = summary(obs, Ledger(root))
     elif args.command == "request":
         parameters = json.loads(args.parameters)

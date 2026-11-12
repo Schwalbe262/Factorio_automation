@@ -11,8 +11,8 @@ User selected a periodic GPT-6 Luna medium planner using authenticated Codex CLI
 The framework owns a persistent dependency queue and executes typed functions;
 ready successors run while Luna plans. Sol monitors and fixes missing functions
 during development. This is assisted development, not a frozen Luna-only score.
-Current unseen seed1053994892 uses cliff-free Nauvis and otherwise normal defaults,
-with no old world JSON/inventory/research/board/jobs. Preserve dev-101 as an archive.
+Current seed3083327785 uses cliff-free Nauvis and the user's 200% starting area,
+with fresh native inventory/research/board/jobs. Preserve prior worlds as archives.
 Choose A, then B, then C from CURRENT native research, enabled recipes and suppliers,
 never prototype existence or old-world maximum tier. Measure wall time, game time,
 planning, execution and model waits separately. Later freeze code for independent
@@ -104,8 +104,11 @@ planning, execution and model waits separately. Later freeze code for independen
 6. Silo, normally produced rocket parts and platform starter pack, real launch
    counter increase and natural platform arrival. Luna-only end-to-end runs.
 
-Current implementation focus: finish fresh-seed mining/smelting and native
-red/green prerequisite sequencing, then supply advanced oil, acid/lubricant,
+Current implementation focus: remove startup inactivity and costly resource or
+defense loops; use observed stocks, affordable capacity and approved next-job
+preparation during real native waits. Quiet early factories do not require new
+turrets; inspect proposed sites and strengthen defense as actual threats grow.
+Finish fresh-seed mining/smelting and native red/green sequencing before advanced oil, acid/lubricant,
 fluid-fed processing units/electric engines/rocket fuel/concrete and solid launch
 materials. Installed Space Age 2.1.20 rocket-silo research uses red/green/blue;
 purple/yellow science is not a first-rocket prerequisite. This leaves the other

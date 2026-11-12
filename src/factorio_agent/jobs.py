@@ -22,6 +22,9 @@ CAPABILITIES = {
               "effect": "steam power with real self-fueling coal belt; verify 30 game seconds"},
     "starter_capacity": {"parameters": {"resource": "iron-ore|copper-ore|coal|stone", "cells": "integer 1..8, absolute target"},
                          "requires": ["starter"], "effect": "expand productive starter cells to fund construction faster"},
+    "prepare_components": {"parameters":{"items":"object of 1..8 unlocked building items, absolute actor targets1..50"},
+                           "requires":["starter"],"opportunistic":True,
+                           "effect":"collect or normally craft bounded building stock for approved next work, preserving the main raw-material budget"},
     "starter_research": {"parameters": {"technology": "automation|electric-mining-drill"}, "requires": ["power"],
                          "effect": "finite natural startup research; reuse an existing funded machine batch before paying a new handcraft allowance"},
     "regularize_power_layout": {"parameters": {}, "requires": ["starter"],
@@ -144,6 +147,9 @@ class Request:
         if self.capability == "starter_capacity":
             from .mining import validate_parameters
             validate_parameters(self.parameters)
+        elif self.capability == 'prepare_components':
+            from .component_reserve import validate_parameters
+            validate_parameters(self.parameters)
         elif self.capability == "starter_research":
             from .research import validate_parameters
             validate_parameters(self.parameters)
@@ -232,6 +238,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
             "enabled_recipes": sorted(k for k,v in obs.get('enabled_recipes',{}).items()if v),
             "research": obs.get("research"), "enemies_near_start": obs.get("enemies"),
             "research_progress": obs.get("research_progress"), "electricity": obs.get("electricity"),
+            "adaptive_defense_risk":obs.get("adaptive_defense_risk"),
             "production_rate_measurement":obs.get("production_rate_measurement"),
             "known_project_construction_budget":obs.get("known_project_construction_budget"),
             "belt_lane_observation":obs.get("belt_lane_observation"),
@@ -239,6 +246,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
             "factory_constraints":obs.get("factory_constraints"),
             "available_research":obs.get("available_research"),
             "native_capability_gates":obs.get("native_capability_gates"),
+            "resource_supply_options":obs.get("resource_supply_options"),
             "capabilities": CAPABILITIES,
             "jobs": [{k: v for k, v in job.items() if k in
                       {"key", "capability", "status", "reason", "actions", "last_tick"}}
@@ -504,6 +512,10 @@ class StarterExecutors:
         return self.bootstrap_research_targets[name]
 
     def record_action(self,capability,obs,action,receipt,parameters=None):
+        pipeline=getattr(self,'science_pipeline',None)
+        if pipeline is not None:
+            pipeline.record_action(action,receipt)
+            if pipeline.target_controller is not None:self.industry=pipeline.target_controller
         if capability=='bootstrap_research':self._bootstrap_research(parameters or{}).record_action(action,receipt)
         elif capability=='starter_research':
             batch=self._existing_startup_batch(parameters or{})
@@ -512,6 +524,23 @@ class StarterExecutors:
             batch=self._funded_startup_owner(obs)
             if batch is not None:batch.record_action(action,receipt)
             else:self.industry.record_action(action,receipt)
+
+    def _component_reserve(self):
+        if getattr(self,'components',None)is None:
+            from .component_reserve import ComponentReserve
+            self.components=ComponentReserve(self.game,self.bootstrap,self.catalog)
+        return self.components
+
+    def _science_wait_action(self,obs,batch,result):
+        if result.get('status')!='waiting'or result.get('type')or not result.get('evidence',{}).get('autonomous_wait'):
+            return result
+        from .science_pipeline import SciencePipeline
+        if getattr(self,'science_pipeline',None)is None:
+            self.science_pipeline=SciencePipeline(self.game,self.bootstrap,self.builder,self.catalog)
+        action=self.science_pipeline.next_action(obs,batch)
+        if action and self.science_pipeline.target_controller is not None:
+            self.industry=self.science_pipeline.target_controller
+        return action or result
 
     def _funded_startup_owner(self,obs):
         technology=obs.get('research')
@@ -757,11 +786,13 @@ class StarterExecutors:
         if capability!='defense_perimeter'and not gun_bridge:
             initial_defense=self._approved_initial_defense(obs,maintain_armed=capability=='bootstrap_research')
             if initial_defense:return initial_defense
+        if capability=='prepare_components':
+            return self._component_reserve().step(obs,parameters or{})
         if capability=='bootstrap_logistics':
             batch=self._funded_startup_owner(obs)
             if batch is not None:
                 self.builder._sync(obs)
-                result=batch.step(obs)
+                result=self._science_wait_action(obs,batch,batch.step(obs))
                 # Shared machines must finish their paid current owner before
                 # a second science target can use them. Its proof does not
                 # complete this logistics job.
@@ -775,12 +806,13 @@ class StarterExecutors:
             batch=self._existing_startup_batch(parameters or{})
             if batch is not None:
                 self.builder._sync(obs)
-                return batch.step(obs)
+                return self._science_wait_action(obs,batch,batch.step(obs))
         if capability=='bootstrap_research':
             # Early defense research must not first rebuild remote damaged
             # starter/coal assets. The controller checks its own live power.
             self.builder._sync(obs)
-            return self._bootstrap_research(parameters or{}).step(obs)
+            batch=self._bootstrap_research(parameters or{})
+            return self._science_wait_action(obs,batch,batch.step(obs))
         if capability=='defense_perimeter':
             self.builder._sync(obs)
             return self._defense_with_fuel(obs,self.perimeter.step(obs))
@@ -1037,6 +1069,8 @@ class StarterExecutors:
         raise ValueError("no executor for capability: " + capability)
 
     def proof(self, capability: str, obs: dict, result: dict, parameters: dict | None = None) -> dict | None:
+        if capability=='prepare_components':
+            return self._component_reserve().proof(obs,parameters or{})
         if capability=='radar_coverage':
             return self.radar_coverage.proof(obs)if getattr(self,'radar_coverage',None)is not None else None
         if capability == "starter_capacity":

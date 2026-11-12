@@ -83,7 +83,8 @@ def assess_risk(facts,world_id):
     if (damaged and pressure)or(near_unit is not None and near_unit<=40)or(near_any is not None and near_any<=32):level=2
     if (near_unit is not None and near_unit<=24 and strongest>=75)or(pressure and any(a['health']<a['max_health']*.5 for a in assets)):level=3
     if facts['evolution_factor']>=.4 and near_any is not None and near_any<=64:level=max(level,2)
-    minimum=(1,2,3,4)[level]
+    minimum=(0,2,3,4)[level]
+    if tier=='mid'and level==0:minimum=1
     if tier=='advanced'and level==0:minimum=2
     return dict(risk=('quiet','approaching','high','critical')[level],level=level,minimum_posts=minimum,
         maximum_posts=minimum,ammo_target=10 if level<2 else 20,refill_below=5 if level<2 else 10,

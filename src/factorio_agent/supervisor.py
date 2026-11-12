@@ -34,7 +34,7 @@ BLOCKER_FIELDS={'reason','last_failure','failure_category','stage','phase','item
     'required_recipes','have','need','available','required','missing','count','capacity','supply_per_minute',
     'required_per_minute','available_per_minute','missing_items','required_items','requirements',
     'boiler_fuel','drill_fuel','drill_powered','water','steam','connected_engines','energized_engines',
-    'coal_on_belts','coal_mining_per_minute','generation_kw'}
+    'coal_on_belts','coal_mining_per_minute','generation_kw','autonomous_wait','background_work_safe'}
 PRIVATE_FIELD=re.compile(r'password|secret|credential|token|auth|api.?key|(?:^|_)(?:path|file|env|position|coordinates|area|entities|entity|lua|rcon|shell|command|cmd|script|code)(?:_|$)',re.I)
 
 
@@ -87,6 +87,13 @@ def _terminal_signature(status):
 def _hash(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 def _raw_hash(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def _positive(value):return type(value)in(int,float)and math.isfinite(value)and value>0
+
+def autonomous_wait(job,tick):
+    evidence=job.get('evidence')or{};observed=job.get('evidence_observed_tick')
+    return bool(job.get('status')=='waiting'and not _unknown(job)
+        and job.get('evidence_status')=='observation_result'
+        and type(observed)is int and 0<=tick-observed<=1800
+        and evidence.get('autonomous_wait')is True and evidence.get('background_work_safe')is True)
 def _same_actor(a,b):return {k:v for k,v in a.items()if k!='native_repair_pending'}=={k:v for k,v in b.items()if k!='native_repair_pending'}
 
 
@@ -335,7 +342,9 @@ def compact_snapshot(observation,status,capabilities,work,actor,planner_error=No
         enemies_near_start=compact(observation.get('enemies_near_start')),
         construction_budget=compact(observation.get('known_project_construction_budget')),crafting_queue=compact(observation.get('crafting_queue')),
         production_rate_measurement=compact(observation.get('production_rate_measurement')),
-        capabilities={k:{'parameters':v.get('parameters',{}),'requires':v.get('requires',[]),'effect':v.get('effect','')[:160]}for k,v in capabilities.items()},
+        resource_supply_options=compact(observation.get('resource_supply_options')),
+        adaptive_defense_risk=compact(observation.get('adaptive_defense_risk')),
+        capabilities={k:{'parameters':v.get('parameters',{}),'requires':v.get('requires',[]),'opportunistic':v.get('opportunistic',False),'effect':v.get('effect','')[:160]}for k,v in capabilities.items()},
         verified_capabilities=sorted({q['capability']for q in jobs if q['status']=='succeeded'}),
         jobs=[{k:q.get(k)for k in('key','capability','parameters','status','actions','last_tick',
             'created_tick','planning_seconds','execution_seconds')}
@@ -532,22 +541,34 @@ class Supervisor:
             marker['control_cursor']=cursor;self.work.save()
             if(not done or node['capability']not in caps or any(nodes[d]['status']!='completed'for d in node['depends_on'])
                     or any(q not in completed for q in caps[node['capability']].get('requires',[]))):continue
+            if marker.get('yield_reason')=='autonomous_wait':
+                if marker.get('opportunistic_return',{}).get('phase')=='pause_intent':continue
+                other=jobs.get(marker.get('higher_job_key'));target=nodes.get(marker.get('higher_task_id'),{})
+                if(other and other.get('status')in ACTIVE)or(not other and target.get('status')=='ready'):continue
             eligible.append(node)
         return min(eligible,key=lambda q:(-q['priority'],q['created_at'],q['id']))if eligible else None
 
     def _scheduler_preempt(self,context):
         active=[j for j in context[1].get('jobs',{}).values()if j['status']in ACTIVE]
         if len(active)!=1:return False
-        job=active[0];node=self.work.node_for_job(job['key']);higher=self.work.ready()
-        if(not node or node.get('paused')or not higher or higher['priority']<=node['priority']
+        job=active[0];node=self.work.node_for_job(job['key'])
+        def allowed(job,node,candidate,ctx):
+            return bool(node and candidate and(candidate['priority']>node['priority']or(
+                autonomous_wait(job,ctx[0]['tick'])and ctx[2].get(candidate['capability'],{}).get('opportunistic')is True)))
+        def candidate(job,node,ctx):
+            rows=[q for q in self.work.data['nodes']if q.get('status')=='ready'and allowed(job,node,q,ctx)]
+            return min(rows,key=lambda q:(-q['priority'],q['created_at'],q['id']))if rows else None
+        higher=candidate(job,node,context)
+        if(not node or node.get('paused')or not allowed(job,node,higher,context)
                 or job['status']not in('waiting','pending')or _unknown(job)
                 or node.get('scheduler_pause',{}).get('phase')in('pause_intent','resume_intent')):return False
         if self._stop_requested()or(self.root/'stop.json').exists():return False
         fresh=self._snapshot()
         if not _same_actor(fresh[3],context[3])or fresh[3].get('native_repair_pending'):raise ValueError('actor changed before scheduler pause')
-        current=fresh[1].get('jobs',{}).get(job['key']);higher=self.work.ready();node=self.work.node_for_job(job['key'])
+        current=fresh[1].get('jobs',{}).get(job['key']);node=self.work.node_for_job(job['key'])
+        higher=candidate(current,node,fresh)if current else None
         if(not current or _job_identity(current)!=_job_identity(job)or current['status']not in('waiting','pending')or _unknown(current)
-                or not higher or higher['priority']<=node['priority']):return False
+                or not allowed(current,node,higher,fresh)):return False
         if self._stop_requested()or(self.root/'stop.json').exists():return False
         old=node.get('scheduler_pause')
         if old:node.setdefault('scheduler_pause_history',[]).append(deepcopy(old));node['scheduler_pause_history']=node['scheduler_pause_history'][-16:]
@@ -555,6 +576,8 @@ class Supervisor:
         marker=dict(version=1,phase='pause_intent',world_id=self.world,task_id=node['id'],job_key=job['key'],
             actor=deepcopy(fresh[3]),job_identity=_job_identity(current),higher_task_id=higher['id'],higher_job_key=higher['job_key'],
             active_priority=node['priority'],higher_priority=higher['priority'],controller_id=self.controller_id,requested_at=self.clock(),control_cursor=cursor)
+        marker['yield_reason']=('autonomous_wait'if autonomous_wait(current,fresh[0]['tick'])
+            and fresh[2].get(higher['capability'],{}).get('opportunistic')is True else'higher_priority')
         node['scheduler_pause']=marker;self.work.save()
         if self._stop_requested()or(self.root/'stop.json').exists():
             marker['phase']='cancelled_before_pause';self.work.save();return False
@@ -565,8 +588,84 @@ class Supervisor:
         if not done or len(events)!=1 or events[0]['event']!='pause' or events[0]['tick']!=receipt.get('paused_at_tick'):
             raise ValueError('scheduler pause has no unique completed native CLI control receipt')
         marker.update(phase='paused',pause_binding=_pause_binding(receipt),pause_event=events[0],control_cursor=cursor)
-        self.work.save();self._event('scheduler_pause',key=job['key'],higher_task_id=higher['id'],priority=node['priority'],higher_priority=higher['priority'])
+        if marker['yield_reason']=='autonomous_wait':marker['opportunistic_child_cursor']=cursor
+        self.work.save();self._event('scheduler_pause',key=job['key'],higher_task_id=higher['id'],priority=node['priority'],higher_priority=higher['priority'],yield_reason=marker['yield_reason'])
         return True
+
+    def _scheduler_yield_opportunistic(self,context):
+        """One bounded preparation slice, then preserve it paused and recheck its owner."""
+        active=[j for j in context[1].get('jobs',{}).values()if j['status']in ACTIVE]
+        if len(active)!=1 or active[0].get('world_id')!=self.world or active[0]['status']!='waiting'or _unknown(active[0]):return False
+        child=active[0]
+        def owner_for(ctx,job):
+            matches=[n for n in self.work.data['nodes']if n.get('scheduler_pause',{}).get('phase')=='paused'
+                and n['scheduler_pause'].get('yield_reason')=='autonomous_wait'
+                and n['scheduler_pause'].get('higher_job_key')==job['key']]
+            if len(matches)!=1:return None
+            node=matches[0];marker=node['scheduler_pause'];owner=ctx[1].get('jobs',{}).get(node['job_key'])
+            if(node.get('paused')or marker.get('world_id')!=self.world or marker.get('task_id')!=node['id']
+                    or marker.get('job_key')!=node['job_key']or not owner or _unknown(owner)
+                    or _pause_binding(owner)!=marker.get('pause_binding')):
+                self._release_scheduler_pause(node,'opportunistic_parent_control_or_identity_changed');return None
+            if not _same_actor(marker['actor'],ctx[3])or ctx[3].get('native_repair_pending'):
+                raise ValueError('opportunistic paused actor changed; no automatic child control')
+            if marker.get('opportunistic_return',{}).get('phase')=='pause_intent':return None
+            cursor=marker.get('opportunistic_child_cursor')
+            if type(cursor)is not int:return None
+            events,_,done=_control_events(self.root,cursor,job['key'])
+            parent_events,_,parent_done=_control_events(self.root,marker['control_cursor'],node['job_key'])
+            if events or parent_events:
+                self._release_scheduler_pause(node,'explicit_control_during_opportunistic_slice');return None
+            if not done or not parent_done:return None
+            return node
+        parent=owner_for(context,child)
+        if parent is None or self._stop_requested()or(self.root/'stop.json').exists():return False
+        fresh=self._snapshot();current=fresh[1].get('jobs',{}).get(child['key'])
+        if(not current or _job_identity(current)!=_job_identity(child)or current['status']!='waiting'or _unknown(current)):
+            return False
+        if not _same_actor(fresh[3],context[3]):raise ValueError('actor changed before opportunistic yield')
+        parent=owner_for(fresh,current)
+        child_node=self.work.node_for_job(current['key'])
+        if parent is None or not child_node or child_node.get('paused'):return False
+        if self._stop_requested()or(self.root/'stop.json').exists():return False
+        path=self.root/'job-events.jsonl';cursor=path.stat().st_size if path.exists()else 0
+        marker=parent['scheduler_pause'];returned=dict(phase='pause_intent',world_id=self.world,
+            child_task_id=child_node['id'],child_job_key=current['key'],child_identity=_job_identity(current),
+            actor=deepcopy(fresh[3]),control_cursor=cursor,requested_at=self.clock())
+        marker['opportunistic_return']=returned;self.work.save()
+        if self._stop_requested()or(self.root/'stop.json').exists():
+            returned['phase']='cancelled_before_pause';self.work.save();return False
+        receipt=self.cli.invoke(['pause','--key',current['key']])
+        if(receipt.get('status')!='paused'or _unknown(receipt)or _job_identity(receipt)!=returned['child_identity']):
+            raise ValueError('opportunistic child pause receipt identity or status changed')
+        events,cursor,done=_control_events(self.root,cursor,current['key'])
+        if not done or len(events)!=1 or events[0]['event']!='pause'or events[0]['tick']!=receipt.get('paused_at_tick'):
+            raise ValueError('opportunistic child pause has no unique completed control receipt')
+        returned.update(phase='child_paused',pause_binding=_pause_binding(receipt),pause_event=events[0],control_cursor=cursor)
+        child_node.update(paused=True,status='blocked',last_reason='opportunistic_slice_yielded_to_owner')
+        self.work.save();self._event('scheduler_opportunistic_yield',key=current['key'],owner_key=parent['job_key'])
+        return True
+
+    def _scheduler_reserved_ready(self,context):
+        """Dispatch the exact reserved child rather than unrelated lower-priority work."""
+        nodes={q['id']:q for q in self.work.data['nodes']};rows=[]
+        for parent in nodes.values():
+            marker=parent.get('scheduler_pause',{});child=nodes.get(marker.get('higher_task_id'),{})
+            if(marker.get('phase')!='paused'or marker.get('yield_reason')!='autonomous_wait'or child.get('status')!='ready'
+                    or child.get('job_key')!=marker.get('higher_job_key')or parent.get('paused')
+                    or marker.get('world_id')!=self.world or marker.get('job_key')!=parent['job_key']or marker.get('task_id')!=parent['id']):continue
+            owner=context[1].get('jobs',{}).get(parent['job_key'])
+            if not owner or _unknown(owner)or _pause_binding(owner)!=marker.get('pause_binding'):continue
+            if not _same_actor(marker['actor'],context[3])or context[3].get('native_repair_pending'):
+                raise ValueError('actor changed before opportunistic dispatch')
+            cursor=marker.get('opportunistic_child_cursor')
+            if type(cursor)is not int:continue
+            events,_,done=_control_events(self.root,cursor,child['job_key'])
+            parent_events,_,parent_done=_control_events(self.root,marker['control_cursor'],parent['job_key'])
+            if events or parent_events:
+                self._release_scheduler_pause(parent,'explicit_control_before_opportunistic_dispatch');continue
+            if done and parent_done:rows.append((parent,child))
+        return min(rows,key=lambda pair:(-pair[0]['priority'],-pair[1]['priority'],pair[1]['created_at'],pair[1]['id']))if rows else None
 
     def _scheduler_resume(self,context,node):
         if self._stop_requested()or(self.root/'stop.json').exists():return False
@@ -643,11 +742,21 @@ class Supervisor:
         if self._stop_requested():return False
         jobs=list(status.get('jobs',{}).values());active=[j for j in jobs if j['status']in ACTIVE]
         if len(active)>1:raise ValueError('multiple jobs active')
+        if active and any(q.get('scheduler_pause',{}).get('phase')=='paused'
+                and q['scheduler_pause'].get('opportunistic_return',{}).get('phase')=='pause_intent'
+                and q['scheduler_pause']['opportunistic_return'].get('child_job_key')==active[0]['key']
+                for q in self.work.data['nodes']):
+            raise ValueError('opportunistic child pause outcome requires reconciliation')
+        if active and self._scheduler_yield_opportunistic(context):
+            if self._stop_requested():return False
+            return self._run_authorized(self._snapshot())
         if active and self._scheduler_preempt(context):
             if self._stop_requested():return False
             return self._run_authorized(self._snapshot())
         if not active:
             self.work.refresh(jobs,capabilities);node=self.work.ready()
+            reserved=self._scheduler_reserved_ready(context)
+            if reserved and(not node or node['priority']<=reserved[0]['priority']):node=reserved[1]
             paused=self._scheduler_owned(context)
             if paused and(not node or(-paused['priority'],paused['created_at'],paused['id'])<=(-node['priority'],node['created_at'],node['id'])):
                 if not self._scheduler_resume(context,paused):return False

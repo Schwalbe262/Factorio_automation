@@ -33,7 +33,7 @@ class RiskTests(unittest.TestCase):
     def test_quiet_native_early_small_enemies_do_not_demand_eight_future_posts(self):
         f=facts();f['assets']=[asset(1)];f['targets']=[threat(),threat(91,89,kind='unit-spawner',health=350)]
         risk=assess_risk(f,'w')
-        self.assertEqual((risk['risk'],risk['minimum_posts'],risk['ammo_target']),('quiet',1,10))
+        self.assertEqual((risk['risk'],risk['minimum_posts'],risk['ammo_target']),('quiet',0,10))
         self.assertEqual(risk['nearest_unit'],84);self.assertEqual(risk['native_tier'],'early')
 
     def test_approaching_units_and_current_damage_raise_real_target_and_ammo_requirements(self):
@@ -71,6 +71,7 @@ class RiskTests(unittest.TestCase):
 class AdditivePlanningTests(unittest.TestCase):
     def setUp(self):
         self.f=facts();self.game=SimpleNamespace(query=Mock(side_effect=lambda _:deepcopy(self.f)))
+        self.f['technologies']['logistic-science-pack']=True
         self.engine=DefensePolicy(self.game,SimpleNamespace(fingerprint='cat'))
         self.obs={'world_id':'w','tick':1000,'entities':deepcopy(self.f['assets']),'technologies':{'automation':True}}
 
@@ -100,11 +101,12 @@ class AdditivePlanningTests(unittest.TestCase):
 
     def test_fresh_map_empty_lua_enemy_and_gun_tables_are_a_valid_quiet_survey(self):
         self.f['targets']={};self.f['guns']={}
+        self.f['technologies']={'automation':True}
         with patch('factorio_agent.defense_policy.native_candidate_survey',side_effect=self.native_site):
             result=self.engine.prepare(self.obs,{},[])
         self.assertTrue(result['ok'],result)
         self.assertEqual(result['risk']['risk'],'quiet')
-        self.assertEqual(len(result['new_posts']),1)
+        self.assertEqual(result['new_posts'],[])
 
     def test_nonempty_malformed_enemy_table_still_fails_closed(self):
         self.f['targets']={'bad':'shape'}
@@ -172,6 +174,35 @@ class AdaptivePerimeterTests(unittest.TestCase):
         self.report['posts'][0]['full_magazines']=7
         self.assertEqual(self.c.step(self.obs)['status'],'succeeded')
         self.c.bootstrap.ensure_item.assert_not_called()
+
+    def test_early_quiet_zero_target_finishes_without_buying_future_posts(self):
+        preview=self.c.policy_engine.prepare.return_value
+        preview['policy']=policy(names=());preview['risk']=preview['policy']['risk']
+        result=self.c.step(self.obs)
+        self.assertEqual(result['status'],'succeeded')
+        self.assertEqual(result['evidence']['active_post_names'],[])
+        self.c.bootstrap.ensure_item.assert_not_called()
+
+    def test_quiet_early_industrial_scope_defers_guns_but_nearby_site_enemies_restore_gate(self):
+        self.c.policy_engine.survey=Mock(return_value=facts())
+        self.c.game.query.return_value={'ok':True,'world_id':'w','tick':1001,'nearby_enemies':0}
+        areas=[[[20,0],[24,4]]]
+        self.assertIsNone(self.c.ensure_coverage(self.obs,'early-mine',areas))
+        proof=self.c.coverage_proof(self.obs,'early-mine')
+        self.assertFalse(proof['defense_required']);self.assertNotIn('geometry',proof)
+        self.c.bootstrap.ensure_item.assert_not_called()
+        self.c.game.query.return_value['nearby_enemies']=1
+        self.assertIsNone(self.c.coverage_proof(self.obs,'early-mine'))
+
+    def test_quiet_deferral_does_not_change_scope_identity_or_cover_unknown_surveys(self):
+        self.c.policy_engine.survey=Mock(return_value=facts())
+        self.c.game.query.return_value={'ok':True,'world_id':'w','tick':1001,'nearby_enemies':0}
+        areas=[[[20,0],[24,4]]]
+        self.assertIsNone(self.c.ensure_coverage(self.obs,'early-mine',areas))
+        changed=self.c.ensure_coverage(self.obs,'early-mine',[[[30,0],[34,4]]])
+        self.assertEqual(changed['reason'],'defense_coverage_scope_geometry_changed')
+        self.c.game.query.return_value={'ok':False}
+        self.assertIsNone(self.c._quiet_scope_deferral(self.obs,'early-mine'))
 
     def test_high_risk_paid_initial_load_receipt_uses_refill_floor_after_loading(self):
         preview=self.c.policy_engine.prepare.return_value;preview['policy']=policy(level=2);preview['risk']=preview['policy']['risk']

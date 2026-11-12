@@ -40,6 +40,10 @@ work: if supply dominates the delay, pause that exact job, queue a bounded
 capacity improvement, then continue the original job after the improvement.
 Zero measured production with FULL output buffers is not evidence of a shortage.
 Use available stocks and current producer statuses before requesting expansion.
+Read resource_supply_options: collect existing stock or advance when the bill
+is funded; clear downstream blockage before adding supply. For a real shortage,
+compare net output, extra-cell costs, projected wait and payback. An expansion
+must shorten the current limiting wait and remain affordable in all inputs.
 After native electric mining unlocks, expand iron/copper through mining_outpost
 and smelting rather than new large burner starter_capacity targets. Up to two
 starter cells remain available for bootstrapping or recovery; paid cells stay.
@@ -49,15 +53,25 @@ There is one active task: ready capacity work cannot run concurrently with a
 material-starved job. Merely queuing that investment behind the active task
 cannot shorten its wait. Explicitly pause it or approve a strictly higher
 priority ready task so the scheduler can switch at a safe boundary.
+During a proven autonomous_wait with background_work_safe, approve a ready
+prepare_components task for the next approved job's actual unlocked buildings.
+Use bounded absolute stock goals, current recipes and protected primary costs;
+never prepare a future locked design. The scheduler may temporarily run this
+approved opportunistic work even below the waiting parent's priority, then
+resume that exact parent. Native waits are opportunities to shorten later work;
+choose useful preparation from the real next job, not a fixed drill example.
 Use only documented capabilities and parameters. Current native research,
 enabled recipes, resources, power and producer readiness govern design choice.
 Never assume a later design is available because its prototype or an old game's
 maximum tier exists. Bootstrap with available early designs, then upgrade after
 their real prerequisites. Do not choose coordinates or arbitrary commands.
-Prioritize immediate defense, power and resource failures. With default enemies,
-unlock and establish early turret protection before
-large polluting expansions. If turret recipes are locked, use the finite machine
-bootstrap research bridge instead of waiting for a late science district.
+Prioritize observed threats, power and resource failures. Read adaptive_defense_risk.
+In the quiet early stage its turret target is zero: advance production and
+research without preemptive turret factories or whole-area turret coverage.
+Do not turn an absent threat into mandatory early defense spending. The framework
+also surveys proposed industrial sites before deferring their defense gate.
+As enemies approach or damage appears, establish the risk-scaled defenses;
+if needed recipes are locked, use the finite machine research bridge.
 Preserve paid partial work and stable queue IDs. An ID permanently identifies one capability and exact
 parameters, including after completion; use a new ID for a different target.
 Reuse the SAME ID for retries of the SAME effect. Do not create new IDs just to

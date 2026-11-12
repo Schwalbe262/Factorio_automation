@@ -394,7 +394,7 @@ class BootstrapLogistics:
         return dict(technology='logistics',normally_assembled_packs=(red['products_finished']-auth['baseline']['red'])*yield_count,
             research_science_consumed=obs['production']['automation-science-pack']['consumed']-auth['baseline']['consumed'],
             original_allocated_inputs=deepcopy(self.state['allocated_inputs']),repurchase_allocated_inputs=deepcopy(epoch['allocated_inputs']),
-            repurchase_id=epoch['id'],historical_goods_loss_quantity='unknown')
+            repurchase_id=epoch['id'],historical_goods_loss_quantity='unknown',**self._autonomous_wait_flags(obs))
 
     def _legacy_repurchase_proof(self,obs):
         if not obs.get('technologies',{}).get('logistics')or self._legacy_epoch_error(obs)or self.state.get('pending_transfer')or self.state.get('transfer_error'):return None
@@ -559,6 +559,8 @@ class BootstrapLogistics:
                 if self.state.get(field)!=expected:return {'status':'blocked','reason':reason}
         if not self.state and researched:
             return {'status':'succeeded','reason':'bootstrap target already natively researched','evidence':self._research_proof(obs)}
+        reserved=self._prewarmed_cell_guard(obs)
+        if reserved:return reserved
         try:count,inputs=self.requirements()
         except (KeyError,TypeError,ValueError,ZeroDivisionError)as exc:
             return {'status':'blocked','reason':'bootstrap_research_rules_unsupported','evidence':{'technology':name,'detail':str(exc)}}
@@ -611,14 +613,18 @@ class BootstrapLogistics:
             self._save()
         proof=self._research_proof(obs)
         if proof:return {'status':'succeeded','reason':'finite machine-built science naturally researched the target','evidence':proof}
-        for item,total in inputs.items():
-            remaining=total-self.state['allocated_inputs'].get(item,0)
-            if remaining<=0:continue
-            if obs.get('inventory',{}).get(item,0)<remaining:
-                return self.bootstrap.ensure_item(obs,item,remaining)
-            port=next(p for p in plan['ports']if p['item']==item)
-            return self._transfer('fund',dict(type='insert',name='wooden-chest',position=port['position'],inventory='chest',
-                item=item,count=remaining,reason='fund one finite machine research batch for '+name))
+        if self.state.get('prewarm'):
+            balanced=self._balanced_funding(obs,acquire=True)
+            if balanced:return balanced
+        else:
+            for item,total in inputs.items():
+                remaining=total-self.state['allocated_inputs'].get(item,0)
+                if remaining<=0:continue
+                if obs.get('inventory',{}).get(item,0)<remaining:
+                    return self.bootstrap.ensure_item(obs,item,remaining)
+                port=next(p for p in plan['ports']if p['item']==item)
+                return self._transfer('fund',dict(type='insert',name='wooden-chest',position=port['position'],inventory='chest',
+                    item=item,count=remaining,reason='fund one finite machine research batch for '+name))
         repair=self._repair_funding(obs,plan)
         if repair:return repair
         if researched:
@@ -678,6 +684,128 @@ class BootstrapLogistics:
         if not moved:self.state['transfer_error']='bootstrap_research_normal_transfer_moved_zero'
         self._save()
 
+    def production_complete(self,obs):
+        """Pure ownership boundary for sharing the cell after all packs were supplied."""
+        if not self.state or not obs.get('ok',True)or not obs.get('world_id'):return None
+        if self._is_legacy():
+            epoch=self.state.get('legacy_repurchase')
+            if not epoch or self._legacy_epoch_error(obs)or'pending_transfer'in self.state or self.state.get('transfer_error'):return None
+            auth=epoch['authorization'];count=auth['required_packs']
+            if epoch['allocated_inputs']!=auth['repurchase_inputs']or epoch['collected_packs']!=count or epoch['supplied_packs']!=count:return None
+            pin=next(p for p in auth['pins']if p.get('recipe')=='automation-science-pack');red=self.find(obs,pin)
+            output=sum(q['amount']for q in self.catalog.recipe_for_product('automation-science-pack')['products']if q['name']=='automation-science-pack')
+            packs=(red['products_finished']-auth['baseline']['red'])*output
+            if packs<count:return None
+            return dict(technology=self.technology,world_id=obs['world_id'],catalog_fingerprint=self.catalog.fingerprint,owner_guard=epoch['id'],
+                red_unit=red['unit_number'],products_finished=red['products_finished'],normally_assembled_packs=packs,collected_packs=count,supplied_packs=count)
+        plan=self._startup_plan(obs)
+        if plan is None or self._binding_error(obs,plan)or'pending_transfer'in self.state or self.state.get('transfer_error'):return None
+        count=self.state['required_packs']
+        if self.state.get('collected_packs')!=count or self.state.get('supplied_packs')!=count:return None
+        if self.state['allocated_inputs']!=self.state['required_inputs']:return None
+        if any(e['allocated_inputs']!=e['authorization']['replacement_inputs']for e in self.state.get('diversion_recoveries',[])):return None
+        if any(not _powered(self.find(obs,p))for p in self.state['machines']+[self.state['lab']]):return None
+        red=self.find(obs,self.state['red_machine']);recipe=self.catalog.recipe_for_product('automation-science-pack')
+        amount=sum(p['amount']for p in recipe['products']if p['name']=='automation-science-pack')
+        packs=(red['products_finished']-self.state['baseline_products_finished'])*amount
+        if packs<count:return None
+        return dict(technology=self.technology,world_id=obs['world_id'],catalog_fingerprint=self.catalog.fingerprint,
+            owner_guard=_hash(self._recovery_frame()),red_unit=red['unit_number'],products_finished=red['products_finished'],
+            normally_assembled_packs=packs,collected_packs=count,supplied_packs=count)
+
+    def _prewarmed_cell_guard(self,obs):
+        if self.technology=='logistics':return None
+        path=self.path.parent/'bootstrap-logistics.json'
+        if not path.exists():return None
+        try:
+            target=json.loads(path.read_text(encoding='utf-8'));warm=target.get('prewarm')
+            if not warm:return None
+            if target.get('world_id')!=obs['world_id']or target.get('catalog_fingerprint')!=self.catalog.fingerprint:
+                return dict(status='blocked',reason='science_prewarm_reserved_cell_identity_changed')
+            if obs.get('technologies',{}).get('logistics'):return None
+            if self.technology==warm['owner_technology']and self.state and _hash(self._recovery_frame())==warm['owner_guard']:return None
+            return dict(status='blocked',reason='science_cell_reserved_for_approved_prewarmed_logistics')
+        except(OSError,KeyError,TypeError,ValueError):return dict(status='blocked',reason='science_prewarm_reserved_cell_identity_changed')
+
+    def _autonomous_wait_flags(self,obs):
+        baseline=self.state.get('legacy_repurchase',{}).get('authorization',{}).get('baseline',{}).get('consumed',self.state.get('baseline_consumed'))
+        consumed=obs.get('production',{}).get('automation-science-pack',{}).get('consumed')
+        safe=bool(self.production_complete(obs)and obs.get('research')==self.technology
+            and not obs.get('technologies',{}).get(self.technology)and type(consumed)in(int,float)
+            and math.isfinite(consumed)and type(baseline)in(int,float)and consumed>baseline)
+        return dict(autonomous_wait=safe,background_work_safe=safe)
+
+    def _balanced_funding(self,obs,*,surplus_budget=None,acquire=False):
+        """At most five science packs per packet; copper first, actual ACK only."""
+        required=self.state['required_inputs'];allocated=self.state['allocated_inputs'];count=self.state['required_packs']
+        if all(allocated.get(k,0)>=n for k,n in required.items()):return None
+        budget={k:max(0,n-allocated.get(k,0))for k,n in required.items()}if surplus_budget is None else surplus_budget
+        warm=self.state['prewarm'];level=warm.get('packet_level',0)
+        need=lambda item,n:max(0,math.ceil(required[item]*n/count)-allocated.get(item,0))
+        if not level or all(need(k,level)==0 for k in required):
+            completed=min(allocated.get(k,0)*count//n for k,n in required.items())
+            levels=range(min(count,completed+5),completed,-1)
+            level=next((n for n in levels if all(need(k,n)<=budget.get(k,0)for k in required)),None)
+            if level is None:return dict(status='waiting',reason='science_prewarm_balanced_surplus_not_available')
+            warm['packet_level']=level;self._save()
+        candidates=[k for k in required if need(k,level)>0]
+        item=min(candidates,key=lambda k:(allocated.get(k,0)/required[k],0 if k=='copper-plate'else 1))
+        amount=min(need(item,level),budget.get(item,0))
+        if amount<=0:return dict(status='waiting',reason='science_prewarm_reserved_raw_unavailable',evidence={'item':item})
+        held=obs.get('inventory',{}).get(item,0)
+        if held>0:
+            port=next(p for p in self._startup_plan(obs)['ports']if p.get('item')==item)
+            return self._transfer('fund',dict(type='insert',name='wooden-chest',position=port['position'],inventory='chest',item=item,
+                count=min(amount,held),reason='fund balanced prewarmed machine science for '+self.technology))
+        if acquire:return self.bootstrap.ensure_item(obs,item,amount)
+        output=self.bootstrap._take_output(obs,item,amount)
+        return output if output is not None else dict(status='waiting',reason='science_prewarm_existing_output_not_available',evidence={'item':item})
+
+    def prewarm(self,obs,*,owner,surplus_budget):
+        """Fund the approved next batch without changing research or lab contents."""
+        if(not isinstance(surplus_budget,dict)or set(surplus_budget)-{'iron-plate','copper-plate'}
+                or any(type(n)is not int or not 0<=n<=1000000 for n in surplus_budget.values())):
+            raise ValueError('prewarm requires bounded nonnegative raw-plate surplus')
+        completed=owner.production_complete(obs)
+        if(not completed or owner.technology==self.technology or obs.get('research')!=owner.technology
+                or obs.get('technologies',{}).get(owner.technology)or obs.get('technologies',{}).get(self.technology)):
+            return dict(status='waiting',reason='science_prewarm_owner_not_consuming_completed_batch')
+        consumed=obs.get('production',{}).get('automation-science-pack',{}).get('consumed')
+        if type(consumed)not in(int,float)or not math.isfinite(consumed)or consumed<=owner.state['baseline_consumed']:
+            return dict(status='waiting',reason='science_prewarm_actual_owner_consumption_required')
+        try:
+            count,inputs=self.requirements();tech=self.catalog.technologies[self.technology]
+            missing=[t for t in tech.get('prerequisites',[])if not obs.get('technologies',{}).get(t)and t!=owner.technology]
+            recipes={self.catalog.recipe_for_product(item)['name']for item in('iron-gear-wheel','automation-science-pack')}
+            if(missing or not obs.get('technologies',{}).get('automation')or tech.get('enabled')is False
+                    or any(not obs.get('enabled_recipes',{}).get(r)for r in recipes)):
+                return dict(status='waiting',reason='science_prewarm_native_prerequisites_missing',evidence={'missing':missing})
+            plan=self._startup_plan(obs)
+            if plan is None or _hash(plan)!=owner.state['plan_hash']:return dict(status='blocked',reason='science_prewarm_shared_cell_changed')
+            if not self.state:
+                # Existing raw/gear residues could create products before a new
+                # baseline is reserved. Decline until the old packet is empty.
+                cell=[self.find(obs,p)for p in owner.state['machines']+owner.state['ports']]
+                if any(e.get('inventory',{}).get(item,0)for e in cell for item in('iron-plate','copper-plate','iron-gear-wheel','automation-science-pack')):
+                    return dict(status='waiting',reason='science_prewarm_old_cell_buffer_not_empty')
+                if not any(surplus_budget.get(k,0)>0 for k in inputs):return dict(status='waiting',reason='science_prewarm_surplus_not_available')
+                self.state=dict(schema_version=1,world_id=obs['world_id'],catalog_fingerprint=self.catalog.fingerprint,technology=self.technology,
+                    plan_hash=_hash(plan),required_packs=count,required_inputs=inputs,allocated_inputs={},red_machine=deepcopy(owner.state['red_machine']),
+                    machines=deepcopy(owner.state['machines']),ports=deepcopy(owner.state['ports']),lab=deepcopy(owner.state['lab']),
+                    baseline_products_finished=completed['products_finished'],baseline_consumed=consumed,collected_packs=0,supplied_packs=0,transfer_sequence=0,
+                    prewarm=dict(owner_technology=owner.technology,owner_guard=completed['owner_guard'],red_unit=completed['red_unit'],packet_level=0,reserved_tick=obs['tick']))
+                self._save()
+            warm=self.state.get('prewarm')
+            if(not warm or warm['owner_technology']!=owner.technology or warm['owner_guard']!=completed['owner_guard']or warm['red_unit']!=completed['red_unit']):
+                return dict(status='blocked',reason='science_prewarm_existing_target_or_owner_changed')
+            error=self._binding_error(obs,plan)
+            if error:return dict(status='blocked',reason=error)
+            if'pending_transfer'in self.state or self.state.get('transfer_error'):
+                return dict(status='blocked',reason='science_prewarm_transfer_requires_reconciliation')
+            action=self._balanced_funding(obs,surplus_budget=surplus_budget)
+            return action or dict(status='waiting',reason='science_prewarm_raw_budget_funded_waiting_for_native_production')
+        except(KeyError,TypeError,ValueError)as exc:return dict(status='blocked',reason='science_prewarm_context_invalid',evidence={'detail':str(exc)})
+
     def _progress(self,obs):
         actual=self.find(obs,self.state['red_machine'])
         recoveries=[dict(id=e['id'],replacement_inputs=deepcopy(e['authorization']['replacement_inputs']),
@@ -690,7 +818,7 @@ class BootstrapLogistics:
             machine_products_finished_delta=actual['products_finished']-self.state['baseline_products_finished'],
             research_science_consumed=obs['production']['automation-science-pack']['consumed']-self.state['baseline_consumed'],
             allocated_normal_inputs=deepcopy(self.state['allocated_inputs']),effective_input_allowance=effective,
-            diversion_recoveries=recoveries)
+            diversion_recoveries=recoveries,**self._autonomous_wait_flags(obs))
 
     def _research_proof(self,obs):
         if not obs.get('technologies',{}).get(self.technology):return None

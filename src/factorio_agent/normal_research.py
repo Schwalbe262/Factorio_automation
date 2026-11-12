@@ -76,7 +76,8 @@ class NormalResearch:
             _atomic_json(self.path,self.state)
         if obs.get('research')!=name:return {'type':'research','technology':name,'reason':'research model-selected technology with automatically belt-fed machine packs'}
         return {'status':'waiting','reason':'native labs consume normally produced science','evidence':{
-            'technology':name,'research_progress':obs.get('research_progress',0)}}
+            'technology':name,'research_progress':obs.get('research_progress',0),
+            'autonomous_wait':True,'background_work_safe':True}}
 
     def proof(self,obs,parameters):
         name=parameters['technology']

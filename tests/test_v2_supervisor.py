@@ -488,6 +488,109 @@ class PreemptionTests(Fixture):
         self.cli.run_status='waiting'
         return low,high
 
+    def autonomous(self):
+        low,high=self.prepared(10)
+        self.cli.jobs[low['job_key']].update(evidence={'autonomous_wait':True,'background_work_safe':True},
+            evidence_status='observation_result',evidence_observed_tick=1)
+        return low,high
+
+    def test_autonomous_wait_runs_lower_priority_approved_preparation_and_resumes_exact_owner(self):
+        with patch.dict(CAPS['starter'],{'opportunistic':True}):
+            owner,work=self.autonomous()
+            self.assertTrue(self.s._run_authorized(self.s._snapshot()))
+            self.assertEqual(self.cli.jobs[owner['job_key']]['status'],'paused')
+            marker=self.s.work.node_for_job(owner['job_key'])['scheduler_pause']
+            self.assertEqual(marker['yield_reason'],'autonomous_wait')
+            self.assertIn(work['job_key'],[c[2]for c in self.cli.calls if c[0]=='run'])
+            self.cli.jobs[work['job_key']]['status']='succeeded'
+            self.s._run_authorized(self.s._snapshot())
+            self.assertEqual([c[2]for c in self.cli.calls if c[0]=='resume'],[owner['job_key']])
+
+    def test_lower_priority_normal_ready_row_does_not_mask_eligible_preparation(self):
+        with patch.dict(CAPS,{'prepare_components':{'parameters':{},'requires':[],'opportunistic':True}}):
+            owner,ordinary=self.autonomous()
+            prep=node('prep','prepare_components',priority=5);prep['parameters']={'items':{'pipe':1}}
+            self.s.work.merge([prep],CAPS,self.cli.validate_requests,1)
+            target=self.s.work.node_for_job(next(q['job_key']for q in self.s.work.data['nodes']if q['id']=='prep'))
+            self.s._run_authorized(self.s._snapshot())
+            self.assertEqual(self.cli.jobs[owner['job_key']]['status'],'paused')
+            self.assertIn(target['job_key'],self.cli.jobs);self.assertNotIn(ordinary['job_key'],self.cli.jobs)
+            self.assertEqual([c[2]for c in self.cli.calls if c[0]=='run'],[target['job_key']])
+
+    def test_resource_waiting_preparation_is_preserved_paused_after_one_slice_then_owner_resumes(self):
+        with patch.dict(CAPS['starter'],{'opportunistic':True}):
+            owner,child=self.autonomous();self.s._run_authorized(self.s._snapshot())
+            self.cli.jobs[child['job_key']]['evidence']={'paid_stock':7}
+            self.s._run_authorized(self.s._snapshot())
+            self.assertEqual(self.cli.jobs[child['job_key']]['status'],'paused')
+            self.assertEqual(self.cli.jobs[child['job_key']]['actions'],1)
+            self.assertEqual(self.cli.jobs[child['job_key']]['evidence'],{'paid_stock':7})
+            self.assertTrue(self.s.work.node_for_job(child['job_key'])['paused'])
+            self.assertEqual([c[2]for c in self.cli.calls if c[0]=='resume'],[owner['job_key']])
+            marker=self.s.work.node_for_job(owner['job_key'])['scheduler_pause']
+            self.assertEqual(marker['phase'],'resumed')
+            returned=marker['opportunistic_return'];self.assertEqual(returned['phase'],'child_paused')
+            self.assertEqual(returned['pause_binding']['key'],child['job_key'])
+            self.assertEqual(returned['pause_event']['event'],'pause')
+            self.assertEqual([c[2]for c in self.cli.calls if c[0]=='run'].count(child['job_key']),1)
+
+    def test_opportunistic_work_has_a_bounded_slice_even_with_a_higher_numeric_priority(self):
+        with patch.dict(CAPS['starter'],{'opportunistic':True}):
+            owner,child=self.autonomous();child['priority']=200;self.s.work.save()
+            self.s._run_authorized(self.s._snapshot());self.s._run_authorized(self.s._snapshot())
+            self.assertEqual(self.cli.jobs[child['job_key']]['status'],'paused')
+            self.assertEqual([c[2]for c in self.cli.calls if c[0]=='resume'],[owner['job_key']])
+
+    def test_unknown_child_outcome_or_stop_never_triggers_automatic_child_pause(self):
+        for change in ('unknown','stop'):
+            self.setUp()
+            with patch.dict(CAPS['starter'],{'opportunistic':True}):
+                owner,child=self.autonomous();self.s._run_authorized(self.s._snapshot())
+                if change=='unknown':self.cli.jobs[child['job_key']]['pending_action']={}
+                else:(self.root/STOP_FILE).write_text(json.dumps({'world_id':'w','request_id':'stop'}))
+                self.assertFalse(self.s._scheduler_yield_opportunistic(self.s._snapshot()))
+                self.assertEqual([c[2]for c in self.cli.calls if c[0]=='pause'],[owner['job_key']])
+
+    def test_explicit_child_control_releases_owned_return_and_is_not_overridden(self):
+        with patch.dict(CAPS['starter'],{'opportunistic':True}):
+            owner,child=self.autonomous();self.s._run_authorized(self.s._snapshot())
+            self.cli.invoke(['pause','--key',child['job_key']]);self.cli.invoke(['resume','--key',child['job_key']])
+            self.assertFalse(self.s._scheduler_yield_opportunistic(self.s._snapshot()))
+            self.assertEqual(self.s.work.node_for_job(owner['job_key'])['scheduler_pause']['phase'],'released')
+            self.assertEqual([c[2]for c in self.cli.calls if c[0]=='pause'],[owner['job_key'],child['job_key']])
+
+    def test_unverified_child_pause_intent_cannot_automatically_resume_the_owner(self):
+        with patch.dict(CAPS['starter'],{'opportunistic':True}):
+            owner,child=self.autonomous();self.s._run_authorized(self.s._snapshot())
+            invoke=self.cli.invoke
+            def changed(args,**kwargs):
+                result=invoke(args,**kwargs)
+                if args[:3]==['pause','--key',child['job_key']]:result['status']='waiting'
+                return result
+            with patch.object(self.cli,'invoke',side_effect=changed):
+                with self.assertRaisesRegex(ValueError,'child pause receipt'):
+                    self.s._scheduler_yield_opportunistic(self.s._snapshot())
+            self.assertIsNone(self.s._scheduler_owned(self.s._snapshot()))
+            self.assertEqual(self.s.work.node_for_job(owner['job_key'])['scheduler_pause']['opportunistic_return']['phase'],'pause_intent')
+            self.cli.jobs[child['job_key']]['status']='waiting'
+            before=len([c for c in self.cli.calls if c[0]=='run'])
+            with self.assertRaisesRegex(ValueError,'pause outcome requires reconciliation'):
+                self.s._run_authorized(self.s._snapshot())
+            self.assertEqual(len([c for c in self.cli.calls if c[0]=='run']),before)
+
+    def test_lower_priority_work_needs_fresh_authoritative_safe_wait_evidence(self):
+        for change in ({'evidence_status':'retained_from_prior_observation'},{'evidence_observed_tick':-5000},
+                {'evidence':{'autonomous_wait':True}},{'pending_action':{}}):
+            self.setUp()
+            with patch.dict(CAPS['starter'],{'opportunistic':True}):
+                owner,_=self.autonomous();self.cli.jobs[owner['job_key']].update(change)
+                self.s._run_authorized(self.s._snapshot())
+                self.assertFalse(any(c[0]=='pause'for c in self.cli.calls))
+
+    def test_native_wait_does_not_authorize_unapproved_or_nonopportunistic_work(self):
+        self.autonomous();self.s._run_authorized(self.s._snapshot())
+        self.assertFalse(any(c[0]=='pause'for c in self.cli.calls))
+
     def test_strictly_higher_approved_work_pauses_exact_partial_job_then_dispatches(self):
         low,high=self.prepared()
         self.assertTrue(self.s._run_authorized(self.s._snapshot()))
