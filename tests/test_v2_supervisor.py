@@ -2,11 +2,14 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import queue
+import sys
 import tempfile
 import threading
+import types
 import unittest
 from unittest.mock import Mock, patch
 
+from factorio_agent.jobs import _admission_error
 from factorio_agent.supervisor import (
     Supervisor,
     WorkQueue,
@@ -21,6 +24,7 @@ from factorio_agent.supervisor import (
 )
 
 
+REAL_LOAD_AUTOPILOT = Supervisor._load_autopilot
 CAPS = {
     "starter": {"parameters": {}, "requires": [], "effect": "paid starter"},
     "power": {"parameters": {}, "requires": ["starter"], "effect": "ordinary power"},
@@ -73,6 +77,7 @@ class FakeCLI:
         self.actor = actor()
         self.stop_on_run = False
         self.run_status = "succeeded"
+        self.ran = []
         self.fail_request = None
         self.bad_checkpoint = False
 
@@ -111,6 +116,10 @@ class FakeCLI:
             if self.fail_request:
                 raise CLIError(self.fail_request)
             key = get("--key")
+            if key not in self.jobs:
+                refusal = _admission_error(self.jobs, get("--capability"))
+                if refusal:
+                    raise CLIError(refusal)
             params = json.loads(get("--parameters"))
             self.jobs.setdefault(
                 key,
@@ -121,6 +130,7 @@ class FakeCLI:
                     parameters=params,
                     status="pending",
                     reason="model_requested",
+                    priority=int(get("--priority")),
                     actions=0,
                     last_tick=self.tick,
                     created_at=self.clock(),
@@ -128,22 +138,31 @@ class FakeCLI:
             )
             return deepcopy(self.jobs[key])
         if cmd == "run":
-            job = self.jobs[get("--key")]
+            self.assertion(args[1] == "--all", "the supervisor runs every active job together")
+            active = [j for j in self.jobs.values() if j["status"] in ("pending", "running", "waiting")]
+            self.ran.append([j["key"] for j in active])
             if self.stop_on_run:
                 (self.root / STOP_FILE).write_text(
                     json.dumps(dict(request_id="user-stop", world_id="w", source="lifecycle"))
                 )
                 if stop_requested and stop_requested():
                     on_stop()
-                job.update(status="waiting", reason="operator_stop_requested")
-            else:
-                job.update(
-                    status=self.run_status,
-                    reason="native_postcondition" if self.run_status == "succeeded" else "waiting_for_resources",
-                )
-            job["actions"] += 1
+            for job in active:
+                if self.stop_on_run:
+                    job.update(status="waiting", reason="operator_stop_requested")
+                else:
+                    job.update(
+                        status=self.run_status,
+                        reason="native_postcondition" if self.run_status == "succeeded" else "waiting_for_resources",
+                    )
+                job["actions"] = job.get("actions", 0) + 1
             self.clock.advance(float(get("--seconds")))
-            return deepcopy(job)
+            return dict(
+                status="running" if active else "idle",
+                jobs={j["key"]: {k: j.get(k) for k in ("status", "reason", "actions", "capability")} for j in active},
+                actions=len(active),
+                last_tick=self.tick,
+            )
         if cmd in ("pause", "resume", "retry"):
             job = self.jobs[get("--key")]
             if cmd == "pause":
@@ -172,6 +191,14 @@ class FakeCLI:
             )
         raise AssertionError("unexpected command " + repr(args))
 
+    @staticmethod
+    def assertion(condition, message):
+        if not condition:
+            raise AssertionError(message)
+
+    def ran_keys(self):
+        return [key for keys in self.ran for key in keys]
+
 
 class Fixture(unittest.TestCase):
     def setUp(self):
@@ -182,6 +209,10 @@ class Fixture(unittest.TestCase):
         self.clock = Clock()
         self.cli = FakeCLI(self.root, self.clock)
         self.client = SimpleClient(decision(nodes=[node("starter"), node("power", "power", ["starter"])]))
+        # The framework autopilot is exercised explicitly in AutopilotTests only.
+        autopilot = patch.object(Supervisor, "_load_autopilot", return_value=None)
+        autopilot.start()
+        self.addCleanup(autopilot.stop)
         self.s = Supervisor(
             self.root, self.client, cli=self.cli, clock=self.clock, sleep=self.clock.advance, max_seconds=200
         )
@@ -382,17 +413,8 @@ class DecisionTests(Fixture):
         self.s._apply(decision("pause"), self.s._snapshot())
         self.assertEqual(self.cli.jobs["active"]["status"], "paused")
 
-    def test_one_world_cannot_adopt_two_active_jobs(self):
-        self.cli.jobs = {
-            str(i): dict(key=str(i), world_id="w", capability="starter", parameters={}, status="waiting")
-            for i in (1, 2)
-        }
-        with self.assertRaises(ValueError):
-            self.s._snapshot()
-        self.assertFalse(any(c[0] == "run" for c in self.cli.calls))
-
-    def test_slow_continue_or_pause_keeps_original_job_key_and_does_not_touch_successor(self):
-        for operation in ("continue", "pause", "retry"):
+    def test_slow_pause_or_retry_keeps_original_job_key_and_does_not_touch_successor(self):
+        for operation in ("pause", "retry"):
             with self.subTest(operation=operation):
                 self.cli.jobs = {
                     "a": dict(
@@ -423,21 +445,19 @@ class DecisionTests(Fixture):
                 self.assertFalse(any(c[0] in ("pause", "resume", "retry") for c in self.cli.calls))
                 self.assertEqual(self.s.errors, 0)
                 self.assertEqual(self.s.backoff_until, 0)
+                self.cli.ran = []
                 self.assertTrue(self.s._run_authorized(self.s._snapshot()))
-                self.assertEqual([c[2] for c in self.cli.calls if c[0] == "run"], ["b"])
+                self.assertEqual(self.cli.ran, [["b"]])
 
-    def test_continue_with_no_prompt_target_is_harmless_when_new_job_started_while_thinking(self):
+    def test_untargeted_continue_is_a_noop_even_with_a_paused_job_or_a_new_job(self):
+        self.cli.jobs["a"] = dict(key="a", world_id="w", capability="starter", parameters={}, status="paused")
         context = self.s._snapshot()
-        self.cli.jobs["b"] = dict(key="b", world_id="w", capability="starter", parameters={}, status="waiting")
+        self.cli.jobs["b"] = dict(key="b", world_id="w", capability="power", parameters={}, status="waiting")
         with patch.object(self.s, "_event") as event:
             self.s._apply(decision("continue"), context)
-        self.assertTrue(
-            any(
-                c.args[0] == "stale_decision" and c.kwargs["reason"] == "no_target_in_decision_snapshot"
-                for c in event.call_args_list
-            )
-        )
+        self.assertTrue(any(c.args[0] == "decision_noop" for c in event.call_args_list))
         self.assertFalse(any(c[0] in ("pause", "resume", "retry") for c in self.cli.calls))
+        self.assertEqual(self.cli.jobs["a"]["status"], "paused")
 
     def test_request_uses_fresh_idle_status_after_previous_job_completed(self):
         self.cli.jobs["a"] = dict(key="a", world_id="w", capability="starter", parameters={}, status="waiting")
@@ -460,45 +480,6 @@ class DecisionTests(Fixture):
         with self.assertRaisesRegex(ValueError, "original decision target"):
             self.s._apply(decision("retry"), context)
         self.assertFalse(any(c[0] == "retry" for c in self.cli.calls))
-
-    def test_running_changes_do_not_trigger_terminal_event_but_new_terminal_and_blocker_do(self):
-        self.cli.jobs = {
-            "old": dict(key="old", world_id="w", capability="starter", parameters={}, status="succeeded"),
-            "b": dict(key="b", world_id="w", capability="power", parameters={}, status="waiting"),
-        }
-        context = self.s._snapshot()
-        results = queue.Queue()
-        results.put((True, decision()))
-        self.s.pending_decision = {"result": results, "context": context, "started_at": self.clock()}
-        self.s.last_decision_time = self.clock()
-        self.s._poll_decision()
-        self.clock.advance(11)
-        self.cli.jobs["b"]["status"] = "running"
-        self.assertFalse(self.s._decision_due(self.s._snapshot()[1]))
-        self.cli.jobs["b"].update(status="blocked", reason="missing_iron")
-        self.assertTrue(self.s._decision_due(self.s._snapshot()[1]))
-        context = self.s._snapshot()
-        results = queue.Queue()
-        results.put((True, decision()))
-        self.s.pending_decision = {"result": results, "context": context, "started_at": self.clock()}
-        self.s.last_decision_time = self.clock()
-        self.s._poll_decision()
-        self.clock.advance(11)
-        self.assertFalse(self.s._decision_due(self.s._snapshot()[1]))
-        self.cli.jobs["b"]["reason"] = "missing_power"
-        self.assertTrue(self.s._decision_due(self.s._snapshot()[1]))
-
-    def test_terminal_change_while_luna_thinks_remains_a_new_event(self):
-        self.cli.jobs["a"] = dict(key="a", world_id="w", capability="starter", parameters={}, status="waiting")
-        context = self.s._snapshot()
-        results = queue.Queue()
-        results.put((True, decision("continue")))
-        self.s.pending_decision = {"result": results, "context": context, "started_at": self.clock()}
-        self.s.last_decision_time = self.clock()
-        self.cli.jobs["a"]["status"] = "succeeded"
-        self.s._poll_decision()
-        self.clock.advance(11)
-        self.assertTrue(self.s._decision_due(self.s._snapshot()[1]))
 
     def test_blocker_snapshot_keeps_material_amounts_and_failure_but_excludes_raw_private_payloads(self):
         self.s.work.merge([node("a")], CAPS, self.cli.validate_requests, 1)
@@ -610,8 +591,8 @@ class TaskTargetTests(Fixture):
     def test_exact_paused_funded_task_resumes_without_duplicating_or_selecting_another_match(self):
         original, duplicate = self.duplicates(parameters={"technology": "electric-mining-drill"})
         context = self.s._snapshot()
-        with self.assertRaisesRegex(ValueError, "unambiguous"):
-            self.s._apply(decision("continue"), context)
+        self.s._apply(decision("continue"), context)
+        self.assertFalse(any(c[0] == "resume" for c in self.cli.calls))
         value = dict(
             decision("continue"), target_task_id="original", parameters={"technology": "electric-mining-drill"}
         )
@@ -702,10 +683,13 @@ class ExecutionTests(Fixture):
         self.s._apply(decision("wait"), self.s._snapshot())
         self.assertGreater(self.s.wait_until, self.clock())
         self.assertTrue(self.s._run_authorized(self.s._snapshot()))
-        self.assertEqual([c[2] for c in self.cli.calls if c[0] == "run"], ["a"])
+        self.assertEqual(self.cli.ran, [["a"]])
 
     def test_wait_delays_only_idle_planning_and_ready_queue_dispatches_immediately(self):
+        self.s.last_decision_time = self.clock()
+        self.s.force_decision = False
         self.s._apply(decision("wait"), self.s._snapshot())
+        self.clock.advance(30)
         self.assertFalse(self.s._decision_due(self.s._snapshot()[1]))
         self.s.work.merge([node("approved")], CAPS, self.cli.validate_requests, 1)
         self.assertTrue(self.s._run_authorized(self.s._snapshot()))
@@ -721,7 +705,7 @@ class ExecutionTests(Fixture):
         self.assertEqual(self.cli.jobs[a["job_key"]]["status"], "paused")
         self.assertTrue(self.s.work.node_for_job(a["job_key"])["paused"])
         self.assertTrue(self.s._run_authorized(self.s._snapshot()))
-        self.assertEqual([c[2] for c in self.cli.calls if c[0] == "run"], [b["job_key"]])
+        self.assertEqual(self.cli.ran, [[b["job_key"]]])
 
     def test_approved_successor_dispatches_while_luna_call_is_still_pending(self):
         self.s.work.merge([node("a"), node("b", "power", ["a"])], CAPS, self.cli.validate_requests, 1)
@@ -731,10 +715,8 @@ class ExecutionTests(Fixture):
         )
         self.s.pending_decision = {"result": queue.Queue(), "context": None, "started_at": self.clock()}
         self.assertTrue(self.s._run_authorized(self.s._snapshot()))
-        runs = [c for c in self.cli.calls if c[0] == "run"]
-        self.assertEqual(len(runs), 1)
         b = self.s.work.data["nodes"][1]
-        self.assertIn(b["job_key"], runs[0])
+        self.assertEqual(self.cli.ran, [[b["job_key"]]])
         self.assertEqual(self.cli.jobs[b["job_key"]]["capability"], "power")
         self.assertIsNotNone(self.s.pending_decision)
 
@@ -749,8 +731,7 @@ class ExecutionTests(Fixture):
     def test_known_false_request_blocks_that_node_without_blind_repeat(self):
         self.s.work.merge([node("a")], CAPS, self.cli.validate_requests, 1)
         self.cli.fail_request = "native prerequisite unavailable"
-        with self.assertRaises(CLIError):
-            self.s._run_authorized(self.s._snapshot())
+        self.assertFalse(self.s._run_authorized(self.s._snapshot()))
         self.s._run_authorized(self.s._snapshot())
         self.assertEqual(len([c for c in self.cli.calls if c[0] == "request"]), 1)
         self.assertEqual(self.s.work.data["nodes"][0]["status"], "blocked")
@@ -830,368 +811,352 @@ class ExecutionTests(Fixture):
         self.assertFalse(any(c[0] == "request" for c in self.cli.calls))
 
 
-class PreemptionTests(Fixture):
-    def prepared(self, high_priority=200, extra=()):
+MANY = {"c" + str(i): {"parameters": {}, "requires": [], "effect": "independent"} for i in range(6)}
+
+
+def job(key, capability="starter", status="waiting", **extra):
+    return dict(key=key, world_id="w", capability=capability, parameters={}, status=status, actions=0, **extra)
+
+
+class MultiJobTests(Fixture):
+    def setUp(self):
+        super().setUp()
+        patcher = patch.dict(CAPS, MANY)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # The test capabilities are not native job capabilities; queue validation is covered elsewhere.
+        self.cli.validate_requests = lambda rows: None
+
+    def requested(self):
+        return [c for c in self.cli.calls if c[0] == "request"]
+
+    def test_up_to_four_ready_nodes_dispatch_in_priority_order_then_one_interleaved_slice(self):
+        nodes = [node("n" + str(i), "c" + str(i), priority=p) for i, p in enumerate((1, 6, 3, 5, 2, 4))]
+        self.s.work.merge(nodes, CAPS, self.cli.validate_requests, 1)
+        self.cli.run_status = "waiting"
+        self.assertTrue(self.s._run_authorized(self.s._snapshot()))
+        requested = self.requested()
+        self.assertEqual([c[c.index("--capability") + 1] for c in requested], ["c1", "c3", "c5", "c2"])
+        self.assertEqual([c[c.index("--priority") + 1] for c in requested], ["6", "5", "4", "3"])
+        self.assertEqual([c for c in self.cli.calls if c[0] == "run"], [["run", "--all", "--seconds", "25"]])
+        self.assertEqual(len(self.cli.ran[0]), 4)
+        self.assertEqual(len(self.s.state["active_job_keys"]), 4)
+        self.assertEqual(self.s.state["active_job_key"], self.s.state["active_job_keys"][0])
+        self.s._snapshot()
+        self.assertEqual(sorted(q["id"] for q in self.s.work.ready_nodes()), ["n0", "n4"])
+        self.assertEqual(self.s.state["active_job_key"], self.requested()[0][2])
+
+    def test_same_capability_as_an_active_job_is_held_back_and_stays_ready(self):
+        self.cli.jobs["manual"] = job("manual", "c0")
         self.s.work.merge(
-            [node("low", priority=100), node("high", priority=high_priority), *extra],
+            [node("a", "c0", priority=9), node("b", "c1", priority=5), node("c", "c1", priority=1)],
             CAPS,
             self.cli.validate_requests,
             1,
         )
-        low = self.s.work.data["nodes"][0]
-        high = self.s.work.data["nodes"][1]
-        self.cli.jobs[low["job_key"]] = dict(
-            key=low["job_key"],
-            world_id="w",
-            capability="starter",
-            parameters={},
-            status="waiting",
-            reason="execution_slice_complete",
-            actions=7,
-            last_tick=1,
-            created_tick=1,
-            created_at=self.clock(),
-            evidence={"paid_assets": 5},
-        )
         self.cli.run_status = "waiting"
-        return low, high
-
-    def autonomous(self):
-        low, high = self.prepared(10)
-        self.cli.jobs[low["job_key"]].update(
-            evidence={"autonomous_wait": True, "background_work_safe": True},
-            evidence_status="observation_result",
-            evidence_observed_tick=1,
-        )
-        return low, high
-
-    def test_autonomous_wait_runs_lower_priority_approved_preparation_and_resumes_exact_owner(self):
-        with patch.dict(CAPS["starter"], {"opportunistic": True}):
-            owner, work = self.autonomous()
-            self.assertTrue(self.s._run_authorized(self.s._snapshot()))
-            self.assertEqual(self.cli.jobs[owner["job_key"]]["status"], "paused")
-            marker = self.s.work.node_for_job(owner["job_key"])["scheduler_pause"]
-            self.assertEqual(marker["yield_reason"], "autonomous_wait")
-            self.assertIn(work["job_key"], [c[2] for c in self.cli.calls if c[0] == "run"])
-            self.cli.jobs[work["job_key"]]["status"] = "succeeded"
-            self.s._run_authorized(self.s._snapshot())
-            self.assertEqual([c[2] for c in self.cli.calls if c[0] == "resume"], [owner["job_key"]])
-
-    def test_lower_priority_normal_ready_row_does_not_mask_eligible_preparation(self):
-        with patch.dict(CAPS, {"prepare_components": {"parameters": {}, "requires": [], "opportunistic": True}}):
-            owner, ordinary = self.autonomous()
-            prep = node("prep", "prepare_components", priority=5)
-            prep["parameters"] = {"items": {"pipe": 1}}
-            self.s.work.merge([prep], CAPS, self.cli.validate_requests, 1)
-            target = self.s.work.node_for_job(
-                next(q["job_key"] for q in self.s.work.data["nodes"] if q["id"] == "prep")
-            )
-            self.s._run_authorized(self.s._snapshot())
-            self.assertEqual(self.cli.jobs[owner["job_key"]]["status"], "paused")
-            self.assertIn(target["job_key"], self.cli.jobs)
-            self.assertNotIn(ordinary["job_key"], self.cli.jobs)
-            self.assertEqual([c[2] for c in self.cli.calls if c[0] == "run"], [target["job_key"]])
-
-    def test_resource_waiting_preparation_is_preserved_paused_after_one_slice_then_owner_resumes(self):
-        with patch.dict(CAPS["starter"], {"opportunistic": True}):
-            owner, child = self.autonomous()
-            self.s._run_authorized(self.s._snapshot())
-            self.cli.jobs[child["job_key"]]["evidence"] = {"paid_stock": 7}
-            self.s._run_authorized(self.s._snapshot())
-            self.assertEqual(self.cli.jobs[child["job_key"]]["status"], "paused")
-            self.assertEqual(self.cli.jobs[child["job_key"]]["actions"], 1)
-            self.assertEqual(self.cli.jobs[child["job_key"]]["evidence"], {"paid_stock": 7})
-            self.assertTrue(self.s.work.node_for_job(child["job_key"])["paused"])
-            self.assertEqual([c[2] for c in self.cli.calls if c[0] == "resume"], [owner["job_key"]])
-            marker = self.s.work.node_for_job(owner["job_key"])["scheduler_pause"]
-            self.assertEqual(marker["phase"], "resumed")
-            returned = marker["opportunistic_return"]
-            self.assertEqual(returned["phase"], "child_paused")
-            self.assertEqual(returned["pause_binding"]["key"], child["job_key"])
-            self.assertEqual(returned["pause_event"]["event"], "pause")
-            self.assertEqual([c[2] for c in self.cli.calls if c[0] == "run"].count(child["job_key"]), 1)
-
-    def test_opportunistic_work_has_a_bounded_slice_even_with_a_higher_numeric_priority(self):
-        with patch.dict(CAPS["starter"], {"opportunistic": True}):
-            owner, child = self.autonomous()
-            child["priority"] = 200
-            self.s.work.save()
-            self.s._run_authorized(self.s._snapshot())
-            self.s._run_authorized(self.s._snapshot())
-            self.assertEqual(self.cli.jobs[child["job_key"]]["status"], "paused")
-            self.assertEqual([c[2] for c in self.cli.calls if c[0] == "resume"], [owner["job_key"]])
-
-    def test_unknown_child_outcome_or_stop_never_triggers_automatic_child_pause(self):
-        for change in ("unknown", "stop"):
-            self.setUp()
-            with patch.dict(CAPS["starter"], {"opportunistic": True}):
-                owner, child = self.autonomous()
-                self.s._run_authorized(self.s._snapshot())
-                if change == "unknown":
-                    self.cli.jobs[child["job_key"]]["pending_action"] = {}
-                else:
-                    (self.root / STOP_FILE).write_text(json.dumps({"world_id": "w", "request_id": "stop"}))
-                self.assertFalse(self.s._scheduler_yield_opportunistic(self.s._snapshot()))
-                self.assertEqual([c[2] for c in self.cli.calls if c[0] == "pause"], [owner["job_key"]])
-
-    def test_explicit_child_control_releases_owned_return_and_is_not_overridden(self):
-        with patch.dict(CAPS["starter"], {"opportunistic": True}):
-            owner, child = self.autonomous()
-            self.s._run_authorized(self.s._snapshot())
-            self.cli.invoke(["pause", "--key", child["job_key"]])
-            self.cli.invoke(["resume", "--key", child["job_key"]])
-            self.assertFalse(self.s._scheduler_yield_opportunistic(self.s._snapshot()))
-            self.assertEqual(self.s.work.node_for_job(owner["job_key"])["scheduler_pause"]["phase"], "released")
-            self.assertEqual([c[2] for c in self.cli.calls if c[0] == "pause"], [owner["job_key"], child["job_key"]])
-
-    def test_unverified_child_pause_intent_cannot_automatically_resume_the_owner(self):
-        with patch.dict(CAPS["starter"], {"opportunistic": True}):
-            owner, child = self.autonomous()
-            self.s._run_authorized(self.s._snapshot())
-            invoke = self.cli.invoke
-
-            def changed(args, **kwargs):
-                result = invoke(args, **kwargs)
-                if args[:3] == ["pause", "--key", child["job_key"]]:
-                    result["status"] = "waiting"
-                return result
-
-            with patch.object(self.cli, "invoke", side_effect=changed):
-                with self.assertRaisesRegex(ValueError, "child pause receipt"):
-                    self.s._scheduler_yield_opportunistic(self.s._snapshot())
-            self.assertIsNone(self.s._scheduler_owned(self.s._snapshot()))
-            self.assertEqual(
-                self.s.work.node_for_job(owner["job_key"])["scheduler_pause"]["opportunistic_return"]["phase"],
-                "pause_intent",
-            )
-            self.cli.jobs[child["job_key"]]["status"] = "waiting"
-            before = len([c for c in self.cli.calls if c[0] == "run"])
-            with self.assertRaisesRegex(ValueError, "pause outcome requires reconciliation"):
-                self.s._run_authorized(self.s._snapshot())
-            self.assertEqual(len([c for c in self.cli.calls if c[0] == "run"]), before)
-
-    def test_lower_priority_work_needs_fresh_authoritative_safe_wait_evidence(self):
-        for change in (
-            {"evidence_status": "retained_from_prior_observation"},
-            {"evidence_observed_tick": -5000},
-            {"evidence": {"autonomous_wait": True}},
-            {"pending_action": {}},
-        ):
-            self.setUp()
-            with patch.dict(CAPS["starter"], {"opportunistic": True}):
-                owner, _ = self.autonomous()
-                self.cli.jobs[owner["job_key"]].update(change)
-                self.s._run_authorized(self.s._snapshot())
-                self.assertFalse(any(c[0] == "pause" for c in self.cli.calls))
-
-    def test_native_wait_does_not_authorize_unapproved_or_nonopportunistic_work(self):
-        self.autonomous()
         self.s._run_authorized(self.s._snapshot())
-        self.assertFalse(any(c[0] == "pause" for c in self.cli.calls))
+        self.assertEqual([c[c.index("--capability") + 1] for c in self.requested()], ["c1"])
+        self.s._snapshot()
+        self.assertEqual([q["id"] for q in self.s.work.ready_nodes()], ["a", "c"])
+        self.assertEqual(sorted(self.cli.ran[0]), sorted(["manual", self.s.work.data["nodes"][1]["job_key"]]))
 
-    def test_strictly_higher_approved_work_pauses_exact_partial_job_then_dispatches(self):
-        low, high = self.prepared()
+    def test_retryable_admission_refusal_keeps_node_ready_but_other_refusals_block(self):
+        self.s.work.merge([node("a", "c0")], CAPS, self.cli.validate_requests, 1)
+        self.cli.fail_request = "another job must finish or pause first: at most 4 jobs may be active"
+        self.assertFalse(self.s._run_authorized(self.s._snapshot()))
+        a = self.s.work.data["nodes"][0]
+        self.assertEqual(a["status"], "ready")
+        self.assertNotIn("dispatch_blocked", a)
+        self.cli.fail_request = "native prerequisite unavailable"
+        self.s._run_authorized(self.s._snapshot())
+        self.assertEqual(a["status"], "blocked")
+        self.assertTrue(a["dispatch_blocked"])
+        self.cli.fail_request = None
+        self.s._run_authorized(self.s._snapshot())
+        self.assertEqual(len(self.requested()), 2)
+
+    def test_wait_decision_does_not_stop_dispatch_of_ready_nodes_or_running_jobs(self):
+        self.cli.jobs["running"] = job("running", "c0")
+        self.s.work.merge([node("ready", "c1")], CAPS, self.cli.validate_requests, 1)
+        self.cli.run_status = "waiting"
+        self.s._apply(decision("wait"), self.s._snapshot())
+        self.assertGreater(self.s.wait_until, self.clock())
         self.assertTrue(self.s._run_authorized(self.s._snapshot()))
-        self.assertEqual(self.cli.jobs[low["job_key"]]["status"], "paused")
-        self.assertEqual(self.cli.jobs[low["job_key"]]["evidence"], {"paid_assets": 5})
-        self.assertEqual(self.cli.jobs[low["job_key"]]["actions"], 7)
-        marker = self.s.work.node_for_job(low["job_key"])["scheduler_pause"]
-        self.assertEqual(marker["phase"], "paused")
-        self.assertEqual(marker["higher_task_id"], "high")
-        self.assertEqual(marker["job_identity"]["key"], low["job_key"])
-        actions = [c for c in self.cli.calls if c[0] in ("pause", "request", "run")]
-        self.assertEqual([c[0] for c in actions], ["pause", "request", "run"])
-        self.assertEqual(actions[0][2], low["job_key"])
-        self.assertIn(high["job_key"], actions[1])
+        self.assertEqual(len(self.requested()), 1)
+        self.assertEqual(sorted(self.cli.ran[0]), sorted(["running", self.s.work.data["nodes"][0]["job_key"]]))
 
-    def test_equal_or_lower_priorities_and_unready_dependencies_do_not_preempt(self):
-        for priority in (100, 99):
-            self.setUp()
-            low, high = self.prepared(priority)
-            self.s._run_authorized(self.s._snapshot())
-            self.assertFalse(any(c[0] in ("pause", "request") for c in self.cli.calls))
-            self.assertEqual(self.cli.jobs[low["job_key"]]["status"], "waiting")
-        self.setUp()
-        low, high = self.prepared(extra=[node("dep", priority=0)])
-        self.s.work.merge([node("high", deps=["dep"], priority=200)], CAPS, self.cli.validate_requests, 1)
-        self.s._run_authorized(self.s._snapshot())
-        self.assertFalse(any(c[0] in ("pause", "request") for c in self.cli.calls))
+    def test_several_active_jobs_continue_is_noop_and_untargeted_pause_must_name_its_target(self):
+        self.cli.jobs = {"a": job("a", "c0"), "b": job("b", "c1")}
+        context = self.s._snapshot()
+        self.s._apply(decision("continue"), context)
+        with self.assertRaisesRegex(ValueError, "unambiguous"):
+            self.s._apply(decision("pause"), context)
+        self.assertFalse(any(c[0] in ("pause", "resume", "retry") for c in self.cli.calls))
+        self.s._apply(decision("pause", "c1"), context)
+        self.assertEqual(self.cli.jobs["b"]["status"], "paused")
+        self.assertEqual(self.cli.jobs["a"]["status"], "waiting")
 
-    def test_unqueued_active_job_has_no_invented_default_priority(self):
-        self.s.work.merge([node("high", priority=200)], CAPS, self.cli.validate_requests, 1)
-        self.cli.jobs["manual"] = dict(
-            key="manual", world_id="w", capability="starter", parameters={}, status="waiting", actions=0
-        )
+    def test_request_is_queued_while_other_jobs_are_active(self):
+        self.cli.jobs["a"] = job("a", "c0")
         self.cli.run_status = "waiting"
-        self.s._run_authorized(self.s._snapshot())
-        self.assertFalse(any(c[0] in ("pause", "request") for c in self.cli.calls))
-        self.assertEqual([c[2] for c in self.cli.calls if c[0] == "run"], ["manual"])
+        self.s._apply(decision("request", "c1"), self.s._snapshot())
+        self.assertTrue(self.s._run_authorized(self.s._snapshot()))
+        self.assertEqual([c[c.index("--capability") + 1] for c in self.requested()], ["c1"])
+        self.assertEqual(len(self.cli.ran[0]), 2)
 
-    def test_pending_unknown_or_running_jobs_never_preempt(self):
-        for field, value in (
-            ("pending_action", {}),
-            ("pending_action", {"type": "build"}),
-            ("reason", "action_outcome_unknown_reconcile_required"),
-            ("status", "running"),
-        ):
-            self.setUp()
-            low, _ = self.prepared()
-            self.cli.jobs[low["job_key"]][field] = value
-            self.s._run_authorized(self.s._snapshot())
-            self.assertFalse(any(c[0] in ("pause", "request") for c in self.cli.calls))
+    def test_snapshot_lists_every_active_job_before_recent_history(self):
+        for i in range(14):
+            self.cli.jobs["done" + str(i)] = job("done" + str(i), "c0", "succeeded", created_at=2000 + i)
+        for i in range(3):
+            self.cli.jobs["old" + str(i)] = job("old" + str(i), "c" + str(i + 1), created_at=i)
+        snapshot = self.s._snapshot()[4]
+        self.assertEqual(sorted(snapshot["active_jobs"]), ["old0", "old1", "old2"])
+        self.assertEqual(snapshot["max_active_jobs"], 4)
+        self.assertEqual(len(snapshot["jobs"]), 12)
+        self.assertEqual(sorted(q["key"] for q in snapshot["jobs"][:3]), ["old0", "old1", "old2"])
+        self.assertNotIn("opportunistic", json.dumps(snapshot["capabilities"]))
 
-    def test_new_uncertain_intent_and_changed_world_are_rechecked_before_pause(self):
-        low, _ = self.prepared()
+
+class LunaTriggerTests(Fixture):
+    def accept(self, result=None):
+        """Simulate one Luna decision that finished now."""
         context = self.s._snapshot()
-        self.cli.jobs[low["job_key"]]["pending_action"] = {}
-        self.s._run_authorized(context)
-        self.assertFalse(any(c[0] in ("pause", "request") for c in self.cli.calls))
-        self.setUp()
-        low, _ = self.prepared()
+        results = queue.Queue()
+        results.put((True, result or decision()))
+        self.s.pending_decision = {"result": results, "context": context, "started_at": self.clock()}
+        self.s.last_decision_time = self.clock()
+        self.s.queue_low_at_decision = self.s._queue_low()
+        self.s._poll_decision()
+
+    def fill(self):
+        self.s.work.merge([node("q1", priority=1), node("q2", "power", ["q1"])], CAPS, self.cli.validate_requests, 1)
+
+    def due(self):
+        return self.s._decision_due(self.s._snapshot()[1])
+
+    def start_queued_nodes(self):
+        """Both queued nodes become running jobs: the queue drains without a terminal event."""
+        for q in self.s.work.data["nodes"]:
+            self.cli.jobs[q["job_key"]] = job(q["job_key"], q["capability"])
+
+    def test_first_cycle_and_forced_decisions_are_due(self):
+        self.assertTrue(self.due())
+        self.fill()
+        self.accept()
+        self.clock.advance(21)
+        self.assertFalse(self.due())
+        self.s.force_decision = True
+        self.assertTrue(self.due())
+
+    def test_terminal_states_and_changed_blocked_reasons_trigger_but_running_changes_do_not(self):
+        self.fill()
+        self.cli.jobs = {"old": job("old", status="succeeded"), "b": job("b", "power")}
+        self.accept()
+        self.clock.advance(21)
+        self.cli.jobs["b"]["status"] = "running"
+        self.assertFalse(self.due())
+        self.cli.jobs["b"].update(status="blocked", reason="missing_iron")
+        self.assertTrue(self.due())
+        self.accept()
+        self.clock.advance(21)
+        self.assertFalse(self.due())
+        self.cli.jobs["b"]["reason"] = "missing_power"
+        self.assertTrue(self.due())
+
+    def test_terminal_change_while_luna_thinks_remains_a_new_event(self):
+        self.fill()
+        self.cli.jobs["a"] = job("a")
         context = self.s._snapshot()
-        self.cli.jobs[low["job_key"]]["world_id"] = "other"
-        with self.assertRaises(ValueError):
-            self.s._run_authorized(context)
-        self.assertFalse(any(c[0] == "pause" for c in self.cli.calls))
+        results = queue.Queue()
+        results.put((True, decision()))
+        self.s.pending_decision = {"result": results, "context": context, "started_at": self.clock()}
+        self.s.last_decision_time = self.clock()
+        self.cli.jobs["a"]["status"] = "succeeded"
+        self.s._poll_decision()
+        self.clock.advance(21)
+        self.assertTrue(self.due())
 
-    def test_stop_between_pause_and_dispatch_preserves_owned_marker_without_new_run(self):
-        low, _ = self.prepared()
-        original = self.cli.invoke
+    def test_queue_becoming_low_triggers_once_per_low_episode(self):
+        self.fill()
+        self.accept()
+        self.clock.advance(21)
+        self.assertFalse(self.due())
+        self.start_queued_nodes()
+        self.assertTrue(self.due())
+        self.accept()
+        self.clock.advance(21)
+        self.assertFalse(self.due())
 
-        def stopping(args, **kwargs):
-            r = original(args, **kwargs)
-            if args[0] == "pause":
-                (self.root / STOP_FILE).write_text(json.dumps(dict(request_id="boundary", world_id="w")))
-            return r
+    def test_max_interval_triggers_with_a_full_queue(self):
+        self.fill()
+        self.accept()
+        self.clock.advance(299)
+        self.assertFalse(self.due())
+        self.clock.advance(2)
+        self.assertTrue(self.due())
 
-        with patch.object(self.cli, "invoke", side_effect=stopping):
-            self.assertFalse(self.s._run_authorized(self.s._snapshot()))
-        self.assertEqual(self.s.work.node_for_job(low["job_key"])["scheduler_pause"]["phase"], "paused")
-        self.assertFalse(any(c[0] in ("request", "run") for c in self.cli.calls))
+    def test_minimum_interval_and_error_backoff_hold_every_trigger(self):
+        self.cli.jobs["a"] = job("a")
+        self.accept()
+        self.cli.jobs["a"]["status"] = "succeeded"
+        self.clock.advance(19)
+        self.assertFalse(self.due())
+        self.clock.advance(2)
+        self.assertTrue(self.due())
+        self.s.backoff_until = self.clock() + 30
+        self.assertFalse(self.due())
 
-    def test_actor_changes_before_pause_or_resume_do_not_retarget(self):
-        low, high = self.prepared()
-        context = self.s._snapshot()
-        self.cli.actor = actor(unit=19)
-        with self.assertRaises(ValueError):
-            self.s._run_authorized(context)
-        self.assertFalse(any(c[0] == "pause" for c in self.cli.calls))
-        self.setUp()
-        low, high = self.prepared()
-        self.s._run_authorized(self.s._snapshot())
-        self.cli.jobs[high["job_key"]]["status"] = "succeeded"
-        self.cli.actor = actor(unit=19)
-        with self.assertRaises(ValueError):
-            self.s._run_authorized(self.s._snapshot())
-        self.assertFalse(any(c[0] == "resume" for c in self.cli.calls))
+    def test_wait_suppresses_low_queue_trigger_until_it_expires_but_not_terminal_events(self):
+        self.fill()
+        self.accept(decision("wait"))
+        self.start_queued_nodes()
+        self.clock.advance(30)
+        self.assertFalse(self.due())
+        self.clock.advance(31)
+        self.assertTrue(self.due())
+        self.clock.advance(-31)
+        first = self.s.work.data["nodes"][0]["job_key"]
+        self.cli.jobs[first]["status"] = "failed"
+        self.assertTrue(self.due())
 
-    def test_actor_change_after_pause_prevents_higher_dispatch(self):
-        self.prepared()
-        original = self.cli.invoke
+    def test_interval_rule_uses_the_decision_interval_as_max_floor_unless_max_is_explicit(self):
+        def make(**kwargs):
+            return Supervisor(self.root, self.client, cli=self.cli, clock=self.clock, **kwargs)
 
-        def changed(args, **kwargs):
-            result = original(args, **kwargs)
-            if args[0] == "pause":
-                self.cli.actor = actor(unit=19)
-            return result
+        self.assertEqual(make(decision_interval=60).max_decision_interval, 300)
+        self.assertEqual(make(decision_interval=600).max_decision_interval, 600)
+        small = make(decision_interval=60, max_decision_interval=10)
+        self.assertEqual((small.max_decision_interval, small.minimum_decision_interval), (10, 10))
+        self.assertEqual(make().minimum_decision_interval, 20)
 
-        with patch.object(self.cli, "invoke", side_effect=changed):
-            with self.assertRaises(ValueError):
-                self.s._run_authorized(self.s._snapshot())
-        self.assertFalse(any(c[0] in ("request", "run") for c in self.cli.calls))
 
-    def test_completed_higher_work_resumes_only_scheduler_owned_job_across_restart(self):
-        low, high = self.prepared()
-        self.s._run_authorized(self.s._snapshot())
-        self.cli.jobs[high["job_key"]]["status"] = "succeeded"
-        restarted = Supervisor(self.root, self.client, cli=self.cli, clock=self.clock, sleep=self.clock.advance)
-        self.assertTrue(restarted._run_authorized(restarted._snapshot()))
-        self.assertEqual([c[2] for c in self.cli.calls if c[0] == "resume"], [low["job_key"]])
-        self.assertEqual(restarted.work.node_for_job(low["job_key"])["scheduler_pause"]["phase"], "resumed")
-        self.assertEqual(self.cli.jobs[low["job_key"]]["evidence"], {"paid_assets": 5})
+class AutopilotTests(Fixture):
+    def install(self, rows):
+        calls = []
 
-    def test_remaining_ready_priority_wins_before_lower_scheduler_resume(self):
-        low, high = self.prepared(extra=[node("middle", priority=150)])
-        self.s._run_authorized(self.s._snapshot())
-        self.cli.jobs[high["job_key"]]["status"] = "succeeded"
-        self.s._run_authorized(self.s._snapshot())
-        middle = self.s.work.data["nodes"][2]
-        self.assertEqual(self.cli.jobs[middle["job_key"]]["status"], "waiting")
-        self.assertFalse(any(c[0] == "resume" for c in self.cli.calls))
-        self.cli.jobs[middle["job_key"]]["status"] = "succeeded"
-        self.s._run_authorized(self.s._snapshot())
-        self.assertEqual([c[2] for c in self.cli.calls if c[0] == "resume"], [low["job_key"]])
+        def planner(jobs, queue_nodes, observation, capabilities, limit=3):
+            calls.append(dict(jobs=jobs, nodes=queue_nodes, tick=observation["tick"], limit=limit))
+            return deepcopy(rows)
 
-    def test_user_repeated_pause_even_with_identical_job_fields_releases_scheduler_ownership(self):
-        low, high = self.prepared()
-        self.s._run_authorized(self.s._snapshot())
-        before = deepcopy(self.cli.jobs[low["job_key"]])
-        self.cli.invoke(["pause", "--key", low["job_key"]])
-        self.assertEqual(before, self.cli.jobs[low["job_key"]])
-        self.cli.jobs[high["job_key"]]["status"] = "succeeded"
-        self.s._run_authorized(self.s._snapshot())
-        self.assertFalse(any(c[0] == "resume" for c in self.cli.calls))
-        self.assertEqual(self.s.work.node_for_job(low["job_key"])["scheduler_pause"]["phase"], "released")
+        patcher = patch.object(Supervisor, "_load_autopilot", return_value=planner)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
 
-    def test_explicit_model_pause_of_already_paused_job_cancels_automatic_resume(self):
-        low, high = self.prepared()
-        self.s._run_authorized(self.s._snapshot())
-        self.cli.jobs[high["job_key"]]["status"] = "succeeded"
-        self.s._apply(decision("pause", "starter"), self.s._snapshot())
-        self.s._run_authorized(self.s._snapshot())
-        current = self.s.work.node_for_job(low["job_key"])
-        self.assertTrue(current["paused"])
-        self.assertEqual(current["scheduler_pause"]["phase"], "released")
-        self.assertFalse(any(c[0] == "resume" for c in self.cli.calls))
+    def test_low_queue_merges_autopilot_nodes_through_queue_validation(self):
+        calls = self.install([node("auto_starter", priority=50), node("not_auto"), node("auto_bad", "unknown")])
+        self.assertFalse(self.s._autopilot(self.s._snapshot()))
+        events = [json.loads(q)["event"] for q in self.s.event_path.read_text(encoding="utf-8").splitlines()]
+        self.assertIn("autopilot_rejected", events)
+        self.assertEqual(self.s.work.data["nodes"], [])
+        self.assertEqual(self.s.errors, 0)
+        calls = self.install([node("auto_starter", priority=50), node("not_auto")])
+        self.assertTrue(self.s._autopilot(self.s._snapshot()))
+        self.assertEqual([q["id"] for q in self.s.work.data["nodes"]], ["auto_starter"])
+        self.assertEqual(self.s.work.ready()["id"], "auto_starter")
+        self.assertEqual(calls[0]["limit"], 3)
 
-    def test_unconfirmed_pause_intent_after_restart_never_adopts_a_user_pause(self):
-        low, high = self.prepared()
-        self.s._run_authorized(self.s._snapshot())
-        self.cli.jobs[high["job_key"]]["status"] = "succeeded"
-        self.s.work.node_for_job(low["job_key"])["scheduler_pause"]["phase"] = "pause_intent"
-        self.s.work.save()
-        restarted = Supervisor(self.root, self.client, cli=self.cli, clock=self.clock, sleep=self.clock.advance)
-        self.assertFalse(restarted._run_authorized(restarted._snapshot()))
-        self.assertFalse(any(c[0] == "resume" for c in self.cli.calls))
+    def test_full_queue_does_not_ask_autopilot(self):
+        calls = self.install([node("auto_starter")])
+        self.s.work.merge([node("a"), node("b", "power", ["a"])], CAPS, self.cli.validate_requests, 1)
+        self.assertFalse(self.s._autopilot(self.s._snapshot()))
+        self.assertEqual(calls, [])
 
-    def test_no_oscillation_while_higher_job_waits_and_unknown_paused_jobs_stay_paused(self):
-        low, high = self.prepared()
-        self.s._run_authorized(self.s._snapshot())
-        for _ in range(3):
-            self.s._run_authorized(self.s._snapshot())
-        self.assertEqual(len([c for c in self.cli.calls if c[0] == "pause"]), 1)
-        self.assertFalse(any(c[0] == "resume" for c in self.cli.calls))
-        self.cli.jobs[high["job_key"]]["status"] = "succeeded"
-        self.cli.jobs[low["job_key"]]["pending_action"] = {"type": "build"}
-        self.s._run_authorized(self.s._snapshot())
-        self.assertFalse(any(c[0] == "resume" for c in self.cli.calls))
+    def test_missing_progression_module_or_function_means_no_autopilot(self):
+        with patch.dict(sys.modules, {"factorio_agent.progression": None}):
+            self.assertIsNone(REAL_LOAD_AUTOPILOT(self.s))
+        with patch.dict(sys.modules, {"factorio_agent.progression": types.ModuleType("progression")}):
+            self.assertIsNone(REAL_LOAD_AUTOPILOT(self.s))
 
-    def test_changed_paused_identity_or_truncated_control_journal_never_resumes(self):
-        low, high = self.prepared()
+    def test_luna_node_with_same_capability_and_parameters_is_skipped_and_its_dependents_redirected(self):
+        self.install([node("auto_starter", priority=50)])
+        self.s._autopilot(self.s._snapshot())
+        self.s._apply(decision(nodes=[node("starter"), node("power", "power", ["starter"])]), self.s._snapshot())
+        ids = {q["id"]: q for q in self.s.work.data["nodes"]}
+        self.assertEqual(sorted(ids), ["auto_starter", "power"])
+        self.assertEqual(ids["power"]["depends_on"], ["auto_starter"])
         self.s._run_authorized(self.s._snapshot())
-        self.cli.jobs[high["job_key"]]["status"] = "succeeded"
-        self.cli.jobs[low["job_key"]]["created_tick"] = 999
-        self.s._run_authorized(self.s._snapshot())
-        self.assertFalse(any(c[0] == "resume" for c in self.cli.calls))
-        self.setUp()
-        low, high = self.prepared()
-        self.s._run_authorized(self.s._snapshot())
-        self.cli.jobs[high["job_key"]]["status"] = "succeeded"
-        (self.root / "job-events.jsonl").write_bytes(b"")
-        with self.assertRaises(ValueError):
-            self.s._run_authorized(self.s._snapshot())
-        self.assertFalse(any(c[0] == "resume" for c in self.cli.calls))
+        self.assertEqual(len([c for c in self.cli.calls if c[0] == "request"]), 1)
+        events = [json.loads(q) for q in self.s.event_path.read_text(encoding="utf-8").splitlines()]
+        skipped = [q for q in events if q["event"] == "queue_duplicates_skipped"]
+        self.assertEqual(skipped[0]["task_ids"], ["starter"])
 
-    def test_scheduler_paused_dependencies_remain_immutable_and_lifecycle_resume_stays_exact(self):
-        low, high = self.prepared(extra=[node("dep", priority=0)])
-        self.s._run_authorized(self.s._snapshot())
-        with self.assertRaises(ValueError):
-            self.s.work.merge([node("low", deps=["dep"], priority=100)], CAPS, self.cli.validate_requests, 1)
+    def test_completed_duplicate_is_skipped_but_a_blocked_one_can_be_replaced(self):
+        self.s.work.merge([node("auto_starter")], CAPS, self.cli.validate_requests, 1)
+        key = self.s.work.data["nodes"][0]["job_key"]
+        self.cli.jobs[key] = job(key, status="succeeded")
+        self.s._apply(decision(nodes=[node("again")]), self.s._snapshot())
+        self.assertEqual([q["id"] for q in self.s.work.data["nodes"]], ["auto_starter"])
+        self.cli.jobs[key]["status"] = "blocked"
+        self.s._apply(decision(nodes=[node("again")]), self.s._snapshot())
+        self.assertEqual([q["id"] for q in self.s.work.data["nodes"]], ["auto_starter", "again"])
+
+    def test_cycle_merges_autopilot_before_luna_sees_the_snapshot(self):
+        self.install([node("auto_starter")])
+        self.cli.run_status = "waiting"
+        self.s._cycle()
+        self.assertTrue(self.client.called.wait(5))
+        self.assertIn("auto_starter", [q["id"] for q in self.client.calls[0]["work_queue"]])
+
+
+class SafeStopTests(Fixture):
+    def test_safe_stop_pauses_every_active_job_and_restart_resumes_all_of_them(self):
+        self.cli.jobs = {k: job(k, "c" + k) for k in ("1", "2", "3")}
+        self.cli.jobs["done"] = job("done", status="succeeded")
         self.s.stop_marker = dict(request_id="safe", world_id="w")
-        self.assertTrue(self.s.safe_stop()["saved"])
+        result = self.s.safe_stop()
+        self.assertTrue(result["saved"])
+        commands = [c for c in self.cli.calls if c[0] in ("pause", "checkpoint")]
+        self.assertEqual(sorted(c[2] for c in commands[:3]), ["1", "2", "3"])
+        self.assertEqual(commands[-1], ["checkpoint"])
+        self.assertEqual(len(result["pause_receipts"]), 3)
+        self.assertEqual(result["pause_receipt"], result["pause_receipts"][0])
+        self.assertEqual(result["active_job_keys"], [])
         restarted = Supervisor(self.root, self.client, cli=self.cli, clock=self.clock, sleep=self.clock.advance)
+        self.assertEqual(sorted(restarted.resume_job_keys), ["1", "2", "3"])
         self.assertTrue(restarted._resume_known(restarted._snapshot()))
-        self.assertEqual([c[2] for c in self.cli.calls if c[0] == "resume"], [high["job_key"]])
+        self.assertEqual(sorted(c[2] for c in self.cli.calls if c[0] == "resume"), ["1", "2", "3"])
+        self.assertTrue(all(self.cli.jobs[k]["status"] == "waiting" for k in ("1", "2", "3")))
+        self.assertEqual(restarted.state["resume_job_keys"], [])
+        self.assertFalse(any(c[0] == "request" for c in self.cli.calls))
+
+    def test_missing_saved_job_blocks_resume_and_unresumed_keys_survive_another_stop(self):
+        self.cli.jobs = {"1": job("1", status="paused")}
+        path = self.root / STATE_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        receipts = [{"key": "1"}, {"key": "gone"}]
+        path.write_text(json.dumps(dict(status="safe_stopped", saved=True, world_id="w", pause_receipts=receipts)))
+        restarted = Supervisor(self.root, self.client, cli=self.cli, clock=self.clock, sleep=self.clock.advance)
+        with self.assertRaisesRegex(ValueError, "identity missing"):
+            restarted._resume_known(restarted._snapshot())
+        self.assertEqual(restarted.resume_job_keys, ["gone"])
+        restarted.resume_job_keys = ["1"]
+        self.cli.jobs["1"]["status"] = "paused"
+        restarted.stop_marker = dict(request_id="again", world_id="w")
+        result = restarted.safe_stop()
+        self.assertEqual([q["key"] for q in result["pause_receipts"]], ["1"])
+
+
+class LegacyQueueTests(Fixture):
+    def test_queue_written_with_scheduler_pause_fields_loads_without_them(self):
+        self.s.work.merge([node("low"), node("high", "power")], CAPS, self.cli.validate_requests, 1)
+        data = json.loads(self.s.work.path.read_text(encoding="utf-8"))
+        data["nodes"][0].update(
+            status="scheduler_paused",
+            scheduler_pause={"phase": "paused", "higher_task_id": "high"},
+            scheduler_pause_history=[{"phase": "released"}],
+        )
+        self.s.work.path.write_text(json.dumps(data), encoding="utf-8")
+        loaded = WorkQueue(self.s.work.path, "w")
+        low = loaded.data["nodes"][0]
+        self.assertNotIn("scheduler_pause", low)
+        self.assertNotIn("scheduler_pause_history", low)
+        self.assertEqual(low["status"], "blocked")
+        loaded.save()
+        self.assertNotIn("scheduler_pause", loaded.path.read_text(encoding="utf-8"))
+        restarted = Supervisor(self.root, self.client, cli=self.cli, clock=self.clock, sleep=self.clock.advance)
+        self.assertNotIn("scheduler_pause", json.dumps(restarted._snapshot()[4]["work_queue"]))
 
 
 class BridgeTests(unittest.TestCase):

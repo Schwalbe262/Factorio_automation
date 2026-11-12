@@ -75,17 +75,16 @@ and smelting rather than new large burner starter_capacity targets. Up to two
 starter cells remain available for bootstrapping or recovery; paid cells stay.
 Finish or repair an existing funded science batch before parallel handcrafting
 or starting another instance of the same research work.
-There is one active task: ready capacity work cannot run concurrently with a
-material-starved job. Merely queuing that investment behind the active task
-cannot shorten its wait. Explicitly pause it or approve a strictly higher
-priority ready task so the scheduler can switch at a safe boundary.
-During a proven autonomous_wait with background_work_safe, approve a ready
-prepare_components task for the next approved job's actual unlocked buildings.
-Use bounded absolute stock goals, current recipes and protected primary costs;
-never prepare a future locked design. The scheduler may temporarily run this
-approved opportunistic work even below the waiting parent's priority, then
-resume that exact parent. Native waits are opportunities to shorten later work;
-choose useful preparation from the real next job, not a fixed drill example.
+Up to 4 jobs run concurrently and are interleaved per action; only one job per
+capability is active at a time, and higher priority ready tasks start first.
+Queue several independent ready tasks instead of waiting: capacity or
+prepare_components work runs beside a material-starved job without pausing it.
+prepare_components should target the next approved job's actual unlocked
+buildings with bounded absolute stock goals, current recipes and protected
+primary costs; never prepare a future locked design.
+When the queue runs low the framework itself adds default next steps (IDs
+starting auto_); do not duplicate them. You are consulted on events (a job
+finished, blocked or failed, or the queue ran low), not on a timer.
 Use only documented capabilities and parameters. Current native research,
 enabled recipes, resources, power and producer readiness govern design choice.
 Never assume a later design is available because its prototype or an old game's

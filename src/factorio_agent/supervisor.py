@@ -1,10 +1,11 @@
-"""Periodic Luna task decisions; typed fresh-process execution and durable DAG."""
+"""Event-driven Luna task decisions over a durable DAG; up to four interleaved jobs per slice."""
 
 from __future__ import annotations
 
 import argparse
 from copy import deepcopy
 import hashlib
+from importlib import import_module
 import json
 import math
 import os
@@ -19,6 +20,7 @@ import uuid
 
 from factorio_agent.core.deterministic_character import _identity
 from factorio_agent.core.deterministic_state import RunLock, _atomic_json
+from factorio_agent.jobs import MAX_ACTIVE_JOBS
 
 
 STATE_FILE = Path("logs/controller-state.json")
@@ -29,6 +31,14 @@ REPO_ROOT = SOURCE_ROOT.parent
 ACTIVE = {"pending", "running", "waiting"}
 TERMINAL = {"succeeded", "blocked", "failed"}
 OPERATIONS = {"plan", "request", "continue", "retry", "pause", "wait"}
+QUEUED = ("pending", "ready")
+# Existing nodes in these states absorb a new node with the same capability and parameters.
+DEDUPE_STATUSES = {"pending", "ready", "running", "completed"}
+# Submit/control refusals that clear by themselves once another job finishes or a fresh observation exists.
+RETRYABLE_ADMISSION = ("is already active", "jobs may be active", "observe again")
+DEFAULT_MAX_DECISION_INTERVAL = 300
+LOW_QUEUE = 2
+AUTOPILOT_LIMIT = 3
 FORBIDDEN = {
     "x",
     "y",
@@ -174,26 +184,8 @@ def _hash(value):
     ).hexdigest()
 
 
-def _raw_hash(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
 def _positive(value):
     return type(value) in (int, float) and math.isfinite(value) and value > 0
-
-
-def autonomous_wait(job, tick):
-    evidence = job.get("evidence") or {}
-    observed = job.get("evidence_observed_tick")
-    return bool(
-        job.get("status") == "waiting"
-        and not _unknown(job)
-        and job.get("evidence_status") == "observation_result"
-        and type(observed) is int
-        and 0 <= tick - observed <= 1800
-        and evidence.get("autonomous_wait") is True
-        and evidence.get("background_work_safe") is True
-    )
 
 
 def _same_actor(a, b):
@@ -255,54 +247,51 @@ def stable_job_key(world, node):
     return "lunaq_" + _hash([world, node["id"], node["capability"], node["parameters"]])[:48]
 
 
-def _job_identity(job):
-    return {
-        k: deepcopy(job.get(k)) for k in ("key", "world_id", "capability", "parameters", "created_at", "created_tick")
-    }
-
-
-def _pause_binding(job):
-    return {
-        **_job_identity(job),
-        **{
-            k: deepcopy(job.get(k))
-            for k in ("status", "reason", "actions", "last_tick", "paused_at_tick", "paused_at_time")
-        },
-    }
-
-
 def _unknown(job):
     return job.get("pending_action") is not None or "outcome_unknown" in str(job.get("reason", ""))
 
 
-def _control_events(root, cursor, key, limit=512 * 1024):
-    """Incrementally check actual CLI control events, including repeated user pause."""
-    path = root / "job-events.jsonl"
-    if not path.exists():
-        if cursor:
-            raise ValueError("scheduler control journal disappeared")
-        return [], 0, True
-    size = path.stat().st_size
-    if type(cursor) is not int or cursor < 0 or size < cursor:
-        raise ValueError("scheduler control journal was truncated")
-    rows = []
-    with path.open("rb") as stream:
-        stream.seek(cursor)
-        while stream.tell() < size and stream.tell() - cursor < limit:
-            raw = stream.readline()
-            if not raw.endswith(b"\n"):
-                raise ValueError("scheduler control journal has an incomplete record")
-            if key.encode() not in raw:
-                continue
-            q = json.loads(raw)
-            if q.get("key") == key and q.get("event") in ("pause", "resume", "retry", "unknown_action_reconciled"):
-                rows.append(dict(event=q["event"], tick=q.get("tick"), sha256=hashlib.sha256(raw).hexdigest()))
-        end = stream.tell()
-    return rows, end, end >= size
+def _node_identity(node):
+    return _hash([node["capability"], node["parameters"]])
+
+
+def _validated_node(node, capabilities, seen):
+    """One typed queue node; DAG edges are a set, so order and repeats carry no meaning."""
+    required = {"id", "capability", "parameters", "priority", "depends_on", "reason"}
+    if not isinstance(node, dict) or set(node) != required:
+        raise ValueError("queue node requires exactly id/capability/parameters/priority/depends_on/reason")
+    name = node["id"]
+    deps = node["depends_on"]
+    if (
+        not isinstance(name, str)
+        or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name)
+        or name in seen
+        or node["capability"] not in capabilities
+        or not isinstance(node["parameters"], dict)
+        or type(node["priority"]) is not int
+        or not -10000 <= node["priority"] <= 10000
+        or not isinstance(deps, list)
+        or any(not isinstance(d, str) for d in deps)
+        or name in deps
+        or not isinstance(node["reason"], str)
+        or len(node["reason"]) > 2000
+    ):
+        raise ValueError("invalid unique typed queue node")
+    _no_raw(node["parameters"])
+    seen.add(name)
+    return dict(deepcopy(node), depends_on=sorted(set(deps)))
 
 
 class WorkQueue:
-    """World-bound append/merge queue; submitted task identity never changes."""
+    """World-bound append/merge queue; submitted task identity never changes.
+
+    Duplicate rule: a NEW node id whose capability and exact parameters equal an
+    existing pending, ready, running or completed node is skipped, and incoming
+    dependencies on it are redirected to that existing node. This keeps a Luna
+    plan from re-running work the autopilot already queued (and vice versa).
+    Blocked nodes do not absorb duplicates, so a fresh id can still replace them.
+    Duplicates inside one merge batch are kept: they are one planner's choice.
+    """
 
     def __init__(self, path, world):
         self.path, self.world = Path(path), world
@@ -321,91 +310,50 @@ class WorkQueue:
             if node.get("job_key") != stable_job_key(world, node):
                 raise ValueError("persistent queue job identity changed")
             _no_raw(node["parameters"])
+            self._strip_legacy(node)
+
+    @staticmethod
+    def _strip_legacy(node):
+        """Older versions stored a scheduler-owned pause protocol on nodes; it no longer exists."""
+        node.pop("scheduler_pause", None)
+        node.pop("scheduler_pause_history", None)
+        if node.get("status") == "scheduler_paused":
+            node["status"] = "blocked"
 
     def save(self):
         _atomic_json(self.path, self.data)
 
     def merge(self, nodes, capabilities, validator, tick, *, native_gates=None):
+        """Validate and persist nodes atomically; return the skipped duplicate ids."""
         result = deepcopy(self.data)
         index = {q["id"]: q for q in result["nodes"]}
+        seen = set()
+        rows = [_validated_node(node, capabilities, seen) for node in nodes]
+        aliases = self._duplicate_aliases(rows, index)
         incoming = set()
-        for node in nodes:
-            required = {"id", "capability", "parameters", "priority", "depends_on", "reason"}
-            if not isinstance(node, dict) or set(node) != required:
-                raise ValueError("queue node requires exactly id/capability/parameters/priority/depends_on/reason")
-            name = node["id"]
-            cap = node["capability"]
-            deps = node["depends_on"]
-            if (
-                not isinstance(name, str)
-                or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name)
-                or name in incoming
-                or cap not in capabilities
-                or not isinstance(node["parameters"], dict)
-                or type(node["priority"]) is not int
-                or not -10000 <= node["priority"] <= 10000
-                or not isinstance(deps, list)
-                or any(not isinstance(d, str) for d in deps)
-                or name in deps
-                or not isinstance(node["reason"], str)
-                or len(node["reason"]) > 2000
-            ):
+        for row in rows:
+            if row["id"] in aliases:
+                continue
+            row["depends_on"] = sorted({aliases.get(d, d) for d in row["depends_on"]})
+            if row["id"] in row["depends_on"]:
                 raise ValueError("invalid unique typed queue node")
-            # A DAG edge is a set membership, not a sequence or a multiset.
-            # Repeated/reordered edges cannot change execution semantics.
-            deps = sorted(set(deps))
-            _no_raw(node["parameters"])
-            incoming.add(name)
-            old = index.get(name)
+            incoming.add(row["id"])
+            old = index.get(row["id"])
             if old:
-                if old["capability"] != cap or old["parameters"] != node["parameters"]:
-                    raise ValueError("queue task identity is immutable; use a new node id")
-                if old["status"] in ("running", "completed", "scheduler_paused"):
-                    added = set(deps) - set(old["depends_on"])
-                    removed = set(old["depends_on"]) - set(deps)
-                    if added or removed:
-                        changes = (
-                            "; added="
-                            + (" ".join(sorted(added)[:4]) or "none")
-                            + "; removed="
-                            + (" ".join(sorted(removed)[:4]) or "none")
-                        )
-                        raise ValueError("cannot change dependencies after execution starts: " + name + changes)
-                    deps = list(old["depends_on"])
-                old.update(priority=node["priority"], depends_on=list(deps), reason=node["reason"])
-                if old["status"] not in ("running", "completed"):
-                    old.pop("dispatch_blocked", None)
+                self._update_existing(old, row)
             else:
-                row = dict(
-                    deepcopy(node),
-                    depends_on=list(deps),
+                new = dict(
+                    row,
                     status="pending",
-                    job_key=stable_job_key(self.world, node),
+                    job_key=stable_job_key(self.world, row),
                     created_at=time.time(),
                     paused=False,
                 )
-                result["nodes"].append(row)
-                index[name] = row
+                result["nodes"].append(new)
+                index[row["id"]] = new
         if len(result["nodes"]) > 512:
             raise ValueError("persistent queue exceeds512 nodes; explicit archival needed")
-        visiting = set()
-        done = set()
-
-        def visit(name):
-            if name not in index:
-                raise ValueError("unknown queue dependency: " + name)
-            if name in visiting:
-                raise ValueError("queue dependency cycle")
-            if name in done:
-                return
-            visiting.add(name)
-            for d in index[name]["depends_on"]:
-                visit(d)
-            visiting.remove(name)
-            done.add(name)
-
-        for name in index:
-            visit(name)
+        self._reject_cycles(index)
         from .capability_gates import reject_native_recipe_cycles
 
         reject_native_recipe_cycles(result["nodes"], native_gates, incoming)
@@ -424,6 +372,62 @@ class WorkQueue:
         )
         self.data = result
         self.save()
+        return sorted(aliases)
+
+    @staticmethod
+    def _duplicate_aliases(rows, index):
+        existing = {}
+        for q in index.values():
+            if q["status"] in DEDUPE_STATUSES:
+                existing.setdefault(_node_identity(q), q["id"])
+        return {
+            row["id"]: existing[_node_identity(row)]
+            for row in rows
+            if row["id"] not in index and _node_identity(row) in existing
+        }
+
+    @staticmethod
+    def _update_existing(old, row):
+        """Priority/reason may change; identity never, and started dependencies never."""
+        if old["capability"] != row["capability"] or old["parameters"] != row["parameters"]:
+            raise ValueError("queue task identity is immutable; use a new node id")
+        deps = row["depends_on"]
+        if old["status"] in ("running", "completed") or old.get("submitted"):
+            added = set(deps) - set(old["depends_on"])
+            removed = set(old["depends_on"]) - set(deps)
+            if added or removed:
+                changes = (
+                    "; added="
+                    + (" ".join(sorted(added)[:4]) or "none")
+                    + "; removed="
+                    + (" ".join(sorted(removed)[:4]) or "none")
+                )
+                raise ValueError("cannot change dependencies after execution starts: " + row["id"] + changes)
+            deps = list(old["depends_on"])
+        old.update(priority=row["priority"], depends_on=list(deps), reason=row["reason"])
+        if old["status"] not in ("running", "completed"):
+            old.pop("dispatch_blocked", None)
+
+    @staticmethod
+    def _reject_cycles(index):
+        visiting = set()
+        done = set()
+
+        def visit(name):
+            if name not in index:
+                raise ValueError("unknown queue dependency: " + name)
+            if name in visiting:
+                raise ValueError("queue dependency cycle")
+            if name in done:
+                return
+            visiting.add(name)
+            for d in index[name]["depends_on"]:
+                visit(d)
+            visiting.remove(name)
+            done.add(name)
+
+        for name in index:
+            visit(name)
 
     def refresh(self, jobs, capabilities):
         by_key = {q["key"]: q for q in jobs}
@@ -444,15 +448,8 @@ class WorkQueue:
                 q["last_job_status"] = job["status"]
                 q["last_reason"] = job.get("reason", "")
                 q["last_blocker"] = blocker_summary(job) if job["status"] in {"waiting", "blocked", "failed"} else {}
-                owned = q.get("scheduler_pause", {}).get("phase") == "paused" and not q.get("paused")
                 q["status"] = (
-                    "completed"
-                    if job["status"] == "succeeded"
-                    else "running"
-                    if job["status"] in ACTIVE
-                    else "scheduler_paused"
-                    if job["status"] == "paused" and owned
-                    else "blocked"
+                    "completed" if job["status"] == "succeeded" else "running" if job["status"] in ACTIVE else "blocked"
                 )
             elif q.get("submitted"):
                 q.update(status="blocked", last_reason="submitted_job_receipt_missing")
@@ -474,9 +471,17 @@ class WorkQueue:
             q["status"] = "ready" if not missing and not prerequisites and not q.get("paused") else "pending"
         self.save()
 
-    def ready(self):
+    def ready_nodes(self):
+        """Ready nodes in dispatch order: highest priority, then oldest, then id."""
         rows = [q for q in self.data["nodes"] if q["status"] == "ready"]
-        return min(rows, key=lambda q: (-q["priority"], q["created_at"], q["id"])) if rows else None
+        return sorted(rows, key=lambda q: (-q["priority"], q["created_at"], q["id"]))
+
+    def ready(self):
+        rows = self.ready_nodes()
+        return rows[0] if rows else None
+
+    def queued_count(self):
+        return sum(q["status"] in QUEUED for q in self.data["nodes"])
 
     def node_for_job(self, key):
         return next((q for q in self.data["nodes"] if q["job_key"] == key), None)
@@ -500,9 +505,6 @@ class WorkQueue:
             | {
                 "last_reason": _diagnostic_text(q.get("last_reason", "")),
                 "blocker": blocker_summary(q.get("last_blocker", {})),
-                "scheduler_pause": {k: q["scheduler_pause"].get(k) for k in ("phase", "higher_task_id")}
-                if q.get("scheduler_pause")
-                else None,
             }
             for q in self.data["nodes"]
             if q["status"] != "completed"
@@ -623,6 +625,17 @@ def actor_binding(value, world):
     )
 
 
+def _active_keys(jobs):
+    """Active job keys in the same order ``run --all`` advances them."""
+    active = [j for j in jobs if j["status"] in ACTIVE]
+    active.sort(key=lambda j: (-j.get("priority", 0), j.get("created_at", 0), j["key"]))
+    return [j["key"] for j in active]
+
+
+def _retryable_admission(reason):
+    return any(text in reason for text in RETRYABLE_ADMISSION)
+
+
 def compact_snapshot(observation, status, capabilities, work, actor, planner_error=None):
     def compact(value, depth=0):
         if depth > 5:
@@ -636,7 +649,9 @@ def compact_snapshot(observation, status, capabilities, work, actor, planner_err
         return value
 
     jobs = list(status.get("jobs", {}).values())
-    recent = sorted(jobs, key=lambda q: q.get("created_at", 0), reverse=True)
+    active = _active_keys(jobs)
+    # Every active job is listed first; the remaining rows are the most recent.
+    recent = sorted(jobs, key=lambda q: (q["key"] not in active, -q.get("created_at", 0)))
     return dict(
         schema_version=1,
         world_id=observation["world_id"],
@@ -663,12 +678,13 @@ def compact_snapshot(observation, status, capabilities, work, actor, planner_err
             k: {
                 "parameters": v.get("parameters", {}),
                 "requires": v.get("requires", []),
-                "opportunistic": v.get("opportunistic", False),
                 "effect": v.get("effect", "")[:160],
             }
             for k, v in capabilities.items()
         },
         verified_capabilities=sorted({q["capability"] for q in jobs if q["status"] == "succeeded"}),
+        max_active_jobs=MAX_ACTIVE_JOBS,
+        active_jobs=active,
         jobs=[
             {
                 k: q.get(k)
@@ -695,7 +711,41 @@ def compact_snapshot(observation, status, capabilities, work, actor, planner_err
     )
 
 
+def _resume_keys(prior, world):
+    """Job keys paused by the preceding successful safe stop of this world."""
+    if prior.get("world_id") != world or prior.get("saved") is not True or prior.get("status") != "safe_stopped":
+        return []
+    receipts = prior.get("pause_receipts")
+    if not isinstance(receipts, list):
+        # Older controller states stored one pause receipt.
+        single = prior.get("pause_receipt")
+        receipts = [single] if isinstance(single, dict) else []
+    return [r["key"] for r in receipts if isinstance(r, dict) and isinstance(r.get("key"), str)]
+
+
 class Supervisor:
+    """Durable queue dispatch with event-driven Luna planning.
+
+    Each cycle: snapshot -> resume jobs paused by the last safe stop -> merge
+    autopilot nodes when the queue is low -> accept a finished Luna decision ->
+    maybe start a Luna call -> submit ready nodes -> one ``run --all`` slice.
+
+    Up to ``MAX_ACTIVE_JOBS`` jobs are active; the job layer interleaves them per
+    action. Luna never gates dispatch: ready nodes run while Luna thinks, after a
+    ``wait`` decision and during error backoff.
+
+    Luna is called (see ``_decision_due``) on the first cycle, when a job became
+    terminal or changed its blocked/failed reason, when fewer than two nodes are
+    pending or ready (once per low episode: not again while the queue stays low
+    after a call made while it was low), or when ``max_decision_interval``
+    elapsed; never sooner than
+    ``minimum_decision_interval`` after the previous call and never during error
+    backoff. Interval rule: ``max_decision_interval`` defaults to
+    ``max(decision_interval, 300)``; an explicit value is used as given, and the
+    minimum interval is capped at that maximum. A ``wait`` decision suppresses
+    the low-queue and interval triggers for ``decision_interval`` seconds.
+    """
+
     def __init__(
         self,
         runtime,
@@ -705,7 +755,8 @@ class Supervisor:
         decision_interval=60,
         slice_seconds=25,
         max_seconds=None,
-        minimum_decision_interval=10,
+        minimum_decision_interval=20,
+        max_decision_interval=None,
         clock=time.time,
         sleep=time.sleep,
     ):
@@ -717,15 +768,21 @@ class Supervisor:
             or not _positive(slice_seconds)
             or slice_seconds > 50
             or (max_seconds is not None and not _positive(max_seconds))
+            or (max_decision_interval is not None and not _positive(max_decision_interval))
         ):
             raise ValueError("positive decision interval, slice<=50 and optional duration required")
         self.root = self.root.resolve()
         self.clock, self.sleep = clock, sleep
         self.client = client
         self.decision_interval = decision_interval
+        self.max_decision_interval = (
+            max(decision_interval, DEFAULT_MAX_DECISION_INTERVAL)
+            if max_decision_interval is None
+            else max_decision_interval
+        )
         self.slice_seconds = slice_seconds
         self.max_seconds = max_seconds
-        self.minimum_decision_interval = min(minimum_decision_interval, decision_interval)
+        self.minimum_decision_interval = min(minimum_decision_interval, self.max_decision_interval)
         self.world = json.loads((self.root / "world-settings.json").read_text(encoding="utf-8"))["world_id"]
         if not isinstance(self.world, str) or not self.world:
             raise ValueError("installed world identity required")
@@ -733,16 +790,7 @@ class Supervisor:
         self.state_path = self.root / STATE_FILE
         self.event_path = self.root / "logs/controller-events.jsonl"
         prior = json.loads(self.state_path.read_text(encoding="utf-8")) if self.state_path.exists() else {}
-        self.resume_job_key = (
-            prior.get("pause_receipt", {}).get("key")
-            if (
-                prior.get("world_id") == self.world
-                and prior.get("saved") is True
-                and prior.get("status") == "safe_stopped"
-                and isinstance(prior.get("pause_receipt"), dict)
-            )
-            else None
-        )
+        self.resume_job_keys = _resume_keys(prior, self.world)
         self.controller_id = uuid.uuid4().hex
         created = _identity(os.getpid())
         now = self.clock()
@@ -760,7 +808,9 @@ class Supervisor:
             status="starting",
             state="running",
             active_job_key=None,
+            active_job_keys=[],
             decision_interval=decision_interval,
+            max_decision_interval=self.max_decision_interval,
             slice_seconds=slice_seconds,
             model="gpt-6-luna",
             reasoning_effort="medium",
@@ -769,7 +819,7 @@ class Supervisor:
             decision_sequence=int(prior.get("decision_sequence", 0)),
             worker_stop_owned=False,
             saved=False,
-            resume_job_key=self.resume_job_key,
+            resume_job_keys=list(self.resume_job_keys),
         )
         self.cli = cli or CLIBridge(self.root, on_spawn=self._child_spawn, on_exit=self._child_exit)
         self.stop_marker = None
@@ -782,6 +832,7 @@ class Supervisor:
         self.last_decision_time = None
         self.force_decision = True
         self.pending_decision = None
+        self.queue_low_at_decision = False
 
     def _save(self, **updates):
         self.state.update(updates, updated_at=self.clock())
@@ -922,39 +973,41 @@ class Supervisor:
         ):
             raise ValueError("world rollback requires explicit reconciliation")
         jobs = list(status.get("jobs", {}).values())
-        active = [j for j in jobs if j["status"] in ACTIVE]
-        if len(active) > 1:
-            raise ValueError("multiple native jobs active in one world")
         self.work.refresh(jobs, capabilities)
-        self._save(last_observed_tick=tick, actor=actor, active_job_key=active[0]["key"] if active else None)
+        keys = _active_keys(jobs)
+        self._save(
+            last_observed_tick=tick,
+            actor=actor,
+            active_job_keys=keys,
+            active_job_key=keys[0] if keys else None,
+        )
         snapshot = compact_snapshot(observation, status, capabilities, self.work, actor, self.state.get("last_error"))
         self.last_snapshot = snapshot
         return observation, status, capabilities, actor, snapshot
 
+    def _queue_low(self):
+        return self.work.queued_count() < LOW_QUEUE
+
     def _decision_due(self, status):
+        """Whether to start a Luna call now; see the class docstring for the rule."""
         now = self.clock()
-        if self.pending_decision is not None:
-            return False
-        if now < self.backoff_until:
-            return False
-        jobs = list(status.get("jobs", {}).values())
-        if now < self.wait_until and not any(j["status"] in ACTIVE for j in jobs) and self.work.ready() is None:
+        if self.pending_decision is not None or now < self.backoff_until:
             return False
         if self.last_decision_time is None:
             return True
-        if now - self.last_decision_time < self.minimum_decision_interval:
+        since = now - self.last_decision_time
+        if since < self.minimum_decision_interval:
             return False
+        if self.force_decision:
+            return True
         signature = _terminal_signature(status)
-        event = any((self.last_job_signature or {}).get(key) != value for key, value in signature.items())
-        low = len([n for n in self.work.data["nodes"] if n["status"] in ("pending", "ready")]) < 2
-        return (
-            self.force_decision
-            or event
-            or now - self.last_decision_time >= self.decision_interval
-            or (
-                low and now - self.last_decision_time >= max(self.minimum_decision_interval, self.decision_interval / 2)
-            )
-        )
+        if any((self.last_job_signature or {}).get(key) != value for key, value in signature.items()):
+            return True
+        if now < self.wait_until:
+            return False
+        if self._queue_low() and not self.queue_low_at_decision:
+            return True
+        return since >= self.max_decision_interval
 
     def _start_decision(self, context):
         snapshot = context[4]
@@ -967,6 +1020,7 @@ class Supervisor:
                 result.put((False, exc))
 
         self.last_decision_time = self.clock()
+        self.queue_low_at_decision = self._queue_low()
         self.state["decision_sequence"] += 1
         self.pending_decision = dict(result=result, context=context, started_at=self.last_decision_time)
         self._save(status="deciding", luna_pending=True, last_decision_started_at=self.last_decision_time)
@@ -996,7 +1050,7 @@ class Supervisor:
         self.backoff_until = 0
         self._save(
             last_decision_at=self.clock(),
-            next_decision_at=self.last_decision_time + self.decision_interval,
+            next_decision_at=self.last_decision_time + self.max_decision_interval,
             last_decision=decision,
             status="running",
             last_error=None,
@@ -1055,376 +1109,80 @@ class Supervisor:
         return rows[0]
 
     def _resume_known(self, context):
-        if not self.resume_job_key:
+        """Resume every job the preceding safe stop paused, before any new dispatch.
+
+        A saved key whose job is missing, belongs to another world or has an
+        unknown action outcome stops the cycle; nothing unrelated replaces it.
+        """
+        if not self.resume_job_keys:
             return False
-        job = context[1].get("jobs", {}).get(self.resume_job_key)
-        if not job or job.get("world_id") != self.world:
-            raise ValueError("saved paused job identity missing; no unrelated replacement")
-        if job.get("pending_action") or job.get("reason") == "action_outcome_unknown_reconcile_required":
-            raise ValueError("saved job requires reviewed unknown-outcome reconciliation")
-        if job["status"] == "paused":
-            if self._stop_requested():
-                return False
-            self.cli.invoke(["resume", "--key", job["key"]])
-            self._event("resume_after_safe_start", key=job["key"])
-        elif job["status"] not in ACTIVE | TERMINAL:
-            raise ValueError("saved job cannot be safely resumed")
-        self.resume_job_key = None
-        self._save(resume_job_key=None)
+        jobs = context[1].get("jobs", {})
+        for key in list(self.resume_job_keys):
+            job = jobs.get(key)
+            if not job or job.get("world_id") != self.world:
+                raise ValueError("saved paused job identity missing; no unrelated replacement")
+            if job.get("pending_action") or job.get("reason") == "action_outcome_unknown_reconcile_required":
+                raise ValueError("saved job requires reviewed unknown-outcome reconciliation")
+            if job["status"] == "paused":
+                if self._stop_requested():
+                    return False
+                self.cli.invoke(["resume", "--key", key])
+                self._event("resume_after_safe_start", key=key)
+            elif job["status"] not in ACTIVE | TERMINAL:
+                raise ValueError("saved job cannot be safely resumed")
+            self.resume_job_keys.remove(key)
+            self._save(resume_job_keys=list(self.resume_job_keys))
         return True
 
-    def _release_scheduler_pause(self, node, reason):
-        marker = node.get("scheduler_pause")
-        if marker and marker.get("phase") in ("pause_intent", "paused", "resume_intent"):
-            marker.update(phase="released", released_reason=reason, released_at=self.clock())
-            self.work.save()
-            self._event("scheduler_pause_released", key=node["job_key"], reason=reason)
+    def _load_autopilot(self):
+        """The framework's default next-step planner, or None while it is unavailable."""
+        try:
+            return import_module(__package__ + ".progression").autopilot_nodes
+        except (ImportError, AttributeError):
+            return None
 
-    def _scheduler_owned(self, context):
-        _, status, caps, actor, _ = context
-        jobs = status.get("jobs", {})
-        nodes = {q["id"]: q for q in self.work.data["nodes"]}
-        completed = {q["capability"] for q in jobs.values() if q["status"] == "succeeded"}
-        eligible = []
-        for node in nodes.values():
-            marker = node.get("scheduler_pause", {})
-            if marker.get("phase") != "paused":
-                continue
-            job = jobs.get(node["job_key"])
-            if (
-                node.get("paused")
-                or marker.get("world_id") != self.world
-                or marker.get("task_id") != node["id"]
-                or marker.get("job_key") != node["job_key"]
-                or not job
-                or _unknown(job)
-                or _pause_binding(job) != marker.get("pause_binding")
-            ):
-                self._release_scheduler_pause(node, "paused_job_control_or_identity_changed")
-                continue
-            if not _same_actor(marker["actor"], actor) or actor.get("native_repair_pending"):
-                raise ValueError("scheduler paused actor identity changed; no automatic resume")
-            events, cursor, done = _control_events(self.root, marker["control_cursor"], node["job_key"])
-            if events:
-                self._release_scheduler_pause(node, "explicit_control_after_scheduler_pause")
-                continue
-            marker["control_cursor"] = cursor
-            self.work.save()
-            if (
-                not done
-                or node["capability"] not in caps
-                or any(nodes[d]["status"] != "completed" for d in node["depends_on"])
-                or any(q not in completed for q in caps[node["capability"]].get("requires", []))
-            ):
-                continue
-            if marker.get("yield_reason") == "autonomous_wait":
-                if marker.get("opportunistic_return", {}).get("phase") == "pause_intent":
-                    continue
-                other = jobs.get(marker.get("higher_job_key"))
-                target = nodes.get(marker.get("higher_task_id"), {})
-                if (other and other.get("status") in ACTIVE) or (not other and target.get("status") == "ready"):
-                    continue
-            eligible.append(node)
-        return min(eligible, key=lambda q: (-q["priority"], q["created_at"], q["id"])) if eligible else None
+    def _autopilot(self, context):
+        """When fewer than two nodes are pending or ready, merge framework default nodes.
 
-    def _scheduler_preempt(self, context):
-        active = [j for j in context[1].get("jobs", {}).values() if j["status"] in ACTIVE]
-        if len(active) != 1:
+        Autopilot nodes use Luna's queue node format with ids starting ``auto_``
+        and pass the same merge validation. A rejected batch is logged and does
+        not enter error backoff, so Luna planning and dispatch continue.
+        """
+        if not self._queue_low():
             return False
-        job = active[0]
-        node = self.work.node_for_job(job["key"])
-
-        def allowed(job, node, candidate, ctx):
-            return bool(
-                node
-                and candidate
-                and (
-                    candidate["priority"] > node["priority"]
-                    or (
-                        autonomous_wait(job, ctx[0]["tick"])
-                        and ctx[2].get(candidate["capability"], {}).get("opportunistic") is True
-                    )
-                )
-            )
-
-        def candidate(job, node, ctx):
-            rows = [q for q in self.work.data["nodes"] if q.get("status") == "ready" and allowed(job, node, q, ctx)]
-            return min(rows, key=lambda q: (-q["priority"], q["created_at"], q["id"])) if rows else None
-
-        higher = candidate(job, node, context)
-        if (
-            not node
-            or node.get("paused")
-            or not allowed(job, node, higher, context)
-            or job["status"] not in ("waiting", "pending")
-            or _unknown(job)
-            or node.get("scheduler_pause", {}).get("phase") in ("pause_intent", "resume_intent")
-        ):
+        planner = self._load_autopilot()
+        if planner is None:
             return False
-        if self._stop_requested() or (self.root / "stop.json").exists():
-            return False
-        fresh = self._snapshot()
-        if not _same_actor(fresh[3], context[3]) or fresh[3].get("native_repair_pending"):
-            raise ValueError("actor changed before scheduler pause")
-        current = fresh[1].get("jobs", {}).get(job["key"])
-        node = self.work.node_for_job(job["key"])
-        higher = candidate(current, node, fresh) if current else None
-        if (
-            not current
-            or _job_identity(current) != _job_identity(job)
-            or current["status"] not in ("waiting", "pending")
-            or _unknown(current)
-            or not allowed(current, node, higher, fresh)
-        ):
-            return False
-        if self._stop_requested() or (self.root / "stop.json").exists():
-            return False
-        old = node.get("scheduler_pause")
-        if old:
-            node.setdefault("scheduler_pause_history", []).append(deepcopy(old))
-            node["scheduler_pause_history"] = node["scheduler_pause_history"][-16:]
-        path = self.root / "job-events.jsonl"
-        cursor = path.stat().st_size if path.exists() else 0
-        marker = dict(
-            version=1,
-            phase="pause_intent",
-            world_id=self.world,
-            task_id=node["id"],
-            job_key=job["key"],
-            actor=deepcopy(fresh[3]),
-            job_identity=_job_identity(current),
-            higher_task_id=higher["id"],
-            higher_job_key=higher["job_key"],
-            active_priority=node["priority"],
-            higher_priority=higher["priority"],
-            controller_id=self.controller_id,
-            requested_at=self.clock(),
-            control_cursor=cursor,
-        )
-        marker["yield_reason"] = (
-            "autonomous_wait"
-            if autonomous_wait(current, fresh[0]["tick"])
-            and fresh[2].get(higher["capability"], {}).get("opportunistic") is True
-            else "higher_priority"
-        )
-        node["scheduler_pause"] = marker
-        self.work.save()
-        if self._stop_requested() or (self.root / "stop.json").exists():
-            marker["phase"] = "cancelled_before_pause"
-            self.work.save()
-            return False
-        receipt = self.cli.invoke(["pause", "--key", job["key"]])
-        if receipt.get("status") != "paused" or _unknown(receipt) or _job_identity(receipt) != marker["job_identity"]:
-            raise ValueError("scheduler pause receipt identity or status changed")
-        events, cursor, done = _control_events(self.root, cursor, job["key"])
-        if (
-            not done
-            or len(events) != 1
-            or events[0]["event"] != "pause"
-            or events[0]["tick"] != receipt.get("paused_at_tick")
-        ):
-            raise ValueError("scheduler pause has no unique completed native CLI control receipt")
-        marker.update(
-            phase="paused", pause_binding=_pause_binding(receipt), pause_event=events[0], control_cursor=cursor
-        )
-        if marker["yield_reason"] == "autonomous_wait":
-            marker["opportunistic_child_cursor"] = cursor
-        self.work.save()
-        self._event(
-            "scheduler_pause",
-            key=job["key"],
-            higher_task_id=higher["id"],
-            priority=node["priority"],
-            higher_priority=higher["priority"],
-            yield_reason=marker["yield_reason"],
-        )
-        return True
-
-    def _scheduler_yield_opportunistic(self, context):
-        """One bounded preparation slice, then preserve it paused and recheck its owner."""
-        active = [j for j in context[1].get("jobs", {}).values() if j["status"] in ACTIVE]
-        if (
-            len(active) != 1
-            or active[0].get("world_id") != self.world
-            or active[0]["status"] != "waiting"
-            or _unknown(active[0])
-        ):
-            return False
-        child = active[0]
-
-        def owner_for(ctx, job):
-            matches = [
-                n
-                for n in self.work.data["nodes"]
-                if n.get("scheduler_pause", {}).get("phase") == "paused"
-                and n["scheduler_pause"].get("yield_reason") == "autonomous_wait"
-                and n["scheduler_pause"].get("higher_job_key") == job["key"]
+        observation, status, capabilities, _, _ = context
+        jobs = list(status.get("jobs", {}).values())
+        known = {q["id"] for q in self.work.data["nodes"]}
+        try:
+            rows = planner(jobs, deepcopy(self.work.data["nodes"]), observation, capabilities, limit=AUTOPILOT_LIMIT)
+            rows = [
+                q
+                for q in (rows or [])[:AUTOPILOT_LIMIT]
+                if isinstance(q, dict) and str(q.get("id", "")).startswith("auto_") and q.get("id") not in known
             ]
-            if len(matches) != 1:
-                return None
-            node = matches[0]
-            marker = node["scheduler_pause"]
-            owner = ctx[1].get("jobs", {}).get(node["job_key"])
-            if (
-                node.get("paused")
-                or marker.get("world_id") != self.world
-                or marker.get("task_id") != node["id"]
-                or marker.get("job_key") != node["job_key"]
-                or not owner
-                or _unknown(owner)
-                or _pause_binding(owner) != marker.get("pause_binding")
-            ):
-                self._release_scheduler_pause(node, "opportunistic_parent_control_or_identity_changed")
-                return None
-            if not _same_actor(marker["actor"], ctx[3]) or ctx[3].get("native_repair_pending"):
-                raise ValueError("opportunistic paused actor changed; no automatic child control")
-            if marker.get("opportunistic_return", {}).get("phase") == "pause_intent":
-                return None
-            cursor = marker.get("opportunistic_child_cursor")
-            if type(cursor) is not int:
-                return None
-            events, _, done = _control_events(self.root, cursor, job["key"])
-            parent_events, _, parent_done = _control_events(self.root, marker["control_cursor"], node["job_key"])
-            if events or parent_events:
-                self._release_scheduler_pause(node, "explicit_control_during_opportunistic_slice")
-                return None
-            if not done or not parent_done:
-                return None
-            return node
-
-        parent = owner_for(context, child)
-        if parent is None or self._stop_requested() or (self.root / "stop.json").exists():
+            if not rows:
+                return False
+            self._merge(rows, capabilities, observation, "autopilot")
+        except Exception as exc:
+            self._event("autopilot_rejected", reason=str(exc)[:600])
             return False
-        fresh = self._snapshot()
-        current = fresh[1].get("jobs", {}).get(child["key"])
-        if (
-            not current
-            or _job_identity(current) != _job_identity(child)
-            or current["status"] != "waiting"
-            or _unknown(current)
-        ):
-            return False
-        if not _same_actor(fresh[3], context[3]):
-            raise ValueError("actor changed before opportunistic yield")
-        parent = owner_for(fresh, current)
-        child_node = self.work.node_for_job(current["key"])
-        if parent is None or not child_node or child_node.get("paused"):
-            return False
-        if self._stop_requested() or (self.root / "stop.json").exists():
-            return False
-        path = self.root / "job-events.jsonl"
-        cursor = path.stat().st_size if path.exists() else 0
-        marker = parent["scheduler_pause"]
-        returned = dict(
-            phase="pause_intent",
-            world_id=self.world,
-            child_task_id=child_node["id"],
-            child_job_key=current["key"],
-            child_identity=_job_identity(current),
-            actor=deepcopy(fresh[3]),
-            control_cursor=cursor,
-            requested_at=self.clock(),
-        )
-        marker["opportunistic_return"] = returned
-        self.work.save()
-        if self._stop_requested() or (self.root / "stop.json").exists():
-            returned["phase"] = "cancelled_before_pause"
-            self.work.save()
-            return False
-        receipt = self.cli.invoke(["pause", "--key", current["key"]])
-        if (
-            receipt.get("status") != "paused"
-            or _unknown(receipt)
-            or _job_identity(receipt) != returned["child_identity"]
-        ):
-            raise ValueError("opportunistic child pause receipt identity or status changed")
-        events, cursor, done = _control_events(self.root, cursor, current["key"])
-        if (
-            not done
-            or len(events) != 1
-            or events[0]["event"] != "pause"
-            or events[0]["tick"] != receipt.get("paused_at_tick")
-        ):
-            raise ValueError("opportunistic child pause has no unique completed control receipt")
-        returned.update(
-            phase="child_paused", pause_binding=_pause_binding(receipt), pause_event=events[0], control_cursor=cursor
-        )
-        child_node.update(paused=True, status="blocked", last_reason="opportunistic_slice_yielded_to_owner")
-        self.work.save()
-        self._event("scheduler_opportunistic_yield", key=current["key"], owner_key=parent["job_key"])
+        self.work.refresh(jobs, capabilities)
+        self._event("autopilot", task_ids=[q["id"] for q in rows])
         return True
 
-    def _scheduler_reserved_ready(self, context):
-        """Dispatch the exact reserved child rather than unrelated lower-priority work."""
-        nodes = {q["id"]: q for q in self.work.data["nodes"]}
-        rows = []
-        for parent in nodes.values():
-            marker = parent.get("scheduler_pause", {})
-            child = nodes.get(marker.get("higher_task_id"), {})
-            if (
-                marker.get("phase") != "paused"
-                or marker.get("yield_reason") != "autonomous_wait"
-                or child.get("status") != "ready"
-                or child.get("job_key") != marker.get("higher_job_key")
-                or parent.get("paused")
-                or marker.get("world_id") != self.world
-                or marker.get("job_key") != parent["job_key"]
-                or marker.get("task_id") != parent["id"]
-            ):
-                continue
-            owner = context[1].get("jobs", {}).get(parent["job_key"])
-            if not owner or _unknown(owner) or _pause_binding(owner) != marker.get("pause_binding"):
-                continue
-            if not _same_actor(marker["actor"], context[3]) or context[3].get("native_repair_pending"):
-                raise ValueError("actor changed before opportunistic dispatch")
-            cursor = marker.get("opportunistic_child_cursor")
-            if type(cursor) is not int:
-                continue
-            events, _, done = _control_events(self.root, cursor, child["job_key"])
-            parent_events, _, parent_done = _control_events(self.root, marker["control_cursor"], parent["job_key"])
-            if events or parent_events:
-                self._release_scheduler_pause(parent, "explicit_control_before_opportunistic_dispatch")
-                continue
-            if done and parent_done:
-                rows.append((parent, child))
-        return (
-            min(
-                rows,
-                key=lambda pair: (-pair[0]["priority"], -pair[1]["priority"], pair[1]["created_at"], pair[1]["id"]),
-            )
-            if rows
-            else None
+    def _merge(self, nodes, capabilities, observation, source):
+        skipped = self.work.merge(
+            nodes,
+            capabilities,
+            self.cli.validate_requests,
+            observation["tick"],
+            native_gates=observation.get("native_capability_gates"),
         )
-
-    def _scheduler_resume(self, context, node):
-        if self._stop_requested() or (self.root / "stop.json").exists():
-            return False
-        fresh = self._snapshot()
-        if not _same_actor(fresh[3], context[3]):
-            raise ValueError("actor changed before scheduler resume")
-        if any(j["status"] in ACTIVE for j in fresh[1].get("jobs", {}).values()):
-            return False
-        owned = self._scheduler_owned(fresh)
-        ready = self.work.ready()
-        rank = lambda q: (-q["priority"], q["created_at"], q["id"])
-        if not owned or owned["job_key"] != node["job_key"] or ready and rank(ready) < rank(owned):
-            return False
-        if self._stop_requested() or (self.root / "stop.json").exists():
-            return False
-        marker = owned["scheduler_pause"]
-        marker["phase"] = "resume_intent"
-        self.work.save()
-        if self._stop_requested() or (self.root / "stop.json").exists():
-            marker["phase"] = "paused"
-            self.work.save()
-            return False
-        receipt = self.cli.invoke(["resume", "--key", owned["job_key"]])
-        if receipt.get("status") not in ACTIVE or _unknown(receipt) or _job_identity(receipt) != marker["job_identity"]:
-            raise ValueError("scheduler resume receipt identity or status changed")
-        marker.update(phase="resumed", resumed_at=self.clock())
-        self.work.save()
-        self._event("scheduler_resume", key=owned["job_key"], priority=owned["priority"])
-        return True
+        if skipped:
+            self._event("queue_duplicates_skipped", source=source, task_ids=skipped[:16])
 
     def _apply(self, decision, context):
         observation, prompt_status, _, actor, _ = context
@@ -1444,20 +1202,10 @@ class Supervisor:
             or fresh.get("tick", -1) < observation["tick"]
         ):
             raise ValueError("fresh decision status world or tick changed")
-        jobs = list(status.get("jobs", {}).values())
-        active = [j for j in jobs if j["status"] in ACTIVE]
-        if len(active) > 1:
-            raise ValueError("multiple native jobs active during model decision")
         if self._stop_requested():
             return
-        self.work.refresh(jobs, capabilities)
-        self.work.merge(
-            decision["queue"],
-            capabilities,
-            self.cli.validate_requests,
-            fresh["tick"],
-            native_gates=fresh.get("native_capability_gates"),
-        )
+        self.work.refresh(list(status.get("jobs", {}).values()), capabilities)
+        self._merge(decision["queue"], capabilities, fresh, "luna")
         operation = decision["operation"]
         self._event(
             "decision",
@@ -1468,175 +1216,186 @@ class Supervisor:
             queue_nodes=len(decision["queue"]),
         )
         if operation == "request":
-            if active:
-                self._event(
-                    "decision_deferred",
-                    operation=operation,
-                    reason="fresh_active_job_must_finish",
-                    key=active[0]["key"],
-                )
-                return
-            node = dict(
-                id="now_"
-                + str(self.state["decision_sequence"])
-                + "_"
-                + _hash([decision["capability"], decision["parameters"]])[:12],
-                capability=decision["capability"],
-                parameters=decision["parameters"],
-                priority=0,
-                depends_on=[],
-                reason=decision["reason"],
-            )
-            self.work.merge([node], capabilities, self.cli.validate_requests, fresh["tick"])
-            self.wait_until = 0
+            self._queue_request(decision, capabilities, fresh)
         elif operation in ("continue", "retry", "pause"):
-            allowed = ACTIVE | {"paused"} if operation in ("continue", "pause") else {"blocked"}
-            # Bind intent to the job Luna saw, never whichever successor has
-            # become active during the asynchronous call.
-            intended = self._target(decision, prompt_status, allowed, missing_ok=True)
-            if intended is None:
-                self._event(
-                    "stale_decision",
-                    operation=operation,
-                    target_task_id=decision.get("target_task_id"),
-                    reason="no_target_in_decision_snapshot",
-                )
-                return
-            job = status.get("jobs", {}).get(intended["key"])
-            if not job or any(job.get(k) != intended.get(k) for k in ("key", "world_id", "capability", "parameters")):
-                raise ValueError("original decision target identity missing or changed; will not retarget")
-            controlled = self.work.node_for_job(job["key"])
-            if operation == "pause" and job["status"] == "paused" and controlled:
-                controlled["paused"] = True
-                self._release_scheduler_pause(controlled, "explicit_model_pause")
-                self.work.save()
-            if job["status"] not in allowed or (operation == "pause" and job["status"] == "paused"):
-                self._event(
-                    "stale_decision",
-                    operation=operation,
-                    key=job["key"],
-                    reason="original_target_no_longer_eligible",
-                    status=job["status"],
-                )
-                return
-            if operation in ("retry", "continue") and job["status"] not in ACTIVE and active:
-                self._event("stale_decision", operation=operation, key=job["key"], reason="another_job_already_active")
-                return
-            node = self.work.node_for_job(job["key"])
-            command = "resume" if operation == "continue" and job["status"] == "paused" else operation
-            if operation == "retry" and _unknown(job):
-                raise ValueError("uncertain outcome requires reviewed reconciliation, never model retry")
-            if command != "continue":
-                if self._stop_requested():
-                    return
-                if controlled:
-                    self._release_scheduler_pause(controlled, "explicit_model_" + command)
-                self.cli.invoke([command, "--key", job["key"]])
-            if node:
-                node["paused"] = operation == "pause"
-                self.work.save()
-            self.wait_until = 0
-        elif operation == "wait":
-            self.wait_until = self.clock() + self.decision_interval
-        else:
-            self.wait_until = 0
+            self._control(decision, prompt_status, status)
+        self.wait_until = self.clock() + self.decision_interval if operation == "wait" else 0
 
-    def _run_authorized(self, context):
-        observation, status, capabilities, actor, _ = context
+    def _queue_request(self, decision, capabilities, observation):
+        """A request is one more queue node; admission happens at dispatch."""
+        node = dict(
+            id="now_"
+            + str(self.state["decision_sequence"])
+            + "_"
+            + _hash([decision["capability"], decision["parameters"]])[:12],
+            capability=decision["capability"],
+            parameters=decision["parameters"],
+            priority=0,
+            depends_on=[],
+            reason=decision["reason"],
+        )
+        self._merge([node], capabilities, observation, "luna_request")
+
+    def _control(self, decision, prompt_status, status):
+        """Apply continue/retry/pause to the exact job Luna saw, never a successor.
+
+        Without ``target_task_id`` a ``continue`` is a no-op: every active job is
+        already running. ``retry``/``pause`` without a target need exactly one
+        matching job. Unknown action outcomes are never retried.
+        """
+        operation = decision["operation"]
+        if operation == "continue" and decision.get("target_task_id") is None:
+            self._event("decision_noop", operation=operation, reason="active_jobs_already_run")
+            return
+        allowed = ACTIVE | {"paused"} if operation in ("continue", "pause") else {"blocked"}
+        intended = self._target(decision, prompt_status, allowed, missing_ok=True)
+        if intended is None:
+            self._event(
+                "stale_decision",
+                operation=operation,
+                target_task_id=decision.get("target_task_id"),
+                reason="no_target_in_decision_snapshot",
+            )
+            return
+        job = status.get("jobs", {}).get(intended["key"])
+        if not job or any(job.get(k) != intended.get(k) for k in ("key", "world_id", "capability", "parameters")):
+            raise ValueError("original decision target identity missing or changed; will not retarget")
+        node = self.work.node_for_job(job["key"])
+        if operation == "pause" and job["status"] == "paused" and node:
+            node["paused"] = True
+            self.work.save()
+        if job["status"] not in allowed or (operation == "pause" and job["status"] == "paused"):
+            self._event(
+                "stale_decision",
+                operation=operation,
+                key=job["key"],
+                reason="original_target_no_longer_eligible",
+                status=job["status"],
+            )
+            return
+        if operation == "retry" and _unknown(job):
+            raise ValueError("uncertain outcome requires reviewed reconciliation, never model retry")
+        command = "resume" if operation == "continue" and job["status"] == "paused" else operation
+        if command != "continue" and not self._control_command(command, job["key"]):
+            return
+        if node:
+            node["paused"] = operation == "pause"
+            self.work.save()
+
+    def _control_command(self, command, key):
+        """Run one job control; a retryable admission refusal is deferred, not an error."""
         if self._stop_requested():
             return False
-        jobs = list(status.get("jobs", {}).values())
-        active = [j for j in jobs if j["status"] in ACTIVE]
-        if len(active) > 1:
-            raise ValueError("multiple jobs active")
-        if active and any(
-            q.get("scheduler_pause", {}).get("phase") == "paused"
-            and q["scheduler_pause"].get("opportunistic_return", {}).get("phase") == "pause_intent"
-            and q["scheduler_pause"]["opportunistic_return"].get("child_job_key") == active[0]["key"]
-            for q in self.work.data["nodes"]
-        ):
-            raise ValueError("opportunistic child pause outcome requires reconciliation")
-        if active and self._scheduler_yield_opportunistic(context):
-            if self._stop_requested():
-                return False
-            return self._run_authorized(self._snapshot())
-        if active and self._scheduler_preempt(context):
-            if self._stop_requested():
-                return False
-            return self._run_authorized(self._snapshot())
-        if not active:
-            self.work.refresh(jobs, capabilities)
-            node = self.work.ready()
-            reserved = self._scheduler_reserved_ready(context)
-            if reserved and (not node or node["priority"] <= reserved[0]["priority"]):
-                node = reserved[1]
-            paused = self._scheduler_owned(context)
-            if paused and (
-                not node
-                or (-paused["priority"], paused["created_at"], paused["id"])
-                <= (-node["priority"], node["created_at"], node["id"])
-            ):
-                if not self._scheduler_resume(context, paused):
-                    return False
-                return self._run_authorized(self._snapshot())
-            if node is None:
-                return False
-            if (self.root / "stop.json").exists():
-                raise ValueError("worker stop marker present; explicit lifecycle start/ownership check required")
-            self._world_guard()
-            fresh = self.cli.invoke(["observe"])
-            binding = actor_binding(self.cli.invoke(["actor-status"]), self.world)
-            if fresh.get("world_id") != self.world or not _same_actor(binding, actor):
-                raise ValueError("world/actor changed before queued request")
-            if self._stop_requested():
-                return False
-            try:
-                self.cli.invoke(
-                    [
-                        "request",
-                        "--key",
-                        node["job_key"],
-                        "--world-id",
-                        self.world,
-                        "--observed-tick",
-                        str(fresh["tick"]),
-                        "--capability",
-                        node["capability"],
-                        "--parameters",
-                        json.dumps(node["parameters"], separators=(",", ":"), allow_nan=False),
-                    ]
-                )
-            except Exception as exc:
-                node.update(status="blocked", dispatch_blocked=True, last_reason=str(exc))
-                self.work.save()
+        try:
+            self.cli.invoke([command, "--key", key])
+        except CLIError as exc:
+            if not _retryable_admission(str(exc)):
                 raise
-            node.update(status="running", submitted=True)
+            self._event("decision_deferred", operation=command, key=key, reason=str(exc)[:300])
+            return False
+        return True
+
+    def _fresh_tick(self, actor):
+        """A current tick for requests, after rechecking world and actor identity."""
+        if (self.root / "stop.json").exists():
+            raise ValueError("worker stop marker present; explicit lifecycle start/ownership check required")
+        self._world_guard()
+        fresh = self.cli.invoke(["observe"])
+        binding = actor_binding(self.cli.invoke(["actor-status"]), self.world)
+        if fresh.get("world_id") != self.world or not _same_actor(binding, actor):
+            raise ValueError("world/actor changed before queued request")
+        return fresh["tick"]
+
+    def _dispatch(self, context):
+        """Submit ready nodes, highest priority first, while fewer than MAX_ACTIVE_JOBS are active.
+
+        A node whose capability is already active stays ready, as does one whose
+        submit is refused for a retryable admission reason; any other refusal
+        blocks that node. Returns the active job keys after submission.
+        """
+        _, status, _, actor, _ = context
+        jobs = list(status.get("jobs", {}).values())
+        active = _active_keys(jobs)
+        busy = {j["capability"] for j in jobs if j["status"] in ACTIVE}
+        candidates = [q for q in self.work.ready_nodes() if q["capability"] not in busy]
+        if len(active) >= MAX_ACTIVE_JOBS or not candidates or self._stop_requested():
+            return active
+        tick = self._fresh_tick(actor)
+        for node in candidates:
+            if len(active) >= MAX_ACTIVE_JOBS or self._stop_requested():
+                break
+            if node["capability"] in busy:
+                continue
+            if self._submit(node, tick):
+                active.append(node["job_key"])
+                busy.add(node["capability"])
+        return active
+
+    def _submit(self, node, tick):
+        try:
+            self.cli.invoke(
+                [
+                    "request",
+                    "--key",
+                    node["job_key"],
+                    "--world-id",
+                    self.world,
+                    "--observed-tick",
+                    str(tick),
+                    "--capability",
+                    node["capability"],
+                    "--parameters",
+                    json.dumps(node["parameters"], separators=(",", ":"), allow_nan=False),
+                    "--priority",
+                    str(node["priority"]),
+                ]
+            )
+        except CLIError as exc:
+            reason = str(exc)
+            if _retryable_admission(reason):
+                self._event("dispatch_deferred", task_id=node["id"], reason=reason[:300])
+                return False
+            node.update(status="blocked", dispatch_blocked=True, last_reason=reason)
             self.work.save()
-            key = node["job_key"]
-        else:
-            key = active[0]["key"]
+            self._event("dispatch_blocked", task_id=node["id"], reason=reason[:300])
+            return False
+        node.update(status="running", submitted=True)
+        self.work.save()
+        return True
+
+    def _run_slice(self, active):
+        """One interleaved ``run --all`` slice; False when no job was active."""
+        if not active:
+            return False
         if (self.root / "stop.json").exists():
             raise ValueError("worker stop marker present; no new run slice")
         if self._stop_requested():
             return False
         self._world_guard()
-        self._save(status="running", active_job_key=key)
+        self._save(status="running", active_job_keys=list(active), active_job_key=active[0])
         receipt = self.cli.invoke(
-            ["run", "--key", key, "--seconds", str(self.slice_seconds)],
+            ["run", "--all", "--seconds", str(self.slice_seconds)],
             stop_requested=self._stop_requested,
             on_stop=self._worker_stop,
         )
+        jobs = receipt.get("jobs") or {}
         self._event(
             "slice",
-            key=key,
             status=receipt.get("status"),
-            reason=receipt.get("reason"),
             actions=receipt.get("actions"),
             tick=receipt.get("last_tick"),
+            jobs={k: {f: v.get(f) for f in ("status", "reason", "actions")} for k, v in list(jobs.items())[:8]},
         )
-        return True
+        return receipt.get("status") != "idle"
+
+    def _run_authorized(self, context):
+        """Dispatch ready approved nodes, then advance every active job for one slice."""
+        if self._stop_requested():
+            return False
+        return self._run_slice(self._dispatch(context))
 
     def safe_stop(self):
+        """Pause every active job, then checkpoint; ACK only after both succeed."""
         marker = self.stop_marker or {
             "request_id": "exit-" + self.controller_id,
             "world_id": self.world,
@@ -1652,15 +1411,17 @@ class Supervisor:
             if marker.get("world_id") != self.world or marker.get("invalid"):
                 raise ValueError("stop marker world or format changed")
             status = self.cli.invoke(["status"])
-            jobs = list(status.get("jobs", {}).values())
             if status.get("world_id") not in (None, self.world):
                 raise ValueError("job world changed while stopping")
-            active = [j for j in jobs if j["status"] in ACTIVE]
-            if len(active) > 1:
-                raise ValueError("more than one active job while stopping")
-            pause = None
-            if active:
-                pause = self.cli.invoke(["pause", "--key", active[0]["key"]])
+            jobs = status.get("jobs", {})
+            active = _active_keys(list(jobs.values()))
+            receipts = [self.cli.invoke(["pause", "--key", key]) for key in active]
+            # Jobs paused by an earlier safe stop and not yet resumed stay owed a resume.
+            receipts += [
+                jobs[key]
+                for key in self.resume_job_keys
+                if key not in active and jobs.get(key, {}).get("status") == "paused"
+            ]
             checkpoint = self.cli.invoke(["checkpoint"])
             if checkpoint.get("world_id") != self.world or checkpoint.get("status") != "checkpoint_requested":
                 raise ValueError("native checkpoint receipt missing")
@@ -1668,17 +1429,46 @@ class Supervisor:
                 status="safe_stopped",
                 state="stopped",
                 saved=True,
-                pause_receipt=pause,
+                pause_receipts=receipts,
+                pause_receipt=receipts[0] if receipts else None,
                 checkpoint_receipt=checkpoint,
                 stop_request_id=marker.get("request_id"),
                 active_job_key=None,
+                active_job_keys=[],
                 stopped_at=self.clock(),
             )
-            self._event("safe_stopped", stop_request_id=marker.get("request_id"), saved=True)
+            self._event("safe_stopped", stop_request_id=marker.get("request_id"), saved=True, paused=len(receipts))
         except Exception as exc:
             self._save(status="blocked", state="stopping", saved=False, stop_error=str(exc))
             self._event("stop_failed", reason=str(exc))
         return deepcopy(self.state)
+
+    def _cycle(self):
+        """One supervisor cycle; False when no job ran and the loop should idle briefly."""
+        context = self._snapshot()
+        if self._stop_requested():
+            return True
+        if self._resume_known(context):
+            context = self._snapshot()
+        if self._autopilot(context):
+            context = self._snapshot()
+        if self._poll_decision():
+            if self._stop_requested():
+                return True
+            context = self._snapshot()
+        if self._decision_due(context[1]):
+            self._start_decision(context)
+        if self._stop_requested():
+            return True
+        # Approved queue work runs while the Luna call is pending.
+        return self._run_authorized(context)
+
+    def _idle(self, seconds):
+        until = self.clock() + seconds
+        while self.clock() < until and not self._stop_requested():
+            if self._poll_decision():
+                break
+            self.sleep(0.25)
 
     def run(self):
         with RunLock(self.root / "controller.lock"):
@@ -1686,27 +1476,8 @@ class Supervisor:
             try:
                 while not self._stop_requested():
                     try:
-                        context = self._snapshot()
-                        if self._stop_requested():
-                            break
-                        if self._resume_known(context):
-                            context = self._snapshot()
-                        if self._poll_decision():
-                            if self._stop_requested():
-                                break
-                            context = self._snapshot()
-                        if self._decision_due(context[1]):
-                            self._start_decision(context)
-                        if self._stop_requested():
-                            break
-                        # Already approved queue successors run while the next
-                        # bounded Luna call is pending; no per-action model wait.
-                        if not self._run_authorized(context):
-                            until = self.clock() + 2
-                            while self.clock() < until and not self._stop_requested():
-                                if self._poll_decision():
-                                    break
-                                self.sleep(0.25)
+                        if not self._cycle():
+                            self._idle(2)
                     except Exception as exc:
                         self.errors += 1
                         self.backoff_until = self.clock() + min(300, 10 * 2 ** min(5, self.errors - 1))
@@ -1728,7 +1499,8 @@ class Supervisor:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime", type=Path)
-    parser.add_argument("--decision-interval", type=float, default=60)
+    parser.add_argument("--decision-interval", type=float, default=60, help="wait delay; max interval floor")
+    parser.add_argument("--max-decision-interval", type=float, help="default: max(decision interval, 300)")
     parser.add_argument("--slice-seconds", type=float, default=25)
     parser.add_argument("--max-seconds", type=float)
     parser.add_argument("--validate-requests", action="store_true", help=argparse.SUPPRESS)
@@ -1758,6 +1530,7 @@ def main(argv=None):
         args.runtime,
         client,
         decision_interval=args.decision_interval,
+        max_decision_interval=args.max_decision_interval,
         slice_seconds=args.slice_seconds,
         max_seconds=args.max_seconds,
     )
