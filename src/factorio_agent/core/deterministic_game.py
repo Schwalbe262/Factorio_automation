@@ -372,7 +372,11 @@ return success{world_id=d.world_id,surface=s.name,tick=game.tick,actor_unit_numb
             stats["seconds"] += elapsed
             # Per-script totals show which query dominates a slow planner.
             # Keyed by the start of the script, which names it well enough.
-            label = " ".join(body.split())[:72]
+            text = " ".join(body.split())
+            if text.startswith("if not d or d.world_id~="):
+                # Skip the world guard that WorldBoundGame puts first.
+                text = text.partition("end; ")[2]
+            label = text[:72]
             row = self.__dict__.setdefault("query_profile", {}).setdefault(label, [0, 0.0])
             row[0] += 1
             row[1] += elapsed
