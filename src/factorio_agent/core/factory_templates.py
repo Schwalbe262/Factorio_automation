@@ -256,7 +256,26 @@ def _fluid_row(
     return entities, ports
 
 
-def _steam_bank(count: int) -> tuple[list, list]:
+COAL_ENTRIES = ("west", "east", "south")
+
+
+def _coal_stub(x: float, entry: str) -> tuple[list[tuple[float, float, int]], tuple[float, float, int]]:
+    """Belt tiles feeding the boiler inserter at (x, 3), and the port where coal arrives.
+
+    The stub may come from either side or straight in, so the planner can pick
+    the one that faces the coal source instead of looping a belt around the
+    bank. Returns (tiles as (x, y, direction), port as (x, y, facing)).
+    """
+    if entry == "west":
+        return [(x + bx, 3, 4) for bx in range(-4, 1)], (x - 4, 3, 4)
+    if entry == "east":
+        return [(x + bx, 3, 12) for bx in range(0, 5)], (x + 4, 3, 12)
+    if entry == "south":
+        return [(x, 3 + by, 0) for by in range(0, 5)], (x, 7, 0)
+    raise ValueError("coal_entry must be west, east or south")
+
+
+def _steam_bank(count: int, coal_entry: str = "west") -> tuple[list, list]:
     # Installed base prototype: north boiler water ports (+/-1,+.5), steam
     # port (0,-.5); 3x5 engines have north/south ports at y=+/-2.
     entities, ports = [], []
@@ -267,15 +286,16 @@ def _steam_bank(count: int) -> tuple[list, list]:
             entities.append(_entity("steam-engine", x, y, width=3, height=5))
         for px in (-4, -3, -2):
             entities.append(_entity("pipe", x + px, 1, fluid="water"))
-        for bx in range(-4, 1):
-            entities.append(_entity("transport-belt", x + bx, 3, direction=4))
+        stub, (coal_x, coal_y, coal_facing) = _coal_stub(x, coal_entry)
+        for bx, by, direction in stub:
+            entities.append(_entity("transport-belt", bx, by, direction=direction))
         entities.append(_entity("burner-inserter", x, 2, direction=8))
         for y in (0, -4, -8):
             entities.append(_entity("small-electric-pole", x + 2, y))
         ports.extend(
             [
                 _port("fluid", "water", "input", x - 4, 1, 4, machine_index=i),
-                _port("item", "coal", "input", x - 4, 3, 4, machine_index=i),
+                _port("item", "coal", "input", coal_x, coal_y, coal_facing, machine_index=i),
                 _port("power", "electricity", "output", x + 2, 0, machine_index=i),
             ]
         )
@@ -293,6 +313,7 @@ def build_template(
     prototype_geometry: dict[str, Any] | None = None,
     anchor: dict[str, float] | None = None,
     rotation: int = 0,
+    coal_entry: str = "west",
 ) -> dict[str, Any]:
     """Create steam_bank, furnace_row, assembler_row, labs_row, chemical_row,
     or refinery_row. ``count`` counts machines (boiler/engine pairs for steam).
@@ -310,7 +331,7 @@ def build_template(
         if any(not isinstance(item, str) or not item for item in inputs) or len(set(inputs)) != len(inputs):
             raise ValueError("inputs must contain distinct nonempty item names")
         if template in {"steam_bank", "steam_power"}:
-            entities, ports = _steam_bank(count)
+            entities, ports = _steam_bank(count, coal_entry)
         elif template in {"furnace_row", "assembler_row", "labs_row"}:
             defaults = {"furnace_row": "stone-furnace", "assembler_row": "assembling-machine-1", "labs_row": "lab"}
             entities, ports = _solid_row(

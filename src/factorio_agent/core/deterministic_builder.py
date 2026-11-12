@@ -15,7 +15,7 @@ from typing import Any
 
 from .deterministic_game import BUILD_BATCH_LIMIT, BUILD_BATCH_NAMES
 from .deterministic_state import _atomic_json, stop_requested
-from .factory_templates import build_template, route_orthogonal, DIRECTIONS
+from .factory_templates import COAL_ENTRIES, DIRECTIONS, build_template, route_orthogonal
 from .deterministic_underground import underground_fields
 
 
@@ -774,19 +774,46 @@ return success{blocked=blocked,clearable=clearable}
                         site["water_out"]["y"] + dy * distance + dx * sideways,
                     )
                     anchor = _position(desired["x"] - px, desired["y"] - py)
-                    bank = build_template("steam_bank", anchor=anchor, rotation=rotation)
-                    if not bank["ok"] or not self.can_place(bank["entities"])["ok"]:
-                        continue
-                    pump = {"name": "offshore-pump", "position": site["position"], "direction": site["direction"]}
-                    water = next(p for p in bank["ports"] if p["item"] == "water")
-                    path = self.route(site["water_out"], water["position"], "pipe", bank["entities"] + [pump])
-                    if not path.get("ok"):
-                        continue
-                    pipes = [{"name": "pipe", "position": p, "direction": 0} for p in path["path"]]
-                    plan = _plan([pump] + bank["entities"] + pipes, bank["ports"], template="starter_power")
-                    if self.can_place(plan["entities"])["ok"]:
-                        return plan
+                    for bank in self._steam_bank_variants(anchor, rotation):
+                        if not self.can_place(bank["entities"])["ok"]:
+                            continue
+                        pump = {"name": "offshore-pump", "position": site["position"], "direction": site["direction"]}
+                        water = next(p for p in bank["ports"] if p["item"] == "water")
+                        path = self.route(site["water_out"], water["position"], "pipe", bank["entities"] + [pump])
+                        if not path.get("ok"):
+                            continue
+                        pipes = [{"name": "pipe", "position": p, "direction": 0} for p in path["path"]]
+                        plan = _plan([pump] + bank["entities"] + pipes, bank["ports"], template="starter_power")
+                        if self.can_place(plan["entities"])["ok"]:
+                            return plan
         return {"ok": False, "reason": "no clear starter coast supports connected steam power"}
+
+    def _steam_bank_variants(self, anchor: dict, rotation: int) -> list[dict]:
+        """Steam bank layouts ordered so the coal port faces the coal source.
+
+        The belt stub under the boiler inserter can enter from three sides.
+        Rank each by how far a belt from the nearest coal must travel to reach
+        its port in the port's own travel direction: the straight-line distance
+        plus twice the distance it would have to overshoot and turn back.
+        """
+        if not hasattr(self, "_coal_origin"):
+            sites = self.coal_sites()
+            self._coal_origin = sites[0] if sites else None
+        banks = [build_template("steam_bank", anchor=anchor, rotation=rotation, coal_entry=e) for e in COAL_ENTRIES]
+        banks = [bank for bank in banks if bank["ok"]]
+        coal = self._coal_origin
+        if coal is None:
+            return banks
+
+        def detour(bank: dict) -> float:
+            port = next(p for p in bank["ports"] if p["item"] == "coal")
+            dx, dy = DIRECTIONS[port["facing"]]
+            offset_x = port["position"]["x"] - coal["x"]
+            offset_y = port["position"]["y"] - coal["y"]
+            behind = max(0.0, -(offset_x * dx + offset_y * dy))
+            return abs(offset_x) + abs(offset_y) + 2 * behind
+
+        return sorted(banks, key=detour)
 
     def coal_sites(self) -> list[dict]:
         result = self.game.query("""
