@@ -18,8 +18,12 @@ from .board import (
     MAX_STARTUP_LABS,
     MAX_STARTUP_SCIENCE_MACHINES,
     Board,
+    _plan as _builder_plan,
+    extended_science_cell,
     lab_slot_entities,
     lab_slot_plan,
+    science_extension_entities,
+    science_extension_error,
     science_machine_count,
 )
 
@@ -673,7 +677,12 @@ class BootstrapLogistics:
         except (OSError, KeyError, TypeError, ValueError, StopIteration) as exc:
             return dict(ok=False, reason="legacy_science_repurchase_audit_unavailable", detail=str(exc))
 
-    def _legacy_epoch_error(self, obs):
+    def _legacy_epoch_error(self, obs, *, historical=False):
+        """Why the legacy repurchase binding no longer holds, or None.
+
+        ``historical`` (logistics natively researched) also accepts a plan
+        the cell grew from, like ``_plan_hash_ok``.
+        """
         try:
             epoch = self.state["legacy_repurchase"]
             auth = epoch["authorization"]
@@ -684,7 +693,7 @@ class BootstrapLogistics:
                 or auth["world_id"] != obs["world_id"]
                 or auth["catalog_fingerprint"] != self.catalog.fingerprint
                 or plan is None
-                or auth["plan_hash"] != _hash(plan)
+                or not self._plan_hash_ok(auth["plan_hash"], plan, historical=historical)
             ):
                 raise ValueError("legacy repurchase world/catalog/original/plan changed")
             if set(epoch["allocated_inputs"]) - set(auth["repurchase_inputs"]):
@@ -722,7 +731,8 @@ class BootstrapLogistics:
         return None
 
     def _legacy_repurchase_step(self, obs):
-        error = self._legacy_epoch_error(obs)
+        finished = bool(obs.get("technologies", {}).get("logistics"))
+        error = self._legacy_epoch_error(obs, historical=finished)
         if error:
             return dict(status="blocked", reason=error)
         if self.state.get("pending_transfer"):
@@ -824,7 +834,7 @@ class BootstrapLogistics:
     def _legacy_repurchase_proof(self, obs):
         if (
             not obs.get("technologies", {}).get("logistics")
-            or self._legacy_epoch_error(obs)
+            or self._legacy_epoch_error(obs, historical=True)
             or self.state.get("pending_transfer")
             or self.state.get("transfer_error")
         ):
@@ -1037,8 +1047,9 @@ class BootstrapLogistics:
             )
 
         iron = port("iron-plate")
-        # The two-machine cell buffers gears in the copper hub chest.
-        hub = port("copper-plate")
+        # The hub cell buffers gears in the copper hub chest and the extended
+        # cell in its gear relay chest: no planned chest may hold gears.
+        chests = [self.find(obs, e) or {} for e in plan["entities"] if e["name"] == "wooden-chest"]
         recipe = self.catalog.recipe_for_product("automation-science-pack")
         yield_count = sum(p["amount"] for p in recipe["products"] if p["name"] == "automation-science-pack")
         short = (
@@ -1047,7 +1058,7 @@ class BootstrapLogistics:
             and gear.get("inventory", {}).get("iron-gear-wheel", 0) == 0
             and gear.get("inventory", {}).get("iron-plate", 0) == 0
             and all(red.get("inventory", {}).get("iron-gear-wheel", 0) == 0 for red in reds)
-            and hub.get("inventory", {}).get("iron-gear-wheel", 0) == 0
+            and all(chest.get("inventory", {}).get("iron-gear-wheel", 0) == 0 for chest in chests)
             and iron.get("inventory", {}).get("iron-plate", 0) == 0
         )
         if not short:
@@ -1077,7 +1088,21 @@ class BootstrapLogistics:
         self._save()
         return self._repair_funding(obs, plan)
 
-    def _binding_error(self, obs, plan):
+    def _plan_hash_ok(self, recorded, plan, *, historical):
+        """Plan rule for a bound batch.
+
+        A running, prewarmed or proving-to-continue batch must be bound to the
+        cell's current plan. A finished batch (its technology natively
+        researched, ``historical``) may instead be bound to a plan the cell
+        grew from (listed in the board lineage); its bound entities are still
+        checked one by one, and growth never removes or moves an entity.
+        """
+        if recorded == _hash(plan):
+            return True
+        lineage = getattr(self.board, "startup_lineage", None)
+        return bool(historical and callable(lineage) and recorded in lineage())
+
+    def _binding_error(self, obs, plan, *, historical=False):
         state = self.state
         if state.get("world_id") != obs["world_id"]:
             return "bootstrap_research_world_changed"
@@ -1085,7 +1110,7 @@ class BootstrapLogistics:
             return "bootstrap_research_catalog_changed"
         if state.get("technology") != self.technology:
             return "bootstrap_research_target_changed"
-        if state.get("plan_hash") != _hash(plan):
+        if not self._plan_hash_ok(state.get("plan_hash"), plan, historical=historical):
             return "bootstrap_research_startup_plan_changed"
         for bound in self._red_pins():
             red = self.find(obs, bound)
@@ -1106,6 +1131,9 @@ class BootstrapLogistics:
         return self._recovery_error()
 
     def _startup_plan(self, obs):
+        refresh = getattr(self.board, "refresh", None)
+        if callable(refresh):
+            refresh()
         board = self.board.state
         if board.get("world_id") != obs["world_id"] or board.get("catalog_fingerprint") != self.catalog.fingerprint:
             return None
@@ -1168,7 +1196,7 @@ class BootstrapLogistics:
         return row
 
     def _plan_capacity(self, obs, plan):
-        """Size science machines (new cell only) and labs for this batch and the next red-only research.
+        """Size science machines (a new cell, or a saved one-machine cell that can grow) and labs for this batch and the next red-only research.
 
         Evidence: held plates minus this batch's inputs (which are paid
         first), and plate rates from the observer's rate samples (a file
@@ -1206,6 +1234,15 @@ class BootstrapLogistics:
         built = [s for s in slots if s and _powered(self.find(obs, s["lab"]))]
         labs = 1 + len(built)
         costs = expansion_costs(self.catalog, RED_PACK, current_assemblers=science)
+        # A saved one-machine cell can still grow by the west extension; its
+        # bill is one machine and its five inserters (chests and pole are wood).
+        growable = plan is not None and science_extension_error(plan) is None
+        if growable:
+            from .progression import raw_cost
+
+            inserters = sum(e["name"] == "inserter" for e in science_extension_entities(plan))
+            bill = raw_cost(self.catalog, {"assembling-machine-1": 1, "inserter": inserters})
+            costs = dict(costs, assembler={k: round(v, 3) for k, v in bill.items()})
         _, inputs = self.requirements()
         rates = _sampled_rates(self.path.parent, obs["world_id"])
         evidence = {}
@@ -1217,7 +1254,7 @@ class BootstrapLogistics:
                 row.update(produced_per_minute=produced, net_per_minute=produced - consumed)
             evidence[item] = row
         config = ResearchCapacityConfig(
-            max_assemblers=MAX_STARTUP_SCIENCE_MACHINES if plan is None else science,
+            max_assemblers=MAX_STARTUP_SCIENCE_MACHINES if plan is None or growable else science,
             max_labs=1 + len(slots),
         )
         decision = plan_research_capacity(
@@ -1246,7 +1283,7 @@ class BootstrapLogistics:
         decision = self._capacity_decision(obs, plan)
         if not decision or decision.get("lab_extension_blocked"):
             return None
-        want = min(MAX_STARTUP_LABS, decision.get("target_labs", 1)) - 1
+        want = min(MAX_STARTUP_LABS, self._decided_labs(decision, plan)) - 1
         slots = lab_slot_entities(plan)[: max(0, want)]
         if not slots or all(self.find(obs, s["lab"]) for s in slots):
             return None
@@ -1257,11 +1294,116 @@ class BootstrapLogistics:
             return None
         if result.get("status") not in ("blocked", "failed"):
             return result
+        self._record_capacity_flag(obs, decision, "lab_extension_blocked", result.get("reason", "blocked"))
+        return None
+
+    @staticmethod
+    def _decided_labs(decision, plan):
+        """Target labs of ``decision`` for the cell ``plan`` actually has.
+
+        When the decision wanted more science machines than the cell holds
+        (the growth was refused or blocked), labs follow the best option
+        without extra machines instead, so lab count never outruns pack supply.
+        """
+        from .research_capacity import labs_without_assemblers
+
+        wanted = decision.get("target_assemblers")
+        if type(wanted) is int and wanted > (science_machine_count(plan) or 1):
+            return labs_without_assemblers(decision)
+        return decision.get("target_labs", 1)
+
+    def _record_capacity_flag(self, obs, decision, flag, reason):
+        """Record a refusal on this target's saved decision so it is not retried for this technology."""
         saved = self._saved_capacity(obs)
         saved.setdefault("decisions", {}).setdefault(self.technology, dict(decision))
-        saved["decisions"][self.technology]["lab_extension_blocked"] = str(result.get("reason", "blocked"))[:200]
+        saved["decisions"][self.technology][flag] = str(reason)[:200]
         saved["world_id"] = obs["world_id"]
         _atomic_json(self._capacity_path(), saved)
+
+    def _extension_refusal(self, obs):
+        """Why the shared science cell must not grow now, or None.
+
+        Growth changes the cell plan, which every bound batch checks. It is
+        allowed only between batches: no bootstrap batch state of this world
+        may have an unresolved transfer, a prewarm whose technology is not yet
+        researched, or a bound batch whose technology is not yet natively
+        researched (funded-and-unfinished, including legacy logistics). An
+        unreadable state refuses (fail closed).
+        """
+        root = self.path.parent
+        researched = obs.get("technologies", {})
+        paths = sorted(root.glob("bootstrap-research-*.json"))
+        paths.append(root / "bootstrap-logistics.json")
+        for path in paths:
+            if not path.exists():
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return "science_cell_extension_batch_state_unreadable"
+            if not isinstance(data, dict):
+                return "science_cell_extension_batch_state_unreadable"
+            if not data or data.get("world_id") != obs["world_id"]:
+                continue
+            technology = data.get("technology", "logistics")
+            if data.get("pending_transfer"):
+                return "science_cell_extension_transfer_unresolved"
+            if data.get("prewarm") and not researched.get(technology):
+                return "science_cell_extension_prewarm_in_progress"
+            if not researched.get(technology):
+                return "science_cell_extension_batch_unfinished"
+        return None
+
+    def _grow_cell(self, obs, plan):
+        """Grow a saved one-machine cell to two science machines before a new batch binds.
+
+        Rules:
+        - only when this target has no bound state, its decision wants more
+          science machines than the cell has, the growth was not blocked
+          before for this technology, and ``_extension_refusal`` is None;
+        - the extension and the decision's extra labs are one builder plan,
+          so assemblers and labs requested together are built together with
+          real items from the actor's stock (the normal builder path);
+        - a blocked or failed placement is recorded on the decision
+          (``cell_extension_blocked``) and never retried for this technology;
+          the batch then proceeds on the old cell;
+        - only when every extension entity is observed is the board block
+          replaced by the grown plan and the old hash added to the lineage
+          (one atomic write). Nothing is removed or moved.
+
+        Returns a builder action/status to return now, or None to continue
+        with the (possibly grown) saved plan.
+        """
+        decision = self._capacity_decision(obs, plan)
+        if not decision or decision.get("cell_extension_blocked"):
+            return None
+        wanted = decision.get("target_assemblers")
+        if type(wanted) is not int or wanted <= (science_machine_count(plan) or 1):
+            return None
+        if science_extension_error(plan) or self._extension_refusal(obs):
+            return None
+        grown = extended_science_cell(plan)
+        want = min(MAX_STARTUP_LABS, decision.get("target_labs", 1)) - 1
+        slots = lab_slot_entities(grown)[: max(0, want)]
+        entities = list(grown["entities"])
+        if slots:
+            entities += list(slots[0]["poles"]) + [slot["lab"] for slot in slots]
+        build = _builder_plan(entities, [], template="startup_science_extension", layout_policy="pcb-block-v1")
+        result = self.builder.ensure_plan(obs, build)
+        if result.get("type"):
+            return result
+        if result.get("status") not in ("succeeded", "blocked", "failed"):
+            return result
+        if result.get("status") == "succeeded":
+            missing = [e for e in science_extension_entities(plan) if not self.find(obs, e)]
+            if not missing:
+                committed = self.board.extend_startup_science(obs, plan, grown)
+                if committed.get("ok"):
+                    return None
+                result = dict(status="blocked", reason=committed.get("reason"))
+            else:
+                result = dict(status="blocked", reason="science_cell_extension_not_observed_after_build")
+        self._record_capacity_flag(obs, decision, "cell_extension_blocked", result.get("reason", "blocked"))
         return None
 
     def _batch_labs(self, obs, plan, labs):
@@ -1344,7 +1486,7 @@ class BootstrapLogistics:
             if not plan.get("ok"):
                 return {"status": "blocked", "reason": plan.get("reason", "bootstrap_science_reservation_failed")}
         if self.state:
-            error = self._binding_error(obs, plan)
+            error = self._binding_error(obs, plan, historical=bool(researched))
             if error:
                 return {"status": "blocked", "reason": error}
             if self.state.get("required_packs") != count or self.state.get("required_inputs") != inputs:
@@ -1353,6 +1495,13 @@ class BootstrapLogistics:
                 return {"status": "blocked", "reason": "bootstrap_research_transfer_outcome_requires_reconciliation"}
             if self.state.get("transfer_error"):
                 return {"status": "blocked", "reason": self.state["transfer_error"]}
+        else:
+            # Between batches a saved one-machine cell may grow first; the new
+            # batch then binds the grown plan and all its science machines.
+            growth = self._grow_cell(obs, plan)
+            if growth is not None:
+                return growth
+            plan = self._startup_plan(obs) or plan
         result = self.builder.ensure_plan(obs, plan)
         if result.get("status") != "succeeded":
             return result
@@ -1486,13 +1635,18 @@ class BootstrapLogistics:
                     reason="supply collected machine-built bootstrap science",
                 ),
             )
-        port = next(p for p in plan["ports"] if p["direction"] == "output")
-        output = self.find(obs, {"name": "wooden-chest", "position": port["position"]})
-        available = output.get("inventory", {}).get("automation-science-pack", 0)
+        # An extended cell has one output chest per science machine: wait on
+        # their total and take from the fullest (first on ties).
+        stocked = []
+        for port in (p for p in plan["ports"] if p["direction"] == "output"):
+            output = self.find(obs, {"name": "wooden-chest", "position": port["position"]})
+            stocked.append((output.get("inventory", {}).get("automation-science-pack", 0), port))
+        available, port = max(stocked, key=lambda row: row[0])
+        total = sum(row[0] for row in stocked)
         # Carrying each pack as it is made costs two actions per pack. Let a
         # small batch per lab pile up; the last few packs are still fetched together.
         batch = SCIENCE_COURIER_BATCH * len(lab_pins)
-        if available >= min(batch, count - collected) and collected < count:
+        if available and total >= min(batch, count - collected) and collected < count:
             return self._transfer(
                 "collect",
                 dict(
@@ -1901,7 +2055,9 @@ class BootstrapLogistics:
         if not self.state:
             return {"tick": obs["tick"], "technology": self.technology, "already_researched": True}
         plan = self._startup_plan(obs)
-        if plan is None or self._binding_error(obs, plan):
+        # The technology is researched: the batch is finished, so its proof
+        # may validate against a plan the cell has since grown from.
+        if plan is None or self._binding_error(obs, plan, historical=True):
             return None
         if self.state.get("pending_transfer") or self.state.get("transfer_error"):
             return None

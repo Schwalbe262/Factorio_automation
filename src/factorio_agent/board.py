@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -125,6 +126,170 @@ def science_machine_count(plan):
     return count if type(count) is int and 1 <= count <= MAX_STARTUP_SCIENCE_MACHINES else None
 
 
+# --- growing a built one-machine cell -------------------------------------------
+#
+# The two-machine hub layout moves the gear machine and the chests, so it is
+# not a superset of the original cell. An already built one-machine cell grows
+# with the "west" extension instead: every original entity stays where it is
+# and a second science machine is added west of the copper port.
+#
+# Offsets from the original science machine A at (0, 0); inserter direction is
+# the pickup side (0 north, 4 east, 8 south, 12 west):
+#
+#          x: -7 -6 -5 -4 -3 -2 -1  0  1
+#   y=-4       B  B  B  .  F  i  g  g  g    F iron port, g gear machine (0,-4)
+#   y=-3       B  B  B  <  R  <  g  g  g    R gear relay chest; < new inserters (dir 4)
+#   y=-2       B  B  B  .  .  P  .  i  .    B new science machine (-6,-3)
+#   y=-1       P  v  ^  .  .  .  A  A  A    v B -> O (dir 0); ^ C -> B (dir 8)
+#   y= 0       .  O  C  <  K  i  A  A  A    K copper port; C copper relay chest
+#   y= 1       .  .  .  .  .  .  A  A  A    O second output chest; A science machine
+#
+# Arrows show where the new inserters move items; i marks an original
+# inserter, P a pole (new (-7,-1), original (-2,-2)).
+# Inserters only feed what the machine's recipe takes, so the relay chests hold
+# only gears (R) and copper (C). The extension needs no new input port: funding
+# still fills the iron and copper ports; it adds one output port (O).
+SCIENCE_EXTENSION_LAYOUT = "west-science-v1"
+SCIENCE_EXTENSION_OFFSETS = (
+    ("assembling-machine-1", -6, -3, 0, "automation-science-pack"),
+    ("wooden-chest", -3, -3, 0, None),
+    ("wooden-chest", -5, 0, 0, None),
+    ("wooden-chest", -6, 0, 0, None),
+    ("inserter", -2, -3, 4, None),
+    ("inserter", -4, -3, 4, None),
+    ("inserter", -4, 0, 4, None),
+    ("inserter", -5, -1, 8, None),
+    ("inserter", -6, -1, 0, None),
+    ("small-electric-pole", -7, -1, 0, None),
+)
+SCIENCE_EXTENSION_OUTPUT = (-6, 0)
+# Keys of a saved cell plan that are geometry, not metadata.
+_PLAN_BODY_KEYS = ("ok", "reason", "entities", "ports", "required_items")
+
+
+def plan_hash(plan):
+    """The same canonical SHA-256 the bound batch states record as ``plan_hash``."""
+    return hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+
+
+def _cell_layout(plan):
+    """1 for the original layout (also when extended), 2 for the hub layout, None if unknown."""
+    if plan.get("science_extension") == SCIENCE_EXTENSION_LAYOUT:
+        return 1
+    if plan.get("science_extension") is not None:
+        return None
+    return science_machine_count(plan)
+
+
+def science_extension_entities(plan):
+    """Entities the west extension adds to ``plan`` (its origin), in build order."""
+    origin = cell_origin(plan)
+    if origin is None:
+        return []
+    x, y = origin["x"], origin["y"]
+    return [
+        entity(name, x + dx, y + dy, direction, recipe) for name, dx, dy, direction, recipe in SCIENCE_EXTENSION_OFFSETS
+    ]
+
+
+def _entity_key(e):
+    return (e["name"], e["position"]["x"], e["position"]["y"], e.get("direction", 0), e.get("recipe"))
+
+
+def science_extension_error(plan):
+    """Why ``plan`` cannot grow to two science machines, or None when it can.
+
+    Rules: only an original one-machine cell grows (not the hub layout and not
+    an already extended cell); its eleven original entities must be at their
+    original offsets; the extension must not overlap any planned entity
+    (including the grid pole chain and the lab slots with their poles) except
+    an identical pole, and must lie inside the reserved area. Placement in the
+    world is still checked natively by the builder before anything is built.
+    """
+    if not isinstance(plan, dict) or plan.get("template") != "startup_science_cell":
+        return "science_cell_extension_unknown_plan"
+    if plan.get("science_extension") is not None or science_machine_count(plan) != 1:
+        return "science_cell_extension_not_a_one_machine_cell"
+    origin = cell_origin(plan)
+    if origin is None:
+        return "science_cell_extension_origin_missing"
+    original = startup_science_cell(origin["x"], origin["y"])
+    present = {_entity_key(e) for e in plan.get("entities", [])}
+    if any(_entity_key(e) not in present for e in original["entities"]):
+        return "science_cell_extension_original_layout_differs"
+    if plan.get("ports") != original["ports"]:
+        return "science_cell_extension_original_ports_differ"
+    geometry = FactoryBuilder.__new__(FactoryBuilder)
+    extension = science_extension_entities(plan)
+    slots = lab_slot_entities(plan)
+    others = list(plan.get("entities", []))
+    others += list(slots[0]["poles"]) if slots else []
+    others += [slot["lab"] for slot in slots]
+    planned = {_entity_key(e) for e in others}
+    taken = set()
+    for other in others:
+        taken |= geometry._occupied_by_plan([other])
+    area = plan.get("reserved_area")
+    for new in extension:
+        tiles = geometry._occupied_by_plan([new])
+        if new["name"] == "small-electric-pole" and _entity_key(new) in planned:
+            continue
+        if tiles & taken:
+            return "science_cell_extension_layout_collides"
+        if area and not all(_inside(area, tile) for tile in tiles):
+            return "science_cell_extension_outside_reserved_area"
+    return None
+
+
+def extended_science_cell(plan):
+    """The two-machine plan grown from a one-machine ``plan`` (a strict superset), or None.
+
+    Every original entity and port is kept unchanged and in order; the
+    extension entities and one output port are appended. Metadata (template,
+    reserved area, layout policy) is copied, and ``science_machines``,
+    ``cell_origin`` and ``science_extension`` mark the new layout.
+    """
+    if science_extension_error(plan):
+        return None
+    origin = deepcopy(cell_origin(plan))
+    extra = {k: deepcopy(v) for k, v in plan.items() if k not in _PLAN_BODY_KEYS}
+    extra.update(
+        science_machines=MAX_STARTUP_SCIENCE_MACHINES,
+        cell_origin=origin,
+        science_extension=SCIENCE_EXTENSION_LAYOUT,
+    )
+    dx, dy = SCIENCE_EXTENSION_OUTPUT
+    port = {
+        "item": "automation-science-pack",
+        "kind": "item",
+        "direction": "output",
+        "position": {"x": origin["x"] + dx, "y": origin["y"] + dy},
+    }
+    entities = deepcopy(plan["entities"]) + science_extension_entities(plan)
+    return _plan(entities, deepcopy(plan["ports"]) + [port], **extra)
+
+
+def is_cell_growth(old, new):
+    """True when ``new`` keeps every entity and port of ``old`` unchanged (same origin, same area).
+
+    Growth never removes or moves an entity: the old entity list is a prefix
+    of the new one, the old ports a prefix of the new ports, and all
+    metadata except the layout markers is identical.
+    """
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return False
+    if cell_origin(old) != cell_origin(new):
+        return False
+    count = len(old.get("entities", []))
+    if new.get("entities", [])[:count] != old.get("entities", []) or len(new.get("entities", [])) <= count:
+        return False
+    if new.get("ports", [])[: len(old.get("ports", []))] != old.get("ports", []):
+        return False
+    markers = ("science_machines", "cell_origin", "science_extension")
+    keys = set(old) | set(new)
+    return all(old.get(k) == new.get(k) for k in keys if k not in _PLAN_BODY_KEYS and k not in markers)
+
+
 def cell_origin(plan):
     """The layout origin: saved for new cells, else the original cell's science machine."""
     origin = plan.get("cell_origin")
@@ -144,7 +309,7 @@ def lab_slot_entities(plan):
     its grid pole chain) or leave the reserved area are dropped. Placement is
     still checked natively by the builder before anything is built.
     """
-    count = science_machine_count(plan)
+    count = _cell_layout(plan)
     origin = cell_origin(plan)
     if count is None or origin is None:
         return []
@@ -207,6 +372,58 @@ class Board:
         self.game, self.builder, self.catalog = game, builder, catalog
         self.path = Path(game.cfg.runtime_dir) / "pcb-board.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
+        self._stamp = self._file_stamp()
+
+    def _file_stamp(self):
+        try:
+            stat = self.path.stat()
+        except OSError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size)
+
+    def refresh(self, *, force=False):
+        """Re-read the board when another writer changed the file since it was read.
+
+        Long-lived controllers each hold a Board; without this a cell grown by
+        one controller would stay invisible to another. An unchanged file keeps
+        the in-memory state.
+        """
+        stamp = self._file_stamp()
+        if not force and stamp == self._stamp:
+            return
+        self.state = json.loads(self.path.read_text(encoding="utf-8")) if stamp is not None else {}
+        self._stamp = stamp
+
+    def startup_lineage(self):
+        """Hashes of the earlier startup science plans the current cell grew from, oldest first."""
+        rows = self.state.get("lineage", {}).get("startup_science", [])
+        return [row for row in rows if isinstance(row, str)] if isinstance(rows, list) else []
+
+    def extend_startup_science(self, obs, old, new):
+        """Replace the saved cell ``old`` with its growth ``new`` and record ``old``'s hash in the lineage.
+
+        Refused (nothing written) when the world or catalog changed, the saved
+        block is no longer exactly ``old``, or ``new`` is not a strict
+        superset of ``old`` (see ``is_cell_growth``). The block and lineage are
+        written together in one atomic file replace.
+        """
+        self.refresh(force=True)
+        if self.state.get("world_id") != obs["world_id"]:
+            return {"ok": False, "reason": "board_world_changed"}
+        if self.state.get("catalog_fingerprint") != self.catalog.fingerprint:
+            return {"ok": False, "reason": "board_catalog_changed_requires_revalidation"}
+        if self.state.get("blocks", {}).get("startup_science") != old:
+            return {"ok": False, "reason": "board_science_cell_changed"}
+        if not is_cell_growth(old, new):
+            return {"ok": False, "reason": "board_science_cell_growth_not_a_superset"}
+        state = deepcopy(self.state)
+        lineage = state.setdefault("lineage", {}).setdefault("startup_science", [])
+        lineage.append(plan_hash(old))
+        state["blocks"]["startup_science"] = deepcopy(new)
+        _atomic_json(self.path, state)
+        self.state = state
+        self._stamp = self._file_stamp()
+        return {"ok": True, "plan": deepcopy(new), "lineage": list(lineage)}
 
     def reserve_startup_science(self, obs, *, science_machines=1):
         """Reserve the startup science cell once per world; later calls return the saved plan.
@@ -317,4 +534,5 @@ return {ok=true,legal=out,roomy=roomy}
         plan = candidates[(roomy or indices)[0] - 1]
         self.state["blocks"]["startup_science"] = plan
         _atomic_json(self.path, self.state)
+        self._stamp = self._file_stamp()
         return deepcopy(plan)

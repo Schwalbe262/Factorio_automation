@@ -434,6 +434,38 @@ def plan_research_capacity(
     )
 
 
+def labs_without_assemblers(row: Mapping, config=ResearchCapacityConfig()) -> int:
+    """Labs to build when a saved decision's extra assemblers cannot be built.
+
+    ``row`` is ``ResearchCapacityDecision.as_dict()``. Only options that add
+    no assembler are considered, with the same rules as the planner: the best
+    one must save ``min_saving_seconds`` and be at most ``max_ratio`` of the
+    wait (an infinite wait takes any finite option). Adding labs to a
+    pack-limited queue therefore adds none. Returns the target lab count.
+    """
+    current = int(row.get("current_labs", 1) or 1)
+    options = [o for o in row.get("options") or () if isinstance(o, Mapping) and o.get("extra_assemblers") == 0]
+    if not options:
+        return current
+
+    def seconds(option):
+        value = option.get("seconds")
+        return math.inf if value is None else float(value)
+
+    wait = seconds(options[0]) if options[0].get("extra_labs") == 0 else math.inf
+    feasible = [o for o in options if o.get("extra_labs", 0) > 0 and math.isfinite(seconds(o))]
+    if not feasible:
+        return current
+    best = min(feasible, key=lambda o: (seconds(o), o["extra_labs"]))
+    if math.isfinite(wait) and (
+        wait < config.min_remaining_seconds
+        or wait - seconds(best) < config.min_saving_seconds
+        or seconds(best) > wait * config.max_ratio
+    ):
+        return current
+    return current + int(best["extra_labs"])
+
+
 # --- catalog helpers -------------------------------------------------------
 
 
