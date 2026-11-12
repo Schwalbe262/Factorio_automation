@@ -1,0 +1,275 @@
+"""Recipe + target rate -> machine choice, machine count and belt-lane plan.
+
+All rates are items per minute at nameplate speed (no modules, no
+productivity, normal quality). Per-machine crafts/minute is
+``60 * crafting_speed / recipe.energy``.
+
+Lane plan: ``input_belts[0]`` is the NEAR input belt (plain inserters),
+``input_belts[1]`` the FAR belt (long-handed inserters). A belt with one item
+type carries it on both lanes; two item types use one lane each. Lanes are
+named relative to the flow ("left" is the left-hand side when looking
+downstream), so the plan is orientation independent.
+"""
+
+from __future__ import annotations
+
+import itertools
+import math
+from dataclasses import dataclass, replace
+from typing import Any, Iterable, Mapping
+
+from .geometry import tile_size
+from .params import DEFAULT_LIMITS, RowLimits, lane_capacity, pole_radius
+
+MAX_SOLID_INGREDIENTS = 4
+
+
+@dataclass(frozen=True)
+class Flow:
+    """One item stream: ``per_machine`` and ``total`` are items/minute."""
+
+    item: str
+    amount: float
+    per_machine: float
+    total: float
+
+
+@dataclass(frozen=True)
+class BeltLanes:
+    """Item on each lane of one belt; equal names mean one item on both lanes."""
+
+    left: str
+    right: str
+
+    @property
+    def items(self) -> tuple[str, ...]:
+        return (self.left,) if self.left == self.right else (self.left, self.right)
+
+
+@dataclass(frozen=True)
+class RowSizing:
+    recipe: str
+    machine: str
+    machine_size: int
+    crafting_speed: float
+    crafts_per_machine: float
+    count: int
+    target_per_minute: float
+    product: Flow
+    ingredients: tuple[Flow, ...]
+    input_belts: tuple[BeltLanes, ...]
+    belt: str
+    lane_capacity_per_minute: float
+    max_count: int
+    recipe_unlocked: bool
+
+    @property
+    def rated_per_minute(self) -> float:
+        return self.product.per_machine * self.count
+
+    def flow(self, item: str) -> Flow:
+        return next(f for f in self.ingredients if f.item == item)
+
+    def with_count(self, count: int) -> "RowSizing":
+        """Same machine and lane plan with another machine count (lane budget enforced)."""
+        if not 1 <= count <= self.max_count:
+            raise ValueError(f"{count} machines exceed the lane budget of {self.max_count} for {self.recipe}")
+        scale = [replace(f, total=f.per_machine * count) for f in self.ingredients]
+        product = replace(self.product, total=self.product.per_machine * count)
+        return replace(self, count=count, ingredients=tuple(scale), product=product)
+
+
+def _amount(row: Mapping[str, Any], recipe: str) -> float:
+    probability = float(row.get("independent_probability", row.get("probability", 1)))
+    shared = row.get("shared_probability")
+    if shared:
+        probability *= float(shared["max"]) - float(shared["min"])
+    if probability != 1 or row.get("extra_count_fraction"):
+        raise ValueError(f"{recipe}: stochastic output {row['name']} cannot be rated by a row")
+    if "amount" in row:
+        return float(row["amount"])
+    if "amount_min" in row and row.get("amount_min") == row.get("amount_max"):
+        return float(row["amount_min"])
+    raise ValueError(f"{recipe}: variable amount for {row['name']} cannot be rated by a row")
+
+
+def _validate_recipe(catalog: Any, name: str) -> Mapping[str, Any]:
+    recipe = catalog.recipes.get(name)
+    if recipe is None:
+        raise ValueError(f"unknown recipe {name!r}")
+    if recipe.get("hidden"):
+        raise ValueError(f"{name}: hidden recipe")
+    rows = list(recipe["ingredients"]) + list(recipe["products"])
+    fluids = sorted({r["name"] for r in rows if r.get("type") == "fluid"})
+    if fluids:
+        raise ValueError(
+            f"{name}: fluid {', '.join(fluids)} not supported: the row reserves no pipe corridor; "
+            "laying pipes needs in-game verification of the pipe_connections orientation frame "
+            "and the pipe-to-ground max underground distance, which the catalog does not export"
+        )
+    solids = [r for r in recipe["ingredients"] if r.get("type", "item") == "item"]
+    if not solids:
+        raise ValueError(f"{name}: no solid ingredient for an input belt")
+    if len(solids) > MAX_SOLID_INGREDIENTS:
+        raise ValueError(f"{name}: {len(solids)} solid ingredients; a row feeds at most {MAX_SOLID_INGREDIENTS}")
+    if len(recipe["products"]) != 1:
+        raise ValueError(f"{name}: {len(recipe['products'])} products; a row has one output lane")
+    if not float(recipe.get("energy") or 0) > 0:
+        raise ValueError(f"{name}: recipe energy must be positive")
+    return recipe
+
+
+def _unlocked_recipes(catalog: Any, enabled: Iterable[str] | None, researched: Iterable[str] | None) -> set[str]:
+    """Catalog force state, extended by the caller's explicit sets."""
+    names = {n for n, r in catalog.recipes.items() if r.get("enabled")}
+    names.update(enabled or ())
+    techs = {n for n, t in catalog.technologies.items() if t.get("researched")}
+    techs.update(researched or ())
+    for tech in techs:
+        names.update((catalog.technologies.get(tech) or {}).get("unlocks", ()))
+    return names
+
+
+def _machine_item(row: Mapping[str, Any]) -> str:
+    places = row.get("items_to_place_this") or []
+    return places[0]["name"] if places else row["name"]
+
+
+def row_supports_size(size: int, supply_radius: float) -> bool:
+    """Odd square >= 3 (long-handed drop lands inside) whose inserter rows a gap pole reaches."""
+    half = size // 2
+    return size % 2 == 1 and size >= 3 and half + 1 < supply_radius + 0.5
+
+
+def _compatible(catalog: Any, name: str, recipe: Mapping[str, Any], radius: float) -> str:
+    """Empty string when ``name`` can run ``recipe`` in a row, else the reason."""
+    row = catalog.entities.get(name)
+    if row is None:
+        return "not in catalog"
+    if row.get("type") != "assembling-machine" or not row.get("electric"):
+        return "not an electric assembling machine"
+    if not float(row.get("crafting_speed") or 0) > 0:
+        return "no crafting speed"
+    if not set(recipe["categories"]) & set(row.get("crafting_categories") or ()):
+        return "crafting categories do not include " + "/".join(recipe["categories"])
+    width, height = tile_size(catalog, name)
+    if width != height or not row_supports_size(width, radius):
+        return f"{width}x{height} footprint does not fit the row pole/inserter geometry"
+    return ""
+
+
+def choose_machine(catalog: Any, recipe: Mapping[str, Any], unlocked: set[str], radius: float) -> str:
+    """Fastest unlocked compatible machine; ties broken by name."""
+    candidates = [
+        (-float(row["crafting_speed"]), name)
+        for name, row in catalog.entities.items()
+        if not _compatible(catalog, name, recipe, radius)
+        and any(r for r, rr in catalog.recipes.items() if r in unlocked and _produces(rr, _machine_item(row)))
+    ]
+    if not candidates:
+        raise ValueError(f"{recipe['name']}: no unlocked row-compatible machine for {recipe['categories']}")
+    return min(candidates)[1]
+
+
+def _produces(recipe: Mapping[str, Any], item: str) -> bool:
+    return any(p["name"] == item and p.get("type", "item") == "item" for p in recipe["products"])
+
+
+def _belt_score(belts: tuple[BeltLanes, ...], flows: Mapping[str, float]) -> tuple[float, float, tuple]:
+    lane_load = max(flows[b.left] / (2 if b.left == b.right else 1) for b in belts)
+    belt_load = max(sum(flows[i] for i in b.items) for b in belts)
+    return lane_load, belt_load, tuple((b.left, b.right) for b in belts)
+
+
+def _belt(items: tuple[str, ...]) -> BeltLanes:
+    return BeltLanes(items[0], items[-1])
+
+
+def plan_lanes(flows: Mapping[str, float]) -> tuple[BeltLanes, ...]:
+    """Assign 1-4 solid items to one or two belts, lowest lane load first; near belt carries more."""
+    items = tuple(sorted(flows))
+    if len(items) <= 2:
+        return (_belt(items),)
+    options = []
+    for size in (1, 2):
+        for near in itertools.combinations(items, size):
+            far = tuple(i for i in items if i not in near)
+            if len(far) <= 2:
+                belts = tuple(sorted((_belt(near), _belt(far)), key=lambda b: -sum(flows[i] for i in b.items)))
+                options.append(belts)
+    return min(options, key=lambda belts: _belt_score(belts, flows))
+
+
+def _max_count(per_machine: Mapping[str, float], belts: tuple[BeltLanes, ...], product: float, lane: float) -> int:
+    limits = [lane / product]
+    for belt in belts:
+        lanes = 2 if belt.left == belt.right else 1
+        limits.extend(lane * lanes / per_machine[i] for i in belt.items)
+    return math.floor(min(limits) + 1e-9)
+
+
+def size_row(
+    catalog: Any,
+    recipe_name: str,
+    rate_per_minute: float,
+    *,
+    machine: str | None = None,
+    enabled_recipes: Iterable[str] | None = None,
+    researched: Iterable[str] | None = None,
+    belt: str = "transport-belt",
+    pole: str = "small-electric-pole",
+    limits: RowLimits = DEFAULT_LIMITS,
+) -> RowSizing:
+    """Size one production row; ``ValueError`` names why a recipe cannot be laid out.
+
+    ``machine`` overrides the choice (category and geometry are still checked).
+    Otherwise the fastest machine whose placing item has an unlocked recipe is
+    used; unlocked = catalog force state plus ``enabled_recipes`` plus unlocks
+    of ``researched`` technologies. The recipe itself may still be locked
+    (planning ahead); ``recipe_unlocked`` reports it.
+    """
+    if not isinstance(rate_per_minute, (int, float)) or not math.isfinite(rate_per_minute) or rate_per_minute <= 0:
+        raise ValueError("rate_per_minute must be a positive finite number")
+    recipe = _validate_recipe(catalog, recipe_name)
+    radius = pole_radius(catalog, pole, limits)
+    unlocked = _unlocked_recipes(catalog, enabled_recipes, researched)
+    if machine is None:
+        machine = choose_machine(catalog, recipe, unlocked, radius)
+    reason = _compatible(catalog, machine, recipe, radius)
+    if reason:
+        raise ValueError(f"{recipe_name}: machine {machine} {reason}")
+    speed = float(catalog.entities[machine]["crafting_speed"])
+    crafts = 60 * speed / float(recipe["energy"])
+    out = recipe["products"][0]
+    product_amount = _amount(out, recipe_name)
+    per_product = crafts * product_amount
+    count = max(1, math.ceil(rate_per_minute / per_product - 1e-9))
+    amounts: dict[str, float] = {}
+    for row in recipe["ingredients"]:
+        amounts[row["name"]] = amounts.get(row["name"], 0) + _amount(row, recipe_name)
+    per_machine = {item: amount * crafts for item, amount in amounts.items()}
+    belts = plan_lanes(per_machine)
+    lane = lane_capacity(catalog, belt, limits)
+    max_count = _max_count(per_machine, belts, per_product, lane)
+    if count > max_count:
+        raise ValueError(
+            f"{recipe_name}: {count} x {machine} exceed one {belt} row (max {max_count}); split into several rows"
+        )
+    return RowSizing(
+        recipe=recipe_name,
+        machine=machine,
+        machine_size=tile_size(catalog, machine)[0],
+        crafting_speed=speed,
+        crafts_per_machine=crafts,
+        count=count,
+        target_per_minute=float(rate_per_minute),
+        product=Flow(out["name"], product_amount, per_product, per_product * count),
+        ingredients=tuple(
+            Flow(item, amounts[item], per_machine[item], per_machine[item] * count) for item in sorted(amounts)
+        ),
+        input_belts=belts,
+        belt=belt,
+        lane_capacity_per_minute=lane,
+        max_count=max_count,
+        recipe_unlocked=recipe_name in unlocked,
+    )
