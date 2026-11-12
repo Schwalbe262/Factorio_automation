@@ -260,10 +260,14 @@ class V2Bootstrap(DeterministicBootstrap):
             if not c.get("electric") and c.get("receiver") and c.get("remaining", 0) > 0
         ]
         producers = {(c["drill"]["name"], c["drill"]["position"]["x"], c["drill"]["position"]["y"]) for c in coal_cells}
-        if self._count(observation, "coal") <= 0:
-            running = any(c.get("fuel", 0) > 0 or c.get("burning") for c in coal_cells)
-            if running and _produced_coal(observation, coal_cells) < FUEL_BATCH:
+        carried = self._count(observation, "coal")
+        if carried < FUEL_BATCH and any(c.get("fuel", 0) > 0 or c.get("burning") for c in coal_cells):
+            # Less than a batch in hand while coal is still being mined: top up
+            # in one trip once a batch has piled up, otherwise leave the few
+            # pieces alone. Spending them one at a time is the loop to avoid.
+            if _produced_coal(observation, coal_cells) < FUEL_BATCH:
                 return None
+            return self.ensure_item(observation, "coal", carried + 3 * FUEL_BATCH)
         # Keep a real coal producer running before spending the last carried
         # fuel on its consumers. The base routine retains ordinary partial
         # transfers and its existing bounded emergency mining behavior.
@@ -337,7 +341,17 @@ class V2Bootstrap(DeterministicBootstrap):
             return None
         observation = self._unreserved_stock_observation(observation, item)
         if item not in CONSTRUCTION_ITEMS:
-            return super()._take_output(observation, item, count)
+            action = super()._take_output(observation, item, count)
+            if (
+                item in FUELS
+                and action is not None
+                and type(action.get("count")) is int
+                and action["count"] < min(count, FUEL_BATCH)
+            ):
+                # Any job that needs fuel waits for a batch instead of taking
+                # single pieces; callers then report the ordinary supply wait.
+                return None
+            return action
         if type(count) is not int or count < 1:
             return None
         world = observation.get("world_id")

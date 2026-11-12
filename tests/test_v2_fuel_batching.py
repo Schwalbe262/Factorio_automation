@@ -80,6 +80,29 @@ class FuelBatchingTests(unittest.TestCase):
         self.assertEqual(action["type"], "insert")
         self.assertIn(action["position"], (self.iron_drill["position"], self.iron_furnace["position"]))
 
+    def test_a_few_carried_pieces_are_not_spent_one_at_a_time(self):
+        self.obs["inventory"] = {"coal": 2}
+        self.coal_drill["inventory"] = {"coal": 5}
+        self.assertIsNone(self.bootstrap.maintain_fuel(self.obs))
+        self.coal_chest["inventory"]["coal"] = FUEL_BATCH
+        action = self.bootstrap.maintain_fuel(self.obs)
+        self.assertEqual(action["type"], "take")
+        self.assertEqual(self.bootstrap.ensure_item.call_args.args[1:], ("coal", 2 + 3 * FUEL_BATCH))
+
+    def test_any_job_collecting_fuel_waits_for_a_batch(self):
+        from factorio_agent.core.deterministic_bootstrap import DeterministicBootstrap
+        from unittest.mock import patch
+
+        self.bootstrap.catalog = None
+        self.bootstrap._unreserved_stock_observation = lambda obs, item: obs
+        single = {"type": "take", "item": "coal", "count": 1}
+        with patch.object(DeterministicBootstrap, "_take_output", return_value=single):
+            self.assertIsNone(self.bootstrap._take_output(self.obs, "coal", 16))
+            self.assertEqual(self.bootstrap._take_output(self.obs, "coal", 1), single)
+        batch = {"type": "take", "item": "coal", "count": FUEL_BATCH}
+        with patch.object(DeterministicBootstrap, "_take_output", return_value=batch):
+            self.assertEqual(self.bootstrap._take_output(self.obs, "coal", 16), batch)
+
     def test_stock_check_uses_chest_contents_for_direct_ore_cells(self):
         stone_chest = dict(name="wooden-chest", position={"x": 20.5, "y": 0.5}, inventory={"stone": 200})
         stone_drill = dict(name="burner-mining-drill", position={"x": 20, "y": 2}, inventory={})
