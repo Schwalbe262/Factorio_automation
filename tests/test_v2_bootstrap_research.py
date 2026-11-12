@@ -27,7 +27,8 @@ class BootstrapResearchTests(unittest.TestCase):
                 ingredients=[dict(name='iron-plate',type='item',amount=2)])}
         technologies={name:dict(prerequisites=['automation-science-pack'],enabled=True,unit_count=count,
             ingredients=[dict(name='automation-science-pack',type='item',amount=1)])
-            for name,count in [('logistics',20),('gun-turret',10),('stone-wall',10),('electric-mining-drill',25)]}
+            for name,count in [('logistics',20),('gun-turret',10),('stone-wall',10),('electric-mining-drill',25),
+                ('fast-inserter',30),('logistic-science-pack',75),('steel-processing',50),('lamp',10),('military',10),('radar',20),('repair-pack',25)]}
         self.catalog=SimpleNamespace(fingerprint='catalog',technologies=technologies,recipe_for_product=lambda name:self.recipes[name])
         self.bootstrap=SimpleNamespace(ensure_item=Mock(side_effect=lambda obs,item,count:
             dict(type='take',item=item,count=count,reason='normally collect real raw plates')))
@@ -69,6 +70,39 @@ class BootstrapResearchTests(unittest.TestCase):
     def test_actual_recipe_yields_change_finite_raw_budget(self):
         self.recipes['iron-gear-wheel']['products'][0]['amount']=2
         self.assertEqual(self.controller.requirements(),(10,{'iron-plate':10,'copper-plate':10}))
+
+    def test_general_red_only_targets_use_live_recipe_budgets_and_separate_paths(self):
+        for target,count in [('fast-inserter',30),('logistic-science-pack',75),('steel-processing',50),
+                ('lamp',10),('military',10),('radar',20),('repair-pack',25)]:
+            with self.subTest(target=target):
+                controller=self.make(target)
+                self.assertEqual(controller.requirements(),(count,{'iron-plate':count*2,'copper-plate':count}))
+                self.assertEqual(controller.path.name,'bootstrap-research-'+target+'.json')
+                action=controller.step(self.obs)
+                self.assertEqual((action['type'],action['item'],action['count']),('insert','iron-plate',count*2))
+                self.assertEqual(controller.state['allocated_inputs'],{})
+                controller.record_action(action,dict(ok=True,moved=action['count']))
+                self.assertEqual(self.make(target).state['allocated_inputs'],{'iron-plate':count*2})
+
+    def test_new_target_prerequisites_multicolor_infinite_and_unknown_catalog_fail_before_cost(self):
+        for target,update in [('fast-inserter',{'prerequisites':['missing-native-tech']}),
+                ('logistic-science-pack',{'ingredients':[dict(name='automation-science-pack',type='item',amount=1),dict(name='logistic-science-pack',type='item',amount=1)]}),
+                ('steel-processing',{'unit_count':101}),('radar',{'count_formula':'L*20'}),
+                ('repair-pack',{'research_trigger':{'type':'craft-item','item':'repair-pack','count':1}})]:
+            self.catalog.technologies[target].update(update)
+            result=self.make(target).step(self.obs)
+            self.assertEqual(result['status'],'blocked');self.assertFalse(self.make(target).path.exists())
+        unknown=self.make('not-installed');self.assertEqual(unknown.step(self.obs)['reason'],'bootstrap_research_rules_unsupported')
+        self.builder.ensure_plan.assert_not_called();self.bootstrap.ensure_item.assert_not_called();self.game.query.assert_not_called()
+
+    def test_new_target_keeps_native_new_machine_proof_and_acknowledged_budget(self):
+        controller=self.make('fast-inserter');self.fund(controller)
+        old=deepcopy(controller.state);self.obs['technologies']['fast-inserter']=True
+        self.assertIsNone(controller.proof(self.obs));self.red()['products_finished']+=30
+        self.obs['production']['automation-science-pack']['consumed']+=30
+        proof=controller.proof(self.obs);self.assertEqual(proof['normally_assembled_packs'],30)
+        self.assertEqual(proof['allocated_normal_inputs'],{'iron-plate':60,'copper-plate':30})
+        self.assertEqual(controller.state['baseline_products_finished'],old['baseline_products_finished'])
 
     def test_legacy_logistics_state_and_completion_behavior_are_not_migrated(self):
         old=dict(world_id='w',required_packs=20,allocated_inputs={'iron-plate':40,'copper-plate':20},baseline_produced=0,baseline_consumed=10)
@@ -261,9 +295,10 @@ class BootstrapResearchTests(unittest.TestCase):
 class BootstrapResearchDispatchTests(unittest.TestCase):
     def test_request_schema_is_finite_targeted_and_requires_only_verified_power(self):
         self.assertEqual(CAPABILITIES['bootstrap_research']['requires'],['power'])
-        for name in ('gun-turret','stone-wall','electric-mining-drill'):
+        for name in ('gun-turret','stone-wall','electric-mining-drill','fast-inserter','logistic-science-pack','steel-processing','military'):
             Request('x','w',1,'bootstrap_research',{'technology':name}).validate()
-        for parameters in ({},{'technology':'automation'},{'technology':'military'}, {'technology':'gun-turret','count':200}):
+        for parameters in ({},{'technology':'../automation'},{'technology':'x;game.speed=2'},
+                {'technology':''},{'technology':[]},{'technology':None},{'technology':'A'*81}, {'technology':'gun-turret','count':200}):
             with self.assertRaises(ValueError):Request('x','w',1,'bootstrap_research',parameters).validate()
 
     def test_bridge_does_not_run_remote_power_or_starter_repairs_before_local_science(self):

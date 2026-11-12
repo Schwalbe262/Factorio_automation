@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import math
 import hashlib
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -15,14 +16,15 @@ from factorio_ai.deterministic_state import _atomic_json
 from .board import Board
 
 
-BOOTSTRAP_RESEARCH_TARGETS={'gun-turret','stone-wall','electric-mining-drill'}
+BOOTSTRAP_RESEARCH_MAX_UNITS=100
 DIVERSION_STALL_TICKS=1800
 
 
 def validate_bootstrap_research(parameters):
     if(not isinstance(parameters,dict)or set(parameters)!={'technology'}
-            or parameters['technology']not in BOOTSTRAP_RESEARCH_TARGETS):
-        raise ValueError('bootstrap_research requires gun-turret, stone-wall or electric-mining-drill')
+            or not isinstance(parameters.get('technology'),str)
+            or re.fullmatch(r'[a-z][a-z0-9_-]{0,79}',parameters['technology'])is None):
+        raise ValueError('bootstrap_research requires a safe catalog technology identifier; finite red-only admission is checked against native rules')
 
 
 def _hash(value):
@@ -188,7 +190,7 @@ class BootstrapLogistics:
         name=getattr(self,'technology','logistics');tech=self.catalog.technologies[name]
         if tech.get("research_trigger") or tech["ingredients"]!=[{"name":"automation-science-pack","type":"item","amount":1}]:
             raise ValueError(name+" science rules changed")
-        if not self._is_legacy()and(type(tech.get('unit_count'))is not int or not 1<=tech['unit_count']<=100 or tech.get('count_formula')):
+        if not self._is_legacy()and(type(tech.get('unit_count'))is not int or not 1<=tech['unit_count']<=BOOTSTRAP_RESEARCH_MAX_UNITS or tech.get('count_formula')):
             raise ValueError('bootstrap research requires a fixed positive unit count no greater than100')
         count=int(tech["unit_count"])
         science=self.catalog.recipe_for_product("automation-science-pack")

@@ -31,8 +31,8 @@ CAPABILITIES = {
                                "effect": "recover obsolete unfinished coal feed and install validated straight trunks; no hot cutover"},
     "bootstrap_logistics": {"parameters": {}, "requires": ["power"],
                             "effect": "normally assemble finite science to unlock native logistics; repair a known replaced legacy input cell through one receipt-audited paid repurchase, preserving its old budget"},
-    "bootstrap_research": {"parameters": {"technology":"gun-turret|stone-wall|electric-mining-drill"}, "requires": ["power"],
-                           "effect": "resume or repair a funded machine-science batch at normal cost, including audited gear diversion; unlock early native defenses or electric mining"},
+    "bootstrap_research": {"parameters": {"technology":"any available technology costing only automation-science-pack, fixed 1..100 units"}, "requires": ["power"],
+                           "effect": "machine-build one finite red-science batch at normal cost and research the chosen technology; resumes or repairs its funded batch, including audited gear diversion"},
     "electric_coal": {"parameters": {}, "requires": ["power"],
                       "effect": "normally craft electric drill, prebuild grid, reserve-backed cutover and real coal output onto retained trunk"},
     "mining_outpost": {"parameters": {"resource":"iron-ore|copper-ore|coal|stone","rate_per_minute":"finite number (0,960], absolute nominal target"},
@@ -543,9 +543,13 @@ class StarterExecutors:
         return action or result
 
     def _funded_startup_owner(self,obs):
+        # Any finite red-only batch owns its running research; the state file
+        # only exists after that batch passed native admission and was funded.
+        from .industry import validate_bootstrap_research
         technology=obs.get('research')
-        if technology not in('gun-turret','stone-wall','electric-mining-drill'):return None
-        if obs.get('technologies',{}).get(technology):return None
+        try:validate_bootstrap_research({'technology':technology})
+        except ValueError:return None
+        if technology=='logistics'or obs.get('technologies',{}).get(technology):return None
         root=getattr(getattr(getattr(self,'game',None),'cfg',None),'runtime_dir',None)
         if not isinstance(root,(str,Path))or not(Path(root)/('bootstrap-research-'+technology+'.json')).exists():return None
         batch=self._bootstrap_research({'technology':technology})

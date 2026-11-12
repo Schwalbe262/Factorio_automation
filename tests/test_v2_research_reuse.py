@@ -83,6 +83,15 @@ class FundedResearchReuseTests(unittest.TestCase):
         self.obs['technologies']={'electric-mining-drill':True}
         self.assertIsNone(self.executor._funded_startup_owner(self.obs))
 
+    def test_any_funded_finite_red_batch_owns_its_running_research(self):
+        (self.root/'bootstrap-research-steel-processing.json').write_text('{}',encoding='utf-8')
+        self.obs['research']='steel-processing'
+        self.assertIs(self.executor._funded_startup_owner(self.obs),self.batch)
+        self.executor._bootstrap_research.assert_called_once_with({'technology':'steel-processing'})
+        for running in('radar','logistics',None,'../escape',7):
+            self.obs['research']=running
+            self.assertIsNone(self.executor._funded_startup_owner(self.obs))
+
     def test_powered_local_science_runs_without_claiming_remote_source_is_ready(self):
         self.executor.industry=SimpleNamespace(local_power_ready=Mock(return_value=True),
             step=Mock(return_value={'status':'waiting','reason':'native_machine_science'}))
