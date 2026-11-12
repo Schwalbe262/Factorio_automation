@@ -61,6 +61,10 @@ CAPABILITIES = {
     "construction_mall": {"parameters":{"product":"transport-belt|gun-turret"},
                           "requires":["main_bus_factory","defense_perimeter"],
                           "effect":"normally belt-feed expandable construction cells from surplus bus taps, cap native finished stocks, prove actual machine output and collect it for recurring construction"},
+    "base_coal_recovery": {"parameters":{},"requires":["steam_expansion","defense_perimeter"],
+                           "effect":"detect actual exhaustion of the original coal drill and normally branch a verified shared coal bank into both existing boiler feeds; preserve ports and prove four loaded engines"},
+    "water_distribution": {"parameters":{},"requires":["water_gathering","gas_distribution","defense_perimeter"],
+                           "effect":"normally extend the existing water intake through a protected fixed outlet; preflight a complete isolated sulfur input pair, preserve existing pipes and prove actual water before publishing the new source"},
     "main_bus_factory": {"parameters":{},"requires":["paired_smelting","logistic_science","defense_perimeter"],
                          "effect":"replace separate raw plate corridors with shared northbound iron/copper buses and native priority taps; commission compact green then normally retire obsolete western hardware; no throughput certification"},
     "dedicated_materials": {"parameters":{"resource":"coal|stone"},"requires":["paired_mining"],
@@ -372,6 +376,8 @@ class StarterExecutors:
         self.construction_mall=None
         self.construction_mall_path=Path(game.cfg.runtime_dir)/'construction-mall.json'
         self.bootstrap.construction_stock_source=self._construction_stock
+        self.base_coal_recovery=None
+        self.water_distribution=None
         from .radar_network import RadarNetwork
         self.radars=RadarNetwork(game,self.builder,catalog,self.perimeter)
         self.outposts.perimeter=self.perimeter
@@ -432,6 +438,9 @@ class StarterExecutors:
         from .normal_research import NormalResearch
         self.normal_research=NormalResearch(game,catalog,self.science,self.green,blue=self.blue)
         ledger=Ledger(Path(game.cfg.runtime_dir)).data
+        self.base_coal_autodetect=(any(j['capability']=='steam_expansion' and j['status']=='succeeded'
+            for j in ledger['jobs'].values()) and all((Path(game.cfg.runtime_dir)/name).exists()for name in
+                ('factory-builder.json','steam-coal-reroute.json','mining-outposts.json')))
         self.industrial_mode=any(j['capability']=='smelting_district' and j['status']=='succeeded'
                                  for j in ledger['jobs'].values())
 
@@ -455,6 +464,36 @@ class StarterExecutors:
             if path is None or not path.exists():return None
             factory=self._construction_factory()
         return factory.ensure_stock(obs,item,count) if factory.has_stock_cell(item) else None
+
+    def _coal_recovery(self):
+        if self.base_coal_recovery is None:
+            from .base_coal_recovery import BaseCoalRecovery
+            self.base_coal_recovery=BaseCoalRecovery(self.game,self.builder,self.catalog,self.perimeter,
+                steam=self.steam_expansion,outposts=self.outposts,reroute=self.steam_coal_reroute)
+        return self.base_coal_recovery
+
+    def _water_distribution(self):
+        if self.water_distribution is None:
+            from .water_distribution import WaterDistribution
+            self.water_distribution=WaterDistribution(self.game,self.builder,self.catalog,self.perimeter,
+                water=self.water)
+        return self.water_distribution
+
+    def _critical_coal_upkeep(self,obs):
+        if obs.get('tick',0)<getattr(self,'coal_retry_tick',0):
+            return getattr(self,'coal_retry_diagnostic',None)
+        factory=getattr(self,'base_coal_recovery',None)
+        if factory is None:
+            if not getattr(self,'base_coal_autodetect',False):return None
+            factory=self._coal_recovery()
+        if not factory.state:
+            diagnostic=factory.depletion_diagnostic(obs)
+            if not diagnostic.get('ok')or not diagnostic.get('depleted'):return None
+        result=factory.step(obs)
+        if result.get('status')=='blocked':
+            self.coal_retry_tick=obs['tick']+1800
+            self.coal_retry_diagnostic=result
+        return None if result.get('status')=='succeeded' else result
 
     def _piercing_upkeep(self,obs):
         factory=getattr(self,'piercing_ammo',None)
@@ -524,10 +563,38 @@ class StarterExecutors:
             return result
         if capability == 'construction_mall':
             self.builder._sync(obs)
+            recovery=getattr(self,'base_coal_recovery',None)
+            if recovery is not None and recovery.state and not recovery.verified:
+                coal=self._critical_coal_upkeep(obs)
+                if coal:
+                    if coal.get('type')or coal.get('status')=='blocked':return coal
+                    return {'status':'waiting','reason':'mall_waiting_for_coal_recovery_publication',
+                            'evidence':{'coal_recovery':coal}}
             result=self._construction_factory().step(obs,parameters or {})
+            if result.get('reason')=='mall_power_margin_changed':
+                coal=self._critical_coal_upkeep(obs)
+                if coal and coal.get('type'):return coal
+                if coal and coal.get('status')=='waiting':
+                    return {'status':'waiting','reason':'mall_waiting_for_automatic_coal_power_recovery',
+                            'evidence':{'power':result.get('evidence',{}),'coal':coal}}
+                if coal:result={**result,'evidence':{**result.get('evidence',{}),'coal_recovery':coal}}
             if result.get('type')or result.get('status')!='waiting':return result
             restored=self.bastion_maintenance.step(obs)
             if restored and(restored.get('type')or restored.get('status')=='blocked'):return restored
+            upkeep=self.perimeter.upkeep(obs)
+            if upkeep and(upkeep.get('type')or upkeep.get('status')=='blocked'):return upkeep
+            return result
+        if capability == 'base_coal_recovery':
+            self.builder._sync(obs)
+            result=self._coal_recovery().step(obs)
+            if result.get('type')or result.get('status')!='waiting':return result
+            upkeep=self.perimeter.upkeep(obs)
+            if upkeep and(upkeep.get('type')or upkeep.get('status')=='blocked'):return upkeep
+            return result
+        if capability == 'water_distribution':
+            self.builder._sync(obs)
+            result=self._water_distribution().step(obs)
+            if result.get('type')or result.get('status')!='waiting':return result
             upkeep=self.perimeter.upkeep(obs)
             if upkeep and(upkeep.get('type')or upkeep.get('status')=='blocked'):return upkeep
             return result
@@ -555,6 +622,8 @@ class StarterExecutors:
             return self.hardening.step(obs,parameters or {})
         if capability == "defense_watch":
             self.builder._sync(obs)
+            coal=self._critical_coal_upkeep(obs)
+            if coal and coal.get('type'):return coal
             from .upgrades import next_upgrade
             upgrade=next_upgrade(obs,self.normal_research)
             if upgrade:return upgrade
@@ -569,7 +638,8 @@ class StarterExecutors:
                 supplied=self._piercing_upkeep(obs)
                 if supplied and supplied.get('type'):return supplied
                 return {'status':'waiting','reason':'watching armed defenses and replenishing normal ammunition',
-                        'evidence':{**result.get('evidence',{}),**({'piercing_factory':supplied} if supplied else {})}}
+                        'evidence':{**result.get('evidence',{}),**({'piercing_factory':supplied} if supplied else {}),
+                                    **({'coal_recovery':coal} if coal else {})}}
             return result
         if capability == "starter":
             self.builder._sync(obs)
@@ -724,6 +794,10 @@ class StarterExecutors:
             return self.piercing_ammo.proof(obs) if self.piercing_ammo is not None else None
         if capability == 'construction_mall':
             return self.construction_mall.proof(obs,parameters or {}) if self.construction_mall is not None else None
+        if capability == 'base_coal_recovery':
+            return self.base_coal_recovery.proof(obs) if self.base_coal_recovery is not None else None
+        if capability == 'water_distribution':
+            return self.water_distribution.proof(obs) if self.water_distribution is not None else None
         if capability == "main_bus_factory":
             return self.bus_factory.proof(obs)
         if capability == "dedicated_materials":

@@ -6662,3 +6662,9 @@ Improvement: distinguish a sole perpendicular belt corner from true side loading
 - Before: Engine made real output4301891 but independentpublicproof failed becauseitconsumedbothSteelbuffers. After: consumer_furnace_units pins the previouslyacceptedactualunits; emptyoutput isexplicitlyreported, contamination/sourcechanges stillfail, nativeEngineproduction remainsrequired.
 - Evidence:4310262 normalSteelinputFe22/coal25 withbothoutputlanesempty;18Steel+20EnginefocusedPASS; correctednative4316623actual29Enginecycles/output4; samejobaccepted4326379with23+23cycles/148actions, all360assetsbound.
 - Remaining risk: sourcebuffers can beemptyfromstarvationaswell; identity/normalinputs/fuelchecks do not promise a sustained rate. Sourcecapacityandcontinuous-flow acceptance remain separate.
+
+## 2026-11-12T17:06:36+09:00 | Source Part17 shared-source depletion recovery and capped machine stock
+- Improvement: detect actual original drill exhaustion, recover continuous supply through one resource-backed shared bank and retain a durable old/new ownership publication. Construction consumes normally produced capped stock through guarded pickups.
+- Before: powereddrill956hadnoresources, intactoldcoalpathwasempty/Boiler167dry, only1.8MWavailable. Repeatedactorfuelwouldnotrepairthecause. After: paidshared66potential sourcecoversbothboilers54max, twoexactrecoveries/preserved279units, fourloadedengines over30s and3.6MW offered4556084.
+- Evidence: verifiedpublishedBaseCoalRecovery native samples include bothboilerscoal5/water200/foursteamengines; originalsource retired,5docCASinterruptiontests pass. SameMallkey4561808succeeded67actions andactual4600230chest200/100nativebeltcraftcycles/WIP0. No granteditems/sourcecapacitymultiplication.
+- Remaining risk:66isresource-backedpotential, not a sustainedmeasurement; anotherbank depletion requiresfreshdiagnosis/extension. Actual guarded constructionstock transfer and broader Rocket flow remain separate gates.

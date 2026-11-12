@@ -19,6 +19,7 @@ class EmergencyDispatchTests(unittest.TestCase):
         ex.radars=SimpleNamespace(step=Mock(return_value={'type':'build','name':'radar'}))
         ex.piercing_ammo=SimpleNamespace(step=Mock(return_value={'type':'build','name':'assembling-machine-1'}))
         ex.construction_mall=SimpleNamespace(step=Mock(return_value={'type':'build','name':'assembling-machine-1'}))
+        ex.water_distribution=SimpleNamespace(step=Mock(return_value={'type':'build','name':'pipe'}))
         ex.starter_upkeep=Mock(return_value={'status':'blocked','reason':'old_hotspot_missing'})
         return ex
 
@@ -103,6 +104,59 @@ class EmergencyDispatchTests(unittest.TestCase):
         result=ex.step('defense_watch',{})
         self.assertEqual(result['status'],'waiting')
         self.assertEqual(result['evidence']['piercing_factory']['reason'],'owned_factory_damaged')
+
+    def test_watch_automatically_restores_an_actually_depleted_original_coal_source(self):
+        ex=self.executor()
+        ex.base_coal_recovery=SimpleNamespace(state={},
+            depletion_diagnostic=Mock(return_value={'ok':True,'depleted':True}),
+            step=Mock(return_value={'type':'build_many','reason':'restore normal boiler coal feed'}))
+        result=ex.step('defense_watch',{'tick':100})
+        self.assertEqual(result['type'],'build_many')
+        ex.perimeter.step.assert_not_called()
+
+    def test_healthy_original_coal_source_does_not_start_an_unneeded_branch(self):
+        ex=self.executor()
+        ex.base_coal_recovery=SimpleNamespace(state={},
+            depletion_diagnostic=Mock(return_value={'ok':True,'depleted':False}),step=Mock())
+        self.assertEqual(ex.step('defense_watch',{'tick':100})['status'],'waiting')
+        ex.base_coal_recovery.step.assert_not_called()
+
+    def test_failed_coal_preparation_keeps_watch_running_and_throttles_heavy_replans(self):
+        ex=self.executor()
+        ex.base_coal_recovery=SimpleNamespace(state={},
+            depletion_diagnostic=Mock(return_value={'ok':True,'depleted':True}),
+            step=Mock(return_value={'status':'blocked','reason':'coal_route_requires_review'}))
+        result=ex.step('defense_watch',{'tick':100})
+        self.assertEqual(result['status'],'waiting')
+        self.assertEqual(result['evidence']['coal_recovery']['reason'],'coal_route_requires_review')
+        ex.step('defense_watch',{'tick':101})
+        self.assertEqual(ex.base_coal_recovery.step.call_count,1)
+
+    def test_mall_power_guard_can_restore_coal_in_its_existing_job(self):
+        ex=self.executor()
+        ex.construction_mall.step.return_value={'status':'blocked','reason':'mall_power_margin_changed'}
+        ex.base_coal_recovery=SimpleNamespace(state={'phase':'build'},
+            verified=False,
+            step=Mock(return_value={'type':'build','name':'transport-belt'}))
+        result=ex.step('construction_mall',{'tick':100},{'product':'transport-belt'})
+        self.assertEqual(result['type'],'build')
+        ex.base_coal_recovery.step.return_value={'status':'waiting','reason':'sampling four engines'}
+        self.assertEqual(ex.step('construction_mall',{'tick':101},{'product':'transport-belt'})['status'],'waiting')
+
+    def test_mall_finishes_coal_sampling_and_publication_even_if_power_is_already_back(self):
+        ex=self.executor()
+        ex.base_coal_recovery=SimpleNamespace(state={'phase':'commission'},verified=False,
+            step=Mock(return_value={'status':'waiting','reason':'sampling four engines'}))
+        result=ex.step('construction_mall',{'tick':100},{'product':'transport-belt'})
+        self.assertEqual(result['reason'],'mall_waiting_for_coal_recovery_publication')
+        ex.construction_mall.step.assert_not_called()
+
+    def test_paid_water_header_precedes_unrelated_upkeep_and_keeps_defenses_during_wait(self):
+        ex=self.executor();ex.perimeter.upkeep=Mock(return_value={'type':'insert','item':'firearm-magazine'})
+        self.assertEqual(ex.step('water_distribution',{})['name'],'pipe')
+        ex.perimeter.upkeep.assert_not_called()
+        ex.water_distribution.step.return_value={'status':'waiting','reason':'waiting for actual water'}
+        self.assertEqual(ex.step('water_distribution',{})['item'],'firearm-magazine')
 
 
 if __name__=='__main__':unittest.main()

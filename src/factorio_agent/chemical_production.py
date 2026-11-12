@@ -258,12 +258,20 @@ CHEMICAL_CROSSING_PROOF_LUA=r'''
 local args=helpers.json_to_table(PAYLOAD)
 if not d or d.world_id~=args.world_id then return {ok=false,reason="chemical_fluid_crossing_world_changed"}end
 '''+CHEMICAL_CROSSING_WITNESS_LUA+r'''
-local expected={};local seen={};local spans={}
+local expected={};local seen={};local spans={};local owned={}
 for _,box in pairs(prototypes.entity["pipe-to-ground"].fluidbox_prototypes)do for _,c in pairs(box.pipe_connections)do
  if c.connection_type=="underground"then spans[#spans+1]=c.max_underground_distance end
 end end
 if #spans~=1 then return {ok=false,reason="chemical_fluid_crossing_native_span_unavailable"}end
 for _,pair in ipairs(args.pairs)do if pair.span>spans[1]then return {ok=false,reason="chemical_fluid_crossing_native_span_changed"}end end
+for _,q in ipairs(args.owned_targets or{})do local e=target(q.position,"pipe")
+ if q.unit_number then
+  if not e or e.force~=f or e.surface~=s or e.unit_number~=q.unit_number or e.quality.name~="normal"
+   or e.position.x~=q.position.x or e.position.y~=q.position.y then return {ok=false,reason="chemical_owned_crossing_unit_changed"}end
+  for name in pairs(e.get_fluid_contents())do if name~=q.fluid then return {ok=false,reason="chemical_owned_crossing_fluid_changed"}end end
+  owned[e.unit_number]=true
+ elseif e then return {ok=false,reason="chemical_unbound_owned_crossing_present"}end
+end
 for _,q in ipairs(args.assets)do
  local e=target(q.position,q.name);local fresh=crossing_witness(e)
  if not fresh or q.force_index~=f.index or fresh.unit_number~=q.unit_number or fresh.type~=q.type or fresh.direction~=q.direction
@@ -283,7 +291,7 @@ for _,p in ipairs(args.cells)do local area={{p.x-.49,p.y-.49},{p.x+.49,p.y+.49}}
   if tile.collides_with(layer)then return {ok=false,reason="chemical_fluid_crossing_terrain_changed",position=p}end
  end end
  for _,e in pairs(s.find_entities_filtered{area=area})do if crossing_obstacle(e)then
-  if not crossing_witness(e)or not expected[e.unit_number]then
+  if not owned[e.unit_number]and(not crossing_witness(e)or not expected[e.unit_number])then
    return {ok=false,reason="chemical_fluid_crossing_unrecorded_asset",position=p}
   end
   seen[e.unit_number]=true
@@ -294,15 +302,31 @@ return {ok=true,preserved_assets=#args.assets,fluid_pairs=#args.pairs}
 '''
 
 
-def fluid_crossing_proof(game,obs,plan):
+def fluid_crossing_proof(game,obs,plan,*,owned_bindings=None):
     """Fresh immutable crossings; legacy plans make no new preservation claim."""
     pairs=plan.get('fluid_underground_pairs',[]);assets=plan.get('preserved_fluid_crossings',[])
     if not isinstance(pairs,list)or not isinstance(assets,list):return {'ok':False,'reason':'chemical_fluid_crossing_witness_invalid'}
-    if not pairs and not assets:return {'ok':True,'preserved_assets':0,'fluid_pairs':0}
+    if not pairs and not assets:
+        return {'ok':False,'reason':'chemical_owned_crossing_contract_invalid'}if plan.get('owned_fluid_crossings')else{'ok':True,'preserved_assets':0,'fluid_pairs':0}
     if not obs.get('ok',True)or not isinstance(obs.get('world_id'),str)or not obs['world_id']:
         return {'ok':False,'reason':'chemical_fluid_crossing_observation_invalid'}
     try:cells=_fluid_buried_cells(pairs)
     except(KeyError,TypeError,ValueError):return {'ok':False,'reason':'chemical_fluid_crossing_pairs_invalid'}
+    owned=[];actual={(e['name'],*xy(e)):e for e in obs.get('entities',[])}
+    try:
+        for row in plan.get('owned_fluid_crossings',[]):
+            q=row['pipe'];p=xy(q)
+            if(row.get('schema')!='same-consumer-fluid-v1'or q.get('name')!='pipe'or q.get('direction',0)!=0
+                    or q.get('fluid')not in('water','petroleum-gas')or row.get('pair')not in pairs
+                    or p not in _fluid_buried_cells([row['pair']])
+                    or not any(e['name']=='pipe'and xy(e)==p for e in plan['entities'])
+                    or not isinstance(q.get('owner_revision'),str)or len(q['owner_revision'])!=64):
+                return {'ok':False,'reason':'chemical_owned_crossing_contract_invalid'}
+            unit=(owned_bindings or{}).get(_key(q));live=actual.get(('pipe',*p))
+            if live and(type(unit)is not int or live.get('unit_number')!=unit):
+                return {'ok':False,'reason':'chemical_owned_crossing_unit_changed'}
+            owned.append(dict(name='pipe',position=q['position'],fluid=q['fluid'],unit_number=unit))
+    except(KeyError,ValueError,TypeError):return {'ok':False,'reason':'chemical_owned_crossing_contract_invalid'}
     seen=set()
     for q in assets:
         if not _valid_fluid_crossing(q,obs['world_id'])or q['unit_number']in seen:
@@ -312,11 +336,12 @@ def fluid_crossing_proof(game,obs,plan):
     if not cells:return {'ok':False,'reason':'chemical_fluid_crossing_witness_outside_tunnel'}
     try:zones=mining_reservations(game,obs['world_id'])
     except(OSError,ValueError,KeyError,TypeError):return {'ok':False,'reason':'chemical_fluid_crossing_resource_scope_invalid'}
-    args={'world_id':obs['world_id'],'assets':assets,'pairs':pairs,'cells':[{'x':x,'y':y}for x,y in sorted(cells)],'zones':zones}
+    args={'world_id':obs['world_id'],'assets':assets,'pairs':pairs,'cells':[{'x':x,'y':y}for x,y in sorted(cells)],'zones':zones,
+          'owned_targets':owned}
     return game.query(CHEMICAL_CROSSING_PROOF_LUA.replace('PAYLOAD',_payload(args)))
 
 
-def plan_typed_fluid_connection(game,builder,obs,source,destination,core,prior_groups=()):
+def plan_typed_fluid_connection(game,builder,obs,source,destination,core,prior_groups=(),*,owned_prior=None):
     """Bounded ordinary pipe route. Source and all other fluid networks stay fixed."""
     if(source.get('item')!=destination.get('item')or source.get('kind')!='fluid'or source.get('name')!='pipe'
             or source.get('facing')not in VECTORS or type(source.get('unit_number'))is not int):
@@ -364,9 +389,17 @@ for _,c in pairs(b.pipe_connections)do if c.connection_type=="underground"then s
             p=(area[0][0]+.5+ix,area[0][1]+.5+iy)
             if not(p[1]==b['y']and p[0]<=b['x']):hard.add(p)
     own=source['item']
-    other=[e for name,es in core['fluid_groups'].items()if name!=own for e in es]+list(prior_groups)
+    other=[e for name,es in core['fluid_groups'].items()if name!=own for e in es]
     for e in other:
         p=xy(e);hard.add(p);hard.update((p[0]+dx,p[1]+dy)for dx,dy in VECTORS.values())
+    independent_hard=set(hard)
+    from .joint_fluid_routing import crossing_permission,validate_underpasses
+    try:permitted,owners=crossing_permission(owned_prior,obs['world_id'],core,prior_groups,independent_hard,
+        {(e['name'],*xy(e))for e in obs.get('entities',[])})
+    except ValueError as exc:return {'ok':False,'reason':'chemical_owned_prior_changed','detail':str(exc)}
+    for e in prior_groups:
+        p=xy(e);hard.add(p);hard.update((p[0]+dx,p[1]+dy)for dx,dy in VECTORS.values())
+    hard.difference_update(permitted)
     hard -= {(a['x'],a['y']),(b['x'],b['y'])};soft={(p['x'],p['y'])for p in survey.get('soft',[])}
     crossings={}
     for row in survey.get('crossings',[]):
@@ -380,13 +413,14 @@ for _,c in pairs(b.pipe_connections)do if c.connection_type=="underground"then s
     if apron_crossing and not any(all(q.get(k)==apron_crossing.get(k)for k in('name','type','unit_number','position','direction'))
             for q in crossings.get(xy(apron_crossing),[])if xy(apron_crossing)in soft and xy(apron_crossing)not in hard):
         return {'ok':False,'reason':'chemical_source_apron_native_obstruction','preflight':clear}
-    maximum=span['spans'][0]
+    maximum=span['spans'][0];soft.update(permitted)
     def accepts(row):
         prefix=apron['path'];segments=row.get('segments',[])
         if prefix and(len(segments)<len(prefix)or any(xy(segments[i])!=(p['x'],p['y'])
                 or(i<len(prefix)-1 and segments[i]['direction']!=source['facing'])for i,p in enumerate(prefix))):return False
         compiled=compile_pipe_crossings(row,soft,maximum)
         if not compiled.get('ok'):return False
+        if not validate_underpasses(compiled,permitted,owners).get('ok'):return False
         by={xy(e):e for e in compiled['entities']}
         normal=prefix[:2]if apron_crossing else prefix
         return all(by.get((p['x'],p['y']),{}).get('name')=='pipe'for p in normal)
@@ -395,6 +429,13 @@ for _,c in pairs(b.pipe_connections)do if c.connection_type=="underground"then s
         max_nodes=200000,max_turns=6,max_detour_ratio=1.35,candidate_validator=accepts,minimum_start_run=minimum_start_run)
     result=compile_pipe_crossings(route,soft,maximum)
     if not result.get('ok'):return result
+    owned=validate_underpasses(result,permitted,owners)
+    if not owned.get('ok'):return owned
+    result['owned_fluid_crossings']=owned['crossings']
+    halo=set()
+    for e in result['entities']:
+        p=xy(e);halo.add(p);halo.update((p[0]+dx,p[1]+dy)for dx,dy in VECTORS.values())
+    result['independent_clear_cells']=[list(p)for p in sorted(halo-independent_hard)]
     result['entities']=[e for e in result['entities']if xy(e)!=xy(source)]
     result['maximum_underground_span']=maximum
     first=(a['x']+VECTORS[source['facing']][0],a['y']+VECTORS[source['facing']][1])
@@ -486,6 +527,7 @@ class ChemicalProduction:
             if saved and self.overrides[item]is not None and self.overrides[item]!=saved:
                 return {'ok':False,'reason':'chemical_bound_source_override_changed','item':item}
             source_key=SOURCE_KEYS[item]
+            if item=='water'and product=='sulfur'and'sulfur-water'in registry.get('sources',{}):source_key='sulfur-water'
             if item=='petroleum-gas':
                 preferred='plastic-gas'if product=='plastic-bar'else'sulfur-gas'
                 if preferred in registry.get('sources',{}):source_key=preferred
@@ -520,13 +562,29 @@ for item,q in pairs(sources)do local e=target(q.position,q.name)
 end;return {ok=true,snapshots=snapshots}''')
         return dict(native,sources=result)
 
-    def prepare(self,obs,parameters):
+    def prepare(self,obs,parameters,*,_prospective_water=None):
         validate_chemical(parameters);product=parameters['product']
         if not obs.get('technologies',{}).get(PRODUCTS[product])or not all(obs.get('enabled_recipes',{}).get(r)for r in(product,'chemical-plant','fast-inserter')):
             return {'ok':False,'reason':'natural_chemical_technology_and_recipes_required','technology':PRODUCTS[product]}
         if self.state and not _identity(obs,self.state,self.catalog):return {'ok':False,'reason':'chemical_world_or_catalog_changed'}
         ready=self._sources(obs,product)
         if not ready.get('ok'):return ready
+        if _prospective_water is not None:
+            from .joint_fluid_routing import ProspectiveWaterSource
+            p=_prospective_water
+            if(not isinstance(p,ProspectiveWaterSource)or product!='sulfur'or p.world_id!=obs['world_id']
+                    or p.catalog_fingerprint!=self.catalog.fingerprint or p.old_source!=ready['sources']['water']
+                    or p.port.get('item')!='water'or p.port.get('facing')not in VECTORS):
+                return {'ok':False,'reason':'chemical_prospective_water_context_invalid'}
+            producer=json.loads((self.path.parent/'water-gathering.json').read_text(encoding='utf-8'))
+            from .joint_fluid_routing import revision
+            frame=revision({k:producer.get(k)for k in('world_id','catalog_fingerprint','core','plan','bindings','defense_scope_id')})
+            tap=producer['core']['pipes'][len(producer['core']['pipes'])//2]
+            expected=dict(kind='fluid',item='water',name='pipe',position={'x':xy(tap)[0],'y':xy(tap)[1]-32},
+                          direction='output',facing=0,fluidbox_index=1)
+            if frame!=p.producer_revision or p.port!=expected or producer.get('phase')!='verified':
+                return {'ok':False,'reason':'chemical_prospective_water_producer_changed'}
+            ready['sources']['water']=dict(p.port,unit_number=0,prospective_unbuilt=True)
         existing=self.state.get('products',{}).get(product)
         if existing:
             return deepcopy(existing)if existing['sources']==ready['sources']else{'ok':False,'reason':'prepared_chemical_source_changed'}
@@ -554,7 +612,11 @@ end;return {ok=true,snapshots=snapshots}''')
             legal_sites+=1
             es=core['entities'][:];fluid_plans={};handoffs={};prior=[]
             for item,destination in core['fluid_ports'].items():
-                route=plan_typed_fluid_connection(self.game,self.builder,obs,ready['sources'][item],destination,core,prior)
+                kwargs={}
+                if prior and all('independent_clear_cells'in p['route']for p in fluid_plans.values()):
+                    from .joint_fluid_routing import trusted_prior
+                    kwargs['owned_prior']=trusted_prior(obs['world_id'],core,fluid_plans)
+                route=plan_typed_fluid_connection(self.game,self.builder,obs,ready['sources'][item],destination,core,prior,**kwargs)
                 if not route.get('ok'):
                     failures.append(candidate_failure(candidate,'fluid_route',route,item=item,source=ready['sources'][item],destination=destination));break
                 nodes=merge_entities([ready['sources'][item]],route['entities'],core['fluid_groups'][item])
@@ -591,9 +653,10 @@ end;return {ok=true,snapshots=snapshots}''')
                 fluid_underground_pairs=[deepcopy(pair)for p in fluid_plans.values()for pair in p['route']['underground_pairs']],
                 preserved_fluid_crossings=list({q['unit_number']:deepcopy(q)for p in fluid_plans.values()
                     for q in p['route'].get('preserved_fluid_crossings',[])}.values()),
+                owned_fluid_crossings=[deepcopy(q)for p in fluid_plans.values()for q in p['route'].get('owned_fluid_crossings',[])],
                 clear_obstacles=check['clear_obstacles'],clearance_world_id=obs['world_id'],defense_scope_id=scope,
                 layout_policy='permanent-typed-chemistry-v1')
-            return {'ok':True,'world_id':obs['world_id'],'catalog_fingerprint':self.catalog.fingerprint,'product':product,
+            return {'ok':True,'prospective_only':_prospective_water is not None,'world_id':obs['world_id'],'catalog_fingerprint':self.catalog.fingerprint,'product':product,
                 'phase':'build','core':core,'plan':plan,'sources':ready['sources'],'fluid_plans':fluid_plans,
                 'fluid_handoffs':handoffs,'bindings':{},'defense_scope_id':scope,'defense_preview':defense,
                 'blue_demand':blue_chemistry_demand(self.catalog),'rated':core['rated'],
@@ -619,6 +682,7 @@ end;return {ok=true,snapshots=snapshots}''')
         validate_chemical(parameters);product=parameters['product']
         if self.state and not _identity(obs,self.state,self.catalog):return {'status':'blocked','reason':'chemical_world_or_catalog_changed'}
         entry=self.state.get('products',{}).get(product)
+        if entry and entry.get('prospective_only'):return {'status':'blocked','reason':'chemical_prospective_preview_is_not_executable'}
         if not entry:
             entry=self.prepare(obs,parameters)
             if not entry.get('ok'):
@@ -641,7 +705,7 @@ end;return {ok=true,snapshots=snapshots}''')
         if result is not None:return result
         pipe_guard=surface_pipe_proof(self.game,obs,entry['plan'])
         if not pipe_guard.get('ok'):return {'status':'blocked','reason':'chemical_preserved_surface_pipe_changed','evidence':pipe_guard}
-        crossing_guard=fluid_crossing_proof(self.game,obs,entry['plan'])
+        crossing_guard=fluid_crossing_proof(self.game,obs,entry['plan'],owned_bindings=entry['bindings'])
         if not crossing_guard.get('ok'):return {'status':'blocked','reason':'chemical_preserved_fluid_crossing_changed','evidence':crossing_guard}
         for fluid,h in entry['fluid_handoffs'].items():
             planned={k:v for k,v in h['first_neighbor'].items()if k!='unit_number'}
@@ -669,6 +733,7 @@ end;return {ok=true,snapshots=snapshots}''')
         if not self.state or not _identity(obs,self.state,self.catalog):return None
         entry=self.state['products'].get(parameters['product'])
         if not entry:return None
+        if entry.get('prospective_only'):return None
         actual={(e['name'],*xy(e)):e for e in obs['entities']}
         for spec in entry['plan']['entities']:
             live=actual.get((spec['name'],*xy(spec)));unit=entry['bindings'].get(_key(spec))
@@ -677,7 +742,7 @@ end;return {ok=true,snapshots=snapshots}''')
         if not underground_proof(obs,entry['plan']):return None
         pipe_guard=surface_pipe_proof(self.game,obs,entry['plan'])
         if not pipe_guard.get('ok'):self.last_proof_failure=pipe_guard;return None
-        crossing_guard=fluid_crossing_proof(self.game,obs,entry['plan'])
+        crossing_guard=fluid_crossing_proof(self.game,obs,entry['plan'],owned_bindings=entry['bindings'])
         if not crossing_guard.get('ok'):self.last_proof_failure=crossing_guard;return None
         defense=self.perimeter.coverage_proof(obs,entry['defense_scope_id'])
         if not defense:return None

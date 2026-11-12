@@ -136,7 +136,7 @@ class MallNativeTests(MallTests):
         self.table=table
         self.lua.globals().helpers=self.lua.table_from({'json_to_table':lambda v:table(json.loads(v))})
         self.lua.execute('''d={world_id="w"};game={tick=100};f={technologies={["circuit-network"]={researched=true}}};s={};world={}
-defines={inventory={chest=1,assembling_machine_input=2},wire_connector_id={circuit_red=1,circuit_green=2},wire_origin={player=1},control_behavior={inserter={hand_read_mode={hold=1}}}}
+defines={inventory={chest=1,crafter_input=2},wire_connector_id={circuit_red=1,circuit_green=2},wire_origin={player=1},control_behavior={inserter={hand_read_mode={hold=1}}}}
 prototypes={item={}};for _,n in ipairs({"gun-turret","transport-belt","iron-gear-wheel","iron-plate","copper-plate"})do prototypes.item[n]={stack_size=n=="gun-turret"and 50 or 100,type="item"}end
 function stack(name,count)return {valid_for_read=true,name=name,count=count,health=1,spoil_tick=0,quality={name="normal"},prototype=prototypes.item[name]}end
 function inventory(n)local inv={bar=n+1};for i=1,n do inv[i]={valid_for_read=false}end
@@ -148,7 +148,7 @@ function add(q,unit)local e={valid=true,name=q.name,position=q.position,unit_num
  quality={name="normal"},force=f,surface=s,type=q.name=="small-electric-pole"and"electric-pole"or q.name,
  energy=100,products_finished=0,cb={},conns={},inv=inventory(48),out=inventory(4),held_stack={valid_for_read=false}}
  e.get_recipe=function()return q.recipe and{name=q.recipe}end;e.is_connected_to_electric_network=function()return true end
- e.get_inventory=function()return e.inv end;e.get_output_inventory=function()return e.out end
+ e.get_inventory=function(index)assert(type(index)=="number","inventory index must be a number");assert(index==1 or index==2,"unsupported inventory index");return e.inv end;e.get_output_inventory=function()return e.out end
  e.get_control_behavior=function()return e.cb end;e.get_or_create_control_behavior=function()return e.cb end
  e.get_transport_line=function()return{get_contents=function()return{}end}end
  e.get_wire_connector=function(id,create)if not e.conns[id]and create then
@@ -168,6 +168,11 @@ target=function(p,name)return world[name..":"..p.x..":"..p.y]end
         self.assertTrue(self.mall._controls(self.obs,self.entry)['ok'])
         arm=self.live[_key(self.core['output_arm'])];arm.cb.circuit_read_hand_contents=False
         self.assertEqual(self.mall._controls(self.obs,self.entry)['reason'],'mall_output_hand_signal_changed')
+
+    def test_current_inventory_enum_works_without_removed_assembling_machine_alias(self):
+        self.assertIsNone(self.lua.globals().defines.inventory.assembling_machine_input)
+        result=self.mall._native(self.obs,self.entry,MALL_PROOF_LUA)
+        self.assertTrue(result['ok'],result)
 
     def test_native_production_requires_both_counters_and_output_then_survives_legitimate_pickup(self):
         self.assertTrue(execute_mall_stock_limit(self.game,self.config)['ok'])

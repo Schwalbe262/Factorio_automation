@@ -114,16 +114,31 @@ completed3104834; no Blue factory is commissioned yet. Engine is commissioned
 engine machines have23 actual finished cycles each, with four units at the fixed
 outlet. Its Steel source proof pins the original commissioned furnace units and
 permits normally consumed empty output buffers; first Steel commissioning still
-requires both real output lanes. Sulfur still lacks a complete clean Water route,
-including after Engine construction4318374. A defended ordinary northern header
-is under investigation; no new water outlet is published yet. Watch maintains
+requires both real output lanes. WaterDistribution is commissioned4584058 with
+31 normal actions: outlet16713 at89.5,-57.5 has real water and28 reciprocal
+connections, while original outlet6989 remains fixed. A same-consumer planned
+fluid underground crossing preserves foreign/resource/future hard cells. Sulfur
+is fully built with134 actions but is not commissioned: native4719458 found
+six missing owned upstream crude/Petroleum/Gas pipes, isolating empty gas segment14
+from the refinery's full gas output. Typed normally paid infrastructure repair
+is being implemented; no missing units or chemistry progress were fabricated.
+Watch maintains
 the remaining perimeter: it restocks/rebuilds known posts and
 ordinary defense research has unlocked walls, radar and repair packs. Three-post
 wall bastions are commissioned with24 paid walls and three armed posts. Native
 repair receipts prove real health gain and tool wear. The exact pinned player's
 successor10915 is rebound after actor11's death;4103 corpse items were recovered
 with conserved rounds/durability, one spare repair tool remains in the corpse.
-The automatic construction mall and sustained production rates remain unproved.
+The transport-belt mall is commissioned4561808 with67 actions. Native4600230
+confirmed100 normal belt craft cycles and200 actual chest belts, with zero
+internal product WIP and the native200 cap. Guarded stock collection is available
+to later construction; its actual transfer remains a separate acceptance check.
+Original coal drill956 exhausted its patch. Automatic recovery shared one fresh
+66/min-potential bank between both boilers (54/min max), normally recovered two
+exact belts and preserved279 units. Four-engine generation and automatic fuel
+were sampled30 game seconds; offered power returned to3.6MW at4556084. The old
+source is retired history, and source/route publication has durable five-file CAS.
+Sustained production rates remain unproved.
 One normally paid, defended radar is working at105.5,-27.5, native3941213 with
 positive scan progress. The installation gate uses fresh local coverage,
 walk access and actual hostile ranges, without waiting for unrelated global

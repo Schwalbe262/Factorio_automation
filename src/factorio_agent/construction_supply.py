@@ -24,6 +24,7 @@ CONSTRUCTION_ITEMS = frozenset({
     "underground-belt", "fast-underground-belt", "express-underground-belt",
     "splitter", "fast-splitter", "express-splitter", "inserter", "fast-inserter",
     "long-handed-inserter", "bulk-inserter", "stack-inserter", "burner-inserter", "gun-turret",
+    "pipe", "pipe-to-ground",
 })
 AMMO_ITEMS = frozenset({
     "artillery-shell", "atomic-bomb", "cannon-shell", "capture-robot-rocket",

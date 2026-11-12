@@ -613,7 +613,7 @@ local rows={};local wip=0
 for _,q in ipairs(x.core.machines)do local e=live[key(q)]
  if not e.is_connected_to_electric_network()or e.energy<=0 then return reject("mall_machine_unpowered")end
  local allowed={};for _,item in ipairs(x.core.recipe_inputs[q.recipe])do allowed[item]=true end
- if not inventory(e.get_inventory(defines.inventory.assembling_machine_input),allowed)then return reject("mall_machine_input_contaminated")end
+ if not inventory(e.get_inventory(defines.inventory.crafter_input),allowed)then return reject("mall_machine_input_contaminated")end
  local output=inventory(e.get_output_inventory(),{[q.recipe]=true})
  if not output then return reject("mall_machine_output_contaminated")end
  if q.recipe==x.core.product then wip=wip+(output[q.recipe]or 0)end

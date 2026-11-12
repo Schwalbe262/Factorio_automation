@@ -105,7 +105,9 @@ Current capabilities:
 | gas_distribution | none | basic_petroleum; protected shared header before consumers, separate Plastic/Sulfur outlets and one unchanged source capacity |
 | advanced_circuit_production | none | chemical_production and main_bus_factory; exact Plastic proof, dedicated green/wire cells, fresh iron/copper surplus taps and reserved expansion |
 | chemical_science | none | engine_production, advanced_circuit_production, chemical_production and automation_science; exact three-product supply and separate blue feed to all eight preserved labs |
-| defense_watch | none | defense_perimeter; bounded worker restocks/rebuilds known posts, selects ordinary prerequisite-ready combat/productivity research, and natively repairs damaged posts at quiet armed service sites |
+| defense_watch | none | defense_perimeter; bounded worker restocks/rebuilds known posts, selects ordinary upgrades, repairs defenses and automatically recovers an actually depleted original boiler-coal source |
+| base_coal_recovery | none | steam_expansion and defense_perimeter; normally fork a verified shared coal bank into both existing boiler feeds after native original-source depletion; prove four loaded engines |
+| water_distribution | none | water_gathering, gas_distribution and defense_perimeter; paid protected water header, complete prospective sulfur input pair and real bound water output before source publication |
 | defense_hardening | none | defense_perimeter and naturally researched walls; add two/three mutually covering paid turrets and open-rear wall bastions at an observed loss hotspot |
 | nest_sweep | none | defense_hardening; one prepared concentrated wave, armed rear cover, multiple normally paid guns placed rapidly within actual spawner range; [contract](NEST_SWEEP.md) |
 | piercing_ammo | none | ammo_production and defense_perimeter; capped ordinary assembler factory with its own yellow-magazine precursors; real batch-fed machine production for bulk red ammunition |

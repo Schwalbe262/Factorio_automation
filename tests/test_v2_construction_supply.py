@@ -72,6 +72,17 @@ class ConstructionSupplyTests(unittest.TestCase):
         validate_take_many(result)
         self.game.query.assert_not_called()
 
+    def test_pipe_construction_pools_finished_machine_and_belt_stock_in_one_bounded_pickup(self):
+        obs={'world_id':'world','entities':[
+            dict(entity(1,0,'assembling-machine-1','output_inventory'),output_inventory={'pipe':4}),
+            dict(entity(2,0),belt_inventory={'pipe':8}),
+            dict(entity(3,0),belt_inventory={'pipe':8})]}
+        result=self.bootstrap._take_output(obs,'pipe',50)
+        self.assertEqual((result['type'],result['item'],result['count']),('take_many','pipe',50))
+        self.assertEqual({q['unit_number']for q in result['sources']},{1,2,3})
+        validate_take_many(result)
+        self.game.query.assert_not_called()
+
     def test_verified_buffer_precedes_fuller_candidates_but_does_not_exclude_them(self):
         chest = entity(1, 0, "wooden-chest", "inventory")
         self.bootstrap.construction_buffers["iron-plate"] = dict(source(1, "wooden-chest", "chest"),
