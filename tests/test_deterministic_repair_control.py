@@ -53,6 +53,23 @@ class RepairControlTests(unittest.TestCase):
         self.assertTrue(requests[0]["request"])
         self.assertTrue(all(row["expected_actor_unit"] == 15 for row in requests))
 
+    def test_opted_in_native_repair_returns_after_cleanup_without_rewriting_health_receipt(self):
+        game=self.game(RUNNING,{'ok':True,'status':'waiting'},FINISHED,{'ok':True,'position':{'x':0,'y':0}})
+        game.backend='assisted';game.act=Mock(return_value={'ok':True,'position':{'x':0,'y':0}})
+        result=self.run_burst(game,dict(ACTION,return_to_spawn=True))
+        self.assertEqual(result['repaired'],12);self.assertEqual(result['durability_used'],6)
+        game.act.assert_called_once();self.assertEqual(game.act.call_args.args[0]['type'],'move')
+        self.assertTrue(game.query.call_args.args[0].endswith(repair.REPAIR_RETURN_HOME_LUA))
+
+    def test_unsafe_return_does_not_move_and_operator_stop_prevents_new_input(self):
+        game=self.game(RUNNING,{'ok':True,'status':'waiting'},FINISHED,{'ok':False,'reason':'unsafe_home'})
+        game.backend='assisted';game.act=Mock()
+        result=self.run_burst(game,dict(ACTION,return_to_spawn=True))
+        self.assertFalse(result['return_to_spawn']['ok']);game.act.assert_not_called()
+        game=self.game(RUNNING,FINISHED);game.backend='assisted';game.act=Mock()
+        self.assertEqual(self.run_burst(game,dict(ACTION,return_to_spawn=True),stop=True),FINISHED)
+        game.act.assert_not_called();self.assertEqual(game.query.call_count,2)
+
     def test_pulse_count_and_wall_deadline_are_bounded_and_cleanup_runs(self):
         game = self.game(RUNNING, *([RUNNING] * repair.MAX_REPAIR_PULSES), FINISHED)
         self.assertEqual(self.run_burst(game), FINISHED)

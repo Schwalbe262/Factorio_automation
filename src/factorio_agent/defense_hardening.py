@@ -155,12 +155,50 @@ class DefenseHardening:
                     if before.get('tick')!=row.get('tick')or not row.get('result',{}).get('ok'):continue
                     rows.append(dict(key=key,tick=row['tick'],action=before['action'],result=row['result'],
                         intent_sha256=digest,result_sha256=hashlib.sha256(raw).hexdigest()))
+                    if(before['action'].get('type')=='build_and_arm_bastion_group'
+                            and row['result'].get('paid_this_call')==3 and not row['result'].get('reused_receipt')):
+                        actions=before['action'].get('deployments',[]);results=row['result'].get('deployments',[])
+                        if len(actions)==len(results)==3:
+                            paired=rows[-1]
+                            rows.extend(dict(paired,action=a,result=r,atomic_group_id=before['action'].get('group_id'))
+                                        for a,r in zip(actions,results))
         return rows
+
+    def _atomic_paid_build(self,row,unit,spec):
+        from .defense_deployment import validate_bastion_deployment,_hash,SCOPE_FIELDS
+        a,r=row['action'],row['result']
+        try:validate_bastion_deployment(a,self.state['world_id'])
+        except(ValueError,KeyError,TypeError):return False
+        post=next((p for p in self.state['posts']if p['position']==spec['position']),None)
+        if(not post or spec['name']!='gun-turret'or a['owner_kind']!='hardening'or a['ammo_item']!='firearm-magazine'
+                or a['plan_revision']!=_hash(self.state['plan'])or a['scope_id']!=self.state['scope_id']or a['post_name']!=post['name']
+                or a['position']!=spec['position']or r.get('unit_number')!=unit or not r.get('ok')
+                or r.get('reused')or r.get('reused_receipt')or r.get('paid_this_call')!=1 or r.get('loaded_this_call')!=20
+                or r.get('paid_turrets')!=1 or r.get('loaded_magazines')!=20 or r.get('loaded_rounds')!=200
+                or r.get('magazine_size')!=10 or r.get('ammo_category')!='bullet'or r.get('quality')!='normal'
+                or type(r.get('start_tick'))is not int or r.get('start_tick')!=r.get('armed_tick')
+                or r.get('actor_unit')!=a['expected_actor_unit']or r.get('world_id')!=self.state['world_id']
+                or r.get('catalog_fingerprint')!=self.catalog.fingerprint or r.get('position')!=spec['position']
+                or r.get('scope_revision')!=_hash({k:self.state['scope'][k]for k in SCOPE_FIELDS})
+                or any(r.get(k)!=a[k]for k in('deployment_id','owner_kind','authority_revision','plan_revision','scope_id','post_name'))):return False
+        if row.get('atomic_marker_verified'):return True
+        check=self.game.query('local q=helpers.json_to_table('+_payload(r)+''');local m=d and d.defense_deployments and d.defense_deployments[q.deployment_id]
+if not m or m.phase~="complete"or not m.receipt then return {ok=false}end
+local r=m.receipt;for _,k in ipairs{"deployment_id","unit_number","world_id","catalog_fingerprint","actor_unit","owner_kind","authority_revision","plan_revision","scope_revision","scope_id","post_name","ammo_item","paid_turrets","loaded_magazines","loaded_rounds","start_tick","armed_tick"}do
+if r[k]~=q[k]then return {ok=false}end end;return {ok=true}''')
+        if not check.get('ok'):return False
+        row['atomic_marker_verified']=True;return True
 
     def _paid_build(self,unit,spec,receipts):
         prior=self.state.get('unit_build_receipts',{}).get(str(unit))
+        if prior and prior['action'].get('type')=='build_and_arm_bastion_post':
+            if self._atomic_paid_build(prior,unit,spec):return prior
         if(prior and not prior.get('result',{}).get('reused')and prior['action'].get('name')==spec['name']
                 and prior['action'].get('position')==spec['position']):return prior
+        atomic=[r for r in receipts if r['action'].get('type')=='build_and_arm_bastion_post'and self._atomic_paid_build(r,unit,spec)]
+        atomic={r['action']['deployment_id']:r for r in atomic}
+        if len(atomic)==1:return next(iter(atomic.values()))
+        if atomic:return None
         matches=[r for r in receipts if r['action'].get('type')=='build'and r['action'].get('name')==spec['name']
                  and r['action'].get('position')==spec['position']and r['result'].get('unit_number')==unit
                  and not r['result'].get('reused')]
@@ -170,6 +208,9 @@ class DefenseHardening:
         saved=self.state.setdefault('stock_delivery_receipts',{}).setdefault(str(unit),{})
         for row in receipts:
             a,r=row['action'],row['result'];moved=r.get('moved')
+            if a.get('type')=='build_and_arm_bastion_post'and self._atomic_paid_build(row,unit,dict(post,name='gun-turret')):
+                saved['deployment:'+a['deployment_id']]={k:row[k]for k in('key','tick','intent_sha256','result_sha256')}|{'moved':20,'actor_unit':r['actor_unit'],'deployment_id':a['deployment_id']}
+                continue
             if(a.get('type')=='insert'and a.get('name')=='gun-turret'and a.get('item')=='firearm-magazine'
                     and a.get('inventory')=='turret_ammo'and a.get('position')==post['position']
                     and a.get('expected_entity_world_id')==self.state['world_id']and a.get('expected_entity_unit')==unit

@@ -145,6 +145,21 @@ if not repair_owner(x) then return failure("native_repair_owner_changed") end
 return finish_repair(x.request)
 '''
 
+
+REPAIR_RETURN_HOME_LUA=REPAIR_COMMON_LUA+r'''
+if not repair_owner(x)or d.native_repair then return {ok=false,reason="repair_return_owner_or_cleanup_changed"}end
+local home=f.get_spawn_position(s);local p=s.find_non_colliding_position("character",home,8,.5)
+if not p then return {ok=false,reason="repair_return_spawn_obstructed"}end
+if s.count_entities_filtered{position=p,radius=32,force="enemy",type={"unit","unit-spawner"}}>0 then
+ return {ok=false,reason="repair_return_spawn_not_quiet"}end
+for _,enemy in pairs(s.find_entities_filtered{position=p,radius=64,force="enemy",type="turret"})do
+ local attack=enemy.prototype.attack_parameters
+ if not attack or not attack.range or(enemy.position.x-p.x)^2+(enemy.position.y-p.y)^2<=(attack.range+3)^2 then
+  return {ok=false,reason="repair_return_spawn_in_hostile_turret_range"}end
+end
+return {ok=true,position=pos(p),tick=game.tick}
+'''
+
 # The normal stop action also recovers a pack left by an interrupted burst.
 STOP_REPAIR_LUA = REPAIR_COMMON_LUA + r'''
 if d and d.native_repair then
@@ -185,6 +200,8 @@ end
 def validate_repair(action: dict) -> None:
     if action.get("type") not in {"repair", "finish_repair"}:
         raise ValueError("unsupported native repair action")
+    if 'return_to_spawn'in action and type(action['return_to_spawn'])is not bool:
+        raise ValueError('native repair return_to_spawn must be boolean')
     if not isinstance(action.get("expected_world_id"), str) or not action["expected_world_id"]:
         raise ValueError("native repair requires the observed world")
     if type(action.get("expected_actor_unit")) is not int or action["expected_actor_unit"] <= 0:
@@ -221,6 +238,8 @@ def pending_repair(observation: dict) -> dict | None:
 
 def run_repair(game, action: dict) -> dict:
     validate_repair(action)
+    if action.get('return_to_spawn')and getattr(game,'backend',None)!='assisted':
+        raise ValueError('automatic repair return requires the assisted movement backend')
     request = dict(action, request=action.get("request") or str(uuid.uuid4()))
     encoded = json.dumps(json.dumps(request, separators=(",", ":")))
     prefix = "local x=helpers.json_to_table(" + encoded + ");"
@@ -256,6 +275,11 @@ def run_repair(game, action: dict) -> dict:
         return cleanup
     if result and not result.get("ok"):
         return result
-    if cleanup and cleanup.get("reason") != "native_repair_already_stopped":
-        return cleanup
-    return result or cleanup
+    answer=cleanup if cleanup and cleanup.get('reason')!='native_repair_already_stopped'else result or cleanup
+    if(action.get('return_to_spawn')and answer and answer.get('ok')
+            and not stop_requested(game.cfg.runtime_dir/'stop.json')):
+        home=game.query(prefix+REPAIR_RETURN_HOME_LUA)
+        returned=game.act(dict(type='move',position=home['position'],
+            reason='return the repair operator to its quiet force spawn after native tool cleanup'))if home.get('ok')else home
+        answer=dict(answer,return_to_spawn=returned)
+    return answer

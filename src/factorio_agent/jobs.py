@@ -53,6 +53,8 @@ CAPABILITIES = {
                           "effect":"normally build mutually covering gun posts and open-rear wall bastions at an observed loss hotspot; preserve production reservations and service access"},
     "radar_network": {"parameters":{},"requires":["defense_perimeter"],
                       "effect":"normally build a defended radar behind the front with measured electrical headroom; prove native scanning"},
+    "nest_assault": {"parameters":{},"requires":["defense_hardening"],
+                    "effect":"identify a dangerously close charted nest cluster; prepay normal guns and preferred researched ammunition, deploy three armed posts in one native tick and clear bounded exact targets using actual gun fire"},
     "main_bus_factory": {"parameters":{},"requires":["paired_smelting","logistic_science","defense_perimeter"],
                          "effect":"replace separate raw plate corridors with shared northbound iron/copper buses and native priority taps; commission compact green then normally retire obsolete western hardware; no throughput certification"},
     "dedicated_materials": {"parameters":{"resource":"coal|stone"},"requires":["paired_mining"],
@@ -350,6 +352,10 @@ class StarterExecutors:
         from .defense_hardening import DefenseHardening
         self.hardening=DefenseHardening(game,self.bootstrap,self.builder,catalog,self.perimeter)
         self.hardening.wall_repair=self.defense_repairs.wall_action
+        from .bastion_maintenance import BastionMaintenance
+        self.bastion_maintenance=BastionMaintenance(game,self.bootstrap,catalog,self.perimeter,self.hardening)
+        from .nest_assault import NestAssault
+        self.nest_assault=NestAssault(game,self.bootstrap,self.builder,catalog,self.perimeter)
         from .radar_network import RadarNetwork
         self.radars=RadarNetwork(game,self.builder,catalog,self.perimeter)
         self.outposts.perimeter=self.perimeter
@@ -425,6 +431,9 @@ class StarterExecutors:
         if getattr(self,'storage',None):
             storage=self.storage.step(obs)
             if storage:return storage
+        if getattr(self,'bastion_maintenance',None):
+            bastion=self.bastion_maintenance.step(obs)
+            if bastion:return bastion
         if getattr(self,'perimeter',None):
             defense=self.perimeter.upkeep(obs)
             if defense:return defense
@@ -448,6 +457,15 @@ class StarterExecutors:
         from factorio_ai.deterministic_repair_control import pending_repair
         cleanup=pending_repair(obs)
         if cleanup:return cleanup
+        if capability == 'nest_assault':
+            self.builder._sync(obs)
+            # Keep normal base ammunition supplied while finite raid crafting
+            # runs. An empty factory buffer must not deadlock native combat.
+            restored=self.bastion_maintenance.step(obs)
+            if restored and(restored.get('type')or restored.get('status')=='blocked'):return restored
+            upkeep=self.perimeter.upkeep(obs)
+            if upkeep and(upkeep.get('type')or upkeep.get('status')=='blocked'):return upkeep
+            return self.nest_assault.step(obs)
         if capability == "defense_hardening":
             self.builder._sync(obs)
             return self.hardening.step(obs,parameters or {})
@@ -456,6 +474,8 @@ class StarterExecutors:
             from .upgrades import next_upgrade
             upgrade=next_upgrade(obs,self.normal_research)
             if upgrade:return upgrade
+            bastion=self.bastion_maintenance.step(obs)
+            if bastion:return bastion
             result=self.perimeter.step(obs)
             if result.get('status')=='succeeded':
                 wall=self.hardening.upkeep(obs)
@@ -612,6 +632,8 @@ class StarterExecutors:
             return self.hardening.proof(obs)
         if capability == "radar_network":
             return self.radars.proof(obs)
+        if capability == 'nest_assault':
+            return self.nest_assault.proof(obs)
         if capability == "main_bus_factory":
             return self.bus_factory.proof(obs)
         if capability == "dedicated_materials":

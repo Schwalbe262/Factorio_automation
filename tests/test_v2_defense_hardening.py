@@ -162,6 +162,50 @@ class HardeningControllerTests(unittest.TestCase):
         self.receipt(dict(type='build',**gun),dict(unit_number=101))
         paid=self.c._paid_build(101,gun,self.c._receipts());self.assertEqual(paid['result']['unit_number'],101)
 
+    def atomic_birth(self,post,unit,actor=11):
+        from factorio_agent.defense_deployment import bastion_deployment_action,_hash,SCOPE_FIELDS
+        self.game.expected_world='w';self.game.backend='assisted';obs=dict(self.obs,actor_unit_number=actor)
+        action=bastion_deployment_action(self.game,obs,post['name'])
+        result=dict(ok=True,unit_number=unit,world_id='w',catalog_fingerprint='c',actor_unit=actor,
+            position=post['position'],paid_turrets=1,loaded_magazines=20,loaded_rounds=200,paid_this_call=1,loaded_this_call=20,
+            ammo_item='firearm-magazine',magazine_size=10,ammo_category='bullet',quality='normal',start_tick=4,armed_tick=4,
+            scope_revision=_hash({k:self.c.state['scope'][k]for k in SCOPE_FIELDS}))
+        result.update({k:action[k]for k in('deployment_id','owner_kind','authority_revision','plan_revision','scope_id','post_name')})
+        return action,result
+
+    def test_atomic_paid_birth_and_consumed_delivery_preserve_original_actor_and_deduplicate(self):
+        self.install();self.c.step(self.obs);post=self.c.state['posts'][0];action,result=self.atomic_birth(post,100)
+        self.receipt(action,{k:v for k,v in result.items()if k!='ok'})
+        rows=self.c._receipts();spec=dict(post,name='gun-turret');paid=self.c._paid_build(100,spec,rows)
+        self.assertTrue(paid['atomic_marker_verified']);self.assertEqual(paid['result']['actor_unit'],11)
+        self.c.state.setdefault('unit_build_receipts',{})['100']=paid;self.obs['actor_unit_number']=10915
+        self.game.query.reset_mock();self.assertEqual(self.c._paid_build(100,spec,[])['result']['actor_unit'],11)
+        self.game.query.assert_not_called()
+        self.c._observe_delivery(post,100,0,rows+rows)
+        self.assertEqual(sum(q['moved']for q in self.c.state['stock_delivery_receipts']['100'].values()),20)
+        self.assertEqual(self.c.state['stocked_units'][post['name']],100)
+
+    def test_atomic_receipt_requires_original_payment_and_native_marker(self):
+        self.install();self.c.step(self.obs);post=self.c.state['posts'][0];action,result=self.atomic_birth(post,100)
+        row=dict(action=action,result=result,key='watch',tick=4,intent_sha256='a',result_sha256='b')
+        for change in({'reused':True},{'reused_receipt':True},{'paid_this_call':0},{'actor_unit':12},{'loaded_magazines':19},{'unit_number':101},{'owner_kind':'nest_assault'}):
+            altered=dict(row,result=dict(result,**change))
+            self.assertIsNone(self.c._paid_build(100,dict(post,name='gun-turret'),[altered]))
+        self.game.query.return_value={'ok':False};self.game.query.side_effect=None
+        self.assertIsNone(self.c._paid_build(100,dict(post,name='gun-turret'),[row]))
+
+    def test_atomic_group_children_retain_paired_evidence_and_each_get_twenty_delivery(self):
+        self.install();self.c.step(self.obs)
+        pairs=[self.atomic_birth(p,100+i)for i,p in enumerate(self.c.state['posts'])]
+        self.receipt(dict(type='build_and_arm_bastion_group',group_id='g',deployments=[a for a,r in pairs]),
+            dict(paid_this_call=3,deployments=[r for a,r in pairs]))
+        rows=self.c._receipts()
+        for i,post in enumerate(self.c.state['posts']):
+            paid=self.c._paid_build(100+i,dict(post,name='gun-turret'),rows)
+            self.assertEqual(paid['atomic_group_id'],'g')
+            self.c._observe_delivery(post,100+i,0,rows)
+            self.assertEqual(sum(q['moved']for q in self.c.state['stock_delivery_receipts'][str(100+i)].values()),20)
+
     def test_known_paid_watch_replacement_records_lost_unit_before_binding_new_unit(self):
         self.install();self.c.step(self.obs);gun=next(e for e in self.c.state['plan']['entities']if e['name']=='gun-turret')
         self.c.state['bindings'][_key(gun)]=100;self.c._save()

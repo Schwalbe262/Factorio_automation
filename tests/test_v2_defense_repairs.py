@@ -6,7 +6,7 @@ import runpy
 import json
 
 from factorio_agent.defense_repairs import DefenseRepairs,REPAIR_SITE_LUA
-from factorio_ai.deterministic_repair_control import BEGIN_REPAIR_LUA
+from factorio_ai.deterministic_repair_control import BEGIN_REPAIR_LUA,REPAIR_RETURN_HOME_LUA
 
 try:
     from lupa import LuaRuntime
@@ -120,6 +120,24 @@ target=function(p,name)if name=="stone-wall"then return e else return g end end
         bad=evaluate(remote=True,remote_exit_fails=True)
         self.assertFalse(bad['result']['ok']);self.assertEqual(bad['cursor_count'],0)
         self.assertEqual(bad['inventory_count'],1);self.assertFalse(bad['pending'])
+
+    def test_native_return_requires_owned_clean_actor_and_quiet_clear_spawn(self):
+        fixture=runpy.run_path(str(Path(__file__).with_name('test_deterministic_repair_control_live.py')))['FIXTURE_LUA']
+        base='''f.get_spawn_position=function()return{x=0,y=0}end
+s.find_non_colliding_position=function()return{x=0,y=0}end
+s.count_entities_filtered=function()return 0 end
+s.find_entities_filtered=function()return{}end
+'''
+        def evaluate(change=''):
+            lua=LuaRuntime(unpack_returned_tuples=True)
+            lua.globals().helpers=lua.table_from({'json_to_table':lambda _:lua.table_from({})})
+            body=fixture.replace('OPTIONS',json.dumps('{}')).replace('BODY',base+change+REPAIR_RETURN_HOME_LUA)
+            return lua.execute(body)['result']
+        self.assertTrue(evaluate()['ok']);self.assertEqual(evaluate()['position']['x'],0)
+        for change in('d.native_repair={};','a.player.name="Other";',
+                       's.count_entities_filtered=function()return 1 end;',
+                       's.find_non_colliding_position=function()return nil end;'):
+            self.assertFalse(evaluate(change)['ok'])
 
 
 if __name__=='__main__':unittest.main()

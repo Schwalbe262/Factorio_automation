@@ -33,6 +33,16 @@ and [exiting remote view](https://lua-api.factorio.com/latest/classes/LuaPlayer.
 Live acceptance still requires a positive health delta with actual durability
 spending; an `ok` or waiting receipt alone is insufficient.
 
+V2 assisted repairs opt into returning the operator to its quiet native force
+spawn after tool cleanup, using the existing ordinary movement action. This
+avoids leaving the operator idle on the front after a repair. The same
+owner/world and a clear spawn outside enemy units and native worm ranges are
+rechecked before returning; uncertain replies and an operator stop issue no
+additional movement. Live receipts at3547616/3548045/3548453/3549009 recorded
+positive health deltas with actual tool durability spending. A later normally
+owned corpse recovery transfers original stacks and may defer a spare tool to
+retain the driver's exactly-one-carried-tool limit.
+
 `defense_hardening` adds the paid mutually covering wall bastions described in
 DEFENSE_HARDENING.md. A first attempt lost unit9478 before its second turret:
 the controller chased an observed stock of20 even after21 real magazines had

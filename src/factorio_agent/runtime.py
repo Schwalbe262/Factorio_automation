@@ -31,6 +31,15 @@ class WorldBoundGame(DeterministicGame):
         return super().query(body)
 
     def act(self,action:dict)->dict:
+        if action.get('type')=='build_and_arm_bastion_post':
+            from .defense_deployment import execute_bastion_deployment
+            return self._record_action(action,execute_bastion_deployment(self,action))
+        if action.get('type')=='build_and_arm_bastion_group':
+            from .defense_deployment import execute_bastion_group
+            return self._record_action(action,execute_bastion_group(self,action))
+        if action.get('type')=='start_nest_assault':
+            from .nest_assault import execute_start_assault
+            return self._record_action(action,execute_start_assault(self,action))
         if action.get('type')=='build_defense_replacement':
             from .defense_relocation import execute_build_replacement
             return self._record_action(action,execute_build_replacement(self,action))

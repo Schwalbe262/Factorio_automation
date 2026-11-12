@@ -13,6 +13,8 @@ class EmergencyDispatchTests(unittest.TestCase):
         ex.perimeter=SimpleNamespace(step=Mock(return_value={'status':'succeeded'}))
         ex.defense_repairs=SimpleNamespace(next_action=Mock(return_value=None))
         ex.normal_research=SimpleNamespace(catalog=SimpleNamespace(technologies={}))
+        ex.bastion_maintenance=SimpleNamespace(step=Mock(return_value=None))
+        ex.nest_assault=SimpleNamespace(step=Mock(return_value={'type':'craft','recipe':'piercing-rounds-magazine'}))
         ex.starter_upkeep=Mock(return_value={'status':'blocked','reason':'old_hotspot_missing'})
         return ex
 
@@ -32,6 +34,12 @@ class EmergencyDispatchTests(unittest.TestCase):
         obs=dict(world_id='w',actor_unit_number=11,repair_pending=dict(request='r'))
         self.assertEqual(ex.step('defense_hardening',obs)['type'],'finish_repair')
         ex.hardening.step.assert_not_called();ex.builder._sync.assert_not_called()
+
+    def test_empty_base_ammo_buffer_does_not_prevent_native_offensive_progress(self):
+        ex=self.executor();ex.perimeter.upkeep=Mock(return_value={'status':'waiting','reason':'factory_empty'})
+        self.assertEqual(ex.step('nest_assault',{})['recipe'],'piercing-rounds-magazine')
+        ex.perimeter.upkeep.return_value={'type':'insert','item':'firearm-magazine'}
+        self.assertEqual(ex.step('nest_assault',{})['item'],'firearm-magazine')
 
 
 if __name__=='__main__':unittest.main()

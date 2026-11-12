@@ -15,6 +15,21 @@ The command format is `python -B -m factorio_agent --runtime <directory> <comman
 
 - `observe`: current world ID/tick, concise production/inventory, technology,
   entities, available capabilities and job receipts.
+- `actor-status`: inspect the pinned player and any actual successor character
+  even when ordinary observation reports `agent_dead`; creates no character/items.
+- `recover-actor --world-id <id> --expected-old-unit <old> --expected-new-unit <new>`:
+  explicitly reconnect framework storage to that same player's actual successor
+  only when the old character is invalid. Preserves original receipts and records
+  the owner succession; it does not revive, grant equipment or rewrite old actions.
+- `belongings-status --world-id <id> --expected-actor-unit <unit> --death-tick <tick>`:
+  inspect the uniquely matching owner's corpse and current native belongings.
+- `recover-belongings` with those same arguments: recover real corpse stacks
+  through native inventory transfer, preserving ammunition and tool metadata.
+  It keeps at most one carried repair tool; surplus tools remain in the owned
+  corpse for a later recovery. The actor stays at its current position.
+- `return-to-base --world-id <id> --expected-actor-unit <unit>`: normally move
+  the pinned operator to a native-clear, quiet force-spawn position in assisted
+  mode. Fails if the owner/world changed, a repair is pending or the base is unsafe.
 - `capabilities`: implemented contracts. Missing skills are genuinely unavailable.
 - `request --key <unique-key> --world-id <id> --observed-tick <tick> --capability <name>`:
   submit one goal. Use a recent observation. A key always identifies the same
@@ -22,10 +37,13 @@ The command format is `python -B -m factorio_agent --runtime <directory> <comman
 - `run --key <key> --seconds 25`: execute a bounded slice of that job. Repeat
   until succeeded/blocked/failed. A waiting slice is still a live unfinished job.
 - `worker --key <key> --max-seconds 900`: keep executing that chosen job without
-  another model decision each slice. Poll the exact shell `session_id` until it
-  completes. A tool's 10-second yield is NOT completion; never start another
-  worker while the first process still owns the writer lock. Worker prints a
-  concise heartbeat about every 50 seconds and stops on a real terminal status.
+  another model decision each slice. Keep monitoring the actual process until
+  completion. For execution across an agent turn, launch a detached hidden
+  process with redirected stdout/stderr, retain its PID and creation time, and
+  inspect those logs plus the job receipt. An agent-local shell session may end
+  when the agent finishes. A stale job or a yielded tool is not proof of a live
+  worker. Never start a second writer while the first still runs. The worker
+  prints a concise heartbeat about every 50 seconds and stops on a terminal status.
 - `pause --key <key>` / `resume --key <key>`: suspend an unfinished goal while
   another goal runs, preserving partial construction. Only one unpaused goal.
 - `retry --key <key>`: retry a known blocked outcome in the same world after
@@ -83,6 +101,7 @@ Current capabilities:
 | chemical_science | none | engine_production, advanced_circuit_production, chemical_production and automation_science; exact three-product supply and separate blue feed to all eight preserved labs |
 | defense_watch | none | defense_perimeter; bounded worker restocks/rebuilds known posts, selects ordinary prerequisite-ready combat/productivity research, and natively repairs damaged posts at quiet armed service sites |
 | defense_hardening | none | defense_perimeter and naturally researched walls; add two/three mutually covering paid turrets and open-rear wall bastions at an observed loss hotspot |
+| nest_assault | none | defense_hardening; finite nearby-nest operation, normally fund guns/walls and preferred piercing ammunition before rapid grouped native-projectile combat; [contract](NEST_ASSAULT.md) |
 | radar_network | none | defense_perimeter and naturally researched radar; one paid defended base radar with measured power headroom and native scan proof |
 | steam_coal_reroute | none | steam_expansion; prebuild alternative, verify loaded engines, recover obsolete owned transport |
 | legacy_coal_cleanup | none | steam_expansion and dedicated_materials; isolated burner/cache recovery after replacement supply and headroom proof |
@@ -99,7 +118,8 @@ implemented and commissioned in the development world. Iron steel-furnace upgrad
 and automatic ammunition are also commissioned. Basic petroleum, independent
 chemistry coal and independent water are commissioned in the development world.
 Engine and chemical interfaces are implemented; live commissioning remains
-pending. Construction mall, repair, blue science, rail and rocket remain pending.
+pending. Native repair and wall bastions are commissioned. Construction mall,
+nearby-nest victory, blue science, rail and rocket remain pending.
 Do not claim a rocket-capable system.
 
 New construction checks resource tiles and registered mining growth space before

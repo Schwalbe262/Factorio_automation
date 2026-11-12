@@ -144,7 +144,7 @@ class AmmoProductionTests(unittest.TestCase):
     def test_refill_requests_are_bounded_and_only_full_actor_stock_counts(self):
         self.installed();self.c.state['phase']='verified'
         self.game.query.reset_mock()
-        for count in (True,0,101):
+        for count in (True,0,501):
             with self.assertRaises(ValueError):self.c.ensure_full_magazines(self.obs,count)
         self.game.query.assert_not_called()
         self.buffer.update(actor_full_magazines=9,full_magazines=80)
@@ -164,6 +164,12 @@ class AmmoProductionTests(unittest.TestCase):
         validate_ammo_action(second,kind='take_full_magazines',expected_world='w')
         self.buffer['actor_full_magazines']=60
         self.assertIsNone(self.c.ensure_full_magazines(self.obs,60))
+
+    def test_operation_precollection_exceeds_one_chest_stack_without_expanding_transfer_limit(self):
+        self.installed();self.c.state['phase']='verified';self.buffer['full_magazines']=100;self.buffer['insertable']=100
+        for held,expected in((100,50),(150,50),(200,20)):
+            self.buffer['actor_full_magazines']=held
+            self.assertEqual(self.c.ensure_full_magazines(self.obs,220)['count'],expected)
         self.buffer['actor_full_magazines']=0
         self.assertEqual(self.c.ensure_full_magazines(self.obs,100)['count'],50)
 

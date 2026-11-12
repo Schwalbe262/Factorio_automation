@@ -264,7 +264,7 @@ return {ok=true,tick=game.tick,assembler_unit=machine.unit_number,products_finis
                 'scope':'actual normal assembler output and bounded buffer; nominal30/min is not sustained-throughput proof'}
 
     def ensure_full_magazines(self,obs,count):
-        if type(count)is not int or not 1<=count<=100:raise ValueError('bounded refill target must be1..100 full normal magazines; each transfer remains at most50')
+        if type(count)is not int or not 1<=count<=500:raise ValueError('bounded refill target must be1..500 full normal magazines; each transfer remains at most50')
         if not self.commissioned:return None
         if not self._identity(obs,self.state):return {'status':'blocked','reason':'ammo_world_or_catalog_changed'}
         buffer=self._buffer(obs)

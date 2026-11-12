@@ -3,7 +3,18 @@ from __future__ import annotations
 
 import json
 
-from factorio_ai.deterministic_repair_control import pending_repair
+from factorio_ai.deterministic_repair_control import pending_repair,REPAIR_RETURN_HOME_LUA
+
+
+def return_to_spawn_action(game,world,actor):
+    """Read-only emission of an ordinary move to the pinned owner's quiet base."""
+    if(not isinstance(world,str)or not world or type(actor)is not int or actor<1
+            or getattr(game,'expected_world',None)!=world or getattr(game,'backend',None)!='assisted'):
+        raise ValueError('safe return requires exact actor and bound assisted world')
+    payload=json.dumps(json.dumps(dict(expected_world_id=world,expected_actor_unit=actor)))
+    home=game.query('local x=helpers.json_to_table('+payload+');'+REPAIR_RETURN_HOME_LUA)
+    if not home.get('ok'):return dict(status='blocked',**home)
+    return dict(type='move',position=home['position'],reason='return the automation operator to its quiet force spawn')
 
 
 REPAIR_SITE_LUA=r'''
@@ -82,4 +93,5 @@ class DefenseRepairs:
         return dict(type='repair',name=result['target'].get('name','gun-turret'),position=result['target']['position'],
             expected_world_id=obs['world_id'],expected_actor_unit=obs['actor_unit_number'],
             expected_entity_unit=result['target']['unit_number'],
+            return_to_spawn=getattr(self.game,'backend','assisted')=='assisted',
             reason='repair a known armed post using one ordinarily acquired repair pack')

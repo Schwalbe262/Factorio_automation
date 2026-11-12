@@ -20,8 +20,20 @@ def main(argv=None):
     create.add_argument("--seed", type=int, default=101)
     create.add_argument("--server-port", type=int, default=34260)
     create.add_argument("--rcon-port", type=int, default=27060)
-    for command in ("start", "connect-player", "observe", "capabilities"):
+    for command in ("start", "connect-player", "observe", "capabilities", "actor-status"):
         commands.add_parser(command)
+    recovery=commands.add_parser("recover-actor")
+    recovery.add_argument("--world-id",required=True)
+    recovery.add_argument("--expected-old-unit",type=int,required=True)
+    recovery.add_argument("--expected-new-unit",type=int,required=True)
+    parking=commands.add_parser('return-to-base')
+    parking.add_argument('--world-id',required=True)
+    parking.add_argument('--expected-actor-unit',type=int,required=True)
+    for name in ('belongings-status','recover-belongings'):
+        belongings=commands.add_parser(name)
+        belongings.add_argument('--world-id',required=True)
+        belongings.add_argument('--expected-actor-unit',type=int,required=True)
+        belongings.add_argument('--death-tick',type=int,required=True)
     commands.add_parser("stop-worker")
     commands.add_parser("clear-worker-stop")
     commands.add_parser("status").add_argument("--key")
@@ -59,6 +71,40 @@ def main(argv=None):
         result = set_client_visibility(runtime.configuration(root), visible=not args.hide)
     elif args.command == "capabilities":
         result = CAPABILITIES
+    elif args.command == "actor-status":
+        from .actor_recovery import inspect_actor_recovery
+        result=inspect_actor_recovery(runtime.game_for(root))
+    elif args.command == "recover-actor":
+        from .actor_recovery import execute_actor_recovery
+        with RunLock(root / "writer.lock"):
+            game=runtime.game_for(root)
+            action=dict(type='recover_actor',world_id=args.world_id,
+                expected_old_unit=args.expected_old_unit,expected_new_unit=args.expected_new_unit)
+            result=execute_actor_recovery(game,args.world_id,args.expected_old_unit,args.expected_new_unit)
+            game._record_action(action,result)
+            Ledger(root).event('actor-lifecycle','actor_recovery',tick=result.get('tick'),
+                old_unit=args.expected_old_unit,new_unit=args.expected_new_unit,result=result)
+    elif args.command == 'belongings-status':
+        from .corpse_recovery import inspect_corpse_recovery
+        result=inspect_corpse_recovery(runtime.game_for(root),args.world_id,args.expected_actor_unit,args.death_tick)
+    elif args.command == 'return-to-base':
+        from .defense_repairs import return_to_spawn_action
+        with RunLock(root/'writer.lock'):
+            game=runtime.game_for(root)
+            action=return_to_spawn_action(game,args.world_id,args.expected_actor_unit)
+            result=game.act(action)if action.get('type')else action
+            Ledger(root).event('actor-lifecycle','return_to_base',result=result)
+    elif args.command == 'recover-belongings':
+        from .corpse_recovery import execute_corpse_recovery
+        with RunLock(root/'writer.lock'):
+            game=runtime.game_for(root)
+            action=dict(type='recover_owned_belongings',world_id=args.world_id,
+                expected_actor_unit=args.expected_actor_unit,death_tick=args.death_tick,keep_single_repair_tool=True)
+            receipt=execute_corpse_recovery(game,args.world_id,args.expected_actor_unit,args.death_tick,
+                keep_single_repair_tool=True)
+            game._record_action(action,receipt)
+            result={k:v for k,v in receipt.items()if k!='conservation'}
+            Ledger(root).event('actor-lifecycle','belongings_recovery',tick=result.get('tick'),result=result)
     elif args.command == "status":
         data=Ledger(root).data
         result=data["jobs"].get(args.key,{"status":"error","reason":"unknown_job_key"}) if args.key else data

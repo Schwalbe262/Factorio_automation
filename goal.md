@@ -22,6 +22,22 @@ only the framework interface and its documented state, with no parent decisions.
 - Maintain radar coverage, normally repaired wall-backed mutually covering turrets,
   and ordinary damage/fire-rate/productivity upgrades. Repeated losses require
   reinforcement. Remove dangerously close nests using paid native projectile combat.
+- Immediate priority (2026-11-12 user steering): remove the nearby eastern enemy
+  cluster before more bus or science expansion. Spawners replenish local units
+  independently of pollution; proximity combat can sustain the repeated losses.
+  Keep the paid wall backstop armed, then use bounded prepared native combat.
+- User instructions are persistent automatic policies, not one-time interventions.
+  Declare material-flow, producer-row and expansion directions before placing a
+  district; preserve fixed ports and reserve growth, service, power and defense
+  corridors. Existing accepted layouts require an ordinary migration to rotate.
+- Mining banks use a shared patch grid, straight collectors, opposing drill rows
+  feeding both physical belt lanes and bounded off-ore exits. Judge expansion by
+  active ore, power and per-lane production, not installed machines or splitters.
+- Normally supplied construction malls make recurring building materials and
+  ammunition, with native chest limits and circuit stock stops. Prefer piercing
+  ammunition after its native unlock; gather stock and rapidly deploy a prepared
+  turret group for assaults. Refeed recovered surplus to verified consuming
+  factories while preserving construction/combat reserves and stock caps.
 - Early factories and transport trunks avoid resource patches. Permit only
   explicit local mining footprints and minimal bounded surface exits; prebuild safe
   replacement corridors before moving existing supplies off ore. Do not silently
@@ -84,7 +100,12 @@ inventory-accounting bug. A new bounded routing family passes the captured Sulfu
 Water corridor; the complete new site still needs native preparation. Current
 priority is repeated eastern turret loss: watch restocks/rebuilds known posts and
 ordinary defense research has unlocked walls, radar and repair packs. Three-post
-wall bastions passed native preparation; live commissioning remains in progress.
+wall bastions are commissioned with24 paid walls and three armed posts. Native
+repair receipts prove real health gain and tool wear. The exact pinned player's
+successor10915 is rebound after actor11's death;4103 corpse items were recovered
+with conserved rounds/durability, one spare repair tool remains in the corpse.
+Nearby-nest assault preparation now runs through the typed Luna worker; actual
+combat victory, automatic construction mall and sustained rates remain unproved.
 Finish defense/radar/nearby-nest combat, these consumers, bulk bus growth, blue,
 rail and rocket. No enemy deletion, granted health or retroactive conservation claim.
 Do not close the continuous-rate gate from filling output buffers. No rocket yet.
