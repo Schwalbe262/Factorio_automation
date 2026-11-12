@@ -699,7 +699,7 @@ return success{boiler_fuel=fuel(boiler),drill_fuel=fuel(drill),
         if "power_plan" not in self.state:
             plan = self._choose_power_plan()
             if not plan.get("ok"):
-                return _report("blocked", plan["reason"])
+                return _report("blocked", plan["reason"], diagnostics=plan)
             self.state["power_plan"] = plan
             self._save()
         power = self.state["power_plan"]
@@ -709,7 +709,7 @@ return success{boiler_fuel=fuel(boiler),drill_fuel=fuel(drill),
         if "coal_plan" not in self.state:
             plan = self._choose_coal_plan(power)
             if not plan.get("ok"):
-                return _report("blocked", plan["reason"])
+                return _report("blocked", plan["reason"], diagnostics=plan)
             self.state["coal_plan"] = plan
             self._save()
         coal = self.state["coal_plan"]

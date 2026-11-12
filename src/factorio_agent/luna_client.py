@@ -42,6 +42,8 @@ Read the latest planner error before proposing a replacement decision.
 Never retry unknown outcomes. If a job is running,
 normally continue it. A locked or blocked task needs a concrete prerequisite or
 repair, not repeated blind retries. Do not claim completion without native proof.
+Layout planning or search-budget failures are executor faults, not evidence of
+insufficient mining capacity. Do not repeatedly expand a resource to treat them.
 The user's goal is rapid scalable progress toward a rocket, with clean layouts,
 both belt lanes, main-bus priorities, capped construction stock, full factory
 radar coverage, timely defenses and eventual external mines/rail transport.

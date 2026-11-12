@@ -1,10 +1,11 @@
 # Starter coal and resource keepouts
 
-The generated compact starter cell has a coal burner drill, four local belts
-and a fuel-return burner inserter. Executing its actual resource-check Lua on
+The generated compact starter cell has a coal burner drill, four local core
+belts, one ordinary straight outlet belt and a fuel-return burner inserter.
+Executing its actual resource-check Lua on
 an interior coal patch rejects the unscoped inserter. Broadening the mining
 whitelist is unnecessary: a read-only survey found boundary placements, and
-the six-entity cell at `(-47,23)` passed strict native whole-cell preflight with
+the earlier six-entity variant at `(-47,23)` passed strict native whole-cell preflight with
 no grandfathered entities or nature clearing. Its arm is at `(-45.5,23.5)`.
 
 The v2 builder now selects a boundary cell whose fuel arm and outgoing port are
@@ -27,7 +28,37 @@ against the current already-fed boiler failed closed and left its saved coal
 plan unchanged. With the new budgets it stopped in 20.61 seconds after one full
 route attempt and 17 boundary candidates, returning
 `starter_coal_planning_budget_exhausted` with recent failure details.
-This task did not reset a seed, construct a starter plant, or
-prove complete fresh-seed startup. Eleven focused tests cover selection, native
+That earlier check did not reset a seed, construct a starter plant, or
+prove complete fresh-seed startup. Its eleven focused tests covered selection, native
 Lua filtering, attempt/deadline limits, failed-plan persistence and existing
 checkpoint behavior.
+
+On fresh seed1053994892 the initial selector exhausted its20-second budget.
+The corner outlet received a perpendicular upstream belt from its own collector;
+the shared crossing compiler correctly rejected this as an unproved foreign feed.
+Publishing the next paid straight belt fixes that geometry without a crossing
+exception. The new outlet has no mining-resource scope and must be off ore.
+
+Whole preflight then exposed cosmetic direction4 in saved ordinary pipe specs,
+while native pipes report direction0. Only exact observed ordinary pipes are
+normalized in a temporary preflight projection. Every planning query guards
+their unit/name/type/force/surface/position and native direction. Underground
+pipes and machines retain all direction checks; the saved power plan and ports
+are unchanged.
+
+Read-only complete selection succeeded in6.744 seconds with the original
+20-second/ten-attempt limits:81 entities,79 paid belts,74-tile route,5turns,
+Manhattan68 and detour ratio1.088235. Fifteen focused tests passed, including
+native changed-unit/force/surface/direction rejection and saved-plan preservation.
+Luna subsequently retried the same83-action power job; the real coal plan was
+saved and the job completed at119 actions with zero failures. Native tick234428
+proved water200, steam400, nine coal on belts, both connected/energized engines
+and1938 verification ticks. This is startup flow readiness; generation and total
+delivered energy were zero with no connected consumers, so it is not a sustained
+load measurement. The15coal/min starter source still needs later expansion for
+both engines' full nameplate load.
+
+The caller now retains concrete failed-plan diagnostics. Layout search failures
+carry `failure_category=layout_planning`, visible in the bounded planner snapshot;
+Luna is instructed to distinguish executor faults from a material shortage.
+Previously it expanded coal cells2->4->6->8 without resolving the route defect.

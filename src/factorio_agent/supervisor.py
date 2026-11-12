@@ -29,7 +29,7 @@ ACTIVE={'pending','running','waiting'}
 TERMINAL={'succeeded','blocked','failed'}
 OPERATIONS={'plan','request','continue','retry','pause','wait'}
 FORBIDDEN={'x','y','position','positions','coordinates','area','entities','entity','lua','rcon','shell','command','cmd','script','code'}
-BLOCKER_FIELDS={'reason','last_failure','stage','phase','item','resource','product','technology','recipe',
+BLOCKER_FIELDS={'reason','last_failure','failure_category','stage','phase','item','resource','product','technology','recipe',
     'required_technology','missing_technologies','required_technologies','required_recipe','missing_recipes',
     'required_recipes','have','need','available','required','missing','count','capacity','supply_per_minute',
     'required_per_minute','available_per_minute','missing_items','required_items','requirements'}

@@ -409,6 +409,17 @@ class BuilderTests(unittest.TestCase):
         self.builder.power_evidence = Mock(return_value=evidence)
         return power, coal, evidence
 
+    def test_power_planning_failure_retains_concrete_diagnostics_without_publishing_a_plan(self):
+        self._ready_power()
+        failure={'ok':False,'reason':'starter_coal_planning_budget_exhausted','failure_category':'layout_planning',
+                 'route_attempts':5,'failures':[{'stage':'route','reason':'no_clean_trunk_corridor'}]}
+        self.builder.state.pop('coal_plan')
+        self.builder._choose_coal_plan=Mock(return_value=failure)
+        result=self.builder.ensure_power(self.obs)
+        self.assertEqual(result['status'],'blocked')
+        self.assertEqual(result['evidence']['diagnostics'],failure)
+        self.assertNotIn('coal_plan',self.builder.state)
+
     def test_power_requires_flow_evidence_over_time_and_accepts_no_load_grid(self):
         power, coal, evidence = self._ready_power()
         first = self.builder.ensure_power(self.obs)

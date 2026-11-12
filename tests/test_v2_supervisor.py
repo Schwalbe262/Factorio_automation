@@ -238,7 +238,7 @@ class DecisionTests(Fixture):
         self.s.work.merge([node('a')],CAPS,self.cli.validate_requests,1);a=self.s.work.data['nodes'][0]
         self.cli.jobs[a['job_key']]=dict(key=a['job_key'],world_id='w',capability='starter',parameters={},status='waiting',
             reason='waiting_for_materials',last_failure='insufficient_inventory',evidence={
-                'supply':{'item':'iron-plate','have':3,'need':40,'required_technology':'automation'},
+                'supply':{'item':'iron-plate','have':3,'need':40,'required_technology':'automation','failure_category':'layout_planning'},
                 'required_items':{'iron-plate':40},'position':{'x':123,'y':456},
                 'command':'powershell STEAL_THIS','rcon_password':'STEAL_THIS','secret':{'item':'STEAL_THIS'},
                 'details':{'reason':'password=STEAL_THIS','item':'C:\\private\\STEAL_THIS'},
@@ -246,6 +246,7 @@ class DecisionTests(Fixture):
         snapshot=self.s._snapshot()[4];row=snapshot['jobs'][0]
         self.assertEqual(row['last_failure'],'insufficient_inventory');self.assertIn('"have": 3',json.dumps(row['evidence']))
         self.assertIn('"need": 40',json.dumps(row['evidence']));self.assertIn('automation',json.dumps(row['evidence']))
+        self.assertIn('layout_planning',json.dumps(row['evidence']))
         encoded=json.dumps({'jobs':snapshot['jobs'],'queue':snapshot['work_queue']})
         for forbidden in ('STEAL_THIS','"position"','"x"','"y"','rcon_password','"command"'):
             self.assertNotIn(forbidden,encoded)

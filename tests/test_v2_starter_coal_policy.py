@@ -7,7 +7,7 @@ from unittest.mock import Mock,patch
 
 from factorio_ai.deterministic_builder import _plan
 from factorio_agent.board import entity
-from factorio_agent.power_layout import V2FactoryBuilder,compact_coal_cell
+from factorio_agent.power_layout import V2FactoryBuilder,compact_coal_cell,_power_preflight_projection,_power_pipe_guard
 from factorio_agent.resource_policy import MINING_NAMES
 from factorio_agent.smelting import port
 
@@ -42,7 +42,7 @@ class StarterCoalPolicyTests(unittest.TestCase):
             result=builder._choose_coal_plan(self.power())
         self.assertTrue(result['ok'],result)
         self.assertEqual(result['drill']['position'],{'x':10,'y':0})
-        self.assertEqual(route.call_args.args[3]['mining_resource'],'coal')
+        self.assertNotIn('mining_resource',route.call_args.args[3])
         self.assertEqual(route.call_count,1)
         self.assertEqual(preflight.call_count,2)
         self.assertNotIn('coal_plan',builder.state)
@@ -114,6 +114,11 @@ class StarterCoalPolicyTests(unittest.TestCase):
 
     def test_saved_working_coal_plan_is_preserved_without_resurvey_or_relocation(self):
         builder=self.builder();saved=compact_coal_cell({'x':4,'y':8})
+        # An accepted older four-belt corner port is historical authority even
+        # though newly discovered cells now publish a fifth straight belt.
+        saved['entities']=[e for e in saved['entities']if e['position']!={'x':7.5,'y':9.5}]
+        saved['required_items']['transport-belt']=4
+        saved['ports'][0].update(position={'x':6.5,'y':9.5},mining_resource='coal')
         builder.state['coal_plan']=deepcopy(saved)
         self.assertEqual(builder._choose_coal_plan(self.power()),saved)
         builder.game.observe.assert_not_called();builder.game.query.assert_not_called()
@@ -151,6 +156,27 @@ class StarterCoalPolicyTests(unittest.TestCase):
         builder=self.builder()
         self.assertEqual(builder._choose_coal_plan(_plan([],[]))['reason'],'starter_power_requires_one_typed_coal_input')
         builder.game.observe.assert_not_called()
+
+    def test_power_projection_normalizes_only_observed_normal_pipes_without_mutating_saved_plan(self):
+        power=_plan([entity('pipe',1.5,2.5,4),entity('pipe-to-ground',3.5,2.5,4),entity('boiler',6,2.5,4)],[])
+        original=deepcopy(power)
+        obs={'entities':[dict(name='pipe',position={'y':2.5,'x':1.5},direction=0,unit_number=50),
+            dict(name='pipe-to-ground',position={'x':3.5,'y':2.5},direction=0,unit_number=51)]}
+        projected,pins=_power_preflight_projection(power,obs)
+        self.assertEqual(projected[0]['direction'],0);self.assertEqual(projected[1]['direction'],4);self.assertEqual(projected[2]['direction'],4)
+        self.assertEqual(power,original);self.assertEqual(pins,[dict(name='pipe',position={'x':1.5,'y':2.5},unit_number=50)])
+        obs['entities'][0]['unit_number']=True
+        self.assertEqual(_power_preflight_projection(power,obs),(power['entities'],[]))
+
+    @unittest.skipUnless(LuaRuntime,'optional executable Lua runtime')
+    def test_native_pipe_projection_guard_rejects_changed_unit_force_direction_or_surface(self):
+        lua=LuaRuntime(unpack_returned_tuples=True);lua.execute('f={};s={};old={valid=true,name="pipe",type="pipe",unit_number=50,force=f,surface=s,direction=0,position={x=1.5,y=2.5}};function target()return old end;helpers={}')
+        lua.globals().helpers.json_to_table=lambda raw:lua.table_from([lua.table_from(dict(q,position=lua.table_from(q['position'])))for q in json.loads(raw)])
+        script=_power_pipe_guard([dict(name='pipe',position={'x':1.5,'y':2.5},unit_number=50)])+'return {ok=true}'
+        self.assertTrue(lua.execute('return(function() '+' '.join(script.splitlines())+' end)()')['ok'])
+        for mutation,restore in(('old.unit_number=51','old.unit_number=50'),('old.force={}','old.force=f'),
+                ('old.surface={}','old.surface=s'),('old.direction=4','old.direction=0'),('old.name="pipe-to-ground"','old.name="pipe"')):
+            lua.execute(mutation);self.assertFalse(lua.execute('return(function() '+' '.join(script.splitlines())+' end)()')['ok']);lua.execute(restore)
 
     @unittest.skipUnless(LuaRuntime,'optional Lua runtime: pip install lupa')
     def test_actual_lua_policy_rejects_interior_arm_and_accepts_boundary_cell(self):

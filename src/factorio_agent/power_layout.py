@@ -24,6 +24,30 @@ def identity(entity):
     return (entity["name"], entity["position"]["x"], entity["position"]["y"], entity.get("direction",0))
 
 
+def _power_preflight_projection(power,observation):
+    """Normal-pipe orientation is cosmetic; retain exact observed unit guards."""
+    actual={(e['name'],e['position']['x'],e['position']['y']):e for e in observation.get('entities',[])}
+    entities=deepcopy(power['entities']);pins=[]
+    for e in entities:
+        if e['name']!='pipe':continue
+        old=actual.get(('pipe',e['position']['x'],e['position']['y']))
+        if old and old.get('direction')==0 and type(old.get('unit_number'))is int and old['unit_number']>0:
+            e['direction']=0
+            pins.append(dict(name='pipe',position=deepcopy(e['position']),unit_number=old['unit_number']))
+    return entities,pins
+
+
+def _power_pipe_guard(pins):
+    payload=json.dumps(json.dumps(pins,separators=(',',':')))
+    return '''local starter_power_pipes=helpers.json_to_table('''+payload+''');
+for _,q in ipairs(starter_power_pipes)do local old=target(q.position,"pipe")
+ if not old or not old.valid or old.name~="pipe"or old.type~="pipe"or old.unit_number~=q.unit_number
+  or old.force~=f or old.surface~=s or old.direction~=0 or old.position.x~=q.position.x or old.position.y~=q.position.y then
+  return {ok=false,reason="starter_power_pipe_identity_changed",position=q.position}
+ end
+end;'''
+
+
 def compact_coal_cell(position):
     x,y = position["x"],position["y"]
     drill = {"name":"burner-mining-drill","position":dict(position),"direction":4}
@@ -34,8 +58,12 @@ def compact_coal_cell(position):
     entities.append({"name":"burner-inserter","position":{"x":x+1.5,"y":y+.5},"direction":4})
     from .resource_policy import mark_mining_core,MINING_NAMES
     footprint=mark_mining_core([e for e in entities if e['name'] in MINING_NAMES],'coal')
+    # Publish a straight off-ore outlet after the corner. A corner source has
+    # a perpendicular upstream feed, which the generic crossing compiler must
+    # reject when it cannot prove that foreign belt is part of this producer.
+    entities.append({'name':'transport-belt','position':{'x':x+3.5,'y':y+1.5},'direction':4})
     return _plan(entities,[{"kind":"item","item":"coal","direction":"output","facing":4,
-                          "position":{"x":x+2.5,"y":y+1.5},"mining_resource":"coal"}],drill=drill,
+                          "position":{"x":x+3.5,"y":y+1.5}}],drill=drill,
                  mining_footprint=footprint,template="compact_starter_coal")
 
 
@@ -60,19 +88,21 @@ class V2FactoryBuilder(FactoryBuilder):
         destinations=[p for p in power.get('ports',[]) if p.get('item')=='coal' and p.get('direction')=='input']
         if len(destinations)!=1:
             return {'ok':False,'reason':'starter_power_requires_one_typed_coal_input'}
-        started=time.monotonic();attempts=0;examined=0;failures=[];indices=[]
+        started=time.monotonic();attempts=0;examined=0;failures=[];indices=[];power_guard=''
         def expired():return time.monotonic()-started>=STARTER_PLANNING_SECONDS
         def failure(reason):
-            return {'ok':False,'reason':reason,'route_attempts':attempts,'route_attempt_budget':STARTER_MAX_ROUTE_ATTEMPTS,
+            return {'ok':False,'reason':reason,'failure_category':'layout_planning',
+                    'route_attempts':attempts,'route_attempt_budget':STARTER_MAX_ROUTE_ATTEMPTS,
                     'planning_seconds_budget':STARTER_PLANNING_SECONDS,'elapsed_seconds':round(time.monotonic()-started,3),
                     'boundary_candidates':len(indices),'candidates_examined':examined,'failures':failures[-8:]}
         def budget_query(script):
             if expired():return {'ok':False,'reason':'starter_coal_planning_budget_exhausted'}
-            result=self.game.query(script)
+            result=self.game.query(power_guard+script)
             return {'ok':False,'reason':'starter_coal_planning_budget_exhausted'} if expired() else result
         planning_game=SimpleNamespace(query=budget_query,cfg=getattr(self.game,'cfg',None))
         obs=self.game.observe()
         if expired():return failure('starter_coal_planning_budget_exhausted')
+        power_entities,pins=_power_preflight_projection(power,obs);power_guard=_power_pipe_guard(pins)
         cells=[self._coal_plan(position) for position in self.coal_sites()[:256]]
         if expired():return failure('starter_coal_planning_budget_exhausted')
         if not cells:return {'ok':False,'reason':'no_starter_coal_candidates'}
@@ -112,14 +142,14 @@ return {ok=true,legal=legal}
             if not check.get('ok'):
                 failures.append({'candidate':index,'stage':'cell','reason':check.get('reason')});continue
             try:
-                reserved=merge_entities(power['entities'],cell['entities'])
+                reserved=merge_entities(power_entities,cell['entities'])
                 if expired():return failure('starter_coal_planning_budget_exhausted')
                 attempts+=1
                 route=plan_connection(planning_game,adapter,obs,cell['ports'][0],destinations[0],reserved)
                 if not route.get('ok'):
                     failures.append({'candidate':index,'stage':'route','reason':route.get('reason')});continue
                 entities=merge_entities(cell['entities'],route['entities'])
-                whole=preflight(planning_game,self,obs,merge_entities(power['entities'],entities))
+                whole=preflight(planning_game,self,obs,merge_entities(power_entities,entities))
             except ValueError as exc:
                 failures.append({'candidate':index,'stage':'geometry','reason':str(exc)});continue
             if not whole.get('ok'):
