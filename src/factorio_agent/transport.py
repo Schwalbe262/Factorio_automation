@@ -8,7 +8,7 @@ import math
 from pathlib import Path
 
 from factorio_agent.core.deterministic_builder import _plan
-from .board import entity
+from .board import built_keys, entity
 from .routing import VECTORS, route_trunks
 from .resource_policy import (
     RESOURCES,
@@ -230,11 +230,7 @@ def _prospective_mining_source(game, builder, obs, source, reserved):
 
 def unbuilt_external_keepouts(builder, obs, blocks, *, released_block=None):
     """Reserve prospective external hardware and tunnels until native assets exist."""
-    actual = {
-        (e["name"], *xy(e))
-        for e in obs.get("entities", [])
-        if type(e.get("unit_number")) is int and e["unit_number"] > 0
-    }
+    actual = built_keys(obs)
     hard = set()
     for name, block in blocks.items():
         area = block.get("reserved_area")

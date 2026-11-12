@@ -37,6 +37,9 @@ from .worldmap import WorldMap
 
 MAP_FILE = "site-map.json"
 PLAN_FILE = "site-plan.json"
+BOARD_FILE = "pcb-board.json"
+# Owner of the planned-tile marks for other blocks' hardware (see SiteService.mark_board_hardware).
+BOARD_HARDWARE_OWNER = "board-hardware"
 HALF_SIZE = 384
 IDENTITY_LUA = (
     "local p=f.get_spawn_position(s) return {ok=true,world_id=d.world_id,x=math.floor(p.x),y=math.floor(p.y)}"
@@ -152,6 +155,44 @@ class SiteService:
         self.save()
 
     # ----- allocation --------------------------------------------------------
+    def mark_board_hardware(self) -> int:
+        """Mark other blocks' planned hardware outside their reserved areas as planned map tiles.
+
+        The cached map only knows surveyed entities. A block registered on the
+        board (``pcb-board.json``) may still be unbuilt, and its power bridge
+        or routed belts leave its reserved area, so neither the survey nor a
+        reserved-area check sees them; a new block could then be allocated on
+        top of them. :meth:`allocate` and :meth:`allocate_candidates` call
+        this first: stale marks (owner :data:`BOARD_HARDWARE_OWNER`) are
+        dropped and every such entity of the current board is marked with
+        :meth:`WorldMap.apply_plan`; the allocator treats ``plan`` tiles as
+        occupied. The marks are removed again right after the allocation, so
+        they are never saved and never block :meth:`extend`. A missing,
+        unreadable or other-world board marks nothing. Returns the number of
+        marked entities.
+        """
+        from ..board import external_hardware
+
+        world = self._world
+        world.clear_plans(BOARD_HARDWARE_OWNER)
+        try:
+            board = json.loads((self.root / BOARD_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return 0
+        if not isinstance(board, dict) or board.get("world_id") != self.world_id:
+            return 0
+        blocks = board.get("blocks")
+        if not isinstance(blocks, dict):
+            return 0
+        marked = 0
+        for _name, e in external_hardware(blocks):
+            try:
+                world.apply_plan([e], owner=BOARD_HARDWARE_OWNER)
+            except (KeyError, TypeError, ValueError):
+                continue
+            marked += 1
+        return marked
+
     def allocation(self, name: str, world_id=None) -> Allocation | None:
         return next((a for a in self.plan(world_id).allocations if a.name == name), None)
 
@@ -166,7 +207,11 @@ class SiteService:
         existing = self.allocation(name, world_id)
         if existing is not None:
             return existing
-        allocation = self._plan.allocate(self._world, kind, along, depth, name=name, returns_to_bus=returns_to_bus)
+        self.mark_board_hardware()
+        try:
+            allocation = self._plan.allocate(self._world, kind, along, depth, name=name, returns_to_bus=returns_to_bus)
+        finally:
+            self._world.clear_plans(BOARD_HARDWARE_OWNER)
         self.save()
         return allocation
 
@@ -179,16 +224,20 @@ class SiteService:
         caller keeps one with :meth:`keep_only` (or releases all).
         """
         self.release_prefix(name + "#", world_id)
+        self.mark_board_hardware()
         found = []
-        for index in range(count):
-            try:
-                found.append(
-                    self._plan.allocate(
-                        self._world, kind, along, depth, name=f"{name}#{index}", returns_to_bus=returns_to_bus
+        try:
+            for index in range(count):
+                try:
+                    found.append(
+                        self._plan.allocate(
+                            self._world, kind, along, depth, name=f"{name}#{index}", returns_to_bus=returns_to_bus
+                        )
                     )
-                )
-            except SiteError:
-                break
+                except SiteError:
+                    break
+        finally:
+            self._world.clear_plans(BOARD_HARDWARE_OWNER)
         self.save()
         return found
 

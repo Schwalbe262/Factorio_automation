@@ -10,7 +10,7 @@ from pathlib import Path
 from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.core.deterministic_state import _atomic_json
 from .board import entity
-from .power_grid import plan_connection
+from .power_grid import plan_connection, replan_power_bridge
 from .transport import VECTORS, xy, plan_connection as belt_connection, underground_proof
 from .planning import overlap, preflight
 from .resource_policy import mark_mining_core, mining_reservations
@@ -18,6 +18,36 @@ from .mining_site import guide_tuple, site_exit
 
 
 RESOURCES = {"iron-ore", "copper-ore", "coal", "stone"}
+# The builder's reason when a planned entity cannot be placed (deterministic_builder.ensure_plan).
+OBSTRUCTED = "reserved block placement is obstructed"
+# A bank re-plans its power bridge around new obstructions at most this often.
+MAX_BRIDGE_REPLANS = 2
+
+
+def _key(e):
+    return e["name"], e["position"]["x"], e["position"]["y"]
+
+
+def bridge_poles(bank):
+    """The bank's power bridge: planned small poles that are not bank hardware.
+
+    Every pole of the bank itself (the paired core grid and its growth) is
+    annotated with ``mining_resource`` by ``mark_mining_core``.
+    :func:`power_grid.plan_connection` adds plain poles; only its goal, the
+    contract's fixed power port, may carry the annotation and that pole is
+    bank hardware. So a bridge pole is a small electric pole without
+    ``mining_resource`` that is not on the fixed power port. A bank without a
+    layout contract has no recognised bridge.
+    """
+    contract = bank.get("layout_contract") or bank["plan"].get("layout_contract")
+    if not contract:
+        return []
+    port = contract.get("fixed_power_port")
+    return [
+        e
+        for e in bank["plan"]["entities"]
+        if e["name"] == "small-electric-pole" and "mining_resource" not in e and e["position"] != port
+    ]
 
 
 def validate_parameters(parameters):
@@ -530,6 +560,137 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             "expansion_policy": "preserve existing drills, collector and output port; grow upstream",
         }
 
+    def _recover_obstructed_bridge(self, obs, bank, result):
+        """Re-plan a pending bank's unbuilt power bridge around a new obstruction; None keeps ``result``.
+
+        Jobs run concurrently: after a bank was planned another job may build
+        on a tile its bridge still needs (live: a science cell inserter on a
+        planned bridge pole), and a retry re-read the same saved plan forever.
+        Rules:
+
+        * Only ``reserved block placement is obstructed`` on a bridge pole
+          (:func:`bridge_poles`) of a bank that is not ready is handled. An
+          obstructed drill, collector belt or exit returns ``result`` unchanged.
+        * The obstruction must be a real observed entity covering the pole's
+          tile that is not the planned pole itself; otherwise ``result`` stays.
+        * At most :data:`MAX_BRIDGE_REPLANS` re-plans per bank, counted in
+          ``bank["power_bridge_replans"]``; after that ``result`` stays.
+        * Built bridge poles and all bank hardware stay; only unbuilt bridge
+          poles are replaced (:func:`power_grid.replan_power_bridge`). Nothing
+          is removed from the world.
+        * The new plan passes the same checks as at prepare time (whole future
+          footprint with growth and output access, then the current plan with
+          its clearance), is persisted, the board is republished and building
+          continues with one ``ensure_plan`` call on the new plan.
+        * Unchanged by design: ``layout_contract`` / ``contract_id`` (fixed
+          ports and growth only), ``defense_scope_id`` (resource, ports,
+          reserved area), ``reserved_area`` and ``mining_reserved_area``
+          (bridge poles are outside them). The proof cache keys on the plan
+          hash and recomputes by itself; retirement authorities exist only for
+          ready banks.
+        """
+        if result.get("status") != "blocked" or result.get("reason") != OBSTRUCTED or bank.get("ready"):
+            return None
+        evidence = result.get("evidence") or {}
+        blocked = evidence.get("entity")
+        if not isinstance(blocked, dict) or blocked.get("name") != "small-electric-pole":
+            return None
+        bridge = bridge_poles(bank)
+        if _key(blocked) not in {_key(e) for e in bridge}:
+            return None
+        tiles = self.builder._occupied_by_plan([blocked])
+        obstruction = [
+            e
+            for e in obs.get("entities", [])
+            if e.get("name") != "character"
+            and isinstance(e.get("position"), dict)
+            and _key(e) != _key(blocked)
+            and self.builder._occupied_by_plan([e]) & tiles
+        ]
+        if not obstruction:
+            return None
+        count = bank.get("power_bridge_replans", 0)
+        if count >= MAX_BRIDGE_REPLANS:
+            return None
+        names = sorted({e["name"] for e in obstruction})
+        failure = self._replan_bridge(obs, bank, bridge, blocked, names)
+        if failure is not None:
+            return dict(result, evidence=dict(evidence, power_bridge_replan=failure))
+        bank["power_bridge_replans"] = count + 1
+        _atomic_json(self.path, self.state)
+        reservation = self.publish_reservations(obs)
+        if reservation:
+            return reservation
+        return self.builder.ensure_plan(obs, bank["plan"])
+
+    def _replan_bridge(self, obs, bank, bridge, blocked, obstruction):
+        """Replace ``bank["plan"]``'s unbuilt bridge in memory; a failure reason, or None on success."""
+        from .mining_layout_policy import oriented_pair_core
+        from .smelting import merge_entities
+
+        plan = bank["plan"]
+        contract = bank.get("layout_contract") or plan.get("layout_contract")
+        try:
+            future = oriented_pair_core(
+                contract["collector_port"]["position"],
+                contract["reserved_pair_slots"],
+                plan["resource"],
+                contract["policy"]["flow"],
+            )
+            facing = plan["ports"][0]["facing"]
+            access = [entity("transport-belt", p["x"], p["y"], facing) for p in contract["output_access"]]
+        except (KeyError, TypeError, ValueError):
+            return "power_bridge_replan_contract_invalid"
+        # The same keep-outs as at prepare time: future drills/belts, the
+        # bank's own belts and the reserved output access cells.
+        reserved = [e for e in future["entities"] + plan["entities"] if e["name"] != "small-electric-pole"] + access
+        replanned = replan_power_bridge(
+            self.game,
+            self.builder,
+            obs,
+            plan,
+            power_port=contract["fixed_power_port"],
+            bridge=bridge,
+            reserved=reserved,
+            avoid=[blocked["position"]],
+        )
+        if not replanned.get("ok"):
+            return replanned.get("reason")
+        try:
+            whole = merge_entities(future["entities"], replanned["entities"], access)
+        except ValueError:
+            return "power_bridge_replan_conflicts_with_growth"
+        full = preflight(self.game, self.builder, obs, whole)
+        if not full.get("ok"):
+            return full.get("reason", "power_bridge_replan_preflight_failed")
+        actual = preflight(self.game, self.builder, obs, replanned["entities"])
+        if not actual.get("ok"):
+            return actual.get("reason", "power_bridge_replan_preflight_failed")
+        metadata = {
+            k: v
+            for k, v in plan.items()
+            if k not in ("ok", "reason", "entities", "ports", "required_items", "clear_obstacles", "clearance_world_id")
+        }
+        bank["plan"] = _plan(
+            replanned["entities"],
+            plan["ports"],
+            **metadata,
+            clear_obstacles=actual["clear_obstacles"],
+            clearance_world_id=obs["world_id"],
+        )
+        bank["wire_hops"] = replanned["wire_hops"]
+        bank.setdefault("power_bridge_history", []).append(
+            {
+                "tick": obs.get("tick"),
+                "obstructed": dict(blocked["position"]),
+                "obstruction": list(obstruction),
+                "kept": [dict(e["position"]) for e in replanned["kept"]],
+                "removed": [dict(e["position"]) for e in replanned["removed"]],
+                "added": [dict(e["position"]) for e in replanned["added"]],
+            }
+        )
+        return None
+
     def step(self, obs, parameters):
         validate_parameters(parameters)
         if not obs.get("technologies", {}).get("electric-mining-drill"):
@@ -628,6 +789,9 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
         if coverage is not None:
             return coverage
         result = self.builder.ensure_plan(obs, pending["plan"])
+        recovered = self._recover_obstructed_bridge(obs, pending, result)
+        if recovered is not None:
+            result = recovered
         if result.get("status") != "succeeded":
             return result
         proof = self.bank_proof(obs, pending)

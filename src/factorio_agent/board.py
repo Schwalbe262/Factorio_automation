@@ -367,6 +367,93 @@ def pole_chain(source, destination, *, horizontal_first=True):
     return result
 
 
+def built_keys(obs):
+    """``(name, x, y)`` of every observed entity with a native unit number (built hardware)."""
+    return {
+        (e["name"], e["position"]["x"], e["position"]["y"])
+        for e in obs.get("entities", [])
+        if type(e.get("unit_number")) is int and e["unit_number"] > 0
+    }
+
+
+def _inside_area(area, position):
+    """True when ``position`` lies inside the ``[[x0, y0], [x1, y1]]`` area (False without an area)."""
+    if not isinstance(area, list) or len(area) != 2:
+        return False
+    (x0, y0), (x1, y1) = area
+    return x0 <= position["x"] <= x1 and y0 <= position["y"] <= y1
+
+
+def external_hardware(blocks, *, exclude=()):
+    """Planned entities of registered blocks that stand outside their own block's reserved area.
+
+    Power bridges and routed belts leave a block's reserved area, so a site
+    check that only compares reserved areas does not see them. A block
+    without a reserved area contributes every entity. Blocks named in
+    ``exclude`` are skipped. Each row is ``(block_name, entity)``.
+    """
+    rows = []
+    for name, block in blocks.items():
+        if name in exclude or not isinstance(block, dict):
+            continue
+        area = block.get("reserved_area")
+        for e in block.get("entities", []):
+            if isinstance(e, dict) and isinstance(e.get("position"), dict) and not _inside_area(area, e["position"]):
+                rows.append((name, e))
+    return rows
+
+
+def planned_unbuilt_hardware(builder, obs, blocks, *, exclude=()):
+    """Tiles of planned-but-unbuilt entities of every registered block, ``{tile: owner row}``.
+
+    Jobs run concurrently: one block may be planned while another chooses its
+    site. A site chosen without this map can claim a tile that the first
+    block still needs (on a live map the startup science cell put an inserter
+    on a mining bank's planned bridge pole and the bank blocked for good).
+    Unlike :func:`transport.unbuilt_external_keepouts` (belt routing only)
+    this covers mining blocks too and every planned entity, inside or outside
+    its block's reserved area. An entity counts as built when an observed
+    entity of the same name stands on its exact position with a unit number.
+    Blocks named in ``exclude`` (the caller's own) are skipped. Each value is
+    ``{"block", "name", "position"}`` of the planned entity on that tile.
+    """
+    built = built_keys(obs)
+    tiles = {}
+    for name, block in blocks.items():
+        if name in exclude or not isinstance(block, dict):
+            continue
+        for e in block.get("entities", []):
+            if not isinstance(e, dict) or not isinstance(e.get("position"), dict):
+                continue
+            if (e["name"], e["position"]["x"], e["position"]["y"]) in built:
+                continue
+            for tile in builder._occupied_by_plan([e]):
+                tiles.setdefault(tile, {"block": name, "name": e["name"], "position": dict(e["position"])})
+    return tiles
+
+
+def hardware_conflicts(builder, entities, planned):
+    """Entities of a candidate whose footprint hits a tile in ``planned`` (see :func:`planned_unbuilt_hardware`).
+
+    Two plans may share one small electric pole: the same pole on the same
+    position is not a conflict. Returns ``[{"entity", "tile", "block"}]``.
+    """
+    conflicts = []
+    for e in entities:
+        for tile in sorted(builder._occupied_by_plan([e])):
+            owner = planned.get(tile)
+            if owner is None:
+                continue
+            if (
+                e["name"] == "small-electric-pole"
+                and owner["name"] == "small-electric-pole"
+                and owner["position"] == e["position"]
+            ):
+                continue
+            conflicts.append({"entity": e["name"], "tile": tile, "block": owner["block"]})
+    return conflicts
+
+
 class Board:
     def __init__(self, game, builder, catalog):
         self.game, self.builder, self.catalog = game, builder, catalog
@@ -431,6 +518,9 @@ class Board:
         ``science_machines`` (1 or 2) sizes a new cell only. Lab slots are
         surveyed with the cell; a site whose slots are all placeable wins,
         else the first legal site is used and blocked slots stay unbuilt.
+        A candidate whose entities (cell or power chain) hit planned-but-unbuilt
+        hardware of another registered block is refused before the survey
+        (see :func:`planned_unbuilt_hardware`).
         """
         if self.state and self.state.get("world_id") != obs["world_id"]:
             return {"ok": False, "reason": "board_world_changed"}
@@ -461,6 +551,7 @@ class Board:
         bx = math.floor((reference["x"] - 8) / 8) * 8 + 0.5
         by = math.floor(reference["y"] / 8) * 8 + 0.5
         offsets = [(0, 0), (-16, 0), (0, 16), (-16, 16), (0, -16), (-16, -16), (-32, 0), (-32, 16), (16, 0), (16, 16)]
+        planned = planned_unbuilt_hardware(self.builder, obs, self.state["blocks"])
         candidates = []
         tx, ty = POWER_TARGET_OFFSETS[science_machines]
         for dx, dy in offsets:
@@ -486,6 +577,9 @@ class Board:
                 # Whole prospective footprint must not overlap itself.
                 footprints = [self.builder._occupied_by_plan([e]) for e in plan["entities"]]
                 if sum(map(len, footprints)) != len(set().union(*footprints)):
+                    continue
+                # Other blocks may be planned but not built yet (concurrent jobs).
+                if hardware_conflicts(self.builder, plan["entities"], planned):
                     continue
                 candidates.append(plan)
         surveys = []

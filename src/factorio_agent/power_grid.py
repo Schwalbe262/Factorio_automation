@@ -187,3 +187,55 @@ return {ok=true,clear=clear}
         wire_hops=len(path) - 1,
         maximum_hop_tiles=7,
     )
+
+
+def _key(e):
+    return e["name"], e["position"]["x"], e["position"]["y"]
+
+
+def replan_power_bridge(game, builder, obs, plan, *, power_port, bridge, reserved=(), avoid=()):
+    """Re-plan the unbuilt part of a saved plan's power bridge (planned by :func:`plan_connection`).
+
+    Rules:
+
+    * ``bridge`` lists the plan's bridge poles; the caller tells them apart
+      from its own hardware. Every bridge pole that is already built (an
+      observed entity of the same name on the same position) stays in the
+      plan, and so does every non-bridge entity.
+    * Only unbuilt bridge poles are dropped; a fresh :func:`plan_connection`
+      from the supplied network (built bridge poles that are energized are
+      part of it) to ``power_port`` replaces them. ``reserved`` are the
+      caller's planned non-pole entities the new chain must keep off.
+    * No new pole may stand on a position in ``avoid`` (the obstruction).
+    * Nothing is built or removed here and nothing is written; the caller
+      re-runs its own validation, persists and republishes.
+
+    Returns ``{"ok", "entities", "kept", "removed", "added", "bridge",
+    "wire_hops", "source_position"}`` or ``{"ok": False, "reason"}``.
+    """
+    bridge_keys = {_key(e) for e in bridge}
+    observed = {_key(e) for e in obs.get("entities", []) if isinstance(e.get("position"), dict)}
+    kept = [e for e in bridge if _key(e) in observed]
+    removed = [e for e in bridge if _key(e) not in observed]
+    if not removed:
+        return {"ok": False, "reason": "power_bridge_already_built"}
+    connection = plan_connection(game, builder, obs, power_port, reserved)
+    if not connection.get("ok"):
+        return {"ok": False, "reason": connection.get("reason", "power_bridge_replan_failed")}
+    blocked = {(p["x"], p["y"]) for p in avoid}
+    if any((e["position"]["x"], e["position"]["y"]) in blocked for e in connection["entities"]):
+        return {"ok": False, "reason": "power_bridge_replan_reuses_obstruction"}
+    removed_keys = {_key(e) for e in removed}
+    entities = [e for e in plan["entities"] if _key(e) not in removed_keys]
+    present = {_key(e) for e in entities}
+    added = [e for e in connection["entities"] if _key(e) not in present]
+    return {
+        "ok": True,
+        "entities": entities + added,
+        "kept": kept,
+        "removed": removed,
+        "added": added,
+        "bridge": [e for e in entities if _key(e) in bridge_keys] + added,
+        "wire_hops": connection["wire_hops"],
+        "source_position": connection.get("source_position"),
+    }

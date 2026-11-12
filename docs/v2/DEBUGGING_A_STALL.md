@@ -97,6 +97,7 @@ a placed plan: `blocks.render.render_ascii(catalog, state["plan"])`.
 | East-only mining exits | coal exit points into another patch; smelting routes fail | `mining_site.plan_exit` turns banks toward the consumer zone | `test_v2_mining_site_exit` |
 | Research jobs fight over the lab | second job blocked `another_research_is_running` | one research-owning job (`jobs._admission_error`); idle lane yields | `test_v2_concurrent_jobs.test_only_one_research_owning_job_is_active`, `test_v2_idle_research` |
 | Blocked job waits for a later success | prerequisite done, job stays blocked for minutes | `Supervisor._auto_retry` after any new success, <= 3 | `test_v2_supervisor.test_dispatch_autopilot_and_auto_retry_run_without_any_model_call` |
+| Concurrent block on a planned bridge pole | bank `blocked` `reserved block placement is obstructed` on a `small-electric-pole` outside its reserved area, every retry the same | `MiningOutposts._recover_obstructed_bridge` re-plans only unbuilt bridge poles (`power_grid.replan_power_bridge`, <= 2 per bank); sites avoid `board.planned_unbuilt_hardware` (startup science, smelting district) and `SiteService.mark_board_hardware` (allocator) | `test_v2_power_bridge_replan` |
 | RCON latency with a GUI client | observe ~580 ms, query ~110 ms | `runtime.NETWORK_SEGMENT_SETTINGS` (16384-byte segments) | - |
 
 Known gap: a job that only *waits* (no actions) raises no `no_progress`

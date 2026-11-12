@@ -8,7 +8,7 @@ from pathlib import Path
 
 from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.core.deterministic_state import _atomic_json
-from .board import entity
+from .board import entity, hardware_conflicts, planned_unbuilt_hardware
 from .power_grid import plan_connection as power_connection
 from .transport import plan_connection as belt_connection, underground_proof, xy
 from .planning import preflight
@@ -415,8 +415,13 @@ class SmeltingDistrict:
             fallback = self._map_site_anchors(game, sources)
         fallback = [district_candidate(x, y, counts) for x, y in fallback + list(smelting_site_anchors(sources))]
         candidates = []
+        # Other blocks' planned-but-unbuilt hardware (bridges, routed belts)
+        # lies outside their reserved areas; a district must not sit on it.
+        unbuilt = planned_unbuilt_hardware(self.builder, obs, board.get("blocks", {}), exclude=("smelting_district",))
         for candidate in planned + fallback:
             area = candidate["area"]
+            if hardware_conflicts(self.builder, candidate["entities"], unbuilt):
+                continue
             if any(
                 area[0][0] < b["reserved_area"][1][0]
                 and area[1][0] > b["reserved_area"][0][0]
