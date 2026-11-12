@@ -67,6 +67,7 @@ class DefensePerimeterTests(unittest.TestCase):
                                                   'focus': {'x': focus[0], 'y': focus[1]}, 'position': {'x': i * 4, 'y': -20}}
                                                  for i, (name, anchor, focus) in enumerate(POSTS)]}))
             c = DefensePerimeter(game, None, SimpleNamespace(fingerprint='catalog'))
+            c.adaptive_enabled=False  # Preserve the historical layout's read-only API.
             obs = {'world_id': 'w', 'tick': 1, 'enabled_recipes': {'gun-turret': True, 'firearm-magazine': True}}
             with patch('factorio_agent.defense_perimeter._atomic_json') as write:
                 result = c.prepare(obs)

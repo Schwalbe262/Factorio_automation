@@ -27,6 +27,22 @@ class LunaDecisionTests(unittest.TestCase):
             with self.assertRaises(ValueError):normalize_decision(value)
         with self.assertRaises(ValueError):LunaDecisionClient(model='another-model')
 
+    def test_target_task_id_normalizes_controls_and_keeps_old_missing_field_compatible(self):
+        self.assertNotIn('target_task_id',normalize_decision(response()))
+        self.assertIsNone(normalize_decision(dict(response(),target_task_id=None))['target_task_id'])
+        for operation in ('continue','retry','pause'):
+            value=dict(response(),operation=operation,target_task_id='funded_electric',parameters_json='{"technology":"electric-mining-drill"}')
+            normalized=normalize_decision(value)
+            self.assertEqual(normalized['target_task_id'],'funded_electric')
+            self.assertEqual(normalized['parameters'],{'technology':'electric-mining-drill'})
+
+    def test_target_task_id_rejects_invalid_ids_wrong_operations_and_raw_job_keys(self):
+        for target in ('','a'*65,'contains spaces',{'position':{'x':1,'y':2}},True):
+            with self.assertRaises(ValueError):normalize_decision(dict(response(),operation='continue',target_task_id=target))
+        for operation in ('plan','request','wait'):
+            with self.assertRaises(ValueError):normalize_decision(dict(response(),operation=operation,capability='starter',target_task_id='existing'))
+        with self.assertRaises(ValueError):normalize_decision(dict(response(),operation='continue',job_key='lunaq_raw'))
+
     def test_native_cli_uses_saved_auth_strict_model_and_readonly_planner(self):
         client=LunaDecisionClient()
         def run(command,**kwargs):
@@ -34,6 +50,12 @@ class LunaDecisionTests(unittest.TestCase):
             self.assertEqual(command[command.index('--sandbox')+1],'read-only')
             self.assertNotIn('OPENAI_API_KEY',kwargs['env']);self.assertNotIn('CODEX_API_KEY',kwargs['env'])
             self.assertNotIn('do-not-send',kwargs['input'].decode())
+            schema=json.loads(Path(command[command.index('--output-schema')+1]).read_text(encoding='utf-8'))
+            self.assertIn('target_task_id',schema['required']);self.assertEqual(schema['properties']['target_task_id']['type'],['string','null'])
+            prompt=kwargs['input'].decode('utf-8')
+            self.assertIn('Reuse the SAME ID for retries of the SAME effect',prompt)
+            self.assertIn('FULL output buffers is not evidence of a shortage',prompt)
+            self.assertIn('Finish or repair an existing funded science batch',prompt)
             Path(command[command.index('--output-last-message')+1]).write_text(json.dumps(response()),encoding='utf-8')
             return SimpleNamespace(returncode=0,stdout=b'{"type":"turn.completed","usage":{"input_tokens":20,"output_tokens":5}}\n',stderr=b'')
         with patch('factorio_agent.luna_client._codex_command',return_value=['codex.exe']),\

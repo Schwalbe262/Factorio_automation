@@ -17,8 +17,10 @@ NODE={'type':'object','additionalProperties':False,'required':['id','capability'
       'properties':{'id':{'type':'string','maxLength':64},'capability':{'type':'string'},'parameters_json':PARAMETERS,
                     'priority':{'type':'integer','minimum':0,'maximum':1000},
                     'depends_on':{'type':'array','items':{'type':'string'}},'reason':{'type':'string'}}}
-DECISION_SCHEMA={'type':'object','additionalProperties':False,'required':['operation','capability','parameters_json','queue','reason'],
+DECISION_SCHEMA={'type':'object','additionalProperties':False,'required':['operation','capability','parameters_json','queue','reason','target_task_id'],
  'properties':{'operation':{'type':'string','enum':list(OPERATIONS)},'capability':{'type':['string','null']},
+               'target_task_id':{'type':['string','null'],'maxLength':64,'pattern':'^[A-Za-z0-9_-]{1,64}$',
+                    'description':'Existing stable work_queue ID for continue/retry/pause, otherwise null; never a job key.'},
                'parameters_json':PARAMETERS,'queue':{'type':'array','items':NODE},'reason':{'type':'string'}}}
 
 PROMPT='''You are the strategy planner for a Factorio Space Age framework.
@@ -36,6 +38,10 @@ invest in the resource that actually limits construction. Repeated one-item
 collections do not establish adequate capacity. A paused job preserves its paid
 work: if supply dominates the delay, pause that exact job, queue a bounded
 capacity improvement, then continue the original job after the improvement.
+Zero measured production with FULL output buffers is not evidence of a shortage.
+Use available stocks and current producer statuses before requesting expansion.
+Finish or repair an existing funded science batch before parallel handcrafting
+or starting another instance of the same research work.
 There is one active task: ready capacity work cannot run concurrently with a
 material-starved job. Merely queuing that investment behind the active task
 cannot shorten its wait. Explicitly pause it or approve a strictly higher
@@ -51,6 +57,11 @@ large polluting expansions. If turret recipes are locked, use the finite machine
 bootstrap research bridge instead of waiting for a late science district.
 Preserve paid partial work and stable queue IDs. An ID permanently identifies one capability and exact
 parameters, including after completion; use a new ID for a different target.
+Reuse the SAME ID for retries of the SAME effect. Do not create new IDs just to
+retry a fresh plan or escape an ambiguous existing-job error. For continue,
+retry or pause, set target_task_id to the particular existing paused/blocked or
+active queue ID. Repeat that node's exact parameters; capability may be null or
+its exact capability. Other operations must use target_task_id=null.
 Read the latest planner error before proposing a replacement decision.
 Never retry unknown outcomes. If a job is running,
 normally continue it. A locked or blocked task needs a concrete prerequisite or
@@ -99,11 +110,14 @@ def _parameters(raw):
 
 def normalize_decision(value):
     if(not isinstance(value,dict)or value.get('operation')not in OPERATIONS
-            or set(value)-{'operation','capability','parameters_json','queue','reason'}):raise ValueError('Invalid Luna decision envelope')
+            or set(value)-{'operation','capability','parameters_json','queue','reason','target_task_id'}):raise ValueError('Invalid Luna decision envelope')
     operation=value['operation'];capability=value.get('capability');queue=value.get('queue',[])
     if capability is not None and(not isinstance(capability,str)or not re.fullmatch(r'[a-z][a-z0-9_]{0,79}',capability)):
         raise ValueError('Invalid Luna capability')
     if operation=='request'and not capability:raise ValueError('A request needs a capability')
+    target=value.get('target_task_id')
+    if target is not None and(operation not in('continue','retry','pause')or not isinstance(target,str)
+            or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',target)):raise ValueError('Invalid Luna target_task_id for job control')
     if not isinstance(queue,list)or len(queue)>16:raise ValueError('Luna queue is limited to sixteen tasks')
     nodes=[]
     for node in queue:
@@ -117,8 +131,10 @@ def normalize_decision(value):
         nodes.append({k:v for k,v in node.items()if k!='parameters_json'}|{'parameters':_parameters(node['parameters_json'])})
     reason=value.get('reason','')
     if not isinstance(reason,str)or len(reason)>2000:raise ValueError('Invalid Luna reason')
-    return {'operation':operation,'capability':capability,'parameters':_parameters(value.get('parameters_json','{}')),
+    result={'operation':operation,'capability':capability,'parameters':_parameters(value.get('parameters_json','{}')),
             'queue':nodes,'reason':reason}
+    if 'target_task_id'in value:result['target_task_id']=target
+    return result
 
 
 class LunaDecisionClient:

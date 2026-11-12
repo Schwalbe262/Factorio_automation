@@ -3,6 +3,8 @@ import hashlib
 import json
 from pathlib import Path
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -276,8 +278,11 @@ class LifecycleTests(unittest.TestCase):
     def test_all_batch_files_delegate_with_absolute_repo_source_and_no_process_kills(self):
         repo=Path(__file__).resolve().parents[1]
         for name,command in [('start','start'),('stop','stop'),('new_map','new-map'),('gui','gui'),('status','status'),('logs','logs'),('shutdown','shutdown')]:
-            content=(repo/(name+'.bat')).read_text(encoding='utf-8')
-            self.assertIn('set "PYTHONPATH=%~dp0src"',content);self.assertIn('factorio_agent.lifecycle --repo "%~dp0." '+command,content)
+            content=(repo/'tools/windows'/(name+'.bat')).read_text(encoding='utf-8')
+            self.assertIn('for %%I in ("%~dp0..\\..") do set "FACTORIO_REPO=%%~fI"',content)
+            self.assertIn('set "PYTHONPATH=%FACTORIO_REPO%\\src"',content)
+            self.assertIn('factorio_agent.lifecycle --repo "%FACTORIO_REPO%" '+command+' %*',content)
+            self.assertIn('if not defined FACTORIO_MENU_ACTIVE',content)
             self.assertNotIn('taskkill',content.lower());self.assertNotIn('del ',content.lower())
 
     @unittest.skipUnless(os.name=='nt','native Windows argument parser')
@@ -285,6 +290,67 @@ class LifecycleTests(unittest.TestCase):
         import subprocess
         argv=[r'C:\Program Files\Python310\python.exe','-B','-m','factorio_agent.supervisor','--runtime',str(self.repo/'space path')]
         self.assertEqual(command_argv(subprocess.list2cmdline(argv)),argv)
+
+
+class BatchMenuTests(unittest.TestCase):
+    def test_one_root_launcher_and_byte_preserved_inactive_legacy_archive(self):
+        repo=Path(__file__).resolve().parents[1]
+        self.assertEqual([p.name for p in repo.glob('*.bat')],['Factorio.bat'])
+        attributes=(repo/'.gitattributes').read_text()
+        for pattern in ('/Factorio.bat -text','/tools/windows/*.bat -text','/tools/legacy_bat/*.bat.txt -text'):
+            self.assertIn(pattern,attributes)
+        archive=repo/'tools/legacy_bat';manifest=(archive/'SHA256SUMS.txt').read_text().splitlines()
+        self.assertEqual(len(manifest),31)
+        self.assertEqual(len(list(archive.glob('*.bat'))),0)
+        for row in manifest:
+            digest,name=row.split('  ',1)
+            self.assertTrue(name.endswith('.bat.txt'));self.assertEqual(Path(name).name,name)
+            self.assertEqual(hashlib.sha256((archive/name).read_bytes()).hexdigest(),digest)
+        for path in [repo/'Factorio.bat',*(repo/'tools/windows').glob('*.bat')]:
+            data=path.read_bytes();self.assertNotIn(b'\n',data.replace(b'\r\n',b''))
+            self.assertFalse(data.startswith(b'\xef\xbb\xbf'))
+        menu=(repo/'Factorio.bat').read_text(encoding='utf-8')
+        self.assertIn('choice /C 123456780',menu);self.assertNotIn('set /p',menu.lower())
+        self.assertEqual(menu.lower().count('\npause\n'),1)
+        self.assertIn('start "" /wait notepad.exe "%~dp0automation_config.json"',menu)
+
+    @staticmethod
+    def command(path,*args):
+        argv=subprocess.list2cmdline([str(path),*args])
+        return '"'+os.environ.get('COMSPEC','cmd.exe')+'" /d /s /c "'+argv+'"'
+
+    @unittest.skipUnless(os.name=='nt','Windows batch execution')
+    def test_help_from_unrelated_directory_never_invokes_lifecycle(self):
+        repo=Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory(prefix='factorio menu ')as temp:
+            root=Path(temp);menu=root/'Factorio.bat';shutil.copyfile(repo/'Factorio.bat',menu)
+            # No wrappers, Python package, runtime, or config exists in this fixture.
+            result=subprocess.run(self.command(menu,'--help'),cwd=root.parent,stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,stderr=subprocess.PIPE,encoding='utf-8',errors='replace',timeout=5)
+            self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(result.stderr,'')
+            self.assertIn('Usage: Factorio.bat [--help]',result.stdout)
+            self.assertIn('게임을 시작하지 않습니다',result.stdout)
+            self.assertIn('[0] 메뉴만 닫기',result.stdout)
+            self.assertEqual([p.name for p in root.iterdir()],['Factorio.bat'])
+
+    @unittest.skipUnless(os.name=='nt','Windows batch execution')
+    def test_relocated_wrappers_use_absolute_repo_and_preserve_cli_arguments(self):
+        repo=Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory(prefix='factorio wrappers ')as temp:
+            root=Path(temp);scripts=root/'tools/windows';scripts.mkdir(parents=True)
+            package=root/'src/factorio_agent';package.mkdir(parents=True)
+            (package/'__init__.py').write_text('',encoding='utf-8')
+            (package/'lifecycle.py').write_text('import json,os,sys\nprint(json.dumps(dict(args=sys.argv[1:],cwd=os.getcwd(),pythonpath=os.environ["PYTHONPATH"])))\n',encoding='utf-8')
+            env=dict(os.environ,FACTORIO_MENU_ACTIVE='1',PATH=str(Path(sys.executable).parent)+os.pathsep+os.environ['PATH'])
+            for name in ('start','stop','new_map','gui','status','logs','shutdown'):
+                path=scripts/(name+'.bat');shutil.copyfile(repo/'tools/windows'/path.name,path)
+                result=subprocess.run(self.command(path,'--fixture','17'),cwd=root.parent,env=env,stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,stderr=subprocess.PIPE,encoding='utf-8',errors='replace',timeout=5)
+                self.assertEqual(result.returncode,0,result.stderr)
+                value=json.loads(result.stdout)
+                self.assertEqual(value['args'],['--repo',str(root),'new-map'if name=='new_map'else name,'--fixture','17'])
+                self.assertEqual(Path(value['cwd']),root)
+                self.assertEqual(Path(value['pythonpath']),root/'src')
 
 
 if __name__=='__main__':unittest.main()

@@ -99,13 +99,16 @@ def _no_raw(value):
 
 
 def validate_decision(value):
-    if not isinstance(value,dict)or set(value)-{'operation','capability','parameters','reason','queue'}:
+    if not isinstance(value,dict)or set(value)-{'operation','capability','parameters','reason','queue','target_task_id'}:
         raise ValueError('decision must contain only the structured task schema')
     if value.get('operation')not in OPERATIONS or not isinstance(value.get('parameters'),dict)or not isinstance(value.get('reason'),str)or len(value['reason'])>2000:
         raise ValueError('invalid operation, parameters or reason')
     cap=value.get('capability')
     if cap is not None and(not isinstance(cap,str)or not re.fullmatch(r'[a-z][a-z0-9_]{0,79}',cap)):raise ValueError('invalid capability name')
     if value['operation']=='request'and cap is None:raise ValueError('request needs a capability')
+    target=value.get('target_task_id')
+    if target is not None and(value['operation']not in('continue','retry','pause')or not isinstance(target,str)
+            or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',target)):raise ValueError('target_task_id requires a stable queue ID and a control operation')
     nodes=value.get('queue',[])
     if not isinstance(nodes,list)or len(nodes)>64:raise ValueError('queue decision accepts at most64 nodes')
     _no_raw(value['parameters'])
@@ -461,6 +464,21 @@ class Supervisor:
         return True
 
     def _target(self,decision,status,allowed,*,missing_ok=False):
+        target=decision.get('target_task_id')
+        if target is not None:
+            if self.work.world!=self.world or self.work.data.get('world_id')!=self.world:raise ValueError('target queue world changed')
+            node=next((q for q in self.work.data['nodes']if q['id']==target),None)
+            if node is None:raise ValueError('unknown target_task_id: '+target)
+            if node.get('job_key')!=stable_job_key(self.world,node):raise ValueError('target task job identity changed')
+            if(decision.get('capability')not in(None,node['capability'])or decision['parameters']!=node['parameters']):
+                raise ValueError('target_task_id capability or parameters do not match the accepted task')
+            job=status.get('jobs',{}).get(node['job_key'])
+            if job is None or job['status']not in allowed:
+                if missing_ok:return None
+                raise ValueError('target_task_id has no eligible job in the decision snapshot')
+            if any(job.get(k)!=expected for k,expected in (('key',node['job_key']),('world_id',self.world),('capability',node['capability']),('parameters',node['parameters']))):
+                raise ValueError('target_task_id prompt job identity changed')
+            return job
         rows=[j for j in status.get('jobs',{}).values()if j['status']in allowed]
         cap=decision.get('capability');params=decision.get('parameters',{})
         if cap is not None:rows=[j for j in rows if j['capability']==cap]
@@ -577,7 +595,7 @@ class Supervisor:
         if self._stop_requested():return
         self.work.refresh(jobs,capabilities)
         self.work.merge(decision['queue'],capabilities,self.cli.validate_requests,fresh['tick'])
-        operation=decision['operation'];self._event('decision',operation=operation,capability=decision.get('capability'),reason=decision['reason'],queue_nodes=len(decision['queue']))
+        operation=decision['operation'];self._event('decision',operation=operation,capability=decision.get('capability'),target_task_id=decision.get('target_task_id'),reason=decision['reason'],queue_nodes=len(decision['queue']))
         if operation=='request':
             if active:
                 self._event('decision_deferred',operation=operation,reason='fresh_active_job_must_finish',key=active[0]['key']);return
@@ -591,7 +609,7 @@ class Supervisor:
             # become active during the asynchronous call.
             intended=self._target(decision,prompt_status,allowed,missing_ok=True)
             if intended is None:
-                self._event('stale_decision',operation=operation,reason='no_target_in_decision_snapshot');return
+                self._event('stale_decision',operation=operation,target_task_id=decision.get('target_task_id'),reason='no_target_in_decision_snapshot');return
             job=status.get('jobs',{}).get(intended['key'])
             if not job or any(job.get(k)!=intended.get(k)for k in ('key','world_id','capability','parameters')):
                 raise ValueError('original decision target identity missing or changed; will not retarget')
@@ -604,7 +622,7 @@ class Supervisor:
                 self._event('stale_decision',operation=operation,key=job['key'],reason='another_job_already_active');return
             node=self.work.node_for_job(job['key'])
             command='resume'if operation=='continue'and job['status']=='paused'else operation
-            if operation=='retry'and(job.get('pending_action')or job.get('reason')=='action_outcome_unknown_reconcile_required'):
+            if operation=='retry'and _unknown(job):
                 raise ValueError('uncertain outcome requires reviewed reconciliation, never model retry')
             if command!='continue':
                 if self._stop_requested():return

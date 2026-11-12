@@ -47,7 +47,7 @@ reconciled or retargeted.
 Decisions use:
 
 ```json
-{"operation":"plan","capability":null,"parameters":{},"reason":"bootstrap",
+{"operation":"plan","capability":null,"parameters":{},"target_task_id":null,"reason":"bootstrap",
  "queue":[{"id":"starter","capability":"starter","parameters":{},
  "priority":100,"depends_on":[],"reason":"normally produce starting materials"}]}
 ```
@@ -57,6 +57,19 @@ have stable IDs, documented capability/parameters, integer priority and dependen
 IDs. `work_queue.json` is bound to one world and persists pending/ready/running/
 blocked/completed nodes. Job keys derive from world, node ID, capability and
 parameters. Node task identity cannot change; use a new ID for a new effect.
+For `continue`, `retry` or `pause`, `target_task_id` can select one existing stable
+queue ID when multiple paused or blocked jobs match. Repeat that task's exact
+parameters; capability may be null or the exact accepted capability. The selector
+resolves the current-world queue's stable job key and binds only the job present
+in the original decision snapshot. A missing/outdated prompt target is a harmless
+stale response; unknown IDs and mismatched capability/parameters are rejected.
+It cannot redirect control to a successor. Other operations use null. Older
+responses without this field retain unambiguous selection behavior. Luna's wire
+schema requires the nullable field; normalization still accepts old missing data.
+Retries keep the same queue ID and paid job; creating another ID for the same
+effect is not a retry. Full output buffers with zero measured production do not
+establish shortage. Existing stocks and native statuses come first, and a funded
+science batch should be finished or repaired before another instance is started.
 Dependency order and repeated dependency IDs have no meaning and are normalized.
 For a running or completed node the actual dependency set remains immutable,
 even when a newly proposed prerequisite has already completed. Such additions

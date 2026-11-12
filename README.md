@@ -19,12 +19,20 @@ Public blueprint examples and the bounded structural importer are documented in
 [reference sources](docs/v2/REFERENCE_SOURCES.md). Imported examples remain
 unverified until tested in the pinned game; original exchange strings stay ignored.
 
-To watch the existing development world, run `watch_factorio_v2.bat`. Viewing
-does not stop automation; movement/build controls share the automation actor.
+On Windows, open [Factorio.bat](Factorio.bat). Its Korean menu starts or resumes
+automation, pauses the game and AI, creates a saved/backed-up new map, opens the
+GUI, shows status/logs, edits settings, and saves/shuts down. Closing only the
+menu keeps the current game state running. `Factorio.bat --help` prints the menu
+without starting the game. See [controls](docs/v2/LIFECYCLE.md) and
+[editable settings](docs/v2/AUTOMATION_CONFIG.md).
+
+The seven individual command wrappers are in [tools/windows](tools/windows/README.md).
+The 31 older launchers are inactive text archives in
+[tools/legacy_bat](tools/legacy_bat/README.md); the root has one current BAT entry point.
 
 ```powershell
 $env:PYTHONPATH = 'src'
-python -B -m factorio_agent --runtime runtime/v2/dev-101 observe
+python -B -m factorio_agent.lifecycle --repo . status
 python -B -m unittest discover -s tests -p 'test_v2_*.py' -q
 ```
 
@@ -35,6 +43,12 @@ directory and distinct ports. Never replace a running save to inspect references
 
 Everything below describes the inherited v1 implementation and its commands.
 It does not specify the v2 model policy or v2 acceptance criteria.
+
+<details>
+<summary>Historical v1 commands and launch instructions (inactive archive)</summary>
+
+Legacy BAT names below refer to [archived text files](tools/legacy_bat/README.md),
+not current launch commands. Use the menu above for the current framework.
 
 # Factorio AI Autoplayer (v1)
 
@@ -1007,3 +1021,5 @@ The current remote is configured as:
 ```powershell
 git remote -v
 ```
+
+</details>

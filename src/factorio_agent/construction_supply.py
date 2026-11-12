@@ -6,8 +6,10 @@ science inventory, raw ore or mining output are eligible for this fast path.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+from pathlib import Path
 
 from factorio_ai.deterministic_bootstrap import DeterministicBootstrap
 
@@ -71,6 +73,43 @@ def validate_take_many(action):
 
 
 class V2Bootstrap(DeterministicBootstrap):
+    def _unreserved_stock_observation(self,observation,item):
+        root=getattr(getattr(getattr(self,'game',None),'cfg',None),'runtime_dir',None)
+        if not isinstance(root,(str,Path)):return observation
+        path=Path(root)/'pcb-board.json'
+        if not path.exists():return observation
+        world=observation.get('world_id');fingerprint=getattr(self.catalog,'fingerprint',None)
+        raw=path.read_bytes()
+        version=(world,fingerprint,hashlib.sha256(raw).digest())
+        cached=getattr(self,'_stock_ownership_cache',None)
+        if cached is None or cached[0]!=version:
+            board=json.loads(raw.decode('utf-8'))
+            if board.get('world_id')!=world or board.get('catalog_fingerprint')!=fingerprint:
+                raise ValueError('construction stock ownership world or catalog changed')
+            blocks=board.get('blocks',{})
+            if not isinstance(blocks,dict):raise ValueError('invalid registered construction stock ownership')
+            groups=list(blocks.items())
+            if board.get('shared_main_bus'):groups.append(('shared_main_bus',board['shared_main_bus']))
+            ownership={}
+            for name,block in groups:
+                for entity in block.get('entities',[]):
+                    p=entity.get('position')
+                    if not _position(p):raise ValueError('invalid registered stock position')
+                    key=(entity['name'],p['x'],p['y'])
+                    # Finite startup batches own their whole cell, including
+                    # intermediates and the output used by their own courier.
+                    public={port['item']for port in block.get('ports',[])
+                        if name!='startup_science'and port.get('direction')=='output'and port.get('position')==p}
+                    ownership[key]=public if key not in ownership else ownership[key]&public
+            self._stock_ownership_cache=(version,ownership)
+        ownership=self._stock_ownership_cache[1]
+        def available(entity):
+            p=entity.get('position')
+            if not _position(p):return True  # ordinary candidate validation still rejects malformed rows
+            allowed=ownership.get((entity.get('name'),p['x'],p['y']))
+            return allowed is None or item in allowed
+        return dict(observation,entities=[e for e in observation.get('entities',[])if available(e)])
+
     def maintain_fuel(self,observation):
         entities=observation.get('entities',[])
         hungry=any(e.get('name')in {'burner-mining-drill','stone-furnace'}
@@ -119,6 +158,7 @@ class V2Bootstrap(DeterministicBootstrap):
             # ensure_item use ordinary engine crafting for fresh full magazines.
             # Even a machine output could contain a manually stored used stack.
             return None
+        observation=self._unreserved_stock_observation(observation,item)
         if item not in CONSTRUCTION_ITEMS:
             return super()._take_output(observation, item, count)
         if type(count) is not int or count < 1:

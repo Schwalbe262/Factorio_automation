@@ -1,0 +1,29 @@
+@echo off
+setlocal
+cd /d "%~dp0"
+
+set "HANDOFF=%CD%\docs\CLI_HANDOFF.md"
+set "PROMPT=Read docs\CLI_HANDOFF.md only as the handoff context. Do not assume the previous desktop conversation is available. Continue the Factorio automation project from that document: verify current git status, run tests, commit/push the current validated changes if still uncommitted, then implement the next highest-priority item described in the handoff."
+
+echo Factorio Automation CLI handoff
+echo Workspace: %CD%
+echo Handoff: %HANDOFF%
+echo.
+echo Starting Codex CLI with the handoff prompt...
+echo.
+
+codex "%PROMPT%"
+if %ERRORLEVEL% EQU 0 goto :done
+
+echo.
+echo Codex CLI did not start from this shell.
+echo Open a CLI manually in this folder and paste this prompt:
+echo.
+echo %PROMPT%
+echo.
+echo The handoff document will be opened now.
+start "" "%HANDOFF%"
+pause
+
+:done
+endlocal

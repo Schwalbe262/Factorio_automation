@@ -85,6 +85,27 @@ class EmergencyDispatchTests(unittest.TestCase):
         self.assertEqual(ex.step('bootstrap_research',obs,{'technology':'electric-mining-drill'}),fuel)
         ex.perimeter.step.assert_not_called();ex.starter_upkeep.assert_not_called()
 
+    def test_adaptive_armed_phase_rechecks_risk_but_yields_when_current_target_is_met(self):
+        ex,obs,ledger,path=self.approved_initial();ex.perimeter.adaptive_enabled=True;ex.perimeter.state={'phase':'armed'}
+        ex.perimeter.step.return_value={'status':'succeeded','reason':'one current-risk target is armed'}
+        ex.starter_upkeep.return_value={'status':'succeeded'};ex._continue_background_construction=Mock(return_value=None)
+        ex.capacity=SimpleNamespace(step=Mock(return_value={'type':'take','item':'iron-plate'}))
+        self.assertEqual(ex.step('starter_capacity',obs,{'resource':'iron-ore','cells':8})['item'],'iron-plate')
+        ex.perimeter.step.assert_called_once_with(obs)
+        ex.perimeter.step.return_value={'type':'build','name':'gun-turret'}
+        self.assertEqual(ex.step('starter_capacity',obs,{'resource':'iron-ore','cells':8})['name'],'gun-turret')
+        self.assertEqual(ex.capacity.step.call_count,1)
+
+    def test_unknown_adaptive_risk_does_not_spend_or_deadlock_ordinary_production(self):
+        ex,obs,ledger,path=self.approved_initial();ex.perimeter.adaptive_enabled=True
+        ex.perimeter.step.return_value={'status':'blocked','reason':'adaptive_defense_policy_unavailable'}
+        ex.perimeter.upkeep=Mock(return_value=None)
+        ex.starter_upkeep.return_value={'status':'succeeded'};ex._continue_background_construction=Mock(return_value=None)
+        ex.capacity=SimpleNamespace(step=Mock(return_value={'type':'take','item':'coal'}))
+        self.assertEqual(ex.step('starter_capacity',obs,{'resource':'coal','cells':8})['item'],'coal')
+        self.assertEqual(ex.defense_policy_diagnostic['reason'],'adaptive_defense_policy_unavailable')
+        self.assertEqual(json.loads(path.read_text(encoding='utf-8')),ledger)
+
     def test_approved_previously_locked_defense_precedes_ordinary_work_without_fake_ledger_success(self):
         ex,obs,ledger,path=self.approved_initial();before=path.read_bytes()
         self.assertEqual(ex.step('starter_capacity',obs,{'resource':'copper-ore','cells':8})['name'],'gun-turret')

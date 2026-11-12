@@ -102,6 +102,9 @@ class DefensePerimeter:
         self.ammo_source = None
         self.path = Path(game.cfg.runtime_dir) / 'defense-perimeter.json'
         self.state = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
+        from .defense_policy import DefensePolicy
+        self.adaptive_enabled=True
+        self.policy_engine=DefensePolicy(game,catalog)
 
     def _identity_error(self, obs):
         if not obs.get('ok', True) or not isinstance(obs.get('world_id'), str) or not obs['world_id']:
@@ -112,6 +115,33 @@ class DefensePerimeter:
         return None
 
     def prepare(self, obs):
+        if not getattr(self,'adaptive_enabled',False):return self._legacy_prepare(obs)
+        error=self._identity_error(obs)
+        if error:return {'ok':False,'reason':error}
+        if not all(obs.get('enabled_recipes',{}).get(name)for name in ('gun-turret','firearm-magazine')):
+            return {'ok':False,'reason':'native_gun_turret_and_normal_magazine_recipes_required'}
+        try:
+            reserved=protected_factory_areas(self.game,obs['world_id'],self.catalog.fingerprint,runtime_dir=self.path.parent)
+            reserved += [deepcopy(scope['areas'][i])for scope in self.state.get('coverage_scopes',{}).values()for i in range(len(scope['areas']))]
+        except (KeyError,TypeError,ValueError)as exc:return {'ok':False,'reason':'adaptive_defense_policy_unavailable','detail':str(exc)[:200]}
+        preview=self.policy_engine.prepare(obs,self.state,reserved)
+        if not preview.get('ok'):return preview
+        state=deepcopy(self.state)if self.state else dict(schema_version=1,world_id=obs['world_id'],catalog_fingerprint=self.catalog.fingerprint,
+            prepared_tick=obs['tick'],posts=[],phase='deploy',ammo_target=AMMO_TARGET,refill_below=REFILL_BELOW,
+            scope='adaptive current-risk armed targets; not whole-factory coverage or combat certification')
+        state['posts']+=deepcopy(preview['new_posts']);state['range']=preview['range']
+        state['adaptive_policy']=deepcopy(preview['policy'])
+        active=set(preview['policy']['active_posts'])
+        for post in state['posts']:
+            if not post.get('unit_number')and not post.get('lost_unit_number'):
+                post['deferred_by_policy']=post['name']not in active
+        if not self.state:
+            state['reserved_areas']=reserved
+            state['requirements']={'gun-turret':len(preview['new_posts']),
+                'firearm-magazine':len(preview['new_posts'])*preview['risk']['ammo_target']}
+        return {**state,'ok':True}
+
+    def _legacy_prepare(self, obs):
         """Read-only all-post native land/range/resource/reservation survey."""
         error = self._identity_error(obs)
         if error:
@@ -238,19 +268,28 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
             if live.get('full_magazines',-1) >= AMMO_TARGET and not spec.get('commissioned'):
                 spec['commissioned'] = True
                 changed = True
+            policy=self.state.get('adaptive_policy',{})
+            goal=policy.get('risk',{}).get('ammo_target',AMMO_TARGET)
+            if(spec['name']in policy.get('active_posts',[])and goal>AMMO_TARGET
+                    and live.get('full_magazines',-1)>=goal and spec.get('policy_loaded_target',0)<goal):
+                spec['policy_loaded_target']=goal;changed=True
         if changed:
             self._save()
 
     def _refill(self, obs, report, *, initial=False):
+        policy=self.state.get('adaptive_policy',{});active=set(policy.get('active_posts',[]))
         for spec, live in zip(self.state['posts'], report['posts']):
             if live.get('missing') or live.get('identity_changed'):
                 continue
-            threshold = AMMO_TARGET if initial and not spec.get('commissioned') else REFILL_BELOW
+            selected=spec['name']in active
+            goal=policy.get('risk',{}).get('ammo_target',AMMO_TARGET)if selected else AMMO_TARGET
+            loaded=max(spec.get('policy_loaded_target',0),AMMO_TARGET if spec.get('commissioned')else 0)
+            threshold=(goal if initial and loaded<goal else policy.get('risk',{}).get('refill_below',REFILL_BELOW))if selected else(AMMO_TARGET if initial and not spec.get('commissioned')else REFILL_BELOW)
             full=live.get('full_magazines')
             if type(full)is not int or full<0:return _result('blocked','native_full_magazine_count_required')
             if full >= threshold:
                 continue
-            needed = AMMO_TARGET - full
+            needed = goal - full
             held = report['actor_full_magazines']
             if not held:
                 return self._ensure_magazines(obs, report, needed)
@@ -286,13 +325,14 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
         self._bind(report)
         return self._refill(obs, report)
 
-    def step(self, obs):
-        if not self.state:
+    def step(self, obs, *, required_posts=None):
+        if not self.state or getattr(self,'adaptive_enabled',False):
             prepared = self.prepare(obs)
             if not prepared.get('ok'):
                 return _result('blocked', prepared.get('reason', 'defense_preflight_failed'), native=prepared)
-            self.state = prepared
-            self._save()
+            if self.state!=prepared:
+                self.state = prepared
+                self._save()
         report = self.inspect(obs)
         if not report.get('ok'):
             return _result('blocked', report.get('reason', 'native_defense_status_failed'))
@@ -305,8 +345,12 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
         for spec, live in zip(self.state['posts'], report['posts']):
             if not live.get('missing'):
                 continue
-            if report['actor_full_magazines'] < AMMO_TARGET:
-                return self._ensure_magazines(obs, report, AMMO_TARGET)
+            policy=self.state.get('adaptive_policy')
+            selected=policy and spec['name']in policy['active_posts']
+            if policy and not selected and spec['name']not in(required_posts or()):continue
+            goal=policy['risk']['ammo_target']if selected else AMMO_TARGET
+            if report['actor_full_magazines'] < goal:
+                return self._ensure_magazines(obs, report, goal)
             if int(obs.get('inventory', {}).get('gun-turret', 0)) < 1:
                 return self.bootstrap.ensure_item(obs, 'gun-turret', 1)
             payload = json.dumps(json.dumps(spec['position'], separators=(',', ':')))
@@ -318,12 +362,17 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
         proof = self._proof(report)
         if not proof:
             return _result('waiting', 'waiting_for_initial_perimeter_magazines', native=report)
+        if self.state.get('adaptive_policy'):
+            if self.state['adaptive_policy'].get('status')!='ready':
+                self.state['adaptive_policy']['status']='ready';self._save()
+            return _result('succeeded','current native risk defense targets are armed',**proof)
         if self.state.get('phase') != 'armed':
             self.state['phase'] = 'armed'
             self._save()
         return _result('succeeded', 'declared strategic posts are normally armed', **proof)
 
     def _proof(self, report):
+        if self.state.get('adaptive_policy'):return self._policy_proof(report,self.state['adaptive_policy'])
         if (not report.get('ok') or not self.state or len(report.get('posts', [])) != len(self.state['posts'])
                 or report.get('missing') or report.get('changed') or report.get('unarmed') or report.get('refill')
                 or any(not post.get('commissioned') for post in self.state['posts'])):
@@ -333,7 +382,30 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
                 'scope': 'strategic armed-post commissioning; actor ammo bootstrap, no automatic-ammo or combat-stress certification'}
 
     def proof(self, obs):
+        if getattr(self,'adaptive_enabled',False)and self.state:
+            preview=self.prepare(obs)
+            if not preview.get('ok'):return None
+            return self._policy_proof(self.inspect(obs),preview['adaptive_policy'])
         return self._proof(self.inspect(obs)) if self.state else None
+
+    def _policy_proof(self,report,policy):
+        if(not report.get('ok')or report.get('changed')or policy.get('world_id')!=self.state.get('world_id')
+                or policy.get('catalog_fingerprint')!=self.catalog.fingerprint):return None
+        names=policy.get('active_posts',[]);rows={p['name']:p for p in report.get('posts',[])}
+        specs={p['name']:p for p in self.state['posts']}
+        if not names or len(names)!=policy['risk']['minimum_posts']:return None
+        for name in names:
+            row=rows.get(name);spec=specs.get(name)
+            if(not row or not spec or row.get('missing')or row.get('identity_changed')or not spec.get('commissioned')
+                    or row.get('full_magazines',-1)<policy['risk']['refill_below']):return None
+            loaded=max(spec.get('policy_loaded_target',0),AMMO_TARGET if spec.get('commissioned')else 0)
+            if loaded<policy['risk']['ammo_target']and row.get('full_magazines',-1)<policy['risk']['ammo_target']:return None
+        return dict(tick=report['tick'],posts=[rows[name]for name in names],native_range=self.state['range'],
+            ammo_target=policy['risk']['ammo_target'],refill_below=policy['risk']['refill_below'],
+            risk=deepcopy(policy['risk']),risk_observed_tick=policy['surveyed_tick'],active_post_names=list(names),
+            retained_registered_posts=len(self.state['posts']),covered_producer_units=policy['covered_producer_units'],
+            uncovered_producer_units=policy['uncovered_producer_units'],
+            scope='adaptive current-risk armed targets only; no whole-factory coverage, sustained-ammo or combat guarantee')
 
     def _coverage_reservations(self, obs, areas):
         reserved = deepcopy(list(FUTURE_AREAS)) + deepcopy(areas)
@@ -392,8 +464,17 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
         if (native.get('range') != self.state['range']
                 or type(native.get('magazine_size')) not in (int, float) or native['magazine_size'] <= 0):
             return {'ok': False, 'reason': 'native_defense_range_or_magazine_prototype_changed'}
-        existing = deepcopy(self.state['posts'])
-        chosen = select_cover(cells, existing, native.get('candidates', []), radius)
+        if self.state.get('adaptive_policy'):
+            live={p['name']:p for p in report['posts']}
+            existing=deepcopy([p for p in self.state['posts']if p.get('commissioned')
+                and not live.get(p['name'],{}).get('missing',True)
+                and live[p['name']].get('unit_number')==p.get('unit_number')
+                and live[p['name']].get('full_magazines',-1)>=REFILL_BELOW])
+            candidates=[p for p in native.get('candidates',[])if all(
+                math.hypot(p['position']['x']-old['position']['x'],p['position']['y']-old['position']['y'])>=3
+                for old in self.state['posts'])]
+        else:existing=deepcopy(self.state['posts']);candidates=native.get('candidates',[])
+        chosen = select_cover(cells, existing, candidates, radius)
         if chosen is None:
             return {'ok': False, 'reason': 'no_clear_accessible_complete_defense_coverage',
                     'native_candidates': len(native.get('candidates', [])), 'effective_range': radius}
@@ -423,6 +504,7 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
         selected = [live[name] for name in names if name in live]
         if len(selected) != len(names):
             return None
+        if any(p.get('missing')or p.get('identity_changed')or p.get('full_magazines',-1)<REFILL_BELOW for p in selected):return None
         if initial and any(p.get('full_magazines', -1) < AMMO_TARGET for p in selected):
             return None
         geometry = coverage_report(scope['cells'], selected, scope['effective_range'])
@@ -457,9 +539,12 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
         if report.get('changed'):
             return _result('blocked', 'defense_post_identity_changed', posts=report['changed'])
         by_name = {p['name']: p for p in report['posts']}
+        required=set(scope['covering_posts'])|set(scope['new_posts'])
+        active=set(self.state.get('adaptive_policy',{}).get('active_posts',[]))
         for spec in self.state['posts']:
             live = by_name.get(spec['name'], {})
-            if live.get('missing') and (spec.get('unit_number') or spec.get('lost_unit_number')):
+            if (live.get('missing')and(spec.get('unit_number')or spec.get('lost_unit_number'))
+                    and(not self.state.get('adaptive_policy')or spec['name']in required|active)):
                 return _result('blocked', 'existing_defense_post_missing_requires_explicit_repair', post=spec['name'])
         self._bind(report)
         if not scope['commissioned']:
@@ -487,7 +572,7 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
                 scope['commissioned_tick'] = report['tick']
                 self._save()
             return None
-        action = self.step(obs)
+        action = self.step(obs,required_posts=required)
         if action.get('type') == 'build':
             try:
                 reserved = self._coverage_reservations(obs, areas)

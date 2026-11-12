@@ -23,13 +23,13 @@ CAPABILITIES = {
     "starter_capacity": {"parameters": {"resource": "iron-ore|copper-ore|coal|stone", "cells": "integer 1..8, absolute target"},
                          "requires": ["starter"], "effect": "expand productive starter cells to fund construction faster"},
     "starter_research": {"parameters": {"technology": "automation|electric-mining-drill"}, "requires": ["power"],
-                         "effect": "finite normally handcrafted startup science; natural research, maximum one budget per technology"},
+                         "effect": "finite natural startup research; reuse an existing funded machine batch before paying a new handcraft allowance"},
     "regularize_power_layout": {"parameters": {}, "requires": ["starter"],
                                "effect": "recover obsolete unfinished coal feed and install validated straight trunks; no hot cutover"},
     "bootstrap_logistics": {"parameters": {}, "requires": ["power"],
                             "effect": "reserve a PCB cell, normally assemble finite red science, naturally unlock underground belts/splitters"},
     "bootstrap_research": {"parameters": {"technology":"gun-turret|stone-wall|electric-mining-drill"}, "requires": ["power"],
-                           "effect": "reuse the registered startup science machines for a finite naturally consumed red-science batch; unlock early defenses/electric mining without handcrafted packs or full science districts"},
+                           "effect": "resume or repair a funded machine-science batch at normal cost, including audited gear diversion; unlock early native defenses or electric mining"},
     "electric_coal": {"parameters": {}, "requires": ["power"],
                       "effect": "normally craft electric drill, prebuild grid, reserve-backed cutover and real coal output onto retained trunk"},
     "mining_outpost": {"parameters": {"resource":"iron-ore|copper-ore|coal|stone","rate_per_minute":"finite number (0,960], absolute nominal target"},
@@ -49,7 +49,7 @@ CAPABILITIES = {
     "steam_expansion": {"parameters":{},"requires":["electric_coal"],
                         "effect":"normally add an engine pair with dedicated paired coal and shared water; preserve old plant and verify thirty game seconds of native generation"},
     "defense_perimeter": {"parameters":{},"requires":["starter"],
-                          "effect":"normally build and arm strategic gun posts, native land/range/identity checks; refill known posts during later jobs; native gun research required"},
+                          "effect":"adapt normally paid gun targets to current native enemies, damage and tech; reuse paid guards, defer unneeded future posts and yield to production once current risk targets are armed; no whole-factory coverage claim"},
     "defense_watch": {"parameters":{},"requires":["defense_perimeter"],
                       "effect":"continuously inspect, normally restock and rebuild known defensive posts during a bounded worker session; yields waiting while armed so development pauses do not leave defenses unattended"},
     "defense_hardening": {"parameters":{},"requires":["defense_perimeter"],
@@ -497,6 +497,32 @@ class StarterExecutors:
 
     def record_action(self,capability,obs,action,receipt,parameters=None):
         if capability=='bootstrap_research':self._bootstrap_research(parameters or{}).record_action(action,receipt)
+        elif capability=='starter_research':
+            batch=self._existing_startup_batch(parameters or{})
+            if batch is not None:batch.record_action(action,receipt)
+        elif capability=='bootstrap_logistics':
+            batch=self._funded_startup_owner(obs)
+            if batch is not None:batch.record_action(action,receipt)
+
+    def _funded_startup_owner(self,obs):
+        technology=obs.get('research')
+        if technology not in('gun-turret','stone-wall','electric-mining-drill'):return None
+        if obs.get('technologies',{}).get(technology):return None
+        root=getattr(getattr(getattr(self,'game',None),'cfg',None),'runtime_dir',None)
+        if not isinstance(root,(str,Path))or not(Path(root)/('bootstrap-research-'+technology+'.json')).exists():return None
+        batch=self._bootstrap_research({'technology':technology})
+        allocated=batch.state.get('allocated_inputs',{})
+        return batch if any(type(n)is int and n>0 for n in allocated.values())else None
+
+    def _existing_startup_batch(self,parameters):
+        if parameters.get('technology')!='electric-mining-drill':return None
+        root=getattr(getattr(getattr(self,'game',None),'cfg',None),'runtime_dir',None)
+        if not isinstance(root,(str,Path)):return None
+        if not(Path(root)/'bootstrap-research-electric-mining-drill.json').exists():return None
+        batch=self._bootstrap_research(parameters)
+        # A real reserved batch, including an invalid binding, must be handled
+        # by its owner rather than paying for a second research implementation.
+        return batch if batch.state else None
 
     def _construction_factory(self):
         if self.construction_mall is None:
@@ -658,8 +684,9 @@ class StarterExecutors:
         """Finish an already requested perimeter; never invent a defense job."""
         perimeter=getattr(self,'perimeter',None)
         if perimeter is None:return None
+        adaptive=bool(getattr(perimeter,'adaptive_enabled',False))
         armed=getattr(perimeter,'state',{}).get('phase')=='armed'
-        if armed and not maintain_armed:return None
+        if armed and not maintain_armed and not adaptive:return None
         if not all(obs.get('enabled_recipes',{}).get(name)for name in ('gun-turret','firearm-magazine')):return None
         game=getattr(self,'game',None)
         if game is None:return None
@@ -675,7 +702,11 @@ class StarterExecutors:
         rows=[job for job in same_world if job.get('capability')=='defense_perimeter']
         known={'pending','running','waiting','paused','blocked','failed','succeeded'}
         if not any(job.get('status')in known and job.get('parameters')=={}for job in rows):return None
-        result=self._defense_with_fuel(obs,perimeter.upkeep(obs)if armed else perimeter.step(obs))
+        result=perimeter.step(obs)if adaptive or not armed else perimeter.upkeep(obs)
+        if adaptive and result.get('status')=='blocked'and str(result.get('reason','')).startswith('adaptive_defense_'):
+            self.defense_policy_diagnostic=result
+            result=perimeter.upkeep(obs)
+        result=self._defense_with_fuel(obs,result)
         # Commissioning defense cannot complete the unrelated mining/build job.
         return result if result and(result.get('type')or result.get('status')!='succeeded')else None
 
@@ -711,10 +742,31 @@ class StarterExecutors:
         if cleanup:return cleanup
         if capability == 'nest_assault':
             return {'status':'blocked','reason':'staged_assault_retired_use_concentrated_nest_sweep'}
+        if capability=='starter_research'and obs.get('technologies',{}).get((parameters or{}).get('technology')):
+            return self.research.step(obs,parameters or{})
         gun_bridge=(capability=='bootstrap_research'and (parameters or{}).get('technology')=='gun-turret')
         if capability!='defense_perimeter'and not gun_bridge:
             initial_defense=self._approved_initial_defense(obs,maintain_armed=capability=='bootstrap_research')
             if initial_defense:return initial_defense
+        if capability=='bootstrap_logistics':
+            batch=self._funded_startup_owner(obs)
+            if batch is not None:
+                self.builder._sync(obs)
+                result=batch.step(obs)
+                # Shared machines must finish their paid current owner before
+                # a second science target can use them. Its proof does not
+                # complete this logistics job.
+                if result.get('status')=='succeeded':
+                    return {'status':'waiting','reason':'funded_science_prerequisite_finished','evidence':result}
+                return result
+            if obs.get('technologies',{}).get('logistics')or self.industry.local_power_ready(obs):
+                self.builder._sync(obs)
+                return self.industry.step(obs)
+        if capability=='starter_research':
+            batch=self._existing_startup_batch(parameters or{})
+            if batch is not None:
+                self.builder._sync(obs)
+                return batch.step(obs)
         if capability=='bootstrap_research':
             # Early defense research must not first rebuild remote damaged
             # starter/coal assets. The controller checks its own live power.
@@ -981,6 +1033,10 @@ class StarterExecutors:
         if capability == "starter_capacity":
             return self.capacity.proof(obs, parameters or {})
         if capability == "starter_research":
+            if obs.get('technologies',{}).get((parameters or{}).get('technology')):
+                return self.research.proof(obs,parameters or{})
+            batch=self._existing_startup_batch(parameters or{})
+            if batch is not None:return batch.proof(obs)
             return self.research.proof(obs, parameters or {})
         if capability == "regularize_power_layout":
             return self.power_layout.proof(obs)

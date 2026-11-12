@@ -308,6 +308,82 @@ class DecisionTests(Fixture):
         self.assertIsNone(self.s._snapshot()[4]['last_planner_error'])
 
 
+class TaskTargetTests(Fixture):
+    def duplicates(self,status='paused',*,parameters=None):
+        parameters={}if parameters is None else parameters
+        capability='starter_research'if parameters else'starter'
+        if capability not in CAPS:
+            patcher=patch.dict(CAPS,{capability:{'parameters':{'technology':'automation|electric-mining-drill'},'requires':[]}})
+            patcher.start();self.addCleanup(patcher.stop)
+        nodes=[dict(node(name,capability),parameters=deepcopy(parameters))for name in ('original','duplicate')]
+        self.s.work.merge(nodes,CAPS,self.cli.validate_requests,1)
+        for q in self.s.work.data['nodes']:
+            self.cli.jobs[q['job_key']]=dict(key=q['job_key'],world_id='w',capability=capability,parameters=deepcopy(parameters),
+                status=status,reason='known_material_wait',actions=7,evidence={'paid_assets':5})
+        return self.s.work.data['nodes']
+
+    def test_exact_paused_funded_task_resumes_without_duplicating_or_selecting_another_match(self):
+        original,duplicate=self.duplicates(parameters={'technology':'electric-mining-drill'})
+        context=self.s._snapshot()
+        with self.assertRaisesRegex(ValueError,'unambiguous'):self.s._apply(decision('continue'),context)
+        value=dict(decision('continue'),target_task_id='original',parameters={'technology':'electric-mining-drill'})
+        self.s._apply(validate_decision(value),context)
+        self.assertEqual([c[2]for c in self.cli.calls if c[0]=='resume'],[original['job_key']])
+        self.assertEqual(self.cli.jobs[duplicate['job_key']]['status'],'paused')
+        self.assertEqual(self.cli.jobs[original['job_key']]['evidence'],{'paid_assets':5})
+        self.assertEqual(len(self.s.work.data['nodes']),2);self.assertFalse(any(c[0]=='request'for c in self.cli.calls))
+
+    def test_exact_blocked_task_retry_does_not_pick_another_identical_capability(self):
+        original,duplicate=self.duplicates('blocked')
+        self.s._apply(dict(decision('retry'),target_task_id='duplicate'),self.s._snapshot())
+        self.assertEqual([c[2]for c in self.cli.calls if c[0]=='retry'],[duplicate['job_key']])
+        self.assertEqual(self.cli.jobs[original['job_key']]['status'],'blocked')
+
+    def test_targeted_pause_keeps_the_other_active_job_and_owns_only_selected_paused_task(self):
+        original,duplicate=self.duplicates()
+        self.cli.jobs[duplicate['job_key']]['status']='waiting'
+        self.s._apply(dict(decision('pause'),target_task_id='original'),self.s._snapshot())
+        self.assertTrue(self.s.work.node_for_job(original['job_key'])['paused'])
+        self.assertEqual(self.cli.jobs[duplicate['job_key']]['status'],'waiting')
+        self.assertFalse(any(c[0]in('pause','resume','retry')for c in self.cli.calls))
+
+    def test_unknown_id_or_mismatched_capability_or_exact_parameters_never_retargets(self):
+        self.duplicates(parameters={'technology':'electric-mining-drill'});context=self.s._snapshot()
+        base=dict(decision('continue'),target_task_id='original',parameters={'technology':'electric-mining-drill'})
+        for change in ({'target_task_id':'missing'},{'capability':'power'},{'parameters':{}},{'parameters':{'technology':'automation'}}):
+            with self.subTest(change=change),self.assertRaises(ValueError):self.s._apply({**base,**change},context)
+        self.assertFalse(any(c[0]in('resume','retry','pause','request')for c in self.cli.calls))
+
+    def test_target_not_in_prompt_is_stale_and_completed_original_never_controls_successor(self):
+        original,duplicate=self.duplicates();empty_context=self.s._snapshot()
+        empty_context=(empty_context[0],{'world_id':'w','jobs':{}},*empty_context[2:])
+        with patch.object(self.s,'_event')as event:
+            self.s._apply(dict(decision('continue'),target_task_id='original'),empty_context)
+        self.assertTrue(any(c.args[0]=='stale_decision'for c in event.call_args_list))
+        context=self.s._snapshot();self.cli.jobs[original['job_key']]['status']='succeeded'
+        self.cli.jobs[duplicate['job_key']]['status']='waiting'
+        with patch.object(self.s,'_event')as event:
+            self.s._apply(dict(decision('continue'),target_task_id='original'),context)
+        self.assertTrue(any(c.args[0]=='stale_decision'and c.kwargs.get('key')==original['job_key']for c in event.call_args_list))
+        self.assertFalse(any(c[0]in('resume','retry','pause')for c in self.cli.calls))
+
+    def test_selected_unknown_outcome_including_empty_intent_is_never_retried(self):
+        original,_=self.duplicates('blocked')
+        for extra in ({'pending_action':{}},{'pending_action':{'type':'build'}},{'reason':'mine_batch_outcome_unknown'}):
+            self.cli.jobs[original['job_key']].pop('pending_action',None)
+            self.cli.jobs[original['job_key']].update({'reason':'known_blocked',**extra})
+            with self.assertRaisesRegex(ValueError,'uncertain outcome'):
+                self.s._apply(dict(decision('retry'),target_task_id='original'),self.s._snapshot())
+        self.assertFalse(any(c[0]=='retry'for c in self.cli.calls))
+
+    def test_target_schema_is_nullable_bounded_and_control_only(self):
+        self.assertIsNone(validate_decision(dict(decision(),target_task_id=None))['target_task_id'])
+        for target in ('','a'*65,'invalid id',{'x':1},True):
+            with self.assertRaises(ValueError):validate_decision(dict(decision('continue'),target_task_id=target))
+        for operation in ('plan','request','wait'):
+            with self.assertRaises(ValueError):validate_decision(dict(decision(operation,'starter'),target_task_id='original'))
+
+
 class ExecutionTests(Fixture):
     def test_wait_keeps_running_active_approved_job(self):
         self.cli.jobs['a']=dict(key='a',world_id='w',capability='starter',parameters={},status='waiting',actions=0)

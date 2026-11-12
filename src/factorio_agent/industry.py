@@ -16,6 +16,7 @@ from .board import Board
 
 
 BOOTSTRAP_RESEARCH_TARGETS={'gun-turret','stone-wall','electric-mining-drill'}
+DIVERSION_STALL_TICKS=1800
 
 
 def validate_bootstrap_research(parameters):
@@ -31,6 +32,96 @@ def _hash(value):
 def _powered(entity):
     energy=(entity or{}).get('energy')
     return bool(entity and entity.get('electric_network_connected')and type(energy)in(int,float)and math.isfinite(energy)and energy>0)
+
+
+def _audit_gear_diversions(root,state,plan,obs):
+    """Stream exact paired receipts; no inferred loss and no game/checkpoint effects."""
+    from .construction_supply import validate_take_many
+    ledger=json.loads((root/'jobs.json').read_text(encoding='utf-8'))
+    if ledger.get('schema_version')!=2 or ledger.get('world_id')!=state['world_id']:
+        raise ValueError('diversion ledger world changed')
+    jobs=ledger.get('jobs',{})
+    targets=[(key,j)for key,j in jobs.items()if j.get('capability')=='bootstrap_research'
+        and j.get('parameters')=={'technology':state['technology']}and j.get('world_id')==state['world_id']]
+    if len(targets)!=1:raise ValueError('unique target research job required')
+    target_key,target=targets[0]
+    if target.get('pending_action'):raise ValueError('target job has an unresolved action')
+    created=target.get('created_tick')
+    if type(created)is not int or created<0:raise ValueError('target job creation tick missing')
+    gear=next(p for p in state['machines']if p.get('recipe')=='iron-gear-wheel')
+    ports={p['item']:next(pin for pin in state['ports']if pin['position']==p['position'])
+        for p in plan['ports']if p.get('item')in state['required_inputs']}
+    path=root/'job-events.jsonl'
+    if path.stat().st_size>64*1024*1024:raise ValueError('diversion audit history exceeds bounded64MiB scan')
+    pending={};funding=None;receipts={};known={r['id']for e in state.get('diversion_recoveries',[])for r in e['authorization']['receipts']}
+    def relevant(source):
+        return source.get('unit_number')==gear['unit_number']or(source.get('name')==gear['name']and source.get('position')==gear['position'])
+    def job_valid(key):
+        row=jobs.get(key,{})
+        return row.get('key')==key and row.get('world_id')==state['world_id']
+    with path.open('rb')as stream:
+        for index,raw in enumerate(stream):
+            if index>=200000 or len(raw)>1024*1024:raise ValueError('diversion audit history exceeds bounded scan')
+            row=json.loads(raw);key=row.get('key');event=row.get('event');tick=row.get('tick')
+            if event not in('action_intent','action_result'):continue
+            if type(tick)is not int or not created<=tick<=obs['tick']:continue
+            if event=='action_intent':
+                if key in pending:raise ValueError('unpaired relevant diversion intent')
+                action=row.get('action',{})
+                is_take=action.get('type')=='take_many'and action.get('item')=='iron-gear-wheel'and any(relevant(s)for s in action.get('sources',[]))
+                is_fund=(key==target_key and action.get('type')=='insert'and action.get('item')in ports
+                    and action.get('reason')=='fund one finite machine research batch for '+state['technology'])
+                if is_take or is_fund:
+                    pending[key]=(row,raw,is_take,is_fund)
+                continue
+            previous=pending.pop(key,None)
+            result=row.get('result',{})
+            if previous is None:
+                if funding and any(relevant(s)and s.get('moved',0)>0 for s in result.get('sources',[])):
+                    raise ValueError('diversion receipt has no matching intent')
+                continue
+            intent,intent_raw,is_take,is_fund=previous;action=intent['action']
+            if is_take and not funding:continue
+            if not job_valid(key)or tick!=intent['tick']:raise ValueError('diversion pair job/world/tick changed')
+            moved=result.get('moved');count=action.get('count')
+            if(result.get('ok')is not True or type(count)is not int or type(moved)is not int or not 0<=moved<=count
+                    or result.get('world_id',state['world_id'])!=state['world_id']):
+                raise ValueError('diversion transfer result unknown or invalid')
+            intent_sha=hashlib.sha256(intent_raw).hexdigest();result_sha=hashlib.sha256(raw).hexdigest()
+            receipt_id=hashlib.sha256(intent_raw+b'\0'+raw).hexdigest()
+            if is_fund:
+                pin=ports[action['item']]
+                if(action.get('name')!=pin['name']or action.get('position')!=pin['position']or action.get('inventory')!='chest'
+                        or count>state['required_inputs'][action['item']]):raise ValueError('funding receipt does not match pinned input')
+                if moved and funding is None:
+                    funding=dict(id=receipt_id,tick=tick,job_key=key,item=action['item'],source=deepcopy(pin),
+                        action_sha256=intent_sha,result_sha256=result_sha)
+                continue
+            if not funding or intent['tick']<funding['tick']:continue
+            validate_take_many(action)
+            if action['world_id']!=state['world_id']:raise ValueError('diversion action world changed')
+            rows=result.get('sources');specs={s['unit_number']:s for s in action['sources']}
+            if(not isinstance(rows,list)or result.get('requested')!=count or len(rows)>len(specs)
+                    or len({s.get('unit_number')for s in rows})!=len(rows)
+                    or result.get('status')!=('succeeded'if moved else'waiting')):
+                raise ValueError('diversion source receipt malformed')
+            total=0;diverted=0
+            for source in rows:
+                spec=specs.get(source.get('unit_number'));n=source.get('moved')
+                if(not spec or type(n)is not int or n<0 or source.get('name')!=spec['name']or source.get('position')!=spec['position']):
+                    raise ValueError('diversion source identity or conservation changed')
+                total+=n
+                if relevant(spec):
+                    if any(spec.get(k)!=gear[k]for k in('name','position','unit_number'))or spec.get('kind')!='output':
+                        raise ValueError('diversion is not the pinned gear output')
+                    diverted+=n
+            if total!=moved:raise ValueError('diversion aggregate count mismatch')
+            if diverted and receipt_id not in known:
+                receipts[receipt_id]=dict(id=receipt_id,action_sha256=intent_sha,result_sha256=result_sha,
+                    job_key=key,tick=tick,item='iron-gear-wheel',moved=diverted,source=deepcopy(gear))
+    if funding is None:raise ValueError('first successful target funding receipt missing')
+    if pending:raise ValueError('unresolved relevant diversion intent remains')
+    return target_key,funding,list(receipts.values())
 
 
 class BootstrapLogistics:
@@ -148,6 +239,104 @@ class BootstrapLogistics:
 
     def _save(self):_atomic_json(self.path,self.state)
 
+    def _recovery_frame(self):
+        return {key:deepcopy(self.state[key])for key in ('world_id','catalog_fingerprint','technology','plan_hash',
+            'required_packs','required_inputs','baseline_products_finished','baseline_consumed','machines','red_machine','ports','lab')}
+
+    def _replacement_inputs(self,gears):
+        recipe=self.catalog.recipe_for_product('iron-gear-wheel')
+        output=sum(p['amount']for p in recipe['products']if p['name']=='iron-gear-wheel'and p.get('probability',1)==1)
+        if type(output)is not int or output<1 or {p['name']for p in recipe['ingredients']}!={'iron-plate'}:
+            raise ValueError('deterministic normal gear replacement recipe required')
+        amount=sum(p['amount']for p in recipe['ingredients'])
+        if type(amount)is not int or amount<1:raise ValueError('positive integer normal gear inputs required')
+        return {'iron-plate':math.ceil(gears/output)*amount}
+
+    def _recovery_error(self):
+        try:
+            seen=set();total_gears=0
+            for epoch in self.state.get('diversion_recoveries',[]):
+                auth=epoch['authorization'];receipts=auth['receipts'];allocated=epoch['allocated_inputs']
+                if epoch['id']!=_hash(auth)or auth['frame']!=self._recovery_frame()or not receipts:
+                    raise ValueError('recovery frame/hash changed')
+                gears=0
+                for receipt in receipts:
+                    if(receipt['id']in seen or type(receipt['moved'])is not int or receipt['moved']<1
+                            or any(not isinstance(receipt[k],str)or len(receipt[k])!=64 for k in('id','action_sha256','result_sha256'))):
+                        raise ValueError('recovery receipt duplicated or invalid')
+                    seen.add(receipt['id']);gears+=receipt['moved']
+                required=self._replacement_inputs(gears)
+                if auth['replacement_inputs']!=required or set(allocated)-set(required):raise ValueError('recovery budget changed')
+                if any(type(n)is not int or not 0<=n<=required[k]for k,n in allocated.items()):raise ValueError('recovery funding exceeds audited allowance')
+                total_gears+=gears
+            science=self.catalog.recipe_for_product('automation-science-pack')
+            output=sum(p['amount']for p in science['products']if p['name']=='automation-science-pack')
+            required_gears=math.ceil(self.state['required_packs']/output)*next(p['amount']for p in science['ingredients']if p['name']=='iron-gear-wheel')
+            if total_gears>required_gears:raise ValueError('recovery exceeds original finite batch gear count')
+        except (KeyError,TypeError,ValueError,ZeroDivisionError):return 'bootstrap_research_diversion_recovery_contract_changed'
+        return None
+
+    def prepare_diversion_recovery(self,obs):
+        """Read-only audit proposal; step accepts it only after a native30s stall."""
+        try:
+            plan=self._startup_plan(obs)
+            if not self.state or plan is None:raise ValueError('registered finite target required')
+            error=self._binding_error(obs,plan)
+            if error:raise ValueError(error)
+            if self.state.get('pending_transfer')or self.state.get('transfer_error'):raise ValueError('unresolved target transfer')
+            if any(self.state['allocated_inputs'].get(k,0)!=n for k,n in self.state['required_inputs'].items()):
+                raise ValueError('original finite funding must finish first')
+            job,funding,receipts=_audit_gear_diversions(Path(self.game.cfg.runtime_dir),self.state,plan,obs)
+            if not receipts:return dict(ok=False,reason='no_new_audited_gear_diversion')
+            gears=sum(r['moved']for r in receipts)
+            authorization=dict(frame=self._recovery_frame(),job_key=job,first_funding=funding,receipts=receipts,
+                replacement_inputs=self._replacement_inputs(gears),observed_tick=obs['tick'],observed_progress=self._progress(obs))
+            epoch=dict(id=_hash(authorization),authorization=authorization,allocated_inputs={})
+            trial=deepcopy(self.state);trial.setdefault('diversion_recoveries',[]).append(epoch)
+            prior=self.state
+            try:
+                self.state=trial;error=self._recovery_error()
+            finally:self.state=prior
+            if error:raise ValueError(error)
+            return dict(ok=True,recovery=epoch,diverted_gears=gears,replacement_inputs=authorization['replacement_inputs'])
+        except (OSError,KeyError,TypeError,ValueError,StopIteration)as exc:
+            return dict(ok=False,reason='bootstrap_research_diversion_audit_unavailable',detail=str(exc))
+
+    def _repair_funding(self,obs,plan):
+        for epoch in self.state.get('diversion_recoveries',[]):
+            for item,total in epoch['authorization']['replacement_inputs'].items():
+                remaining=total-epoch['allocated_inputs'].get(item,0)
+                if remaining<=0:continue
+                if obs.get('inventory',{}).get(item,0)<remaining:return self.bootstrap.ensure_item(obs,item,remaining)
+                port=next(p for p in plan['ports']if p['item']==item)
+                return self._transfer('repair_fund',dict(type='insert',name='wooden-chest',position=port['position'],inventory='chest',
+                    item=item,count=remaining,reason='fund audited diversion replacement raw inputs for '+self.technology),epoch['id'])
+        return None
+
+    def _recover_stalled_diversion(self,obs,plan):
+        gear=next(self.find(obs,p)for p in self.state['machines']if p.get('recipe')=='iron-gear-wheel')
+        red=self.find(obs,self.state['red_machine'])
+        iron=next(self.find(obs,p)for p in self.state['ports']if p['position']==next(q['position']for q in plan['ports']if q.get('item')=='iron-plate'))
+        recipe=self.catalog.recipe_for_product('automation-science-pack')
+        yield_count=sum(p['amount']for p in recipe['products']if p['name']=='automation-science-pack')
+        short=((red['products_finished']-self.state['baseline_products_finished'])*yield_count<self.state['required_packs']
+            and gear.get('inventory',{}).get('iron-gear-wheel',0)==0 and gear.get('inventory',{}).get('iron-plate',0)==0
+            and red.get('inventory',{}).get('iron-gear-wheel',0)==0 and iron.get('inventory',{}).get('iron-plate',0)==0)
+        if not short:return None
+        finished=gear.get('products_finished')
+        if type(finished)not in(int,float)or not math.isfinite(finished)or finished<0:return None
+        signature=_hash(dict(progress=self._progress(obs),gear_products_finished=finished))
+        previous=self.state.get('diversion_stall')
+        if not previous or previous['signature']!=signature:
+            self.state['diversion_stall']=dict(signature=signature,tick=obs['tick']);self._save();return None
+        if obs['tick']<previous['tick']:return dict(status='blocked',reason='bootstrap_research_diversion_stall_tick_rollback')
+        if obs['tick']-previous['tick']<DIVERSION_STALL_TICKS:return None
+        proposal=self.prepare_diversion_recovery(obs)
+        if not proposal['ok']:
+            return dict(status='waiting'if proposal['reason']=='no_new_audited_gear_diversion'else'blocked',reason=proposal['reason'],evidence=proposal)
+        self.state.setdefault('diversion_recoveries',[]).append(proposal['recovery']);self.state.pop('diversion_stall',None);self._save()
+        return self._repair_funding(obs,plan)
+
     def _binding_error(self,obs,plan):
         state=self.state
         if state.get('world_id')!=obs['world_id']:return 'bootstrap_research_world_changed'
@@ -166,12 +355,23 @@ class BootstrapLogistics:
         consumed=obs.get('production',{}).get('automation-science-pack',{}).get('consumed')
         if type(consumed)not in(int,float)or not math.isfinite(consumed)or consumed<state['baseline_consumed']:
             return 'bootstrap_research_science_counter_rollback'
-        return None
+        return self._recovery_error()
 
     def _startup_plan(self,obs):
         board=self.board.state
         if board.get('world_id')!=obs['world_id']or board.get('catalog_fingerprint')!=self.catalog.fingerprint:return None
         return board.get('blocks',{}).get('startup_science')
+
+    def local_power_ready(self,obs):
+        """Prove only this live science cell; never certify remote fuel flow."""
+        plan=self._startup_plan(obs)
+        if not plan:return False
+        machines=[p for p in plan.get('entities',[])if p.get('name')=='assembling-machine-1']
+        if len(machines)!=2 or {p.get('recipe')for p in machines}!={'iron-gear-wheel','automation-science-pack'}:return False
+        for pin in machines:
+            actual=self.find(obs,pin)
+            if not _powered(actual)or actual.get('recipe')!=pin['recipe']or type(actual.get('unit_number'))is not int:return False
+        return any(e.get('name')=='lab'and _powered(e)for e in obs.get('entities',[]))
 
     def _research_step(self,obs):
         name=self.technology;researched=obs.get('technologies',{}).get(name)
@@ -242,6 +442,8 @@ class BootstrapLogistics:
             port=next(p for p in plan['ports']if p['item']==item)
             return self._transfer('fund',dict(type='insert',name='wooden-chest',position=port['position'],inventory='chest',
                 item=item,count=remaining,reason='fund one finite machine research batch for '+name))
+        repair=self._repair_funding(obs,plan)
+        if repair:return repair
         if researched:
             return {'status':'waiting','reason':'bootstrap_target_researched_waiting_for_fresh_machine_proof','evidence':self._progress(obs)}
         if obs.get('research')!=name:return {'type':'research','technology':name,'reason':'consume normally machine-produced bootstrap science'}
@@ -256,11 +458,14 @@ class BootstrapLogistics:
         if available and collected<count:
             return self._transfer('collect',dict(type='take',name='wooden-chest',position=port['position'],inventory='chest',
                 item='automation-science-pack',count=min(available,count-collected),reason='collect owned machine-built bootstrap science'))
+        repair=self._recover_stalled_diversion(obs,plan)
+        if repair:return repair
         return {'status':'waiting','reason':'waiting_for_finite_machine_science_and_native_research','evidence':self._progress(obs)}
 
-    def _transfer(self,kind,action):
+    def _transfer(self,kind,action,recovery_id=None):
         self.state['transfer_sequence']+=1
         self.state['pending_transfer']=dict(kind=kind,action=deepcopy(action),sequence=self.state['transfer_sequence'])
+        if recovery_id:self.state['pending_transfer']['recovery_id']=recovery_id
         self._save();return action
 
     def record_action(self,action,receipt):
@@ -272,6 +477,12 @@ class BootstrapLogistics:
             raise ValueError('bootstrap research transfer outcome unknown; retain durable intent')
         kind=pending['kind'];item=action['item']
         if kind=='fund':self.state['allocated_inputs'][item]=self.state['allocated_inputs'].get(item,0)+moved
+        elif kind=='repair_fund':
+            epoch=next((e for e in self.state.get('diversion_recoveries',[])if e['id']==pending.get('recovery_id')),None)
+            if epoch is None or self._recovery_error():raise ValueError('audited repair funding contract changed; retain durable intent')
+            total=epoch['allocated_inputs'].get(item,0)+moved
+            if total>epoch['authorization']['replacement_inputs'].get(item,0):raise ValueError('repair funding exceeds audited allowance')
+            epoch['allocated_inputs'][item]=total
         elif kind=='collect':self.state['collected_packs']+=moved
         elif kind=='lab':self.state['supplied_packs']+=moved
         else:raise ValueError('unknown bootstrap research transfer kind')
@@ -282,10 +493,17 @@ class BootstrapLogistics:
 
     def _progress(self,obs):
         actual=self.find(obs,self.state['red_machine'])
+        recoveries=[dict(id=e['id'],replacement_inputs=deepcopy(e['authorization']['replacement_inputs']),
+            allocated_inputs=deepcopy(e['allocated_inputs']),receipt_ids=[r['id']for r in e['authorization']['receipts']])
+            for e in self.state.get('diversion_recoveries',[])]
+        effective=deepcopy(self.state['required_inputs'])
+        for epoch in recoveries:
+            for item,count in epoch['replacement_inputs'].items():effective[item]=effective.get(item,0)+count
         return dict(technology=self.technology,required_packs=self.state['required_packs'],
             machine_products_finished_delta=actual['products_finished']-self.state['baseline_products_finished'],
             research_science_consumed=obs['production']['automation-science-pack']['consumed']-self.state['baseline_consumed'],
-            allocated_normal_inputs=deepcopy(self.state['allocated_inputs']))
+            allocated_normal_inputs=deepcopy(self.state['allocated_inputs']),effective_input_allowance=effective,
+            diversion_recoveries=recoveries)
 
     def _research_proof(self,obs):
         if not obs.get('technologies',{}).get(self.technology):return None
