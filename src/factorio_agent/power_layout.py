@@ -427,7 +427,7 @@ class RegularizePower:
 local args=helpers.json_to_table("""
             + args
             + """);local ignored={};for _,id in ipairs(args.ignored) do ignored[id]=true end
-local blocked={};local clearable={};local b=args.bounds
+local blocked={};local clearable={};local ore={};local b=args.bounds
 for x=b.min_x,b.max_x,1 do for y=b.min_y,b.max_y,1 do
  local p={x=x,y=y};local legal=s.can_place_entity{name="transport-belt",position=p,force=f,
   build_check_type=defines.build_check_type.manual_ghost,forced=true}
@@ -452,9 +452,10 @@ for x=b.min_x,b.max_x,1 do for y=b.min_y,b.max_y,1 do
    end
   end
  end
+ for _,e in pairs(entities) do if e.type=="resource" then ore[#ore+1]=p;break end end
  if not legal then blocked[#blocked+1]=p elseif #natural>0 then clearable[#clearable+1]={position=p,entities=natural} end
 end end
-return {ok=true,blocked=blocked,clearable=clearable}
+return {ok=true,blocked=blocked,clearable=clearable,ore=ore}
 """
         )
         if not survey.get("ok"):
@@ -467,6 +468,9 @@ return {ok=true,blocked=blocked,clearable=clearable}
             return {"ok": False, "reason": "compact_coal_cell_has_protected_obstruction"}
         occupied = self.builder._occupied_by_plan(power["entities"] + cell["entities"])
         occupied.update((p["x"], p["y"]) for p in survey.get("blocked", []))
+        # The builder refuses any belt on an ore tile, so the trunk must route
+        # around every patch. Only the coal cell itself may stand on ore.
+        occupied.update((p["x"], p["y"]) for p in survey.get("ore") or [] if (p["x"], p["y"]) not in compact_tiles)
         occupied.discard((a["x"], a["y"]))
         occupied.discard((b["x"], b["y"]))
         _atomic_json(
