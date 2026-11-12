@@ -60,6 +60,53 @@ class ResearchOwnershipTests(unittest.TestCase):
         self.assertFalse(_owns_research("power"))
 
 
+class PowerBridgeAvoidsOtherBlocksTests(unittest.TestCase):
+    def setUp(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        board = {
+            "blocks": {
+                "startup_science": {
+                    "reserved_area": [[32, 4], [48, 20]],
+                    "entities": [{"name": "inserter", "position": {"x": 40.5, "y": 14.5}}],
+                },
+                "mining_bank": {
+                    "reserved_area": [[60, 0], [80, 12]],
+                    "entities": [{"name": "small-electric-pole", "position": {"x": 64.5, "y": 6.5}}],
+                },
+                "loose_hardware": {"entities": [{"name": "transport-belt", "position": {"x": 52.5, "y": 30.5}}]},
+            }
+        }
+        (root / "pcb-board.json").write_text(json.dumps(board), encoding="utf-8")
+        self.game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=root))
+        self.builder = SimpleNamespace(
+            _occupied_by_plan=lambda entities: {(e["position"]["x"], e["position"]["y"]) for e in entities}
+        )
+
+    def test_points_in_other_blocks_are_refused_but_the_callers_own_block_is_not(self):
+        from factorio_agent.power_grid import _foreign_block_points
+
+        goal = (64.5, 6.5)
+        points = {goal, (40.5, 14.5), (44.5, 10.5), (52.5, 30.5), (56.5, 6.5), (68.5, 6.5)}
+        foreign = _foreign_block_points(self.game, self.builder, goal, points)
+        self.assertEqual(foreign, {(40.5, 14.5), (44.5, 10.5), (52.5, 30.5)})
+
+    def test_missing_board_means_no_restriction(self):
+        from types import SimpleNamespace
+
+        from factorio_agent.power_grid import _foreign_block_points
+
+        game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=self.temp.name + "/nowhere"))
+        self.assertEqual(_foreign_block_points(game, self.builder, (0.5, 0.5), {(1.5, 1.5)}), set())
+        self.assertEqual(_foreign_block_points(SimpleNamespace(), self.builder, (0.5, 0.5), {(1.5, 1.5)}), set())
+
+
 class SharedErrorClassTests(unittest.TestCase):
     def test_supervisor_run_as_a_script_catches_the_bridge_error(self):
         """A refused submit raised by the in-process bridge must be the class the supervisor catches.

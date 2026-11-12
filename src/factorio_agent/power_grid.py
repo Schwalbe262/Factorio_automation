@@ -4,11 +4,52 @@ from __future__ import annotations
 
 import heapq
 import json
+from pathlib import Path
 import math
 
 from factorio_agent.core.deterministic_builder import _plan
 from .board import entity
 from .resource_policy import mining_reservations, validate_annotations
+
+
+def _foreign_block_points(game, builder, goal, points):
+    """Candidate pole points that belong to another registered block.
+
+    Jobs run concurrently, so another block may be planned but not built yet.
+    A power bridge that only checks the live world can then claim a tile that
+    block needs: on a live map a mining bank's bridge pole was planned exactly
+    where the science cell later put an inserter, and the bank blocked. Poles
+    stay out of every other block's reserved area and off its planned
+    hardware. The block whose reserved area holds the goal is the caller's own.
+    Any problem reading the board yields no restriction.
+    """
+    try:
+        path = Path(game.cfg.runtime_dir) / "pcb-board.json"
+        blocks = json.loads(path.read_text(encoding="utf-8")).get("blocks", {})
+    except (AttributeError, OSError, TypeError, ValueError):
+        return set()
+    foreign = set()
+    for block in blocks.values():
+        if not isinstance(block, dict):
+            continue
+        area = block.get("reserved_area")
+        inside = None
+        if isinstance(area, list) and len(area) == 2:
+            (x0, y0), (x1, y1) = area
+
+            def inside(point, x0=x0, y0=y0, x1=x1, y1=y1):
+                return x0 <= point[0] <= x1 and y0 <= point[1] <= y1
+
+            if inside(goal):
+                continue
+        try:
+            occupied = builder._occupied_by_plan(block.get("entities", []))
+        except (KeyError, TypeError, ValueError):
+            occupied = set()
+        for point in points:
+            if point in occupied or (inside is not None and inside(point)):
+                foreign.add(point)
+    return foreign
 
 
 def plan_connection(game, builder, obs, destination, reserved=()):
@@ -101,6 +142,7 @@ return {ok=true,clear=clear}
         return {"ok": False, "reason": result.get("reason", "power_survey_failed")}
     legal = {ordered[i - 1] for i in result.get("clear", [])}
     legal -= builder._occupied_by_plan(list(reserved))
+    legal -= _foreign_block_points(game, builder, goal, legal) - set(starts)
     if goal not in legal:
         return {"ok": False, "reason": "power_target_footprint_obstructed"}
     frontier = []
