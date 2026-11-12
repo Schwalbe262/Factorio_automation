@@ -180,8 +180,9 @@ ROADMAP: tuple[Step, ...] = (
         after=("mining_outpost_iron", "mining_outpost_copper", "mining_outpost_coal"),
         builds=SMELTING_DISTRICT_BUILDS,
     ),
-    Step("paired_smelting", "paired_smelting", {}),
-    Step("paired_mining", "paired_mining", {}),
+    # paired_smelting / paired_mining are migrations of the old development
+    # map and are not roadmap steps: fresh districts publish plate ports and
+    # fresh mining banks are already paired (outposts.py, pcb-paired-mining-v1).
     Step("automation_science", "automation_science", {"rate_per_minute": 30}),
     _research("logistic-science-pack"),
     _research("steel-processing"),

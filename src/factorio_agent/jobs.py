@@ -85,7 +85,7 @@ CAPABILITIES = {
             "resource": "iron-ore|copper-ore",
             "rate_per_minute": "finite number (0,450], absolute nominal target",
         },
-        "requires": ["paired_smelting"],
+        "requires": ["smelting_district"],
         "effect": "add independent upper/lower furnaces inside reserved rows; consumer ports remain fixed",
     },
     "paired_smelting": {
@@ -101,7 +101,7 @@ CAPABILITIES = {
     "automation_science": {
         "parameters": {"rate_per_minute": "finite number (0,30], requested red-science rate with nominal headroom"},
         "native_recipes": ["assembling-machine-1", "automation-science-pack", "lab"],
-        "requires": ["paired_smelting"],
+        "requires": ["smelting_district"],
         "effect": "reserve normal machine science and labs, connect raw plate belts and power; no actor-fed science inputs",
     },
     "logistic_science": {
@@ -169,17 +169,17 @@ CAPABILITIES = {
     },
     "main_bus_factory": {
         "parameters": {},
-        "requires": ["paired_smelting", "logistic_science", "defense_perimeter"],
+        "requires": ["smelting_district", "logistic_science", "defense_perimeter"],
         "effect": "replace separate raw plate corridors with shared northbound iron/copper buses and native priority taps; commission compact green then normally retire obsolete western hardware; no throughput certification",
     },
     "dedicated_materials": {
         "parameters": {"resource": "coal|stone"},
-        "requires": ["paired_mining"],
+        "requires": ["mining_outpost"],
         "effect": "normally build an independent opposing drill pair and publish proven material ports; coal distribution stays outside resources",
     },
     "chemical_coal_supply": {
         "parameters": {},
-        "requires": ["paired_mining"],
+        "requires": ["mining_outpost"],
         "effect": "normally build a separate defended opposing coal pair for chemistry, preserve existing coal consumers and publish one exact plastic-coal outlet without multiplying bank capacity",
     },
     "steam_coal_reroute": {

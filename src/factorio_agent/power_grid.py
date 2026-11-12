@@ -52,6 +52,23 @@ def _foreign_block_points(game, builder, goal, points):
     return foreign
 
 
+def _inside_other_blocks(game, goal, positions):
+    """Positions inside the reserved area of a registered block that does not hold ``goal``."""
+    try:
+        path = Path(game.cfg.runtime_dir) / "pcb-board.json"
+        blocks = json.loads(path.read_text(encoding="utf-8")).get("blocks", {})
+    except (AttributeError, OSError, TypeError, ValueError):
+        return set()
+    areas = []
+    for block in blocks.values():
+        area = block.get("reserved_area") if isinstance(block, dict) else None
+        if isinstance(area, list) and len(area) == 2:
+            (x0, y0), (x1, y1) = area
+            if not (x0 <= goal[0] <= x1 and y0 <= goal[1] <= y1):
+                areas.append((x0, y0, x1, y1))
+    return {p for p in positions if any(x0 <= p[0] <= x1 and y0 <= p[1] <= y1 for x0, y0, x1, y1 in areas)}
+
+
 def plan_connection(game, builder, obs, destination, reserved=()):
     networks = {
         e.get("electric_network_id") for e in obs["entities"] if e["name"] == "steam-engine" and e.get("energy", 0) > 0
@@ -61,6 +78,23 @@ def plan_connection(game, builder, obs, destination, reserved=()):
     ]
     if not sources:
         return {"ok": False, "reason": "no_supplied_pole_network"}
+    result = _connect(game, builder, obs, destination, reserved, sources, sources)
+    if result.get("reason") != "no_bounded_pole_hop_connection":
+        return result
+    # The nearest supplied pole can sit deep inside another block (a smelting
+    # district's furnace poles are more than one hop from its edge), and pole
+    # points inside other blocks are not legal, so no hop leaves it. Search
+    # once more from the nearest supplied pole outside every other block.
+    goal = (destination["x"], destination["y"])
+    inside = _inside_other_blocks(game, goal, {(e["position"]["x"], e["position"]["y"]) for e in sources})
+    outside = [e for e in sources if (e["position"]["x"], e["position"]["y"]) not in inside]
+    if not inside or not outside:
+        return result
+    return _connect(game, builder, obs, destination, reserved, sources, outside)
+
+
+def _connect(game, builder, obs, destination, reserved, sources, anchors):
+    """Pole hops from supplied ``sources`` to ``destination``; the search box spans the nearest of ``anchors``."""
     goal = (destination["x"], destination["y"])
     mining_goal = None
     for spec in reserved:
@@ -81,7 +115,7 @@ def plan_connection(game, builder, obs, destination, reserved=()):
                 return {"ok": False, "reason": "invalid_mining_power_goal"}
             break
     zones = mining_reservations(game, obs.get("world_id", ""))
-    closest = min(sources, key=lambda e: math.dist(goal, (e["position"]["x"], e["position"]["y"])))
+    closest = min(anchors, key=lambda e: math.dist(goal, (e["position"]["x"], e["position"]["y"])))
     start = closest["position"]["x"], closest["position"]["y"]
     bounds = (
         min(start[0], goal[0]) - 12,

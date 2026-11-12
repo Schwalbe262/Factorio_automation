@@ -14,6 +14,7 @@ from .transport import plan_connection as belt_connection, xy, underground_proof
 from .power_grid import plan_connection as power_connection
 from .planning import overlap, survey_slots, preflight
 from .site.placement import settle
+from .plate_supply import plate_sources
 
 
 def validate_rate(parameters):
@@ -141,15 +142,13 @@ class AutomaticScience:
         validate_rate(parameters)
         root = self.path.parent
         board = json.loads((root / "pcb-board.json").read_text(encoding="utf-8"))
-        supplies = json.loads((root / "smelter-lanes.json").read_text(encoding="utf-8"))
-        if any(
-            s.get("world_id") != obs["world_id"] or s.get("catalog_fingerprint") != self.catalog.fingerprint
-            for s in (board, supplies)
-        ):
+        if board.get("world_id") != obs["world_id"] or board.get("catalog_fingerprint") != self.catalog.fingerprint:
             return {"ok": False, "reason": "science_supply_world_or_catalog_changed"}
-        source_ports = {
-            p["item"]: p for module in supplies["modules"] for p in module["ports"] if p["direction"] == "output"
-        }
+        # Plates come from the smelting district's registered output ports.
+        supply = plate_sources(root, board, obs["world_id"], self.catalog.fingerprint, owner="automation_science")
+        if not supply.get("ok"):
+            return supply
+        source_ports = supply["ports"]
         if not all(obs.get("enabled_recipes", {}).get(name) for name in ("automation-science-pack", "iron-gear-wheel")):
             return {"ok": False, "reason": "science_machine_recipes_not_unlocked"}
         speed = self.catalog.entities["assembling-machine-1"]["crafting_speed"]
@@ -192,8 +191,13 @@ class AutomaticScience:
                     "available_nominal": min(ore, plates),
                 }
         candidates = []
-        planned = planned_science_candidates(self.site, obs["world_id"], count)
-        for block in planned or legacy_science_candidates(count):
+        # Sites come from the master plan; the fixed development-map list is
+        # only for a controller built without a site service.
+        if self.site is not None:
+            blocks = planned_science_candidates(self.site, obs["world_id"], count)
+        else:
+            blocks = legacy_science_candidates(count)
+        for block in blocks:
             science, labs = block["science"], block["labs"]
             areas = [science["reserved_area"], labs["reserved_area"]]
             if any(overlap(area, b["reserved_area"]) for area in areas for b in board["blocks"].values()):
