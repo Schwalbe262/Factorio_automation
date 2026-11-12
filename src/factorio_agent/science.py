@@ -165,11 +165,12 @@ class AutomaticScience:
         ingredients = {v["name"]: v["amount"] for v in red["ingredients"]}
         gear_yield = sum(v["amount"] for v in gear["products"] if v["name"] == "iron-gear-wheel")
         iron_per_gear = next(v["amount"] for v in gear["ingredients"] if v["name"] == "iron-plate") / gear_yield
-        needed = {
-            "iron-plate": count * nominal_each * ingredients["iron-gear-wheel"] * iron_per_gear,
-            "copper-plate": count * nominal_each * ingredients["copper-plate"],
+        per_machine = {
+            "iron-plate": nominal_each * ingredients["iron-gear-wheel"] * iron_per_gear,
+            "copper-plate": nominal_each * ingredients["copper-plate"],
         }
-        for item, rate in needed.items():
+        available = {}
+        for item in per_machine:
             bank = next(b for b in smelting["banks"] if b["product"] == item)
             ore = sum(
                 b["nominal_rate_per_minute"]
@@ -182,14 +183,19 @@ class AutomaticScience:
                 * 60
                 / self.catalog.recipes[item]["energy"]
             )
-            if min(ore, plates) < rate:
-                return {
-                    "ok": False,
-                    "reason": "science_needs_connected_supply_headroom",
-                    "item": item,
-                    "needed": rate,
-                    "available_nominal": min(ore, plates),
-                }
+            available[item] = min(ore, plates)
+        # Size the row to what the connected supply carries instead of blocking:
+        # a smaller row that runs beats a full row that cannot be planned.
+        count = min(count, *(int(available[item] / rate + 1e-9) for item, rate in per_machine.items()))
+        if count < 1:
+            item = min(per_machine, key=lambda name: available[name] / per_machine[name])
+            return {
+                "ok": False,
+                "reason": "science_needs_connected_supply_headroom",
+                "item": item,
+                "needed": per_machine[item],
+                "available_nominal": available[item],
+            }
         candidates = []
         # Sites come from the master plan; the fixed development-map list is
         # only for a controller built without a site service.
