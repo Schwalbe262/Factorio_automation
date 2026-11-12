@@ -292,5 +292,29 @@ class ConfigTests(unittest.TestCase):
             SiteConfig(bus_width=27)
 
 
+class TouchingPatchTests(unittest.TestCase):
+    def test_overlapping_bounding_boxes_are_trimmed_not_dropped(self):
+        """Live seed 397906970: copper sat diagonally against iron and got no zone at all."""
+        from factorio_agent.site.geometry import Rect
+        from factorio_agent.site.siteselect import _trim, mining_rect
+
+        iron = Rect(-48, 14, -14, 45)
+        copper = Rect(-61, 33, -39, 55)
+        stone = Rect(-51, 57, -35, 71)
+        from types import SimpleNamespace
+
+        occupancy = SimpleNamespace(grid=SimpleNamespace(bounds=Rect(-384, -384, 384, 384)), taken=[])
+        config = SimpleNamespace(mining_margin=6)
+        iron_zone = mining_rect(SimpleNamespace(bbox=iron), occupancy, [], config, (copper, stone))
+        self.assertFalse(iron_zone.intersects(copper))
+        occupancy.taken.append(iron_zone)
+        copper_zone = mining_rect(SimpleNamespace(bbox=copper), occupancy, [], config, (iron, stone))
+        self.assertIsNotNone(copper_zone)
+        self.assertFalse(copper_zone.intersects(iron_zone))
+        self.assertFalse(copper_zone.intersects(stone))
+        # The cut is made on the axis that keeps more of the patch's own box.
+        self.assertEqual(_trim(Rect(-67, 27, -48, 61), stone, copper), Rect(-67, 27, -48, 57))
+
+
 if __name__ == "__main__":
     unittest.main()

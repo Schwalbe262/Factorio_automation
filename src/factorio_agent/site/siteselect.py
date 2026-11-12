@@ -72,15 +72,63 @@ def _inflate(rect: Rect, margin: int, bounds: Rect) -> Rect:
     )
 
 
-def mining_rect(ref: PatchRef, occupancy: Occupancy, blocked: list[Rect], config: SiteConfig) -> Rect | None:
-    """Patch bbox plus the largest margin (config, shrinking to 0) that does
-    not overlap taken zones or ``blocked`` rects (zones already on the map)."""
-    for margin in range(config.mining_margin, -1, -1):
-        rect = _inflate(ref.bbox, margin, occupancy.grid.bounds)
-        others = occupancy.taken + blocked
-        if not any(rect.intersects(other) for other in others):
-            return rect
-    return None
+def mining_rect(
+    ref: PatchRef, occupancy: Occupancy, blocked: list[Rect], config: SiteConfig, foreign_cores: tuple[Rect, ...] = ()
+) -> Rect | None:
+    """Mining zone for a patch: its bounding box plus the configured margin, trimmed.
+
+    Patches in a starting area often touch. A full margin around the first
+    patch then swallows most of its neighbour (a live map ended with "no usable
+    copper-ore patch"). So the inflated rectangle is trimmed against, in order,
+    the bounding boxes of the other resources' best patches (``foreign_cores``:
+    a margin never eats another patch), zones already taken, and ``blocked``
+    rects. The zone is kept while it still covers MIN_TRIMMED_SHARE of the
+    patch's own bounding box.
+    """
+    rect = _inflate(ref.bbox, config.mining_margin, occupancy.grid.bounds)
+    for other in (*foreign_cores, *occupancy.taken, *blocked):
+        if rect.intersects(other):
+            rect = _trim(rect, other, ref.bbox)
+            if rect is None:
+                return None
+    kept_x = min(rect.x1, ref.bbox.x1) - max(rect.x0, ref.bbox.x0)
+    kept_y = min(rect.y1, ref.bbox.y1) - max(rect.y0, ref.bbox.y0)
+    if kept_x <= 0 or kept_y <= 0 or kept_x * kept_y < MIN_TRIMMED_SHARE * ref.bbox.area:
+        return None
+    return rect
+
+
+MIN_TRIMMED_SHARE = 0.5
+
+
+def _overlap_area(a: Rect, b: Rect) -> int:
+    width = min(a.x1, b.x1) - max(a.x0, b.x0)
+    height = min(a.y1, b.y1) - max(a.y0, b.y0)
+    return width * height if width > 0 and height > 0 else 0
+
+
+def _trim(rect: Rect, other: Rect, keep: Rect | None = None) -> Rect | None:
+    """Cut from ``rect`` the strip that overlaps ``other``.
+
+    The cut can be made on the x or the y axis. The one that leaves more of
+    ``keep`` (the patch's own bounding box) inside the result wins; ties go to
+    the larger remaining rectangle.
+    """
+    keep = keep or rect
+    cut_x = (
+        Rect(rect.x0, rect.y0, other.x0, rect.y1)
+        if other.x0 + other.x1 >= rect.x0 + rect.x1
+        else Rect(other.x1, rect.y0, rect.x1, rect.y1)
+    )
+    cut_y = (
+        Rect(rect.x0, rect.y0, rect.x1, other.y0)
+        if other.y0 + other.y1 >= rect.y0 + rect.y1
+        else Rect(rect.x0, other.y1, rect.x1, rect.y1)
+    )
+    options = [r for r in (cut_x, cut_y) if r.x1 > r.x0 and r.y1 > r.y0]
+    if not options:
+        return None
+    return max(options, key=lambda r: (_overlap_area(r, keep), r.area))
 
 
 def choose_resources(
@@ -96,11 +144,13 @@ def choose_resources(
     existing = [rect for _owner, rect in world.zones()]
     plans = []
     zones = []
+    best_boxes = {name: ranked[name][0].bbox for name in config.required_solids if ranked.get(name)}
     for name in config.required_solids:
         refs = ranked.get(name, [])
         primary = None
+        cores = tuple(box for other, box in best_boxes.items() if other != name)
         for ref in refs:
-            rect = mining_rect(ref, occupancy, existing, config)
+            rect = mining_rect(ref, occupancy, existing, config, cores)
             if rect is not None:
                 primary = ref
                 growth = dominant_compass(ref.centroid[0] - start[0], ref.centroid[1] - start[1])

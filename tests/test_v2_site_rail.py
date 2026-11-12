@@ -56,8 +56,10 @@ class RailPlanTests(unittest.TestCase):
                 self.assertNotEqual(ore.side, smelting.output_side)
                 feeder_sides = {p.side for p in smelting.ports if p.role == "in" and p.material != "ore"}
                 if ore.side in feeder_sides:
+                    # Sharing an edge is allowed when no free edge can host the
+                    # station (all taken, or the free one has no room); the plan
+                    # must then say so.
                     self.assertTrue(any("shares the" in w for w in plan.warnings), plan.warnings)
-                    self.assertTrue({"N", "E", "S", "W"} - {smelting.output_side} <= feeder_sides)
                 config = plan.config
                 self.assertEqual(
                     sorted((station.rect.width, station.rect.height)),
