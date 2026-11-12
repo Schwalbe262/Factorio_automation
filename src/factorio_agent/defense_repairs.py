@@ -1,23 +1,33 @@
 """Acquire real tools and issue bounded native repairs for known defensive posts."""
+
 from __future__ import annotations
 
 import json
 
-from factorio_agent.core.deterministic_repair_control import pending_repair,REPAIR_RETURN_HOME_LUA
+from factorio_agent.core.deterministic_repair_control import pending_repair, REPAIR_RETURN_HOME_LUA
 
 
-def return_to_spawn_action(game,world,actor):
+def return_to_spawn_action(game, world, actor):
     """Read-only emission of an ordinary move to the pinned owner's quiet base."""
-    if(not isinstance(world,str)or not world or type(actor)is not int or actor<1
-            or getattr(game,'expected_world',None)!=world or getattr(game,'backend',None)!='assisted'):
-        raise ValueError('safe return requires exact actor and bound assisted world')
-    payload=json.dumps(json.dumps(dict(expected_world_id=world,expected_actor_unit=actor)))
-    home=game.query('local x=helpers.json_to_table('+payload+');'+REPAIR_RETURN_HOME_LUA)
-    if not home.get('ok'):return dict(status='blocked',**home)
-    return dict(type='move',position=home['position'],reason='return the automation operator to its quiet force spawn')
+    if (
+        not isinstance(world, str)
+        or not world
+        or type(actor) is not int
+        or actor < 1
+        or getattr(game, "expected_world", None) != world
+        or getattr(game, "backend", None) != "assisted"
+    ):
+        raise ValueError("safe return requires exact actor and bound assisted world")
+    payload = json.dumps(json.dumps(dict(expected_world_id=world, expected_actor_unit=actor)))
+    home = game.query("local x=helpers.json_to_table(" + payload + ");" + REPAIR_RETURN_HOME_LUA)
+    if not home.get("ok"):
+        return dict(status="blocked", **home)
+    return dict(
+        type="move", position=home["position"], reason="return the automation operator to its quiet force spawn"
+    )
 
 
-REPAIR_SITE_LUA=r'''
+REPAIR_SITE_LUA = r"""
 if not d or d.world_id~=x.world or not a or not a.valid or a.unit_number~=x.actor
  or a.force~=f or a.surface~=s then return {ok=false,reason="defense_repair_actor_changed"}end
 for _,q in ipairs(x.posts)do
@@ -51,47 +61,89 @@ for _,q in ipairs(x.posts)do
  end
 end
 return {ok=true,tick=game.tick}
-'''
+"""
 
 
 class DefenseRepairs:
-    def __init__(self,game,bootstrap,perimeter):
-        self.game,self.bootstrap,self.perimeter=game,bootstrap,perimeter
+    def __init__(self, game, bootstrap, perimeter):
+        self.game, self.bootstrap, self.perimeter = game, bootstrap, perimeter
 
-    def next_action(self,obs):
-        cleanup=pending_repair(obs)
-        if cleanup:return cleanup
-        if not obs.get('enabled_recipes',{}).get('repair-pack'):return None
-        if not obs.get('ok')or type(obs.get('actor_unit_number'))is not int:return None
-        report=self.perimeter.inspect(obs)
-        if not report.get('ok')or report.get('changed'):return None
-        candidates=[p for p in report.get('posts',[])if not p.get('missing')and
-            0<p.get('health',0)<p.get('max_health',0)and type(p.get('unit_number'))is int]
-        candidates.sort(key=lambda p:(p['health']/p['max_health'],p['unit_number']))
-        if not candidates:return None
-        return self._issue(obs,[dict(name='gun-turret',position=p['position'],unit_number=p['unit_number'])for p in candidates])
+    def next_action(self, obs):
+        cleanup = pending_repair(obs)
+        if cleanup:
+            return cleanup
+        if not obs.get("enabled_recipes", {}).get("repair-pack"):
+            return None
+        if not obs.get("ok") or type(obs.get("actor_unit_number")) is not int:
+            return None
+        report = self.perimeter.inspect(obs)
+        if not report.get("ok") or report.get("changed"):
+            return None
+        candidates = [
+            p
+            for p in report.get("posts", [])
+            if not p.get("missing")
+            and 0 < p.get("health", 0) < p.get("max_health", 0)
+            and type(p.get("unit_number")) is int
+        ]
+        candidates.sort(key=lambda p: (p["health"] / p["max_health"], p["unit_number"]))
+        if not candidates:
+            return None
+        return self._issue(
+            obs, [dict(name="gun-turret", position=p["position"], unit_number=p["unit_number"]) for p in candidates]
+        )
 
-    def wall_action(self,obs,spec,unit):
-        cleanup=pending_repair(obs)
-        if cleanup:return cleanup
-        if(spec.get('name')!='stone-wall'or type(unit)is not int or unit<1
-                or not obs.get('enabled_recipes',{}).get('repair-pack')):return None
-        return self._issue(obs,[dict(name='stone-wall',position=spec['position'],unit_number=unit)])
+    def wall_action(self, obs, spec, unit):
+        cleanup = pending_repair(obs)
+        if cleanup:
+            return cleanup
+        if (
+            spec.get("name") != "stone-wall"
+            or type(unit) is not int
+            or unit < 1
+            or not obs.get("enabled_recipes", {}).get("repair-pack")
+        ):
+            return None
+        return self._issue(obs, [dict(name="stone-wall", position=spec["position"], unit_number=unit)])
 
-    def _issue(self,obs,targets):
-        payload=dict(world=obs['world_id'],actor=obs['actor_unit_number'],posts=targets,
-            guards=[dict(position=p['position'],unit_number=p['unit_number'])
-                    for p in getattr(self.perimeter,'state',{}).get('posts',[])if p.get('unit_number')])
-        result=self.game.query('local x=helpers.json_to_table('+json.dumps(json.dumps(payload,separators=(',',':')))+');'+REPAIR_SITE_LUA)
-        if not result.get('ok')or not result.get('target'):return None
-        carried=obs.get('inventory',{}).get('repair-pack',0)
-        if carried>1:return {'status':'blocked','reason':'exactly_one_carried_native_repair_pack_required'}
-        pack=self.bootstrap.ensure_item(obs,'repair-pack',1)
-        if pack.get('type')or pack.get('status')!='succeeded':return pack
-        if not result['reachable']:
-            return {'type':'move','position':result['approach'],'reason':'approach a quiet armed post for native repair'}
-        return dict(type='repair',name=result['target'].get('name','gun-turret'),position=result['target']['position'],
-            expected_world_id=obs['world_id'],expected_actor_unit=obs['actor_unit_number'],
-            expected_entity_unit=result['target']['unit_number'],
-            return_to_spawn=getattr(self.game,'backend','assisted')=='assisted',
-            reason='repair a known armed post using one ordinarily acquired repair pack')
+    def _issue(self, obs, targets):
+        payload = dict(
+            world=obs["world_id"],
+            actor=obs["actor_unit_number"],
+            posts=targets,
+            guards=[
+                dict(position=p["position"], unit_number=p["unit_number"])
+                for p in getattr(self.perimeter, "state", {}).get("posts", [])
+                if p.get("unit_number")
+            ],
+        )
+        result = self.game.query(
+            "local x=helpers.json_to_table("
+            + json.dumps(json.dumps(payload, separators=(",", ":")))
+            + ");"
+            + REPAIR_SITE_LUA
+        )
+        if not result.get("ok") or not result.get("target"):
+            return None
+        carried = obs.get("inventory", {}).get("repair-pack", 0)
+        if carried > 1:
+            return {"status": "blocked", "reason": "exactly_one_carried_native_repair_pack_required"}
+        pack = self.bootstrap.ensure_item(obs, "repair-pack", 1)
+        if pack.get("type") or pack.get("status") != "succeeded":
+            return pack
+        if not result["reachable"]:
+            return {
+                "type": "move",
+                "position": result["approach"],
+                "reason": "approach a quiet armed post for native repair",
+            }
+        return dict(
+            type="repair",
+            name=result["target"].get("name", "gun-turret"),
+            position=result["target"]["position"],
+            expected_world_id=obs["world_id"],
+            expected_actor_unit=obs["actor_unit_number"],
+            expected_entity_unit=result["target"]["unit_number"],
+            return_to_spawn=getattr(self.game, "backend", "assisted") == "assisted",
+            reason="repair a known armed post using one ordinarily acquired repair pack",
+        )

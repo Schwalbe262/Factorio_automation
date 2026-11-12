@@ -12,7 +12,7 @@ from typing import Any, Mapping
 from .world_catalog import WorldCatalog
 
 
-LAUNCH_LUA = r'''
+LAUNCH_LUA = r"""
 local state=d.first_rocket_launch
 if state and state.ordered then
  if not state.platform or not state.platform.valid then return failure("launch_platform_lost") end
@@ -63,10 +63,10 @@ end
 state.ordered=true
 state.ordered_tick=game.tick
 return success{status="running",reason="launch_ordered",platform_index=state.platform.index,baseline=state.baseline}
-'''
+"""
 
 
-OBSERVE_LAUNCH_LUA = r'''
+OBSERVE_LAUNCH_LUA = r"""
 local state=d and d.first_rocket_launch
 if not state then return {status="not_started",rockets_launched=f.rockets_launched} end
 local platform=state.platform
@@ -78,7 +78,7 @@ return {status=complete and "succeeded" or state.ordered and "running" or "waiti
  platform_index=valid and platform.index or nil,platform_hub_valid=hub and hub.valid or false,
  rockets_launched=f.rockets_launched,silo_unit_number=state.silo_unit_number,
  ordered_tick=state.ordered_tick}
-'''
+"""
 
 
 class LaunchStage:
@@ -93,8 +93,12 @@ class LaunchStage:
         observing. Other launch counters alone never establish this run's success.
         """
         launch = observation.get("launch") or {}
-        if (launch.get("ordered") and launch.get("platform_hub_valid")
-                and launch.get("rockets_launched", observation.get("rockets_launched", 0)) > launch.get("baseline", float("inf"))):
+        if (
+            launch.get("ordered")
+            and launch.get("platform_hub_valid")
+            and launch.get("rockets_launched", observation.get("rockets_launched", 0))
+            > launch.get("baseline", float("inf"))
+        ):
             return {"status": "succeeded", "reason": "starter_pack_delivered", "action": None, "requirements": []}
         if launch.get("ordered"):
             if launch.get("platform_valid") is False:
@@ -104,22 +108,64 @@ class LaunchStage:
         if launch.get("silo_unit_number") is not None:
             silos = [silo for silo in silos if silo.get("unit_number") == launch["silo_unit_number"]]
         if not silos:
-            return {"status": "blocked", "reason": "rocket_silo_missing", "action": None,
-                    "requirements": [{"kind": "build", "item": "rocket-silo", "count": 1}]}
+            return {
+                "status": "blocked",
+                "reason": "rocket_silo_missing",
+                "action": None,
+                "requirements": [{"kind": "build", "item": "rocket-silo", "count": 1}],
+            }
         silo = min(silos, key=lambda entity: entity.get("unit_number", 0))
-        remaining = (0 if silo.get("rocket_silo_status") == "rocket_ready" else
-                     max(0, self.parts_required - int(silo.get("rocket_parts", 0))))
+        remaining = (
+            0
+            if silo.get("rocket_silo_status") == "rocket_ready"
+            else max(0, self.parts_required - int(silo.get("rocket_parts", 0)))
+        )
         if remaining:
-            return {"status": "waiting", "reason": "rocket_parts_required", "action": None,
-                    "requirements": [{"kind": "produce", "item": "rocket-part", "count": remaining,
-                                      "machine_unit_number": silo.get("unit_number")}]}
+            return {
+                "status": "waiting",
+                "reason": "rocket_parts_required",
+                "action": None,
+                "requirements": [
+                    {
+                        "kind": "produce",
+                        "item": "rocket-part",
+                        "count": remaining,
+                        "machine_unit_number": silo.get("unit_number"),
+                    }
+                ],
+            }
         pack = "space-platform-starter-pack"
         if not silo.get("inventory", {}).get(pack) and not observation.get("inventory", {}).get(pack):
-            source = next((entity for entity in observation.get("entities", []) if entity is not silo and entity.get("inventory", {}).get(pack, 0) > 0), None)
+            source = next(
+                (
+                    entity
+                    for entity in observation.get("entities", [])
+                    if entity is not silo and entity.get("inventory", {}).get(pack, 0) > 0
+                ),
+                None,
+            )
             if source:
-                return {"status": "ready", "reason": "collect_starter_pack", "requirements": [],
-                        "action": {"type": "take", "position": source["position"], "name": source["name"], "item": pack, "count": 1}}
-            return {"status": "blocked", "reason": "starter_pack_required", "action": None,
-                    "requirements": [{"kind": "produce", "item": pack, "count": 1}]}
-        return {"status": "ready", "reason": "request_launch", "requirements": [],
-                "action": {"type": "launch", "position": silo["position"], "name": "rocket-silo"}}
+                return {
+                    "status": "ready",
+                    "reason": "collect_starter_pack",
+                    "requirements": [],
+                    "action": {
+                        "type": "take",
+                        "position": source["position"],
+                        "name": source["name"],
+                        "item": pack,
+                        "count": 1,
+                    },
+                }
+            return {
+                "status": "blocked",
+                "reason": "starter_pack_required",
+                "action": None,
+                "requirements": [{"kind": "produce", "item": pack, "count": 1}],
+            }
+        return {
+            "status": "ready",
+            "reason": "request_launch",
+            "requirements": [],
+            "action": {"type": "launch", "position": silo["position"], "name": "rocket-silo"},
+        }

@@ -4,8 +4,9 @@ Transport lines can be shared by paired mouths; their contents are not additive
 across endpoints. A successful endpoint build alone is not a network proof.
 """
 
-UNDERGROUND_NAMES = frozenset({"underground-belt", "fast-underground-belt",
-                               "express-underground-belt", "turbo-underground-belt"})
+UNDERGROUND_NAMES = frozenset(
+    {"underground-belt", "fast-underground-belt", "express-underground-belt", "turbo-underground-belt"}
+)
 
 
 def underground_fields(spec: dict) -> dict:
@@ -22,7 +23,7 @@ def underground_fields(spec: dict) -> dict:
     return {"belt_to_ground_type": role}
 
 
-OBSERVE_UNDERGROUND_LUA = r'''
+OBSERVE_UNDERGROUND_LUA = r"""
 local function observe_underground(e)
  local row={belt_to_ground_type=e.belt_to_ground_type,force=e.force.name,surface=e.surface.name,
   transport_lines={},belt_inventory={},underground_pair_verified=false,
@@ -53,4 +54,4 @@ local function observe_underground(e)
  end
  return row
 end
-'''
+"""

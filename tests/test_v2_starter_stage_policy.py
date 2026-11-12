@@ -7,33 +7,43 @@ from factorio_agent.mining import StarterCapacity
 
 class StarterStageTests(unittest.TestCase):
     def setUp(self):
-        self.c=StarterCapacity.__new__(StarterCapacity);self.c.state={'world_id':'w','pending':{}}
-        self.c.cells=Mock(return_value=[]);self.c.proof=Mock(return_value=None)
-        self.c.bootstrap=SimpleNamespace(maintain_fuel=Mock(return_value={'type':'insert','item':'coal','count':2}))
-        self.obs={'world_id':'w','tick':1,'technologies':{}}
+        self.c = StarterCapacity.__new__(StarterCapacity)
+        self.c.state = {"world_id": "w", "pending": {}}
+        self.c.cells = Mock(return_value=[])
+        self.c.proof = Mock(return_value=None)
+        self.c.bootstrap = SimpleNamespace(
+            maintain_fuel=Mock(return_value={"type": "insert", "item": "coal", "count": 2})
+        )
+        self.obs = {"world_id": "w", "tick": 1, "technologies": {}}
 
     def test_completed_target_yields_before_unrelated_fuel_upkeep(self):
-        self.c.cells.return_value=[{}]*8;self.c.proof.return_value={'productive_cells':8}
-        result=self.c.step(self.obs,{'resource':'copper-ore','cells':8})
-        self.assertEqual(result['status'],'succeeded');self.c.bootstrap.maintain_fuel.assert_not_called()
+        self.c.cells.return_value = [{}] * 8
+        self.c.proof.return_value = {"productive_cells": 8}
+        result = self.c.step(self.obs, {"resource": "copper-ore", "cells": 8})
+        self.assertEqual(result["status"], "succeeded")
+        self.c.bootstrap.maintain_fuel.assert_not_called()
 
     def test_fresh_early_tier_can_still_build_its_original_starter_target(self):
-        result=self.c.step(self.obs,{'resource':'copper-ore','cells':8})
-        self.assertEqual(result['type'],'insert');self.c.bootstrap.maintain_fuel.assert_called_once()
+        result = self.c.step(self.obs, {"resource": "copper-ore", "cells": 8})
+        self.assertEqual(result["type"], "insert")
+        self.c.bootstrap.maintain_fuel.assert_called_once()
 
     def test_native_unlock_stops_new_bulk_burner_investment_without_deleting_paid_work(self):
-        self.obs['technologies']['electric-mining-drill']=True;self.c.state['pending']['copper-ore']={'paid':'preserved'}
-        result=self.c.step(self.obs,{'resource':'copper-ore','cells':8})
-        self.assertEqual(result['status'],'blocked');self.c.bootstrap.maintain_fuel.assert_not_called()
-        self.assertEqual(self.c.state['pending']['copper-ore'],{'paid':'preserved'})
+        self.obs["technologies"]["electric-mining-drill"] = True
+        self.c.state["pending"]["copper-ore"] = {"paid": "preserved"}
+        result = self.c.step(self.obs, {"resource": "copper-ore", "cells": 8})
+        self.assertEqual(result["status"], "blocked")
+        self.c.bootstrap.maintain_fuel.assert_not_called()
+        self.assertEqual(self.c.state["pending"]["copper-ore"], {"paid": "preserved"})
 
     def test_two_cell_recovery_and_other_resources_remain_available(self):
-        self.obs['technologies']['electric-mining-drill']=True
-        for resource,count in (('copper-ore',2),('iron-ore',1),('coal',8),('stone',8)):
+        self.obs["technologies"]["electric-mining-drill"] = True
+        for resource, count in (("copper-ore", 2), ("iron-ore", 1), ("coal", 8), ("stone", 8)):
             with self.subTest(resource=resource):
-                self.assertEqual(self.c.step(self.obs,{'resource':resource,'cells':count})['type'],'insert')
+                self.assertEqual(self.c.step(self.obs, {"resource": resource, "cells": count})["type"], "insert")
 
     def test_existing_full_target_keeps_its_native_proof_after_unlock(self):
-        self.obs['technologies']['electric-mining-drill']=True
-        self.c.cells.return_value=[{}]*8;self.c.proof.return_value={'productive_cells':8}
-        self.assertEqual(self.c.step(self.obs,{'resource':'copper-ore','cells':8})['status'],'succeeded')
+        self.obs["technologies"]["electric-mining-drill"] = True
+        self.c.cells.return_value = [{}] * 8
+        self.c.proof.return_value = {"productive_cells": 8}
+        self.assertEqual(self.c.step(self.obs, {"resource": "copper-ore", "cells": 8})["status"], "succeeded")

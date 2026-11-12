@@ -3,6 +3,7 @@
 The process lock protects a run's checkpoint and append-only event journal. Completion
 is cached evidence only: the supervisor must still check live completion predicates.
 """
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -91,8 +92,13 @@ class RunState:
         return reason is not None
 
     def record_task(
-        self, goal_id: str, result: TaskResult, *, tick: int,
-        progress: Any = None, max_retries: int = 3,
+        self,
+        goal_id: str,
+        result: TaskResult,
+        *,
+        tick: int,
+        progress: Any = None,
+        max_retries: int = 3,
     ) -> TaskResult:
         """Record only goal-specific evidence, bounding repeated failures in that state.
 
@@ -117,9 +123,14 @@ class RunState:
             task.failure_counts[failure_key] = count
             if count >= max_retries:
                 result = TaskResult(
-                    TaskStatus.BLOCKED, f"retry budget exhausted: {result.reason}",
-                    {**result.evidence, "attempts": count, "retry_budget": max_retries,
-                     "original_failure_code": result.failure_code},
+                    TaskStatus.BLOCKED,
+                    f"retry budget exhausted: {result.reason}",
+                    {
+                        **result.evidence,
+                        "attempts": count,
+                        "retry_budget": max_retries,
+                        "original_failure_code": result.failure_code,
+                    },
                     "retry_budget_exhausted",
                 )
         task.last_observed_tick = tick
@@ -130,9 +141,12 @@ class RunState:
         if max_stall_ticks < 1:
             raise ValueError("max_stall_ticks must be positive")
         task = self.tasks.get(goal_id)
-        return bool(task and task.status != TaskStatus.SUCCEEDED.value
-                    and tick >= task.last_observed_tick
-                    and tick - task.last_progress_tick >= max_stall_ticks)
+        return bool(
+            task
+            and task.status != TaskStatus.SUCCEEDED.value
+            and tick >= task.last_observed_tick
+            and tick - task.last_progress_tick >= max_stall_ticks
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {"schema_version": 1, **asdict(self)}
@@ -153,8 +167,14 @@ def load_run_state(path: Path, *, world_id: str, game_fingerprint: str, tick: in
         tasks = {name: TaskProgress(**data) for name, data in raw["tasks"].items()}
         for task in tasks.values():
             TaskStatus(task.status)
-        state = RunState(raw["world_id"], raw["game_fingerprint"], raw["last_tick"], tasks,
-                         raw.get("generation", 0), raw.get("invalidation_reason"))
+        state = RunState(
+            raw["world_id"],
+            raw["game_fingerprint"],
+            raw["last_tick"],
+            tasks,
+            raw.get("generation", 0),
+            raw.get("invalidation_reason"),
+        )
         state.reconcile(world_id, game_fingerprint, tick)
         return state
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
@@ -170,7 +190,7 @@ def replace_with_retry(source: str | Path, destination: str | Path) -> None:
         except PermissionError:
             if attempt == 5:
                 raise
-            time.sleep(0.01 * 2 ** attempt)
+            time.sleep(0.01 * 2**attempt)
 
 
 def _atomic_json(path: Path, payload: Any) -> None:
@@ -196,9 +216,15 @@ def save_run_state(path: Path, state: RunState) -> None:
 def append_task_event(path: Path, state: RunState, goal_id: str, result: TaskResult) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"timestamp": datetime.now(timezone.utc).isoformat(), "world_id": state.world_id,
-               "game_fingerprint": state.game_fingerprint, "generation": state.generation,
-               "tick": state.last_tick, "goal_id": goal_id, "result": result.to_dict()}
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "world_id": state.world_id,
+        "game_fingerprint": state.game_fingerprint,
+        "generation": state.generation,
+        "tick": state.last_tick,
+        "goal_id": goal_id,
+        "result": result.to_dict(),
+    }
     with path.open("a", encoding="utf-8") as output:
         output.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n")
         output.flush()
@@ -216,6 +242,7 @@ class RunLock:
     process lock a different inode. PID metadata is diagnostic, never authority;
     this also avoids PID reuse and Windows process-permission races.
     """
+
     def __init__(self, path: Path):
         self.path = Path(path)
         self._file: Any = None
@@ -230,16 +257,20 @@ class RunLock:
             # Lock one byte, including beyond EOF; never write before acquiring.
             if os.name == "nt":
                 import msvcrt
+
                 msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
             else:
                 import fcntl
+
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
             handle.close()
             raise RunAlreadyOwnedError(f"another process owns run lock: {self.path}") from exc
         self._file = handle
         try:
-            handle.write(json.dumps({"pid": os.getpid(), "acquired_at": datetime.now(timezone.utc).isoformat()}).encode())
+            handle.write(
+                json.dumps({"pid": os.getpid(), "acquired_at": datetime.now(timezone.utc).isoformat()}).encode()
+            )
             handle.truncate()
             os.fsync(handle.fileno())
         except BaseException:
@@ -254,9 +285,11 @@ class RunLock:
                 handle.seek(0)
                 if os.name == "nt":
                     import msvcrt
+
                     msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
                 else:
                     import fcntl
+
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
             finally:
                 handle.close()

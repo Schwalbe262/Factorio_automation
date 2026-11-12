@@ -4,6 +4,7 @@ This adapter deliberately has no dependency on strategy/model/foundry code.
 Only initial freeplay inventory is supplied. Machines and the engine crafting
 queue perform production; research and launch counters are observation-only.
 """
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -18,21 +19,33 @@ from typing import Any
 import uuid
 
 from .config import AppConfig, load_config
-from .factorio import (build_create_no_mod_save_command,
-    build_start_no_mod_server_command, no_mod_save_path, wait_for_rcon)
+from .factorio import (
+    build_create_no_mod_save_command,
+    build_start_no_mod_server_command,
+    no_mod_save_path,
+    wait_for_rcon,
+)
 from .rcon import FactorioRconClient, RconError, parse_json_response
 from .deterministic_underground import OBSERVE_UNDERGROUND_LUA, underground_fields
 from .deterministic_belt_switch_guard import (
-    BELT_ROUTE_REPLACEMENT_LUA, validate_belt_route_replacement, validate_belt_switch_backend)
+    BELT_ROUTE_REPLACEMENT_LUA,
+    validate_belt_route_replacement,
+    validate_belt_switch_backend,
+)
 from .deterministic_coal_replacement_guard import (
-    COAL_TRANSIT_REPLACEMENT_LUA, validate_coal_transit_replacement, validate_coal_replacement_backend)
+    COAL_TRANSIT_REPLACEMENT_LUA,
+    validate_coal_transit_replacement,
+    validate_coal_replacement_backend,
+)
 
 
 BUILD_BATCH_LIMIT = 32
-BUILD_BATCH_NAMES = frozenset({"transport-belt", "small-electric-pole", "pipe", "inserter", "long-handed-inserter", "fast-inserter"})
+BUILD_BATCH_NAMES = frozenset(
+    {"transport-belt", "small-electric-pole", "pipe", "inserter", "long-handed-inserter", "fast-inserter"}
+)
 
 
-RECOVER_EQUIPPED_AMMO_LUA = r'''
+RECOVER_EQUIPPED_AMMO_LUA = r"""
 if not d or d.world_id~=x.expected_actor_world_id or a.unit_number~=x.expected_actor_unit_number
  or a.force~=f then return failure("equipped_ammo_actor_identity_changed") end
 local proto=prototypes.item[x.item]
@@ -54,16 +67,23 @@ local inserted=inv.insert{name=x.item,quality="normal",count=amount}
 source.count=source.count-inserted
 return success{status=inserted>0 and "succeeded" or "waiting",moved=inserted,
  source_inventory="character_ammo",destination_inventory="character_main"}
-'''
+"""
 
 
 def validate_equipped_ammo_recovery(action: dict[str, Any]) -> None:
     if action.get("type") != "recover_equipped_ammo":
         return
-    if (action.get("item") != "firearm-magazine"
-            or not isinstance(action.get("expected_actor_world_id"), str) or not action["expected_actor_world_id"]
-            or any(type(action.get(key)) is not int or action[key] < 1 for key in ("slot", "count", "expected_actor_unit_number"))
-            or action["count"] > 100 or "position" in action):
+    if (
+        action.get("item") != "firearm-magazine"
+        or not isinstance(action.get("expected_actor_world_id"), str)
+        or not action["expected_actor_world_id"]
+        or any(
+            type(action.get(key)) is not int or action[key] < 1
+            for key in ("slot", "count", "expected_actor_unit_number")
+        )
+        or action["count"] > 100
+        or "position" in action
+    ):
         raise ValueError("equipped ammo recovery requires a bounded slot, item, world and actor identity")
 
 
@@ -73,20 +93,37 @@ def validate_mine_guard(action: dict[str, Any]) -> None:
     identity = {"expected_entity_unit", "expected_entity_world_id"}
     if identity.intersection(action):
         unit = action.get("expected_entity_unit")
-        if (not identity.issubset(action) or action.get("type") != "mine"
-                or type(action.get("count", 1)) is not int or action.get("count", 1) != 1
-                or not isinstance(unit, int) or isinstance(unit, bool) or unit < 1
-                or not isinstance(action.get("expected_entity_world_id"), str) or not action["expected_entity_world_id"]):
+        if (
+            not identity.issubset(action)
+            or action.get("type") != "mine"
+            or type(action.get("count", 1)) is not int
+            or action.get("count", 1) != 1
+            or not isinstance(unit, int)
+            or isinstance(unit, bool)
+            or unit < 1
+            or not isinstance(action.get("expected_entity_world_id"), str)
+            or not action["expected_entity_world_id"]
+        ):
             raise ValueError("invalid owned entity mining guard")
     if "lab_replacement" in action:
         replacement = action["lab_replacement"]
         position = replacement.get("position") if isinstance(replacement, dict) else None
         unit = replacement.get("unit_number") if isinstance(replacement, dict) else None
-        if (not identity.issubset(action) or action.get("name") != "lab"
-                or not isinstance(unit, int) or isinstance(unit, bool) or unit < 1
-                or unit == action.get("expected_entity_unit")
-                or not isinstance(position, dict) or not all(isinstance(position.get(axis), (int, float))
-                    and not isinstance(position[axis], bool) and math.isfinite(position[axis]) for axis in ("x", "y"))):
+        if (
+            not identity.issubset(action)
+            or action.get("name") != "lab"
+            or not isinstance(unit, int)
+            or isinstance(unit, bool)
+            or unit < 1
+            or unit == action.get("expected_entity_unit")
+            or not isinstance(position, dict)
+            or not all(
+                isinstance(position.get(axis), (int, float))
+                and not isinstance(position[axis], bool)
+                and math.isfinite(position[axis])
+                for axis in ("x", "y")
+            )
+        ):
             raise ValueError("invalid laboratory retirement guard")
     keys = {"expected_world_id", "expected_unit_number", "exhausted_source_receiver", "required_replacement_item"}
     if not keys.intersection(action):
@@ -94,19 +131,35 @@ def validate_mine_guard(action: dict[str, Any]) -> None:
     receiver = action.get("exhausted_source_receiver")
     position = receiver.get("position") if isinstance(receiver, dict) else None
     unit = action.get("expected_unit_number")
-    valid = (keys.issubset(action) and action.get("type") == "mine"
-             and action.get("name") == "burner-mining-drill" and type(action.get("count", 1)) is int and action.get("count", 1) == 1
-             and isinstance(action.get("expected_world_id"), str) and bool(action["expected_world_id"])
-             and isinstance(unit, int) and not isinstance(unit, bool) and unit > 0
-             and action.get("required_replacement_item") == "electric-mining-drill"
-             and isinstance(receiver, dict) and isinstance(receiver.get("name"), str) and bool(receiver["name"])
-             and isinstance(position, dict) and all(isinstance(position.get(k), (int, float))
-                 and not isinstance(position[k], bool) and math.isfinite(position[k]) for k in ("x", "y")))
+    valid = (
+        keys.issubset(action)
+        and action.get("type") == "mine"
+        and action.get("name") == "burner-mining-drill"
+        and type(action.get("count", 1)) is int
+        and action.get("count", 1) == 1
+        and isinstance(action.get("expected_world_id"), str)
+        and bool(action["expected_world_id"])
+        and isinstance(unit, int)
+        and not isinstance(unit, bool)
+        and unit > 0
+        and action.get("required_replacement_item") == "electric-mining-drill"
+        and isinstance(receiver, dict)
+        and isinstance(receiver.get("name"), str)
+        and bool(receiver["name"])
+        and isinstance(position, dict)
+        and all(
+            isinstance(position.get(k), (int, float))
+            and not isinstance(position[k], bool)
+            and math.isfinite(position[k])
+            for k in ("x", "y")
+        )
+    )
     if not valid:
         raise ValueError("invalid exhausted source mining guard")
 
 
-GUARDED_MINE_LUA = r'''
+GUARDED_MINE_LUA = (
+    r"""
 if x.expected_entity_unit then
  if not d or d.world_id~=x.expected_entity_world_id then return failure("owned_mine_world_changed") end
  if not e or not e.valid or e.unit_number~=x.expected_entity_unit or e.force~=f then return failure("owned_mine_target_changed") end
@@ -138,15 +191,25 @@ if x.expected_world_id then
  end
  if inv.get_item_count(x.required_replacement_item)<1 then return failure("source_upgrade_replacement_missing") end
 end
-''' + BELT_ROUTE_REPLACEMENT_LUA + COAL_TRANSIT_REPLACEMENT_LUA
+"""
+    + BELT_ROUTE_REPLACEMENT_LUA
+    + COAL_TRANSIT_REPLACEMENT_LUA
+)
 
 
-def run_config(seed: int = 20260908, *, runtime: Path | None = None,
-               server_port: int = 34200, rcon_port: int = 27015) -> AppConfig:
+def run_config(
+    seed: int = 20260908, *, runtime: Path | None = None, server_port: int = 34200, rcon_port: int = 27015
+) -> AppConfig:
     cfg = load_config()
     root = Path(runtime) if runtime else cfg.runtime_dir / "deterministic" / str(seed)
-    return replace(cfg, runtime_dir=root.resolve(), log_dir=(root / "logs").resolve(),
-                   slurm_enabled=False, server_port=server_port, rcon_port=rcon_port)
+    return replace(
+        cfg,
+        runtime_dir=root.resolve(),
+        log_dir=(root / "logs").resolve(),
+        slurm_enabled=False,
+        server_port=server_port,
+        rcon_port=rcon_port,
+    )
 
 
 def start_world(cfg: AppConfig, *, seed: int, new_world: bool = False, backend: str = "assisted") -> subprocess.Popen:
@@ -172,18 +235,29 @@ def start_world(cfg: AppConfig, *, seed: int, new_world: bool = False, backend: 
         command = build_create_no_mod_save_command(cfg, save)
         settings_path = Path(command[command.index("--map-gen-settings") + 1])
         # All controls use the game's default preset, with the agreed cliff exception.
-        settings_path.write_text(json.dumps({"seed": seed, "cliff_settings": {
-            "name": "cliff", "richness": 0, "cliff_elevation_interval": 0}}), encoding="utf-8")
+        settings_path.write_text(
+            json.dumps(
+                {"seed": seed, "cliff_settings": {"name": "cliff", "richness": 0, "cliff_elevation_interval": 0}}
+            ),
+            encoding="utf-8",
+        )
         with (cfg.log_dir / "create-world.log").open("wb") as log:
-            subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            subprocess.run(
+                command,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                check=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
     if backend == "character":
         from .deterministic_navigation import prepare_character_save
+
         prepare_character_save(cfg, newly_created=newly_created)
     command = build_start_no_mod_server_command(cfg, save_path=save)
     with (cfg.log_dir / "server-process.log").open("ab") as log:
-        proc = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
-                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        proc = subprocess.Popen(
+            command, stdout=log, stderr=subprocess.STDOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        )
     (cfg.runtime_dir / "server.pid").write_text(str(proc.pid), encoding="ascii")
     try:
         wait_for_rcon(cfg, timeout_seconds=60)
@@ -193,7 +267,7 @@ def start_world(cfg: AppConfig, *, seed: int, new_world: bool = False, backend: 
     return proc
 
 
-_HELPERS = r'''
+_HELPERS = r"""
 local d=storage.deterministic_player
 local a=d and d.actor
 if d and d.crafting_player_index and (not a or not a.valid) then
@@ -219,7 +293,7 @@ local function target(p,name)
 end
 local function success(t) t=t or {};t.ok=true;return t end
 local function failure(reason) return {ok=false,reason=reason} end
-'''
+"""
 
 
 class DeterministicGame:
@@ -241,7 +315,7 @@ class DeterministicGame:
     def observe_waiting(self):
         """Compact wake-up evidence only; never an input to action planning."""
         started = time.perf_counter()
-        value = self.query('''
+        value = self.query("""
 if not a or not a.valid then return failure("agent_dead") end
 local count=0;local damaged=0;local fuel_alarm=false
 for _,e in pairs(s.find_entities_filtered{force=f}) do
@@ -260,7 +334,7 @@ return success{world_id=d.world_id,surface=s.name,tick=game.tick,actor_unit_numb
  crafting_queue_length=#queue,research=research and research.name or nil,entity_count=count,
  damaged=damaged,actor_damaged=a.health<a.max_health,fuel_alarm=fuel_alarm,
  enemies=s.count_entities_filtered{position={0,0},radius=128,force="enemy",type={"unit","unit-spawner"}}}
-''')
+""")
         self._measure_observation("waiting", started, value)
         return value
 
@@ -269,8 +343,9 @@ return success{world_id=d.world_id,surface=s.name,tick=game.tick,actor_unit_numb
             # Confirm with an inert command. Never retry a timed-out mutation.
             for attempt in range(2):
                 try:
-                    with FactorioRconClient(self.cfg.rcon_host, self.cfg.rcon_port,
-                                            self.cfg.rcon_password, timeout=2) as c:
+                    with FactorioRconClient(
+                        self.cfg.rcon_host, self.cfg.rcon_port, self.cfg.rcon_password, timeout=2
+                    ) as c:
                         c.execute('/silent-command rcon.print("ready")', drain_seconds=0.02)
                     self._confirmed = True
                     break
@@ -278,16 +353,16 @@ return success{world_id=d.world_id,surface=s.name,tick=game.tick,actor_unit_numb
                     if attempt:
                         raise
         lua = "local good,result=pcall(function() " + _HELPERS + body + " end); "
-        lua += 'if not good then result={ok=false,reason=tostring(result)} end; rcon.print(helpers.table_to_json(result or {}))'
+        lua += "if not good then result={ok=false,reason=tostring(result)} end; rcon.print(helpers.table_to_json(result or {}))"
         command = "/silent-command " + " ".join(lua.splitlines())
-        with FactorioRconClient(self.cfg.rcon_host, self.cfg.rcon_port,
-                                self.cfg.rcon_password, timeout=30) as client:
+        with FactorioRconClient(self.cfg.rcon_host, self.cfg.rcon_port, self.cfg.rcon_password, timeout=30) as client:
             response = client.execute(command, drain_seconds=0.02)
         return parse_json_response(response)
 
     def initialize(self) -> dict[str, Any]:
         wid = str(uuid.uuid4())
-        return self.query('''
+        return self.query(
+            """
 if d then
   if not a or not a.valid then return failure("agent_dead") end
   return success{world_id=d.world_id,position=pos(a.position),inventory=contents(a.get_main_inventory())}
@@ -297,15 +372,20 @@ local where=s.find_non_colliding_position("character",spawn,32,0.5)
 if not where then return failure("no_character_spawn") end
 local actor=s.create_entity{name="character",position=where,force=f}
 if not actor then return failure("character_creation_failed") end
-storage.deterministic_player={world_id=''' + json.dumps(wid) + ''',actor=actor,created_tick=game.tick}
+storage.deterministic_player={world_id="""
+            + json.dumps(wid)
+            + """,actor=actor,created_tick=game.tick}
 local items={['iron-plate']=8,wood=1,pistol=1,['firearm-magazine']=10,['burner-mining-drill']=1,['stone-furnace']=1}
 for name,count in pairs(items) do actor.insert{name=name,count=count} end
 return success{world_id=storage.deterministic_player.world_id,position=pos(actor.position),inventory=contents(actor.get_main_inventory())}
-''')
+"""
+        )
 
     def observe(self, radius: float = 384) -> dict[str, Any]:
         started = time.perf_counter()
-        observation = self.query(OBSERVE_UNDERGROUND_LUA + '''
+        observation = self.query(
+            OBSERVE_UNDERGROUND_LUA
+            + """
 if not a or not a.valid then return failure("agent_dead") end
 local equipped=a.get_inventory(defines.inventory.character_ammo);local recoverable={}
 if equipped and equipped.valid then for i=1,#equipped do local stack=equipped[i]
@@ -363,7 +443,9 @@ local enabled={}
 for name,r in pairs(f.recipes) do if r.enabled then enabled[name]=true end end
 local resources={}
 for _,name in ipairs({'iron-ore','copper-ore','coal','stone','crude-oil'}) do
- local nearest=s.find_entities_filtered{position={0,0},radius=''' + str(float(radius)) + ''',name=name,limit=2000}
+ local nearest=s.find_entities_filtered{position={0,0},radius="""
+            + str(float(radius))
+            + """,name=name,limit=2000}
  local best=nil;local dist=math.huge
  for _,e in pairs(nearest) do local ds=e.position.x^2+e.position.y^2;if ds<dist then best=e;dist=ds end end
  if best then resources[name]={position=pos(best.position),amount=best.amount} end
@@ -381,9 +463,11 @@ return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.
  crafting_queue=a.crafting_queue,entities=rows,resources=resources,technologies=techs,enabled_recipes=enabled,
  research=current and current.name or nil,research_progress=f.research_progress,production=production,rockets_launched=f.rockets_launched,
  enemies=s.count_entities_filtered{position={0,0},radius=128,force="enemy",type={"unit","unit-spawner"}}}
-''')
+"""
+        )
         if observation.get("ok"):
             from .deterministic_launch import OBSERVE_LAUNCH_LUA
+
             observation["launch"] = self.query(OBSERVE_LAUNCH_LUA)
         self._measure_observation("full", started, observation, queries=2 if observation.get("ok") else 1)
         return observation
@@ -399,64 +483,67 @@ return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.
             raise ValueError("underground role is only valid on build actions")
         if action.get("type") in {"repair", "finish_repair"}:
             from .deterministic_repair_control import run_repair
+
             return self._record_action(action, run_repair(self, action))
         validate_mine_guard(action)
         validate_equipped_ammo_recovery(action)
-        if "count" in action and (isinstance(action["count"], bool)
-                or not isinstance(action["count"], int) or action["count"] < 1):
+        if "count" in action and (
+            isinstance(action["count"], bool) or not isinstance(action["count"], int) or action["count"] < 1
+        ):
             raise ValueError("action count must be a positive integer")
-        if action.get("type") == "bar" and (isinstance(action.get("slots"), bool)
-                or not isinstance(action.get("slots"), int) or action["slots"] < 0):
+        if action.get("type") == "bar" and (
+            isinstance(action.get("slots"), bool) or not isinstance(action.get("slots"), int) or action["slots"] < 0
+        ):
             raise ValueError("bar slots must be a non-negative integer")
         if action.get("type") == "build_many":
             return self._record_action(action, self._build_many(action))
         encoded = json.dumps(json.dumps(action, separators=(",", ":")))
-        body = 'local x=helpers.json_to_table(' + encoded + '); '
+        body = "local x=helpers.json_to_table(" + encoded + "); "
         body += 'if not a or not a.valid then return failure("agent_dead") end; '
-        body += 'local inv=a.get_main_inventory(); '
+        body += "local inv=a.get_main_inventory(); "
         kind = action.get("type")
         if kind == "recover_equipped_ammo":
             body += RECOVER_EQUIPPED_AMMO_LUA
         elif kind == "craft":
-            body += '''
+            body += """
 local recipe=f.recipes[x.recipe]
 if not recipe or not recipe.enabled then return failure("recipe_locked") end
 if a.crafting_queue_size>0 then return success{status="waiting",reason="crafting_queue_busy"} end
 local n=a.begin_crafting{count=x.count or 1,recipe=x.recipe}
 if n<=0 then return failure("not_craftable") end
 return success{status="running",started=n}
-'''
+"""
         elif kind == "move":
             if self.backend == "character":
-                body += '''
+                body += """
 local dx=x.position.x-a.position.x;local dy=x.position.y-a.position.y
 if dx*dx+dy*dy<1 then a.walking_state={walking=false};return success{status="succeeded"} end
 local angle=math.atan2(dy,dx);local direction=(math.floor(angle/(math.pi/4)+0.5)*2+4)%16
 a.walking_state={walking=true,direction=direction}
 return success{status="running",position=pos(a.position)}
-'''
+"""
             else:
-                body += '''
+                body += """
 local p=s.find_non_colliding_position("character",x.position,8,0.5)
 if not p then return failure("position_blocked") end
 if not a.teleport(p) then return failure("move_failed") end
 return success{status="succeeded",position=pos(a.position)}
-'''
+"""
         elif kind == "mine":
-            body += '''
+            body += """
 local e=target(x.position,x.name)
 if not e then return failure("target_missing") end
 if string.find(e.name,"crash%-site") or string.find(e.name,"wreck") then return failure("protected_artifact") end
-'''
+"""
             body += GUARDED_MINE_LUA
             if self.backend == "character":
-                body += '''
+                body += """
 if not a.can_reach_entity(e) then return failure("out_of_reach") end
 a.mining_state={mining=true,position=e.position}
 return success{status="running"}
-'''
+"""
             else:
-                body += '''
+                body += """
 if e.type=="resource" and e.prototype.resource_category~="basic-solid" then return failure("resource_requires_machine") end
 if e.type=="resource" then
  local amount=math.min(x.count or 1,50,e.amount,inv.get_insertable_count(e.name))
@@ -467,9 +554,9 @@ if e.type=="resource" then
 end
 if not a.mine_entity(e) then return failure("mining_failed") end
 return success{status="succeeded"}
-'''
+"""
         elif kind == "build":
-            body += '''
+            body += """
 local existing=target(x.position,x.name)
 if existing then
  if x.belt_to_ground_type and (existing.force~=f or existing.surface~=s
@@ -489,48 +576,49 @@ local valid_item=false
 for _,cost in pairs(proto.items_to_place_this or {}) do if cost.name==item then valid_item=true end end
 if not valid_item then return failure("invalid_placement_item") end
 if inv.get_item_count(item)<1 then return failure("missing_item:"..item) end
-'''
+"""
             if self.backend == "character":
                 body += 'if ((x.position.x-a.position.x)^2+(x.position.y-a.position.y)^2)^0.5>a.build_distance then return failure("out_of_reach") end; '
-            body += '''
+            body += """
 if not s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f,type=x.belt_to_ground_type} then return failure("placement_blocked") end
 if inv.remove{name=item,count=1}~=1 then return failure("missing_item:"..item) end
 local e=s.create_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f,type=x.belt_to_ground_type,raise_built=true,player=a.player}
 if not e then inv.insert{name=item,count=1};return failure("build_failed") end
 return success{status="succeeded",unit_number=e.unit_number}
-'''
+"""
         elif kind in {"insert", "take"}:
-            body += '''
+            body += """
 local e=target(x.position,x.name)
 if not e then return failure("target_missing") end
-'''
+"""
             if self.backend == "character":
-                ground_exception = 'e.type~="item-entity" and ' if kind == "take" else ''
-                body += 'if ' + ground_exception + 'not a.can_reach_entity(e) then return failure("out_of_reach") end; '
+                ground_exception = 'e.type~="item-entity" and ' if kind == "take" else ""
+                body += "if " + ground_exception + 'not a.can_reach_entity(e) then return failure("out_of_reach") end; '
             if action.get("item") == "repair-pack":
                 from .deterministic_repair_control import TRANSFER_REPAIR_PACK_LUA
+
                 body += TRANSFER_REPAIR_PACK_LUA
             if kind == "insert":
-                body += '''
+                body += """
 local n=math.min(x.count or 1,inv.get_item_count(x.item))
 if n<=0 then return success{status="waiting",moved=0} end
 local dest=x.inventory and e.get_inventory(defines.inventory[x.inventory]) or nil
 local inserted=dest and dest.insert{name=x.item,count=n} or e.insert{name=x.item,count=n}
 if inserted>0 then inv.remove{name=x.item,count=inserted} end
 return success{status=inserted>0 and "succeeded" or "waiting",moved=inserted}
-'''
+"""
             else:
-                body += '''
+                body += """
 if e.type=="item-entity" then
  local stack=e.stack
  if not stack or not stack.valid_for_read or stack.name~=x.item then return failure("ground_item_changed") end
  if stack.prototype.type~="item" then return failure("ground_stack_metadata_unsupported") end
  local quality=stack.quality.name
  if x.quality and x.quality~=quality then return failure("ground_item_quality_changed") end
-'''
+"""
                 if self.backend == "character":
                     body += 'if (e.position.x-a.position.x)^2+(e.position.y-a.position.y)^2>a.item_pickup_distance^2 then return failure("out_of_pickup_reach") end; '
-                body += '''
+                body += """
  local amount=math.min(x.count or 1,stack.count)
  local moved=inv.insert{name=stack.name,quality=quality,count=amount}
  if moved>0 then
@@ -560,30 +648,30 @@ if removed<=0 then return success{status="waiting",moved=0} end
 local inserted=inv.insert{name=x.item,count=removed}
 if inserted<removed then source.insert{name=x.item,count=removed-inserted} end
 return success{status=inserted>0 and "succeeded" or "waiting",moved=inserted}
-'''
+"""
         elif kind == "bar":
-            body += '''
+            body += """
 local e=target(x.position,x.name)
 if not e or e.type~="container" then return failure("container_missing") end
-'''
+"""
             if self.backend == "character":
                 body += 'if not a.can_reach_entity(e) then return failure("out_of_reach") end; '
-            body += '''
+            body += """
 local chest=e.get_inventory(defines.inventory.chest)
 if not chest or not chest.supports_bar() then return failure("inventory_bar_unsupported") end
 if x.slots>#chest then return failure("bar_exceeds_inventory_size") end
 chest.set_bar(x.slots+1)
 local bar=chest.get_bar()
 return bar==x.slots+1 and success{status="succeeded",slots=bar-1} or failure("inventory_bar_rejected")
-'''
+"""
         elif kind == "recipe":
-            body += '''
+            body += """
 local e=target(x.position,x.name)
 if not e then return failure("target_missing") end
-'''
+"""
             if self.backend == "character":
                 body += 'if not a.can_reach_entity(e) then return failure("out_of_reach") end; '
-            body += '''
+            body += """
 local r=f.recipes[x.recipe]
 if not r or not r.enabled then return failure("recipe_locked") end
 local current=e.get_recipe()
@@ -593,9 +681,9 @@ current=e.get_recipe()
 if not current or current.name~=x.recipe then return failure("recipe_rejected") end
 if x.direction~=nil and e.direction~=x.direction then return failure("recipe_direction_rejected") end
 return success{status="succeeded",direction=e.direction}
-'''
+"""
         elif kind == "research":
-            body += '''
+            body += """
 local t=f.technologies[x.technology]
 if not t then return failure("unknown_technology") end
 if t.researched then return success{status="succeeded"} end
@@ -604,13 +692,15 @@ for _,prereq in pairs(t.prerequisites) do if not prereq.researched then return f
 if f.current_research and f.current_research.name==t.name then return success{status="running"} end
 if not f.add_research(t) then return failure("research_rejected") end
 return success{status="running"}
-'''
+"""
         elif kind == "stop":
             from .deterministic_repair_control import STOP_REPAIR_LUA
+
             body += STOP_REPAIR_LUA
             body += 'a.walking_state={walking=false};a.mining_state={mining=false};return success{status="succeeded"}'
         elif kind == "launch":
             from .deterministic_launch import LAUNCH_LUA
+
             body += LAUNCH_LUA
         else:
             raise ValueError(f"Unsupported deterministic action: {kind}")
@@ -627,22 +717,36 @@ return success{status="running"}
         if self.backend != "assisted":
             raise ValueError("build_many requires the assisted backend")
         rows = action.get("actions")
-        if (set(action) - {"type", "actions", "reason"} or not isinstance(rows, list)
-                or not 1 <= len(rows) <= BUILD_BATCH_LIMIT):
+        if (
+            set(action) - {"type", "actions", "reason"}
+            or not isinstance(rows, list)
+            or not 1 <= len(rows) <= BUILD_BATCH_LIMIT
+        ):
             raise ValueError("build_many requires 1 to 32 infrastructure build actions")
         if "reason" in action and not isinstance(action["reason"], str):
             raise ValueError("build_many reasons must be strings")
         # Validate the entire envelope before the first mutation, including later
         # children that would otherwise fail only after earlier items were spent.
         for row in rows:
-            if (not isinstance(row, dict) or set(row) - {"type", "name", "item", "position", "direction", "reason"}
-                    or row.get("type") != "build" or not isinstance(row.get("name"), str)
-                    or row["name"] not in BUILD_BATCH_NAMES):
-                raise ValueError("build_many accepts only ordinary belt, pole, plain pipe, and basic/long-handed/fast inserter builds")
+            if (
+                not isinstance(row, dict)
+                or set(row) - {"type", "name", "item", "position", "direction", "reason"}
+                or row.get("type") != "build"
+                or not isinstance(row.get("name"), str)
+                or row["name"] not in BUILD_BATCH_NAMES
+            ):
+                raise ValueError(
+                    "build_many accepts only ordinary belt, pole, plain pipe, and basic/long-handed/fast inserter builds"
+                )
             position = row.get("position")
-            if (not isinstance(position, dict) or set(position) != {"x", "y"}
-                    or any(isinstance(value, bool) or not isinstance(value, (int, float))
-                           or not math.isfinite(value) for value in position.values())):
+            if (
+                not isinstance(position, dict)
+                or set(position) != {"x", "y"}
+                or any(
+                    isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+                    for value in position.values()
+                )
+            ):
                 raise ValueError("build_many requires finite x/y positions")
             direction = row.get("direction", 0)
             if isinstance(direction, bool) or not isinstance(direction, int) or direction not in (0, 4, 8, 12):
@@ -659,20 +763,42 @@ return success{status="running"}
             except (TimeoutError, RconError, OSError) as exc:
                 # The last command may have executed. Keep the confirmed prefix
                 # separate and stop the worker; a resume must observe the world.
-                return {"ok": False, "status": "blocked", "reason": "build_batch_outcome_unknown",
-                        "completed": index, "built": built, "reused": reused, "results": results,
-                        "uncertain_index": index, "exception": str(exc), "exception_type": type(exc).__name__}
+                return {
+                    "ok": False,
+                    "status": "blocked",
+                    "reason": "build_batch_outcome_unknown",
+                    "completed": index,
+                    "built": built,
+                    "reused": reused,
+                    "results": results,
+                    "uncertain_index": index,
+                    "exception": str(exc),
+                    "exception_type": type(exc).__name__,
+                }
             results.append(result)
             if not result.get("ok") or result.get("status") != "succeeded":
-                return {**result, "ok": False, "reason": result.get("reason", "build_batch_child_not_complete"),
-                        "completed": index, "built": built, "reused": reused, "results": results,
-                        "failed_index": index}
+                return {
+                    **result,
+                    "ok": False,
+                    "reason": result.get("reason", "build_batch_child_not_complete"),
+                    "completed": index,
+                    "built": built,
+                    "reused": reused,
+                    "results": results,
+                    "failed_index": index,
+                }
             if result.get("reused"):
                 reused += 1
             else:
                 built += 1
-        return {"ok": True, "status": "succeeded", "completed": len(rows),
-                "built": built, "reused": reused, "results": results}
+        return {
+            "ok": True,
+            "status": "succeeded",
+            "completed": len(rows),
+            "built": built,
+            "reused": reused,
+            "results": results,
+        }
 
     def save(self) -> None:
         with FactorioRconClient(self.cfg.rcon_host, self.cfg.rcon_port, self.cfg.rcon_password) as c:

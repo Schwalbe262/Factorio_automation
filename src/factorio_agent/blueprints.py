@@ -1,4 +1,5 @@
 """Bounded reader for Factorio blueprint exchange strings (analysis only)."""
+
 from __future__ import annotations
 
 import base64
@@ -49,7 +50,7 @@ def decode_blueprint_string(text: str) -> dict[str, Any]:
         raise BlueprintDecodeError("malformed compressed JSON payload") from exc
     if not isinstance(value, dict):
         raise BlueprintDecodeError("blueprint root must be a JSON object")
-    if not (isinstance(value.get("blueprint"),dict) or isinstance(value.get("blueprint_book"),dict)):
+    if not (isinstance(value.get("blueprint"), dict) or isinstance(value.get("blueprint_book"), dict)):
         raise BlueprintDecodeError("expected a blueprint or blueprint book root")
     # Validate all nested blueprint entity lists before returning the payload.
     list(iter_blueprints(value))
@@ -102,11 +103,13 @@ def summarize_blueprint(payload: Mapping[str, Any], catalog: Mapping[str, Any] |
             if entities_seen > MAX_ENTITIES:
                 raise BlueprintDecodeError("blueprint entity count exceeds limit")
         names = sorted(counts)
-        result.append({
-            "label": bp.get("label", ""),
-            "entity_total": sum(counts.values()),
-            "entity_counts": dict(sorted(counts.items())),
-            "catalog_unknown_entities": [name for name in names if name not in catalog_entities],
-            "verification": "UNVERIFIED_STRUCTURE_ONLY",
-        })
+        result.append(
+            {
+                "label": bp.get("label", ""),
+                "entity_total": sum(counts.values()),
+                "entity_counts": dict(sorted(counts.items())),
+                "catalog_unknown_entities": [name for name in names if name not in catalog_entities],
+                "verification": "UNVERIFIED_STRUCTURE_ONLY",
+            }
+        )
     return result

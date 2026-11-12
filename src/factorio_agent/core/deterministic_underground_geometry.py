@@ -4,6 +4,7 @@ These records describe a plan, not proof of an engine connection. A caller
 must obtain the distance limit from its world catalog and separately verify
 the live pair before treating transport capacity or material flow as proven.
 """
+
 from __future__ import annotations
 
 import math
@@ -17,10 +18,13 @@ def _mouth(entity):
     direction = entity.get("direction")
     role = entity.get("belt_to_ground_type")
     position = entity.get("position")
-    if (type(direction) is not int or direction not in DIRECTIONS or role not in {"input", "output"}
-            or not isinstance(position, dict)
-            or any(type(position.get(axis)) not in (int, float) or not math.isfinite(position[axis])
-                   for axis in ("x", "y"))):
+    if (
+        type(direction) is not int
+        or direction not in DIRECTIONS
+        or role not in {"input", "output"}
+        or not isinstance(position, dict)
+        or any(type(position.get(axis)) not in (int, float) or not math.isfinite(position[axis]) for axis in ("x", "y"))
+    ):
         raise ValueError("invalid underground endpoint geometry")
     return position["x"], position["y"], direction, role
 
@@ -45,10 +49,17 @@ def underground_edges(plan: dict) -> dict:
             raise ValueError("invalid underground pair record")
         inlet, outlet = _mouth(pair.get("input")), _mouth(pair.get("output"))
         limit = pair.get("max_distance")
-        if (inlet[3] != "input" or outlet[3] != "output" or inlet[2] != outlet[2]
-                or mouths.get(inlet[:2]) != inlet or mouths.get(outlet[:2]) != outlet
-                or inlet[:2] in claimed or outlet[:2] in claimed
-                or type(limit) is not int or limit < 1):
+        if (
+            inlet[3] != "input"
+            or outlet[3] != "output"
+            or inlet[2] != outlet[2]
+            or mouths.get(inlet[:2]) != inlet
+            or mouths.get(outlet[:2]) != outlet
+            or inlet[:2] in claimed
+            or outlet[:2] in claimed
+            or type(limit) is not int
+            or limit < 1
+        ):
             raise ValueError("underground pair does not match its reserved endpoints")
         dx, dy = DIRECTIONS[inlet[2]]
         vx, vy = outlet[0] - inlet[0], outlet[1] - inlet[1]

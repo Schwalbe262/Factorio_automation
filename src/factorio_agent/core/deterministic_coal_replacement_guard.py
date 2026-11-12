@@ -1,4 +1,5 @@
 """Atomic live preconditions for an ordinary paid coal-inserter replacement."""
+
 from __future__ import annotations
 
 import math
@@ -16,8 +17,11 @@ def _positive(value):
 
 
 def _position(value):
-    if (not isinstance(value, dict) or set(value) != {"x", "y"}
-            or any(type(v) not in (int, float) or not math.isfinite(v) for v in value.values())):
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"x", "y"}
+        or any(type(v) not in (int, float) or not math.isfinite(v) for v in value.values())
+    ):
         raise ValueError("coal replacement requires finite exact positions")
     return value["x"], value["y"]
 
@@ -26,18 +30,44 @@ def validate_coal_transit_replacement(action: dict) -> None:
     if "coal_transit_replacement" not in action:
         return
     guard = action["coal_transit_replacement"]
-    keys = {"item", "replacement", "expected_actor_unit_number", "expected_network_id", "old_direction", "pickup", "drop", "pole"}
-    allowed = {"type", "name", "position", "count", "reason", "expected_entity_unit",
-               "expected_entity_world_id", "coal_transit_replacement"}
-    if (not isinstance(guard, dict) or set(guard) != keys or set(action) - allowed
-            or action.get("type") != "mine" or action.get("name") != "burner-inserter"
-            or type(action.get("count", 1)) is not int or action.get("count", 1) != 1
-            or not _positive(action.get("expected_entity_unit"))
-            or not isinstance(action.get("expected_entity_world_id"), str) or not action["expected_entity_world_id"]
-            or guard.get("item") != "coal" or guard.get("replacement") != "fast-inserter"
-            or not _positive(guard.get("expected_actor_unit_number"))
-            or not _positive(guard.get("expected_network_id"))
-            or type(guard.get("old_direction")) is not int or guard["old_direction"] not in DIRECTIONS):
+    keys = {
+        "item",
+        "replacement",
+        "expected_actor_unit_number",
+        "expected_network_id",
+        "old_direction",
+        "pickup",
+        "drop",
+        "pole",
+    }
+    allowed = {
+        "type",
+        "name",
+        "position",
+        "count",
+        "reason",
+        "expected_entity_unit",
+        "expected_entity_world_id",
+        "coal_transit_replacement",
+    }
+    if (
+        not isinstance(guard, dict)
+        or set(guard) != keys
+        or set(action) - allowed
+        or action.get("type") != "mine"
+        or action.get("name") != "burner-inserter"
+        or type(action.get("count", 1)) is not int
+        or action.get("count", 1) != 1
+        or not _positive(action.get("expected_entity_unit"))
+        or not isinstance(action.get("expected_entity_world_id"), str)
+        or not action["expected_entity_world_id"]
+        or guard.get("item") != "coal"
+        or guard.get("replacement") != "fast-inserter"
+        or not _positive(guard.get("expected_actor_unit_number"))
+        or not _positive(guard.get("expected_network_id"))
+        or type(guard.get("old_direction")) is not int
+        or guard["old_direction"] not in DIRECTIONS
+    ):
         raise ValueError("invalid coal transit mining guard")
     position = _position(action.get("position"))
     positions, units = {position}, {action["expected_entity_unit"], guard["expected_actor_unit_number"]}
@@ -45,10 +75,14 @@ def validate_coal_transit_replacement(action: dict) -> None:
         raise ValueError("coal replacement actor and target must differ")
     for label in ("pickup", "drop", "pole"):
         spec = guard[label]
-        if (not isinstance(spec, dict) or set(spec) != {"name", "position", "direction", "unit_number"}
-                or spec.get("name") != ("small-electric-pole" if label == "pole" else "transport-belt")
-                or type(spec.get("direction")) is not int or spec["direction"] not in DIRECTIONS
-                or not _positive(spec.get("unit_number"))):
+        if (
+            not isinstance(spec, dict)
+            or set(spec) != {"name", "position", "direction", "unit_number"}
+            or spec.get("name") != ("small-electric-pole" if label == "pole" else "transport-belt")
+            or type(spec.get("direction")) is not int
+            or spec["direction"] not in DIRECTIONS
+            or not _positive(spec.get("unit_number"))
+        ):
             raise ValueError("invalid coal replacement endpoint identity")
         point = _position(spec["position"])
         if point in positions or spec["unit_number"] in units:
@@ -62,7 +96,7 @@ def validate_coal_transit_replacement(action: dict) -> None:
                 raise ValueError("coal replacement requires adjacent pickup and drop belts")
 
 
-COAL_TRANSIT_REPLACEMENT_LUA = r'''
+COAL_TRANSIT_REPLACEMENT_LUA = r"""
 if x.coal_transit_replacement then
  local q=x.coal_transit_replacement
  if not d or d.world_id~=x.expected_entity_world_id or not a or not a.valid
@@ -161,4 +195,4 @@ if x.coal_transit_replacement then
  recover inventory/held items. No fuel, energy or replacement is synthesized. ]]
  if inv.count_empty_stacks(false,false)<1+cargo then return failure("coal_replacement_inventory_full") end
 end
-'''
+"""

@@ -25,7 +25,7 @@ PLAYER_NAME = "FactoryAutomaton"
 _PROCESSES: dict[str, Any] = {}
 
 
-BIND_CRAFTING_PLAYER_LUA = r'''
+BIND_CRAFTING_PLAYER_LUA = r"""
 local name=d and d.crafting_player_name or"FactoryAutomaton"
 local p=nil
 if d and d.crafting_player_index then
@@ -72,7 +72,7 @@ d.crafting_player_name=p.name
 d.crafting_actor_unit_number=a.unit_number
 return {status="ready",player_name=p.name,player_index=p.index,connected=p.connected,
  character_unit_number=a.unit_number,discarded_join_inventory=discarded}
-'''
+"""
 
 
 def _identity(pid: int) -> int | None:
@@ -89,7 +89,9 @@ def _identity(pid: int) -> int | None:
         return None
     try:
         created, exited, kernel_time, user_time = (wintypes.FILETIME() for _ in range(4))
-        if not kernel.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel_time), ctypes.byref(user_time)):
+        if not kernel.GetProcessTimes(
+            handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel_time), ctypes.byref(user_time)
+        ):
             return None
         if exited.dwLowDateTime or exited.dwHighDateTime:
             return None
@@ -106,12 +108,14 @@ def _hide_client_windows(pid: int) -> None:
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
     user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+
     def visit(hwnd, _):
         owner = wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
         if owner.value == pid:
             user32.ShowWindow(hwnd, 0)
         return True
+
     callback = callback_type(visit)
     user32.EnumWindows(callback, 0)
 
@@ -121,10 +125,13 @@ def _view_requested(root: Path, state: dict[str, Any]) -> bool:
         view = json.loads((root / "client-view.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
-    return (isinstance(view, dict) and view.get("visible") is True
-            and bool(state.get("creation_time"))
-            and view.get("pid") == state.get("pid")
-            and view.get("creation_time") == state["creation_time"])
+    return (
+        isinstance(view, dict)
+        and view.get("visible") is True
+        and bool(state.get("creation_time"))
+        and view.get("pid") == state.get("pid")
+        and view.get("creation_time") == state["creation_time"]
+    )
 
 
 def _show_client_windows(pid: int, creation_time: int) -> int:
@@ -136,9 +143,17 @@ def _show_client_windows(pid: int, creation_time: int) -> int:
     user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
     user32.SetForegroundWindow.argtypes = [wintypes.HWND]
     user32.IsWindowVisible.argtypes = [wintypes.HWND]
-    user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
-                                   ctypes.c_int, ctypes.c_int, wintypes.UINT]
+    user32.SetWindowPos.argtypes = [
+        wintypes.HWND,
+        wintypes.HWND,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.UINT,
+    ]
     shown = 0
+
     def visit(hwnd, _):
         nonlocal shown
         owner = wintypes.DWORD()
@@ -154,6 +169,7 @@ def _show_client_windows(pid: int, creation_time: int) -> int:
             user32.SetForegroundWindow(hwnd)
             shown += bool(user32.IsWindowVisible(hwnd))
         return True
+
     user32.EnumWindows(callback_type(visit), 0)
     return shown
 
@@ -179,8 +195,7 @@ def set_client_visibility(cfg: Any, *, visible: bool = True) -> dict[str, Any]:
             return {"status": "running", "reason": "client_window_not_ready", "pid": pid}
     elif _identity(pid) == created:
         _hide_client_windows(pid)
-    return {"status": "ready", "pid": pid, "visible": visible,
-            "address": f"{cfg.rcon_host}:{cfg.server_port}"}
+    return {"status": "ready", "pid": pid, "visible": visible, "address": f"{cfg.rcon_host}:{cfg.server_port}"}
 
 
 def stop_crafting_client(cfg: Any) -> dict[str, Any]:
@@ -206,7 +221,9 @@ def stop_crafting_client(cfg: Any) -> dict[str, Any]:
         return {"status": "blocked", "reason": "owned_client_stop_failed", "pid": pid}
     try:
         created, exited, kernel_time, user_time = (wintypes.FILETIME() for _ in range(4))
-        if not kernel.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel_time), ctypes.byref(user_time)):
+        if not kernel.GetProcessTimes(
+            handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel_time), ctypes.byref(user_time)
+        ):
             return {"status": "blocked", "reason": "owned_client_identity_unavailable", "pid": pid}
         identity = (created.dwHighDateTime << 32) | created.dwLowDateTime
         if identity != state["creation_time"]:
@@ -234,18 +251,59 @@ def prepare_client(cfg: Any) -> tuple[list[str], Path]:
     (root / "steam_appid.txt").write_text("427520", encoding="ascii")
     mods = root / "mods"
     mods.mkdir(exist_ok=True)
-    (mods / "mod-list.json").write_text(json.dumps({"mods": [{"name": name, "enabled": True}
-        for name in ("base", "elevated-rails", "recycler", "quality", "space-age")]}), encoding="utf-8")
+    (mods / "mod-list.json").write_text(
+        json.dumps(
+            {
+                "mods": [
+                    {"name": name, "enabled": True}
+                    for name in ("base", "elevated-rails", "recycler", "quality", "space-age")
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
     config = root / "client-config.ini"
     install = Path(cfg.factorio_exe).parent.parent.parent
     if not config.exists():
-        config.write_text("\n".join(["; version=13", "[path]", f"read-data={(install / 'data').as_posix()}",
-                                   f"write-data={data.as_posix()}", "", "[general]", "locale=en", "",
-                                   "[other]", "check-updates=false", "enable-blueprint-storage-cloud-sync=false",
-                                   "", "[graphics]", "full-screen=false", ""]), encoding="utf-8")
-    command = [str(cfg.factorio_exe), "--config", str(config), "--mod-directory", str(mods),
-               "--disable-migration-window", "--disable-audio", "--force-graphics-preset", "very-low",
-               "--window-size", "800x600", "--port", "0", "--mp-connect", f"{cfg.rcon_host}:{cfg.server_port}"]
+        config.write_text(
+            "\n".join(
+                [
+                    "; version=13",
+                    "[path]",
+                    f"read-data={(install / 'data').as_posix()}",
+                    f"write-data={data.as_posix()}",
+                    "",
+                    "[general]",
+                    "locale=en",
+                    "",
+                    "[other]",
+                    "check-updates=false",
+                    "enable-blueprint-storage-cloud-sync=false",
+                    "",
+                    "[graphics]",
+                    "full-screen=false",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    command = [
+        str(cfg.factorio_exe),
+        "--config",
+        str(config),
+        "--mod-directory",
+        str(mods),
+        "--disable-migration-window",
+        "--disable-audio",
+        "--force-graphics-preset",
+        "very-low",
+        "--window-size",
+        "800x600",
+        "--port",
+        "0",
+        "--mp-connect",
+        f"{cfg.rcon_host}:{cfg.server_port}",
+    ]
     settings = Path(cfg.runtime_dir) / "vanilla" / "server-settings.json"
     if settings.exists():
         password = json.loads(settings.read_text(encoding="utf-8")).get("game_password")
@@ -269,9 +327,12 @@ def ensure_crafting_player(game: Any) -> dict[str, Any]:
     live = process is not None and process.poll() is None
     if not live and state.get("pid") and state.get("creation_time"):
         live = _identity(int(state["pid"])) == state["creation_time"]
-    owned = bool(state.get("pid") and state.get("creation_time")
-                 and (process is None or process.pid == state["pid"])
-                 and _identity(int(state["pid"])) == state["creation_time"])
+    owned = bool(
+        state.get("pid")
+        and state.get("creation_time")
+        and (process is None or process.pid == state["pid"])
+        and _identity(int(state["pid"])) == state["creation_time"]
+    )
     if owned and not _view_requested(root, state):
         _hide_client_windows(int(state["pid"]))
     if result.get("status") == "ready":
@@ -280,14 +341,24 @@ def ensure_crafting_player(game: Any) -> dict[str, Any]:
         return result
     if live:
         if time.time() - state.get("started_at", time.time()) > 120:
-            return {"status": "blocked", "reason": "dedicated_client_connection_timeout", "player_name": PLAYER_NAME,
-                    "pid": state["pid"], "log_path": str(root / "data" / "factorio-current.log")}
+            return {
+                "status": "blocked",
+                "reason": "dedicated_client_connection_timeout",
+                "player_name": PLAYER_NAME,
+                "pid": state["pid"],
+                "log_path": str(root / "data" / "factorio-current.log"),
+            }
         return dict(result, pid=state["pid"])
     if time.time() - state.get("started_at", 0) < 10:
         return {"status": "running", "reason": "dedicated_client_restart_backoff", "player_name": PLAYER_NAME}
     command, root = prepare_client(cfg)
-    process=spawn_console_independent(command,cwd=str(root),log_path=root/'client-process.log',hide_window=True)
+    process = spawn_console_independent(command, cwd=str(root), log_path=root / "client-process.log", hide_window=True)
     _PROCESSES[str(root)] = process
-    state = {"pid": process.pid, "creation_time": _identity(process.pid), "started_at": time.time(), "player_name": PLAYER_NAME}
+    state = {
+        "pid": process.pid,
+        "creation_time": _identity(process.pid),
+        "started_at": time.time(),
+        "player_name": PLAYER_NAME,
+    }
     registry.write_text(json.dumps(state), encoding="utf-8")
     return {"status": "running", "reason": "dedicated_client_started", **state}

@@ -5,8 +5,13 @@ from factorio_agent.verification import FlowWindow
 
 class SustainedFlowTests(unittest.TestCase):
     def sample(self, window, tick, produced, consumed, *, world="a", healthy=True):
-        return window.add(world_id=world, tick=tick, produced={"science": produced},
-                          consumed={"science": consumed}, supplies_healthy=healthy)
+        return window.add(
+            world_id=world,
+            tick=tick,
+            produced={"science": produced},
+            consumed={"science": consumed},
+            supplies_healthy=healthy,
+        )
 
     def test_starting_inventory_and_lifetime_counts_cannot_prove_current_flow(self):
         window = FlowWindow({"science": 30})
@@ -41,10 +46,12 @@ class SustainedFlowTests(unittest.TestCase):
         self.assertEqual(result["status"], "insufficient_throughput")
 
     def test_observation_gap_supply_fault_rollback_and_world_change_reset_window(self):
-        for change, reason in (({"tick": 1000}, "observation_gap"),
-                               ({"tick": 0}, "tick_rollback_or_duplicate"),
-                               ({"world": "other", "tick": 600}, "world_changed"),
-                               ({"healthy": False, "tick": 600}, "supply_fault")):
+        for change, reason in (
+            ({"tick": 1000}, "observation_gap"),
+            ({"tick": 0}, "tick_rollback_or_duplicate"),
+            ({"world": "other", "tick": 600}, "world_changed"),
+            ({"healthy": False, "tick": 600}, "supply_fault"),
+        ):
             window = FlowWindow({"science": 30})
             self.sample(window, 0, 20, 20)
             arguments = {"tick": 600, "produced": 21, "consumed": 21, **change}

@@ -16,12 +16,6 @@ NO_MOD_SAVE_NAME = "no-mod-rcon.zip"
 NO_MOD_MAP_GEN_SETTINGS_NAME = "safe-start-map-gen-settings.json"
 
 
-
-
-
-
-
-
 def no_mod_save_path(cfg: AppConfig) -> Path:
     return cfg.runtime_dir / "vanilla" / "saves" / NO_MOD_SAVE_NAME
 
@@ -94,8 +88,6 @@ def write_no_mod_server_settings(cfg: AppConfig) -> Path:
     return settings_path
 
 
-
-
 def write_no_mod_server_config(cfg: AppConfig) -> Path:
     factorio_root = cfg.factorio_exe.parent.parent.parent
     read_data = factorio_root / "data"
@@ -121,8 +113,6 @@ def write_no_mod_server_config(cfg: AppConfig) -> Path:
     return config_path
 
 
-
-
 def build_create_no_mod_save_command(cfg: AppConfig, save_path: Path | None = None) -> list[str]:
     mod_dir = prepare_vanilla_mod_directory(cfg.runtime_dir)
     server_config = write_no_mod_server_config(cfg)
@@ -139,16 +129,6 @@ def build_create_no_mod_save_command(cfg: AppConfig, save_path: Path | None = No
         "--create",
         str(target_save),
     ]
-
-
-
-
-
-
-
-
-
-
 
 
 def build_start_no_mod_server_command(
@@ -184,8 +164,6 @@ def build_start_no_mod_server_command(
     ]
 
 
-
-
 def wait_for_rcon(cfg: AppConfig, timeout_seconds: int = 120) -> None:
     deadline = time.monotonic() + timeout_seconds
     last_error: Exception | None = None
@@ -198,5 +176,3 @@ def wait_for_rcon(cfg: AppConfig, timeout_seconds: int = 120) -> None:
             last_error = exc
             time.sleep(1)
     raise TimeoutError(f"RCON did not become ready within {timeout_seconds}s: {last_error}")
-
-

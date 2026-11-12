@@ -16,8 +16,7 @@ from typing import Any, Iterable, Mapping
 
 
 DIRECTIONS = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}
-FLUID_ITEMS = {"water", "steam", "crude-oil", "heavy-oil", "light-oil",
-               "petroleum-gas", "sulfuric-acid", "lubricant"}
+FLUID_ITEMS = {"water", "steam", "crude-oil", "heavy-oil", "light-oil", "petroleum-gas", "sulfuric-acid", "lubricant"}
 
 
 def _point(value: Any) -> tuple[float, float]:
@@ -39,15 +38,21 @@ def _rotate(x: float, y: float, direction: int) -> tuple[float, float]:
 
 
 def _failure(reason: str) -> dict[str, Any]:
-    return {"ok": False, "reason": reason, "entities": [], "ports": [],
-            "required_items": {}, "bounds": {}}
+    return {"ok": False, "reason": reason, "entities": [], "ports": [], "required_items": {}, "bounds": {}}
 
 
-def _entity(name: str, x: float, y: float, *, direction: int = 0,
-            width: int = 1, height: int = 1, recipe: str | None = None,
-            fluid: str | None = None) -> dict[str, Any]:
-    result = {"name": name, "position": _position(x, y), "direction": direction,
-              "_width": width, "_height": height}
+def _entity(
+    name: str,
+    x: float,
+    y: float,
+    *,
+    direction: int = 0,
+    width: int = 1,
+    height: int = 1,
+    recipe: str | None = None,
+    fluid: str | None = None,
+) -> dict[str, Any]:
+    result = {"name": name, "position": _position(x, y), "direction": direction, "_width": width, "_height": height}
     if recipe:
         result["recipe"] = recipe
     if fluid:
@@ -55,10 +60,10 @@ def _entity(name: str, x: float, y: float, *, direction: int = 0,
     return result
 
 
-def _port(kind: str, item: str, direction: str, x: float, y: float,
-          facing: int | None = None, **extra: Any) -> dict[str, Any]:
-    result = {"kind": kind, "item": item, "direction": direction,
-              "position": _position(x, y), **extra}
+def _port(
+    kind: str, item: str, direction: str, x: float, y: float, facing: int | None = None, **extra: Any
+) -> dict[str, Any]:
+    result = {"kind": kind, "item": item, "direction": direction, "position": _position(x, y), **extra}
     if facing is not None:
         result["facing"] = facing
     return result
@@ -82,27 +87,37 @@ def _free(entities: list[dict[str, Any]], candidate: dict[str, Any]) -> bool:
     return not any(_overlap(candidate, existing) for existing in entities)
 
 
-def _item_connection(entities: list[dict[str, Any]], ports: list[dict[str, Any]],
-                     item: str, direction: str, slot: tuple[float, float, int],
-                     machine_index: int, inserter: str = "inserter") -> bool:
+def _item_connection(
+    entities: list[dict[str, Any]],
+    ports: list[dict[str, Any]],
+    item: str,
+    direction: str,
+    slot: tuple[float, float, int],
+    machine_index: int,
+    inserter: str = "inserter",
+) -> bool:
     x, y, outward = slot
     dx, dy = DIRECTIONS[outward]
     facing = outward if direction == "input" else (outward + 8) % 16
     belt_direction = (outward + 8) % 16 if direction == "input" else outward
     additions = [_entity(inserter, x, y, direction=facing)]
-    additions.extend(_entity("transport-belt", x + dx * n, y + dy * n,
-                             direction=belt_direction) for n in (1, 2))
+    additions.extend(_entity("transport-belt", x + dx * n, y + dy * n, direction=belt_direction) for n in (1, 2))
     if any(not _free(entities, e) for e in additions):
         return False
     entities.extend(additions)
-    ports.append(_port("item", item, direction, x + 2 * dx, y + 2 * dy,
-                       belt_direction, machine_index=machine_index))
+    ports.append(_port("item", item, direction, x + 2 * dx, y + 2 * dy, belt_direction, machine_index=machine_index))
     return True
 
 
-def _solid_row(template: str, recipe: str | None, machine: str, count: int,
-               inputs: list[str], output: str | None,
-               geometry: dict[str, Any] | None) -> tuple[list, list]:
+def _solid_row(
+    template: str,
+    recipe: str | None,
+    machine: str,
+    count: int,
+    inputs: list[str],
+    output: str | None,
+    geometry: dict[str, Any] | None,
+) -> tuple[list, list]:
     if template == "furnace_row":
         if machine not in {"stone-furnace", "steel-furnace"}:
             raise ValueError("furnace_row supports the 2x2 stone/steel furnace geometry")
@@ -111,7 +126,7 @@ def _solid_row(template: str, recipe: str | None, machine: str, count: int,
         entities, ports = [], []
         for i in range(count):
             x = i * 6
-            entities.append(_entity(machine, x + .5, .5, width=2, height=2))
+            entities.append(_entity(machine, x + 0.5, 0.5, width=2, height=2))
             for k, item in enumerate(inputs):
                 _item_connection(entities, ports, item, "input", (x + k, -1, 0), i)
             _item_connection(entities, ports, output, "output", (x, 2, 8), i)
@@ -147,20 +162,21 @@ def _solid_row(template: str, recipe: str | None, machine: str, count: int,
     return entities, ports
 
 
-def _corner_poles(entities: list[dict[str, Any]], ports: list[dict[str, Any]],
-                  x: float, width: int, height: int) -> None:
+def _corner_poles(
+    entities: list[dict[str, Any]], ports: list[dict[str, Any]], x: float, width: int, height: int
+) -> None:
     for dx in (-(width + 1) / 2, (width + 1) / 2):
         for y in (-(height + 1) / 2, (height + 1) / 2):
             pole = _entity("small-electric-pole", x + dx, y)
             if not _free(entities, pole):
                 raise ValueError("fluid/item geometry occupies reserved power pole position")
             entities.append(pole)
-    ports.append(_port("power", "electricity", "input", x - (width + 1) / 2,
-                       -(height + 1) / 2))
+    ports.append(_port("power", "electricity", "input", x - (width + 1) / 2, -(height + 1) / 2))
 
 
-def _fluid_row(recipe: str | None, machine: str, count: int, inputs: list[str],
-               output: str | None, geometry: dict[str, Any] | None) -> tuple[list, list]:
+def _fluid_row(
+    recipe: str | None, machine: str, count: int, inputs: list[str], output: str | None, geometry: dict[str, Any] | None
+) -> tuple[list, list]:
     if not recipe or not geometry or not geometry.get("fluid_ports"):
         raise ValueError("fluid templates require recipe and explicit prototype fluid ports")
     width, height = geometry.get("width"), geometry.get("height")
@@ -177,8 +193,9 @@ def _fluid_row(recipe: str | None, machine: str, count: int, inputs: list[str],
         required.add((output, "output"))
     if not required.issubset(declared):
         raise ValueError("missing recipe fluid port")
-    if any(not isinstance(p, dict) or not p.get("item") or p.get("direction") not in {"input", "output"}
-           for p in raw_ports):
+    if any(
+        not isinstance(p, dict) or not p.get("item") or p.get("direction") not in {"input", "output"} for p in raw_ports
+    ):
         raise ValueError("each fluid port requires item and input/output direction")
     fluid_inputs = {item for item, direction in declared if direction == "input"}
     fluid_outputs = {item for item, direction in declared if direction == "output"}
@@ -204,9 +221,17 @@ def _fluid_row(recipe: str | None, machine: str, count: int, inputs: list[str],
                 if not _free(entities, pipe):
                     raise ValueError("fluid port corridors overlap")
                 entities.append(pipe)
-            ports.append(_port("fluid", p["item"], p["direction"], cx + px + 2 * dx,
-                               py + 2 * dy, outward if p["direction"] == "output" else (outward + 8) % 16,
-                               machine_index=i))
+            ports.append(
+                _port(
+                    "fluid",
+                    p["item"],
+                    p["direction"],
+                    cx + px + 2 * dx,
+                    py + 2 * dy,
+                    outward if p["direction"] == "output" else (outward + 8) % 16,
+                    machine_index=i,
+                )
+            )
         # Input inserters use the edges first, keeping the central fluid ports clear.
         edge_x, edge_y = (width - 1) // 2, (height - 1) // 2
         slots = [(cx + x, -(height + 1) / 2, 0) for x in (-edge_x, edge_x, 0)]
@@ -224,7 +249,7 @@ def _fluid_row(recipe: str | None, machine: str, count: int, inputs: list[str],
     pipes = [e for e in entities if e["name"] == "pipe"]
     for i, pipe in enumerate(pipes):
         x, y = _point(pipe["position"])
-        for other in pipes[i + 1:]:
+        for other in pipes[i + 1 :]:
             ox, oy = _point(other["position"])
             if pipe["_fluid"] != other["_fluid"] and abs(x - ox) + abs(y - oy) == 1:
                 raise ValueError("different fluid corridors would connect")
@@ -237,7 +262,7 @@ def _steam_bank(count: int) -> tuple[list, list]:
     entities, ports = [], []
     for i in range(count):
         x = i * 8
-        entities.append(_entity("boiler", x, .5, width=3, height=2))
+        entities.append(_entity("boiler", x, 0.5, width=3, height=2))
         for y in (-3, -8):
             entities.append(_entity("steam-engine", x, y, width=3, height=5))
         for px in (-4, -3, -2):
@@ -247,16 +272,28 @@ def _steam_bank(count: int) -> tuple[list, list]:
         entities.append(_entity("burner-inserter", x, 2, direction=8))
         for y in (0, -4, -8):
             entities.append(_entity("small-electric-pole", x + 2, y))
-        ports.extend([_port("fluid", "water", "input", x - 4, 1, 4, machine_index=i),
-                      _port("item", "coal", "input", x - 4, 3, 4, machine_index=i),
-                      _port("power", "electricity", "output", x + 2, 0, machine_index=i)])
+        ports.extend(
+            [
+                _port("fluid", "water", "input", x - 4, 1, 4, machine_index=i),
+                _port("item", "coal", "input", x - 4, 3, 4, machine_index=i),
+                _port("power", "electricity", "output", x + 2, 0, machine_index=i),
+            ]
+        )
     return entities, ports
 
 
-def build_template(template: str, *, recipe: str | None = None, machine: str | None = None,
-                   count: int = 1, inputs: list[str] | None = None, output: str | None = None,
-                   prototype_geometry: dict[str, Any] | None = None,
-                   anchor: dict[str, float] | None = None, rotation: int = 0) -> dict[str, Any]:
+def build_template(
+    template: str,
+    *,
+    recipe: str | None = None,
+    machine: str | None = None,
+    count: int = 1,
+    inputs: list[str] | None = None,
+    output: str | None = None,
+    prototype_geometry: dict[str, Any] | None = None,
+    anchor: dict[str, float] | None = None,
+    rotation: int = 0,
+) -> dict[str, Any]:
     """Create steam_bank, furnace_row, assembler_row, labs_row, chemical_row,
     or refinery_row. ``count`` counts machines (boiler/engine pairs for steam).
 
@@ -276,15 +313,15 @@ def build_template(template: str, *, recipe: str | None = None, machine: str | N
             entities, ports = _steam_bank(count)
         elif template in {"furnace_row", "assembler_row", "labs_row"}:
             defaults = {"furnace_row": "stone-furnace", "assembler_row": "assembling-machine-1", "labs_row": "lab"}
-            entities, ports = _solid_row(template, recipe, machine or defaults[template], count,
-                                         inputs, output, prototype_geometry)
+            entities, ports = _solid_row(
+                template, recipe, machine or defaults[template], count, inputs, output, prototype_geometry
+            )
         elif template in {"chemical_row", "refinery_row", "fluid_machine_row"}:
             default_machine = "oil-refinery" if template == "refinery_row" else "chemical-plant"
-            entities, ports = _fluid_row(recipe, machine or default_machine, count, inputs,
-                                         output, prototype_geometry)
+            entities, ports = _fluid_row(recipe, machine or default_machine, count, inputs, output, prototype_geometry)
         else:
             raise ValueError(f"unsupported template: {template}")
-        ax, ay = _point(anchor if anchor is not None else {"x": .5, "y": .5})
+        ax, ay = _point(anchor if anchor is not None else {"x": 0.5, "y": 0.5})
         for obj in entities + ports:
             x, y = _rotate(*_point(obj["position"]), rotation)
             obj["position"] = _position(ax + x, ay + y)
@@ -293,11 +330,19 @@ def build_template(template: str, *, recipe: str | None = None, machine: str | N
             elif "facing" in obj:
                 obj["facing"] = (obj["facing"] + rotation) % 16
         for i, entity in enumerate(entities):
-            if any(_overlap(entity, other) for other in entities[i + 1:]):
+            if any(_overlap(entity, other) for other in entities[i + 1 :]):
                 raise ValueError("template contains overlapping entities")
         poles = [e for e in entities if e["name"] == "small-electric-pole"]
-        electric_names = {"inserter", "lab", "chemical-plant", "oil-refinery", "steam-engine",
-                          "assembling-machine-1", "assembling-machine-2", "assembling-machine-3"}
+        electric_names = {
+            "inserter",
+            "lab",
+            "chemical-plant",
+            "oil-refinery",
+            "steam-engine",
+            "assembling-machine-1",
+            "assembling-machine-2",
+            "assembling-machine-3",
+        }
         for entity in entities:
             if entity["name"] not in electric_names:
                 continue
@@ -311,23 +356,41 @@ def build_template(template: str, *, recipe: str | None = None, machine: str | N
             if not covered:
                 raise ValueError(f"template leaves {entity['name']} outside power coverage")
         rects = [_rect(e) for e in entities]
-        bounds = {"min_x": min(r[0] for r in rects), "min_y": min(r[1] for r in rects),
-                  "max_x": max(r[2] for r in rects), "max_y": max(r[3] for r in rects)}
+        bounds = {
+            "min_x": min(r[0] for r in rects),
+            "min_y": min(r[1] for r in rects),
+            "max_x": max(r[2] for r in rects),
+            "max_y": max(r[3] for r in rects),
+        }
         bounds.update(width=bounds["max_x"] - bounds["min_x"], height=bounds["max_y"] - bounds["min_y"])
         for e in entities:
             e.pop("_width", None)
             e.pop("_height", None)
             e.pop("_fluid", None)
-        return {"ok": True, "reason": "", "template": template, "entities": entities, "ports": ports,
-                "required_items": dict(sorted(Counter(e["name"] for e in entities).items())),
-                "bounds": bounds, "validation_required": ["placement", "power", "sustained_flow"]}
+        return {
+            "ok": True,
+            "reason": "",
+            "template": template,
+            "entities": entities,
+            "ports": ports,
+            "required_items": dict(sorted(Counter(e["name"] for e in entities).items())),
+            "bounds": bounds,
+            "validation_required": ["placement", "power", "sustained_flow"],
+        }
     except (ValueError, TypeError, KeyError) as exc:
         return _failure(str(exc))
 
 
-def route_orthogonal(start: Any, end: Any, *, occupied: Iterable[Any] = (),
-                     bounds: Mapping[str, float] | None = None, max_nodes: int = 10000,
-                     start_direction: int | None = None, end_direction: int | None = None) -> dict[str, Any]:
+def route_orthogonal(
+    start: Any,
+    end: Any,
+    *,
+    occupied: Iterable[Any] = (),
+    bounds: Mapping[str, float] | None = None,
+    max_nodes: int = 10000,
+    start_direction: int | None = None,
+    end_direction: int | None = None,
+) -> dict[str, Any]:
     """Bounded A* on a tile lattice. Occupied endpoints fail; callers must remove
     only the intended reusable source/destination tiles from occupancy explicitly.
     Start/end directions constrain belt departure/arrival, preventing reversed taps.
@@ -338,7 +401,12 @@ def route_orthogonal(start: Any, end: Any, *, occupied: Iterable[Any] = (),
         ex, ey = _point(end)
         if any(d is not None and d not in DIRECTIONS for d in (start_direction, end_direction)):
             raise ValueError("route directions must be 0,4,8,12")
-        if (sx, sy) == (ex, ey) and start_direction is not None and end_direction is not None and start_direction != end_direction:
+        if (
+            (sx, sy) == (ex, ey)
+            and start_direction is not None
+            and end_direction is not None
+            and start_direction != end_direction
+        ):
             raise ValueError("coincident route endpoints require the same direction")
         if isinstance(max_nodes, bool) or not isinstance(max_nodes, int) or max_nodes < 1:
             raise ValueError("max_nodes must be a positive integer")
@@ -347,18 +415,26 @@ def route_orthogonal(start: Any, end: Any, *, occupied: Iterable[Any] = (),
         blocked = {_point(p) for p in occupied}
         if (sx, sy) in blocked or (ex, ey) in blocked:
             raise ValueError("route endpoint is occupied")
-        limits = dict(bounds or {"min_x": min(sx, ex) - 32, "max_x": max(sx, ex) + 32,
-                                "min_y": min(sy, ey) - 32, "max_y": max(sy, ey) + 32})
+        limits = dict(
+            bounds
+            or {
+                "min_x": min(sx, ex) - 32,
+                "max_x": max(sx, ex) + 32,
+                "min_y": min(sy, ey) - 32,
+                "max_y": max(sy, ey) + 32,
+            }
+        )
+
         def inside(x: float, y: float) -> bool:
             return limits["min_x"] <= x <= limits["max_x"] and limits["min_y"] <= y <= limits["max_y"]
+
         if not inside(sx, sy) or not inside(ex, ey):
             raise ValueError("route endpoint is outside bounds")
         if (sx, sy) != (ex, ey):
             # A forced belt facing requires this adjacent tile in every path.
             # Reject an obstructed approach before spending the search budget;
             # a crossing planner may still select a different endpoint.
-            for x, y, direction, sign in ((sx, sy, start_direction, 1),
-                                           (ex, ey, end_direction, -1)):
+            for x, y, direction, sign in ((sx, sy, start_direction, 1), (ex, ey, end_direction, -1)):
                 if direction is not None:
                     dx, dy = DIRECTIONS[direction]
                     required = (x + dx * sign, y + dy * sign)
@@ -405,7 +481,9 @@ def route_orthogonal(start: Any, end: Any, *, occupied: Iterable[Any] = (),
                 heuristic = 10 * (abs(nx - ex) + abs(ny - ey))
                 heapq.heappush(frontier, (cost + heuristic, sequence, next_node))
         if goal is None:
-            failure.update(visited=visited, reason="route search budget exhausted" if frontier else "no route within bounds")
+            failure.update(
+                visited=visited, reason="route search budget exhausted" if frontier else "no route within bounds"
+            )
             return failure
         path = []
         while True:
@@ -423,7 +501,11 @@ def route_orthogonal(start: Any, end: Any, *, occupied: Iterable[Any] = (),
                 delta = (round(path[i + 1]["x"] - position["x"]), round(path[i + 1]["y"] - position["y"]))
                 direction = next(d for d, vec in DIRECTIONS.items() if vec == delta)
             else:
-                direction = end_direction if end_direction is not None else (segments[-1]["direction"] if segments else start_direction or 0)
+                direction = (
+                    end_direction
+                    if end_direction is not None
+                    else (segments[-1]["direction"] if segments else start_direction or 0)
+                )
             segments.append({"position": position, "direction": direction})
         return {"ok": True, "reason": "", "path": path, "segments": segments, "visited": visited}
     except (ValueError, TypeError, KeyError) as exc:

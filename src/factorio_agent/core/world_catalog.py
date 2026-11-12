@@ -21,13 +21,18 @@ class CatalogError(ValueError):
 
 
 _TABLES = ("recipes", "technologies", "entities", "items", "fluids")
-_SOURCES = {"recipes": "force.recipes", "technologies": "force.technologies",
-            "entities": "prototypes.entity", "items": "prototypes.item", "fluids": "prototypes.fluid"}
+_SOURCES = {
+    "recipes": "force.recipes",
+    "technologies": "force.technologies",
+    "entities": "prototypes.entity",
+    "items": "prototypes.item",
+    "fluids": "prototypes.fluid",
+}
 
 # Optional properties can be absent or invalid for an entity subclass. Required
 # recipe data is read directly so an incompatible API fails instead of exporting
 # plausible but fabricated ingredient counts.
-_LUA_HELPERS = r'''
+_LUA_HELPERS = r"""
 local force = game.forces.player
 local function optional(fn) local ok, value = pcall(fn); if ok then return value end end
 local function keys(values)
@@ -53,10 +58,10 @@ local function products(values)
   end
   return out
 end
-'''
+"""
 
 _LUA_EXPORTERS = {
-    "recipes": r'''
+    "recipes": r"""
 local function export(p)
   local proto = prototypes.recipe[p.name]
   local categories = optional(function() return rows(p.categories) end)
@@ -68,8 +73,8 @@ local function export(p)
     surface_conditions=optional(function() return rows(proto.surface_conditions) end),
     maximum_productivity=optional(function() return proto.maximum_productivity end)}
 end
-''',
-    "technologies": r'''
+""",
+    "technologies": r"""
 local function export(p)
   local proto = p.prototype
   local unlocked = {}
@@ -86,8 +91,8 @@ local function export(p)
     research_trigger=optional(function() return proto.research_trigger end),
     unlocks=unlocked}
 end
-''',
-    "entities": r'''
+""",
+    "entities": r"""
 local function export(p)
   local boxes = {}
   for _, b in pairs(p.fluidbox_prototypes or {}) do
@@ -114,20 +119,20 @@ local function export(p)
     burner=optional(function() return p.burner_prototype ~= nil end),
     electric=optional(function() return p.electric_energy_source_prototype ~= nil end)}
 end
-''',
-    "items": r'''
+""",
+    "items": r"""
 local function export(p)
   return {name=p.name, type=p.type, stack_size=p.stack_size, weight=p.weight,
     place_result=name_of(p.place_result), rocket_launch_products=products(p.rocket_launch_products),
     fuel_value=optional(function() return p.fuel_value end)}
 end
-''',
-    "fluids": r'''
+""",
+    "fluids": r"""
 local function export(p)
   return {name=p.name, default_temperature=p.default_temperature,
     max_temperature=p.max_temperature, fuel_value=p.fuel_value}
 end
-''',
+""",
 }
 
 
@@ -160,7 +165,11 @@ def _typed_rows(values: Mapping[tuple[str, str], float]) -> list[dict[str, Any]]
 
 def _targets(values: Mapping[str, float] | Iterable[Mapping[str, Any]]) -> dict[tuple[str, str], float]:
     result: dict[tuple[str, str], float] = defaultdict(float)
-    iterable = ({"type": "item", "name": name, "amount": count} for name, count in values.items()) if isinstance(values, Mapping) else values
+    iterable = (
+        ({"type": "item", "name": name, "amount": count} for name, count in values.items())
+        if isinstance(values, Mapping)
+        else values
+    )
     for row in iterable:
         result[_material(row)] += _amount(row.get("amount", 1))
     return dict(result)
@@ -244,7 +253,9 @@ class WorldCatalog:
     def from_game(cls, query: Callable[[str], dict[str, Any]], *, chunk_size: int = 48) -> "WorldCatalog":
         if not 1 <= chunk_size <= 256:
             raise CatalogError("chunk_size must be between 1 and 256")
-        meta = query(_LUA_HELPERS + r'''
+        meta = query(
+            _LUA_HELPERS
+            + r"""
 local surface = game.get_surface("nauvis") or game.surfaces[1]
 local raw = {}; local seen = {}
 local function add_source(kind, name)
@@ -282,7 +293,8 @@ return {version=helpers.game_version, active_mods=script.active_mods,
   surface_name=surface.name, surface_properties=properties, raw_sources=raw, raw_sources_authoritative=true,
   names={recipes=keys(force.recipes), technologies=keys(force.technologies),
     entities=keys(prototypes.entity), items=keys(prototypes.item), fluids=keys(prototypes.fluid)}}
-''')
+"""
+        )
         if not isinstance(meta, dict) or not isinstance(meta.get("names"), dict):
             raise CatalogError("game query returned no catalog metadata")
         payload = {key: value for key, value in meta.items() if key != "names"}
@@ -290,12 +302,14 @@ return {version=helpers.game_version, active_mods=script.active_mods,
             names = _sequence(meta["names"].get(table))
             output: dict[str, Any] = {}
             for start in range(0, len(names), chunk_size):
-                batch = names[start:start + chunk_size]
+                batch = names[start : start + chunk_size]
                 # JSON string literals for prototype identifiers have the same
                 # escaping as Lua for these ASCII names; no shell interpolation.
                 literal = "{" + ",".join(json.dumps(name, ensure_ascii=True) for name in batch) + "}"
-                body = (_LUA_HELPERS + _LUA_EXPORTERS[table] + f"\nlocal out = {{}}\nfor _, name in ipairs({literal}) do\n"
-                        f"  out[name] = export({_SOURCES[table]}[name])\nend\nreturn {{entries=out}}")
+                body = (
+                    _LUA_HELPERS + _LUA_EXPORTERS[table] + f"\nlocal out = {{}}\nfor _, name in ipairs({literal}) do\n"
+                    f"  out[name] = export({_SOURCES[table]}[name])\nend\nreturn {{entries=out}}"
+                )
                 response = query(body)
                 entries = response.get("entries") if isinstance(response, dict) else None
                 if not isinstance(entries, dict) or set(entries) != set(batch):
@@ -314,8 +328,10 @@ return {version=helpers.game_version, active_mods=script.active_mods,
         # deep-copying the complete prototype catalog.
         data = dict(self._data)
         for table, fields in (("recipes", ("enabled",)), ("technologies", ("enabled", "researched"))):
-            data[table] = {name: {key: value for key, value in row.items() if key not in fields}
-                           for name, row in data[table].items()}
+            data[table] = {
+                name: {key: value for key, value in row.items() if key not in fields}
+                for name, row in data[table].items()
+            }
         return self._hash(data)
 
     @property
@@ -324,7 +340,9 @@ return {version=helpers.game_version, active_mods=script.active_mods,
 
     @staticmethod
     def _hash(value: Any) -> str:
-        return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+        return hashlib.sha256(
+            json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        ).hexdigest()
 
     def technology_order(self, targets: str | Iterable[str], *, include_researched: bool = False) -> list[str]:
         """Prerequisites first, deterministic ties; unknown names/cycles fail."""
@@ -367,8 +385,14 @@ return {version=helpers.game_version, active_mods=script.active_mods,
     def _recipe_rank(self, recipe: Mapping[str, Any], product: str) -> tuple[Any, ...]:
         unlocks = self._unlocks.get(recipe["name"], [])
         depth = min((len(self.technology_order(t, include_researched=True)) for t in unlocks), default=0)
-        return (recipe["name"] != product, not recipe.get("enabled", False), depth,
-                recipe.get("main_product") != product, len(recipe["ingredients"]), recipe["name"])
+        return (
+            recipe["name"] != product,
+            not recipe.get("enabled", False),
+            depth,
+            recipe.get("main_product") != product,
+            len(recipe["ingredients"]),
+            recipe["name"],
+        )
 
     def _reverses_packaging(self, recipe: Mapping[str, Any], product: tuple[str, str]) -> bool:
         # Emptying a filled container is transportation, not an extraction path.
@@ -378,13 +402,14 @@ return {version=helpers.game_version, active_mods=script.active_mods,
             key = _material(ingredient)
             if key in self._raw:
                 continue
-            producers = [r for r in self._products.get(key, [])
-                         if not any("recycling" in c for c in r["categories"])]
+            producers = [r for r in self._products.get(key, []) if not any("recycling" in c for c in r["categories"])]
             if producers and all(any(_material(i) == product for i in r["ingredients"]) for r in producers):
                 return True
         return False
 
-    def recipe_for_product(self, item: str, unlocked_only: bool = False, *, product_type: str = "item") -> dict[str, Any] | None:
+    def recipe_for_product(
+        self, item: str, unlocked_only: bool = False, *, product_type: str = "item"
+    ) -> dict[str, Any] | None:
         """Choose a standard local production recipe, never a recycling loop.
 
         Natural resource products are terminals even if Space Age provides an
@@ -394,14 +419,20 @@ return {version=helpers.game_version, active_mods=script.active_mods,
         key = (product_type, item)
         if key in self._raw:
             return None
-        candidates = [r for r in self._products.get(key, []) if
-                      (not unlocked_only or r.get("enabled", False)) and self._surface_allowed(r)
-                      and not any("recycling" in category for category in r["categories"])
-                      and not any(_material(i) == key for i in r["ingredients"])
-                      and not self._reverses_packaging(r, key)]
+        candidates = [
+            r
+            for r in self._products.get(key, [])
+            if (not unlocked_only or r.get("enabled", False))
+            and self._surface_allowed(r)
+            and not any("recycling" in category for category in r["categories"])
+            and not any(_material(i) == key for i in r["ingredients"])
+            and not self._reverses_packaging(r, key)
+        ]
         return min(candidates, key=lambda r: self._recipe_rank(r, item)) if candidates else None
 
-    def _graph(self, targets: Mapping[tuple[str, str], float]) -> tuple[list[tuple[str, str]], dict[tuple[str, str], dict[str, Any]]]:
+    def _graph(
+        self, targets: Mapping[tuple[str, str], float]
+    ) -> tuple[list[tuple[str, str]], dict[tuple[str, str], dict[str, Any]]]:
         order: list[tuple[str, str]] = []
         choices: dict[tuple[str, str], dict[str, Any]] = {}
         visited: set[tuple[str, str]] = set()
@@ -443,9 +474,12 @@ return {version=helpers.game_version, active_mods=script.active_mods,
         requested = _targets(products)
         order, choices = self._graph(requested)
         recipes = list(dict.fromkeys(choices[key]["name"] for key in order if key in choices))
-        return {"products": [{"type": key[0], "name": key[1]} for key in order],
-                "recipes": recipes, "technologies": self._technology_for_recipes(recipes),
-                "raw_materials": [{"type": key[0], "name": key[1]} for key in order if key not in choices]}
+        return {
+            "products": [{"type": key[0], "name": key[1]} for key in order],
+            "recipes": recipes,
+            "technologies": self._technology_for_recipes(recipes),
+            "raw_materials": [{"type": key[0], "name": key[1]} for key in order if key not in choices],
+        }
 
     def bill_of_materials(self, products: Mapping[str, float] | Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         """Integer recipe batches with shared ingredients and coproduct credit.
@@ -471,12 +505,20 @@ return {version=helpers.game_version, active_mods=script.active_mods,
                 needed[_material(product)] -= _yield(product) * count
             for ingredient in recipe["ingredients"]:
                 needed[_material(ingredient)] += _amount(ingredient["amount"]) * count
-        return {"targets": _typed_rows(requested), "recipe_batches": dict(sorted(batches.items())),
-                "raw_materials": _typed_rows({k: v for k, v in needed.items() if k in self._raw}),
-                "surplus": _typed_rows({k: -v for k, v in needed.items() if v < -1e-9}),
-                "technologies": self._technology_for_recipes(batches),
-                "assumptions": ["normal quality", "integer batches", "no productivity bonus",
-                                "factory construction and operating fuel excluded", "not a minimum-cost refinery solution"]}
+        return {
+            "targets": _typed_rows(requested),
+            "recipe_batches": dict(sorted(batches.items())),
+            "raw_materials": _typed_rows({k: v for k, v in needed.items() if k in self._raw}),
+            "surplus": _typed_rows({k: -v for k, v in needed.items() if v < -1e-9}),
+            "technologies": self._technology_for_recipes(batches),
+            "assumptions": [
+                "normal quality",
+                "integer batches",
+                "no productivity bonus",
+                "factory construction and operating fuel excluded",
+                "not a minimum-cost refinery solution",
+            ],
+        }
 
     def first_rocket_bom(self, *, include_research: bool = True) -> dict[str, Any]:
         """One manufactured silo, its first rocket, and one platform starter pack.
@@ -488,8 +530,11 @@ return {version=helpers.game_version, active_mods=script.active_mods,
         silo = self.entities.get("rocket-silo")
         if not silo or not silo.get("rocket_parts_required"):
             raise CatalogError("live rocket silo part requirement is unavailable")
-        targets: dict[str, float] = {"rocket-silo": 1, "rocket-part": _amount(silo["rocket_parts_required"]),
-                                   "space-platform-starter-pack": 1}
+        targets: dict[str, float] = {
+            "rocket-silo": 1,
+            "rocket-part": _amount(silo["rocket_parts_required"]),
+            "space-platform-starter-pack": 1,
+        }
         technology_names: set[str] = set()
         science: dict[str, float] = defaultdict(float)
         if include_research:
@@ -512,7 +557,10 @@ return {version=helpers.game_version, active_mods=script.active_mods,
         result = self.bill_of_materials(targets)
         result["science_packs"] = dict(sorted(science.items()))
         result["technology_order"] = self.technology_order(technology_names or result["technologies"])
-        result["trigger_requirements"] = [{"technology": name, "trigger": deepcopy(self.technologies[name]["research_trigger"])}
-                                          for name in result["technology_order"] if self.technologies[name].get("research_trigger")]
+        result["trigger_requirements"] = [
+            {"technology": name, "trigger": deepcopy(self.technologies[name]["research_trigger"])}
+            for name in result["technology_order"]
+            if self.technologies[name].get("research_trigger")
+        ]
         result["catalog_fingerprint"] = self.fingerprint
         return result

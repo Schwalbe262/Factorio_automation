@@ -1,4 +1,5 @@
 """Opt-in inert Lua tables exercise the actual repair guards, without world writes."""
+
 import json
 import os
 from pathlib import Path
@@ -10,7 +11,7 @@ from factorio_agent.core import deterministic_repair_control as repair
 from factorio_agent.core.deterministic_game import DeterministicGame, run_config
 
 
-FIXTURE_LUA = r'''
+FIXTURE_LUA = r"""
 local o=helpers.json_to_table(OPTIONS)
 local game={tick=o.tick or 20};local storage=nil;local f={};local s={};local defines={controllers={character=1,remote=7}}
 local d={world_id="fixture",crafting_player_index=1,crafting_actor_unit_number=15}
@@ -63,16 +64,20 @@ local result=perform()
 return {ok=true,result=result,pending=d.native_repair~=nil,cursor_count=cursor.count,
  cursor_name=cursor.name,inventory_count=inv[1].count,inventory_durability=inv[1].durability,
  selection=a.selected and a.selected.unit_number,repairing=a.repair_state and a.repair_state.repairing or false}
-'''
+"""
 
 
 @unittest.skipUnless(os.environ.get("FACTORIO_REPAIR_INERT_TEST") == "1", "requires inert RCON fixture")
 class RepairControlLuaTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.game = DeterministicGame(run_config(runtime=Path(os.environ.get("FACTORIO_REPAIR_RUNTIME",
-            "runtime/native-repair-fixture")), server_port=34244,
-            rcon_port=int(os.environ.get("FACTORIO_REPAIR_RCON_PORT", "27044"))))
+        cls.game = DeterministicGame(
+            run_config(
+                runtime=Path(os.environ.get("FACTORIO_REPAIR_RUNTIME", "runtime/native-repair-fixture")),
+                server_port=34244,
+                rcon_port=int(os.environ.get("FACTORIO_REPAIR_RCON_PORT", "27044")),
+            )
+        )
 
     def evaluate(self, body, **options):
         script = FIXTURE_LUA.replace("OPTIONS", json.dumps(json.dumps(options))).replace("BODY", body)
@@ -82,8 +87,16 @@ class RepairControlLuaTests(unittest.TestCase):
         return result
 
     def test_begin_rejects_changed_world_actor_target_force_surface_and_unrelated_cursor(self):
-        for change in ({"world": "different"}, {"actor": 16}, {"unit": 45}, {"foreign": True},
-                       {"surface": True}, {"disconnected": True}, {"missing": True}, {"cursor_busy": True}):
+        for change in (
+            {"world": "different"},
+            {"actor": 16},
+            {"unit": 45},
+            {"foreign": True},
+            {"surface": True},
+            {"disconnected": True},
+            {"missing": True},
+            {"cursor_busy": True},
+        ):
             with self.subTest(change=change):
                 result = self.evaluate(repair.BEGIN_REPAIR_LUA, **change)
                 self.assertFalse(result["result"]["ok"])
@@ -110,11 +123,13 @@ class RepairControlLuaTests(unittest.TestCase):
         self.assertEqual((result["inventory_count"], result["cursor_count"]), (2, 0))
 
     def test_pulse_revalidates_identity_tick_deadline_selection_and_real_reach(self):
-        for change, reason in (({"tick": 5}, "native_repair_tick_rollback"),
-                               ({"tick": 131}, "native_repair_tick_budget_reached"),
-                               ({"missing": True}, "native_repair_target_changed"),
-                               ({"distant": True}, "native_repair_out_of_reach"),
-                               ({"unrelated_selection": True}, "native_repair_selection_changed")):
+        for change, reason in (
+            ({"tick": 5}, "native_repair_tick_rollback"),
+            ({"tick": 131}, "native_repair_tick_budget_reached"),
+            ({"missing": True}, "native_repair_target_changed"),
+            ({"distant": True}, "native_repair_out_of_reach"),
+            ({"unrelated_selection": True}, "native_repair_selection_changed"),
+        ):
             with self.subTest(change=change):
                 result = self.evaluate(repair.PULSE_REPAIR_LUA, pending=True, **change)
                 self.assertEqual(result["result"]["reason"], reason)
@@ -144,8 +159,10 @@ class RepairControlLuaTests(unittest.TestCase):
         self.assertEqual(result["cursor_count"], 1)
 
     def test_external_health_gain_without_tool_cost_and_tick_rollback_cannot_claim_success(self):
-        for change, reason in (({"health": 210, "durability": 300}, "native_repair_receipt_uncorrelated"),
-                               ({"tick": 5}, "native_repair_receipt_invalidated")):
+        for change, reason in (
+            ({"health": 210, "durability": 300}, "native_repair_receipt_uncorrelated"),
+            ({"tick": 5}, "native_repair_receipt_invalidated"),
+        ):
             result = self.evaluate(repair.FINISH_REPAIR_LUA, pending=True, **change)
             self.assertFalse(result["result"]["ok"])
             self.assertEqual(result["result"]["reason"], reason)
@@ -153,7 +170,7 @@ class RepairControlLuaTests(unittest.TestCase):
             self.assertEqual(result["cursor_count"], 0)
 
     def test_actual_take_and_insert_queries_transfer_partial_quality_tools_without_recreating_them(self):
-        shadow = r'''
+        shadow = r"""
 local o=helpers.json_to_table(OPTIONS)
 local game=nil;local storage=nil;local f={};local s={}
 local function success(t) t.ok=true;return t end
@@ -181,26 +198,37 @@ local result=perform()
 return {ok=true,result=result,source_count=source[1].count,source_durability=source[1].durability,
  dest_count=destination[1].count,dest_durability=destination[1].durability,
  quality=destination[1].quality and destination[1].quality.name}
-'''
+"""
         for backend in ("assisted", "character"):
             for kind in ("take", "insert"):
                 for change in ({}, {"full_inventory": True}, {"foreign": True}):
                     with self.subTest(backend=backend, kind=kind, change=change):
                         adapter = DeterministicGame(self.game.cfg, backend=backend)
-                        action = {"type": kind, "name": "steel-chest", "position": {"x": 0, "y": 0},
-                                  "item": "repair-pack", "count": 1}
-                        with patch.object(adapter, "query", return_value={"ok": True}) as query, \
-                                patch.object(adapter, "_record_action", side_effect=lambda action, result: result):
+                        action = {
+                            "type": kind,
+                            "name": "steel-chest",
+                            "position": {"x": 0, "y": 0},
+                            "item": "repair-pack",
+                            "count": 1,
+                        }
+                        with (
+                            patch.object(adapter, "query", return_value={"ok": True}) as query,
+                            patch.object(adapter, "_record_action", side_effect=lambda action, result: result),
+                        ):
                             adapter.act(action)
                         body = query.call_args.args[0]
-                        script = shadow.replace("OPTIONS", json.dumps(json.dumps({"kind": kind, **change}))).replace("BODY", body)
+                        script = shadow.replace("OPTIONS", json.dumps(json.dumps({"kind": kind, **change}))).replace(
+                            "BODY", body
+                        )
                         with patch.object(deterministic_game, "_HELPERS", ""):
                             result = self.game.query(script)
                         self.assertTrue(result.get("ok"), result)
                         if not change:
                             self.assertEqual(result["result"].get("moved"), 1)
                             self.assertEqual((result["source_count"], result["source_durability"]), (1, 300))
-                            self.assertEqual((result["dest_count"], result["dest_durability"], result["quality"]), (1, 37, "rare"))
+                            self.assertEqual(
+                                (result["dest_count"], result["dest_durability"], result["quality"]), (1, 37, "rare")
+                            )
                         else:
                             self.assertEqual((result["source_count"], result["source_durability"]), (2, 37))
                             self.assertNotEqual(result["result"].get("status"), "succeeded")

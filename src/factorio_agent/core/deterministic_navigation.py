@@ -3,6 +3,7 @@
 The isolated scenario retains its existing event handlers. Inputs expire when
 the controller stops renewing them, and all movement/mining uses engine state.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,7 +21,7 @@ from .deterministic_belt_switch_guard import validate_belt_switch_backend
 from .deterministic_coal_replacement_guard import validate_coal_replacement_backend
 
 
-SCENARIO_INPUT_LUA = r'''
+SCENARIO_INPUT_LUA = r"""
 if not _G.factorio_ai_character_input_version then
  local old_path=script.get_event_handler(defines.events.on_script_path_request_finished)
  script.on_event(defines.events.on_script_path_request_finished,function(event)
@@ -118,10 +119,10 @@ if not _G.factorio_ai_character_input_version then
  end)
  _G.factorio_ai_character_input_version=1
 end
-'''
+"""
 
 
-INSTALL_INPUT_LUA = r'''
+INSTALL_INPUT_LUA = r"""
 if not d or not a or not a.valid then return failure("character_missing") end
 if _G.factorio_ai_character_input_version~=1
  or not script.get_event_handler(defines.events.on_tick)
@@ -131,10 +132,11 @@ end
 d.motion=nil
 a.walking_state={walking=false};a.mining_state={mining=false}
 return success{status="ready",scenario_version=1}
-'''
+"""
 
 
-CHARACTER_INPUT_LUA = r'''
+CHARACTER_INPUT_LUA = (
+    r"""
 local key=helpers.table_to_json(x)
 local motion=d.motion
 local retry_count=0
@@ -175,7 +177,9 @@ if x.type=="move" then
 else
  local entity=target(x.position,x.name)
  local e=entity;local inv=a.get_main_inventory()
-''' + GUARDED_MINE_LUA + r'''
+"""
+    + GUARDED_MINE_LUA
+    + r"""
  if not entity then motion.status="succeeded";return success{status="succeeded"} end
  if string.find(entity.name,"crash%-site") or string.find(entity.name,"wreck") then motion.status="blocked";motion.reason="protected_artifact";return failure(motion.reason) end
  if not a.can_reach_entity(entity) then motion.status="blocked";motion.reason="out_of_reach";return failure(motion.reason) end
@@ -186,14 +190,15 @@ else
  end
 end
 return success{status="running",reason="engine_character_input_started"}
-'''
+"""
+)
 
 
 SCENARIO_MARKER = "-- factorio-ai persistent character input v1"
 SCENARIO_MODULE = "factorio_ai_character_control.lua"
 
 
-BUILD_FOOTPRINT_LUA = r'''
+BUILD_FOOTPRINT_LUA = r"""
 local function build_box(x)
  local box=prototypes.entity[x.name].collision_box
  local left,top,right,bottom=math.huge,math.huge,-math.huge,-math.huge
@@ -205,7 +210,7 @@ local function build_box(x)
  end
  return left+x.position.x,top+x.position.y,right+x.position.x,bottom+x.position.y
 end
-'''
+"""
 
 
 def prepare_character_save(cfg: Any, *, newly_created: bool = False) -> dict:
@@ -222,7 +227,7 @@ def prepare_character_save(cfg: Any, *, newly_created: bool = False) -> dict:
     if not save.is_relative_to(root):
         raise ValueError("character save must be inside its isolated runtime directory")
     try:
-        connection = socket.create_connection((cfg.rcon_host, cfg.rcon_port), timeout=.2)
+        connection = socket.create_connection((cfg.rcon_host, cfg.rcon_port), timeout=0.2)
     except OSError:
         pass
     else:
@@ -270,8 +275,14 @@ def prepare_character_save(cfg: Any, *, newly_created: bool = False) -> dict:
         os.replace(temporary, save)
     finally:
         Path(temporary).unlink(missing_ok=True)
-    return {"status": "ready", "changed": True, "save": str(save), "backup": str(backup),
-            "scenario_version": 1, "controller_sha256": hashlib.sha256(source).hexdigest()}
+    return {
+        "status": "ready",
+        "changed": True,
+        "save": str(save),
+        "backup": str(backup),
+        "scenario_version": 1,
+        "controller_sha256": hashlib.sha256(source).hexdigest(),
+    }
 
 
 class CharacterNavigator:
@@ -284,18 +295,18 @@ class CharacterNavigator:
         return self.game.query(INSTALL_INPUT_LUA)
 
     def stop(self) -> dict:
-        self.game.query('if d then d.motion=nil end;return success{}')
+        self.game.query("if d then d.motion=nil end;return success{}")
         return self.game.act({"type": "stop"})
 
     def pending_action(self) -> dict | None:
         """Preserve a finite mining batch across partial-inventory observations."""
-        result = self.game.query('''
+        result = self.game.query("""
 local motion=d and d.motion
 if motion and motion.kind=="mine" and motion.status=="running" then
  return success{action=helpers.json_to_table(motion.key)}
 end
 return success{}
-''')
+""")
         return result.get("action") if result.get("ok") else None
 
     def execute(self, action: dict, observation: dict) -> dict:
@@ -303,6 +314,7 @@ return success{}
         validate_belt_switch_backend(action, "character")
         validate_coal_replacement_backend(action, "character")
         from .deterministic_underground import underground_fields
+
         if action.get("type") == "build":
             underground_fields(action)
         elif "belt_to_ground_type" in action:
@@ -316,8 +328,12 @@ return success{}
             return result
         if action.get("position") and action["type"] != "move":
             encoded = json.dumps(json.dumps(action, separators=(",", ":")))
-            reach = self.game.query(BUILD_FOOTPRINT_LUA + '''
-local x=helpers.json_to_table(''' + encoded + ''')
+            reach = self.game.query(
+                BUILD_FOOTPRINT_LUA
+                + """
+local x=helpers.json_to_table("""
+                + encoded
+                + """)
 local e=target(x.position,x.name)
 local within
 if e and x.type=="take" and e.type=="item-entity" then
@@ -349,14 +365,17 @@ if within and not e and x.type=="build" and prototypes.entity[x.name]
  end
 end
 return success{within=within}
-''')
+"""
+            )
             if not reach.get("ok"):
                 return reach
             if not reach.get("within"):
                 return self._input({"type": "move", "position": reach.get("approach") or action["position"]})
         if action["type"] in {"move", "mine"}:
             return self._input(action)
-        self.game.query('if d then d.motion=nil end;a.walking_state={walking=false};a.mining_state={mining=false};return success{}')
+        self.game.query(
+            "if d then d.motion=nil end;a.walking_state={walking=false};a.mining_state={mining=false};return success{}"
+        )
         return self.game.act(action)
 
     def _input(self, action: dict) -> dict:
@@ -369,4 +388,4 @@ return success{within=within}
         if isinstance(count, bool) or not isinstance(count, int) or count < 1:
             raise ValueError("mining count must be a positive integer")
         encoded = json.dumps(json.dumps(action, separators=(",", ":")))
-        return self.game.query('local x=helpers.json_to_table(' + encoded + ');' + CHARACTER_INPUT_LUA)
+        return self.game.query("local x=helpers.json_to_table(" + encoded + ");" + CHARACTER_INPUT_LUA)

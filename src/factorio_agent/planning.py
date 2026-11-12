@@ -1,28 +1,32 @@
 """Read-only whole-block surveys with explicit ordinary natural clearance."""
+
 from __future__ import annotations
 
 import json
 from .transport import xy
-from .resource_policy import policy_specs,mining_reservations,RESOURCE_CHECK_LUA
+from .resource_policy import policy_specs, mining_reservations, RESOURCE_CHECK_LUA
 
 
-OWNED_CONFIGURATION_GUARD=r'''
+OWNED_CONFIGURATION_GUARD = r"""
 local same_direction=old.direction==(spec.direction or 0)
 if spec.name=="gun-turret"then same_direction=true end
 if spec.name=="steam-engine"or spec.name=="steam-turbine"then same_direction=old.direction%8==(spec.direction or 0)%8 end
 if old.force~=f or(not same_direction and old.type~="electric-pole"and not spec.recipe)then
  return {ok=false,reason="owned_block_entity_configuration_changed"}end
-'''
+"""
 
 
-def overlap(a,b):
-    return a[0][0]<b[1][0] and a[1][0]>b[0][0] and a[0][1]<b[1][1] and a[1][1]>b[0][1]
+def overlap(a, b):
+    return a[0][0] < b[1][0] and a[1][0] > b[0][0] and a[0][1] < b[1][1] and a[1][1] > b[0][1]
 
 
-def survey_slots(game,slots):
-    payload=json.dumps(json.dumps(slots,separators=(',',':')))
-    return game.query('''
-local slots=helpers.json_to_table('''+payload+''');local legal={}
+def survey_slots(game, slots):
+    payload = json.dumps(json.dumps(slots, separators=(",", ":")))
+    return game.query(
+        """
+local slots=helpers.json_to_table("""
+        + payload
+        + """);local legal={}
 for index,areas in ipairs(slots) do
  local clear=true
  for _,area in ipairs(areas) do
@@ -44,21 +48,28 @@ for index,areas in ipairs(slots) do
  if clear then legal[#legal+1]=index end
 end
 return {ok=true,legal=legal}
-''')
+"""
+    )
 
 
-def preflight(game,builder,obs,entities,*,ignored_units=()):
-    boxes=[builder._occupied_by_plan([e]) for e in entities]
-    if sum(map(len,boxes))!=len(set().union(*boxes)):
-        return {'ok':False,'reason':'whole_block_prospective_overlap'}
+def preflight(game, builder, obs, entities, *, ignored_units=()):
+    boxes = [builder._occupied_by_plan([e]) for e in entities]
+    if sum(map(len, boxes)) != len(set().union(*boxes)):
+        return {"ok": False, "reason": "whole_block_prospective_overlap"}
     try:
-        specs=policy_specs(builder,obs,entities,ignored_units=ignored_units)
-        zones=mining_reservations(game,obs['world_id'])
-    except (ValueError,KeyError,TypeError) as exc:
-        return {'ok':False,'reason':'invalid_mining_resource_scope','detail':str(exc)}
-    payload=json.dumps(json.dumps({'specs':specs,'ignored':list(ignored_units),'zones':zones},separators=(',',':')))
-    result=game.query(RESOURCE_CHECK_LUA+'''
-local args=helpers.json_to_table('''+payload+''');local specs=args.specs;local obstacles={};local seen={};local ignored={}
+        specs = policy_specs(builder, obs, entities, ignored_units=ignored_units)
+        zones = mining_reservations(game, obs["world_id"])
+    except (ValueError, KeyError, TypeError) as exc:
+        return {"ok": False, "reason": "invalid_mining_resource_scope", "detail": str(exc)}
+    payload = json.dumps(
+        json.dumps({"specs": specs, "ignored": list(ignored_units), "zones": zones}, separators=(",", ":"))
+    )
+    result = game.query(
+        RESOURCE_CHECK_LUA
+        + """
+local args=helpers.json_to_table("""
+        + payload
+        + """);local specs=args.specs;local obstacles={};local seen={};local ignored={}
 for _,unit in ipairs(args.ignored) do ignored[unit]=true end
 for _,spec in ipairs(specs) do
  local resource_reason=resource_violation(spec,args.zones,ignored,args.specs)
@@ -67,7 +78,9 @@ for _,spec in ipairs(specs) do
  local old=target(spec.position,spec.name)
  if old and ignored[old.unit_number] then old=nil end
  if old then
-'''+OWNED_CONFIGURATION_GUARD+'''
+"""
+        + OWNED_CONFIGURATION_GUARD
+        + """
  else
   local legal=s.can_place_entity{name=spec.name,position=spec.position,direction=spec.direction or 0,force=f,
     type=spec.belt_to_ground_type,build_check_type=defines.build_check_type.manual_ghost,forced=true}
@@ -96,10 +109,15 @@ for _,spec in ipairs(specs) do
  end
 end
 return {ok=true,clear_obstacles=obstacles}
-''')
-    if not result.get('ok'):return result
-    if len(result.get('clear_obstacles',[]))>96:return {'ok':False,'reason':'block_clearance_budget_exceeded'}
-    obstacles=result.get('clear_obstacles',[])
-    if obstacles=={}:obstacles=[]
-    if not isinstance(obstacles,list):return {'ok':False,'reason':'invalid_native_clearance_shape'}
-    return {**result,'clear_obstacles':obstacles,'clearance_world_id':obs['world_id']}
+"""
+    )
+    if not result.get("ok"):
+        return result
+    if len(result.get("clear_obstacles", [])) > 96:
+        return {"ok": False, "reason": "block_clearance_budget_exceeded"}
+    obstacles = result.get("clear_obstacles", [])
+    if obstacles == {}:
+        obstacles = []
+    if not isinstance(obstacles, list):
+        return {"ok": False, "reason": "invalid_native_clearance_shape"}
+    return {**result, "clear_obstacles": obstacles, "clearance_world_id": obs["world_id"]}

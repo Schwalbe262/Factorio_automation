@@ -1,4 +1,5 @@
 """Conserved raw pickup and paid construction in a committed furnace gap."""
+
 from __future__ import annotations
 
 import json
@@ -7,36 +8,53 @@ from pathlib import Path
 
 
 def execute_gap_build(game, action, *, dry_run=False):
-    allowed = {'type', 'position', 'direction', 'resource', 'expected_old_unit',
-               'expected_actor_unit', 'expected_world_id', 'reason'}
-    p = action.get('position')
-    if (set(action)-allowed or action.get('type') != 'build_furnace_gap'
-            or action.get('direction') != 0 or type(action.get('direction')) is not int
-            or action.get('resource') not in ('iron-ore', 'copper-ore')
-            or any(type(action.get(k)) is not int or action[k] < 1
-                   for k in ('expected_old_unit', 'expected_actor_unit'))
-            or not isinstance(action.get('expected_world_id'), str) or not action['expected_world_id']
-            or not isinstance(p, dict) or set(p) != {'x', 'y'}
-            or any(type(v) not in (int, float) or not math.isfinite(v) for v in p.values())):
-        raise ValueError('gap build requires exact committed furnace, actor and world identity')
-    if getattr(game, 'expected_world', None) != action['expected_world_id']:
-        raise ValueError('gap build must target the bound world')
-    if game.backend != 'assisted':
-        raise ValueError('atomic furnace gap construction requires the assisted backend')
-    path = Path(game.cfg.runtime_dir)/'furnace-upgrade.json'
-    state = json.loads(path.read_text(encoding='utf-8'))
-    pending = state.get('pending', {})
-    if (state.get('phase') != 'upgrade' or state.get('world_id') != action['expected_world_id']
-            or state.get('resource') != action['resource']
-            or pending.get('position') != p or pending.get('direction') != 0
-            or pending.get('name') != 'stone-furnace'
-            or pending.get('unit_number') != action['expected_old_unit']):
-        raise ValueError('gap build is restricted to the current prepaid replacement transaction')
+    allowed = {
+        "type",
+        "position",
+        "direction",
+        "resource",
+        "expected_old_unit",
+        "expected_actor_unit",
+        "expected_world_id",
+        "reason",
+    }
+    p = action.get("position")
+    if (
+        set(action) - allowed
+        or action.get("type") != "build_furnace_gap"
+        or action.get("direction") != 0
+        or type(action.get("direction")) is not int
+        or action.get("resource") not in ("iron-ore", "copper-ore")
+        or any(type(action.get(k)) is not int or action[k] < 1 for k in ("expected_old_unit", "expected_actor_unit"))
+        or not isinstance(action.get("expected_world_id"), str)
+        or not action["expected_world_id"]
+        or not isinstance(p, dict)
+        or set(p) != {"x", "y"}
+        or any(type(v) not in (int, float) or not math.isfinite(v) for v in p.values())
+    ):
+        raise ValueError("gap build requires exact committed furnace, actor and world identity")
+    if getattr(game, "expected_world", None) != action["expected_world_id"]:
+        raise ValueError("gap build must target the bound world")
+    if game.backend != "assisted":
+        raise ValueError("atomic furnace gap construction requires the assisted backend")
+    path = Path(game.cfg.runtime_dir) / "furnace-upgrade.json"
+    state = json.loads(path.read_text(encoding="utf-8"))
+    pending = state.get("pending", {})
+    if (
+        state.get("phase") != "upgrade"
+        or state.get("world_id") != action["expected_world_id"]
+        or state.get("resource") != action["resource"]
+        or pending.get("position") != p
+        or pending.get("direction") != 0
+        or pending.get("name") != "stone-furnace"
+        or pending.get("unit_number") != action["expected_old_unit"]
+    ):
+        raise ValueError("gap build is restricted to the current prepaid replacement transaction")
     payload = dict(action, dry_run=dry_run)
-    return game.query('local x=helpers.json_to_table('+json.dumps(json.dumps(payload))+');'+GAP_BUILD_LUA)
+    return game.query("local x=helpers.json_to_table(" + json.dumps(json.dumps(payload)) + ");" + GAP_BUILD_LUA)
 
 
-GAP_BUILD_LUA = r'''
+GAP_BUILD_LUA = r"""
 local function reject(reason)return {ok=false,status="blocked",reason=reason}end
 if not d or d.world_id~=x.expected_world_id then return reject("furnace_gap_world_changed")end
 if not a or not a.valid or a.force~=f or a.surface~=s or a.unit_number~=x.expected_actor_unit then return reject("furnace_gap_actor_changed")end
@@ -75,4 +93,4 @@ if inv.remove{name="steel-furnace",quality="normal",count=1}~=1 then return reje
 local built=s.create_entity{name="steel-furnace",position=x.position,direction=0,force=f,raise_built=true,player=a.player}
 if not built then inv.insert{name="steel-furnace",quality="normal",count=1};return reject("furnace_gap_native_build_failed_refunded")end
 return {ok=true,status="succeeded",unit_number=built.unit_number,picked=picked,paid_furnaces=1}
-'''
+"""

@@ -1,4 +1,5 @@
 """Paid, same-tick deployment of registered defense posts."""
+
 from __future__ import annotations
 
 import hashlib
@@ -13,223 +14,454 @@ from .resource_policy import mining_reservations
 from .transport import VECTORS
 
 
-ACTION='build_and_arm_bastion_post'
-GROUP_ACTION='build_and_arm_bastion_group'
-AMMO_ITEMS={'firearm-magazine','piercing-rounds-magazine'}
-OWNER_FILES={'hardening':'defense-hardening.json','nest_assault':'nest-assault.json','nest_sweep':'nest-sweep.json'}
-SCOPE_FIELDS=('areas','cells','effective_range','covering_posts','new_posts')
-def _hash(v):return hashlib.sha256(json.dumps(v,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-def _payload(v):return json.dumps(json.dumps(v,separators=(',',':')))
-def _identity(v,world,catalog):return v.get('world_id')==world and v.get('catalog_fingerprint')==catalog
-def _key(e):return e['name']+':'+str(e['position']['x'])+':'+str(e['position']['y'])
+ACTION = "build_and_arm_bastion_post"
+GROUP_ACTION = "build_and_arm_bastion_group"
+AMMO_ITEMS = {"firearm-magazine", "piercing-rounds-magazine"}
+OWNER_FILES = {
+    "hardening": "defense-hardening.json",
+    "nest_assault": "nest-assault.json",
+    "nest_sweep": "nest-sweep.json",
+}
+SCOPE_FIELDS = ("areas", "cells", "effective_range", "covering_posts", "new_posts")
+
+
+def _hash(v):
+    return hashlib.sha256(json.dumps(v, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _payload(v):
+    return json.dumps(json.dumps(v, separators=(",", ":")))
+
+
+def _identity(v, world, catalog):
+    return v.get("world_id") == world and v.get("catalog_fingerprint") == catalog
+
+
+def _key(e):
+    return e["name"] + ":" + str(e["position"]["x"]) + ":" + str(e["position"]["y"])
+
+
 def _generation(v):
-    result={k:v[k]for k in('owner_kind','authority_revision','ammo_item','post_name','scope_id','position','plan_revision','expected_world_id','expected_lost_unit')}
-    result['position']={k:int(n)for k,n in result['position'].items()};return result
+    result = {
+        k: v[k]
+        for k in (
+            "owner_kind",
+            "authority_revision",
+            "ammo_item",
+            "post_name",
+            "scope_id",
+            "position",
+            "plan_revision",
+            "expected_world_id",
+            "expected_lost_unit",
+        )
+    }
+    result["position"] = {k: int(n) for k, n in result["position"].items()}
+    return result
 
 
-def validate_bastion_deployment(action,world=None):
-    required={'type','owner_kind','authority_revision','ammo_item','deployment_id','post_name','scope_id','position','plan_revision','expected_world_id',
-              'expected_actor_unit','expected_lost_unit'}
-    if(not isinstance(action,dict)or set(action)-required-{'reason'}or not required<=set(action)or action.get('type')!=ACTION
-            or action.get('owner_kind')not in OWNER_FILES
-            or action.get('ammo_item')not in AMMO_ITEMS
-            or type(action.get('expected_actor_unit'))is not int or action['expected_actor_unit']<1
-            or any(not isinstance(action.get(k),str)or not action[k]or len(action[k])>180
-                   for k in('post_name','scope_id','expected_world_id'))
-            or any(not isinstance(action.get(k),str)or len(action[k])!=64 or any(c not in'0123456789abcdef'for c in action[k])
-                   for k in('deployment_id','plan_revision','authority_revision'))
-            or(action['expected_lost_unit']is not None and(type(action['expected_lost_unit'])is not int or action['expected_lost_unit']<1))
-            or('reason'in action and not isinstance(action['reason'],str))):raise ValueError('exact typed bastion deployment envelope required')
-    p=action.get('position')
-    if(not isinstance(p,dict)or set(p)!={'x','y'}or any(type(v)not in(int,float)or not math.isfinite(v)or v%1 for v in p.values())):
-        raise ValueError('exact finite integer bastion position required')
-    if world is not None and action['expected_world_id']!=world:raise ValueError('bastion deployment world changed')
-    if action['deployment_id']!=_hash(_generation(action)):raise ValueError('bastion deployment identity does not match its immutable generation')
+def validate_bastion_deployment(action, world=None):
+    required = {
+        "type",
+        "owner_kind",
+        "authority_revision",
+        "ammo_item",
+        "deployment_id",
+        "post_name",
+        "scope_id",
+        "position",
+        "plan_revision",
+        "expected_world_id",
+        "expected_actor_unit",
+        "expected_lost_unit",
+    }
+    if (
+        not isinstance(action, dict)
+        or set(action) - required - {"reason"}
+        or not required <= set(action)
+        or action.get("type") != ACTION
+        or action.get("owner_kind") not in OWNER_FILES
+        or action.get("ammo_item") not in AMMO_ITEMS
+        or type(action.get("expected_actor_unit")) is not int
+        or action["expected_actor_unit"] < 1
+        or any(
+            not isinstance(action.get(k), str) or not action[k] or len(action[k]) > 180
+            for k in ("post_name", "scope_id", "expected_world_id")
+        )
+        or any(
+            not isinstance(action.get(k), str)
+            or len(action[k]) != 64
+            or any(c not in "0123456789abcdef" for c in action[k])
+            for k in ("deployment_id", "plan_revision", "authority_revision")
+        )
+        or (
+            action["expected_lost_unit"] is not None
+            and (type(action["expected_lost_unit"]) is not int or action["expected_lost_unit"] < 1)
+        )
+        or ("reason" in action and not isinstance(action["reason"], str))
+    ):
+        raise ValueError("exact typed bastion deployment envelope required")
+    p = action.get("position")
+    if (
+        not isinstance(p, dict)
+        or set(p) != {"x", "y"}
+        or any(type(v) not in (int, float) or not math.isfinite(v) or v % 1 for v in p.values())
+    ):
+        raise ValueError("exact finite integer bastion position required")
+    if world is not None and action["expected_world_id"] != world:
+        raise ValueError("bastion deployment world changed")
+    if action["deployment_id"] != _hash(_generation(action)):
+        raise ValueError("bastion deployment identity does not match its immutable generation")
 
 
-def _foreign_areas(root,board,own,world,catalog):
+def _foreign_areas(root, board, own, world, catalog):
     """Exclude only the exact authorized Hardening block; retain all other reserves."""
-    blocks=[b for name,b in board['blocks'].items()if name!=own];bus=board.get('shared_main_bus',{})
-    areas=[b['reserved_area']for b in blocks if b.get('reserved_area')]
-    areas += [r['area']for r in bus.get('reservations',[])if r.get('area')]
-    geometry=FactoryBuilder.__new__(FactoryBuilder)
-    cells=geometry._occupied_by_plan([e for b in blocks+[bus]for e in b.get('entities',[])])
-    ports=[p for b in blocks+[bus]for p in b.get('ports',[])]
-    for b in blocks+[bus]:
-        for pair in b.get('underground_pairs',[]):
-            if pair.get('direction')not in VECTORS:raise ValueError('foreign prospective tunnel heading invalid')
-            dx,dy=VECTORS[pair['direction']];a,c=pair['input'],pair['output']
-            span=abs(c[0]-a[0])+abs(c[1]-a[1])
-            if span%1 or not 1<=span<=32 or(a[0]+span*dx,a[1]+span*dy)!=tuple(c):raise ValueError('foreign prospective tunnel span invalid')
-            cells.update((a[0]+i*dx,a[1]+i*dy)for i in range(int(span)+1))
-    for name in('material-sources.json','fluid-sources.json'):
-        path=root/name
+    blocks = [b for name, b in board["blocks"].items() if name != own]
+    bus = board.get("shared_main_bus", {})
+    areas = [b["reserved_area"] for b in blocks if b.get("reserved_area")]
+    areas += [r["area"] for r in bus.get("reservations", []) if r.get("area")]
+    geometry = FactoryBuilder.__new__(FactoryBuilder)
+    cells = geometry._occupied_by_plan([e for b in blocks + [bus] for e in b.get("entities", [])])
+    ports = [p for b in blocks + [bus] for p in b.get("ports", [])]
+    for b in blocks + [bus]:
+        for pair in b.get("underground_pairs", []):
+            if pair.get("direction") not in VECTORS:
+                raise ValueError("foreign prospective tunnel heading invalid")
+            dx, dy = VECTORS[pair["direction"]]
+            a, c = pair["input"], pair["output"]
+            span = abs(c[0] - a[0]) + abs(c[1] - a[1])
+            if span % 1 or not 1 <= span <= 32 or (a[0] + span * dx, a[1] + span * dy) != tuple(c):
+                raise ValueError("foreign prospective tunnel span invalid")
+            cells.update((a[0] + i * dx, a[1] + i * dy) for i in range(int(span) + 1))
+    for name in ("material-sources.json", "fluid-sources.json"):
+        path = root / name
         if path.exists():
-            registry=json.loads(path.read_text(encoding='utf-8'))
-            if not _identity(registry,world,catalog):raise ValueError('foreign typed source registry identity changed')
-            ports.extend(registry.get('sources',{}).values())
+            registry = json.loads(path.read_text(encoding="utf-8"))
+            if not _identity(registry, world, catalog):
+                raise ValueError("foreign typed source registry identity changed")
+            ports.extend(registry.get("sources", {}).values())
     for p in ports:
-        if p.get('facing')not in VECTORS or p.get('direction')not in('input','output'):continue
-        x,y=p['position']['x'],p['position']['y'];dx,dy=VECTORS[p['facing']]
-        if p['direction']=='input':dx,dy=-dx,-dy
-        containing=[a for a in areas if a[0][0]<=x<=a[1][0]and a[0][1]<=y<=a[1][1]];length=2
-        for step in range(1,5):
-            xx,yy=x+step*dx,y+step*dy
-            if containing and not any(xx+.49>a[0][0]and xx-.49<a[1][0]and yy+.49>a[0][1]and yy-.49<a[1][1]for a in containing):
-                length=max(length,step);break
-        cells.update((x+i*dx,y+i*dy)for i in range(length+1))
-    areas.extend([[[x-.5,y-.5],[x+.5,y+.5]]for x,y in cells])
+        if p.get("facing") not in VECTORS or p.get("direction") not in ("input", "output"):
+            continue
+        x, y = p["position"]["x"], p["position"]["y"]
+        dx, dy = VECTORS[p["facing"]]
+        if p["direction"] == "input":
+            dx, dy = -dx, -dy
+        containing = [a for a in areas if a[0][0] <= x <= a[1][0] and a[0][1] <= y <= a[1][1]]
+        length = 2
+        for step in range(1, 5):
+            xx, yy = x + step * dx, y + step * dy
+            if containing and not any(
+                xx + 0.49 > a[0][0] and xx - 0.49 < a[1][0] and yy + 0.49 > a[0][1] and yy - 0.49 < a[1][1]
+                for a in containing
+            ):
+                length = max(length, step)
+                break
+        cells.update((x + i * dx, y + i * dy) for i in range(length + 1))
+    areas.extend([[[x - 0.5, y - 0.5], [x + 0.5, y + 0.5]] for x, y in cells])
     return areas
 
 
-def _load_owner(root,owner_kind):
-    if owner_kind not in OWNER_FILES:raise ValueError('unknown deployment owner authority')
-    document=json.loads((root/OWNER_FILES[owner_kind]).read_text(encoding='utf-8'))
-    if owner_kind=='hardening':return document,document,None,_hash({'owner_kind':'hardening','worm_policy':'exclude'})
-    if owner_kind=='nest_sweep':return _load_sweep(document)
-    try:from .nest_assault import deployment_stage
-    except ImportError as exc:raise ValueError('trusted NestAssault authority not installed')from exc
-    stage=deployment_stage(document);policy=stage.get('underfire_policy',{})
-    start,deadline=document.get('started_tick'),policy.get('deadline_tick')
-    if(policy.get('mode')!='controlled_projectile_assault_v1'or policy.get('operation_id')!=document.get('id')
-            or type(document.get('active_stage'))is not int or not 0<=document['active_stage']<3
-            or type(policy.get('stage_index'))is not int or policy['stage_index']!=document['active_stage']or not isinstance(document.get('stages'),list)
-            or not 1<=len(document['stages'])<=3 or policy.get('max_post_losses')!=2 or policy.get('max_enemy_range')!=25
-            or policy.get('min_rear_count')!=2 or policy.get('coverage_margin')!=2
-            or policy.get('min_backstop_health_fraction')!=.5 or policy.get('min_backstop_full_mags')!=5
-            or type(start)is not int or type(deadline)is not int or not start<deadline<=start+180*60
-            or deadline!=document.get('deadline_tick')or policy.get('started_tick')!=start
-            or policy.get('target_set_hash')!=document.get('target_set_hash')
-            or policy.get('targets')!=document.get('targets')or _hash(policy.get('targets'))!=policy.get('target_set_hash')
-            or not isinstance(policy.get('target_set_hash'),str)or len(policy['target_set_hash'])!=64
-            or not isinstance(policy.get('targets'),list)or not 1<=len(policy['targets'])<=12
-            or not isinstance(policy.get('backstop_specs'),list)or not 2<=len(policy['backstop_specs'])<=12
-            or policy.get('ammo_item')not in AMMO_ITEMS or stage.get('ammo_item')!=policy['ammo_item']
-            or len(stage.get('posts',[]))!=3 or sum(e['name']=='gun-turret'for e in stage['plan']['entities'])!=3
-            or sum(e['name']=='stone-wall'for e in stage['plan']['entities'])!=24):
-        raise ValueError('registered NestAssault controlled-underfire policy is invalid or unbounded')
-    for witnesses in(policy['targets'],policy['backstop_specs']):
-        units=[]
+def _load_owner(root, owner_kind):
+    if owner_kind not in OWNER_FILES:
+        raise ValueError("unknown deployment owner authority")
+    document = json.loads((root / OWNER_FILES[owner_kind]).read_text(encoding="utf-8"))
+    if owner_kind == "hardening":
+        return document, document, None, _hash({"owner_kind": "hardening", "worm_policy": "exclude"})
+    if owner_kind == "nest_sweep":
+        return _load_sweep(document)
+    try:
+        from .nest_assault import deployment_stage
+    except ImportError as exc:
+        raise ValueError("trusted NestAssault authority not installed") from exc
+    stage = deployment_stage(document)
+    policy = stage.get("underfire_policy", {})
+    start, deadline = document.get("started_tick"), policy.get("deadline_tick")
+    if (
+        policy.get("mode") != "controlled_projectile_assault_v1"
+        or policy.get("operation_id") != document.get("id")
+        or type(document.get("active_stage")) is not int
+        or not 0 <= document["active_stage"] < 3
+        or type(policy.get("stage_index")) is not int
+        or policy["stage_index"] != document["active_stage"]
+        or not isinstance(document.get("stages"), list)
+        or not 1 <= len(document["stages"]) <= 3
+        or policy.get("max_post_losses") != 2
+        or policy.get("max_enemy_range") != 25
+        or policy.get("min_rear_count") != 2
+        or policy.get("coverage_margin") != 2
+        or policy.get("min_backstop_health_fraction") != 0.5
+        or policy.get("min_backstop_full_mags") != 5
+        or type(start) is not int
+        or type(deadline) is not int
+        or not start < deadline <= start + 180 * 60
+        or deadline != document.get("deadline_tick")
+        or policy.get("started_tick") != start
+        or policy.get("target_set_hash") != document.get("target_set_hash")
+        or policy.get("targets") != document.get("targets")
+        or _hash(policy.get("targets")) != policy.get("target_set_hash")
+        or not isinstance(policy.get("target_set_hash"), str)
+        or len(policy["target_set_hash"]) != 64
+        or not isinstance(policy.get("targets"), list)
+        or not 1 <= len(policy["targets"]) <= 12
+        or not isinstance(policy.get("backstop_specs"), list)
+        or not 2 <= len(policy["backstop_specs"]) <= 12
+        or policy.get("ammo_item") not in AMMO_ITEMS
+        or stage.get("ammo_item") != policy["ammo_item"]
+        or len(stage.get("posts", [])) != 3
+        or sum(e["name"] == "gun-turret" for e in stage["plan"]["entities"]) != 3
+        or sum(e["name"] == "stone-wall" for e in stage["plan"]["entities"]) != 24
+    ):
+        raise ValueError("registered NestAssault controlled-underfire policy is invalid or unbounded")
+    for witnesses in (policy["targets"], policy["backstop_specs"]):
+        units = []
         for q in witnesses:
-            p=q.get('position')
-            if(type(q.get('unit_number'))is not int or q['unit_number']<1 or not isinstance(q.get('name'),str)or not q['name']
-                    or not isinstance(p,dict)or set(p)!={'x','y'}or any(type(v)not in(int,float)or not math.isfinite(v)for v in p.values())):
-                raise ValueError('typed finite NestAssault native witness required')
-            units.append(q['unit_number'])
-        if len(set(units))!=len(units):raise ValueError('distinct native NestAssault witnesses required')
-    return document,stage,policy,_hash({'owner_kind':'nest_assault','operation_id':document['id'],
-        'stage_index':document['active_stage'],'policy':policy})
+            p = q.get("position")
+            if (
+                type(q.get("unit_number")) is not int
+                or q["unit_number"] < 1
+                or not isinstance(q.get("name"), str)
+                or not q["name"]
+                or not isinstance(p, dict)
+                or set(p) != {"x", "y"}
+                or any(type(v) not in (int, float) or not math.isfinite(v) for v in p.values())
+            ):
+                raise ValueError("typed finite NestAssault native witness required")
+            units.append(q["unit_number"])
+        if len(set(units)) != len(units):
+            raise ValueError("distinct native NestAssault witnesses required")
+    return (
+        document,
+        stage,
+        policy,
+        _hash(
+            {
+                "owner_kind": "nest_assault",
+                "operation_id": document["id"],
+                "stage_index": document["active_stage"],
+                "policy": policy,
+            }
+        ),
+    )
 
 
 def _load_sweep(document):
     """Only the installed known-file adapter may authorize a committed wave."""
-    try:from .nest_sweep import deployment_wave
-    except ImportError as exc:raise ValueError('trusted NestSweep authority not installed')from exc
-    wave=deployment_wave(document);policy=wave.get('underfire_policy',{});posts=wave.get('posts',[])
-    count=policy.get('post_count');start=document.get('started_tick');deadline=policy.get('deadline_tick')
-    entities=wave.get('plan',{}).get('entities',[]);profile=policy.get('force_profile')
-    if(policy.get('mode')!='committed_projectile_wave_v2'or policy.get('operation_id')!=document.get('id')
-            or type(count)is not int or not 6<=count<=12 or len(posts)!=count
-            or policy.get('ammo_item')!='piercing-rounds-magazine'or wave.get('ammo_item')!=policy['ammo_item']
-            or policy.get('max_enemy_range')!=25 or policy.get('coverage_margin')!=2
-            or policy.get('min_planned_neighbors')!=2 or policy.get('min_target_coverage')!=2
-            or policy.get('min_backstop_count')!=2 or policy.get('min_backstop_health_fraction')!=.5
-            or policy.get('min_backstop_full_mags')!=5 or policy.get('planned_posts')!=posts
-            or type(start)is not int or type(deadline)is not int or not start<deadline<=start+10800
-            or policy.get('started_tick')!=start or document.get('deadline_tick')!=deadline
-            or not isinstance(policy.get('targets'),list)or not 1<=len(policy['targets'])<=12
-            or policy['targets']!=document.get('targets')or _hash(policy['targets'])!=document.get('target_set_hash')
-            or policy.get('target_set_hash')!=document.get('target_set_hash')
-            or not isinstance(policy.get('backstop_specs'),list)or not 2<=len(policy['backstop_specs'])<=12
-            or not isinstance(profile,dict)or any(type(profile.get(k))not in(int,float)or not math.isfinite(profile[k])
-                for k in('ammo_damage','turret_damage','gun_speed'))
-            or sum(e.get('name')=='gun-turret'for e in entities)!=count
-            or not 0<=sum(e.get('name')=='stone-wall'for e in entities)<=8*count
-            or type(document.get('actor_unit'))is not int or document['actor_unit']<1):
-        raise ValueError('registered committed wave policy is invalid, changed or unbounded')
-    for witnesses in(policy['targets'],policy['backstop_specs']):
-        units=[]
+    try:
+        from .nest_sweep import deployment_wave
+    except ImportError as exc:
+        raise ValueError("trusted NestSweep authority not installed") from exc
+    wave = deployment_wave(document)
+    policy = wave.get("underfire_policy", {})
+    posts = wave.get("posts", [])
+    count = policy.get("post_count")
+    start = document.get("started_tick")
+    deadline = policy.get("deadline_tick")
+    entities = wave.get("plan", {}).get("entities", [])
+    profile = policy.get("force_profile")
+    if (
+        policy.get("mode") != "committed_projectile_wave_v2"
+        or policy.get("operation_id") != document.get("id")
+        or type(count) is not int
+        or not 6 <= count <= 12
+        or len(posts) != count
+        or policy.get("ammo_item") != "piercing-rounds-magazine"
+        or wave.get("ammo_item") != policy["ammo_item"]
+        or policy.get("max_enemy_range") != 25
+        or policy.get("coverage_margin") != 2
+        or policy.get("min_planned_neighbors") != 2
+        or policy.get("min_target_coverage") != 2
+        or policy.get("min_backstop_count") != 2
+        or policy.get("min_backstop_health_fraction") != 0.5
+        or policy.get("min_backstop_full_mags") != 5
+        or policy.get("planned_posts") != posts
+        or type(start) is not int
+        or type(deadline) is not int
+        or not start < deadline <= start + 10800
+        or policy.get("started_tick") != start
+        or document.get("deadline_tick") != deadline
+        or not isinstance(policy.get("targets"), list)
+        or not 1 <= len(policy["targets"]) <= 12
+        or policy["targets"] != document.get("targets")
+        or _hash(policy["targets"]) != document.get("target_set_hash")
+        or policy.get("target_set_hash") != document.get("target_set_hash")
+        or not isinstance(policy.get("backstop_specs"), list)
+        or not 2 <= len(policy["backstop_specs"]) <= 12
+        or not isinstance(profile, dict)
+        or any(
+            type(profile.get(k)) not in (int, float) or not math.isfinite(profile[k])
+            for k in ("ammo_damage", "turret_damage", "gun_speed")
+        )
+        or sum(e.get("name") == "gun-turret" for e in entities) != count
+        or not 0 <= sum(e.get("name") == "stone-wall" for e in entities) <= 8 * count
+        or type(document.get("actor_unit")) is not int
+        or document["actor_unit"] < 1
+    ):
+        raise ValueError("registered committed wave policy is invalid, changed or unbounded")
+    for witnesses in (policy["targets"], policy["backstop_specs"]):
+        units = []
         for q in witnesses:
-            p=q.get('position')
-            if(type(q.get('unit_number'))is not int or q['unit_number']<1 or not isinstance(q.get('name'),str)or not q['name']
-                    or not isinstance(p,dict)or set(p)!={'x','y'}or any(type(v)not in(int,float)or not math.isfinite(v)for v in p.values())):
-                raise ValueError('exact finite committed wave witness required')
-            units.append(q['unit_number'])
-        if len(set(units))!=len(units):raise ValueError('distinct committed wave witnesses required')
-    return document,wave,policy,_hash({'owner_kind':'nest_sweep','operation_id':document['id'],'policy':policy})
+            p = q.get("position")
+            if (
+                type(q.get("unit_number")) is not int
+                or q["unit_number"] < 1
+                or not isinstance(q.get("name"), str)
+                or not q["name"]
+                or not isinstance(p, dict)
+                or set(p) != {"x", "y"}
+                or any(type(v) not in (int, float) or not math.isfinite(v) for v in p.values())
+            ):
+                raise ValueError("exact finite committed wave witness required")
+            units.append(q["unit_number"])
+        if len(set(units)) != len(units):
+            raise ValueError("distinct committed wave witnesses required")
+    return document, wave, policy, _hash({"owner_kind": "nest_sweep", "operation_id": document["id"], "policy": policy})
 
 
-def _context(game,action):
-    validate_bastion_deployment(action,getattr(game,'expected_world',None))
-    if getattr(game,'expected_world',None)!=action['expected_world_id']or getattr(game,'backend',None)!='assisted':
-        raise ValueError('bastion deployment requires the bound ordinary assisted game')
-    root=Path(game.cfg.runtime_dir);document,state,policy,authority=_load_owner(root,action['owner_kind'])
-    if action['authority_revision']!=authority:raise ValueError('deployment owner policy revision changed')
-    if action['owner_kind']=='nest_sweep'and action['expected_actor_unit']!=document['actor_unit']:
-        raise ValueError('committed wave actor changed')
-    board=json.loads((root/'pcb-board.json').read_text(encoding='utf-8'))
-    perimeter=(json.loads((root/'defense-perimeter.json').read_text(encoding='utf-8'))
-               if action['owner_kind']=='hardening'else state.get('perimeter',{}))
-    world=action['expected_world_id'];catalog=state.get('catalog_fingerprint')
-    phases=('register','walls','verified')if action['owner_kind']=='hardening'else('register','deploy','fight','verified')
-    if(not catalog or not all(_identity(v,world,catalog)for v in(document,state,board,perimeter))
-            or state.get('phase')not in phases or state.get('scope_id')!=action['scope_id']
-            or action['ammo_item']!=(state.get('ammo_item','firearm-magazine')if policy is None else policy['ammo_item'])
-            or _hash(state.get('plan'))!=action['plan_revision']or board.get('blocks',{}).get(state.get('block'))!=state['plan']):
-        raise ValueError('registered deployment owner world, catalog or whole plan changed')
-    posts=[p for p in state['posts']if p.get('name')==action['post_name']]
-    published=[p for p in perimeter['posts']if p.get('name')==action['post_name']]
-    if len(posts)!=1 or len(published)!=1:raise ValueError('one exact registered bastion post required')
-    post,registered=posts[0],published[0]
-    if(post.get('position')!=action['position']or any(registered.get(k)!=post.get(k)
-            for k in('name','position','coverage_scope','local_walk_access'))or post.get('coverage_scope')!=action['scope_id']
-            or(policy is not None and(post.get('ammo_item')!=action['ammo_item']or registered.get('ammo_item')!=action['ammo_item']))
-            or registered.get('lost_unit_number')!=action['expected_lost_unit']):raise ValueError('registered bastion post or loss generation changed')
-    scope=perimeter.get('coverage_scopes',{}).get(action['scope_id'],{})
-    if(any(scope.get(k)!=state['scope'].get(k)for k in SCOPE_FIELDS)
-            or action['post_name']not in scope.get('new_posts',[])):raise ValueError('registered bastion scope changed')
-    spec={'name':'gun-turret','position':post['position'],'direction':0}
-    if spec not in state['plan']['entities']:raise ValueError('bastion is not an exact planned turret')
-    geometry=FactoryBuilder.__new__(FactoryBuilder);boxes=[geometry._occupied_by_plan([e])for e in state['plan']['entities']]
-    if(any(e['name']not in('gun-turret','stone-wall')for e in state['plan']['entities'])
-            or sum(map(len,boxes))!=len(set().union(*boxes))):raise ValueError('whole prospective bastion footprints overlap or changed type')
-    p=post['position'];box=[[p['x']-1,p['y']-1],[p['x']+1,p['y']+1]]
-    area=state['plan']['reserved_area']
-    if not(area[0][0]<=box[0][0]and area[0][1]<=box[0][1]and box[1][0]<=area[1][0]and box[1][1]<=area[1][1]):
-        raise ValueError('bastion footprint lies outside its exact reserved block')
-    foreign=_foreign_areas(root,board,state['block'],world,catalog)
-    zones=mining_reservations(game,world)
-    if any(overlap(box,a)for a in foreign+[z['area']for z in zones]):raise ValueError('bastion overlaps foreign production, prospective transport, port apron or mining reserve')
-    bound=state.get('bindings',{}).get(_key(spec));registered_unit=registered.get('unit_number')
-    if any(v is not None and(type(v)is not int or v<1)for v in(bound,registered_unit)):raise ValueError('bastion saved unit invalid')
-    lineage=set(registered.get('lost_unit_numbers',[]))|{registered.get('lost_unit_origin'),registered.get('lost_unit_number')}
-    prior_authorized=bound is None or(action['expected_lost_unit']is not None and bound in lineage)
-    return dict(action,catalog_fingerprint=catalog,registered_unit=registered_unit,bound_unit=bound,
-                prior_binding_authorized=prior_authorized,scope_revision=_hash({k:scope[k]for k in SCOPE_FIELDS}),
-                effective_range=scope['effective_range'],hotspot=state['hotspot'],assault_policy=policy)
+def _context(game, action):
+    validate_bastion_deployment(action, getattr(game, "expected_world", None))
+    if (
+        getattr(game, "expected_world", None) != action["expected_world_id"]
+        or getattr(game, "backend", None) != "assisted"
+    ):
+        raise ValueError("bastion deployment requires the bound ordinary assisted game")
+    root = Path(game.cfg.runtime_dir)
+    document, state, policy, authority = _load_owner(root, action["owner_kind"])
+    if action["authority_revision"] != authority:
+        raise ValueError("deployment owner policy revision changed")
+    if action["owner_kind"] == "nest_sweep" and action["expected_actor_unit"] != document["actor_unit"]:
+        raise ValueError("committed wave actor changed")
+    board = json.loads((root / "pcb-board.json").read_text(encoding="utf-8"))
+    perimeter = (
+        json.loads((root / "defense-perimeter.json").read_text(encoding="utf-8"))
+        if action["owner_kind"] == "hardening"
+        else state.get("perimeter", {})
+    )
+    world = action["expected_world_id"]
+    catalog = state.get("catalog_fingerprint")
+    phases = (
+        ("register", "walls", "verified")
+        if action["owner_kind"] == "hardening"
+        else ("register", "deploy", "fight", "verified")
+    )
+    if (
+        not catalog
+        or not all(_identity(v, world, catalog) for v in (document, state, board, perimeter))
+        or state.get("phase") not in phases
+        or state.get("scope_id") != action["scope_id"]
+        or action["ammo_item"]
+        != (state.get("ammo_item", "firearm-magazine") if policy is None else policy["ammo_item"])
+        or _hash(state.get("plan")) != action["plan_revision"]
+        or board.get("blocks", {}).get(state.get("block")) != state["plan"]
+    ):
+        raise ValueError("registered deployment owner world, catalog or whole plan changed")
+    posts = [p for p in state["posts"] if p.get("name") == action["post_name"]]
+    published = [p for p in perimeter["posts"] if p.get("name") == action["post_name"]]
+    if len(posts) != 1 or len(published) != 1:
+        raise ValueError("one exact registered bastion post required")
+    post, registered = posts[0], published[0]
+    if (
+        post.get("position") != action["position"]
+        or any(registered.get(k) != post.get(k) for k in ("name", "position", "coverage_scope", "local_walk_access"))
+        or post.get("coverage_scope") != action["scope_id"]
+        or (
+            policy is not None
+            and (post.get("ammo_item") != action["ammo_item"] or registered.get("ammo_item") != action["ammo_item"])
+        )
+        or registered.get("lost_unit_number") != action["expected_lost_unit"]
+    ):
+        raise ValueError("registered bastion post or loss generation changed")
+    scope = perimeter.get("coverage_scopes", {}).get(action["scope_id"], {})
+    if any(scope.get(k) != state["scope"].get(k) for k in SCOPE_FIELDS) or action["post_name"] not in scope.get(
+        "new_posts", []
+    ):
+        raise ValueError("registered bastion scope changed")
+    spec = {"name": "gun-turret", "position": post["position"], "direction": 0}
+    if spec not in state["plan"]["entities"]:
+        raise ValueError("bastion is not an exact planned turret")
+    geometry = FactoryBuilder.__new__(FactoryBuilder)
+    boxes = [geometry._occupied_by_plan([e]) for e in state["plan"]["entities"]]
+    if any(e["name"] not in ("gun-turret", "stone-wall") for e in state["plan"]["entities"]) or sum(
+        map(len, boxes)
+    ) != len(set().union(*boxes)):
+        raise ValueError("whole prospective bastion footprints overlap or changed type")
+    p = post["position"]
+    box = [[p["x"] - 1, p["y"] - 1], [p["x"] + 1, p["y"] + 1]]
+    area = state["plan"]["reserved_area"]
+    if not (
+        area[0][0] <= box[0][0] and area[0][1] <= box[0][1] and box[1][0] <= area[1][0] and box[1][1] <= area[1][1]
+    ):
+        raise ValueError("bastion footprint lies outside its exact reserved block")
+    foreign = _foreign_areas(root, board, state["block"], world, catalog)
+    zones = mining_reservations(game, world)
+    if any(overlap(box, a) for a in foreign + [z["area"] for z in zones]):
+        raise ValueError("bastion overlaps foreign production, prospective transport, port apron or mining reserve")
+    bound = state.get("bindings", {}).get(_key(spec))
+    registered_unit = registered.get("unit_number")
+    if any(v is not None and (type(v) is not int or v < 1) for v in (bound, registered_unit)):
+        raise ValueError("bastion saved unit invalid")
+    lineage = set(registered.get("lost_unit_numbers", [])) | {
+        registered.get("lost_unit_origin"),
+        registered.get("lost_unit_number"),
+    }
+    prior_authorized = bound is None or (action["expected_lost_unit"] is not None and bound in lineage)
+    return dict(
+        action,
+        catalog_fingerprint=catalog,
+        registered_unit=registered_unit,
+        bound_unit=bound,
+        prior_binding_authorized=prior_authorized,
+        scope_revision=_hash({k: scope[k] for k in SCOPE_FIELDS}),
+        effective_range=scope["effective_range"],
+        hotspot=state["hotspot"],
+        assault_policy=policy,
+    )
 
 
-def bastion_deployment_action(game,obs,post_name,*,owner_kind='hardening'):
+def bastion_deployment_action(game, obs, post_name, *, owner_kind="hardening"):
     """Read-only emitter; the actual operation independently revalidates all inputs."""
-    root=Path(game.cfg.runtime_dir);_,state,policy,authority=_load_owner(root,owner_kind)
-    perimeter=(json.loads((root/'defense-perimeter.json').read_text(encoding='utf-8'))
-               if owner_kind=='hardening'else state.get('perimeter',{}))
-    matches=[p for p in perimeter.get('posts',[])if p.get('name')==post_name]
-    if len(matches)!=1:raise ValueError('one registered bastion name required')
-    p=matches[0];identity=dict(owner_kind=owner_kind,authority_revision=authority,
-        ammo_item=state.get('ammo_item','firearm-magazine')if policy is None else policy['ammo_item'],
-        post_name=post_name,scope_id=state['scope_id'],position=p['position'],plan_revision=_hash(state['plan']),
-        expected_world_id=obs.get('world_id'),expected_lost_unit=p.get('lost_unit_number'))
-    action=dict(type=ACTION,**identity,deployment_id=_hash(_generation(identity)),expected_actor_unit=obs.get('actor_unit_number'),
-        reason='normally pay one turret and arm twenty full magazines in one native operation')
-    if not obs.get('ok',True):raise ValueError('fresh successful world observation required')
-    _context(game,action);return action
+    root = Path(game.cfg.runtime_dir)
+    _, state, policy, authority = _load_owner(root, owner_kind)
+    perimeter = (
+        json.loads((root / "defense-perimeter.json").read_text(encoding="utf-8"))
+        if owner_kind == "hardening"
+        else state.get("perimeter", {})
+    )
+    matches = [p for p in perimeter.get("posts", []) if p.get("name") == post_name]
+    if len(matches) != 1:
+        raise ValueError("one registered bastion name required")
+    p = matches[0]
+    identity = dict(
+        owner_kind=owner_kind,
+        authority_revision=authority,
+        ammo_item=state.get("ammo_item", "firearm-magazine") if policy is None else policy["ammo_item"],
+        post_name=post_name,
+        scope_id=state["scope_id"],
+        position=p["position"],
+        plan_revision=_hash(state["plan"]),
+        expected_world_id=obs.get("world_id"),
+        expected_lost_unit=p.get("lost_unit_number"),
+    )
+    action = dict(
+        type=ACTION,
+        **identity,
+        deployment_id=_hash(_generation(identity)),
+        expected_actor_unit=obs.get("actor_unit_number"),
+        reason="normally pay one turret and arm twenty full magazines in one native operation",
+    )
+    if not obs.get("ok", True):
+        raise ValueError("fresh successful world observation required")
+    _context(game, action)
+    return action
 
 
 # Reuse the exact normal/metadata predicates used by the existing full-ammo collector.
-AMMO_PLAIN_LUA=('local function normal(stack)'+AMMO_GUARD_LUA.split('local function normal(stack)',1)[1]).replace('stack.name=="firearm-magazine"','stack.name==x.ammo_item ')
+AMMO_PLAIN_LUA = ("local function normal(stack)" + AMMO_GUARD_LUA.split("local function normal(stack)", 1)[1]).replace(
+    'stack.name=="firearm-magazine"', "stack.name==x.ammo_item "
+)
 
-DEPLOY_BASTION_LUA=r'''
+DEPLOY_BASTION_LUA = (
+    r"""
 local function reject(reason)return {ok=false,status="blocked",reason=reason}end
 if x.owner_kind~="hardening"and x.owner_kind~="nest_assault"and x.owner_kind~="nest_sweep"then return reject("bastion_deployment_owner_invalid")end
 if not d or d.world_id~=x.expected_world_id then return reject("bastion_deployment_world_changed")end
@@ -244,7 +476,9 @@ if not gun or gun.tile_width~=2 or gun.tile_height~=2 or not proto or proto.type
 if x.ammo_item=="piercing-rounds-magazine"and(not f.recipes[x.ammo_item]or not f.recipes[x.ammo_item].enabled)then return reject("bastion_piercing_recipe_not_unlocked")end
 local ok,slots=pcall(function()return gun.get_inventory_size(defines.inventory.turret_ammo)end)
 if not ok or not slots or slots<1 then return reject("bastion_native_ammo_inventory_prototype_missing")end
-'''+AMMO_PLAIN_LUA+r'''
+"""
+    + AMMO_PLAIN_LUA
+    + r"""
 local function plain_gun(st)return st.valid_for_read and st.name=="gun-turret"and st.quality.name=="normal"
  and st.prototype.type=="item"and st.health==1 and st.spoil_tick==0
  and not st.is_item_with_tags and not st.is_item_with_inventory and not st.is_item_with_entity_data end
@@ -348,63 +582,90 @@ marker.phase="complete";marker.receipt={ok=true,status="succeeded",deployment_id
  rounds_before=before.rounds,rounds_after=after.rounds+loaded.rounds,before=before,after=after,
  start_tick=marker.start_tick,armed_tick=game.tick,quality="normal"}
 return marker.receipt
-'''
+"""
+)
 
 
 def _native_body(owner_kind):
-    body=DEPLOY_BASTION_LUA
-    if owner_kind!='hardening':
-        if owner_kind=='nest_assault':
-            from .nest_assault import ASSAULT_DEPLOYMENT_GUARD_LUA as guard,ASSAULT_CONFIGURE_POST_LUA as configure
-        elif owner_kind=='nest_sweep':
-            from .nest_sweep import SWEEP_DEPLOYMENT_GUARD_LUA as guard,SWEEP_CONFIGURE_POST_LUA as configure
-        else:raise ValueError('unknown trusted deployment owner')
-        if not all(isinstance(v,str)and v.strip()and '--'not in v for v in(guard,configure)):
-            raise ValueError('trusted native assault guards must be nonempty flattenable module constants')
-        body=body.replace('return reject("nest_assault_guard_not_linked")',guard+';assault_operation=op')
-        body=body.replace('return reject("nest_assault_configure_not_linked")',configure)
+    body = DEPLOY_BASTION_LUA
+    if owner_kind != "hardening":
+        if owner_kind == "nest_assault":
+            from .nest_assault import ASSAULT_DEPLOYMENT_GUARD_LUA as guard, ASSAULT_CONFIGURE_POST_LUA as configure
+        elif owner_kind == "nest_sweep":
+            from .nest_sweep import SWEEP_DEPLOYMENT_GUARD_LUA as guard, SWEEP_CONFIGURE_POST_LUA as configure
+        else:
+            raise ValueError("unknown trusted deployment owner")
+        if not all(isinstance(v, str) and v.strip() and "--" not in v for v in (guard, configure)):
+            raise ValueError("trusted native assault guards must be nonempty flattenable module constants")
+        body = body.replace('return reject("nest_assault_guard_not_linked")', guard + ";assault_operation=op")
+        body = body.replace('return reject("nest_assault_configure_not_linked")', configure)
     return body
 
 
-def execute_bastion_deployment(game,action):
-    payload=_context(game,action)
-    if action['owner_kind']=='nest_sweep':raise ValueError('committed nest sweep requires its complete registered wave in one group')
-    body=_native_body(action['owner_kind'])
-    return game.query('local x=helpers.json_to_table('+_payload(payload)+');'+body)
+def execute_bastion_deployment(game, action):
+    payload = _context(game, action)
+    if action["owner_kind"] == "nest_sweep":
+        raise ValueError("committed nest sweep requires its complete registered wave in one group")
+    body = _native_body(action["owner_kind"])
+    return game.query("local x=helpers.json_to_table(" + _payload(payload) + ");" + body)
 
 
 def _group_id(deployments):
-    return _hash({'deployment_ids':[q['deployment_id']for q in deployments]})
+    return _hash({"deployment_ids": [q["deployment_id"] for q in deployments]})
 
 
-def validate_bastion_group(action,world=None):
-    if(not isinstance(action,dict)or set(action)-{'type','group_id','deployments','reason'}
-            or not {'type','group_id','deployments'}<=set(action)or action['type']!=GROUP_ACTION
-            or not isinstance(action['deployments'],list)or len(action['deployments'])not in(3,6,7,8,9,10,11,12)
-            or('reason'in action and not isinstance(action['reason'],str))):raise ValueError('exact bounded registered deployment group required')
-    rows=action['deployments']
-    for q in rows:validate_bastion_deployment(q,world)
-    count=len(rows)
-    common=('owner_kind','authority_revision','ammo_item','scope_id','plan_revision','expected_world_id','expected_actor_unit')
-    if(any(any(q[k]!=rows[0][k]for k in common)for q in rows)
-            or(count!=3 if rows[0]['owner_kind']!='nest_sweep'else not 6<=count<=12)
-            or len({q['post_name']for q in rows})!=count
-            or len({tuple(q['position'][k]for k in('x','y'))for q in rows})!=count
-            or action['group_id']!=_group_id(rows)):raise ValueError('one immutable complete stage, actor, ammunition and distinct posts required')
+def validate_bastion_group(action, world=None):
+    if (
+        not isinstance(action, dict)
+        or set(action) - {"type", "group_id", "deployments", "reason"}
+        or not {"type", "group_id", "deployments"} <= set(action)
+        or action["type"] != GROUP_ACTION
+        or not isinstance(action["deployments"], list)
+        or len(action["deployments"]) not in (3, 6, 7, 8, 9, 10, 11, 12)
+        or ("reason" in action and not isinstance(action["reason"], str))
+    ):
+        raise ValueError("exact bounded registered deployment group required")
+    rows = action["deployments"]
+    for q in rows:
+        validate_bastion_deployment(q, world)
+    count = len(rows)
+    common = (
+        "owner_kind",
+        "authority_revision",
+        "ammo_item",
+        "scope_id",
+        "plan_revision",
+        "expected_world_id",
+        "expected_actor_unit",
+    )
+    if (
+        any(any(q[k] != rows[0][k] for k in common) for q in rows)
+        or (count != 3 if rows[0]["owner_kind"] != "nest_sweep" else not 6 <= count <= 12)
+        or len({q["post_name"] for q in rows}) != count
+        or len({tuple(q["position"][k] for k in ("x", "y")) for q in rows}) != count
+        or action["group_id"] != _group_id(rows)
+    ):
+        raise ValueError("one immutable complete stage, actor, ammunition and distinct posts required")
 
 
-def bastion_group_deployment_action(game,obs,*,owner_kind='nest_assault'):
+def bastion_group_deployment_action(game, obs, *, owner_kind="nest_assault"):
     """Read-only emitter for the complete current trusted stage or committed wave."""
-    _,state,_,_=_load_owner(Path(game.cfg.runtime_dir),owner_kind)
-    count=len(state.get('posts',[]))
-    if(count!=3 if owner_kind!='nest_sweep'else not 6<=count<=12):raise ValueError('complete bounded registered stage or wave required')
-    rows=[bastion_deployment_action(game,obs,p['name'],owner_kind=owner_kind)for p in state['posts']]
-    action=dict(type=GROUP_ACTION,group_id=_group_id(rows),deployments=rows,
-        reason='normally pay and arm the complete registered group in one native tick')
-    validate_bastion_group(action,getattr(game,'expected_world',None));return action
+    _, state, _, _ = _load_owner(Path(game.cfg.runtime_dir), owner_kind)
+    count = len(state.get("posts", []))
+    if count != 3 if owner_kind != "nest_sweep" else not 6 <= count <= 12:
+        raise ValueError("complete bounded registered stage or wave required")
+    rows = [bastion_deployment_action(game, obs, p["name"], owner_kind=owner_kind) for p in state["posts"]]
+    action = dict(
+        type=GROUP_ACTION,
+        group_id=_group_id(rows),
+        deployments=rows,
+        reason="normally pay and arm the complete registered group in one native tick",
+    )
+    validate_bastion_group(action, getattr(game, "expected_world", None))
+    return action
 
 
-GROUP_DEPLOY_LUA=r'''
+GROUP_DEPLOY_LUA = r"""
 local function reject(reason)return {ok=false,status="blocked",reason=reason,group_id=g.group_id}end
 local first=g.deployments[1]
 local count=#g.deployments;local magazines=20*count
@@ -460,22 +721,47 @@ record.phase="complete";record.receipt={ok=true,status="succeeded",group_id=g.gr
  paid_this_call=count,loaded_this_call=magazines,start_tick=record.start_tick,armed_tick=game.tick,
  same_tick=true,before=before,after=after,deployments=record.completed_prefix,quality="normal"}
 return record.receipt
-'''
+"""
 
 
-def execute_bastion_group(game,action):
+def execute_bastion_group(game, action):
     """Validate every trusted context, then execute ONE native query."""
-    validate_bastion_group(action,getattr(game,'expected_world',None))
-    rows=[_context(game,q)for q in action['deployments']]
-    _,stage,_,_=_load_owner(Path(game.cfg.runtime_dir),rows[0]['owner_kind'])
-    if [q['post_name']for q in rows]!=[p['name']for p in stage['posts']]:raise ValueError('group must contain the complete registered stage in plan order')
-    payload=dict(group_id=action['group_id'],deployments=rows,revision=_hash([dict(_generation(q),
-        expected_actor_unit=q['expected_actor_unit'],catalog_fingerprint=q['catalog_fingerprint'],scope_revision=q['scope_revision'])for q in rows]))
-    group_body=GROUP_DEPLOY_LUA
-    if rows[0]['owner_kind']=='nest_sweep':
+    validate_bastion_group(action, getattr(game, "expected_world", None))
+    rows = [_context(game, q) for q in action["deployments"]]
+    _, stage, _, _ = _load_owner(Path(game.cfg.runtime_dir), rows[0]["owner_kind"])
+    if [q["post_name"] for q in rows] != [p["name"] for p in stage["posts"]]:
+        raise ValueError("group must contain the complete registered stage in plan order")
+    payload = dict(
+        group_id=action["group_id"],
+        deployments=rows,
+        revision=_hash(
+            [
+                dict(
+                    _generation(q),
+                    expected_actor_unit=q["expected_actor_unit"],
+                    catalog_fingerprint=q["catalog_fingerprint"],
+                    scope_revision=q["scope_revision"],
+                )
+                for q in rows
+            ]
+        ),
+    )
+    group_body = GROUP_DEPLOY_LUA
+    if rows[0]["owner_kind"] == "nest_sweep":
         from .nest_sweep import SWEEP_BEGIN_WAVE_LUA
-        if not isinstance(SWEEP_BEGIN_WAVE_LUA,str)or not SWEEP_BEGIN_WAVE_LUA.strip()or'--'in SWEEP_BEGIN_WAVE_LUA:
-            raise ValueError('trusted native sweep commit must be a nonempty flattenable module constant')
-        group_body=group_body.replace('return reject("nest_sweep_group_commit_not_linked")',SWEEP_BEGIN_WAVE_LUA)
-    return game.query('local g=helpers.json_to_table('+_payload(payload)+');local function deploy_one(x) '
-        +_native_body(rows[0]['owner_kind'])+' end;'+group_body)
+
+        if (
+            not isinstance(SWEEP_BEGIN_WAVE_LUA, str)
+            or not SWEEP_BEGIN_WAVE_LUA.strip()
+            or "--" in SWEEP_BEGIN_WAVE_LUA
+        ):
+            raise ValueError("trusted native sweep commit must be a nonempty flattenable module constant")
+        group_body = group_body.replace('return reject("nest_sweep_group_commit_not_linked")', SWEEP_BEGIN_WAVE_LUA)
+    return game.query(
+        "local g=helpers.json_to_table("
+        + _payload(payload)
+        + ");local function deploy_one(x) "
+        + _native_body(rows[0]["owner_kind"])
+        + " end;"
+        + group_body
+    )

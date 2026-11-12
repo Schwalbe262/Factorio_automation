@@ -1,4 +1,5 @@
 """Execute the shared native selector with an optional local Lua test runtime."""
+
 import unittest
 
 from factorio_agent.resource_policy import MINING_EXIT_LUA, mining_exit_candidates
@@ -9,11 +10,11 @@ except ImportError:
     LuaRuntime = None
 
 
-@unittest.skipUnless(LuaRuntime, 'optional Lua runtime: pip install lupa')
+@unittest.skipUnless(LuaRuntime, "optional Lua runtime: pip install lupa")
 class NativeMiningExitTests(unittest.TestCase):
     def setUp(self):
         self.lua = LuaRuntime(unpack_returned_tuples=True)
-        self.lua.execute(r'''
+        self.lua.execute(r"""
 f={name="player"};a=nil;entities={};terrain={}
 defines={build_check_type={manual_ghost=1}}
 prototypes={entity={["transport-belt"]={collision_mask={layers={ground=true}}}}}
@@ -48,8 +49,10 @@ function add(name,x,y,kind,unit,direction,foreign)
 end
 add("transport-belt",.5,.5,"transport-belt",1)
 add("electric-mining-drill",-1.5,-1.5,"mining-drill",2)
-''')
-        self.choose = self.lua.execute(MINING_EXIT_LUA + '''
+""")
+        self.choose = self.lua.execute(
+            MINING_EXIT_LUA
+            + """
 return function(args)
  local accept=nil
  if args.apron then accept=function(p)
@@ -57,111 +60,156 @@ return function(args)
  end end
  return select_mining_exit(args.source,args.zones,args.ignored,args.planned,args.candidates,accept,false,args.extension)
 end
-''')
-        self.source = {'position': {'x': .5, 'y': .5}, 'facing': 4, 'item': 'coal', 'mining_resource': 'coal'}
+"""
+        )
+        self.source = {"position": {"x": 0.5, "y": 0.5}, "facing": 4, "item": "coal", "mining_resource": "coal"}
 
     def table(self, value):
-        if isinstance(value, dict): return self.lua.table_from({k: self.table(v) for k,v in value.items()})
-        if isinstance(value, list): return self.lua.table_from([self.table(v) for v in value])
+        if isinstance(value, dict):
+            return self.lua.table_from({k: self.table(v) for k, v in value.items()})
+        if isinstance(value, list):
+            return self.lua.table_from([self.table(v) for v in value])
         return value
 
-    def ore(self, x, y, name='coal'):
-        self.lua.globals().add(name, x, y, 'resource', None, 0, False)
+    def ore(self, x, y, name="coal"):
+        self.lua.globals().add(name, x, y, "resource", None, 0, False)
 
-    def block(self, x, y, name='transport-belt', unit=80):
+    def block(self, x, y, name="transport-belt", unit=80):
         self.lua.globals().add(name, x, y, name, unit, 4, False)
 
     def run_selector(self, *, zones=None, ignored=None, planned=None, apron=False, extension=0):
-        return self.choose(self.table({'source': self.source, 'zones': zones or [], 'ignored': ignored or {},
-            'planned': planned or [], 'apron': apron, 'extension': extension,
-            'candidates': mining_exit_candidates(self.source['position'], extra_clear_steps=extension)}))
+        return self.choose(
+            self.table(
+                {
+                    "source": self.source,
+                    "zones": zones or [],
+                    "ignored": ignored or {},
+                    "planned": planned or [],
+                    "apron": apron,
+                    "extension": extension,
+                    "candidates": mining_exit_candidates(self.source["position"], extra_clear_steps=extension),
+                }
+            )
+        )
 
     def south_patch(self):
-        for i in range(13): self.ore(i+.5, .5)
-        for i in range(1, 5): self.ore(1.5, i+.5)
-        self.block(1.5, -.5)
+        for i in range(13):
+            self.ore(i + 0.5, 0.5)
+        for i in range(1, 5):
+            self.ore(1.5, i + 0.5)
+        self.block(1.5, -0.5)
 
     def test_clear_east_is_preferred_over_shorter_south(self):
-        self.ore(.5, .5); self.ore(1.5, .5); self.ore(2.5, .5)
+        self.ore(0.5, 0.5)
+        self.ore(1.5, 0.5)
+        self.ore(2.5, 0.5)
         result = self.run_selector()
-        self.assertTrue(result['ok'])
-        self.assertEqual((result['clear_position']['x'], result['clear_position']['y']), (3.5, .5))
-        self.assertEqual(result['exit_length'], 2)
+        self.assertTrue(result["ok"])
+        self.assertEqual((result["clear_position"]["x"], result["clear_position"]["y"]), (3.5, 0.5))
+        self.assertEqual(result["exit_length"], 2)
 
     def test_safe_south_l_ends_at_first_resource_and_reservation_free_cell(self):
         self.south_patch()
         result = self.run_selector()
-        self.assertTrue(result['ok'])
-        self.assertEqual((result['clear_position']['x'], result['clear_position']['y']), (1.5, 5.5))
-        self.assertEqual(result['exit_length'], 5)
-        self.assertEqual(len(result['exit_prefix']), 7)
+        self.assertTrue(result["ok"])
+        self.assertEqual((result["clear_position"]["x"], result["clear_position"]["y"]), (1.5, 5.5))
+        self.assertEqual(result["exit_length"], 5)
+        self.assertEqual(len(result["exit_prefix"]), 7)
 
     def test_hub_advances_off_patch_when_first_clear_anchor_has_ore_on_east_apron(self):
-        self.south_patch(); self.ore(4.5, 5.5)
+        self.south_patch()
+        self.ore(4.5, 5.5)
         result = self.run_selector(apron=True, extension=4)
-        self.assertTrue(result['ok'])
-        self.assertEqual(result['clear_position']['y'], 5.5)
-        self.assertEqual(result['exit_length'], 5)
-        self.assertEqual(len(result['exit_prefix']), 7)
-        self.assertEqual(result['hub_position']['y'], 6.5)
-        self.assertEqual(len(result['hub_connector']), 1)
-        self.assertEqual(result['hub_connector'][1]['y'], 6.5)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["clear_position"]["y"], 5.5)
+        self.assertEqual(result["exit_length"], 5)
+        self.assertEqual(len(result["exit_prefix"]), 7)
+        self.assertEqual(result["hub_position"]["y"], 6.5)
+        self.assertEqual(len(result["hub_connector"]), 1)
+        self.assertEqual(result["hub_connector"][1]["y"], 6.5)
 
     def test_hub_connector_never_reenters_ore_or_exceeds_four_additional_tiles(self):
-        self.south_patch(); self.ore(4.5, 5.5); self.ore(1.5, 6.5)
-        self.assertFalse(self.run_selector(apron=True, extension=4)['ok'])
-        self.setUp(); self.south_patch()
-        for i in range(6): self.ore(4.5, 5.5+i)
-        self.assertFalse(self.run_selector(apron=True, extension=4)['ok'])
+        self.south_patch()
+        self.ore(4.5, 5.5)
+        self.ore(1.5, 6.5)
+        self.assertFalse(self.run_selector(apron=True, extension=4)["ok"])
+        self.setUp()
+        self.south_patch()
+        for i in range(6):
+            self.ore(4.5, 5.5 + i)
+        self.assertFalse(self.run_selector(apron=True, extension=4)["ok"])
 
     def test_hub_connector_native_collision_or_reservation_is_rejected(self):
-        self.south_patch(); self.ore(4.5, 5.5); self.block(1.5, 6.5)
-        self.assertFalse(self.run_selector(apron=True, extension=4)['ok'])
-        self.setUp(); self.south_patch(); self.ore(4.5, 5.5)
-        zones = [{'area': [[1, 6], [2, 7]], 'resource': 'coal'}]
-        self.assertFalse(self.run_selector(apron=True, extension=4, zones=zones)['ok'])
+        self.south_patch()
+        self.ore(4.5, 5.5)
+        self.block(1.5, 6.5)
+        self.assertFalse(self.run_selector(apron=True, extension=4)["ok"])
+        self.setUp()
+        self.south_patch()
+        self.ore(4.5, 5.5)
+        zones = [{"area": [[1, 6], [2, 7]], "resource": "coal"}]
+        self.assertFalse(self.run_selector(apron=True, extension=4, zones=zones)["ok"])
 
     def test_foreign_belt_drill_or_terrain_blocks_l_even_before_first_clear_cell(self):
-        for kind in ('transport-belt', 'underground-belt', 'electric-mining-drill', 'terrain'):
+        for kind in ("transport-belt", "underground-belt", "electric-mining-drill", "terrain"):
             with self.subTest(kind=kind):
-                self.setUp(); self.south_patch()
-                if kind == 'terrain': self.lua.execute('terrain["1.5:2.5"]=true')
-                else: self.block(1.5, 2.5, kind)
-                self.assertFalse(self.run_selector()['ok'])
+                self.setUp()
+                self.south_patch()
+                if kind == "terrain":
+                    self.lua.execute('terrain["1.5:2.5"]=true')
+                else:
+                    self.block(1.5, 2.5, kind)
+                self.assertFalse(self.run_selector()["ok"])
 
     def test_recovery_ignores_only_exact_owned_target_units(self):
-        self.south_patch(); self.block(1.5, 2.5, unit=99)
-        self.assertFalse(self.run_selector()['ok'])
-        self.assertTrue(self.run_selector(ignored={99: True})['ok'])
+        self.south_patch()
+        self.block(1.5, 2.5, unit=99)
+        self.assertFalse(self.run_selector()["ok"])
+        self.assertTrue(self.run_selector(ignored={99: True})["ok"])
         self.lua.execute('entities[#entities].force={name="other"}')
-        self.assertFalse(self.run_selector(ignored={99: True})['ok'])
+        self.assertFalse(self.run_selector(ignored={99: True})["ok"])
 
     def test_foreign_resource_or_reservation_on_l_is_rejected(self):
-        self.south_patch(); self.ore(1.5, 2.5, 'iron-ore')
-        self.assertFalse(self.run_selector()['ok'])
-        self.setUp(); self.south_patch()
-        self.assertFalse(self.run_selector(zones=[{'area': [[1, 2], [2, 3]], 'resource': 'stone'}])['ok'])
+        self.south_patch()
+        self.ore(1.5, 2.5, "iron-ore")
+        self.assertFalse(self.run_selector()["ok"])
+        self.setUp()
+        self.south_patch()
+        self.assertFalse(self.run_selector(zones=[{"area": [[1, 2], [2, 3]], "resource": "stone"}])["ok"])
 
     def test_reservation_continues_prefix_past_first_ore_hole(self):
         self.south_patch()
-        result = self.run_selector(zones=[{'area': [[1, 5], [2, 7]], 'resource': 'coal'}])
-        self.assertTrue(result['ok'])
-        self.assertEqual(result['clear_position']['y'], 7.5)
+        result = self.run_selector(zones=[{"area": [[1, 5], [2, 7]], "resource": "coal"}])
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["clear_position"]["y"], 7.5)
 
     def test_over_twelve_steps_and_missing_source_drill_fail_closed(self):
-        for path in mining_exit_candidates(self.source['position']):
-            for p in path: self.ore(p['x'], p['y'])
-        self.assertFalse(self.run_selector()['ok'])
-        self.setUp(); self.ore(.5, .5)
-        self.lua.execute('table.remove(entities,2)')
-        self.assertEqual(self.run_selector()['reason'], 'mining_exit_without_nearby_source_drill')
+        for path in mining_exit_candidates(self.source["position"]):
+            for p in path:
+                self.ore(p["x"], p["y"])
+        self.assertFalse(self.run_selector()["ok"])
+        self.setUp()
+        self.ore(0.5, 0.5)
+        self.lua.execute("table.remove(entities,2)")
+        self.assertEqual(self.run_selector()["reason"], "mining_exit_without_nearby_source_drill")
 
     def test_owned_or_planned_mining_source_is_required(self):
-        self.ore(.5, .5); self.lua.execute('table.remove(entities,1)')
-        self.assertEqual(self.run_selector()['reason'], 'mining_exit_requires_owned_source')
-        self.assertTrue(self.run_selector(planned=[{'name': 'transport-belt', 'position': self.source['position'],
-            'direction': 4, 'mining_resource': 'coal'}])['ok'])
+        self.ore(0.5, 0.5)
+        self.lua.execute("table.remove(entities,1)")
+        self.assertEqual(self.run_selector()["reason"], "mining_exit_requires_owned_source")
+        self.assertTrue(
+            self.run_selector(
+                planned=[
+                    {
+                        "name": "transport-belt",
+                        "position": self.source["position"],
+                        "direction": 4,
+                        "mining_resource": "coal",
+                    }
+                ]
+            )["ok"]
+        )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

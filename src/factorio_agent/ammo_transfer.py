@@ -1,39 +1,62 @@
 """Exact-slot transfers of full normal magazines, preserving partial magazines."""
+
 from __future__ import annotations
 
 import json
 import math
 
 
-CHESTS=frozenset(('wooden-chest','iron-chest','steel-chest'))
+CHESTS = frozenset(("wooden-chest", "iron-chest", "steel-chest"))
 
 
-def validate_ammo_action(action,*,kind,expected_world=None):
-    common={'type','name','position','expected_entity_unit','expected_entity_world_id','expected_actor_unit','reason'}
-    extra={'item','count','source_slots'}if kind=='take_full_magazines'else{'slots'}
-    if (not isinstance(action,dict)or set(action)-common-extra or action.get('type')!=kind
-            or action.get('name')not in CHESTS
-            or any(type(action.get(k))is not int or action[k]<1 for k in('expected_entity_unit','expected_actor_unit'))
-            or not isinstance(action.get('expected_entity_world_id'),str)or not action['expected_entity_world_id']
-            or('reason'in action and not isinstance(action['reason'],str))):
-        raise ValueError('ammo transfer requires exact chest, actor and world identities')
-    p=action.get('position')
-    if (not isinstance(p,dict)or set(p)!={'x','y'}
-            or any(type(p[k])not in(int,float)or not math.isfinite(p[k])for k in('x','y'))):
-        raise ValueError('ammo transfer requires a finite exact chest position')
-    if expected_world is not None and action['expected_entity_world_id']!=expected_world:
-        raise ValueError('ammo transfer must target the bound world')
-    if kind=='take_full_magazines':
-        slots=action.get('source_slots')
-        if (action.get('item')!='firearm-magazine'or type(action.get('count'))is not int or not 1<=action['count']<=50
-                or not isinstance(slots,list)or not 1<=len(slots)<=16
-                or any(type(slot)is not int or not 1<=slot<=48 for slot in slots)or len(set(slots))!=len(slots)):
-            raise ValueError('ammo take requires normal firearm magazines, count1..50 and unique bounded source slots')
-    elif kind!='configure_ammo_buffer'or action.get('slots')!=1 or type(action.get('slots'))is not int:
-        raise ValueError('ammo buffer supports exactly one available chest slot')
+def validate_ammo_action(action, *, kind, expected_world=None):
+    common = {
+        "type",
+        "name",
+        "position",
+        "expected_entity_unit",
+        "expected_entity_world_id",
+        "expected_actor_unit",
+        "reason",
+    }
+    extra = {"item", "count", "source_slots"} if kind == "take_full_magazines" else {"slots"}
+    if (
+        not isinstance(action, dict)
+        or set(action) - common - extra
+        or action.get("type") != kind
+        or action.get("name") not in CHESTS
+        or any(type(action.get(k)) is not int or action[k] < 1 for k in ("expected_entity_unit", "expected_actor_unit"))
+        or not isinstance(action.get("expected_entity_world_id"), str)
+        or not action["expected_entity_world_id"]
+        or ("reason" in action and not isinstance(action["reason"], str))
+    ):
+        raise ValueError("ammo transfer requires exact chest, actor and world identities")
+    p = action.get("position")
+    if (
+        not isinstance(p, dict)
+        or set(p) != {"x", "y"}
+        or any(type(p[k]) not in (int, float) or not math.isfinite(p[k]) for k in ("x", "y"))
+    ):
+        raise ValueError("ammo transfer requires a finite exact chest position")
+    if expected_world is not None and action["expected_entity_world_id"] != expected_world:
+        raise ValueError("ammo transfer must target the bound world")
+    if kind == "take_full_magazines":
+        slots = action.get("source_slots")
+        if (
+            action.get("item") != "firearm-magazine"
+            or type(action.get("count")) is not int
+            or not 1 <= action["count"] <= 50
+            or not isinstance(slots, list)
+            or not 1 <= len(slots) <= 16
+            or any(type(slot) is not int or not 1 <= slot <= 48 for slot in slots)
+            or len(set(slots)) != len(slots)
+        ):
+            raise ValueError("ammo take requires normal firearm magazines, count1..50 and unique bounded source slots")
+    elif kind != "configure_ammo_buffer" or action.get("slots") != 1 or type(action.get("slots")) is not int:
+        raise ValueError("ammo buffer supports exactly one available chest slot")
 
 
-AMMO_GUARD_LUA=r'''
+AMMO_GUARD_LUA = r"""
 local function reject(reason)return {ok=false,status="blocked",reason=reason,moved=0}end
 if not d or d.world_id~=x.expected_entity_world_id then return reject("ammo_world_changed")end
 if not a or not a.valid or a.force~=f or a.surface~=s or a.unit_number~=x.expected_actor_unit then return reject("ammo_actor_changed")end
@@ -53,9 +76,11 @@ local function plain(stack)
   and not stack.is_item_with_tags and not stack.is_item_with_inventory and not stack.is_item_with_entity_data
   and stack.ammo>=1 and stack.ammo<=size and stack.ammo%1==0
 end
-'''
+"""
 
-TAKE_FULL_MAGAZINES_LUA=AMMO_GUARD_LUA+r'''
+TAKE_FULL_MAGAZINES_LUA = (
+    AMMO_GUARD_LUA
+    + r"""
 for i=1,#dest do local stack=dest[i]
  if normal(stack)and not plain(stack)then return reject("ammo_actor_magazine_metadata_unsupported")end
 end
@@ -95,9 +120,12 @@ if sc+dc~=sc2+dc2 or sr+dr~=sr2+dr2 then return reject("ammo_count_or_round_cons
 return {ok=true,status=moved>0 and "succeeded"or "waiting",moved=moved,requested=x.count,source_unit=e.unit_number,
  actor_unit=a.unit_number,quality="normal",source_slots=receipts,rounds_before=sr+dr,rounds_after=sr2+dr2,
  reason=moved==0 and(capacity<=0 and "actor_ammo_capacity_full"or "waiting_for_full_factory_magazines")or nil}
-'''
+"""
+)
 
-CONFIGURE_AMMO_BUFFER_LUA=AMMO_GUARD_LUA+r'''
+CONFIGURE_AMMO_BUFFER_LUA = (
+    AMMO_GUARD_LUA
+    + r"""
 for i=1,#source do local stack=source[i]
  if stack.valid_for_read and not plain(stack)then return reject("ammo_buffer_contains_other_item_quality_or_metadata")end
  if i>1 and stack.valid_for_read then return reject("ammo_buffer_already_exceeds_single_slot")end
@@ -106,19 +134,29 @@ if not source.supports_bar()then return reject("ammo_buffer_bar_unsupported")end
 source.set_bar(2)
 if source.get_bar()~=2 then return reject("ammo_buffer_bar_rejected")end
 return {ok=true,status="succeeded",slots=1,unit_number=e.unit_number}
-'''
+"""
+)
 
 
-def _execute(game,action,kind,body):
-    validate_ammo_action(action,kind=kind,expected_world=getattr(game,'expected_world',None))
-    backend=getattr(game,'backend','assisted')
-    if backend not in('assisted','character'):raise ValueError('ammo transfer requires an ordinary supported backend')
-    payload=json.dumps(json.dumps(action,separators=(',',':')))
-    return game.query('local x=helpers.json_to_table('+payload+');local character_backend='
-                      +('true'if backend=='character'else'false')+';'+body)
+def _execute(game, action, kind, body):
+    validate_ammo_action(action, kind=kind, expected_world=getattr(game, "expected_world", None))
+    backend = getattr(game, "backend", "assisted")
+    if backend not in ("assisted", "character"):
+        raise ValueError("ammo transfer requires an ordinary supported backend")
+    payload = json.dumps(json.dumps(action, separators=(",", ":")))
+    return game.query(
+        "local x=helpers.json_to_table("
+        + payload
+        + ");local character_backend="
+        + ("true" if backend == "character" else "false")
+        + ";"
+        + body
+    )
 
 
-def execute_take_full_magazines(game,action):return _execute(game,action,'take_full_magazines',TAKE_FULL_MAGAZINES_LUA)
+def execute_take_full_magazines(game, action):
+    return _execute(game, action, "take_full_magazines", TAKE_FULL_MAGAZINES_LUA)
 
 
-def execute_configure_ammo_buffer(game,action):return _execute(game,action,'configure_ammo_buffer',CONFIGURE_AMMO_BUFFER_LUA)
+def execute_configure_ammo_buffer(game, action):
+    return _execute(game, action, "configure_ammo_buffer", CONFIGURE_AMMO_BUFFER_LUA)

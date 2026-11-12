@@ -1,4 +1,5 @@
 """Fresh, bounded preconditions for the ordinary mining step of a belt bypass."""
+
 from __future__ import annotations
 
 import math
@@ -16,8 +17,11 @@ def _positive(value):
 
 
 def _position(value):
-    if (not isinstance(value, dict) or set(value) != {"x", "y"}
-            or any(type(v) not in (int, float) or not math.isfinite(v) for v in value.values())):
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"x", "y"}
+        or any(type(v) not in (int, float) or not math.isfinite(v) for v in value.values())
+    ):
         raise ValueError("belt switch requires finite exact positions")
     return value["x"], value["y"]
 
@@ -32,8 +36,12 @@ def _endpoint(spec):
             raise ValueError("belt switch requires explicit underground roles")
     elif spec.get("name") != "transport-belt":
         raise ValueError("belt switch supports ordinary transport and underground belts")
-    if (set(spec) != keys or not _positive(spec.get("unit_number"))
-            or type(spec.get("direction")) is not int or spec["direction"] not in (0, 4, 8, 12)):
+    if (
+        set(spec) != keys
+        or not _positive(spec.get("unit_number"))
+        or type(spec.get("direction")) is not int
+        or spec["direction"] not in (0, 4, 8, 12)
+    ):
         raise ValueError("belt switch endpoint identity is invalid")
     return _position(spec["position"])
 
@@ -43,20 +51,34 @@ def validate_belt_route_replacement(action: dict) -> None:
         return
     guard = action["belt_route_replacement"]
     keys = {"item", "entry_direction", "expected_actor_unit_number", "exit", "entities", "pairs"}
-    if (not isinstance(guard, dict) or set(guard) != keys or action.get("type") != "mine"
-            or action.get("name") != "transport-belt" or type(action.get("count", 1)) is not int
-            or action.get("count", 1) != 1 or not _positive(action.get("expected_entity_unit"))
-            or not isinstance(action.get("expected_entity_world_id"), str) or not action["expected_entity_world_id"]
-            or not isinstance(guard.get("item"), str) or not guard["item"]
-            or not _positive(guard.get("expected_actor_unit_number"))
-            or type(guard.get("entry_direction")) is not int or guard["entry_direction"] not in (0, 4, 8, 12)):
+    if (
+        not isinstance(guard, dict)
+        or set(guard) != keys
+        or action.get("type") != "mine"
+        or action.get("name") != "transport-belt"
+        or type(action.get("count", 1)) is not int
+        or action.get("count", 1) != 1
+        or not _positive(action.get("expected_entity_unit"))
+        or not isinstance(action.get("expected_entity_world_id"), str)
+        or not action["expected_entity_world_id"]
+        or not isinstance(guard.get("item"), str)
+        or not guard["item"]
+        or not _positive(guard.get("expected_actor_unit_number"))
+        or type(guard.get("entry_direction")) is not int
+        or guard["entry_direction"] not in (0, 4, 8, 12)
+    ):
         raise ValueError("invalid belt route mining guard")
     positions = {_position(action.get("position"))}
     units = {action["expected_entity_unit"]}
     entities, pairs = guard["entities"], guard["pairs"]
-    if (not isinstance(entities, list) or not 1 <= len(entities) <= 32
-            or not isinstance(pairs, list) or not 1 <= len(pairs) <= 16
-            or not isinstance(guard["exit"], dict) or guard["exit"].get("name") != "transport-belt"):
+    if (
+        not isinstance(entities, list)
+        or not 1 <= len(entities) <= 32
+        or not isinstance(pairs, list)
+        or not 1 <= len(pairs) <= 16
+        or not isinstance(guard["exit"], dict)
+        or guard["exit"].get("name") != "transport-belt"
+    ):
         raise ValueError("belt switch requires a bounded replacement and surface exit")
     for spec in [guard["exit"], *entities]:
         point = _endpoint(spec)
@@ -67,13 +89,17 @@ def validate_belt_route_replacement(action: dict) -> None:
     if guard["expected_actor_unit_number"] in units:
         raise ValueError("belt switch actor cannot be an endpoint")
     for pair in pairs:
-        if (not isinstance(pair, dict) or set(pair) != {"input", "output", "max_distance"}
-                or pair.get("input") not in entities or pair.get("output") not in entities):
+        if (
+            not isinstance(pair, dict)
+            or set(pair) != {"input", "output", "max_distance"}
+            or pair.get("input") not in entities
+            or pair.get("output") not in entities
+        ):
             raise ValueError("belt switch pairs must reference exact replacement identities")
     underground_edges({"entities": entities, "underground_pairs": pairs})
 
 
-BELT_ROUTE_REPLACEMENT_LUA = r'''
+BELT_ROUTE_REPLACEMENT_LUA = r"""
 if x.belt_route_replacement then
  local q=x.belt_route_replacement
  if not d or d.world_id~=x.expected_entity_world_id or not a or not a.valid
@@ -135,4 +161,4 @@ if x.belt_route_replacement then
  assume metadata-bearing cargo will merge. Each recovered item gets a slot. ]]
  if inv.count_empty_stacks(false,false)<cargo+1 then return failure("belt_switch_inventory_full") end
 end
-'''
+"""

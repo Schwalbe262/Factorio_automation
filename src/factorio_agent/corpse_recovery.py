@@ -1,33 +1,40 @@
 """Conserved native transfer of one pinned player's exact death-corpse stacks."""
+
 from __future__ import annotations
 
 import json
 
 
-def _payload(value):return json.dumps(json.dumps(value, separators=(',', ':')))
+def _payload(value):
+    return json.dumps(json.dumps(value, separators=(",", ":")))
 
 
 def _arguments(game, world, actor, death_tick):
-    if (not isinstance(world, str) or not world or any(type(v) is not int or v < 1 for v in (actor, death_tick))
-            or (getattr(game, 'expected_world', None) is not None and game.expected_world != world)):
-        raise ValueError('exact bound world, positive actor unit and death tick required')
-    return {'world_id':world, 'actor_unit':actor, 'death_tick':death_tick}
+    if (
+        not isinstance(world, str)
+        or not world
+        or any(type(v) is not int or v < 1 for v in (actor, death_tick))
+        or (getattr(game, "expected_world", None) is not None and game.expected_world != world)
+    ):
+        raise ValueError("exact bound world, positive actor unit and death tick required")
+    return {"world_id": world, "actor_unit": actor, "death_tick": death_tick}
 
 
 def inspect_corpse_recovery(game, expected_world, expected_actor_unit, death_tick):
     args = _arguments(game, expected_world, expected_actor_unit, death_tick)
-    return game.query(CORPSE_RECOVERY_INSPECT_LUA.replace('PAYLOAD', _payload(args)))
+    return game.query(CORPSE_RECOVERY_INSPECT_LUA.replace("PAYLOAD", _payload(args)))
 
 
 def execute_corpse_recovery(game, expected_world, expected_actor_unit, death_tick, *, keep_single_repair_tool=False):
     """Caller holds the writer lock; no movement or item-specification recreation."""
     args = _arguments(game, expected_world, expected_actor_unit, death_tick)
-    if type(keep_single_repair_tool)is not bool:raise ValueError('repair-tool recovery policy must be boolean')
-    args['keep_single_repair_tool']=keep_single_repair_tool
-    return game.query(CORPSE_RECOVERY_EXECUTE_LUA.replace('PAYLOAD', _payload(args)))
+    if type(keep_single_repair_tool) is not bool:
+        raise ValueError("repair-tool recovery policy must be boolean")
+    args["keep_single_repair_tool"] = keep_single_repair_tool
+    return game.query(CORPSE_RECOVERY_EXECUTE_LUA.replace("PAYLOAD", _payload(args)))
 
 
-CORPSE_RECOVERY_COMMON_LUA=r'''
+CORPSE_RECOVERY_COMMON_LUA = r"""
 local args=helpers.json_to_table(PAYLOAD)
 local function reject(reason)return {ok=false,status="blocked",reason=reason,tick=game.tick}end
 local function same_position(p,q)return p.x==q.x and p.y==q.y end
@@ -134,10 +141,12 @@ local function read_marker(owner,corpse)
  if marker and not valid_marker(marker,owner,corpse)then return nil,"corpse_recovery_marker_identity_changed"end
  return marker,nil
 end
-'''
+"""
 
 
-CORPSE_RECOVERY_INSPECT_LUA=CORPSE_RECOVERY_COMMON_LUA+r'''
+CORPSE_RECOVERY_INSPECT_LUA = (
+    CORPSE_RECOVERY_COMMON_LUA
+    + r"""
 local owner,reason=context();if not owner then return reject(reason)end
 local corpse,why=select_corpse(owner);if why then return reject(why)end
 local marker,invalid=read_marker(owner,corpse);if invalid then return reject(invalid)end
@@ -150,10 +159,13 @@ return {ok=true,tick=game.tick,world_id=d.world_id,owner_index=owner.index,actor
   inventory_slots=#inv,goods=goods}or nil,actor_goods=actor,empty_main_slots=free,native_repair_pending=d.native_repair and true or false,
  existing_phase=marker and marker.phase or nil,already_recovered=marker and marker.phase=="completed"or false,
  scope="exact owner/death corpse selected without force filter; read-only stack and conservation baseline"}
-'''
+"""
+)
 
 
-CORPSE_RECOVERY_EXECUTE_LUA=CORPSE_RECOVERY_COMMON_LUA+r'''
+CORPSE_RECOVERY_EXECUTE_LUA = (
+    CORPSE_RECOVERY_COMMON_LUA
+    + r"""
 local owner,reason=context();if not owner then return reject(reason)end
 if d.native_repair or d.actor.crafting_queue_size>0 then return reject("corpse_recovery_actor_inventory_operation_pending")end
 local corpse,why=select_corpse(owner);if why then return reject(why)end
@@ -236,4 +248,5 @@ return {ok=true,status=marker.phase=="completed"and"succeeded"or"waiting",tick=g
  remaining_stacks=after.corpse.occupied_stacks,receipt_index=receipt.index,actor_position=pos(actor.position),
  deferred_repair_tools=deferred_tools,
  conservation={before=before.total,after=after.total},scope="actual native stack transfer only; count, rounds and tool durability conserved; actor never moved"}
-'''
+"""
+)

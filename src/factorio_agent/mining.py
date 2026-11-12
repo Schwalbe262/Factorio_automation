@@ -3,6 +3,7 @@
 This is capital bootstrapping, not a substitute for scalable electric mining.
 The model chooses the absolute cell target rather than individual placements.
 """
+
 from __future__ import annotations
 
 import json
@@ -34,8 +35,13 @@ class StarterCapacity:
 
     def choose_site(self, resource: str) -> dict:
         receiver = "stone-furnace" if resource in {"iron-ore", "copper-ore"} else "wooden-chest"
-        return self.game.query('''
-local resource=''' + json.dumps(resource) + ''';local receiver_name=''' + json.dumps(receiver) + '''
+        return self.game.query(
+            """
+local resource="""
+            + json.dumps(resource)
+            + """;local receiver_name="""
+            + json.dumps(receiver)
+            + """
 local seen={};local best=nil;local best_score=-math.huge
 for _,ore in pairs(s.find_entities_filtered{position={0,0},radius=384,name=resource,limit=2000}) do
  local x=math.floor(ore.position.x);local y=math.floor(ore.position.y);local key=x..":"..y
@@ -58,13 +64,21 @@ for _,ore in pairs(s.find_entities_filtered{position={0,0},radius=384,name=resou
  end
 end
 return best or {ok=false,reason="no_clear_starter_capacity_site"}
-''')
+"""
+        )
 
     @staticmethod
     def matching(obs: dict, part: dict):
-        return next((e for e in obs.get("entities", []) if e["name"] == part["name"]
-                     and abs(e["position"]["x"] - part["position"]["x"]) < .1
-                     and abs(e["position"]["y"] - part["position"]["y"]) < .1), None)
+        return next(
+            (
+                e
+                for e in obs.get("entities", [])
+                if e["name"] == part["name"]
+                and abs(e["position"]["x"] - part["position"]["x"]) < 0.1
+                and abs(e["position"]["y"] - part["position"]["y"]) < 0.1
+            ),
+            None,
+        )
 
     def proof(self, obs: dict, parameters: dict) -> dict | None:
         resource, count = parameters["resource"], parameters["cells"]
@@ -74,13 +88,22 @@ return best or {ok=false,reason="no_clear_starter_capacity_site"}
             receiver = self.matching(obs, cell["receiver"])
             if not receiver or not (cell.get("fuel", 0) > 0 or cell.get("burning") or cell.get("operating")):
                 continue
-            produced = receiver.get("products_finished", 0) if receiver["name"] == "stone-furnace" else sum(receiver.get("inventory", {}).values())
+            produced = (
+                receiver.get("products_finished", 0)
+                if receiver["name"] == "stone-furnace"
+                else sum(receiver.get("inventory", {}).values())
+            )
             if produced > 0:
                 productive.append({"drill": cell["drill"], "receiver": cell["receiver"], "observed_output": produced})
         if len(productive) < count:
             return None
-        return {"tick": obs["tick"], "resource": resource, "productive_cells": len(productive),
-                "cells": productive, "fuel_mode": "bounded starter upkeep; not automated belt mining"}
+        return {
+            "tick": obs["tick"],
+            "resource": resource,
+            "productive_cells": len(productive),
+            "cells": productive,
+            "fuel_mode": "bounded starter upkeep; not automated belt mining",
+        }
 
     def step(self, obs: dict, parameters: dict) -> dict:
         validate_parameters(parameters)
@@ -89,22 +112,36 @@ return best or {ok=false,reason="no_clear_starter_capacity_site"}
         resource, wanted = parameters["resource"], parameters["cells"]
         # Completion has priority over unrelated starter fuel chores. Otherwise
         # a paid, productive target can loop forever replenishing other cells.
-        if len(self.cells(resource))>=wanted:
-            proof=self.proof(obs,parameters)
-            if proof:return {'status':'succeeded','reason':'starter capacity has live machine output','evidence':proof}
-        if (resource in('iron-ore','copper-ore')and wanted>2
-                and obs.get('technologies',{}).get('electric-mining-drill')is True):
-            return {'status':'blocked','reason':'bulk_starter_capacity_requires_electric_mining_after_unlock',
-                'evidence':{'resource':resource,'required':wanted,'available':2,
-                    'required_technology':'electric-mining-drill',
-                    'reason':'expand mining_outpost and smelting_district; preserve paid starter cells'}}
+        if len(self.cells(resource)) >= wanted:
+            proof = self.proof(obs, parameters)
+            if proof:
+                return {"status": "succeeded", "reason": "starter capacity has live machine output", "evidence": proof}
+        if (
+            resource in ("iron-ore", "copper-ore")
+            and wanted > 2
+            and obs.get("technologies", {}).get("electric-mining-drill") is True
+        ):
+            return {
+                "status": "blocked",
+                "reason": "bulk_starter_capacity_requires_electric_mining_after_unlock",
+                "evidence": {
+                    "resource": resource,
+                    "required": wanted,
+                    "available": 2,
+                    "required_technology": "electric-mining-drill",
+                    "reason": "expand mining_outpost and smelting_district; preserve paid starter cells",
+                },
+            }
         fuel = self.bootstrap.maintain_fuel(obs)
         if fuel:
             return fuel
         if len(self.cells(resource)) >= wanted:
             proof = self.proof(obs, parameters)
-            return ({"status": "succeeded", "reason": "starter capacity has live machine output", "evidence": proof}
-                    if proof else {"status": "waiting", "reason": "waiting for every target cell to produce"})
+            return (
+                {"status": "succeeded", "reason": "starter capacity has live machine output", "evidence": proof}
+                if proof
+                else {"status": "waiting", "reason": "waiting for every target cell to produce"}
+            )
         pending = self.state["pending"].get(resource)
         if pending and all(self.matching(obs, p) for p in (pending["receiver"], pending["drill"])):
             self.state["pending"].pop(resource)

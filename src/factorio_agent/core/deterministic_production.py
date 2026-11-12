@@ -13,11 +13,17 @@ from .world_catalog import CatalogError, WorldCatalog, _amount, _material, _type
 def _researched(observation: Mapping[str, Any], catalog: WorldCatalog) -> set[str]:
     observed = observation.get("technologies")
     if isinstance(observed, dict):
-        return {name for name, value in observed.items()
-                if (value.get("researched", False) if isinstance(value, dict) else value is True)}
+        return {
+            name
+            for name, value in observed.items()
+            if (value.get("researched", False) if isinstance(value, dict) else value is True)
+        }
     if isinstance(observed, list):
-        return {value if isinstance(value, str) else value["name"] for value in observed
-                if isinstance(value, str) or value.get("researched")}
+        return {
+            value if isinstance(value, str) else value["name"]
+            for value in observed
+            if isinstance(value, str) or value.get("researched")
+        }
     return {name for name, value in catalog.technologies.items() if value.get("researched")}
 
 
@@ -29,8 +35,14 @@ class ProductionGraph:
     rocket/silo/starter-pack batch requirements remain separate from those rates.
     """
 
-    def __init__(self, catalog: WorldCatalog, *, science_rate_per_minute: float = 30,
-                 power_reserve_fraction: float = 0.2, fuel_reserve_seconds: float = 120):
+    def __init__(
+        self,
+        catalog: WorldCatalog,
+        *,
+        science_rate_per_minute: float = 30,
+        power_reserve_fraction: float = 0.2,
+        fuel_reserve_seconds: float = 120,
+    ):
         if not math.isfinite(science_rate_per_minute) or science_rate_per_minute <= 0:
             raise ValueError("science_rate_per_minute must be positive")
         if not 0 <= power_reserve_fraction < 1:
@@ -49,8 +61,9 @@ class ProductionGraph:
             return {name for name, value in values.items() if value} if isinstance(values, dict) else set(values)
         return {name for name, value in self.catalog.recipes.items() if value.get("enabled")}
 
-    def machines_for_recipe(self, recipe_name: str, observation: Mapping[str, Any] | None = None,
-                            *, unlocked_only: bool = True) -> list[dict[str, Any]]:
+    def machines_for_recipe(
+        self, recipe_name: str, observation: Mapping[str, Any] | None = None, *, unlocked_only: bool = True
+    ) -> list[dict[str, Any]]:
         recipe = self.catalog.recipes[recipe_name]
         categories = set(recipe["categories"])
         enabled = self._enabled(observation)
@@ -62,19 +75,30 @@ class ProductionGraph:
             if not categories.intersection(entity["crafting_categories"]):
                 continue
             placement_items = [item["name"] for item in entity["items_to_place_this"]]
-            build_recipes = [candidate for item in placement_items
-                             if (candidate := self.catalog.recipe_for_product(item)) is not None]
+            build_recipes = [
+                candidate
+                for item in placement_items
+                if (candidate := self.catalog.recipe_for_product(item)) is not None
+            ]
             available = name in existing or any(candidate["name"] in enabled for candidate in build_recipes)
             if unlocked_only and not available:
                 continue
             speed = entity.get("crafting_speed")
             if speed is None or not math.isfinite(float(speed)) or speed <= 0:
                 continue
-            machines.append({"name": name, "crafting_speed": speed, "available": available,
-                             "placement_items": placement_items,
-                             "energy_usage_per_tick": entity.get("energy_usage", 0) or 0,
-                             "electric": entity.get("electric", False), "burner": entity.get("burner", False),
-                             "fluidbox_prototypes": deepcopy(entity["fluidbox_prototypes"])})
+            machines.append(
+                {
+                    "name": name,
+                    "crafting_speed": speed,
+                    "available": available,
+                    "placement_items": placement_items,
+                    "energy_usage_per_tick": entity.get("energy_usage", 0) or 0,
+                    "electric": entity.get("electric", False),
+                    "burner": entity.get("burner", False),
+                    "fluidbox_prototypes": deepcopy(entity["fluidbox_prototypes"]),
+                }
+            )
+
         # Favor established machines, then the cheapest construction ingredient
         # count. This does not prescribe a curated machine tier by recipe name.
         def rank(machine):
@@ -84,6 +108,7 @@ class ProductionGraph:
                 if row:
                     costs.append(sum(_amount(i["amount"]) for i in row["ingredients"]))
             return (machine["name"] not in existing, min(costs, default=math.inf), machine["name"])
+
         return sorted(machines, key=rank)
 
     def _continuous_rates(self, science_names: list[str]) -> tuple[dict[str, float], dict[tuple[str, str], float]]:
@@ -143,30 +168,62 @@ class ProductionGraph:
             if not machines and not handcraft:
                 gaps.append({"kind": "machine_category", "recipe": name, "categories": recipe["categories"]})
             unlocks = [technology for technology, row in self.catalog.technologies.items() if name in row["unlocks"]]
-            nodes.append({"id": f"recipe:{name}", "kind": "production", "recipe": name,
-                          "ingredients": deepcopy(recipe["ingredients"]), "products": deepcopy(recipe["products"]),
-                          "categories": list(recipe["categories"]), "energy_seconds": recipe["energy"],
-                          "batches_required": full_bom["recipe_batches"].get(name, 0),
-                          "cycles_per_minute": cycles.get(name, 0),
-                          "unlock_technologies": sorted(unlocks), "handcraft_allowed": handcraft,
-                          "machine_candidates": [machine["name"] for machine in machines]})
+            nodes.append(
+                {
+                    "id": f"recipe:{name}",
+                    "kind": "production",
+                    "recipe": name,
+                    "ingredients": deepcopy(recipe["ingredients"]),
+                    "products": deepcopy(recipe["products"]),
+                    "categories": list(recipe["categories"]),
+                    "energy_seconds": recipe["energy"],
+                    "batches_required": full_bom["recipe_batches"].get(name, 0),
+                    "cycles_per_minute": cycles.get(name, 0),
+                    "unlock_technologies": sorted(unlocks),
+                    "handcraft_allowed": handcraft,
+                    "machine_candidates": [machine["name"] for machine in machines],
+                }
+            )
         technology_order = self.catalog.technology_order(set(bom["technology_order"]) | set(full_bom["technologies"]))
         for name in technology_order:
             technology = self.catalog.technologies[name]
             trigger = technology.get("research_trigger")
-            if trigger and trigger.get("type") not in {"craft-item", "craft-fluid", "mine-entity", "build-entity", "create-space-platform", "send-item-to-orbit"}:
+            if trigger and trigger.get("type") not in {
+                "craft-item",
+                "craft-fluid",
+                "mine-entity",
+                "build-entity",
+                "create-space-platform",
+                "send-item-to-orbit",
+            }:
                 gaps.append({"kind": "research_trigger", "technology": name, "trigger": deepcopy(trigger)})
-            nodes.append({"id": f"technology:{name}", "kind": "trigger" if trigger else "research",
-                          "technology": name, "prerequisites": list(technology["prerequisites"]),
-                          "trigger": deepcopy(trigger), "science": deepcopy(technology["ingredients"]),
-                          "unit_count": technology.get("unit_count")})
-        self._plan = {"catalog_fingerprint": self.catalog.fingerprint, "objective": "first_space_age_rocket",
-                      "nodes": nodes, "technology_order": technology_order,
-                      "bom": {**full_bom, "science_packs": bom["science_packs"]},
-                      "science_rate_per_minute": self.science_rate_per_minute,
-                      "raw_rates_per_minute": _typed_rows({key: rate for key, rate in raw_rates.items() if key in self.catalog._raw}),
-                      "reserves": {"power_spare_fraction": self.power_reserve_fraction,
-                                   "fuel_seconds": self.fuel_reserve_seconds}, "gaps": gaps}
+            nodes.append(
+                {
+                    "id": f"technology:{name}",
+                    "kind": "trigger" if trigger else "research",
+                    "technology": name,
+                    "prerequisites": list(technology["prerequisites"]),
+                    "trigger": deepcopy(trigger),
+                    "science": deepcopy(technology["ingredients"]),
+                    "unit_count": technology.get("unit_count"),
+                }
+            )
+        self._plan = {
+            "catalog_fingerprint": self.catalog.fingerprint,
+            "objective": "first_space_age_rocket",
+            "nodes": nodes,
+            "technology_order": technology_order,
+            "bom": {**full_bom, "science_packs": bom["science_packs"]},
+            "science_rate_per_minute": self.science_rate_per_minute,
+            "raw_rates_per_minute": _typed_rows(
+                {key: rate for key, rate in raw_rates.items() if key in self.catalog._raw}
+            ),
+            "reserves": {
+                "power_spare_fraction": self.power_reserve_fraction,
+                "fuel_seconds": self.fuel_reserve_seconds,
+            },
+            "gaps": gaps,
+        }
         return deepcopy(self._plan)
 
     def next_research(self, observation: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -183,10 +240,19 @@ class ProductionGraph:
                 continue
             trigger = technology.get("research_trigger")
             if trigger:
-                return {"kind": "trigger", "technology": name, "trigger": deepcopy(trigger),
-                        "reason": "natural_trigger_required", "action": None}
-            return {"kind": "research", "technology": name, "science": deepcopy(technology["ingredients"]),
-                    "action": {"type": "research", "technology": name}}
+                return {
+                    "kind": "trigger",
+                    "technology": name,
+                    "trigger": deepcopy(trigger),
+                    "reason": "natural_trigger_required",
+                    "action": None,
+                }
+            return {
+                "kind": "research",
+                "technology": name,
+                "science": deepcopy(technology["ingredients"]),
+                "action": {"type": "research", "technology": name},
+            }
         return None
 
     def recipe_demand(self, observation: Mapping[str, Any] | None = None) -> dict[str, dict[str, Any]]:
@@ -202,15 +268,32 @@ class ProductionGraph:
             machines = self.machines_for_recipe(name, observation)
             row["enabled"] = name in enabled
             row["available_machines"] = [machine["name"] for machine in machines]
-            row["status"] = "locked" if not row["enabled"] else "ready" if machines else "handcraft_only" if row["handcraft_allowed"] else "missing_machine"
-            row["ingredient_rates_per_minute"] = [dict(ingredient, amount=ingredient["amount"] * row["cycles_per_minute"]) for ingredient in row["ingredients"]]
+            row["status"] = (
+                "locked"
+                if not row["enabled"]
+                else "ready"
+                if machines
+                else "handcraft_only"
+                if row["handcraft_allowed"]
+                else "missing_machine"
+            )
+            row["ingredient_rates_per_minute"] = [
+                dict(ingredient, amount=ingredient["amount"] * row["cycles_per_minute"])
+                for ingredient in row["ingredients"]
+            ]
             if machines:
                 selected = machines[0]
                 row["selected_machine"] = selected["name"]
-                count = math.ceil(row["cycles_per_minute"] * row["energy_seconds"] / selected["crafting_speed"] / 60 - 1e-12)
+                count = math.ceil(
+                    row["cycles_per_minute"] * row["energy_seconds"] / selected["crafting_speed"] / 60 - 1e-12
+                )
                 row["machines_for_rate"] = max(0, count)
                 demand_watts = selected["energy_usage_per_tick"] * max(0, count) * 60
-                row["reserved_power_watts"] = demand_watts / (1 - self.power_reserve_fraction) if selected["electric"] else 0
-                row["burner_fuel_energy_reserve_joules"] = demand_watts * self.fuel_reserve_seconds if selected["burner"] else 0
+                row["reserved_power_watts"] = (
+                    demand_watts / (1 - self.power_reserve_fraction) if selected["electric"] else 0
+                )
+                row["burner_fuel_energy_reserve_joules"] = (
+                    demand_watts * self.fuel_reserve_seconds if selected["burner"] else 0
+                )
             result[name] = row
         return result

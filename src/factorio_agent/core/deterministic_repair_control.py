@@ -4,6 +4,7 @@ Only the engine changes entity health and repair-pack durability. Issued inputs
 are bounded; after interruption the single carried pack bounds native spending.
 The saved cleanup record conserves the cursor, without a fabricated replacement.
 """
+
 from __future__ import annotations
 
 import json
@@ -17,7 +18,7 @@ from .deterministic_state import stop_requested
 MAX_REPAIR_TICKS = 120
 MAX_REPAIR_PULSES = 20
 
-REPAIR_COMMON_LUA = r'''
+REPAIR_COMMON_LUA = r"""
 local function repair_owner(x)
  if not d or d.world_id~=x.expected_world_id or not a or not a.valid
   or a.unit_number~=x.expected_actor_unit or a.force~=f or a.surface~=s then return false end
@@ -76,9 +77,11 @@ local function finish_repair(request)
  if repaired>0 and spent<=0 then return failure("native_repair_receipt_uncorrelated") end
  return success(result)
 end
-'''
+"""
 
-BEGIN_REPAIR_LUA = REPAIR_COMMON_LUA + r'''
+BEGIN_REPAIR_LUA = (
+    REPAIR_COMMON_LUA
+    + r"""
 if not repair_owner(x) then return failure("native_repair_owner_changed") end
 if d.native_repair then return failure("native_repair_cleanup_required") end
 local e=target(x.position,x.name)
@@ -111,9 +114,12 @@ if not cursor.transfer_stack(stack,1) or not cursor.valid_for_read or cursor.nam
 job.phase="repair"
 d.motion=nil;a.walking_state={walking=false};a.mining_state={mining=false}
 return success{status="running",reason="native_repair_prepared",request=job.request,tick=game.tick}
-'''
+"""
+)
 
-PULSE_REPAIR_LUA = REPAIR_COMMON_LUA + r'''
+PULSE_REPAIR_LUA = (
+    REPAIR_COMMON_LUA
+    + r"""
 if not repair_owner(x) then return failure("native_repair_owner_changed") end
 local job=d.native_repair
 if not job or job.request~=x.request then return failure("native_repair_request_changed") end
@@ -138,15 +144,21 @@ else
 end
 a.repair_state={repairing=false,position=job.position}
 return success{status="waiting",reason=job.reason}
-'''
+"""
+)
 
-FINISH_REPAIR_LUA = REPAIR_COMMON_LUA + r'''
+FINISH_REPAIR_LUA = (
+    REPAIR_COMMON_LUA
+    + r"""
 if not repair_owner(x) then return failure("native_repair_owner_changed") end
 return finish_repair(x.request)
-'''
+"""
+)
 
 
-REPAIR_RETURN_HOME_LUA=REPAIR_COMMON_LUA+r'''
+REPAIR_RETURN_HOME_LUA = (
+    REPAIR_COMMON_LUA
+    + r"""
 if not repair_owner(x)or d.native_repair then return {ok=false,reason="repair_return_owner_or_cleanup_changed"}end
 local home=f.get_spawn_position(s);local p=s.find_non_colliding_position("character",home,8,.5)
 if not p then return {ok=false,reason="repair_return_spawn_obstructed"}end
@@ -158,19 +170,23 @@ for _,enemy in pairs(s.find_entities_filtered{position=p,radius=64,force="enemy"
   return {ok=false,reason="repair_return_spawn_in_hostile_turret_range"}end
 end
 return {ok=true,position=pos(p),tick=game.tick}
-'''
+"""
+)
 
 # The normal stop action also recovers a pack left by an interrupted burst.
-STOP_REPAIR_LUA = REPAIR_COMMON_LUA + r'''
+STOP_REPAIR_LUA = (
+    REPAIR_COMMON_LUA
+    + r"""
 if d and d.native_repair then
  local result=finish_repair(nil)
  if not result.ok or result.status=="waiting" and result.reason=="native_repair_cursor_return_waiting" then return result end
 end
-'''
+"""
+)
 
 # Generic name/count insert/remove recreates tool metadata. Use real stack
 # transfers for the repair pack when ordinary production picks up or deposits it.
-TRANSFER_REPAIR_PACK_LUA = r'''
+TRANSFER_REPAIR_PACK_LUA = r"""
 if x.item=="repair-pack" then
  if e.force~=f or e.surface~=s then return failure("repair_pack_storage_changed") end
  local other=x.inventory and e.get_inventory(defines.inventory[x.inventory]) or nil
@@ -194,14 +210,14 @@ if x.item=="repair-pack" then
  end
  return success{status=moved>0 and "succeeded" or "waiting",moved=moved}
 end
-'''
+"""
 
 
 def validate_repair(action: dict) -> None:
     if action.get("type") not in {"repair", "finish_repair"}:
         raise ValueError("unsupported native repair action")
-    if 'return_to_spawn'in action and type(action['return_to_spawn'])is not bool:
-        raise ValueError('native repair return_to_spawn must be boolean')
+    if "return_to_spawn" in action and type(action["return_to_spawn"]) is not bool:
+        raise ValueError("native repair return_to_spawn must be boolean")
     if not isinstance(action.get("expected_world_id"), str) or not action["expected_world_id"]:
         raise ValueError("native repair requires the observed world")
     if type(action.get("expected_actor_unit")) is not int or action["expected_actor_unit"] <= 0:
@@ -217,8 +233,9 @@ def validate_repair(action: dict) -> None:
     if not isinstance(action.get("name"), str) or not action["name"]:
         raise ValueError("native repair requires an entity name")
     position = action.get("position")
-    if not isinstance(position, dict) or any(type(position.get(k)) not in (int, float)
-            or not math.isfinite(position[k]) for k in ("x", "y")):
+    if not isinstance(position, dict) or any(
+        type(position.get(k)) not in (int, float) or not math.isfinite(position[k]) for k in ("x", "y")
+    ):
         raise ValueError("native repair requires a finite position")
 
 
@@ -228,18 +245,21 @@ def pending_repair(observation: dict) -> dict | None:
         return None
     if not isinstance(pending, dict):
         raise ValueError("invalid native repair cleanup observation")
-    action = {"type": "finish_repair", "request": pending.get("request"),
-              "expected_world_id": observation.get("world_id"),
-              "expected_actor_unit": observation.get("actor_unit_number"),
-              "reason": "return the conserved repair pack from an interrupted burst"}
+    action = {
+        "type": "finish_repair",
+        "request": pending.get("request"),
+        "expected_world_id": observation.get("world_id"),
+        "expected_actor_unit": observation.get("actor_unit_number"),
+        "reason": "return the conserved repair pack from an interrupted burst",
+    }
     validate_repair(action)
     return action
 
 
 def run_repair(game, action: dict) -> dict:
     validate_repair(action)
-    if action.get('return_to_spawn')and getattr(game,'backend',None)!='assisted':
-        raise ValueError('automatic repair return requires the assisted movement backend')
+    if action.get("return_to_spawn") and getattr(game, "backend", None) != "assisted":
+        raise ValueError("automatic repair return requires the assisted movement backend")
     request = dict(action, request=action.get("request") or str(uuid.uuid4()))
     encoded = json.dumps(json.dumps(request, separators=(",", ":")))
     prefix = "local x=helpers.json_to_table(" + encoded + ");"
@@ -258,7 +278,7 @@ def run_repair(game, action: dict) -> dict:
                 result = game.query(prefix + PULSE_REPAIR_LUA)
                 if not result.get("ok") or result.get("status") != "running":
                     break
-                time.sleep(.04)
+                time.sleep(0.04)
     except Exception as exc:
         error = exc
     finally:
@@ -275,11 +295,24 @@ def run_repair(game, action: dict) -> dict:
         return cleanup
     if result and not result.get("ok"):
         return result
-    answer=cleanup if cleanup and cleanup.get('reason')!='native_repair_already_stopped'else result or cleanup
-    if(action.get('return_to_spawn')and answer and answer.get('ok')
-            and not stop_requested(game.cfg.runtime_dir/'stop.json')):
-        home=game.query(prefix+REPAIR_RETURN_HOME_LUA)
-        returned=game.act(dict(type='move',position=home['position'],
-            reason='return the repair operator to its quiet force spawn after native tool cleanup'))if home.get('ok')else home
-        answer=dict(answer,return_to_spawn=returned)
+    answer = cleanup if cleanup and cleanup.get("reason") != "native_repair_already_stopped" else result or cleanup
+    if (
+        action.get("return_to_spawn")
+        and answer
+        and answer.get("ok")
+        and not stop_requested(game.cfg.runtime_dir / "stop.json")
+    ):
+        home = game.query(prefix + REPAIR_RETURN_HOME_LUA)
+        returned = (
+            game.act(
+                dict(
+                    type="move",
+                    position=home["position"],
+                    reason="return the repair operator to its quiet force spawn after native tool cleanup",
+                )
+            )
+            if home.get("ok")
+            else home
+        )
+        answer = dict(answer, return_to_spawn=returned)
     return answer

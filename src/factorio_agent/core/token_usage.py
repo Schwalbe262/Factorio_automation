@@ -127,9 +127,13 @@ def current_codex_thread_usage(
         if not thread_id and cwd is not None and _normalized_codex_cwd(summary["cwd"]) != _normalized_codex_cwd(cwd):
             raise ValueError("Codex session cwd does not match the requested checkout")
         return CodexThreadUsage(
-            thread_id=summary["thread_id"], cwd=summary["cwd"], tokens_used=summary["tokens_used"],
-            updated_at_ms=summary["updated_at_ms"], weekly_used_percent=summary["weekly_used_percent"],
-            weekly_resets_at=summary["weekly_resets_at"], source="codex_session_jsonl",
+            thread_id=summary["thread_id"],
+            cwd=summary["cwd"],
+            tokens_used=summary["tokens_used"],
+            updated_at_ms=summary["updated_at_ms"],
+            weekly_used_percent=summary["weekly_used_percent"],
+            weekly_resets_at=summary["weekly_resets_at"],
+            source="codex_session_jsonl",
         )
     if db_error is not None:
         raise db_error
@@ -233,7 +237,9 @@ def summarize_codex_session_usage(path: Path, *, max_tail_bytes: int = 2 * 1024 
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 tokens = value
                 try:
-                    updated_at_ms = int(datetime.fromisoformat(str(event.get("timestamp")).replace("Z", "+00:00")).timestamp() * 1000)
+                    updated_at_ms = int(
+                        datetime.fromisoformat(str(event.get("timestamp")).replace("Z", "+00:00")).timestamp() * 1000
+                    )
                 except (ValueError, TypeError, OverflowError):
                     pass
         limits = payload.get("rate_limits")
@@ -251,10 +257,17 @@ def summarize_codex_session_usage(path: Path, *, max_tail_bytes: int = 2 * 1024 
             break
     if tokens is None:
         raise ValueError("no cumulative token_count event in the bounded Codex session tail")
-    return {"thread_id": thread_id, "cwd": str(meta.get("cwd") or ""), "tokens_used": tokens,
-            "updated_at_ms": updated_at_ms, "weekly_used_percent": weekly_percent,
-            "weekly_resets_at": weekly_resets_at, "source": "codex_session_jsonl",
-            "session_path": str(path), "weekly_percent_basis": "account_usage"}
+    return {
+        "thread_id": thread_id,
+        "cwd": str(meta.get("cwd") or ""),
+        "tokens_used": tokens,
+        "updated_at_ms": updated_at_ms,
+        "weekly_used_percent": weekly_percent,
+        "weekly_resets_at": weekly_resets_at,
+        "source": "codex_session_jsonl",
+        "session_path": str(path),
+        "weekly_percent_basis": "account_usage",
+    }
 
 
 def _codex_thread_usage_from_row(row: sqlite3.Row) -> CodexThreadUsage:

@@ -1,32 +1,44 @@
 """Explicit owner-character succession; never respawn, transfer items or erase receipts."""
+
 from __future__ import annotations
 
 import json
 
 
-def _payload(value):return json.dumps(json.dumps(value, separators=(',', ':')))
+def _payload(value):
+    return json.dumps(json.dumps(value, separators=(",", ":")))
 
 
 def inspect_actor_recovery(game):
     """Works through raw query even when normal observation reports agent_dead."""
-    return game.query(ACTOR_RECOVERY_INSPECT_LUA.replace('PAYLOAD', _payload({
-        'expected_world':getattr(game, 'expected_world', None)})))
+    return game.query(
+        ACTOR_RECOVERY_INSPECT_LUA.replace(
+            "PAYLOAD", _payload({"expected_world": getattr(game, "expected_world", None)})
+        )
+    )
 
 
 def execute_actor_recovery(game, expected_world, expected_old_unit, expected_new_unit):
     """Caller holds the world writer lock; this changes framework storage only."""
-    if (not isinstance(expected_world, str) or not expected_world
-            or any(type(v) is not int or v < 1 for v in (expected_old_unit, expected_new_unit))
-            or expected_old_unit == expected_new_unit):
-        raise ValueError('exact world and distinct positive old/new character units required')
-    bound = getattr(game, 'expected_world', None)
+    if (
+        not isinstance(expected_world, str)
+        or not expected_world
+        or any(type(v) is not int or v < 1 for v in (expected_old_unit, expected_new_unit))
+        or expected_old_unit == expected_new_unit
+    ):
+        raise ValueError("exact world and distinct positive old/new character units required")
+    bound = getattr(game, "expected_world", None)
     if bound is not None and bound != expected_world:
-        raise ValueError('actor recovery world disagrees with bound game')
-    return game.query(ACTOR_RECOVERY_EXECUTE_LUA.replace('PAYLOAD', _payload({
-        'expected_world':expected_world, 'old_unit':expected_old_unit, 'new_unit':expected_new_unit})))
+        raise ValueError("actor recovery world disagrees with bound game")
+    return game.query(
+        ACTOR_RECOVERY_EXECUTE_LUA.replace(
+            "PAYLOAD",
+            _payload({"expected_world": expected_world, "old_unit": expected_old_unit, "new_unit": expected_new_unit}),
+        )
+    )
 
 
-ACTOR_RECOVERY_COMMON_LUA=r'''
+ACTOR_RECOVERY_COMMON_LUA = r"""
 local function character_row(e)
  if not e or not e.valid then return {valid=false}end
  return {valid=true,name=e.name,unit_number=e.unit_number,position=pos(e.position),surface_index=e.surface.index,
@@ -59,14 +71,17 @@ local function exact_successor(owner,unit)
  return owner and owner.connected and owner.force==f and e and e.valid and e.name=="character"
   and e.unit_number==unit and e.player==owner and e.force==f and e.surface==s
 end
-'''
+"""
 
 
-ACTOR_RECOVERY_INSPECT_LUA=r'''
+ACTOR_RECOVERY_INSPECT_LUA = (
+    r"""
 local args=helpers.json_to_table(PAYLOAD)
 if not d or not d.world_id then return {ok=false,reason="actor_recovery_framework_world_missing"}end
 if args.expected_world and d.world_id~=args.expected_world then return {ok=false,reason="actor_recovery_world_changed"}end
-'''+ACTOR_RECOVERY_COMMON_LUA+r'''
+"""
+    + ACTOR_RECOVERY_COMMON_LUA
+    + r"""
 local owner,owner_error=pinned_owner();local old=d.crafting_actor_unit_number
 local old_pointer=character_row(d.actor);local successor=character_row(owner and owner.character)
 local live,scan_error=nil,nil
@@ -122,14 +137,18 @@ return {ok=true,tick=game.tick,world_id=d.world_id,surface_index=s.index,pinned_
  classification=classification,recovery_ready=ready,native_repair_pending=pending,
  pending_native_repair=type(repair)=="table"and {actor_unit=repair.actor_unit,world_id=repair.world_id,request=repair.request,phase=repair.phase}or nil,
  scope="read-only owner succession evidence; a corpse identifies its player, not the old character unit; absence does not prove no death"}
-'''
+"""
+)
 
 
-ACTOR_RECOVERY_EXECUTE_LUA=r'''
+ACTOR_RECOVERY_EXECUTE_LUA = (
+    r"""
 local args=helpers.json_to_table(PAYLOAD)
 if not d or d.world_id~=args.expected_world then return {ok=false,status="blocked",tick=game.tick,reason="actor_recovery_world_changed"}end
 if d.native_repair then return {ok=false,status="blocked",tick=game.tick,reason="actor_recovery_pending_native_repair_requires_separate_review"}end
-'''+ACTOR_RECOVERY_COMMON_LUA+r'''
+"""
+    + ACTOR_RECOVERY_COMMON_LUA
+    + r"""
 local owner,owner_error=pinned_owner()
 if not owner then return {ok=false,status="blocked",tick=game.tick,reason=owner_error}end
 if not exact_successor(owner,args.new_unit)then return {ok=false,status="blocked",tick=game.tick,reason="actor_recovery_exact_owner_successor_required"}end
@@ -167,4 +186,5 @@ d.actor=owner.character
 d.crafting_actor_unit_number=args.new_unit
 return {ok=true,status="succeeded",tick=game.tick,reason="framework_actor_rebound_to_pinned_owner_successor",already_recovered=false,
  succession=marker,scope="no respawn, inventory, health, controller, research, production, settings or prior-receipt changes"}
-'''
+"""
+)

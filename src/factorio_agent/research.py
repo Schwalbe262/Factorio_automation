@@ -3,6 +3,7 @@
 Only Automation and electric mining may use this starter handcraft allowance.
 All subsequent science must come from the normal production capabilities.
 """
+
 from __future__ import annotations
 
 import json
@@ -33,7 +34,7 @@ class StarterResearch:
                 return {"status": "succeeded", "entity": entity}
         site = self.state.get("lab_site")
         if site is None:
-            site = self.game.query('''
+            site = self.game.query("""
 local supplied={}
 for _,generator in pairs(s.find_entities_filtered{force=f,type="generator"}) do
  if generator.electric_network_id and generator.energy>0 then supplied[generator.electric_network_id]=true end
@@ -47,15 +48,20 @@ for _,pole in pairs(s.find_entities_filtered{force=f,type="electric-pole"}) do
  end
 end
 return {ok=false,reason="no_powered_lab_site"}
-''')
+""")
             if not site.get("ok"):
                 return {"status": "blocked", "reason": site.get("reason", "lab_site_query_failed")}
             self.state["lab_site"] = site
             _atomic_json(self.path, self.state)
         if obs.get("inventory", {}).get("lab", 0) < 1:
             return self.bootstrap.ensure_item(obs, "lab", 1)
-        return {"type": "build", "name": "lab", "position": site["position"], "direction": 0,
-                "reason": "build startup research lab next to operating power"}
+        return {
+            "type": "build",
+            "name": "lab",
+            "position": site["position"],
+            "direction": 0,
+            "reason": "build startup research lab next to operating power",
+        }
 
     def step(self, obs: dict, parameters: dict) -> dict:
         validate_parameters(parameters)
@@ -63,12 +69,21 @@ return {ok=false,reason="no_powered_lab_site"}
         if self.state.get("world_id") != obs["world_id"]:
             self.state = {"world_id": obs["world_id"], "allowances": {}}
         if obs.get("technologies", {}).get(name):
-            return {"status": "succeeded", "reason": "target researched naturally", "evidence": {
-                "technology": name, "tick": obs["tick"], "science": obs.get("production", {}).get("automation-science-pack", {})}}
+            return {
+                "status": "succeeded",
+                "reason": "target researched naturally",
+                "evidence": {
+                    "technology": name,
+                    "tick": obs["tick"],
+                    "science": obs.get("production", {}).get("automation-science-pack", {}),
+                },
+            }
         tech = self.catalog.technologies[name]
         if any(not obs.get("technologies", {}).get(parent) for parent in tech["prerequisites"]):
             return {"status": "blocked", "reason": "research_prerequisites_missing"}
-        if tech.get("research_trigger") or tech["ingredients"] != [{"amount": 1, "name": "automation-science-pack", "type": "item"}]:
+        if tech.get("research_trigger") or tech["ingredients"] != [
+            {"amount": 1, "name": "automation-science-pack", "type": "item"}
+        ]:
             return {"status": "blocked", "reason": "startup_research_rules_changed"}
         result = self.lab(obs)
         if result.get("status") != "succeeded":
@@ -83,21 +98,37 @@ return {ok=false,reason="no_powered_lab_site"}
         if allowance is None:
             # Persist before crafting. A retry/restart/rollback cannot replenish
             # this finite handcraft budget. Existing packs need no extra funding.
-            allowance = {"budget": int(tech["unit_count"]), "reserved_output": 0,
-                         "created_tick": obs["tick"]}
+            allowance = {"budget": int(tech["unit_count"]), "reserved_output": 0, "created_tick": obs["tick"]}
             self.state["allowances"][name] = allowance
             _atomic_json(self.path, self.state)
         held = obs.get("inventory", {}).get(item, 0)
         if held:
-            return {"type": "insert", "name": "lab", "position": lab["position"], "inventory": "lab_input",
-                    "item": item, "count": min(held, int(tech["unit_count"])), "reason": "supply finite startup science"}
+            return {
+                "type": "insert",
+                "name": "lab",
+                "position": lab["position"],
+                "inventory": "lab_input",
+                "item": item,
+                "count": min(held, int(tech["unit_count"])),
+                "reason": "supply finite startup science",
+            }
         lab_packs = lab.get("inventory", {}).get(item, 0)
-        if lab_packs or lab.get("status_name")=="working":
-            return {"status": "waiting", "reason": "lab consumes normal startup science", "evidence": {
-                "technology": name, "progress": obs.get("research_progress", 0), "packs_in_lab": lab_packs}}
+        if lab_packs or lab.get("status_name") == "working":
+            return {
+                "status": "waiting",
+                "reason": "lab consumes normal startup science",
+                "evidence": {
+                    "technology": name,
+                    "progress": obs.get("research_progress", 0),
+                    "packs_in_lab": lab_packs,
+                },
+            }
         if obs.get("crafting_queue"):
-            return {"status":"waiting","reason":"engine is crafting the reserved startup science batch",
-                    "evidence":{"technology":name,"reserved_output":allowance["reserved_output"]}}
+            return {
+                "status": "waiting",
+                "reason": "engine is crafting the reserved startup science batch",
+                "evidence": {"technology": name, "reserved_output": allowance["reserved_output"]},
+            }
         remaining = allowance["budget"] - allowance["reserved_output"]
         if remaining <= 0:
             return {"status": "blocked", "reason": "startup_science_allowance_exhausted_requires_automatic_production"}
@@ -116,6 +147,9 @@ return {ok=false,reason="no_powered_lab_site"}
     def proof(obs: dict, parameters: dict) -> dict | None:
         if not obs.get("technologies", {}).get(parameters["technology"]):
             return None
-        return {"tick": obs["tick"], "technology": parameters["technology"],
-                "science_statistics": obs.get("production", {}).get("automation-science-pack", {}),
-                "research_mode": "finite normal starter science"}
+        return {
+            "tick": obs["tick"],
+            "technology": parameters["technology"],
+            "science_statistics": obs.get("production", {}).get("automation-science-pack", {}),
+            "research_mode": "finite normal starter science",
+        }

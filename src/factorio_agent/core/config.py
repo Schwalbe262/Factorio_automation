@@ -8,9 +8,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_FACTORIO_EXE = Path(
-    r"C:\Program Files (x86)\Steam\steamapps\common\Factorio\bin\x64\factorio.exe"
-)
+DEFAULT_FACTORIO_EXE = Path(r"C:\Program Files (x86)\Steam\steamapps\common\Factorio\bin\x64\factorio.exe")
 
 
 @dataclass(frozen=True)
@@ -73,16 +71,14 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     raw = _load_json(example_path)
     raw.update(_load_json(config_path))
 
-    factorio_exe = Path(
-        os.getenv("FACTORIO_AI_EXE")
-        or raw.get("factorio_exe")
-        or str(DEFAULT_FACTORIO_EXE)
-    )
+    factorio_exe = Path(os.getenv("FACTORIO_AI_EXE") or raw.get("factorio_exe") or str(DEFAULT_FACTORIO_EXE))
     runtime_dir = _repo_path(os.getenv("FACTORIO_AI_RUNTIME_DIR") or raw.get("runtime_dir") or "runtime")
     mod_runtime_dir = _repo_path(
         os.getenv("FACTORIO_AI_MOD_RUNTIME_DIR") or raw.get("mod_runtime_dir") or runtime_dir / "mods"
     )
-    save_path = _repo_path(os.getenv("FACTORIO_AI_SAVE_PATH") or raw.get("save_path") or runtime_dir / "saves" / "ai-mvp.zip")
+    save_path = _repo_path(
+        os.getenv("FACTORIO_AI_SAVE_PATH") or raw.get("save_path") or runtime_dir / "saves" / "ai-mvp.zip"
+    )
     log_dir = _repo_path(os.getenv("FACTORIO_AI_LOG_DIR") or raw.get("log_dir") or "logs")
 
     slurm_default = _scheduler_mode_enabled() or _bool_value(raw.get("slurm_enabled"), False)

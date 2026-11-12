@@ -315,11 +315,7 @@ def prepare_steam_vanilla_mod_list(runtime_dir: Path, *, appdata_dir: str | Path
         shutil.copy2(mod_list_path, backup_path)
     payload = official_vanilla_mod_list_payload(_installed_user_mod_names(mod_list_path.parent))
     mod_list_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    disabled = [
-        item["name"]
-        for item in payload["mods"]
-        if isinstance(item, dict) and not item.get("enabled")
-    ]
+    disabled = [item["name"] for item in payload["mods"] if isinstance(item, dict) and not item.get("enabled")]
     return {
         "modListPath": str(mod_list_path),
         "backupPath": str(backup_path) if backup_path else None,

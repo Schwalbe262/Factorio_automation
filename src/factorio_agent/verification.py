@@ -1,4 +1,5 @@
 """Require sampled, sustained machine output instead of stock or build counts."""
+
 from __future__ import annotations
 
 import math
@@ -16,8 +17,15 @@ class FlowWindow:
         self.samples: list[dict] = []
         self.reset_reason = None
 
-    def add(self, *, world_id: str, tick: int, produced: dict[str, float],
-            consumed: dict[str, float], supplies_healthy: bool) -> dict:
+    def add(
+        self,
+        *,
+        world_id: str,
+        tick: int,
+        produced: dict[str, float],
+        consumed: dict[str, float],
+        supplies_healthy: bool,
+    ) -> dict:
         """Counters must be machine-only output and normal downstream consumption.
 
         Callers obtain these from the live engine; inventory stock is not input.
@@ -27,8 +35,10 @@ class FlowWindow:
         if not isinstance(world_id, str) or not world_id or type(tick) is not int or tick < 0:
             raise ValueError("world identity and integer game tick are required")
         for counts in (produced, consumed):
-            if any(type(counts.get(item)) not in (int, float) or not math.isfinite(counts[item]) or counts[item] < 0
-                   for item in self.rates):
+            if any(
+                type(counts.get(item)) not in (int, float) or not math.isfinite(counts[item]) or counts[item] < 0
+                for item in self.rates
+            ):
                 raise ValueError("every target requires a finite monotonic counter")
         reset = None
         if self.world_id not in (None, world_id):
@@ -39,8 +49,10 @@ class FlowWindow:
                 reset = "tick_rollback_or_duplicate"
             elif tick - previous["tick"] > self.max_gap_ticks:
                 reset = "observation_gap"
-            elif any(produced[item] < previous["produced"][item] or consumed[item] < previous["consumed"][item]
-                     for item in self.rates):
+            elif any(
+                produced[item] < previous["produced"][item] or consumed[item] < previous["consumed"][item]
+                for item in self.rates
+            ):
                 reset = "counter_reset"
         if not supplies_healthy:
             reset = "supply_fault"
@@ -59,11 +71,19 @@ class FlowWindow:
         return self.result()
 
     def result(self) -> dict:
-        base = {"world_id": self.world_id, "required_minutes": self.minutes,
-                "reset_reason": self.reset_reason, "target_rates_per_minute": self.rates}
+        base = {
+            "world_id": self.world_id,
+            "required_minutes": self.minutes,
+            "reset_reason": self.reset_reason,
+            "target_rates_per_minute": self.rates,
+        }
         if len(self.samples) < 2 or self.samples[-1]["tick"] - self.samples[0]["tick"] < self.minutes * 3600:
-            return {**base, "status": "sampling", "sample_count": len(self.samples),
-                    "observed_ticks": self.samples[-1]["tick"] - self.samples[0]["tick"] if self.samples else 0}
+            return {
+                **base,
+                "status": "sampling",
+                "sample_count": len(self.samples),
+                "observed_ticks": self.samples[-1]["tick"] - self.samples[0]["tick"] if self.samples else 0,
+            }
         intervals = []
         end = self.samples[-1]
         # Use actual sampled interval lengths; never interpolate unobserved counts.
@@ -73,15 +93,25 @@ class FlowWindow:
                 break
             start = candidates[-1]
             elapsed = end["tick"] - start["tick"]
-            rates = {kind: {item: (end[kind][item] - start[kind][item]) * 3600 / elapsed
-                            for item in self.rates} for kind in ("produced", "consumed")}
-            passed = all(rates[kind][item] + 1e-9 >= target for item, target in self.rates.items()
-                         for kind in ("produced", "consumed"))
-            intervals.append({"from_tick": start["tick"], "to_tick": end["tick"], "rates_per_minute": rates,
-                              "passed": passed})
+            rates = {
+                kind: {item: (end[kind][item] - start[kind][item]) * 3600 / elapsed for item in self.rates}
+                for kind in ("produced", "consumed")
+            }
+            passed = all(
+                rates[kind][item] + 1e-9 >= target
+                for item, target in self.rates.items()
+                for kind in ("produced", "consumed")
+            )
+            intervals.append(
+                {"from_tick": start["tick"], "to_tick": end["tick"], "rates_per_minute": rates, "passed": passed}
+            )
             end = start
         intervals.reverse()
         passed = len(intervals) >= self.minutes and all(row["passed"] for row in intervals)
-        return {**base, "status": "succeeded" if passed else "insufficient_throughput",
-                "intervals": intervals, "from_tick": intervals[0]["from_tick"] if intervals else None,
-                "to_tick": self.samples[-1]["tick"]}
+        return {
+            **base,
+            "status": "succeeded" if passed else "insufficient_throughput",
+            "intervals": intervals,
+            "from_tick": intervals[0]["from_tick"] if intervals else None,
+            "to_tick": self.samples[-1]["tick"],
+        }

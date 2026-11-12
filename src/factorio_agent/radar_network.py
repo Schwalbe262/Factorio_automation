@@ -1,4 +1,5 @@
 """One normally paid base radar, with native power and overlapping defense gates."""
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -18,408 +19,715 @@ from .smelting import merge_entities
 from .transport import unbuilt_external_keepouts, xy
 
 
-BASE_BLOCK = 'radar_base'
-FUTURE_BLOCK = 'radar_oil_future'
-DEFENSE_SCOPE = 'radar:network'
+BASE_BLOCK = "radar_base"
+FUTURE_BLOCK = "radar_oil_future"
+DEFENSE_SCOPE = "radar:network"
 ENEMY_EXCLUSION = 32
 MINIMUM_FULL_MAGAZINES = 5
 
 
-def _payload(value):return json.dumps(json.dumps(value, separators=(',', ':')))
-def _key(spec):return spec['name']+':'+str(spec['position']['x'])+':'+str(spec['position']['y'])
-def _finite(value):return type(value) in (int, float) and math.isfinite(value)
+def _payload(value):
+    return json.dumps(json.dumps(value, separators=(",", ":")))
+
+
+def _key(spec):
+    return spec["name"] + ":" + str(spec["position"]["x"]) + ":" + str(spec["position"]["y"])
+
+
+def _finite(value):
+    return type(value) in (int, float) and math.isfinite(value)
 
 
 def _parameters(value):
     if value is not None and (not isinstance(value, dict) or value):
-        raise ValueError('radar_network accepts only empty parameters')
+        raise ValueError("radar_network accepts only empty parameters")
 
 
 def radar_core(catalog, x, y):
-    proto = catalog.entities['radar']
-    if (proto.get('type') != 'radar' or not proto.get('electric') or proto.get('burner')
-            or not _finite(proto.get('energy_usage')) or proto['energy_usage'] <= 0
-            or any(not _finite(v) or v % 1 != .5 for v in (x, y))):
-        raise ValueError('finite half-tile electric radar geometry required')
-    box = proto['collision_box']
-    if (any(not _finite(v) for p in box.values() for v in p.values())
-            or not -1.5 < box['left_top']['x'] < 0 < box['right_bottom']['x'] < 1.5
-            or not -1.5 < box['left_top']['y'] < 0 < box['right_bottom']['y'] < 1.5):
-        raise ValueError('installed radar must fit the native three by three body')
-    radar = dict(entity('radar', x, y), _width=3, _height=3)
-    pole = entity('small-electric-pole', x+2, y+1)
-    service = [entity('transport-belt', x+dx, y+dy) for dx in range(-2, 3) for dy in range(-2, 3)
-               if max(abs(dx), abs(dy)) == 2 and (dx, dy) != (2, 1)]
-    return _plan([radar, pole], [], radar=radar, power_pole=pole, service_keepouts=service,
-                 reserved_area=[[x-3.5, y-3.5], [x+3.5, y+3.5]],
-                 watts=proto['energy_usage']*60, layout_policy='paid-defended-base-radar-v1')
+    proto = catalog.entities["radar"]
+    if (
+        proto.get("type") != "radar"
+        or not proto.get("electric")
+        or proto.get("burner")
+        or not _finite(proto.get("energy_usage"))
+        or proto["energy_usage"] <= 0
+        or any(not _finite(v) or v % 1 != 0.5 for v in (x, y))
+    ):
+        raise ValueError("finite half-tile electric radar geometry required")
+    box = proto["collision_box"]
+    if (
+        any(not _finite(v) for p in box.values() for v in p.values())
+        or not -1.5 < box["left_top"]["x"] < 0 < box["right_bottom"]["x"] < 1.5
+        or not -1.5 < box["left_top"]["y"] < 0 < box["right_bottom"]["y"] < 1.5
+    ):
+        raise ValueError("installed radar must fit the native three by three body")
+    radar = dict(entity("radar", x, y), _width=3, _height=3)
+    pole = entity("small-electric-pole", x + 2, y + 1)
+    service = [
+        entity("transport-belt", x + dx, y + dy)
+        for dx in range(-2, 3)
+        for dy in range(-2, 3)
+        if max(abs(dx), abs(dy)) == 2 and (dx, dy) != (2, 1)
+    ]
+    return _plan(
+        [radar, pole],
+        [],
+        radar=radar,
+        power_pole=pole,
+        service_keepouts=service,
+        reserved_area=[[x - 3.5, y - 3.5], [x + 3.5, y + 3.5]],
+        watts=proto["energy_usage"] * 60,
+        layout_policy="paid-defended-base-radar-v1",
+    )
 
 
 def radar_candidates(obs, board, posts, *, oil=False, effective_range=16, keepout_cells=(), extra_areas=()):
     """Bounded exterior sites inside two native defense disks, filtered before cap."""
-    if not _finite(effective_range) or not 3.5 < effective_range <= 64:return []
-    actual = {e.get('unit_number'):e for e in obs.get('entities', [])}
-    known = [p for p in posts if type(p.get('unit_number')) is int and p['unit_number'] > 0
-             and actual.get(p['unit_number'], {}).get('name') == 'gun-turret'
-             and actual[p['unit_number']].get('position') == p.get('position')
-             and _finite(actual[p['unit_number']].get('health'))
-             and _finite(actual[p['unit_number']].get('max_health'))
-             and actual[p['unit_number']]['max_health'] > 0
-             and actual[p['unit_number']]['health'] >= actual[p['unit_number']]['max_health']]
-    machines = [e for e in obs.get('entities', []) if e['name'] in (
-        ('oil-refinery', 'pumpjack') if oil else ('lab', 'steam-engine', 'assembling-machine-1'))]
-    if not machines:return []
-    anchor = {axis:sum(e['position'][axis] for e in machines)/len(machines) for axis in ('x', 'y')}
+    if not _finite(effective_range) or not 3.5 < effective_range <= 64:
+        return []
+    actual = {e.get("unit_number"): e for e in obs.get("entities", [])}
+    known = [
+        p
+        for p in posts
+        if type(p.get("unit_number")) is int
+        and p["unit_number"] > 0
+        and actual.get(p["unit_number"], {}).get("name") == "gun-turret"
+        and actual[p["unit_number"]].get("position") == p.get("position")
+        and _finite(actual[p["unit_number"]].get("health"))
+        and _finite(actual[p["unit_number"]].get("max_health"))
+        and actual[p["unit_number"]]["max_health"] > 0
+        and actual[p["unit_number"]]["health"] >= actual[p["unit_number"]]["max_health"]
+    ]
+    machines = [
+        e
+        for e in obs.get("entities", [])
+        if e["name"] in (("oil-refinery", "pumpjack") if oil else ("lab", "steam-engine", "assembling-machine-1"))
+    ]
+    if not machines:
+        return []
+    anchor = {axis: sum(e["position"][axis] for e in machines) / len(machines) for axis in ("x", "y")}
     pairs = []
     for i, first in enumerate(known):
-        for second in known[i+1:]:
-            if math.dist(xy(first), xy(second)) > 2*(effective_range-3.5):continue
-            midpoint = {axis:(first['position'][axis]+second['position'][axis])/2 for axis in ('x', 'y')}
-            if oil and math.dist(tuple(midpoint.values()), tuple(anchor.values())) > 36:continue
-            pairs.append((sum((midpoint[k]-anchor[k])**2 for k in ('x', 'y')), midpoint, first, second))
-    pairs.sort(key=lambda row:(row[0], row[1]['x'], row[1]['y']))
-    areas = [b['reserved_area'] for b in board.get('blocks', {}).values() if b.get('reserved_area')]
-    areas += [r['area'] for r in board.get('shared_main_bus', {}).get('reservations', []) if r.get('area')]
+        for second in known[i + 1 :]:
+            if math.dist(xy(first), xy(second)) > 2 * (effective_range - 3.5):
+                continue
+            midpoint = {axis: (first["position"][axis] + second["position"][axis]) / 2 for axis in ("x", "y")}
+            if oil and math.dist(tuple(midpoint.values()), tuple(anchor.values())) > 36:
+                continue
+            pairs.append((sum((midpoint[k] - anchor[k]) ** 2 for k in ("x", "y")), midpoint, first, second))
+    pairs.sort(key=lambda row: (row[0], row[1]["x"], row[1]["y"]))
+    areas = [b["reserved_area"] for b in board.get("blocks", {}).values() if b.get("reserved_area")]
+    areas += [r["area"] for r in board.get("shared_main_bus", {}).get("reservations", []) if r.get("area")]
     areas += list(extra_areas)
-    hard = set(keepout_cells);seen = set();pools = [];checked = 0
+    hard = set(keepout_cells)
+    seen = set()
+    pools = []
+    checked = 0
     limit = 8 if oil else 16
+
     def diverse_sites(extra=()):
-        groups = pools+([list(extra)] if extra else [])
+        groups = pools + ([list(extra)] if extra else [])
         result = []
         for index in range(limit):
             for group in groups:
-                if index < len(group):result.append(group[index])
-                if len(result) == limit:return result
+                if index < len(group):
+                    result.append(group[index])
+                if len(result) == limit:
+                    return result
         return result
-    radius = effective_range-3.5
+
+    radius = effective_range - 3.5
     for _, point, first, second in pairs[:32]:
         sites = []
-        lo_x = math.ceil(max(first['position']['x'], second['position']['x'])-radius-.5)
-        hi_x = math.floor(min(first['position']['x'], second['position']['x'])+radius-.5)
-        lo_y = math.ceil(max(first['position']['y'], second['position']['y'])-radius-.5)
-        hi_y = math.floor(min(first['position']['y'], second['position']['y'])+radius-.5)
-        pool = [(x+.5,y+.5) for x in range(lo_x,hi_x+1) for y in range(lo_y,hi_y+1)]
-        pool.sort(key=lambda p:((p[0]-anchor['x'])**2+(p[1]-anchor['y'])**2,
-                               (p[0]-point['x'])**2+(p[1]-point['y'])**2, p))
-        for x,y in pool:
-            if (x,y) in seen:continue
-            seen.add((x,y));checked += 1
-            if checked > 16384:return diverse_sites(sites)
-            area = [[x-3.5,y-3.5],[x+3.5,y+3.5]]
-            if any(overlap(area,a) for a in areas):continue
-            if any((x+dx,y+dy) in hard for dx in range(-3,4) for dy in range(-3,4)):continue
-            if any(any(math.hypot(cx-p['position']['x'],cy-p['position']['y']) > effective_range
-                       for cx in (area[0][0],area[1][0]) for cy in (area[0][1],area[1][1])) for p in (first,second)):continue
-            sites.append((x,y))
-            if len(sites) >= limit:break
-        if sites:pools.append(sites)
+        lo_x = math.ceil(max(first["position"]["x"], second["position"]["x"]) - radius - 0.5)
+        hi_x = math.floor(min(first["position"]["x"], second["position"]["x"]) + radius - 0.5)
+        lo_y = math.ceil(max(first["position"]["y"], second["position"]["y"]) - radius - 0.5)
+        hi_y = math.floor(min(first["position"]["y"], second["position"]["y"]) + radius - 0.5)
+        pool = [(x + 0.5, y + 0.5) for x in range(lo_x, hi_x + 1) for y in range(lo_y, hi_y + 1)]
+        pool.sort(
+            key=lambda p: (
+                (p[0] - anchor["x"]) ** 2 + (p[1] - anchor["y"]) ** 2,
+                (p[0] - point["x"]) ** 2 + (p[1] - point["y"]) ** 2,
+                p,
+            )
+        )
+        for x, y in pool:
+            if (x, y) in seen:
+                continue
+            seen.add((x, y))
+            checked += 1
+            if checked > 16384:
+                return diverse_sites(sites)
+            area = [[x - 3.5, y - 3.5], [x + 3.5, y + 3.5]]
+            if any(overlap(area, a) for a in areas):
+                continue
+            if any((x + dx, y + dy) in hard for dx in range(-3, 4) for dy in range(-3, 4)):
+                continue
+            if any(
+                any(
+                    math.hypot(cx - p["position"]["x"], cy - p["position"]["y"]) > effective_range
+                    for cx in (area[0][0], area[1][0])
+                    for cy in (area[0][1], area[1][1])
+                )
+                for p in (first, second)
+            ):
+                continue
+            sites.append((x, y))
+            if len(sites) >= limit:
+                break
+        if sites:
+            pools.append(sites)
     return diverse_sites()
 
 
 def planned_power_watts(catalog, obs, board):
     """Charge known unbuilt electrical equipment, never assume its future idle load."""
-    actual = {(e['name'], *xy(e)) for e in obs.get('entities', [])}
+    actual = {(e["name"], *xy(e)) for e in obs.get("entities", [])}
     missing = {}
-    for name, block in board.get('blocks', {}).items():
-        if name in (BASE_BLOCK, FUTURE_BLOCK):continue
-        for spec in block.get('entities', []):
-            key = (spec['name'], *xy(spec))
-            if key in actual:continue
-            proto = catalog.entities.get(spec['name'])
-            if proto is None:raise ValueError('planned entity absent from pinned catalog')
-            if not proto.get('electric'):continue
-            usage = proto.get('energy_usage')
-            if not _finite(usage) or usage < 0:raise ValueError('planned native energy usage unavailable')
-            missing[key] = usage*60
+    for name, block in board.get("blocks", {}).items():
+        if name in (BASE_BLOCK, FUTURE_BLOCK):
+            continue
+        for spec in block.get("entities", []):
+            key = (spec["name"], *xy(spec))
+            if key in actual:
+                continue
+            proto = catalog.entities.get(spec["name"])
+            if proto is None:
+                raise ValueError("planned entity absent from pinned catalog")
+            if not proto.get("electric"):
+                continue
+            usage = proto.get("energy_usage")
+            if not _finite(usage) or usage < 0:
+                raise ValueError("planned native energy usage unavailable")
+            missing[key] = usage * 60
     return sum(missing.values())
 
 
 class RadarNetwork:
     def __init__(self, game, builder, catalog, perimeter):
         self.game, self.builder, self.catalog, self.perimeter = game, builder, catalog, perimeter
-        self.path = Path(game.cfg.runtime_dir)/'radar-network.json'
-        self.state = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
+        self.path = Path(game.cfg.runtime_dir) / "radar-network.json"
+        self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
         self.last_proof_failure = None
 
     def _identity(self, obs, value):
-        return (obs.get('ok', True) and isinstance(obs.get('world_id'), str) and bool(obs['world_id'])
-                and value.get('world_id') == obs['world_id'] and value.get('catalog_fingerprint') == self.catalog.fingerprint)
+        return (
+            obs.get("ok", True)
+            and isinstance(obs.get("world_id"), str)
+            and bool(obs["world_id"])
+            and value.get("world_id") == obs["world_id"]
+            and value.get("catalog_fingerprint") == self.catalog.fingerprint
+        )
 
     def _board(self, obs):
-        path = self.path.parent/'pcb-board.json'
-        value = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
-        if not self._identity(obs, value):raise ValueError('radar_board_identity_changed')
+        path = self.path.parent / "pcb-board.json"
+        value = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if not self._identity(obs, value):
+            raise ValueError("radar_board_identity_changed")
         return value
 
     def _keepouts(self, obs, board):
-        blocks = {k:v for k,v in board['blocks'].items() if k not in (BASE_BLOCK, FUTURE_BLOCK)}
+        blocks = {k: v for k, v in board["blocks"].items() if k not in (BASE_BLOCK, FUTURE_BLOCK)}
         cells = unbuilt_external_keepouts(self.builder, obs, blocks)
-        ports = [p for block in list(blocks.values())+[board.get('shared_main_bus', {})] for p in block.get('ports', [])]
-        for filename in ('material-sources.json', 'fluid-sources.json'):
-            path = self.path.parent/filename
-            if not path.exists():continue
-            registry = json.loads(path.read_text(encoding='utf-8'))
-            if not self._identity(obs, registry):raise ValueError('radar_source_registry_identity_changed')
-            ports += list(registry.get('sources', {}).values())
+        ports = [
+            p for block in list(blocks.values()) + [board.get("shared_main_bus", {})] for p in block.get("ports", [])
+        ]
+        for filename in ("material-sources.json", "fluid-sources.json"):
+            path = self.path.parent / filename
+            if not path.exists():
+                continue
+            registry = json.loads(path.read_text(encoding="utf-8"))
+            if not self._identity(obs, registry):
+                raise ValueError("radar_source_registry_identity_changed")
+            ports += list(registry.get("sources", {}).values())
         for port in ports:
-            if port.get('facing') not in VECTORS or port.get('direction') not in ('input', 'output'):continue
-            dx, dy = VECTORS[port['facing']]
-            if port['direction'] == 'input':dx, dy = -dx, -dy
-            cells.update((port['position']['x']+i*dx, port['position']['y']+i*dy) for i in range(5))
-        areas = [b['reserved_area'] for b in blocks.values() if b.get('reserved_area')]
-        areas += [r['area'] for r in board.get('shared_main_bus', {}).get('reservations', []) if r.get('area')]
+            if port.get("facing") not in VECTORS or port.get("direction") not in ("input", "output"):
+                continue
+            dx, dy = VECTORS[port["facing"]]
+            if port["direction"] == "input":
+                dx, dy = -dx, -dy
+            cells.update((port["position"]["x"] + i * dx, port["position"]["y"] + i * dy) for i in range(5))
+        areas = [b["reserved_area"] for b in blocks.values() if b.get("reserved_area")]
+        areas += [r["area"] for r in board.get("shared_main_bus", {}).get("reservations", []) if r.get("area")]
         return cells, areas
 
     def _geometry(self, obs, board, core, entities=(), extra_areas=()):
         cells, areas = self._keepouts(obs, board)
-        area = core['reserved_area']
-        if any(overlap(area, other) for other in areas+list(extra_areas)):
-            return {'ok':False, 'reason':'radar_reserved_area_conflict'}
-        if any(area[0][0] < x+.49 and x-.49 < area[1][0] and area[0][1] < y+.49 and y-.49 < area[1][1] for x,y in cells):
-            return {'ok':False, 'reason':'radar_future_transport_or_fixed_port_conflict'}
+        area = core["reserved_area"]
+        if any(overlap(area, other) for other in areas + list(extra_areas)):
+            return {"ok": False, "reason": "radar_reserved_area_conflict"}
+        if any(
+            area[0][0] < x + 0.49 and x - 0.49 < area[1][0] and area[0][1] < y + 0.49 and y - 0.49 < area[1][1]
+            for x, y in cells
+        ):
+            return {"ok": False, "reason": "radar_future_transport_or_fixed_port_conflict"}
         for spec in entities:
             occupied = self.builder._occupied_by_plan([spec])
-            if occupied & cells:return {'ok':False, 'reason':'radar_power_crosses_future_transport_or_fixed_port'}
-            if any(any(x+.49 > a[0][0] and x-.49 < a[1][0] and y+.49 > a[0][1] and y-.49 < a[1][1]
-                       for x,y in occupied) for a in areas+list(extra_areas)):
-                return {'ok':False, 'reason':'radar_power_crosses_producer_reservation'}
-        return {'ok':True, 'foreign_areas':areas}
+            if occupied & cells:
+                return {"ok": False, "reason": "radar_power_crosses_future_transport_or_fixed_port"}
+            if any(
+                any(
+                    x + 0.49 > a[0][0] and x - 0.49 < a[1][0] and y + 0.49 > a[0][1] and y - 0.49 < a[1][1]
+                    for x, y in occupied
+                )
+                for a in areas + list(extra_areas)
+            ):
+                return {"ok": False, "reason": "radar_power_crosses_producer_reservation"}
+        return {"ok": True, "foreign_areas": areas}
 
     def _site_guard(self, game, obs, core, board):
-        posts = [{k:p[k] for k in ('position', 'unit_number') if k in p}
-                 for p in getattr(self.perimeter, 'state', {}).get('posts', []) if type(p.get('unit_number')) is int]
+        posts = [
+            {k: p[k] for k in ("position", "unit_number") if k in p}
+            for p in getattr(self.perimeter, "state", {}).get("posts", [])
+            if type(p.get("unit_number")) is int
+        ]
         _, areas = self._keepouts(obs, board)
-        return game.query(RADAR_SITE_LUA.replace('PAYLOAD', _payload({'world_id':obs['world_id'], 'core':core,
-            'posts':posts, 'zones':mining_reservations(self.game, obs['world_id']), 'foreign_areas':areas,
-            'enemy_radius':ENEMY_EXCLUSION, 'minimum_full_magazines':MINIMUM_FULL_MAGAZINES})))
+        return game.query(
+            RADAR_SITE_LUA.replace(
+                "PAYLOAD",
+                _payload(
+                    {
+                        "world_id": obs["world_id"],
+                        "core": core,
+                        "posts": posts,
+                        "zones": mining_reservations(self.game, obs["world_id"]),
+                        "foreign_areas": areas,
+                        "enemy_radius": ENEMY_EXCLUSION,
+                        "minimum_full_magazines": MINIMUM_FULL_MAGAZINES,
+                    }
+                ),
+            )
+        )
 
     def _local_coverage(self, site):
         """Private existing-post evidence; unrelated perimeter upkeep is separate."""
-        if not isinstance(site, dict) or not site.get('ok'):return None
-        registered = {p.get('unit_number'):p for p in self.perimeter.state.get('posts', [])
-                      if type(p.get('unit_number')) is int and p['unit_number'] > 0}
-        posts = site.get('covering_posts')
-        if not isinstance(posts, list):return None
-        selected = [];seen = set()
+        if not isinstance(site, dict) or not site.get("ok"):
+            return None
+        registered = {
+            p.get("unit_number"): p
+            for p in self.perimeter.state.get("posts", [])
+            if type(p.get("unit_number")) is int and p["unit_number"] > 0
+        }
+        posts = site.get("covering_posts")
+        if not isinstance(posts, list):
+            return None
+        selected = []
+        seen = set()
         for post in posts:
-            unit = post.get('unit_number');known = registered.get(unit)
-            if (type(unit) is not int or unit in seen or not known or post.get('position') != known.get('position')
-                    or not _finite(post.get('full_magazines'))
-                    or post['full_magazines'] < MINIMUM_FULL_MAGAZINES):return None
-            seen.add(unit);selected.append(dict(post, name=known['name']))
-        if len(selected) < 2:return None
-        return {'tick':site['tick'], 'posts':selected, 'minimum_full_normal_magazines':MINIMUM_FULL_MAGAZINES,
-                'health_policy':'native full-health check', 'area_coverage':'two exact registered guns cover the whole reserved area',
-                'access_scope':site.get('access_scope'), 'scope':'fresh local native coverage; unrelated perimeter state is not a prerequisite'}
+            unit = post.get("unit_number")
+            known = registered.get(unit)
+            if (
+                type(unit) is not int
+                or unit in seen
+                or not known
+                or post.get("position") != known.get("position")
+                or not _finite(post.get("full_magazines"))
+                or post["full_magazines"] < MINIMUM_FULL_MAGAZINES
+            ):
+                return None
+            seen.add(unit)
+            selected.append(dict(post, name=known["name"]))
+        if len(selected) < 2:
+            return None
+        return {
+            "tick": site["tick"],
+            "posts": selected,
+            "minimum_full_normal_magazines": MINIMUM_FULL_MAGAZINES,
+            "health_policy": "native full-health check",
+            "area_coverage": "two exact registered guns cover the whole reserved area",
+            "access_scope": site.get("access_scope"),
+            "scope": "fresh local native coverage; unrelated perimeter state is not a prerequisite",
+        }
 
     def _power_guard(self, game, obs, board, source, preserved, additional_radars):
-        return game.query(RADAR_POWER_LUA.replace('PAYLOAD', _payload({'world_id':obs['world_id'], 'source':source,
-            'preserved_poles':preserved, 'scheduled_watts':planned_power_watts(self.catalog, obs, board),
-            'additional_watts':additional_radars*self.catalog.entities['radar']['energy_usage']*60})))
+        return game.query(
+            RADAR_POWER_LUA.replace(
+                "PAYLOAD",
+                _payload(
+                    {
+                        "world_id": obs["world_id"],
+                        "source": source,
+                        "preserved_poles": preserved,
+                        "scheduled_watts": planned_power_watts(self.catalog, obs, board),
+                        "additional_watts": additional_radars * self.catalog.entities["radar"]["energy_usage"] * 60,
+                    }
+                ),
+            )
+        )
 
     def _choose(self, budget, obs, board, *, oil=False, prior=None):
-        registered = getattr(self.perimeter, 'state', {}).get('posts', [])
+        registered = getattr(self.perimeter, "state", {}).get("posts", [])
         report = self.perimeter.inspect(obs)
-        if not report.get('ok'):
-            return {'ok':False, 'reason':'radar_current_defense_inspection_required'}
-        live = {p.get('name'):p for p in report.get('posts', [])}
+        if not report.get("ok"):
+            return {"ok": False, "reason": "radar_current_defense_inspection_required"}
+        live = {p.get("name"): p for p in report.get("posts", [])}
         # Apply the native stock gate before the bounded candidate cap. Otherwise
         # one unstocked pair can occupy every candidate and hide ready rear sites.
-        posts = [p for p in registered if p.get('name') in live
-                 and live[p['name']].get('unit_number') == p.get('unit_number')
-                 and not live[p['name']].get('missing')
-                 and not live[p['name']].get('identity_changed')
-                 and live[p['name']].get('full_magazines', 0) >= MINIMUM_FULL_MAGAZINES]
-        native_range = getattr(self.perimeter, 'state', {}).get('range')
-        if not _finite(native_range):return {'ok':False, 'reason':'radar_verified_native_defense_range_required'}
-        extra = [prior['core']['reserved_area']] if prior else []
+        posts = [
+            p
+            for p in registered
+            if p.get("name") in live
+            and live[p["name"]].get("unit_number") == p.get("unit_number")
+            and not live[p["name"]].get("missing")
+            and not live[p["name"]].get("identity_changed")
+            and live[p["name"]].get("full_magazines", 0) >= MINIMUM_FULL_MAGAZINES
+        ]
+        native_range = getattr(self.perimeter, "state", {}).get("range")
+        if not _finite(native_range):
+            return {"ok": False, "reason": "radar_verified_native_defense_range_required"}
+        extra = [prior["core"]["reserved_area"]] if prior else []
         if prior:
-            extra += [[[px-.5, py-.5], [px+.5, py+.5]] for px,py in
-                      self.builder._occupied_by_plan(prior['plan']['entities'])]
+            extra += [
+                [[px - 0.5, py - 0.5], [px + 0.5, py + 0.5]]
+                for px, py in self.builder._occupied_by_plan(prior["plan"]["entities"])
+            ]
         cells, _ = self._keepouts(obs, board)
-        sites = radar_candidates(obs, board, posts, oil=oil, effective_range=native_range-2,
-                                 keepout_cells=cells, extra_areas=extra)
+        sites = radar_candidates(
+            obs, board, posts, oil=oil, effective_range=native_range - 2, keepout_cells=cells, extra_areas=extra
+        )
         failures = []
         for x, y in sites:
-            if budget.expired():break
+            if budget.expired():
+                break
             core = radar_core(self.catalog, x, y)
             geometry = self._geometry(obs, board, core, extra_areas=extra)
-            if not geometry['ok']:failures.append(geometry['reason']);continue
-            actual = {(e['name'], *xy(e)):e for e in obs.get('entities', [])}
-            if any((e['name'], *xy(e)) in actual for e in core['entities']):
-                failures.append('radar_site_contains_existing_asset');continue
+            if not geometry["ok"]:
+                failures.append(geometry["reason"])
+                continue
+            actual = {(e["name"], *xy(e)): e for e in obs.get("entities", [])}
+            if any((e["name"], *xy(e)) in actual for e in core["entities"]):
+                failures.append("radar_site_contains_existing_asset")
+                continue
             site = self._site_guard(budget.game, obs, core, board)
-            if not site.get('ok'):failures.append(site.get('reason', 'radar_site_survey_failed'));continue
-            reserved = [core['radar']]+core['service_keepouts']
-            if prior:reserved += prior['plan']['entities']
-            bridge = power_connection(budget.game, self.builder, obs, core['power_pole']['position'], reserved)
-            if not bridge.get('ok'):failures.append(bridge.get('reason', 'radar_power_connection_failed'));continue
-            source_live = next((e for e in obs['entities'] if e.get('unit_number') == bridge.get('source_unit_number')
-                                and e['name'] == 'small-electric-pole' and e['position'] == bridge.get('source_position')), None)
-            if not source_live or type(source_live.get('electric_network_id')) is not int:
-                failures.append('radar_exact_power_source_unavailable');continue
-            source = {k:source_live[k] for k in ('name', 'position', 'unit_number', 'electric_network_id', 'direction')}
-            source['world_id'] = obs['world_id']
+            if not site.get("ok"):
+                failures.append(site.get("reason", "radar_site_survey_failed"))
+                continue
+            reserved = [core["radar"]] + core["service_keepouts"]
+            if prior:
+                reserved += prior["plan"]["entities"]
+            bridge = power_connection(budget.game, self.builder, obs, core["power_pole"]["position"], reserved)
+            if not bridge.get("ok"):
+                failures.append(bridge.get("reason", "radar_power_connection_failed"))
+                continue
+            source_live = next(
+                (
+                    e
+                    for e in obs["entities"]
+                    if e.get("unit_number") == bridge.get("source_unit_number")
+                    and e["name"] == "small-electric-pole"
+                    and e["position"] == bridge.get("source_position")
+                ),
+                None,
+            )
+            if not source_live or type(source_live.get("electric_network_id")) is not int:
+                failures.append("radar_exact_power_source_unavailable")
+                continue
+            source = {
+                k: source_live[k] for k in ("name", "position", "unit_number", "electric_network_id", "direction")
+            }
+            source["world_id"] = obs["world_id"]
             preserved = [source]
             new_poles = []
             incompatible = False
-            for spec in bridge['entities']:
-                old = actual.get((spec['name'], *xy(spec)))
+            for spec in bridge["entities"]:
+                old = actual.get((spec["name"], *xy(spec)))
                 if old:
-                    if old.get('electric_network_id') != source['electric_network_id']:
-                        incompatible = True;break
-                    preserved.append({k:old[k] for k in ('name', 'position', 'unit_number', 'electric_network_id', 'direction')})
-                    preserved[-1]['world_id'] = obs['world_id']
-                else:new_poles.append(spec)
-            if incompatible:failures.append('radar_power_bridge_would_adopt_another_network');continue
-            es = merge_entities(core['entities'], new_poles)
+                    if old.get("electric_network_id") != source["electric_network_id"]:
+                        incompatible = True
+                        break
+                    preserved.append(
+                        {k: old[k] for k in ("name", "position", "unit_number", "electric_network_id", "direction")}
+                    )
+                    preserved[-1]["world_id"] = obs["world_id"]
+                else:
+                    new_poles.append(spec)
+            if incompatible:
+                failures.append("radar_power_bridge_would_adopt_another_network")
+                continue
+            es = merge_entities(core["entities"], new_poles)
             geometry = self._geometry(obs, board, core, new_poles, extra_areas=extra)
-            if not geometry['ok']:failures.append(geometry['reason']);continue
+            if not geometry["ok"]:
+                failures.append(geometry["reason"])
+                continue
             power = self._power_guard(budget.game, obs, board, source, preserved, 2 if oil else 1)
-            if not power.get('ok'):failures.append(power.get('reason', 'radar_power_margin_unproven'));continue
-            if type(power.get('force_index')) is not int or power['force_index'] < 1:
-                failures.append('radar_native_power_force_unverified');continue
-            for spec in preserved:spec['force_index'] = power['force_index']
+            if not power.get("ok"):
+                failures.append(power.get("reason", "radar_power_margin_unproven"))
+                continue
+            if type(power.get("force_index")) is not int or power["force_index"] < 1:
+                failures.append("radar_native_power_force_unverified")
+                continue
+            for spec in preserved:
+                spec["force_index"] = power["force_index"]
             # Service cells reserve walking space; they are not belts to build.
             # The native site guard proves their actual walk access separately.
             whole = preflight(budget.game, self.builder, obs, es)
-            if not whole.get('ok'):failures.append(whole.get('reason', 'radar_whole_preflight_failed'));continue
-            plan = _plan(es, [], reserved_area=core['reserved_area'], defense_scope_id=DEFENSE_SCOPE,
-                clear_obstacles=whole['clear_obstacles'], clearance_world_id=obs['world_id'],
-                layout_policy=core['layout_policy'], reserved_only=oil)
-            return {'ok':True, 'core':core, 'plan':plan, 'power_source':source, 'preserved_poles':preserved,
-                    'power_preview':power, 'site_preview':site}
-        return {'ok':False, 'reason':'no_safe_powered_oil_radar_reservation' if oil else 'no_safe_powered_base_radar_site',
-                'evidence':{'candidate_count':len(sites), 'failures':failures[-6:]}}
+            if not whole.get("ok"):
+                failures.append(whole.get("reason", "radar_whole_preflight_failed"))
+                continue
+            plan = _plan(
+                es,
+                [],
+                reserved_area=core["reserved_area"],
+                defense_scope_id=DEFENSE_SCOPE,
+                clear_obstacles=whole["clear_obstacles"],
+                clearance_world_id=obs["world_id"],
+                layout_policy=core["layout_policy"],
+                reserved_only=oil,
+            )
+            return {
+                "ok": True,
+                "core": core,
+                "plan": plan,
+                "power_source": source,
+                "preserved_poles": preserved,
+                "power_preview": power,
+                "site_preview": site,
+            }
+        return {
+            "ok": False,
+            "reason": "no_safe_powered_oil_radar_reservation" if oil else "no_safe_powered_base_radar_site",
+            "evidence": {"candidate_count": len(sites), "failures": failures[-6:]},
+        }
 
     def prepare(self, obs, parameters=None):
         _parameters(parameters)
-        if not self._identity(obs, {'world_id':obs.get('world_id'), 'catalog_fingerprint':self.catalog.fingerprint}):
-            return {'ok':False, 'reason':'radar_requires_valid_world_observation'}
-        if self.state:return deepcopy(self.state) if self._identity(obs, self.state) else {'ok':False, 'reason':'radar_world_or_catalog_changed'}
-        if not obs.get('technologies', {}).get('radar') or not all(obs.get('enabled_recipes', {}).get(k) for k in ('radar', 'small-electric-pole')):
-            return {'ok':False, 'reason':'native_radar_research_and_recipes_required'}
+        if not self._identity(obs, {"world_id": obs.get("world_id"), "catalog_fingerprint": self.catalog.fingerprint}):
+            return {"ok": False, "reason": "radar_requires_valid_world_observation"}
+        if self.state:
+            return (
+                deepcopy(self.state)
+                if self._identity(obs, self.state)
+                else {"ok": False, "reason": "radar_world_or_catalog_changed"}
+            )
+        if not obs.get("technologies", {}).get("radar") or not all(
+            obs.get("enabled_recipes", {}).get(k) for k in ("radar", "small-electric-pole")
+        ):
+            return {"ok": False, "reason": "native_radar_research_and_recipes_required"}
         try:
             board = self._board(obs)
-            if any(k in board['blocks'] for k in (BASE_BLOCK, FUTURE_BLOCK)):
-                return {'ok':False, 'reason':'radar_reservation_without_owned_checkpoint'}
-            if any(e['name'] == 'radar' for e in obs.get('entities', [])):
-                return {'ok':False, 'reason':'existing_radar_requires_explicit_ownership_reconciliation'}
+            if any(k in board["blocks"] for k in (BASE_BLOCK, FUTURE_BLOCK)):
+                return {"ok": False, "reason": "radar_reservation_without_owned_checkpoint"}
+            if any(e["name"] == "radar" for e in obs.get("entities", [])):
+                return {"ok": False, "reason": "existing_radar_requires_explicit_ownership_reconciliation"}
             budget = PlanningBudget(self.game)
             base = self._choose(budget, obs, board)
-            if not base.get('ok'):return base
+            if not base.get("ok"):
+                return base
             future = self._choose(budget, obs, board, oil=True, prior=base)
-            areas = [base['core']['reserved_area']]
-            defense = self._local_coverage(base['site_preview'])
-            if not defense:return {'ok':False, 'reason':'radar_local_native_defense_preview_required'}
-            if budget.expired():return budget.failure(stage='radar_complete_preparation')
+            areas = [base["core"]["reserved_area"]]
+            defense = self._local_coverage(base["site_preview"])
+            if not defense:
+                return {"ok": False, "reason": "radar_local_native_defense_preview_required"}
+            if budget.expired():
+                return budget.failure(stage="radar_complete_preparation")
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            return {'ok':False, 'reason':'radar_native_geometry_or_context_invalid', 'detail':str(exc)}
-        return {'ok':True, 'schema_version':1, 'world_id':obs['world_id'], 'catalog_fingerprint':self.catalog.fingerprint,
-                'phase':'build', **{k:base[k] for k in ('core', 'plan', 'power_source', 'preserved_poles', 'power_preview', 'site_preview')},
-                'future_oil':dict(future, reserved=bool(future.get('ok')), coverage_status='preview_only_not_live_proof'), 'defense_scope_id':DEFENSE_SCOPE,
-                'defense_areas':areas, 'defense_preview':defense, 'bindings':{}, 'prepared_tick':obs.get('tick')}
+            return {"ok": False, "reason": "radar_native_geometry_or_context_invalid", "detail": str(exc)}
+        return {
+            "ok": True,
+            "schema_version": 1,
+            "world_id": obs["world_id"],
+            "catalog_fingerprint": self.catalog.fingerprint,
+            "phase": "build",
+            **{
+                k: base[k] for k in ("core", "plan", "power_source", "preserved_poles", "power_preview", "site_preview")
+            },
+            "future_oil": dict(future, reserved=bool(future.get("ok")), coverage_status="preview_only_not_live_proof"),
+            "defense_scope_id": DEFENSE_SCOPE,
+            "defense_areas": areas,
+            "defense_preview": defense,
+            "bindings": {},
+            "prepared_tick": obs.get("tick"),
+        }
 
-    def _save(self):_atomic_json(self.path, self.state)
+    def _save(self):
+        _atomic_json(self.path, self.state)
 
     def _bind(self, obs):
-        actual = {(e['name'], *xy(e)):e for e in obs.get('entities', [])}
+        actual = {(e["name"], *xy(e)): e for e in obs.get("entities", [])}
         changed = False
-        for spec in self.state['plan']['entities']:
-            live = actual.get((spec['name'], *xy(spec)))
-            old = self.state['bindings'].get(_key(spec))
-            if old and (not live or live.get('unit_number') != old):return {'status':'blocked', 'reason':'radar_owned_asset_missing_or_replaced'}
+        for spec in self.state["plan"]["entities"]:
+            live = actual.get((spec["name"], *xy(spec)))
+            old = self.state["bindings"].get(_key(spec))
+            if old and (not live or live.get("unit_number") != old):
+                return {"status": "blocked", "reason": "radar_owned_asset_missing_or_replaced"}
             if live:
-                if type(live.get('unit_number')) is not int or live['unit_number'] < 1 or live.get('direction') != spec.get('direction', 0):
-                    return {'status':'blocked', 'reason':'radar_owned_asset_identity_or_direction_changed'}
-                if old is None:self.state['bindings'][_key(spec)] = live['unit_number'];changed = True
-        if changed:self._save()
+                if (
+                    type(live.get("unit_number")) is not int
+                    or live["unit_number"] < 1
+                    or live.get("direction") != spec.get("direction", 0)
+                ):
+                    return {"status": "blocked", "reason": "radar_owned_asset_identity_or_direction_changed"}
+                if old is None:
+                    self.state["bindings"][_key(spec)] = live["unit_number"]
+                    changed = True
+        if changed:
+            self._save()
         return None
 
     def _reserve(self, obs, board):
-        wanted = {BASE_BLOCK:self.state['plan']}
-        if self.state['future_oil']['reserved']:wanted[FUTURE_BLOCK] = self.state['future_oil']['plan']
+        wanted = {BASE_BLOCK: self.state["plan"]}
+        if self.state["future_oil"]["reserved"]:
+            wanted[FUTURE_BLOCK] = self.state["future_oil"]["plan"]
         for name, plan in wanted.items():
-            old = board['blocks'].get(name)
-            if old and old != plan:return {'status':'blocked', 'reason':'radar_registered_plan_changed'}
-            if any(k not in wanted and p.get('reserved_area') and overlap(plan['reserved_area'], p['reserved_area'])
-                   for k,p in board['blocks'].items()):return {'status':'blocked', 'reason':'radar_reservation_conflict'}
-            core = self.state['core'] if name == BASE_BLOCK else self.state['future_oil']['core']
-            geometry = self._geometry(obs, board, core, [e for e in plan['entities'] if e != core['radar']])
-            if not geometry.get('ok'):return {'status':'blocked', 'reason':'radar_reservation_or_power_keepout_changed', 'evidence':geometry}
-        if any(board['blocks'].get(k) != v for k,v in wanted.items()):
-            board['blocks'].update(wanted);_atomic_json(self.path.parent/'pcb-board.json', board)
+            old = board["blocks"].get(name)
+            if old and old != plan:
+                return {"status": "blocked", "reason": "radar_registered_plan_changed"}
+            if any(
+                k not in wanted and p.get("reserved_area") and overlap(plan["reserved_area"], p["reserved_area"])
+                for k, p in board["blocks"].items()
+            ):
+                return {"status": "blocked", "reason": "radar_reservation_conflict"}
+            core = self.state["core"] if name == BASE_BLOCK else self.state["future_oil"]["core"]
+            geometry = self._geometry(obs, board, core, [e for e in plan["entities"] if e != core["radar"]])
+            if not geometry.get("ok"):
+                return {
+                    "status": "blocked",
+                    "reason": "radar_reservation_or_power_keepout_changed",
+                    "evidence": geometry,
+                }
+        if any(board["blocks"].get(k) != v for k, v in wanted.items()):
+            board["blocks"].update(wanted)
+            _atomic_json(self.path.parent / "pcb-board.json", board)
         return None
 
     def step(self, obs, parameters=None):
         _parameters(parameters)
         if not self.state:
             ready = self.prepare(obs)
-            if not ready.get('ok'):return {'status':'blocked', **ready}
-            self.state = ready;self._save()
-        if not self._identity(obs, self.state):return {'status':'blocked', 'reason':'radar_world_or_catalog_changed'}
+            if not ready.get("ok"):
+                return {"status": "blocked", **ready}
+            self.state = ready
+            self._save()
+        if not self._identity(obs, self.state):
+            return {"status": "blocked", "reason": "radar_world_or_catalog_changed"}
         result = self._bind(obs)
-        if result:return result
-        try:board = self._board(obs)
-        except (OSError, ValueError):return {'status':'blocked', 'reason':'radar_board_identity_changed'}
-        try:result = self._reserve(obs, board)
-        except (OSError, ValueError, KeyError, TypeError):return {'status':'blocked', 'reason':'radar_reservation_context_changed'}
-        if result:return result
-        core = self.state['core']
+        if result:
+            return result
         try:
-            geometry = self._geometry(obs, board, core, [e for e in self.state['plan']['entities'] if e != core['radar']])
-            if not geometry.get('ok'):return {'status':'blocked', 'reason':'radar_site_or_power_corridor_changed', 'evidence':geometry}
+            board = self._board(obs)
+        except (OSError, ValueError):
+            return {"status": "blocked", "reason": "radar_board_identity_changed"}
+        try:
+            result = self._reserve(obs, board)
+        except (OSError, ValueError, KeyError, TypeError):
+            return {"status": "blocked", "reason": "radar_reservation_context_changed"}
+        if result:
+            return result
+        core = self.state["core"]
+        try:
+            geometry = self._geometry(
+                obs, board, core, [e for e in self.state["plan"]["entities"] if e != core["radar"]]
+            )
+            if not geometry.get("ok"):
+                return {"status": "blocked", "reason": "radar_site_or_power_corridor_changed", "evidence": geometry}
             site = self._site_guard(self.game, obs, core, board)
-            if not self._local_coverage(site):return {'status':'blocked', 'reason':'radar_security_or_service_changed', 'evidence':site}
-            installed = _key(core['radar']) in self.state['bindings']
+            if not self._local_coverage(site):
+                return {"status": "blocked", "reason": "radar_security_or_service_changed", "evidence": site}
+            installed = _key(core["radar"]) in self.state["bindings"]
             additional = int(not installed)
-            power = self._power_guard(self.game, obs, board, self.state['power_source'], self.state['preserved_poles'], additional)
-            if not power.get('ok'):return {'status':'blocked', 'reason':'radar_native_power_margin_changed', 'evidence':power}
-            check = preflight(self.game, self.builder, obs, self.state['plan']['entities'])
-            if not check.get('ok'):return {'status':'blocked', 'reason':'radar_whole_preflight_changed', 'evidence':check}
-        except (OSError, ValueError, KeyError, TypeError):return {'status':'blocked', 'reason':'radar_fresh_native_context_changed'}
-        result = self.builder.ensure_plan(obs, self.state['plan'])
-        if result.get('status') != 'succeeded':return result
+            power = self._power_guard(
+                self.game, obs, board, self.state["power_source"], self.state["preserved_poles"], additional
+            )
+            if not power.get("ok"):
+                return {"status": "blocked", "reason": "radar_native_power_margin_changed", "evidence": power}
+            check = preflight(self.game, self.builder, obs, self.state["plan"]["entities"])
+            if not check.get("ok"):
+                return {"status": "blocked", "reason": "radar_whole_preflight_changed", "evidence": check}
+        except (OSError, ValueError, KeyError, TypeError):
+            return {"status": "blocked", "reason": "radar_fresh_native_context_changed"}
+        result = self.builder.ensure_plan(obs, self.state["plan"])
+        if result.get("status") != "succeeded":
+            return result
         proof = self.proof(obs)
-        if not proof:return {'status':'waiting', 'reason':'waiting_for_exact_powered_working_radar', 'evidence':self.last_proof_failure}
-        self.state.update(phase='verified', proof=proof);self._save()
-        return {'status':'succeeded', 'reason':'one normally paid defended base radar is working', 'evidence':proof}
+        if not proof:
+            return {
+                "status": "waiting",
+                "reason": "waiting_for_exact_powered_working_radar",
+                "evidence": self.last_proof_failure,
+            }
+        self.state.update(phase="verified", proof=proof)
+        self._save()
+        return {"status": "succeeded", "reason": "one normally paid defended base radar is working", "evidence": proof}
 
     def proof(self, obs, parameters=None):
         _parameters(parameters)
         self.last_proof_failure = None
-        if not self.state or not self._identity(obs, self.state):return None
-        actual = {(e['name'], *xy(e)):e for e in obs.get('entities', [])}
+        if not self.state or not self._identity(obs, self.state):
+            return None
+        actual = {(e["name"], *xy(e)): e for e in obs.get("entities", [])}
         specs = []
-        for spec in self.state['plan']['entities']:
-            unit = self.state['bindings'].get(_key(spec));live = actual.get((spec['name'], *xy(spec)))
-            if not unit or not live or live.get('unit_number') != unit:return None
+        for spec in self.state["plan"]["entities"]:
+            unit = self.state["bindings"].get(_key(spec))
+            live = actual.get((spec["name"], *xy(spec)))
+            if not unit or not live or live.get("unit_number") != unit:
+                return None
             specs.append(dict(spec, unit_number=unit))
-        try:board = self._board(obs)
-        except (OSError, ValueError):self.last_proof_failure = {'reason':'radar_board_identity_changed'};return None
-        if (board['blocks'].get(BASE_BLOCK) != self.state['plan']
-                or (self.state['future_oil']['reserved'] and board['blocks'].get(FUTURE_BLOCK) != self.state['future_oil']['plan'])):
-            self.last_proof_failure = {'reason':'radar_registered_plan_changed'};return None
         try:
-            geometry = self._geometry(obs, board, self.state['core'], [e for e in self.state['plan']['entities'] if e != self.state['core']['radar']])
-            if not geometry.get('ok'):self.last_proof_failure = geometry;return None
-            site = self._site_guard(self.game, obs, self.state['core'], board)
+            board = self._board(obs)
+        except (OSError, ValueError):
+            self.last_proof_failure = {"reason": "radar_board_identity_changed"}
+            return None
+        if board["blocks"].get(BASE_BLOCK) != self.state["plan"] or (
+            self.state["future_oil"]["reserved"]
+            and board["blocks"].get(FUTURE_BLOCK) != self.state["future_oil"]["plan"]
+        ):
+            self.last_proof_failure = {"reason": "radar_registered_plan_changed"}
+            return None
+        try:
+            geometry = self._geometry(
+                obs,
+                board,
+                self.state["core"],
+                [e for e in self.state["plan"]["entities"] if e != self.state["core"]["radar"]],
+            )
+            if not geometry.get("ok"):
+                self.last_proof_failure = geometry
+                return None
+            site = self._site_guard(self.game, obs, self.state["core"], board)
             defense = self._local_coverage(site)
-            if not defense:self.last_proof_failure = site if not site.get('ok')else{'reason':'radar_local_native_defense_proof_required'};return None
-            power = self._power_guard(self.game, obs, board, self.state['power_source'], self.state['preserved_poles'], 0)
-            if not power.get('ok'):self.last_proof_failure = power;return None
+            if not defense:
+                self.last_proof_failure = (
+                    site if not site.get("ok") else {"reason": "radar_local_native_defense_proof_required"}
+                )
+                return None
+            power = self._power_guard(
+                self.game, obs, board, self.state["power_source"], self.state["preserved_poles"], 0
+            )
+            if not power.get("ok"):
+                self.last_proof_failure = power
+                return None
         except (OSError, ValueError, KeyError, TypeError):
-            self.last_proof_failure = {'reason':'radar_fresh_native_context_changed'};return None
-        native = self.game.query(RADAR_PROOF_LUA.replace('PAYLOAD', _payload({'world_id':obs['world_id'], 'specs':specs,
-            'source':self.state['power_source'], 'radar_watts':self.state['core']['watts']})))
-        if not native.get('ok'):self.last_proof_failure = native;return None
-        return {'tick':native['tick'], 'radar_count':1, 'radar':native, 'power':power, 'defense_coverage':defense,
-                'future_oil_reserved':self.state['future_oil']['reserved'],
-                'future_oil_coverage_status':'reservation preview; no current native defense or power proof claimed',
-                'scope':'exact powered working base radar and bounded chart sample; no full-map or sustained scan claim'}
+            self.last_proof_failure = {"reason": "radar_fresh_native_context_changed"}
+            return None
+        native = self.game.query(
+            RADAR_PROOF_LUA.replace(
+                "PAYLOAD",
+                _payload(
+                    {
+                        "world_id": obs["world_id"],
+                        "specs": specs,
+                        "source": self.state["power_source"],
+                        "radar_watts": self.state["core"]["watts"],
+                    }
+                ),
+            )
+        )
+        if not native.get("ok"):
+            self.last_proof_failure = native
+            return None
+        return {
+            "tick": native["tick"],
+            "radar_count": 1,
+            "radar": native,
+            "power": power,
+            "defense_coverage": defense,
+            "future_oil_reserved": self.state["future_oil"]["reserved"],
+            "future_oil_coverage_status": "reservation preview; no current native defense or power proof claimed",
+            "scope": "exact powered working base radar and bounded chart sample; no full-map or sustained scan claim",
+        }
 
 
-RADAR_POWER_LUA=r'''
+RADAR_POWER_LUA = r"""
 local args=helpers.json_to_table(PAYLOAD)
 if not d or d.world_id~=args.world_id then return {ok=false,reason="radar_power_world_changed"}end
 local function exact(q)local e=target(q.position,q.name)
@@ -447,10 +755,10 @@ return {ok=true,tick=game.tick,network_id=source.electric_network_id,force_index
  demand_watts=demand,measured_5s_watts=measured,scheduled_watts=args.scheduled_watts,additional_watts=args.additional_watts,
  reserve_watts=reserve,headroom_watts=headroom,satisfaction=flow.consumption_satisfaction,
  scope="native currently offered production and current/five-second measured load, with explicit planned-load and reserve deductions"}
-'''
+"""
 
 
-RADAR_SITE_LUA=r'''
+RADAR_SITE_LUA = r"""
 local args=helpers.json_to_table(PAYLOAD);local c=args.core;local p=c.radar.position;local area=c.reserved_area
 if not d or d.world_id~=args.world_id then return {ok=false,reason="radar_site_world_changed"}end
 local proto=prototypes.entity.radar
@@ -525,10 +833,10 @@ local charted=0;for dx=-1,1 do for dy=-1,1 do if f.is_chunk_charted(s,{x=math.fl
 return {ok=true,tick=game.tick,covering_posts=armed,enemy_exclusion_radius=args.enemy_radius,
  local_walk_cells=#queue,charted_sample_chunks=charted,sampled_chunks=9,
  access_scope="native walkable local component from outside the service reservation to all four radar service sides"}
-'''
+"""
 
 
-RADAR_PROOF_LUA=r'''
+RADAR_PROOF_LUA = r"""
 local args=helpers.json_to_table(PAYLOAD)
 if not d or d.world_id~=args.world_id then return {ok=false,reason="radar_proof_world_changed"}end
 local radar=nil
@@ -546,4 +854,4 @@ local charted=0;for dx=-1,1 do for dy=-1,1 do if f.is_chunk_charted(s,{x=math.fl
 return {ok=true,tick=game.tick,unit_number=radar.unit_number,position=pos(radar.position),world_id=d.world_id,
  force_index=f.index,network_id=radar.electric_network_id,energy=radar.energy,status="working",scan_progress=progress,
  charted_sample_chunks=charted,sampled_chunks=9,scope="current native scan progress and existing chart sample, not attribution of all charted chunks to this radar"}
-'''
+"""

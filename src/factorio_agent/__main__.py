@@ -1,4 +1,5 @@
 """CLI used by the gameplay subagent; never calls a model API."""
+
 from __future__ import annotations
 
 import argparse
@@ -22,18 +23,18 @@ def main(argv=None):
     create.add_argument("--rcon-port", type=int, default=27060)
     for command in ("start", "connect-player", "observe", "capabilities", "actor-status", "checkpoint"):
         commands.add_parser(command)
-    recovery=commands.add_parser("recover-actor")
-    recovery.add_argument("--world-id",required=True)
-    recovery.add_argument("--expected-old-unit",type=int,required=True)
-    recovery.add_argument("--expected-new-unit",type=int,required=True)
-    parking=commands.add_parser('return-to-base')
-    parking.add_argument('--world-id',required=True)
-    parking.add_argument('--expected-actor-unit',type=int,required=True)
-    for name in ('belongings-status','recover-belongings'):
-        belongings=commands.add_parser(name)
-        belongings.add_argument('--world-id',required=True)
-        belongings.add_argument('--expected-actor-unit',type=int,required=True)
-        belongings.add_argument('--death-tick',type=int,required=True)
+    recovery = commands.add_parser("recover-actor")
+    recovery.add_argument("--world-id", required=True)
+    recovery.add_argument("--expected-old-unit", type=int, required=True)
+    recovery.add_argument("--expected-new-unit", type=int, required=True)
+    parking = commands.add_parser("return-to-base")
+    parking.add_argument("--world-id", required=True)
+    parking.add_argument("--expected-actor-unit", type=int, required=True)
+    for name in ("belongings-status", "recover-belongings"):
+        belongings = commands.add_parser(name)
+        belongings.add_argument("--world-id", required=True)
+        belongings.add_argument("--expected-actor-unit", type=int, required=True)
+        belongings.add_argument("--death-tick", type=int, required=True)
     commands.add_parser("stop-worker")
     commands.add_parser("clear-worker-stop")
     commands.add_parser("status").add_argument("--key")
@@ -47,7 +48,7 @@ def main(argv=None):
     request.add_argument("--cells", type=int)
     request.add_argument("--technology")
     request.add_argument("--product")
-    request.add_argument("--rate-per-minute",type=float)
+    request.add_argument("--rate-per-minute", type=float)
     execute = commands.add_parser("run")
     execute.add_argument("--key", required=True)
     execute.add_argument("--seconds", type=float, default=25)
@@ -67,54 +68,80 @@ def main(argv=None):
     elif args.command == "connect-player":
         result = runtime.connect_player(root)
     elif args.command == "checkpoint":
-        with RunLock(root/'writer.lock'):
-            game=runtime.game_for(root);obs=game.query('return {ok=true,world_id=d.world_id,tick=game.tick}')
-            if not obs.get('ok'):raise RuntimeError(obs.get('reason','live world observation required'))
+        with RunLock(root / "writer.lock"):
+            game = runtime.game_for(root)
+            obs = game.query("return {ok=true,world_id=d.world_id,tick=game.tick}")
+            if not obs.get("ok"):
+                raise RuntimeError(obs.get("reason", "live world observation required"))
             game.save()
-            Ledger(root).event('world-lifecycle','checkpoint_requested',tick=obs['tick'],world_id=obs['world_id'])
-            result={'status':'checkpoint_requested','world_id':obs['world_id'],'observed_tick':obs['tick']}
+            Ledger(root).event("world-lifecycle", "checkpoint_requested", tick=obs["tick"], world_id=obs["world_id"])
+            result = {"status": "checkpoint_requested", "world_id": obs["world_id"], "observed_tick": obs["tick"]}
     elif args.command == "watch":
         from factorio_agent.core.deterministic_character import set_client_visibility
+
         result = set_client_visibility(runtime.configuration(root), visible=not args.hide)
     elif args.command == "capabilities":
         result = CAPABILITIES
     elif args.command == "actor-status":
         from .actor_recovery import inspect_actor_recovery
-        result=inspect_actor_recovery(runtime.game_for(root))
+
+        result = inspect_actor_recovery(runtime.game_for(root))
     elif args.command == "recover-actor":
         from .actor_recovery import execute_actor_recovery
+
         with RunLock(root / "writer.lock"):
-            game=runtime.game_for(root)
-            action=dict(type='recover_actor',world_id=args.world_id,
-                expected_old_unit=args.expected_old_unit,expected_new_unit=args.expected_new_unit)
-            result=execute_actor_recovery(game,args.world_id,args.expected_old_unit,args.expected_new_unit)
-            game._record_action(action,result)
-            Ledger(root).event('actor-lifecycle','actor_recovery',tick=result.get('tick'),
-                old_unit=args.expected_old_unit,new_unit=args.expected_new_unit,result=result)
-    elif args.command == 'belongings-status':
+            game = runtime.game_for(root)
+            action = dict(
+                type="recover_actor",
+                world_id=args.world_id,
+                expected_old_unit=args.expected_old_unit,
+                expected_new_unit=args.expected_new_unit,
+            )
+            result = execute_actor_recovery(game, args.world_id, args.expected_old_unit, args.expected_new_unit)
+            game._record_action(action, result)
+            Ledger(root).event(
+                "actor-lifecycle",
+                "actor_recovery",
+                tick=result.get("tick"),
+                old_unit=args.expected_old_unit,
+                new_unit=args.expected_new_unit,
+                result=result,
+            )
+    elif args.command == "belongings-status":
         from .corpse_recovery import inspect_corpse_recovery
-        result=inspect_corpse_recovery(runtime.game_for(root),args.world_id,args.expected_actor_unit,args.death_tick)
-    elif args.command == 'return-to-base':
+
+        result = inspect_corpse_recovery(
+            runtime.game_for(root), args.world_id, args.expected_actor_unit, args.death_tick
+        )
+    elif args.command == "return-to-base":
         from .defense_repairs import return_to_spawn_action
-        with RunLock(root/'writer.lock'):
-            game=runtime.game_for(root)
-            action=return_to_spawn_action(game,args.world_id,args.expected_actor_unit)
-            result=game.act(action)if action.get('type')else action
-            Ledger(root).event('actor-lifecycle','return_to_base',result=result)
-    elif args.command == 'recover-belongings':
+
+        with RunLock(root / "writer.lock"):
+            game = runtime.game_for(root)
+            action = return_to_spawn_action(game, args.world_id, args.expected_actor_unit)
+            result = game.act(action) if action.get("type") else action
+            Ledger(root).event("actor-lifecycle", "return_to_base", result=result)
+    elif args.command == "recover-belongings":
         from .corpse_recovery import execute_corpse_recovery
-        with RunLock(root/'writer.lock'):
-            game=runtime.game_for(root)
-            action=dict(type='recover_owned_belongings',world_id=args.world_id,
-                expected_actor_unit=args.expected_actor_unit,death_tick=args.death_tick,keep_single_repair_tool=True)
-            receipt=execute_corpse_recovery(game,args.world_id,args.expected_actor_unit,args.death_tick,
-                keep_single_repair_tool=True)
-            game._record_action(action,receipt)
-            result={k:v for k,v in receipt.items()if k!='conservation'}
-            Ledger(root).event('actor-lifecycle','belongings_recovery',tick=result.get('tick'),result=result)
+
+        with RunLock(root / "writer.lock"):
+            game = runtime.game_for(root)
+            action = dict(
+                type="recover_owned_belongings",
+                world_id=args.world_id,
+                expected_actor_unit=args.expected_actor_unit,
+                death_tick=args.death_tick,
+                keep_single_repair_tool=True,
+            )
+            receipt = execute_corpse_recovery(
+                game, args.world_id, args.expected_actor_unit, args.death_tick, keep_single_repair_tool=True
+            )
+            game._record_action(action, receipt)
+            result = {k: v for k, v in receipt.items() if k != "conservation"}
+            Ledger(root).event("actor-lifecycle", "belongings_recovery", tick=result.get("tick"), result=result)
     elif args.command == "status":
-        data=Ledger(root).data
-        result=data["jobs"].get(args.key,{"status":"error","reason":"unknown_job_key"}) if args.key else data
+        data = Ledger(root).data
+        result = data["jobs"].get(args.key, {"status": "error", "reason": "unknown_job_key"}) if args.key else data
     elif args.command == "stop-worker":
         if not root.is_dir():
             raise ValueError("runtime directory does not exist")
@@ -138,34 +165,62 @@ def main(argv=None):
         if not obs.get("ok"):
             raise RuntimeError(obs.get("reason", "observation_failed"))
         obs["electricity"] = runtime.electricity_snapshot(game)
-        from .defense_policy import DefensePolicy,assess_risk
-        try:obs['adaptive_defense_risk']=assess_risk(DefensePolicy(game,None).survey(obs),obs['world_id'])
-        except(ValueError,KeyError,TypeError,RuntimeError):
-            obs['adaptive_defense_risk']={'status':'unavailable','reason':'bounded current producer and threat facts unavailable'}
-        from .diagnostics import production_rates,construction_budget,port_lane_snapshot,smelting_throughput_bounds,factory_constraints
-        obs["production_rate_measurement"]=production_rates(root,obs)
-        obs["belt_lane_observation"]=port_lane_snapshot(root,game,obs)
-        if (root/"catalog.json").exists():
-            obs["known_project_construction_budget"]=construction_budget(root,obs,runtime.catalog_for(root,game))
-            obs["smelting_throughput_bounds"]=smelting_throughput_bounds(root,obs,runtime.catalog_for(root,game))
-            obs["factory_constraints"]=factory_constraints(root,obs,runtime.catalog_for(root,game))
+        from .defense_policy import DefensePolicy, assess_risk
+
+        try:
+            obs["adaptive_defense_risk"] = assess_risk(DefensePolicy(game, None).survey(obs), obs["world_id"])
+        except (ValueError, KeyError, TypeError, RuntimeError):
+            obs["adaptive_defense_risk"] = {
+                "status": "unavailable",
+                "reason": "bounded current producer and threat facts unavailable",
+            }
+        from .diagnostics import (
+            production_rates,
+            construction_budget,
+            port_lane_snapshot,
+            smelting_throughput_bounds,
+            factory_constraints,
+        )
+
+        obs["production_rate_measurement"] = production_rates(root, obs)
+        obs["belt_lane_observation"] = port_lane_snapshot(root, game, obs)
+        if (root / "catalog.json").exists():
+            obs["known_project_construction_budget"] = construction_budget(root, obs, runtime.catalog_for(root, game))
+            obs["smelting_throughput_bounds"] = smelting_throughput_bounds(root, obs, runtime.catalog_for(root, game))
+            obs["factory_constraints"] = factory_constraints(root, obs, runtime.catalog_for(root, game))
             from .normal_research import ready_options
-            obs["available_research"]=ready_options(runtime.catalog_for(root,game),obs)
+
+            obs["available_research"] = ready_options(runtime.catalog_for(root, game), obs)
             from .capability_gates import native_recipe_gates
-            obs['native_capability_gates']=native_recipe_gates(runtime.catalog_for(root,game),obs,CAPABILITIES)
+
+            obs["native_capability_gates"] = native_recipe_gates(runtime.catalog_for(root, game), obs, CAPABILITIES)
             from .supply_planning import supply_options
-            obs['resource_supply_options']=supply_options(root,game,obs,runtime.catalog_for(root,game),
-                obs['known_project_construction_budget'],obs['production_rate_measurement'])
+
+            obs["resource_supply_options"] = supply_options(
+                root,
+                game,
+                obs,
+                runtime.catalog_for(root, game),
+                obs["known_project_construction_budget"],
+                obs["production_rate_measurement"],
+            )
         result = summary(obs, Ledger(root))
     elif args.command == "request":
         parameters = json.loads(args.parameters)
-        typed = {name: getattr(args, name) for name in ("resource", "cells", "technology","product","rate_per_minute") if getattr(args, name) is not None}
+        typed = {
+            name: getattr(args, name)
+            for name in ("resource", "cells", "technology", "product", "rate_per_minute")
+            if getattr(args, name) is not None
+        }
         if typed:
             if parameters:
                 raise ValueError("use typed parameters or JSON, not both")
             parameters = typed
-        result = submit(root, runtime.game_for(root), Request(args.key, args.world_id,
-                        args.observed_tick, args.capability, parameters))
+        result = submit(
+            root,
+            runtime.game_for(root),
+            Request(args.key, args.world_id, args.observed_tick, args.capability, parameters),
+        )
     elif args.command in {"pause", "resume", "reconcile", "retry"}:
         result = control(root, runtime.game_for(root), args.key, args.command)
     elif args.command in {"run", "worker"}:
@@ -181,9 +236,18 @@ def main(argv=None):
                 raise ValueError("worker duration must be greater than zero and at most 3600 seconds")
             deadline = time.monotonic() + args.max_seconds
             while True:
-                result = run_slice(root, game, executors, args.key, seconds=min(50, max(.001, deadline - time.monotonic())))
-                print(json.dumps({k: result.get(k) for k in ("key", "status", "reason", "last_tick", "actions")}), flush=True)
-                if result["status"] in {"succeeded", "blocked", "failed", "paused"} or result["reason"] == "operator_stop_requested" or time.monotonic() >= deadline:
+                result = run_slice(
+                    root, game, executors, args.key, seconds=min(50, max(0.001, deadline - time.monotonic()))
+                )
+                print(
+                    json.dumps({k: result.get(k) for k in ("key", "status", "reason", "last_tick", "actions")}),
+                    flush=True,
+                )
+                if (
+                    result["status"] in {"succeeded", "blocked", "failed", "paused"}
+                    or result["reason"] == "operator_stop_requested"
+                    or time.monotonic() >= deadline
+                ):
                     break
     print(json.dumps(result, ensure_ascii=False, allow_nan=False))
 

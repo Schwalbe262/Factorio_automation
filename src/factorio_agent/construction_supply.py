@@ -4,6 +4,7 @@ The observation chooses candidates; a single native operation rechecks their
 identities and live normal-quality stocks.  No source ingredients, fuel,
 science inventory, raw ore or mining output are eligible for this fast path.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -16,54 +17,114 @@ from factorio_agent.core.deterministic_bootstrap import DeterministicBootstrap
 
 MAX_SOURCES = 16
 MAX_ITEMS = 50
-OUTPUT_NAMES = frozenset({"stone-furnace", "steel-furnace", "electric-furnace",
-                          "assembling-machine-1", "assembling-machine-2", "assembling-machine-3"})
+OUTPUT_NAMES = frozenset(
+    {
+        "stone-furnace",
+        "steel-furnace",
+        "electric-furnace",
+        "assembling-machine-1",
+        "assembling-machine-2",
+        "assembling-machine-3",
+    }
+)
 CHEST_NAMES = frozenset({"wooden-chest", "iron-chest", "steel-chest"})
-CONSTRUCTION_ITEMS = frozenset({
-    "iron-plate", "copper-plate", "steel-plate", "stone-brick", "iron-gear-wheel",
-    "electronic-circuit", "advanced-circuit", "processing-unit", "copper-cable",
-    "transport-belt", "fast-transport-belt", "express-transport-belt",
-    "underground-belt", "fast-underground-belt", "express-underground-belt",
-    "splitter", "fast-splitter", "express-splitter", "inserter", "fast-inserter",
-    "long-handed-inserter", "bulk-inserter", "stack-inserter", "burner-inserter", "gun-turret",
-    "pipe", "pipe-to-ground",
-})
-AMMO_ITEMS = frozenset({
-    "artillery-shell", "atomic-bomb", "cannon-shell", "capture-robot-rocket",
-    "explosive-cannon-shell", "explosive-rocket", "explosive-uranium-cannon-shell",
-    "firearm-magazine", "flamethrower-ammo", "piercing-rounds-magazine",
-    "piercing-shotgun-shell", "railgun-ammo", "rocket", "shotgun-shell",
-    "tesla-ammo", "uranium-cannon-shell", "uranium-rounds-magazine",
-})
+CONSTRUCTION_ITEMS = frozenset(
+    {
+        "iron-plate",
+        "copper-plate",
+        "steel-plate",
+        "stone-brick",
+        "iron-gear-wheel",
+        "electronic-circuit",
+        "advanced-circuit",
+        "processing-unit",
+        "copper-cable",
+        "transport-belt",
+        "fast-transport-belt",
+        "express-transport-belt",
+        "underground-belt",
+        "fast-underground-belt",
+        "express-underground-belt",
+        "splitter",
+        "fast-splitter",
+        "express-splitter",
+        "inserter",
+        "fast-inserter",
+        "long-handed-inserter",
+        "bulk-inserter",
+        "stack-inserter",
+        "burner-inserter",
+        "gun-turret",
+        "pipe",
+        "pipe-to-ground",
+    }
+)
+AMMO_ITEMS = frozenset(
+    {
+        "artillery-shell",
+        "atomic-bomb",
+        "cannon-shell",
+        "capture-robot-rocket",
+        "explosive-cannon-shell",
+        "explosive-rocket",
+        "explosive-uranium-cannon-shell",
+        "firearm-magazine",
+        "flamethrower-ammo",
+        "piercing-rounds-magazine",
+        "piercing-shotgun-shell",
+        "railgun-ammo",
+        "rocket",
+        "shotgun-shell",
+        "tesla-ammo",
+        "uranium-cannon-shell",
+        "uranium-rounds-magazine",
+    }
+)
 
 
 def _position(value):
-    return (isinstance(value, dict) and set(value) == {"x", "y"}
-            and all(type(value[k]) in (int, float) and math.isfinite(value[k]) for k in ("x", "y")))
+    return (
+        isinstance(value, dict)
+        and set(value) == {"x", "y"}
+        and all(type(value[k]) in (int, float) and math.isfinite(value[k]) for k in ("x", "y"))
+    )
 
 
 def validate_take_many(action):
     """Reject the entire malformed envelope before any native I/O."""
-    if (not isinstance(action, dict)
-            or set(action)-{"type", "item", "count", "world_id", "sources", "reason"}
-            or action.get("type") != "take_many"
-            or not isinstance(action.get("item"), str) or action["item"] not in CONSTRUCTION_ITEMS
-            or type(action.get("count")) is not int or not 1 <= action["count"] <= MAX_ITEMS
-            or not isinstance(action.get("world_id"), str) or not action["world_id"]
-            or not isinstance(action.get("sources"), list) or not 1 <= len(action["sources"]) <= MAX_SOURCES
-            or ("reason" in action and not isinstance(action["reason"], str))):
+    if (
+        not isinstance(action, dict)
+        or set(action) - {"type", "item", "count", "world_id", "sources", "reason"}
+        or action.get("type") != "take_many"
+        or not isinstance(action.get("item"), str)
+        or action["item"] not in CONSTRUCTION_ITEMS
+        or type(action.get("count")) is not int
+        or not 1 <= action["count"] <= MAX_ITEMS
+        or not isinstance(action.get("world_id"), str)
+        or not action["world_id"]
+        or not isinstance(action.get("sources"), list)
+        or not 1 <= len(action["sources"]) <= MAX_SOURCES
+        or ("reason" in action and not isinstance(action["reason"], str))
+    ):
         raise ValueError("take_many requires a constructed item, global count 1..50, world and 1..16 sources")
     units = set()
     positions = set()
     for row in action["sources"]:
-        if (not isinstance(row, dict) or set(row) != {"name", "position", "unit_number", "kind"}
-                or not isinstance(row.get("name"), str) or not isinstance(row.get("kind"), str)
-                or type(row.get("unit_number")) is not int or row["unit_number"] < 1
-                or not _position(row.get("position"))):
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"name", "position", "unit_number", "kind"}
+            or not isinstance(row.get("name"), str)
+            or not isinstance(row.get("kind"), str)
+            or type(row.get("unit_number")) is not int
+            or row["unit_number"] < 1
+            or not _position(row.get("position"))
+        ):
             raise ValueError("take_many sources require exact name, finite position, unit identity and stock kind")
-        if not ((row["kind"] == "output" and row["name"] in OUTPUT_NAMES)
-                or (row["kind"] == "chest" and row["name"] in CHEST_NAMES)
-                or (row["kind"] == "belt" and row["name"] == "transport-belt")):
+        if not (
+            (row["kind"] == "output" and row["name"] in OUTPUT_NAMES)
+            or (row["kind"] == "chest" and row["name"] in CHEST_NAMES)
+            or (row["kind"] == "belt" and row["name"] == "transport-belt")
+        ):
             raise ValueError("take_many accepts only machine outputs, chests and ordinary transport belts")
         position = row["position"]["x"], row["position"]["y"]
         if row["unit_number"] in units or position in positions:
@@ -73,91 +134,122 @@ def validate_take_many(action):
 
 
 class V2Bootstrap(DeterministicBootstrap):
-    def _unreserved_stock_observation(self,observation,item):
-        root=getattr(getattr(getattr(self,'game',None),'cfg',None),'runtime_dir',None)
-        if not isinstance(root,(str,Path)):return observation
-        path=Path(root)/'pcb-board.json'
-        if not path.exists():return observation
-        world=observation.get('world_id');fingerprint=getattr(self.catalog,'fingerprint',None)
-        raw=path.read_bytes()
-        version=(world,fingerprint,hashlib.sha256(raw).digest())
-        cached=getattr(self,'_stock_ownership_cache',None)
-        if cached is None or cached[0]!=version:
-            board=json.loads(raw.decode('utf-8'))
-            if board.get('world_id')!=world or board.get('catalog_fingerprint')!=fingerprint:
-                raise ValueError('construction stock ownership world or catalog changed')
-            blocks=board.get('blocks',{})
-            if not isinstance(blocks,dict):raise ValueError('invalid registered construction stock ownership')
-            groups=list(blocks.items())
-            if board.get('shared_main_bus'):groups.append(('shared_main_bus',board['shared_main_bus']))
-            ownership={}
-            for name,block in groups:
-                for entity in block.get('entities',[]):
-                    p=entity.get('position')
-                    if not _position(p):raise ValueError('invalid registered stock position')
-                    key=(entity['name'],p['x'],p['y'])
+    def _unreserved_stock_observation(self, observation, item):
+        root = getattr(getattr(getattr(self, "game", None), "cfg", None), "runtime_dir", None)
+        if not isinstance(root, (str, Path)):
+            return observation
+        path = Path(root) / "pcb-board.json"
+        if not path.exists():
+            return observation
+        world = observation.get("world_id")
+        fingerprint = getattr(self.catalog, "fingerprint", None)
+        raw = path.read_bytes()
+        version = (world, fingerprint, hashlib.sha256(raw).digest())
+        cached = getattr(self, "_stock_ownership_cache", None)
+        if cached is None or cached[0] != version:
+            board = json.loads(raw.decode("utf-8"))
+            if board.get("world_id") != world or board.get("catalog_fingerprint") != fingerprint:
+                raise ValueError("construction stock ownership world or catalog changed")
+            blocks = board.get("blocks", {})
+            if not isinstance(blocks, dict):
+                raise ValueError("invalid registered construction stock ownership")
+            groups = list(blocks.items())
+            if board.get("shared_main_bus"):
+                groups.append(("shared_main_bus", board["shared_main_bus"]))
+            ownership = {}
+            for name, block in groups:
+                for entity in block.get("entities", []):
+                    p = entity.get("position")
+                    if not _position(p):
+                        raise ValueError("invalid registered stock position")
+                    key = (entity["name"], p["x"], p["y"])
                     # Finite startup batches own their whole cell, including
                     # intermediates and the output used by their own courier.
-                    public={port['item']for port in block.get('ports',[])
-                        if name!='startup_science'and port.get('direction')=='output'and port.get('position')==p}
-                    ownership[key]=public if key not in ownership else ownership[key]&public
-            self._stock_ownership_cache=(version,ownership)
-        ownership=self._stock_ownership_cache[1]
-        def available(entity):
-            p=entity.get('position')
-            if not _position(p):return True  # ordinary candidate validation still rejects malformed rows
-            allowed=ownership.get((entity.get('name'),p['x'],p['y']))
-            return allowed is None or item in allowed
-        return dict(observation,entities=[e for e in observation.get('entities',[])if available(e)])
+                    public = {
+                        port["item"]
+                        for port in block.get("ports", [])
+                        if name != "startup_science" and port.get("direction") == "output" and port.get("position") == p
+                    }
+                    ownership[key] = public if key not in ownership else ownership[key] & public
+            self._stock_ownership_cache = (version, ownership)
+        ownership = self._stock_ownership_cache[1]
 
-    def maintain_fuel(self,observation):
+        def available(entity):
+            p = entity.get("position")
+            if not _position(p):
+                return True  # ordinary candidate validation still rejects malformed rows
+            allowed = ownership.get((entity.get("name"), p["x"], p["y"]))
+            return allowed is None or item in allowed
+
+        return dict(observation, entities=[e for e in observation.get("entities", []) if available(e)])
+
+    def maintain_fuel(self, observation):
         # Only imminent fuel loss may interrupt the primary build. Refilling
         # every live burner below two items can consume all newly mined coal
         # forever, especially when its output is already backed up.
         def urgent(entity):
-            if entity.get('name')not in {'burner-mining-drill','stone-furnace'}:return True
-            if entity.get('status_name')in {'full_output','waiting_for_space','waiting_for_space_in_destination'}:return False
-            fuel=entity.get('inventory')or{}
-            if fuel.get('coal',0)+fuel.get('wood',0)>0:return False
-            return entity.get('remaining_burning_fuel',0)<=1_000_000
-        entities=[e for e in observation.get('entities',[])if urgent(e)]
-        observation=dict(observation,entities=entities)
-        hungry=any(e.get('name')in {'burner-mining-drill','stone-furnace'}
-            and sum((e.get('inventory')or{}).get(item,0)for item in ('coal','wood'))<2 for e in entities)
-        if not hungry:return None
-        survey=self._existing_cells('coal')
-        if not survey.get('ok'):
-            return {'status':'blocked','reason':'starter_coal_priority_survey_failed'}
-        producers={(c['drill']['name'],c['drill']['position']['x'],c['drill']['position']['y'])
-            for c in survey.get('cells',[])if not c.get('electric')and c.get('receiver')and c.get('remaining',0)>0}
+            if entity.get("name") not in {"burner-mining-drill", "stone-furnace"}:
+                return True
+            if entity.get("status_name") in {"full_output", "waiting_for_space", "waiting_for_space_in_destination"}:
+                return False
+            fuel = entity.get("inventory") or {}
+            if fuel.get("coal", 0) + fuel.get("wood", 0) > 0:
+                return False
+            return entity.get("remaining_burning_fuel", 0) <= 1_000_000
+
+        entities = [e for e in observation.get("entities", []) if urgent(e)]
+        observation = dict(observation, entities=entities)
+        hungry = any(
+            e.get("name") in {"burner-mining-drill", "stone-furnace"}
+            and sum((e.get("inventory") or {}).get(item, 0) for item in ("coal", "wood")) < 2
+            for e in entities
+        )
+        if not hungry:
+            return None
+        survey = self._existing_cells("coal")
+        if not survey.get("ok"):
+            return {"status": "blocked", "reason": "starter_coal_priority_survey_failed"}
+        producers = {
+            (c["drill"]["name"], c["drill"]["position"]["x"], c["drill"]["position"]["y"])
+            for c in survey.get("cells", [])
+            if not c.get("electric") and c.get("receiver") and c.get("remaining", 0) > 0
+        }
         # Keep a real coal producer running before spending the last carried
         # fuel on its consumers. The base routine retains ordinary partial
         # transfers and its existing bounded emergency mining behavior.
-        ordered=sorted(entities,key=lambda e:(e.get('name'),(e.get('position')or{}).get('x'),
-            (e.get('position')or{}).get('y'))not in producers)
-        return super().maintain_fuel(dict(observation,entities=ordered))
+        ordered = sorted(
+            entities,
+            key=lambda e: (
+                (e.get("name"), (e.get("position") or {}).get("x"), (e.get("position") or {}).get("y")) not in producers
+            ),
+        )
+        return super().maintain_fuel(dict(observation, entities=ordered))
 
-    def _ensure_cell(self,observation,resource,receiver_name):
-        result=super()._ensure_cell(observation,resource,receiver_name)
-        cleanup=getattr(self,'cell_site_cleanup',None)
-        if result and result.get('type')=='build'and cleanup is not None:
-            recovery=cleanup(observation,{'entities':[]},result)
-            if recovery is not None:return recovery
+    def _ensure_cell(self, observation, resource, receiver_name):
+        result = super()._ensure_cell(observation, resource, receiver_name)
+        cleanup = getattr(self, "cell_site_cleanup", None)
+        if result and result.get("type") == "build" and cleanup is not None:
+            recovery = cleanup(observation, {"entities": []}, result)
+            if recovery is not None:
+                return recovery
         return result
 
     def ensure_item(self, observation, item, count, _stack=()):
-        source = getattr(self, 'construction_stock_source', None)
+        source = getattr(self, "construction_stock_source", None)
         if source is not None and self._count(observation, item) < count:
             supplied = source(observation, item, count)
             if supplied is not None:
-                if (not isinstance(supplied, dict)
-                        or not (supplied.get('type') == 'take_mall_stock'
-                                or (not supplied.get('type') and supplied.get('status') in {'waiting', 'blocked'}))):
-                    raise ValueError('construction stock provider requires guarded mall collection or an explicit wait')
-                if supplied.get('type') == 'take_mall_stock' and (
-                        supplied.get('item') != item or type(supplied.get('count')) is not int
-                        or not 1 <= supplied['count'] <= min(50, count-self._count(observation, item))):
-                    raise ValueError('mall collection must match the requested missing stock')
+                if not isinstance(supplied, dict) or not (
+                    supplied.get("type") == "take_mall_stock"
+                    or (not supplied.get("type") and supplied.get("status") in {"waiting", "blocked"})
+                ):
+                    raise ValueError("construction stock provider requires guarded mall collection or an explicit wait")
+                if supplied.get("type") == "take_mall_stock" and (
+                    supplied.get("item") != item
+                    or type(supplied.get("count")) is not int
+                    or not 1 <= supplied["count"] <= min(50, count - self._count(observation, item))
+                ):
+                    raise ValueError("mall collection must match the requested missing stock")
                 return supplied
         return super().ensure_item(observation, item, count, _stack)
 
@@ -168,7 +260,7 @@ class V2Bootstrap(DeterministicBootstrap):
             # ensure_item use ordinary engine crafting for fresh full magazines.
             # Even a machine output could contain a manually stored used stack.
             return None
-        observation=self._unreserved_stock_observation(observation,item)
+        observation = self._unreserved_stock_observation(observation, item)
         if item not in CONSTRUCTION_ITEMS:
             return super()._take_output(observation, item, count)
         if type(count) is not int or count < 1:
@@ -194,14 +286,24 @@ class V2Bootstrap(DeterministicBootstrap):
             stock = inventory.get(item, 0)
             if type(stock) not in (int, float) or not math.isfinite(stock) or stock < 0:
                 continue
-            verified = (kind == "chest" and buffer.get("world_id") == world
-                        and buffer.get("unit_number") == unit and buffer.get("name") == name
-                        and buffer.get("position") == position)
+            verified = (
+                kind == "chest"
+                and buffer.get("world_id") == world
+                and buffer.get("unit_number") == unit
+                and buffer.get("name") == name
+                and buffer.get("position") == position
+            )
             # Include a verified buffer even when its snapshot was empty: it may
             # have filled, and an empty live buffer never stops the rest of the sweep.
             if stock > 0 or verified:
-                candidates.append((not verified, -stock, unit, {"name": name, "position": dict(position),
-                                                               "unit_number": unit, "kind": kind}))
+                candidates.append(
+                    (
+                        not verified,
+                        -stock,
+                        unit,
+                        {"name": name, "position": dict(position), "unit_number": unit, "kind": kind},
+                    )
+                )
         candidates.sort(key=lambda row: row[:3])
         sources = []
         units, positions = set(), set()
@@ -216,12 +318,17 @@ class V2Bootstrap(DeterministicBootstrap):
                 break
         if not sources:
             return None
-        return {"type": "take_many", "item": item, "count": min(count, MAX_ITEMS),
-                "world_id": world, "sources": sources,
-                "reason": f"collect live construction stocks {item}"}
+        return {
+            "type": "take_many",
+            "item": item,
+            "count": min(count, MAX_ITEMS),
+            "world_id": world,
+            "sources": sources,
+            "reason": f"collect live construction stocks {item}",
+        }
 
 
-TAKE_MANY_LUA = r'''
+TAKE_MANY_LUA = r"""
 if not d or d.world_id~=x.world_id then return failure("take_many_world_changed") end
 if not a or not a.valid or a.force~=f then return failure("agent_dead_or_force_changed") end
 local inv=a.get_main_inventory()
@@ -271,7 +378,7 @@ for _,spec in ipairs(x.sources) do
  end
 end
 return success{status=total>0 and "succeeded" or "waiting",moved=total,requested=x.count,sources=rows}
-'''
+"""
 
 
 def execute_take_many(game, action):
@@ -284,8 +391,14 @@ def execute_take_many(game, action):
     if backend not in ("assisted", "character"):
         raise ValueError("take_many requires an ordinary supported backend")
     encoded = json.dumps(json.dumps(action, separators=(",", ":")))
-    receipt = game.query("local x=helpers.json_to_table("+encoded+");local character_backend="
-                         +("true" if backend == "character" else "false")+";"+TAKE_MANY_LUA)
+    receipt = game.query(
+        "local x=helpers.json_to_table("
+        + encoded
+        + ");local character_backend="
+        + ("true" if backend == "character" else "false")
+        + ";"
+        + TAKE_MANY_LUA
+    )
     if not receipt.get("ok"):
         return receipt
     rows = receipt.get("sources")
@@ -294,13 +407,22 @@ def execute_take_many(game, action):
         receipt = dict(receipt, sources=rows)
     moved = receipt.get("moved")
     allowed = {s["unit_number"] for s in action["sources"]}
-    if (type(moved) is not int or not 0 <= moved <= action["count"] or not isinstance(rows, list)
-            or len(rows) > len(allowed)
-            or any(not isinstance(row, dict) or row.get("unit_number") not in allowed
-                   or type(row.get("moved")) is not int or row["moved"] < 0 for row in rows)
-            or len({row["unit_number"] for row in rows}) != len(rows)
-            or sum(row["moved"] for row in rows) != moved
-            or receipt.get("status") != ("succeeded" if moved else "waiting")):
+    if (
+        type(moved) is not int
+        or not 0 <= moved <= action["count"]
+        or not isinstance(rows, list)
+        or len(rows) > len(allowed)
+        or any(
+            not isinstance(row, dict)
+            or row.get("unit_number") not in allowed
+            or type(row.get("moved")) is not int
+            or row["moved"] < 0
+            for row in rows
+        )
+        or len({row["unit_number"] for row in rows}) != len(rows)
+        or sum(row["moved"] for row in rows) != moved
+        or receipt.get("status") != ("succeeded" if moved else "waiting")
+    ):
         # The operation may have happened. Never conceal or automatically retry
         # an inconsistent/unknown result; the job owner must reconcile inventory.
         raise RuntimeError("take_many receipt violates aggregate conservation; reconcile before retry")

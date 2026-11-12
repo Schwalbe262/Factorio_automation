@@ -37,12 +37,14 @@ class BlueprintReferenceTests(unittest.TestCase):
         self.assertEqual(summary["verification"], "UNVERIFIED_STRUCTURE_ONLY")
 
     def test_flattens_nested_books(self):
-        payload = {"blueprint_book": {"blueprints": [
-            {"index": 0, "blueprint": {"label": "a", "entities": [{"name": "transport-belt"}]}},
-            {"index": 1, "blueprint_book": {"blueprints": [
-                {"blueprint": {"label": "b", "entities": []}}
-            ]}},
-        ]}}
+        payload = {
+            "blueprint_book": {
+                "blueprints": [
+                    {"index": 0, "blueprint": {"label": "a", "entities": [{"name": "transport-belt"}]}},
+                    {"index": 1, "blueprint_book": {"blueprints": [{"blueprint": {"label": "b", "entities": []}}]}},
+                ]
+            }
+        }
         summaries = summarize_blueprint(payload)
         self.assertEqual([x["label"] for x in summaries], ["a", "b"])
 
@@ -65,8 +67,8 @@ class BlueprintReferenceTests(unittest.TestCase):
             decode_blueprint_string(packed)
 
     def test_rejects_non_blueprint_and_deep_json_without_unbounded_recursion(self):
-        for raw in (b'{}', b'['*2000+b'0'+b']'*2000):
-            packed='0'+base64.b64encode(zlib.compress(raw)).decode()
+        for raw in (b"{}", b"[" * 2000 + b"0" + b"]" * 2000):
+            packed = "0" + base64.b64encode(zlib.compress(raw)).decode()
             with self.assertRaises(BlueprintDecodeError):
                 decode_blueprint_string(packed)
 
