@@ -28,6 +28,8 @@ CAPABILITIES = {
                                "effect": "recover obsolete unfinished coal feed and install validated straight trunks; no hot cutover"},
     "bootstrap_logistics": {"parameters": {}, "requires": ["power"],
                             "effect": "reserve a PCB cell, normally assemble finite red science, naturally unlock underground belts/splitters"},
+    "bootstrap_research": {"parameters": {"technology":"gun-turret|stone-wall|electric-mining-drill"}, "requires": ["power"],
+                           "effect": "reuse the registered startup science machines for a finite naturally consumed red-science batch; unlock early defenses/electric mining without handcrafted packs or full science districts"},
     "electric_coal": {"parameters": {}, "requires": ["power"],
                       "effect": "normally craft electric drill, prebuild grid, reserve-backed cutover and real coal output onto retained trunk"},
     "mining_outpost": {"parameters": {"resource":"iron-ore|copper-ore|coal|stone","rate_per_minute":"finite number (0,960], absolute nominal target"},
@@ -141,6 +143,9 @@ class Request:
         elif self.capability == "starter_research":
             from .research import validate_parameters
             validate_parameters(self.parameters)
+        elif self.capability == "bootstrap_research":
+            from .industry import validate_bootstrap_research
+            validate_bootstrap_research(self.parameters)
         elif self.capability == "mining_outpost":
             from .outposts import validate_parameters
             validate_parameters(self.parameters)
@@ -362,6 +367,7 @@ class StarterExecutors:
         self.power_layout = RegularizePower(game, self.builder)
         from .industry import BootstrapLogistics
         self.industry = BootstrapLogistics(game,self.bootstrap,self.builder,catalog)
+        self.bootstrap_research_targets={}
         from .electric_mining import ElectricCoal
         self.electric_coal=ElectricCoal(game,self.bootstrap,self.builder)
         from .outposts import MiningOutposts
@@ -480,6 +486,17 @@ class StarterExecutors:
             from .piercing_ammo import PiercingAmmo
             self.piercing_ammo=PiercingAmmo(self.game,self.builder,self.catalog,self.perimeter)
         return self.piercing_ammo
+
+    def _bootstrap_research(self,parameters):
+        from .industry import BootstrapLogistics,validate_bootstrap_research
+        validate_bootstrap_research(parameters);name=parameters['technology']
+        if not hasattr(self,'bootstrap_research_targets'):self.bootstrap_research_targets={}
+        if name not in self.bootstrap_research_targets:
+            self.bootstrap_research_targets[name]=BootstrapLogistics(self.game,self.bootstrap,self.builder,self.catalog,technology=name)
+        return self.bootstrap_research_targets[name]
+
+    def record_action(self,capability,obs,action,receipt,parameters=None):
+        if capability=='bootstrap_research':self._bootstrap_research(parameters or{}).record_action(action,receipt)
 
     def _construction_factory(self):
         if self.construction_mall is None:
@@ -661,6 +678,11 @@ class StarterExecutors:
         from factorio_ai.deterministic_repair_control import pending_repair
         cleanup=pending_repair(obs)
         if cleanup:return cleanup
+        if capability=='bootstrap_research':
+            # Early defense research must not first rebuild remote damaged
+            # starter/coal assets. The controller checks its own live power.
+            self.builder._sync(obs)
+            return self._bootstrap_research(parameters or{}).step(obs)
         if capability == 'nest_assault':
             return {'status':'blocked','reason':'staged_assault_retired_use_concentrated_nest_sweep'}
         if capability == 'radar_network':
@@ -818,7 +840,7 @@ class StarterExecutors:
             if infrastructure:return infrastructure
             belts=self._registered_belt_upkeep(obs)
             if belts:return belts
-        if capability not in ("research","defense_perimeter"):
+        if capability not in ("research","bootstrap_research","defense_perimeter"):
             from .upgrades import next_upgrade
             upgrade=next_upgrade(obs,self.normal_research)
             if upgrade:return upgrade
@@ -928,6 +950,8 @@ class StarterExecutors:
             return self.power_layout.proof(obs)
         if capability == "bootstrap_logistics":
             return self.industry.proof(obs)
+        if capability == "bootstrap_research":
+            return self._bootstrap_research(parameters or{}).proof(obs)
         if capability == "electric_coal":
             return self.electric_coal.proof(obs)
         if capability == "mining_outpost":
@@ -1098,6 +1122,8 @@ def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> 
                                                  'infrastructure_repair_outcome_unknown'):
                         job['uncertain_batch_receipt']=receipt
                         raise RuntimeError('batch outcome unknown; observe and reconcile before continuing')
+                    record=getattr(executors,'record_action',None)
+                    if callable(record):record(job['capability'],obs,result,receipt,job['parameters'])
                 except Exception:
                     # Durable intent survives connection errors; explicit
                     # reconciliation is necessary before further mutations.

@@ -86,6 +86,7 @@ Current capabilities:
 | starter_research | `--technology automation` or electric-mining-drill | power |
 | regularize_power_layout | none | starter; existing unfinished power plan |
 | bootstrap_logistics | none | power and naturally unlocked Automation |
+| bootstrap_research | `--technology gun-turret`, stone-wall or electric-mining-drill | power; current native Automation, red-science recipe, target prerequisites and powered startup machines/lab; logistics research is unnecessary |
 | electric_coal | none | power and naturally unlocked electric-mining-drill |
 | mining_outpost | `--resource iron-ore` (or copper-ore/coal/stone), `--rate-per-minute 1..960` absolute nominal target | power and electric-mining-drill |
 | smelting_district | none; initial district has iron60/copper30 nominal inputs | power, bootstrap_logistics, mining_outpost; one ready bank each iron60/copper30/coal30 |

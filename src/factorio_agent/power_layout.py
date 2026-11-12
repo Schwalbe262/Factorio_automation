@@ -71,6 +71,10 @@ class V2FactoryBuilder(FactoryBuilder):
     """Use fixed trunk routing and compact starter cells for future v2 plans."""
     _coal_plan=staticmethod(compact_coal_cell)
 
+    def __init__(self,game,bootstrap,catalog):
+        super().__init__(game,bootstrap,catalog)
+        bootstrap.cell_site_cleanup=self._recover_resource_cell_obstruction
+
     def _choose_coal_plan(self,power):
         """Choose a new boundary cell and complete resource-free boiler route.
 

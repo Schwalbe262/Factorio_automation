@@ -74,6 +74,33 @@ effect needs reviewed reconciliation outside this decision schema. Only one
 active job is accepted per world. A lifecycle START resumes the exact job paused
 by the preceding successful safe stop before considering unrelated new work.
 
+At a completed slice boundary, an approved **strictly higher** ready-node
+priority can preempt an active queued job that is `waiting` or `pending`.
+The scheduler assigns no capability-specific priorities and no default priority
+to an unqueued active job. Equal/lower priorities or unmet dependencies do not
+preempt. Native world, actor, job identity/status, rollback, uncertain action and
+operator stop state are checked again before the exact CLI pause. Paid partial
+plans and their original job keys remain in place.
+
+The node's durable `scheduler_pause` stores its original world/job/actor,
+higher approved task, pause intent and completed CLI pause binding. Only a
+confirmed scheduler-owned pause can automatically resume, ordered against
+remaining ready work by approved priority and stable queue ordering. Its
+`scheduler_paused` state preserves started dependency identity. A higher task
+that is still waiting does not cause priority oscillation. Completed, blocked
+or otherwise terminal higher work leaves the original pause eligible; it does
+not reset or retry that higher job.
+
+Ownership also checks actual control events in `job-events.jsonl`, incrementally
+from the accepted pause cursor, without giving journal contents to Luna. An
+external repeated pause is detected even if the job's paused fields stay the
+same. Explicit model/user control, a changed binding or an uncertain action
+releases automatic-resume ownership. Truncated or unavailable audit history
+fails closed. A restart preserves a confirmed marker; a crash leaving only an
+unconfirmed pause intent never adopts a possibly user-created pause. Stop
+between pause and dispatch retains the confirmed marker and submits no new
+job. Lifecycle's separate exact safe-stop resume remains unchanged.
+
 The supervisor holds the OS lock `controller.lock`. State is
 `logs/controller-state.json`; bounded events are `logs/controller-events.jsonl`.
 State records PID, exact Windows process creation FILETIME in both `creation_time`
@@ -116,5 +143,8 @@ They exercise DAG/prerequisites, queue identity, continuous dispatch through wai
 and per-job pause, stale target isolation, terminal-only event scheduling,
 bounded blocker/identity summaries, rejection,
 actor/world binding, fresh-process argv, stop during execution/planning, ownership,
-checkpoint failures and exact paused-job resume. They make no game changes and
+checkpoint failures and exact paused-job resume. Sixteen additional scheduler
+cases cover priority/dependency ordering, preserved paid partial progress,
+unknowns, stop/actor races, restart, explicit user/model pause and no oscillation.
+They make no game changes and
 do not establish an unattended one-hour factory or rocket success claim.

@@ -71,6 +71,14 @@ def validate_take_many(action):
 
 
 class V2Bootstrap(DeterministicBootstrap):
+    def _ensure_cell(self,observation,resource,receiver_name):
+        result=super()._ensure_cell(observation,resource,receiver_name)
+        cleanup=getattr(self,'cell_site_cleanup',None)
+        if result and result.get('type')=='build'and cleanup is not None:
+            recovery=cleanup(observation,{'entities':[]},result)
+            if recovery is not None:return recovery
+        return result
+
     def ensure_item(self, observation, item, count, _stack=()):
         source = getattr(self, 'construction_stock_source', None)
         if source is not None and self._count(observation, item) < count:

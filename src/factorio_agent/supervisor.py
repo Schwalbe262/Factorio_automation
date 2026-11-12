@@ -115,6 +115,40 @@ def validate_decision(value):
 def stable_job_key(world,node):return 'lunaq_'+_hash([world,node['id'],node['capability'],node['parameters']])[:48]
 
 
+def _job_identity(job):
+    return {k:deepcopy(job.get(k))for k in('key','world_id','capability','parameters','created_at','created_tick')}
+
+
+def _pause_binding(job):
+    return {**_job_identity(job),**{k:deepcopy(job.get(k))for k in('status','reason','actions','last_tick','paused_at_tick','paused_at_time')}}
+
+
+def _unknown(job):
+    return(job.get('pending_action')is not None or 'outcome_unknown'in str(job.get('reason','')))
+
+
+def _control_events(root,cursor,key,limit=512*1024):
+    """Incrementally check actual CLI control events, including repeated user pause."""
+    path=root/'job-events.jsonl'
+    if not path.exists():
+        if cursor:raise ValueError('scheduler control journal disappeared')
+        return [],0,True
+    size=path.stat().st_size
+    if type(cursor)is not int or cursor<0 or size<cursor:raise ValueError('scheduler control journal was truncated')
+    rows=[]
+    with path.open('rb')as stream:
+        stream.seek(cursor)
+        while stream.tell()<size and stream.tell()-cursor<limit:
+            raw=stream.readline()
+            if not raw.endswith(b'\n'):raise ValueError('scheduler control journal has an incomplete record')
+            if key.encode()not in raw:continue
+            q=json.loads(raw)
+            if q.get('key')==key and q.get('event')in('pause','resume','retry','unknown_action_reconciled'):
+                rows.append(dict(event=q['event'],tick=q.get('tick'),sha256=hashlib.sha256(raw).hexdigest()))
+        end=stream.tell()
+    return rows,end,end>=size
+
+
 class WorkQueue:
     """World-bound append/merge queue; submitted task identity never changes."""
     def __init__(self,path,world):
@@ -147,7 +181,7 @@ class WorkQueue:
             old=index.get(name)
             if old:
                 if old['capability']!=cap or old['parameters']!=node['parameters']:raise ValueError('queue task identity is immutable; use a new node id')
-                if old['status']in('running','completed'):
+                if old['status']in('running','completed','scheduler_paused'):
                     added=set(deps)-set(old['depends_on']);removed=set(old['depends_on'])-set(deps)
                     if added or removed:
                         changes='; added='+(' '.join(sorted(added)[:4])or'none')+'; removed='+(' '.join(sorted(removed)[:4])or'none')
@@ -184,7 +218,8 @@ class WorkQueue:
                 q['submitted']=True
                 q['last_job_status']=job['status'];q['last_reason']=job.get('reason','')
                 q['last_blocker']=blocker_summary(job)if job['status']in {'waiting','blocked','failed'}else{}
-                q['status']='completed'if job['status']=='succeeded'else'running'if job['status']in ACTIVE else'blocked'
+                owned=q.get('scheduler_pause',{}).get('phase')=='paused'and not q.get('paused')
+                q['status']='completed'if job['status']=='succeeded'else'running'if job['status']in ACTIVE else'scheduler_paused'if job['status']=='paused'and owned else'blocked'
             elif q.get('submitted'):q.update(status='blocked',last_reason='submitted_job_receipt_missing')
             elif q.get('status')not in('completed','blocked'):q['status']='pending'
         for q in nodes.values():
@@ -205,7 +240,8 @@ class WorkQueue:
 
     def compact(self):
         return [{k:q.get(k)for k in('id','capability','parameters','priority','depends_on','status','job_key','missing_dependencies','missing_prerequisites')}
-            |{'last_reason':_diagnostic_text(q.get('last_reason','')),'blocker':blocker_summary(q.get('last_blocker',{}))}
+            |{'last_reason':_diagnostic_text(q.get('last_reason','')),'blocker':blocker_summary(q.get('last_blocker',{})),
+              'scheduler_pause':{k:q['scheduler_pause'].get(k)for k in('phase','higher_task_id')}if q.get('scheduler_pause')else None}
             for q in self.data['nodes']if q['status']!='completed'][:64]
 
     def compact_completed(self):
@@ -288,6 +324,7 @@ def compact_snapshot(observation,status,capabilities,work,actor,planner_error=No
         research_progress=observation.get('research_progress'),available_research=compact(observation.get('available_research')),
         inventory=compact(observation.get('inventory',{})),entity_counts=compact(observation.get('entities',{})),
         electricity=compact(observation.get('electricity')),factory_constraints=compact(observation.get('factory_constraints')),
+        enemies_near_start=compact(observation.get('enemies_near_start')),
         construction_budget=compact(observation.get('known_project_construction_budget')),crafting_queue=compact(observation.get('crafting_queue')),
         production_rate_measurement=compact(observation.get('production_rate_measurement')),
         capabilities={k:{'parameters':v.get('parameters',{}),'requires':v.get('requires',[]),'effect':v.get('effect','')[:160]}for k,v in capabilities.items()},
@@ -448,6 +485,84 @@ class Supervisor:
         self.resume_job_key=None;self._save(resume_job_key=None)
         return True
 
+    def _release_scheduler_pause(self,node,reason):
+        marker=node.get('scheduler_pause')
+        if marker and marker.get('phase')in('pause_intent','paused','resume_intent'):
+            marker.update(phase='released',released_reason=reason,released_at=self.clock());self.work.save()
+            self._event('scheduler_pause_released',key=node['job_key'],reason=reason)
+
+    def _scheduler_owned(self,context):
+        _,status,caps,actor,_=context;jobs=status.get('jobs',{});nodes={q['id']:q for q in self.work.data['nodes']}
+        completed={q['capability']for q in jobs.values()if q['status']=='succeeded'};eligible=[]
+        for node in nodes.values():
+            marker=node.get('scheduler_pause',{})
+            if marker.get('phase')!='paused':continue
+            job=jobs.get(node['job_key'])
+            if(node.get('paused')or marker.get('world_id')!=self.world or marker.get('task_id')!=node['id']
+                    or marker.get('job_key')!=node['job_key']or not job or _unknown(job)
+                    or _pause_binding(job)!=marker.get('pause_binding')):
+                self._release_scheduler_pause(node,'paused_job_control_or_identity_changed');continue
+            if not _same_actor(marker['actor'],actor)or actor.get('native_repair_pending'):
+                raise ValueError('scheduler paused actor identity changed; no automatic resume')
+            events,cursor,done=_control_events(self.root,marker['control_cursor'],node['job_key'])
+            if events:self._release_scheduler_pause(node,'explicit_control_after_scheduler_pause');continue
+            marker['control_cursor']=cursor;self.work.save()
+            if(not done or node['capability']not in caps or any(nodes[d]['status']!='completed'for d in node['depends_on'])
+                    or any(q not in completed for q in caps[node['capability']].get('requires',[]))):continue
+            eligible.append(node)
+        return min(eligible,key=lambda q:(-q['priority'],q['created_at'],q['id']))if eligible else None
+
+    def _scheduler_preempt(self,context):
+        active=[j for j in context[1].get('jobs',{}).values()if j['status']in ACTIVE]
+        if len(active)!=1:return False
+        job=active[0];node=self.work.node_for_job(job['key']);higher=self.work.ready()
+        if(not node or node.get('paused')or not higher or higher['priority']<=node['priority']
+                or job['status']not in('waiting','pending')or _unknown(job)
+                or node.get('scheduler_pause',{}).get('phase')in('pause_intent','resume_intent')):return False
+        if self._stop_requested()or(self.root/'stop.json').exists():return False
+        fresh=self._snapshot()
+        if not _same_actor(fresh[3],context[3])or fresh[3].get('native_repair_pending'):raise ValueError('actor changed before scheduler pause')
+        current=fresh[1].get('jobs',{}).get(job['key']);higher=self.work.ready();node=self.work.node_for_job(job['key'])
+        if(not current or _job_identity(current)!=_job_identity(job)or current['status']not in('waiting','pending')or _unknown(current)
+                or not higher or higher['priority']<=node['priority']):return False
+        if self._stop_requested()or(self.root/'stop.json').exists():return False
+        old=node.get('scheduler_pause')
+        if old:node.setdefault('scheduler_pause_history',[]).append(deepcopy(old));node['scheduler_pause_history']=node['scheduler_pause_history'][-16:]
+        path=self.root/'job-events.jsonl';cursor=path.stat().st_size if path.exists()else 0
+        marker=dict(version=1,phase='pause_intent',world_id=self.world,task_id=node['id'],job_key=job['key'],
+            actor=deepcopy(fresh[3]),job_identity=_job_identity(current),higher_task_id=higher['id'],higher_job_key=higher['job_key'],
+            active_priority=node['priority'],higher_priority=higher['priority'],controller_id=self.controller_id,requested_at=self.clock(),control_cursor=cursor)
+        node['scheduler_pause']=marker;self.work.save()
+        if self._stop_requested()or(self.root/'stop.json').exists():
+            marker['phase']='cancelled_before_pause';self.work.save();return False
+        receipt=self.cli.invoke(['pause','--key',job['key']])
+        if(receipt.get('status')!='paused'or _unknown(receipt)or _job_identity(receipt)!=marker['job_identity']):
+            raise ValueError('scheduler pause receipt identity or status changed')
+        events,cursor,done=_control_events(self.root,cursor,job['key'])
+        if not done or len(events)!=1 or events[0]['event']!='pause' or events[0]['tick']!=receipt.get('paused_at_tick'):
+            raise ValueError('scheduler pause has no unique completed native CLI control receipt')
+        marker.update(phase='paused',pause_binding=_pause_binding(receipt),pause_event=events[0],control_cursor=cursor)
+        self.work.save();self._event('scheduler_pause',key=job['key'],higher_task_id=higher['id'],priority=node['priority'],higher_priority=higher['priority'])
+        return True
+
+    def _scheduler_resume(self,context,node):
+        if self._stop_requested()or(self.root/'stop.json').exists():return False
+        fresh=self._snapshot()
+        if not _same_actor(fresh[3],context[3]):raise ValueError('actor changed before scheduler resume')
+        if any(j['status']in ACTIVE for j in fresh[1].get('jobs',{}).values()):return False
+        owned=self._scheduler_owned(fresh);ready=self.work.ready()
+        rank=lambda q:(-q['priority'],q['created_at'],q['id'])
+        if not owned or owned['job_key']!=node['job_key']or ready and rank(ready)<rank(owned):return False
+        if self._stop_requested()or(self.root/'stop.json').exists():return False
+        marker=owned['scheduler_pause'];marker['phase']='resume_intent';self.work.save()
+        if self._stop_requested()or(self.root/'stop.json').exists():
+            marker['phase']='paused';self.work.save();return False
+        receipt=self.cli.invoke(['resume','--key',owned['job_key']])
+        if(receipt.get('status')not in ACTIVE or _unknown(receipt)or _job_identity(receipt)!=marker['job_identity']):
+            raise ValueError('scheduler resume receipt identity or status changed')
+        marker.update(phase='resumed',resumed_at=self.clock());self.work.save()
+        self._event('scheduler_resume',key=owned['job_key'],priority=owned['priority']);return True
+
     def _apply(self,decision,context):
         observation,prompt_status,_,actor,_=context
         if self._stop_requested():return
@@ -480,6 +595,9 @@ class Supervisor:
             job=status.get('jobs',{}).get(intended['key'])
             if not job or any(job.get(k)!=intended.get(k)for k in ('key','world_id','capability','parameters')):
                 raise ValueError('original decision target identity missing or changed; will not retarget')
+            controlled=self.work.node_for_job(job['key'])
+            if operation=='pause'and job['status']=='paused'and controlled:
+                controlled['paused']=True;self._release_scheduler_pause(controlled,'explicit_model_pause');self.work.save()
             if job['status']not in allowed or(operation=='pause'and job['status']=='paused'):
                 self._event('stale_decision',operation=operation,key=job['key'],reason='original_target_no_longer_eligible',status=job['status']);return
             if operation in ('retry','continue')and job['status']not in ACTIVE and active:
@@ -490,6 +608,7 @@ class Supervisor:
                 raise ValueError('uncertain outcome requires reviewed reconciliation, never model retry')
             if command!='continue':
                 if self._stop_requested():return
+                if controlled:self._release_scheduler_pause(controlled,'explicit_model_'+command)
                 self.cli.invoke([command,'--key',job['key']])
             if node:node['paused']=operation=='pause';self.work.save()
             self.wait_until=0
@@ -501,8 +620,15 @@ class Supervisor:
         if self._stop_requested():return False
         jobs=list(status.get('jobs',{}).values());active=[j for j in jobs if j['status']in ACTIVE]
         if len(active)>1:raise ValueError('multiple jobs active')
+        if active and self._scheduler_preempt(context):
+            if self._stop_requested():return False
+            return self._run_authorized(self._snapshot())
         if not active:
             self.work.refresh(jobs,capabilities);node=self.work.ready()
+            paused=self._scheduler_owned(context)
+            if paused and(not node or(-paused['priority'],paused['created_at'],paused['id'])<=(-node['priority'],node['created_at'],node['id'])):
+                if not self._scheduler_resume(context,paused):return False
+                return self._run_authorized(self._snapshot())
             if node is None:return False
             if(self.root/'stop.json').exists():raise ValueError('worker stop marker present; explicit lifecycle start/ownership check required')
             self._world_guard();fresh=self.cli.invoke(['observe']);binding=actor_binding(self.cli.invoke(['actor-status']),self.world)

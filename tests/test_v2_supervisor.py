@@ -70,13 +70,17 @@ class FakeCLI:
             job['actions']+=1;self.clock.advance(float(get('--seconds')));return deepcopy(job)
         if cmd in('pause','resume','retry'):
             job=self.jobs[get('--key')]
-            if cmd=='pause':job.update(status='paused',reason='model_requested_pause')
+            if cmd=='pause':
+                if job['status']!='paused':job.update(paused_at_tick=self.tick,paused_at_time=self.clock())
+                job.update(status='paused',reason='model_requested_pause')
             elif cmd=='resume':
                 if job['status']!='paused':raise CLIError('only paused can resume')
                 job.update(status='waiting',reason='fresh_observation_before_replanning')
             else:
                 if job.get('pending_action')or job['status']!='blocked':raise CLIError('only known blocked can retry')
                 job.update(status='waiting',reason='fresh_observation_before_replanning')
+            with (self.root/'job-events.jsonl').open('a',encoding='utf-8')as events:
+                events.write(json.dumps(dict(event=cmd,key=job['key'],tick=self.tick,status=job['status'],time=self.clock()))+'\n')
             return deepcopy(job)
         if cmd=='stop-worker':return {'ok':True,'status':'stop_requested'}
         if cmd=='checkpoint':return dict(status='checkpoint_requested',world_id='other'if self.bad_checkpoint else'w',observed_tick=self.tick)
@@ -388,6 +392,144 @@ class ExecutionTests(Fixture):
         self.assertEqual(self.s.state['model'],'gpt-6-luna');self.assertEqual(self.s.work.data['nodes'],[])
         self.assertFalse(any(c[0]=='request'for c in self.cli.calls))
 
+
+
+class PreemptionTests(Fixture):
+    def prepared(self,high_priority=200,extra=()):
+        self.s.work.merge([node('low',priority=100),node('high',priority=high_priority),*extra],CAPS,self.cli.validate_requests,1)
+        low=self.s.work.data['nodes'][0];high=self.s.work.data['nodes'][1]
+        self.cli.jobs[low['job_key']]=dict(key=low['job_key'],world_id='w',capability='starter',parameters={},status='waiting',
+            reason='execution_slice_complete',actions=7,last_tick=1,created_tick=1,created_at=self.clock(),evidence={'paid_assets':5})
+        self.cli.run_status='waiting'
+        return low,high
+
+    def test_strictly_higher_approved_work_pauses_exact_partial_job_then_dispatches(self):
+        low,high=self.prepared()
+        self.assertTrue(self.s._run_authorized(self.s._snapshot()))
+        self.assertEqual(self.cli.jobs[low['job_key']]['status'],'paused')
+        self.assertEqual(self.cli.jobs[low['job_key']]['evidence'],{'paid_assets':5})
+        self.assertEqual(self.cli.jobs[low['job_key']]['actions'],7)
+        marker=self.s.work.node_for_job(low['job_key'])['scheduler_pause']
+        self.assertEqual(marker['phase'],'paused');self.assertEqual(marker['higher_task_id'],'high');self.assertEqual(marker['job_identity']['key'],low['job_key'])
+        actions=[c for c in self.cli.calls if c[0]in('pause','request','run')]
+        self.assertEqual([c[0]for c in actions],['pause','request','run']);self.assertEqual(actions[0][2],low['job_key']);self.assertIn(high['job_key'],actions[1])
+
+    def test_equal_or_lower_priorities_and_unready_dependencies_do_not_preempt(self):
+        for priority in (100,99):
+            self.setUp();low,high=self.prepared(priority)
+            self.s._run_authorized(self.s._snapshot());self.assertFalse(any(c[0]in('pause','request')for c in self.cli.calls))
+            self.assertEqual(self.cli.jobs[low['job_key']]['status'],'waiting')
+        self.setUp();low,high=self.prepared(extra=[node('dep',priority=0)])
+        self.s.work.merge([node('high',deps=['dep'],priority=200)],CAPS,self.cli.validate_requests,1)
+        self.s._run_authorized(self.s._snapshot());self.assertFalse(any(c[0]in('pause','request')for c in self.cli.calls))
+
+    def test_unqueued_active_job_has_no_invented_default_priority(self):
+        self.s.work.merge([node('high',priority=200)],CAPS,self.cli.validate_requests,1)
+        self.cli.jobs['manual']=dict(key='manual',world_id='w',capability='starter',parameters={},status='waiting',actions=0)
+        self.cli.run_status='waiting';self.s._run_authorized(self.s._snapshot())
+        self.assertFalse(any(c[0]in('pause','request')for c in self.cli.calls));self.assertEqual([c[2]for c in self.cli.calls if c[0]=='run'],['manual'])
+
+    def test_pending_unknown_or_running_jobs_never_preempt(self):
+        for field,value in (('pending_action',{}),('pending_action',{'type':'build'}),('reason','action_outcome_unknown_reconcile_required'),('status','running')):
+            self.setUp();low,_=self.prepared();self.cli.jobs[low['job_key']][field]=value
+            self.s._run_authorized(self.s._snapshot());self.assertFalse(any(c[0]in('pause','request')for c in self.cli.calls))
+
+    def test_new_uncertain_intent_and_changed_world_are_rechecked_before_pause(self):
+        low,_=self.prepared();context=self.s._snapshot();self.cli.jobs[low['job_key']]['pending_action']={}
+        self.s._run_authorized(context);self.assertFalse(any(c[0]in('pause','request')for c in self.cli.calls))
+        self.setUp();low,_=self.prepared();context=self.s._snapshot();self.cli.jobs[low['job_key']]['world_id']='other'
+        with self.assertRaises(ValueError):self.s._run_authorized(context)
+        self.assertFalse(any(c[0]=='pause'for c in self.cli.calls))
+
+    def test_stop_between_pause_and_dispatch_preserves_owned_marker_without_new_run(self):
+        low,_=self.prepared();original=self.cli.invoke
+        def stopping(args,**kwargs):
+            r=original(args,**kwargs)
+            if args[0]=='pause':(self.root/STOP_FILE).write_text(json.dumps(dict(request_id='boundary',world_id='w')))
+            return r
+        with patch.object(self.cli,'invoke',side_effect=stopping):
+            self.assertFalse(self.s._run_authorized(self.s._snapshot()))
+        self.assertEqual(self.s.work.node_for_job(low['job_key'])['scheduler_pause']['phase'],'paused')
+        self.assertFalse(any(c[0]in('request','run')for c in self.cli.calls))
+
+    def test_actor_changes_before_pause_or_resume_do_not_retarget(self):
+        low,high=self.prepared();context=self.s._snapshot();self.cli.actor=actor(unit=19)
+        with self.assertRaises(ValueError):self.s._run_authorized(context)
+        self.assertFalse(any(c[0]=='pause'for c in self.cli.calls))
+        self.setUp();low,high=self.prepared();self.s._run_authorized(self.s._snapshot());self.cli.jobs[high['job_key']]['status']='succeeded';self.cli.actor=actor(unit=19)
+        with self.assertRaises(ValueError):self.s._run_authorized(self.s._snapshot())
+        self.assertFalse(any(c[0]=='resume'for c in self.cli.calls))
+
+    def test_actor_change_after_pause_prevents_higher_dispatch(self):
+        self.prepared();original=self.cli.invoke
+        def changed(args,**kwargs):
+            result=original(args,**kwargs)
+            if args[0]=='pause':self.cli.actor=actor(unit=19)
+            return result
+        with patch.object(self.cli,'invoke',side_effect=changed):
+            with self.assertRaises(ValueError):self.s._run_authorized(self.s._snapshot())
+        self.assertFalse(any(c[0]in('request','run')for c in self.cli.calls))
+
+    def test_completed_higher_work_resumes_only_scheduler_owned_job_across_restart(self):
+        low,high=self.prepared();self.s._run_authorized(self.s._snapshot());self.cli.jobs[high['job_key']]['status']='succeeded'
+        restarted=Supervisor(self.root,self.client,cli=self.cli,clock=self.clock,sleep=self.clock.advance)
+        self.assertTrue(restarted._run_authorized(restarted._snapshot()))
+        self.assertEqual([c[2]for c in self.cli.calls if c[0]=='resume'],[low['job_key']])
+        self.assertEqual(restarted.work.node_for_job(low['job_key'])['scheduler_pause']['phase'],'resumed')
+        self.assertEqual(self.cli.jobs[low['job_key']]['evidence'],{'paid_assets':5})
+
+    def test_remaining_ready_priority_wins_before_lower_scheduler_resume(self):
+        low,high=self.prepared(extra=[node('middle',priority=150)])
+        self.s._run_authorized(self.s._snapshot());self.cli.jobs[high['job_key']]['status']='succeeded'
+        self.s._run_authorized(self.s._snapshot());middle=self.s.work.data['nodes'][2]
+        self.assertEqual(self.cli.jobs[middle['job_key']]['status'],'waiting');self.assertFalse(any(c[0]=='resume'for c in self.cli.calls))
+        self.cli.jobs[middle['job_key']]['status']='succeeded';self.s._run_authorized(self.s._snapshot())
+        self.assertEqual([c[2]for c in self.cli.calls if c[0]=='resume'],[low['job_key']])
+
+    def test_user_repeated_pause_even_with_identical_job_fields_releases_scheduler_ownership(self):
+        low,high=self.prepared();self.s._run_authorized(self.s._snapshot())
+        before=deepcopy(self.cli.jobs[low['job_key']]);self.cli.invoke(['pause','--key',low['job_key']])
+        self.assertEqual(before,self.cli.jobs[low['job_key']])
+        self.cli.jobs[high['job_key']]['status']='succeeded';self.s._run_authorized(self.s._snapshot())
+        self.assertFalse(any(c[0]=='resume'for c in self.cli.calls))
+        self.assertEqual(self.s.work.node_for_job(low['job_key'])['scheduler_pause']['phase'],'released')
+
+    def test_explicit_model_pause_of_already_paused_job_cancels_automatic_resume(self):
+        low,high=self.prepared();self.s._run_authorized(self.s._snapshot());self.cli.jobs[high['job_key']]['status']='succeeded'
+        self.s._apply(decision('pause','starter'),self.s._snapshot())
+        self.s._run_authorized(self.s._snapshot());current=self.s.work.node_for_job(low['job_key'])
+        self.assertTrue(current['paused']);self.assertEqual(current['scheduler_pause']['phase'],'released')
+        self.assertFalse(any(c[0]=='resume'for c in self.cli.calls))
+
+    def test_unconfirmed_pause_intent_after_restart_never_adopts_a_user_pause(self):
+        low,high=self.prepared();self.s._run_authorized(self.s._snapshot());self.cli.jobs[high['job_key']]['status']='succeeded'
+        self.s.work.node_for_job(low['job_key'])['scheduler_pause']['phase']='pause_intent';self.s.work.save()
+        restarted=Supervisor(self.root,self.client,cli=self.cli,clock=self.clock,sleep=self.clock.advance)
+        self.assertFalse(restarted._run_authorized(restarted._snapshot()))
+        self.assertFalse(any(c[0]=='resume'for c in self.cli.calls))
+
+    def test_no_oscillation_while_higher_job_waits_and_unknown_paused_jobs_stay_paused(self):
+        low,high=self.prepared();self.s._run_authorized(self.s._snapshot())
+        for _ in range(3):self.s._run_authorized(self.s._snapshot())
+        self.assertEqual(len([c for c in self.cli.calls if c[0]=='pause']),1);self.assertFalse(any(c[0]=='resume'for c in self.cli.calls))
+        self.cli.jobs[high['job_key']]['status']='succeeded';self.cli.jobs[low['job_key']]['pending_action']={'type':'build'}
+        self.s._run_authorized(self.s._snapshot());self.assertFalse(any(c[0]=='resume'for c in self.cli.calls))
+
+    def test_changed_paused_identity_or_truncated_control_journal_never_resumes(self):
+        low,high=self.prepared();self.s._run_authorized(self.s._snapshot());self.cli.jobs[high['job_key']]['status']='succeeded'
+        self.cli.jobs[low['job_key']]['created_tick']=999;self.s._run_authorized(self.s._snapshot());self.assertFalse(any(c[0]=='resume'for c in self.cli.calls))
+        self.setUp();low,high=self.prepared();self.s._run_authorized(self.s._snapshot());self.cli.jobs[high['job_key']]['status']='succeeded'
+        (self.root/'job-events.jsonl').write_bytes(b'')
+        with self.assertRaises(ValueError):self.s._run_authorized(self.s._snapshot())
+        self.assertFalse(any(c[0]=='resume'for c in self.cli.calls))
+
+    def test_scheduler_paused_dependencies_remain_immutable_and_lifecycle_resume_stays_exact(self):
+        low,high=self.prepared(extra=[node('dep',priority=0)]);self.s._run_authorized(self.s._snapshot())
+        with self.assertRaises(ValueError):self.s.work.merge([node('low',deps=['dep'],priority=100)],CAPS,self.cli.validate_requests,1)
+        self.s.stop_marker=dict(request_id='safe',world_id='w');self.assertTrue(self.s.safe_stop()['saved'])
+        restarted=Supervisor(self.root,self.client,cli=self.cli,clock=self.clock,sleep=self.clock.advance)
+        self.assertTrue(restarted._resume_known(restarted._snapshot()))
+        self.assertEqual([c[2]for c in self.cli.calls if c[0]=='resume'],[high['job_key']])
 
 class BridgeTests(unittest.TestCase):
     def test_every_slice_uses_fresh_python_with_absolute_current_source_and_no_shell(self):

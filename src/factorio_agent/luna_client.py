@@ -36,13 +36,20 @@ invest in the resource that actually limits construction. Repeated one-item
 collections do not establish adequate capacity. A paused job preserves its paid
 work: if supply dominates the delay, pause that exact job, queue a bounded
 capacity improvement, then continue the original job after the improvement.
+There is one active task: ready capacity work cannot run concurrently with a
+material-starved job. Merely queuing that investment behind the active task
+cannot shorten its wait. Explicitly pause it or approve a strictly higher
+priority ready task so the scheduler can switch at a safe boundary.
 Use only documented capabilities and parameters. Current native research,
 enabled recipes, resources, power and producer readiness govern design choice.
 Never assume a later design is available because its prototype or an old game's
 maximum tier exists. Bootstrap with available early designs, then upgrade after
 their real prerequisites. Do not choose coordinates or arbitrary commands.
-Prioritize immediate defense, power and resource failures. Preserve paid partial
-work and stable queue IDs. An ID permanently identifies one capability and exact
+Prioritize immediate defense, power and resource failures. With default enemies,
+unlock and establish early turret protection before
+large polluting expansions. If turret recipes are locked, use the finite machine
+bootstrap research bridge instead of waiting for a late science district.
+Preserve paid partial work and stable queue IDs. An ID permanently identifies one capability and exact
 parameters, including after completion; use a new ID for a different target.
 Read the latest planner error before proposing a replacement decision.
 Never retry unknown outcomes. If a job is running,
