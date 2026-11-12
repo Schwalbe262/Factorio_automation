@@ -179,6 +179,14 @@ class AdvancedControllerTests(unittest.TestCase):
         self.assertEqual(self.c.prepare(self.obs)['reason'], 'commissioned_automatic_plastic_factory_required')
         self.assertEqual(self.route.call_count, 0); self.builder.bootstrap.ensure_item.assert_not_called(); self.assertFalse(self.c.path.exists())
 
+    def test_core_cannot_occupy_another_factories_unbuilt_external_feed(self):
+        self.board['blocks']['future'] = {'reserved_area': [[500, 500], [510, 510]],
+                                         'entities': [entity('transport-belt', 72.5, -100.5, 4)]}
+        result = self.c.prepare(self.obs)
+        self.assertEqual(result['reason'], 'no_advanced_circuit_site_clear_of_reserved_and_unbuilt_external_plans')
+        self.land.assert_not_called(); self.tap.prepare.assert_not_called(); self.builder.ensure_plan.assert_not_called()
+        self.assertFalse(self.c.path.exists())
+
     def test_failed_corridor_preserves_exact_stage_and_does_not_latch_plan(self):
         self.route.return_value = {'ok': False, 'reason': 'no_clean_trunk_corridor', 'visited': 400}
         r = self.c.step(self.obs)

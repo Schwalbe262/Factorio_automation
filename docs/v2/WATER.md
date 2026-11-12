@@ -36,5 +36,15 @@ Read-only preparation passed at tick **2657444** in 5.84 seconds: a new pump at
 eastbound outlet `(90.5,-25.5)`. It requires one offshore pump and three pipes,
 uses existing armed coverage and preserves pump166 `(54.5,0.5)` direction4 plus
 its pipe peer397. This records preparation only; construction and native water
-publication remain pending deployment. No fluid insertion, item grant, research
+publication followed at tick **2669609**: five normal-cost actions, zero failures,
+pump6990, pipes6987..6989 with100water each. Original166/397 were preserved and
+existing armed post6171 covered the intake. This proves finite water buffers,
+not sustained pumping throughput. No fluid insertion, item grant, research
 edit or production-counter edit is emitted.
+
+The board plan carries the intake's exact `defense_scope_id`, allowing its
+published outlet to use the same strict bounded source apron as other producers.
+A verified legacy plan missing only this metadata can publish it after fresh
+native proof and exact old/desired board equality. Board-first publication is
+idempotent across a restart; changed geometry or a different scope blocks. The
+source descriptor, ports, entities and physical game remain unchanged.

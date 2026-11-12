@@ -1,4 +1,5 @@
 from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -97,9 +98,9 @@ class ProductionReservationTests(unittest.TestCase):
         self.board={'world_id':'w','blocks':{'producer':self.owner}}
         self.preflight=patch('factorio_agent.planning.preflight',return_value={'ok':True}).start();self.addCleanup(patch.stopall)
 
-    def keepouts(self,reserved=()):
+    def keepouts(self,reserved=(),**kwargs):
         (self.root/'pcb-board.json').write_text(json.dumps(self.board))
-        return _production_keepouts(self.game,self.builder,self.obs,self.source,self.destination,reserved,self.bounds)
+        return _production_keepouts(self.game,self.builder,self.obs,self.source,self.destination,reserved,self.bounds,**kwargs)
 
     def test_registered_source_opens_only_empty_straight_apron_and_keeps_future_area_hard(self):
         p=self.keepouts();self.assertTrue(p['ok'],p)
@@ -153,6 +154,51 @@ class ProductionReservationTests(unittest.TestCase):
     def test_solid_mining_outer_area_uses_existing_separate_mining_policy(self):
         self.owner.update(resource='coal',entities=[entity('electric-mining-drill',.5,.5)],reserved_area=[[0,-1],[8,2]])
         p=self.keepouts();self.assertTrue(p['ok']);self.assertEqual(p['hard'],set());self.assertEqual(p['source_prefix'],[])
+
+    def test_unbuilt_external_feed_and_power_footprints_are_hard_without_fake_native_assets(self):
+        self.owner['entities'] += [entity('transport-belt',6.5,-3.5,4),entity('small-electric-pole',7.5,-3.5)]
+        before=deepcopy(self.obs);p=self.keepouts()
+        self.assertTrue(p['ok'],p);self.assertIn((6.5,-3.5),p['hard']);self.assertIn((7.5,-3.5),p['hard'])
+        self.assertEqual(self.obs,before)
+        self.obs['entities'].append(dict(entity('transport-belt',6.5,-3.5,4),unit_number=10))
+        self.assertNotIn((6.5,-3.5),self.keepouts()['hard'])
+
+    def test_unbuilt_underground_reserves_the_entire_external_tunnel(self):
+        self.owner['entities'] += [dict(entity('underground-belt',6.5,-3.5,4),belt_to_ground_type='input'),
+                                   dict(entity('underground-belt',10.5,-3.5,4),belt_to_ground_type='output')]
+        self.owner['underground_pairs']=[{'input':[6.5,-3.5],'output':[10.5,-3.5],'direction':4,'span':4}]
+        p=self.keepouts();self.assertTrue(p['ok'],p)
+        self.assertTrue({(x,-3.5)for x in(6.5,7.5,8.5,9.5,10.5)}<=p['hard'])
+
+    def test_exact_receiver_revision_releases_only_its_unbuilt_external_footprints(self):
+        receiver={'reserved_area':[[9,-1],[13,3]],'ports':[self.destination],
+                  'entities':[entity('transport-belt',5.5,-3.5,4)]}
+        self.board['blocks']['receiver']=receiver
+        self.owner['entities'].append(entity('transport-belt',7.5,-3.5,4))
+        release={'block':'receiver','plan_revision':hashlib.sha256(json.dumps(receiver,sort_keys=True,separators=(',',':')).encode()).hexdigest()}
+        p=self.keepouts([entity('transport-belt',10.5,.5,4)],released_unbuilt_receiver=release)
+        self.assertTrue(p['ok'],p);self.assertNotIn((5.5,-3.5),p['hard'])
+        self.assertIn((7.5,-3.5),p['hard']);self.assertIn((11.5,1.5),p['hard'])
+        release['plan_revision']='stale'
+        self.assertEqual(self.keepouts([entity('transport-belt',10.5,.5,4)],released_unbuilt_receiver=release)['reason'],
+                         'transport_unbuilt_receiver_release_identity_changed')
+
+    def test_release_requires_the_exact_registered_destination_block_and_board(self):
+        release={'block':'producer','plan_revision':hashlib.sha256(json.dumps(self.owner,sort_keys=True,separators=(',',':')).encode()).hexdigest()}
+        self.assertEqual(self.keepouts(released_unbuilt_receiver=release)['reason'],'transport_unbuilt_receiver_release_identity_changed')
+        game=SimpleNamespace(query=Mock())
+        result=plan_connection(game,self.builder,self.obs,self.source,self.destination,released_unbuilt_receiver=release)
+        self.assertEqual(result['reason'],'transport_unbuilt_receiver_release_identity_changed');game.query.assert_not_called()
+
+    def test_future_surface_transport_keeps_neighbor_cells_clear_of_incidental_feeds(self):
+        self.owner['entities'] += [entity('transport-belt',6.5,-3.5,4),entity('pipe',9.5,-3.5)]
+        p=self.keepouts();self.assertTrue(p['ok'],p)
+        for point in((6.5,-2.5),(5.5,-3.5),(9.5,-2.5),(10.5,-3.5)):
+            self.assertIn(point,p['hard'])
+
+    def test_new_destination_cannot_erase_a_foreign_future_transport_keepout(self):
+        self.owner['entities'].append(entity('pipe',10.5,1.5))
+        self.assertEqual(self.keepouts()['reason'],'transport_endpoint_conflicts_with_unbuilt_external_plan')
 
 
 @unittest.skipUnless(LuaRuntime,'optional executable Lua runtime')

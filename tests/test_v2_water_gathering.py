@@ -66,6 +66,7 @@ class WaterGatheringTests(unittest.TestCase):
         with patch('factorio_agent.water_gathering._atomic_json')as write:
             result=self.c.prepare(self.obs);write.assert_not_called()
         self.assertTrue(result['ok'],result);self.assertEqual(result['preserved_pumps'],[self.old])
+        self.assertEqual(result['plan']['defense_scope_id'],result['defense_scope_id'])
         self.assertEqual({p.name:p.read_bytes()for p in self.root.glob('*.json')},before)
         self.assertEqual(self.c.state,{});self.builder.ensure_plan.assert_not_called()
         self.assertEqual(self.c.prepare({**self.obs,'enabled_recipes':{}})['reason'],'native_water_pump_and_pipe_recipes_required')
@@ -115,6 +116,28 @@ class WaterGatheringTests(unittest.TestCase):
         self.registry['sources']['water']={'unit_number':999};self.c.sources_path.write_text(json.dumps(self.registry))
         self.assertEqual(self.c.prepare(self.obs)['reason'],'water_source_exists_without_intake_checkpoint')
         self.game.query.assert_not_called()
+
+    def test_verified_legacy_scope_publication_recovers_both_metadata_write_orders(self):
+        self.install();self.c.state['phase']='verified';self.c.state['plan'].pop('defense_scope_id')
+        legacy=deepcopy(self.c.state['plan']);desired=dict(legacy,defense_scope_id=self.c.state['defense_scope_id'])
+        board={'world_id':'w','catalog_fingerprint':'c','blocks':{'water_gathering':legacy}}
+        path=self.root/'pcb-board.json';path.write_text(json.dumps(board))
+        with patch.object(self.c,'proof',return_value=None):
+            self.assertEqual(self.c._reserve(self.obs)['reason'],'water_scope_upgrade_native_proof_required')
+        self.assertEqual(json.loads(path.read_text())['blocks']['water_gathering'],legacy)
+        with patch.object(self.c,'proof',return_value={'native':True}):self.assertIsNone(self.c._reserve(self.obs))
+        self.assertEqual(self.c.state['plan'],desired);self.assertEqual(json.loads(path.read_text())['blocks']['water_gathering'],desired)
+        self.c.state['plan']=legacy
+        with patch.object(self.c,'proof',return_value={'native':True}):self.assertIsNone(self.c._reserve(self.obs))
+        self.assertEqual(self.c.state['plan'],desired);self.builder.ensure_plan.assert_not_called()
+
+    def test_scope_upgrade_never_adopts_changed_board_geometry(self):
+        self.install();self.c.state['phase']='verified';self.c.state['plan'].pop('defense_scope_id')
+        changed=dict(self.c.state['plan'],reserved_area=[[100,100],[110,110]])
+        path=self.root/'pcb-board.json';path.write_text(json.dumps({'world_id':'w','catalog_fingerprint':'c','blocks':{'water_gathering':changed}}))
+        with patch.object(self.c,'proof',return_value={'native':True})as proof:
+            self.assertEqual(self.c._reserve(self.obs)['reason'],'water_scope_upgrade_reservation_changed');proof.assert_not_called()
+        self.assertEqual(json.loads(path.read_text())['blocks']['water_gathering'],changed)
 
     @unittest.skipUnless(LuaRuntime,'optional Lua runtime: pip install lupa')
     def test_actual_lua_reciprocal_flow_identity_steam_preservation_and_independent_segments(self):

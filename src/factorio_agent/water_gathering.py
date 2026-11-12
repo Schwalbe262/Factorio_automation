@@ -102,7 +102,7 @@ class WaterGathering:
             if budget.expired():return budget.failure(candidate_failures=failures[-6:],stage='defense_preview')
             if not defense.get('ok'):failures.append({'stage':'defense','detail':defense});continue
             plan=_plan(core['entities'],core['ports'],reserved_area=core['reserved_area'],
-                clear_obstacles=whole['clear_obstacles'],clearance_world_id=obs['world_id'],layout_policy=core['layout_policy'])
+                defense_scope_id=scope,clear_obstacles=whole['clear_obstacles'],clearance_world_id=obs['world_id'],layout_policy=core['layout_policy'])
             return {'ok':True,'world_id':obs['world_id'],'catalog_fingerprint':self.catalog.fingerprint,
                 'phase':'build','plan':plan,'core':core,'bindings':{},'prepared_tick':obs.get('tick'),
                 'preserved_pumps':sites.get('preserved_pumps',[]),'defense_scope_id':scope,'defense_preview':defense}
@@ -127,6 +127,15 @@ class WaterGathering:
         path=self.path.parent/'pcb-board.json';board=json.loads(path.read_text(encoding='utf-8'))
         if not self._identity(obs,board):return {'status':'blocked','reason':'water_board_identity_changed'}
         old=board['blocks'].get('water_gathering');plan=self.state['plan']
+        scope=self.state['defense_scope_id']
+        if plan.get('defense_scope_id')is None and self.state.get('phase')=='verified':
+            desired=dict(plan,defense_scope_id=scope)
+            if old not in(plan,desired):return {'status':'blocked','reason':'water_scope_upgrade_reservation_changed'}
+            if not self.proof(obs):return {'status':'blocked','reason':'water_scope_upgrade_native_proof_required'}
+            if old!=desired:
+                board['blocks']['water_gathering']=desired;_atomic_json(path,board)
+            self.state['plan']=desired;self._save();old=plan=desired
+        if plan.get('defense_scope_id')!=scope:return {'status':'blocked','reason':'water_reserved_defense_scope_changed'}
         if old and old!=plan:return {'status':'blocked','reason':'water_reservation_changed'}
         if any(k!='water_gathering'and overlap(plan['reserved_area'],b['reserved_area'])for k,b in board['blocks'].items()if b.get('reserved_area')):
             return {'status':'blocked','reason':'water_reservation_conflict'}

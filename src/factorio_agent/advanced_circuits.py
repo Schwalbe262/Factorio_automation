@@ -20,7 +20,7 @@ from .industrial import PlanningBudget, free_tap_parameters
 from .manufacturing import connect_power_groups
 from .planning import overlap, preflight, survey_slots
 from .smelting import merge_entities, port
-from .transport import VECTORS, plan_connection, surface_pipe_proof, underground_proof, xy
+from .transport import VECTORS, plan_connection, surface_pipe_proof, underground_proof, unbuilt_external_keepouts, xy
 
 
 SCOPE_ID = 'advanced-circuit-production'
@@ -362,7 +362,11 @@ class AdvancedCircuitProduction:
         for core in cores:
             audit = audit_advanced_circuit_core(core, self.catalog)
             if not audit['ok']: return {'ok': False, 'reason': 'advanced_circuit_core_audit_failed', 'evidence': audit}
-        cores = [c for c in cores if not any(overlap(c['reserved_area'], b['reserved_area']) for b in board['blocks'].values() if b.get('reserved_area'))]
+        future_hard = unbuilt_external_keepouts(self.builder, obs, board['blocks'])
+        cores = [c for c in cores if not any(overlap(c['reserved_area'], b['reserved_area']) for b in board['blocks'].values() if b.get('reserved_area'))
+                 and not any(c['reserved_area'][0][0] < px+.49 and px-.49 < c['reserved_area'][1][0]
+                             and c['reserved_area'][0][1] < py+.49 and py-.49 < c['reserved_area'][1][1] for px, py in future_hard)]
+        if not cores: return {'ok': False, 'reason': 'no_advanced_circuit_site_clear_of_reserved_and_unbuilt_external_plans'}
         budget = PlanningBudget(self.game)
         adapter = SimpleNamespace(_occupied_by_plan=self.builder._occupied_by_plan,
                                   can_place=lambda es: preflight(budget.game, self.builder, obs, es))

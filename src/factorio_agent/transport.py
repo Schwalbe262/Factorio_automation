@@ -1,6 +1,7 @@
 """Whole orthogonal corridors with explicit underground crossing pairs."""
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -152,13 +153,43 @@ def _prospective_mining_source(game,builder,obs,source,reserved):
     return {'ok':True,'entities':core}
 
 
-def _production_keepouts(game,builder,obs,source,destination,reserved,bounds):
+def unbuilt_external_keepouts(builder,obs,blocks,*,released_block=None):
+    """Reserve prospective external hardware and tunnels until native assets exist."""
+    actual={(e['name'],*xy(e))for e in obs.get('entities',[])if type(e.get('unit_number'))is int and e['unit_number']>0}
+    hard=set()
+    for name,block in blocks.items():
+        area=block.get('reserved_area')
+        mining=block.get('resource')in RESOURCES|{'crude-oil'}and any(e['name']in(
+            'burner-mining-drill','electric-mining-drill','pumpjack')for e in block.get('entities',[]))
+        if not area or mining or name==released_block:continue
+        missing=[e for e in block.get('entities',[])if(e['name'],*xy(e))not in actual]
+        cells=builder._occupied_by_plan(missing)
+        for e in missing:
+            if e['name']in('transport-belt','underground-belt','pipe','pipe-to-ground'):
+                x,y=xy(e);cells.update((x+dx,y+dy)for dx,dy in VECTORS.values())
+        for pair in block.get('underground_pairs',[]):
+            first=pair.get('input',pair.get('first'));last=pair.get('output',pair.get('last'))
+            if first is None or last is None:continue
+            mouths=[e for e in block.get('entities',[])if xy(e)in(tuple(first),tuple(last))]
+            if mouths and all((e['name'],*xy(e))in actual for e in mouths):continue
+            dx,dy=last[0]-first[0],last[1]-first[1]
+            if bool(dx)==bool(dy):raise ValueError('cardinal prospective underground pair required')
+            span=abs(dx)+abs(dy)
+            if type(span)not in(int,float)or not math.isfinite(span)or span%1 or not 1<=span<=32:
+                raise ValueError('bounded prospective underground pair required')
+            cells.update((first[0]+dx*i/span,first[1]+dy*i/span)for i in range(int(span)+1))
+        hard.update((x,y)for x,y in cells if not(x+.49>area[0][0]and x-.49<area[1][0]
+            and y+.49>area[0][1]and y-.49<area[1][1]))
+    return hard
+
+
+def _production_keepouts(game,builder,obs,source,destination,reserved,bounds,*,released_unbuilt_receiver=None):
     """Whole producer reservations, with only their exact bounded port aprons."""
     empty={'ok':True,'hard':set(),'source_prefix':[],'destination_suffix':[],'aprons':[]}
     root=getattr(getattr(game,'cfg',None),'runtime_dir',None)
-    if root is None:return empty
+    if root is None:return {'ok':False,'reason':'transport_unbuilt_receiver_release_identity_changed'}if released_unbuilt_receiver is not None else empty
     path=Path(root)/'pcb-board.json'
-    if not path.exists():return empty
+    if not path.exists():return {'ok':False,'reason':'transport_unbuilt_receiver_release_identity_changed'}if released_unbuilt_receiver is not None else empty
     try:
         board=json.loads(path.read_text(encoding='utf-8'))
         if board.get('world_id')!=obs['world_id']:return {'ok':False,'reason':'transport_production_board_world_changed'}
@@ -180,12 +211,13 @@ def _production_keepouts(game,builder,obs,source,destination,reserved,bounds):
         def inside(p,area):return(p['x']+.49>area[0][0]and p['x']-.49<area[1][0]
             and p['y']+.49>area[0][1]and p['y']-.49<area[1][1])
         actual={xy(e):e for e in obs.get('entities',[])if e['name']=='transport-belt'}
-        aprons=[];source_prefix=[];destination_suffix=[]
+        aprons=[];source_prefix=[];destination_suffix=[];destination_owner=None
         for role,port in(('output',source),('input',destination)):
             owners=[(i,b)for i,b in enumerate(blocks)if inside(port['position'],b['reserved_area'])]
             if not owners:continue
             if len(owners)!=1:return {'ok':False,'reason':'transport_port_has_overlapping_production_reservations'}
             index,owner=owners[0]
+            if role=='input':destination_owner=owner['reservation_name']
             matches=[p for p in owner.get('ports',[])if p.get('direction')==role and all(p.get(k)==port.get(k)
                 for k in('kind','item','position','facing'))]
             if len(matches)!=1 or port.get('kind')!='item'or port.get('direction')!=role or port.get('facing')not in VECTORS:
@@ -217,7 +249,17 @@ def _production_keepouts(game,builder,obs,source,destination,reserved,bounds):
             aprons.append({'owner_index':index,'points':points,'facing':port['facing'],'units':units,'role':role})
             if role=='output':source_prefix=points
             else:destination_suffix=list(reversed(points))
-        hard=set()
+        released=None
+        if released_unbuilt_receiver is not None:
+            release=released_unbuilt_receiver
+            if(not isinstance(release,dict)or set(release)!={'block','plan_revision'}
+                    or release.get('block')!=destination_owner or destination_owner not in board.get('blocks',{})
+                    or hashlib.sha256(json.dumps(board['blocks'][destination_owner],sort_keys=True,separators=(',',':')).encode()).hexdigest()!=release.get('plan_revision')):
+                return {'ok':False,'reason':'transport_unbuilt_receiver_release_identity_changed'}
+            released=destination_owner
+        hard=unbuilt_external_keepouts(builder,obs,board.get('blocks',{}),released_block=released)
+        if xy(source)in hard or xy(destination)in hard:
+            return {'ok':False,'reason':'transport_endpoint_conflicts_with_unbuilt_external_plan'}
         for index,block in enumerate(blocks):
             area=block['reserved_area'];allowed={(p['x'],p['y'])for apron in aprons if apron['owner_index']==index for p in apron['points']}
             for p in block.get('ports',[]):
@@ -240,7 +282,7 @@ def _production_keepouts(game,builder,obs,source,destination,reserved,bounds):
         return {'ok':False,'reason':'invalid_transport_production_reservation','detail':str(exc)}
 
 
-def plan_connection(game,builder,obs,source,destination,reserved=(),*,ignored_units=()):
+def plan_connection(game,builder,obs,source,destination,reserved=(),*,ignored_units=(),released_unbuilt_receiver=None):
     if source.get('item')!=destination.get('item'):
         return {'ok':False,'reason':'port_item_mismatch'}
     mining_resource=source.get('mining_resource')
@@ -253,7 +295,8 @@ def plan_connection(game,builder,obs,source,destination,reserved=(),*,ignored_un
         return {'ok':False,'reason':'belt_corridor_survey_budget_exceeded'}
     prospective=_prospective_mining_source(game,builder,obs,source,reserved)
     if not prospective.get('ok'):return prospective
-    production=_production_keepouts(game,builder,obs,source,destination,reserved,bounds)
+    production=_production_keepouts(game,builder,obs,source,destination,reserved,bounds,
+                                    released_unbuilt_receiver=released_unbuilt_receiver)
     if not production.get('ok'):return production
     zones=mining_reservations(game,obs['world_id'])
     pipe_candidates=[{'name':'pipe','position':e['position'],'unit_number':e['unit_number']}

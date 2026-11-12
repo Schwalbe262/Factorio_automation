@@ -146,6 +146,18 @@ class ChemicalApronTests(unittest.TestCase):
             self.assertEqual(result['first_neighbor'],dict(entity('pipe',151.5,-61.5),fluidbox_index=1))
             self.assertEqual(result['underground_pairs'],[])
 
+    def test_fluid_destination_cannot_erase_unbuilt_foreign_external_transport(self):
+        with tempfile.TemporaryDirectory()as root:
+            foreign={'reserved_area':[[180,-80],[190,-70]],'ports':[],
+                     'entities':[entity('transport-belt',154.5,-60.5,4)]}
+            Path(root,'pcb-board.json').write_text(json.dumps({'world_id':'w','blocks':{'producer':self.block,'foreign':foreign}}))
+            game=SimpleNamespace(cfg=SimpleNamespace(runtime_dir=root),query=Mock(side_effect=[
+                {'ok':True,'spans':[10]},{'ok':True,'hard':[],'soft':[]}]))
+            core=chemical_core(catalog(),'plastic-bar',160.5,-57.5)
+            with patch('factorio_agent.chemical_production.preflight',return_value={'ok':True}):
+                result=plan_typed_fluid_connection(game,self.builder,{'world_id':'w'},self.source,core['fluid_ports']['petroleum-gas'],core)
+            self.assertEqual(result['reason'],'chemical_fluid_endpoint_conflicts_with_unbuilt_external_plan')
+
 
 class ChemicalControllerTests(unittest.TestCase):
     def setUp(self):
@@ -202,6 +214,14 @@ class ChemicalControllerTests(unittest.TestCase):
         self.assertEqual(self.c._sources(self.obs,'plastic-bar')['sources']['petroleum-gas'],self.gas)
         self.c.overrides['petroleum-gas']=alias
         self.assertEqual(self.c._sources(self.obs,'plastic-bar')['reason'],'chemical_bound_source_override_changed')
+
+    def test_core_candidates_preserve_other_factories_unbuilt_external_feeds(self):
+        es=[entity('transport-belt',10.5+dx,-26.5+dy,4)for dx,dy in((0,0),(0,14),(22,0),(22,14),(0,-14),(22,-14))]
+        (self.root/'pcb-board.json').write_text(json.dumps({'world_id':'w','catalog_fingerprint':'c',
+            'blocks':{'future_owner':{'reserved_area':[[500,500],[510,510]],'entities':es}}}))
+        result=self.c.prepare(self.obs,self.params)
+        self.assertFalse(result['ok']);self.survey.assert_not_called();self.builder.ensure_plan.assert_not_called()
+        self.assertFalse(self.c.path.exists())
 
     def test_prepare_readonly_paid_core_complete_sources_and_natural_technology(self):
         with patch('factorio_agent.chemical_production._atomic_json')as write:

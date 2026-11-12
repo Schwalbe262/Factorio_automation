@@ -17,7 +17,7 @@ from .planning import overlap,preflight,survey_slots
 from .resource_policy import mining_reservations
 from .routing import VECTORS,route_trunks
 from .smelting import merge_entities,port
-from .transport import plan_connection as belt_connection,surface_pipe_proof,underground_proof,xy
+from .transport import plan_connection as belt_connection,surface_pipe_proof,underground_proof,unbuilt_external_keepouts,xy
 
 
 PRODUCTS={'plastic-bar':'plastics','sulfur':'sulfur-processing'}
@@ -236,6 +236,10 @@ for _,c in pairs(b.pipe_connections)do if c.connection_type=="underground"then s
         'zones':mining_reservations(game,obs['world_id'])})))
     if not survey.get('ok'):return survey
     hard={(p['x'],p['y'])for p in survey.get('hard',[])};hard.update(builder._occupied_by_plan(core['entities']+core['output_access']))
+    future_hard=unbuilt_external_keepouts(builder,obs,board['blocks'])
+    if xy(source)in future_hard or xy(destination)in future_hard:
+        return {'ok':False,'reason':'chemical_fluid_endpoint_conflicts_with_unbuilt_external_plan'}
+    hard.update(future_hard)
     area=core['reserved_area']
     for ix in range(int(area[1][0]-area[0][0])):
         for iy in range(int(area[1][1]-area[0][1])):
@@ -393,6 +397,7 @@ end;return {ok=true,snapshots=snapshots}''')
         anchors=[(sx+10+dx,sy+4+dy)for dx,dy in((0,0),(0,14),(22,0),(22,14),(0,-14),(22,-14))]
         reservations=[b['reserved_area']for b in board['blocks'].values()if b.get('reserved_area')]
         reservations += [r['area']for r in board.get('shared_main_bus',{}).get('reservations',[])if r.get('area')]
+        future_hard=unbuilt_external_keepouts(self.builder,obs,board['blocks'])
         failures=[];started=time.monotonic();deadline=started+20;attempts=0;legal_sites=0
         for x,y in anchors:
             if time.monotonic()>deadline:break
@@ -400,6 +405,9 @@ end;return {ok=true,snapshots=snapshots}''')
             core=chemical_core(self.catalog,product,x,y)
             if any(overlap(core['reserved_area'],r)for r in reservations):
                 failures.append(candidate_failure(candidate,'core_reservation',{'reason':'candidate_reserved_area_conflict'}));continue
+            a,b=core['reserved_area']
+            if any(a[0]<px+.49 and px-.49<b[0]and a[1]<py+.49 and py-.49<b[1]for px,py in future_hard):
+                failures.append(candidate_failure(candidate,'core_reservation',{'reason':'candidate_overlaps_unbuilt_external_plan'}));continue
             land=survey_slots(self.game,[[core['reserved_area']]])
             if not land.get('ok')or 1 not in land.get('legal',[]):
                 failures.append(candidate_failure(candidate,'core_land',{'reason':land.get('reason')or'candidate_not_land_and_resource_clear'}));continue
