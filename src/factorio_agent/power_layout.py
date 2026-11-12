@@ -159,7 +159,7 @@ class V2FactoryBuilder(FactoryBuilder):
             return failure("starter_coal_planning_budget_exhausted")
         power_entities, pins = _power_preflight_projection(power, obs)
         power_guard = _power_pipe_guard(pins)
-        cells = [self._coal_plan(position) for position in self.coal_sites()[:256]]
+        cells = [self._coal_plan(position) for position in self.coal_sites_richest_first()[:256]]
         if expired():
             return failure("starter_coal_planning_budget_exhausted")
         if not cells:

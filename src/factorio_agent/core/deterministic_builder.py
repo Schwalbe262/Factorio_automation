@@ -151,12 +151,10 @@ def _plan(entities: list[dict], ports: list[dict], **extra: Any) -> dict:
     }
 
 
-# Coal in the 3x3 tiles around a dedicated power drill, in items. The cell
-# must sit on the patch fringe (its outlet leaves the ore), where tiles are
-# thin: 4000 left no fringe site at all on a live map, while an unchecked
-# site ran dry in twenty minutes. 1500 keeps a burner drill (15 coal/min)
-# fed until electric mining takes over.
-DEDICATED_COAL_MINIMUM = 1500
+# Coal in the 3x3 tiles around a dedicated power drill, in items, tried in
+# this order. An unchecked fringe site ran dry in twenty minutes on a live
+# map; a single high floor left no fringe site at all on another.
+COAL_RICHNESS_TIERS = (4000, 2000, 1000, 400, 0)
 
 
 class FactoryBuilder:
@@ -823,12 +821,30 @@ return success{blocked=blocked,clearable=clearable}
 
         return sorted(banks, key=detour)
 
-    def coal_sites(self) -> list[dict]:
+    def coal_sites_richest_first(self) -> list[dict]:
+        """Coal sites ordered by richness tier, nearest first inside a tier.
+
+        A dedicated power drill has to sit on the patch fringe, where tiles are
+        thin. Filtering by one fixed amount either leaves no fringe site or
+        admits one that runs dry in minutes, so candidates are ranked instead:
+        the planner tries the richest sites first and only then thinner ones.
+        """
+        ordered: list[dict] = []
+        seen: set[tuple] = set()
+        for minimum in COAL_RICHNESS_TIERS:
+            for site in self.coal_sites(minimum):
+                key = (site["x"], site["y"])
+                if key not in seen:
+                    seen.add(key)
+                    ordered.append(site)
+        return ordered
+
+    def coal_sites(self, minimum: int = 0) -> list[dict]:
         # A drill on the thin fringe of a patch runs dry within minutes and the
         # power feed then waits forever, so require real ore under the drill.
         result = self.game.query(
             "local MINIMUM="
-            + str(int(DEDICATED_COAL_MINIMUM))
+            + str(int(minimum))
             + """
 local out={};local seen={}
 for _,e in pairs(s.find_entities_filtered{position={0,0},radius=192,name="coal",limit=3000}) do
@@ -890,7 +906,7 @@ return success{sites=out}
 
     def _choose_coal_plan(self, power: dict) -> dict:
         destination = next(p for p in power["ports"] if p["item"] == "coal")
-        for position in self.coal_sites()[:256]:
+        for position in self.coal_sites_richest_first()[:256]:
             coal = self._coal_plan(position)
             if not self.can_place(coal["entities"])["ok"]:
                 continue
