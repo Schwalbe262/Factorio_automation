@@ -228,6 +228,14 @@ def execute(argv=None, services=None):
             except Exception as exc:  # a demand estimate must never break observe
                 obs["roadmap_material_demand"] = {}
                 obs["roadmap_material_demand_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .progression import bulk_item_demand
+
+            try:
+                jobs_list = list(Ledger(root).data["jobs"].values())
+                obs["bulk_item_demand"] = bulk_item_demand(services.catalog(root, game), jobs_list, obs)
+            except Exception as exc:  # a demand estimate must never break observe
+                obs["bulk_item_demand"] = {}
+                obs["bulk_item_demand_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .research_capacity import research_capacity_receipt
 
             try:

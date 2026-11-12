@@ -138,6 +138,14 @@ FUELS = ("coal", "wood")
 FUEL_BATCH = 8  # coal pieces worth one fetch-and-fuel trip
 COLLECT_BATCH = 10  # construction items worth one collection trip
 FUEL_SKIP_STOCK = 50  # finished items in a cell that make more fuel pointless
+# Hand-craft cap: when more than this many finished items of one kind are
+# missing and a verified, producing ``produce`` row makes that item
+# (``machine_stock.MachineStock``), ``ensure_item`` collects the row's stock
+# (batched ``take_many``) or waits for it instead of queueing a large hand
+# craft. At or below the cap, or when the row is building, stalled or broken,
+# or no row exists, hand crafting proceeds as before (never a deadlock); a
+# fallback above the cap names the row state in the craft reason.
+HANDCRAFT_LIMIT = 10
 
 
 def _entity_key(entity):
@@ -330,7 +338,30 @@ class V2Bootstrap(DeterministicBootstrap):
                 ):
                     raise ValueError("mall collection must match the requested missing stock")
                 return supplied
-        return super().ensure_item(observation, item, count, _stack)
+        missing = count - self._count(observation, item)
+        hook = getattr(self, "machine_stock", None)
+        machine = hook(observation, item) if hook is not None and missing > 0 else None
+        if machine is not None and machine.get("status") == "producing":
+            collect = self._take_output(observation, item, missing)
+            if collect is not None:
+                return collect
+            if missing > HANDCRAFT_LIMIT:
+                return {
+                    "status": "waiting",
+                    "reason": f"waiting for machine-made {item}",
+                    "evidence": {"item": item, "missing": missing, "limit": HANDCRAFT_LIMIT, "machine": machine},
+                }
+        result = super().ensure_item(observation, item, count, _stack)
+        if (
+            machine is not None
+            and machine.get("status") != "producing"
+            and missing > HANDCRAFT_LIMIT
+            and isinstance(result, dict)
+            and result.get("type") == "craft"
+        ):
+            note = f"; machine-made {item} {machine.get('status')}: hand-craft fallback"
+            result = dict(result, reason=(str(result.get("reason") or "") + note)[:300])
+        return result
 
     def _take_output(self, observation, item, count):
         catalog_item = getattr(self.catalog, "items", {}).get(item, {})

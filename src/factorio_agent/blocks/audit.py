@@ -9,6 +9,10 @@ and drops at ``pos - reach * VECTORS[d]`` (reach from ``params``); inserters
 pick from either belt lane and drop on the far lane (``lanes.inserter_output_lane``).
 Rate model: nameplate crafts/min = 60 * crafting_speed / energy; belt lane and
 inserter items/min come from ``params`` (conservative belt->machine budgets).
+A derated plan declares ``crafts_per_machine`` below nameplate: the audit
+then checks every inserter, lane and output budget against that declared
+rate (a claim it verifies, never a counter it trusts), and a declared rate
+above nameplate is the finding ``declared_rate_above_nameplate``.
 Power model: an electric entity is powered when any of its tiles overlaps a
 pole's square supply area; poles must form one wire-connected network.
 """
@@ -52,10 +56,18 @@ class Scene:
     def recipe(self, machine: dict) -> dict:
         return self.catalog.recipes.get(machine.get("recipe")) or {}
 
-    def crafts(self, machine: dict) -> float:
+    def nameplate(self, machine: dict) -> float:
         energy = float(self.recipe(machine).get("energy") or 0)
         speed = float(self.catalog.entities[machine["name"]].get("crafting_speed") or 0)
         return 60 * speed / energy if energy > 0 else 0.0
+
+    def crafts(self, machine: dict) -> float:
+        """Declared (derated) crafts/minute when the plan has one, else nameplate."""
+        nameplate = self.nameplate(machine)
+        declared = self.plan.get("crafts_per_machine")
+        if isinstance(declared, (int, float)) and not isinstance(declared, bool) and declared > 0:
+            return min(nameplate, float(declared))
+        return nameplate
 
     def ports(self, direction: str) -> list[dict]:
         return [p for p in self.plan["ports"] if p.get("direction") == direction]
@@ -264,6 +276,13 @@ def _check_machine_arms(s: Scene, m: dict, lanes: dict, crafts: float) -> list[s
     return errors
 
 
+def _check_declared_rate(s: Scene) -> list[str]:
+    declared = s.plan.get("crafts_per_machine")
+    if not isinstance(declared, (int, float)) or isinstance(declared, bool):
+        return []
+    return [f"declared_rate_above_nameplate:{xy(m)}" for m in s.machines if declared > s.nameplate(m) + 1e-9]
+
+
 def audit_row(catalog: Any, plan: dict, *, limits: RowLimits = DEFAULT_LIMITS) -> list[str]:
     """Return sorted, de-duplicated finding codes (``code:detail``); empty = OK."""
     scene, errors = _scene(catalog, plan, limits)
@@ -275,4 +294,5 @@ def audit_row(catalog: Any, plan: dict, *, limits: RowLimits = DEFAULT_LIMITS) -
     errors += _check_belt_lines(scene)
     errors += _check_power(scene)
     errors += _check_throughput(scene, lanes)
+    errors += _check_declared_rate(scene)
     return sorted(set(errors))

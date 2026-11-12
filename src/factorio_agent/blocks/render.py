@@ -2,7 +2,7 @@
 
 Legend: belts ``> < ^ v`` (flow), machines ``M``, plain inserter ``i``, fast
 inserter ``f``, long-handed ``L``, other inserters ``I``, poles ``+``, input
-port ``@``, output port ``O``, reserved future machine ``:``, empty ``.``.
+port ``@``, output port ``O``, chest ``C``, reserved future machine ``:``, empty ``.``.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from .geometry import footprint, xy
 
 BELT_GLYPHS = {0: "^", 4: ">", 8: "v", 12: "<"}
 NAMED_GLYPHS = {"inserter": "i", "fast-inserter": "f", "long-handed-inserter": "L"}
-TYPE_GLYPHS = {"assembling-machine": "M", "inserter": "I", "electric-pole": "+"}
+TYPE_GLYPHS = {"assembling-machine": "M", "inserter": "I", "electric-pole": "+", "container": "C"}
 
 
 def _glyph(catalog: Any, e: dict) -> str:

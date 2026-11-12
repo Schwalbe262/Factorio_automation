@@ -210,6 +210,9 @@ def _build(catalog: Any, sizing: RowSizing, spec: RowSpec, count: int) -> dict:
         count=count,
         target_per_minute=sizing.target_per_minute,
         rated_per_minute=sizing.product.per_machine * count,
+        crafts_per_machine=sizing.crafts_per_machine,
+        nameplate_crafts=sizing.nameplate_crafts or sizing.crafts_per_machine,
+        sizing_inserter=sizing.inserter,
         reserved_area=bounding_box(tiles, margin=1),
         flow=spec.flow,
         growth={
@@ -273,6 +276,7 @@ def extend_row(plan: dict, catalog: Any, extra_machines: int, *, limits: RowLimi
     if not isinstance(extra_machines, int) or extra_machines < 1:
         raise ValueError("extra_machines must be a positive integer")
     spec = RowSpec(**dict(plan["layout"], origin=tuple(plan["layout"]["origin"])))
+    lanes = [tuple(dict.fromkeys((b["left"], b["right"]))) for b in plan["input_belts"]]
     sizing = size_row(
         catalog,
         plan["recipe"],
@@ -281,6 +285,8 @@ def extend_row(plan: dict, catalog: Any, extra_machines: int, *, limits: RowLimi
         belt=spec.belt,
         pole=spec.pole,
         limits=limits,
+        inserter=plan.get("sizing_inserter"),
+        lanes=lanes,
     )
     sizing = sizing.with_count(plan["count"] + extra_machines)
     if [{"left": b.left, "right": b.right} for b in sizing.input_belts] != plan["input_belts"]:
@@ -313,7 +319,9 @@ def main(argv: list[str] | None = None) -> int:
         catalog = WorldCatalog.from_dict(json.load(handle))
     researched = list(catalog.technologies) if args.all_researched else None
     try:
-        sizing = size_row(catalog, args.recipe, args.rate, machine=args.machine, researched=researched)
+        sizing = size_row(
+            catalog, args.recipe, args.rate, machine=args.machine, researched=researched, inserter=args.inserter
+        )
         plan = row_block(catalog, sizing, flow=args.flow, inserter=args.inserter, spare=args.spare)
     except ValueError as error:
         print("rejected:", error, file=sys.stderr)

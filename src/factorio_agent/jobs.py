@@ -285,6 +285,15 @@ CAPABILITIES = {
         "requires": ["steam_expansion", "dedicated_materials"],
         "effect": "normally recover a proven isolated burner-to-coal-cache cell after automatic supply, loaded steam and inventory headroom checks; preserve all electric miners and power assets",
     },
+    "produce": {
+        "parameters": {
+            "item": "product of an unlocked solid assembler recipe with at most two solid ingredients",
+            "rate_per_minute": "finite number (0,600], absolute nominal target",
+        },
+        "requires": ["smelting_district", "power"],
+        "native_recipes": ["assembling-machine-1"],
+        "effect": "normally build a recipe-driven assembler row (derated to its inserters, plus a one-level intermediate sub-row) on a master-plan block, route its inputs from free board ports or a bus tap, end it in a chest capped at two stacks, prove machine output in the chest and register the chest as construction stock; a higher rate fills reserved slots in place",
+    },
     "research": {
         "parameters": {"technology": "catalog technology name"},
         "requires": ["automation_science"],
@@ -370,6 +379,10 @@ class Request:
             from .normal_research import validate_parameters
 
             validate_parameters(self.parameters)
+        elif self.capability == "produce":
+            from .production_rows import validate_parameters
+
+            validate_parameters(self.parameters)
         elif not isinstance(self.parameters, dict) or self.parameters:
             raise ValueError("this capability accepts no parameters")
 
@@ -446,6 +459,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "resource_supply_options": obs.get("resource_supply_options"),
         "roadmap_material_demand": obs.get("roadmap_material_demand"),
         "roadmap_material_demand_error": obs.get("roadmap_material_demand_error"),
+        "bulk_item_demand": obs.get("bulk_item_demand"),
         "research_capacity": obs.get("research_capacity"),
         "research_capacity_error": obs.get("research_capacity_error"),
         "capabilities": CAPABILITIES,
@@ -735,6 +749,21 @@ class StarterExecutors:
         from .bus_factory import BusFactory
 
         self.bus_factory = BusFactory(game, self.builder, catalog, self.smelting, self.science, self.green)
+        from .bus_tap import BusTap
+        from .machine_stock import MachineStock
+        from .production_rows import ProductionRows
+
+        self.production_rows = ProductionRows(
+            game,
+            self.builder,
+            catalog,
+            site=self.site,
+            tap_factory=lambda: BusTap(
+                game, self.builder, catalog, bus_factory=self.bus_factory, science=self.science, green=self.green
+            ),
+        )
+        # Finished produce rows are construction stock; large hand crafts wait for them.
+        self.bootstrap.machine_stock = MachineStock(self.production_rows)
         from .inventory_storage import InventoryStorage
 
         self.storage = InventoryStorage(game, catalog)
@@ -1707,6 +1736,8 @@ class StarterExecutors:
             return self.steel_coal_supply.step(obs)
         if capability == "brick_production":
             return self.industrial_operations.brick_production(obs)
+        if capability == "produce":
+            return self.production_rows.step(obs, parameters or {})
         if capability == "oil_gathering":
             return self.oil_gathering.step(obs)
         if capability == "water_gathering":
@@ -1819,6 +1850,8 @@ class StarterExecutors:
             return self.steel_coal_supply.proof(obs)
         if capability == "brick_production":
             return self.industrial_operations.brick_production_proof(obs)
+        if capability == "produce":
+            return self.production_rows.proof(obs, parameters or {})
         if capability == "oil_gathering":
             return self.oil_gathering.proof(obs)
         if capability == "water_gathering":

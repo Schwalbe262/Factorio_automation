@@ -42,6 +42,16 @@ TOP_PRIORITY = -100
 CAPACITY_PRIORITY = TOP_PRIORITY + 50
 # Raw terminals of the lookahead bill of materials (plates count as raw).
 RAW_ITEMS = frozenset({"iron-plate", "copper-plate", "coal", "stone", "wood"})
+# Machine-made construction stock (``produce``), see ``produce_nodes``.
+PRODUCE_CAPABILITY = "produce"
+# Just below capacity: plates first, then the rows that turn them into stock.
+PRODUCE_PRIORITY = CAPACITY_PRIORITY - 1
+# Finished items the next steps place before a row pays for itself.
+BULK_THRESHOLD = 20
+# A proposed row covers the upcoming need in about this many minutes.
+COVER_MINUTES = 5.0
+PRODUCE_MAX_RATE = 600.0
+PRODUCE_MIN_RATE = 1.0
 
 
 @dataclass(frozen=True)
@@ -411,6 +421,7 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     Capacity nodes (``capacity_nodes``) rank at ``CAPACITY_PRIORITY``, above
     every roadmap step, because jobs advance in priority order and the
     capacity job must get scarce plates first; they count toward ``limit``.
+    ``produce`` nodes (``produce_nodes``) follow at ``PRODUCE_PRIORITY``.
     Roadmap node ids are ``"auto_" + step.id``. ``depends_on`` is always
     empty: a step is only proposed once every ``after`` step is satisfied,
     and satisfied dependencies are dropped. Priorities descend along the
@@ -422,6 +433,7 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     steps = _by_id()
     queued_ids = {node.get("id") for node in queue_nodes}
     proposed: list[dict] = capacity_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit)]
+    proposed += produce_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
     for index, step in enumerate(ROADMAP):
         if len(proposed) >= limit:
             break
@@ -556,3 +568,108 @@ def roadmap_wanted_technologies(jobs, technologies_researched, *, horizon=6) -> 
     """Technologies named by the next ``horizon`` unsatisfied steps, in roadmap order."""
     steps = _upcoming(jobs, _names(technologies_researched), horizon)
     return [step.parameters["technology"] for step in steps if "technology" in step.parameters]
+
+
+def bulk_item_demand(catalog, jobs, observation, *, horizon=4) -> dict[str, dict]:
+    """Finished construction items the next ``horizon`` unsatisfied steps place.
+
+    ``{item: {"count": n, "raw_per_item": {plate: amount}}}`` from
+    ``Step.builds``; raw items (plates, coal, stone, wood) are left out, and
+    so is an item without a catalog recipe. ``raw_per_item`` is the
+    recursive raw cost of one item (``raw_cost``). Steps without ``builds``
+    add nothing, so later stages are under-estimated.
+    """
+    researched = _names((observation or {}).get("technologies"))
+    counts: dict[str, float] = {}
+    for step in _upcoming(jobs, researched, horizon):
+        for name, count in (step.builds or {}).items():
+            if name in RAW_ITEMS or isinstance(count, bool) or not isinstance(count, (int, float)):
+                continue
+            counts[name] = counts.get(name, 0.0) + float(count)
+    demand = {}
+    for name, count in counts.items():
+        if not catalog.recipe_for_product(name):
+            continue
+        raw = raw_cost(catalog, {name: 1})
+        demand[name] = {"count": round(count, 3), "raw_per_item": {k: round(v, 4) for k, v in raw.items()}}
+    return demand
+
+
+def _net_rate(observation: Mapping, item: str) -> float | None:
+    supply = observation.get("resource_supply_options")
+    row = supply.get(item) if isinstance(supply, Mapping) else None
+    evidence = row.get("evidence") if isinstance(row, Mapping) else None
+    value = evidence.get("net_per_minute") if isinstance(evidence, Mapping) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _produce_taken(item: str, jobs, queue_nodes) -> bool:
+    """Any produce node or job for ``item`` exists (open, done, or stalled for the planner)."""
+    for row in list(jobs) + list(queue_nodes):
+        if row.get("capability") != PRODUCE_CAPABILITY:
+            continue
+        parameters = row.get("parameters")
+        if isinstance(parameters, Mapping) and parameters.get("item") == item:
+            return True
+    return False
+
+
+def produce_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
+    """Queue nodes for machine-made construction stock (``produce``).
+
+    Reads the receipt's ``bulk_item_demand`` (``bulk_item_demand``) and the
+    plate ``net_per_minute`` of ``resource_supply_options`` (the evidence
+    ``capacity_planning`` uses). An item is proposed when the next steps place
+    more than ``BULK_THRESHOLD`` of it, ``produce`` prerequisites succeeded and
+    no produce job or node for it exists. Rate: the need over
+    ``COVER_MINUTES``, capped so each plate's per-item cost stays within that
+    plate's measured net production (unmeasured or non-positive net: no node,
+    a row would only starve), and within ``(PRODUCE_MIN_RATE, PRODUCE_MAX_RATE]``.
+    Largest need first.
+    """
+    if PRODUCE_CAPABILITY not in capabilities:
+        return []
+    succeeded = {job.get("capability") for job in jobs if job.get("status") == "succeeded"}
+    if not set(capabilities[PRODUCE_CAPABILITY].get("requires", [])) <= succeeded:
+        return []
+    demand = observation.get("bulk_item_demand")
+    if not isinstance(demand, Mapping):
+        return []
+    nodes = []
+    ranked = sorted(demand.items(), key=lambda row: (-float((row[1] or {}).get("count", 0) or 0), row[0]))
+    for item, row in ranked:
+        count = row.get("count") if isinstance(row, Mapping) else None
+        raw = row.get("raw_per_item") if isinstance(row, Mapping) else None
+        if isinstance(count, bool) or not isinstance(count, (int, float)) or count <= BULK_THRESHOLD:
+            continue
+        if not isinstance(raw, Mapping) or not raw or _produce_taken(item, jobs, queue_nodes):
+            continue
+        rate = count / COVER_MINUTES
+        caps = []
+        for plate, per_item in raw.items():
+            net = _net_rate(observation, plate)
+            if net is None or net <= 0 or not isinstance(per_item, (int, float)) or per_item <= 0:
+                caps = None
+                break
+            caps.append(net / per_item)
+        if caps is None:
+            continue
+        rate = round(min([rate, PRODUCE_MAX_RATE] + caps), 1)
+        if rate < PRODUCE_MIN_RATE:
+            continue
+        nodes.append(
+            {
+                "id": f"{NODE_PREFIX}produce_{item}",
+                "capability": PRODUCE_CAPABILITY,
+                "parameters": {"item": item, "rate_per_minute": rate},
+                "priority": PRODUCE_PRIORITY,
+                "depends_on": [],
+                "reason": (
+                    f"next steps place {count:g} {item}; machine stock at {rate}/min covers it in "
+                    f"{count / rate:.1f} min within measured plate net production"
+                )[:300],
+            }
+        )
+    return nodes
