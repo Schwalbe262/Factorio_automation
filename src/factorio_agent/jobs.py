@@ -1268,7 +1268,7 @@ def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> 
                     game.save()
                 else:
                     evidence=result.get('evidence',{})
-                    if not evidence and status in {'blocked','failed'}:
+                    if not evidence and status in {'waiting','blocked','failed'}:
                         evidence={k:v for k,v in result.items()if k not in {'status','reason','ok','evidence'}
                                   and type(v)in(int,float,bool,str)and(not isinstance(v,str)or len(v)<=500)}
                         position=result.get('position')

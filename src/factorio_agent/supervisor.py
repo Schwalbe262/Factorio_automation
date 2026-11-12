@@ -32,7 +32,9 @@ FORBIDDEN={'x','y','position','positions','coordinates','area','entities','entit
 BLOCKER_FIELDS={'reason','last_failure','failure_category','stage','phase','item','resource','product','technology','recipe',
     'required_technology','missing_technologies','required_technologies','required_recipe','missing_recipes',
     'required_recipes','have','need','available','required','missing','count','capacity','supply_per_minute',
-    'required_per_minute','available_per_minute','missing_items','required_items','requirements'}
+    'required_per_minute','available_per_minute','missing_items','required_items','requirements',
+    'boiler_fuel','drill_fuel','drill_powered','water','steam','connected_engines','energized_engines',
+    'coal_on_belts','coal_mining_per_minute','generation_kw'}
 PRIVATE_FIELD=re.compile(r'password|secret|credential|token|auth|api.?key|(?:^|_)(?:path|file|env|position|coordinates|area|entities|entity|lua|rcon|shell|command|cmd|script|code)(?:_|$)',re.I)
 
 

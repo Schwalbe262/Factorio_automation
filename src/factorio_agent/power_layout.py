@@ -75,6 +75,12 @@ class V2FactoryBuilder(FactoryBuilder):
         super().__init__(game,bootstrap,catalog)
         bootstrap.cell_site_cleanup=self._recover_resource_cell_obstruction
 
+    def _seed(self,observation,key,entity,count):
+        if entity.get('name')=='electric-mining-drill':return super()._seed(observation,key,entity,count)
+        from .paid_burner_seed import PaidBurnerSeed
+        if not hasattr(self,'paid_burner_seed'):self.paid_burner_seed=PaidBurnerSeed(self.game,self.catalog)
+        return self.paid_burner_seed.step(observation,key,entity,count,bootstrap=self.bootstrap,move=self._move)
+
     def _choose_coal_plan(self,power):
         """Choose a new boundary cell and complete resource-free boiler route.
 

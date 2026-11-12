@@ -307,6 +307,15 @@ class DecisionTests(Fixture):
         self.s.last_decision_time=self.clock();self.s._poll_decision()
         self.assertIsNone(self.s._snapshot()[4]['last_planner_error'])
 
+    def test_power_wait_snapshot_distinguishes_missing_coal_from_live_water_and_steam(self):
+        self.s.work.merge([node('a')],CAPS,self.cli.validate_requests,1);a=self.s.work.data['nodes'][0]
+        facts=dict(drill_fuel=0,drill_powered=False,water=200,steam=400,energized_engines=2,coal_on_belts=141)
+        self.cli.jobs[a['job_key']]=dict(key=a['job_key'],world_id='w',capability='starter',parameters={},status='waiting',
+            reason='waiting for dedicated coal, water, and steam flow',evidence=dict(facts,rcon_password='secret'))
+        snapshot=self.s._snapshot()[4]
+        self.assertEqual(snapshot['jobs'][0]['evidence'],facts)
+        self.assertNotIn('secret',json.dumps(snapshot))
+
 
 class TaskTargetTests(Fixture):
     def duplicates(self,status='paused',*,parameters=None):

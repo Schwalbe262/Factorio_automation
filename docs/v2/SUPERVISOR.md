@@ -44,6 +44,12 @@ retry or resume the successor. A fresh active job also defers a stale new reques
 Unknown actions, rollback and actor/world changes are not automatically
 reconciled or retargeted.
 
+Waiting conditions survive worker time-slice boundaries. Scalar native fuel,
+water, steam and engine measurements reach the planner's bounded blocker
+summary, so a combined power wait can identify its actual missing condition.
+Science-job progress ignores unrelated iron/coal production and defense posts;
+native science, research and required construction remain progress evidence.
+
 Decisions use:
 
 ```json

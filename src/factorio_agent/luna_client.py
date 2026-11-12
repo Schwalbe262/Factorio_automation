@@ -69,6 +69,10 @@ repair, not repeated blind retries. Do not claim completion without native proof
 A waiting job's reason is its real executor condition, even after a time slice.
 Judge that condition and native progress before continuing; a slice ending does
 not resolve missing fuel, inputs or prerequisite research.
+For combined coal/water/steam waits, compare drill_fuel/drill_powered, water,
+steam and energized_engines to locate the missing condition before choosing
+a repair. Positive water and steam with an unfueled drill calls for coal-source
+startup or its documented repair, rather than a separate water-gathering plan.
 Layout planning or search-budget failures are executor faults, not evidence of
 insufficient mining capacity. Do not repeatedly expand a resource to treat them.
 The user's goal is rapid scalable progress toward a rocket, with clean layouts,

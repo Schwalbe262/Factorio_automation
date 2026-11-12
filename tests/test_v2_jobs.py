@@ -225,10 +225,13 @@ class JobBoundaryTests(unittest.TestCase):
     def test_real_power_blocker_survives_the_slice_and_restart(self):
         submit(self.root,self.game,self.request())
         result=run_slice(self.root,self.game,Executor({'status':'waiting',
-            'reason':'waiting for dedicated coal, water, and steam flow','evidence':{'drill_fuel':0}}),'test',seconds=.001)
+            'reason':'waiting for dedicated coal, water, and steam flow','drill_fuel':0,
+            'water':200,'steam':400,'energized_engines':2}),'test',seconds=.001)
         saved=Ledger(self.root).data['jobs']['test']
         self.assertEqual(saved['reason'],result['reason'])
         self.assertEqual(saved['evidence']['drill_fuel'],0)
+        self.assertEqual(saved['evidence']['water'],200)
+        self.assertEqual(saved['evidence']['steam'],400)
         self.assertNotEqual(saved['reason'],'execution_slice_complete')
 
     def test_model_can_pause_a_slow_goal_do_another_job_and_resume(self):
