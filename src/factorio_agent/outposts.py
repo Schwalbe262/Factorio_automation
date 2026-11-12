@@ -14,7 +14,7 @@ from .power_grid import plan_connection, replan_power_bridge
 from .transport import VECTORS, xy, plan_connection as belt_connection, underground_proof
 from .planning import overlap, preflight
 from .resource_policy import mark_mining_core, mining_reservations
-from .mining_site import guide_tuple, site_exit
+from .mining_site import alternative_exits, guide_tuple, site_exit
 
 
 RESOURCES = {"iron-ore", "copper-ore", "coal", "stone"}
@@ -151,7 +151,18 @@ class MiningOutposts:
         exit_record = site_exit(getattr(self, "site", None), obs.get("world_id"), resource)
         if exit_record is None:
             return prepare_new_bank(self.game, self.builder, obs, resource, count, reservations)
-        return prepare_new_bank(self.game, self.builder, obs, resource, count, reservations, site_exit=exit_record)
+        result = prepare_new_bank(self.game, self.builder, obs, resource, count, reservations, site_exit=exit_record)
+        if result.get("ok") or not exit_record:
+            return result
+        # The planned side had no usable site; try the zone's other sides
+        # before giving up, nearest to the consumer first.
+        tried = [exit_record["side"]]
+        for alternative in alternative_exits(exit_record):
+            tried.append(alternative["side"])
+            other = prepare_new_bank(self.game, self.builder, obs, resource, count, reservations, site_exit=alternative)
+            if other.get("ok"):
+                return other
+        return dict(result, exit_sides_tried=tried)
 
     def bank_proof(self, obs, bank):
         from .depleted_drill_retirement import effective_mining_plan, FILE as RETIREMENT_FILE

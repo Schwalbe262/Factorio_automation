@@ -679,5 +679,33 @@ class SiteExitRecordTests(unittest.TestCase):
             self.assertEqual(prepare.call_args.kwargs, {})
 
 
+class AlternativeExitTests(unittest.TestCase):
+    def test_other_sides_are_offered_nearest_the_consumer_first(self):
+        from factorio_agent.mining_site import alternative_exits
+
+        record = {
+            "resource": "copper-ore",
+            "zone": "mining:copper-ore",
+            "zone_rect": [-38, -66, -7, -31],
+            "side": "E",
+            "flow": "west_to_east",
+            "facing": 4,
+            "corridor": "corridor:copper-ore->smelting",
+            "corridor_start": [-7.0, -38.0],
+            "entry_port": {"zone": "smelting", "side": "W", "point": [4.0, -38.0]},
+            "guide": [-7, -40, 4, -36],
+        }
+        options = alternative_exits(record)
+        self.assertEqual([o["side"] for o in options], ["S", "W", "N"])
+        self.assertEqual([o["facing"] for o in options], [8, 12, 0])
+        for option in options:
+            self.assertEqual(option["planned_side"], "E")
+            self.assertIsNone(option["corridor"])
+            x0, y0, x1, y1 = option["guide"]
+            self.assertTrue(x0 <= 4 <= x1 and y0 <= -38 <= y1)
+            self.assertTrue(x0 <= option["corridor_start"][0] <= x1 and y0 <= option["corridor_start"][1] <= y1)
+        self.assertEqual(alternative_exits(None), [])
+
+
 if __name__ == "__main__":
     unittest.main()

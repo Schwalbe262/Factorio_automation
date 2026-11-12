@@ -65,6 +65,57 @@ def plan_exit(plan, resource):
     }
 
 
+def alternative_exits(record):
+    """Exit records for the other three sides of the same zone, best first.
+
+    The planned side can be unusable in practice: the early burner cells sit on
+    the patch fringe nearest the base, which is usually also the side facing
+    the consumer (live, seed 1400895309: every candidate on the planned east
+    fringe hit existing hardware). The bank may then leave by another side and
+    the belt is routed to the same entry port. Sides are ordered by the
+    distance from that side's edge midpoint to the entry port (or to the
+    planned corridor start). The reserved corridor no longer applies, so the
+    guide is the box spanning the new start and the entry port.
+    """
+    if not record:
+        return []
+    x0, y0, x1, y1 = record["zone_rect"]
+    midpoints = {
+        "N": ((x0 + x1) / 2, float(y0)),
+        "S": ((x0 + x1) / 2, float(y1)),
+        "W": (float(x0), (y0 + y1) / 2),
+        "E": (float(x1), (y0 + y1) / 2),
+    }
+    entry = record.get("entry_port")
+    target = entry["point"] if entry else record["corridor_start"]
+    options = []
+    for side, start in midpoints.items():
+        if side == record["side"]:
+            continue
+        guide = [
+            int(min(start[0], target[0])) - 2,
+            int(min(start[1], target[1])) - 2,
+            int(max(start[0], target[0])) + 2,
+            int(max(start[1], target[1])) + 2,
+        ]
+        options.append(
+            (
+                abs(start[0] - target[0]) + abs(start[1] - target[1]),
+                dict(
+                    record,
+                    side=side,
+                    flow=SIDE_FLOWS[side],
+                    facing=SIDE_FACINGS[side],
+                    corridor=None,
+                    corridor_start=[start[0], start[1]],
+                    guide=guide,
+                    planned_side=record["side"],
+                ),
+            )
+        )
+    return [option for _distance, option in sorted(options, key=lambda row: (row[0], row[1]["side"]))]
+
+
 def site_exit(site, world_id, resource):
     """:func:`plan_exit` on the site service's plan; None without a service or plan."""
     if site is None:
