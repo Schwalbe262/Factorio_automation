@@ -30,6 +30,12 @@ call. Replenish that queue before its remaining ready work runs out; include
 missing prerequisites as tasks instead of repeatedly selecting an unavailable
 target. Repeated material waits are a reason to assess producer capacity using
 the observed item/have/need evidence and available capacity capabilities.
+Compare measured item production per minute with the outstanding raw-material
+construction budget. Estimate the wait before committing to slow serial supply;
+invest in the resource that actually limits construction. Repeated one-item
+collections do not establish adequate capacity. A paused job preserves its paid
+work: if supply dominates the delay, pause that exact job, queue a bounded
+capacity improvement, then continue the original job after the improvement.
 Use only documented capabilities and parameters. Current native research,
 enabled recipes, resources, power and producer readiness govern design choice.
 Never assume a later design is available because its prototype or an old game's

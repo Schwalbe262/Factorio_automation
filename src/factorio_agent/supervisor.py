@@ -138,17 +138,25 @@ class WorkQueue:
             if(not isinstance(name,str)or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',name)or name in incoming
                     or cap not in capabilities or not isinstance(node['parameters'],dict)
                     or type(node['priority'])is not int or not -10000<=node['priority']<=10000
-                    or not isinstance(deps,list)or any(not isinstance(d,str)for d in deps)or len(deps)!=len(set(deps))or name in deps
+                    or not isinstance(deps,list)or any(not isinstance(d,str)for d in deps)or name in deps
                     or not isinstance(node['reason'],str)or len(node['reason'])>2000):raise ValueError('invalid unique typed queue node')
+            # A DAG edge is a set membership, not a sequence or a multiset.
+            # Repeated/reordered edges cannot change execution semantics.
+            deps=sorted(set(deps))
             _no_raw(node['parameters']);incoming.add(name)
             old=index.get(name)
             if old:
                 if old['capability']!=cap or old['parameters']!=node['parameters']:raise ValueError('queue task identity is immutable; use a new node id')
-                if old['status']in('running','completed')and old['depends_on']!=deps:raise ValueError('cannot change dependencies after execution starts')
+                if old['status']in('running','completed'):
+                    added=set(deps)-set(old['depends_on']);removed=set(old['depends_on'])-set(deps)
+                    if added or removed:
+                        changes='; added='+(' '.join(sorted(added)[:4])or'none')+'; removed='+(' '.join(sorted(removed)[:4])or'none')
+                        raise ValueError('cannot change dependencies after execution starts: '+name+changes)
+                    deps=list(old['depends_on'])
                 old.update(priority=node['priority'],depends_on=list(deps),reason=node['reason'])
                 if old['status']not in('running','completed'):old.pop('dispatch_blocked',None)
             else:
-                row=dict(deepcopy(node),status='pending',job_key=stable_job_key(self.world,node),created_at=time.time(),paused=False)
+                row=dict(deepcopy(node),depends_on=list(deps),status='pending',job_key=stable_job_key(self.world,node),created_at=time.time(),paused=False)
                 result['nodes'].append(row);index[name]=row
         if len(result['nodes'])>512:raise ValueError('persistent queue exceeds512 nodes; explicit archival needed')
         visiting=set();done=set()
@@ -201,7 +209,7 @@ class WorkQueue:
             for q in self.data['nodes']if q['status']!='completed'][:64]
 
     def compact_completed(self):
-        return [{k:q.get(k)for k in ('id','capability','parameters','status')}
+        return [{k:q.get(k)for k in ('id','capability','parameters','status','depends_on')}
             for q in self.data['nodes']if q['status']=='completed'][-16:]
 
 
@@ -284,7 +292,8 @@ def compact_snapshot(observation,status,capabilities,work,actor,planner_error=No
         production_rate_measurement=compact(observation.get('production_rate_measurement')),
         capabilities={k:{'parameters':v.get('parameters',{}),'requires':v.get('requires',[]),'effect':v.get('effect','')[:160]}for k,v in capabilities.items()},
         verified_capabilities=sorted({q['capability']for q in jobs if q['status']=='succeeded'}),
-        jobs=[{k:q.get(k)for k in('key','capability','parameters','status','actions','last_tick')}
+        jobs=[{k:q.get(k)for k in('key','capability','parameters','status','actions','last_tick',
+            'created_tick','planning_seconds','execution_seconds')}
             |blocker_summary(q)|{'uncertain_action':bool(q.get('pending_action'))}for q in recent[:12]],
         work_queue=work.compact(),recent_completed_queue=work.compact_completed(),last_planner_error=_diagnostic_text(planner_error),
         policy='Only structured task/DAG decisions; no shell, coordinates, RCON, research setters or model fallback. Verification and actual execution remain in the framework.')

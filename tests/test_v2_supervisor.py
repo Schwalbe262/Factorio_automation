@@ -129,6 +129,43 @@ class QueueTests(Fixture):
         key=self.s.work.data['nodes'][0]['job_key']
         with self.assertRaises(ValueError):self.s.work.refresh([dict(key=key,world_id='w',capability='power',parameters={},status='succeeded')],CAPS)
 
+    def test_dependency_duplicates_and_order_are_idempotent_for_running_and_completed_nodes(self):
+        work=self.s.work;work.merge([node('a'),node('b'),node('c','power',['b','a','a'])],CAPS,self.cli.validate_requests,1)
+        c=work.data['nodes'][2];self.assertEqual(c['depends_on'],['a','b'])
+        key=c['job_key']
+        for status in ('waiting','succeeded'):
+            with self.subTest(status=status):
+                jobs=[dict(key=q['job_key'],world_id='w',capability=q['capability'],parameters=q['parameters'],
+                    status=status if q['id']=='c'else'succeeded')for q in work.data['nodes']]
+                work.refresh(jobs,CAPS)
+                work.merge([node('c','power',['b','b','a'])],CAPS,self.cli.validate_requests,2)
+                c=work.node_for_job(key)
+                self.assertEqual(c['depends_on'],['a','b']);self.assertEqual(c['job_key'],key)
+                self.assertEqual(c['status'],'running'if status=='waiting'else'completed')
+
+    def test_started_dependency_addition_or_removal_is_not_silently_dropped_even_when_completed(self):
+        work=self.s.work;work.merge([node('a'),node('b'),node('d'),node('c','power',['a','b'])],CAPS,self.cli.validate_requests,1)
+        for status in ('waiting','succeeded'):
+            self.cli.jobs={q['job_key']:dict(key=q['job_key'],world_id='w',capability=q['capability'],parameters=q['parameters'],
+                status=status if q['id']=='c'else'succeeded')for q in work.data['nodes']}
+            self.s._snapshot();before=work.path.read_bytes()
+            for deps,added,removed in ((['a','b','d'],'d','none'),(['a'],'none','b')):
+                with self.subTest(status=status,deps=deps):
+                    with self.assertRaises(ValueError)as error:
+                        work.merge([node('new_independent'),node('c','power',deps)],CAPS,self.cli.validate_requests,2)
+                    self.assertEqual(work.path.read_bytes(),before)
+                    self.s._save(last_error=str(error.exception));message=self.s._snapshot()[4]['last_planner_error']
+                    self.assertIn('c; added='+added+'; removed='+removed,message)
+                    self.assertNotIn('new_independent',[q['id']for q in work.data['nodes']])
+
+    def test_pending_dependencies_can_change_but_self_edges_and_unknown_duplicate_edges_still_fail(self):
+        work=self.s.work;work.merge([node('a'),node('b'),node('c','power',['a'])],CAPS,self.cli.validate_requests,1)
+        work.merge([node('c','power',['b','b'])],CAPS,self.cli.validate_requests,2)
+        self.assertEqual(work.data['nodes'][2]['depends_on'],['b']);before=work.path.read_bytes()
+        for deps in (['c','c'],['missing','missing']):
+            with self.assertRaises(ValueError):work.merge([node('c','power',deps)],CAPS,self.cli.validate_requests,2)
+            self.assertEqual(work.path.read_bytes(),before)
+
 
 class DecisionTests(Fixture):
     def test_schema_rejects_raw_shell_coords_and_unknown_operations(self):
@@ -259,7 +296,7 @@ class DecisionTests(Fixture):
         self.s._save(last_error='queue task identity is immutable; use a new node id')
         snapshot=self.s._snapshot()[4]
         completed=snapshot['recent_completed_queue'];self.assertEqual(len(completed),16)
-        self.assertEqual(completed[-1],dict(id='a24',capability='starter',parameters={},status='completed'))
+        self.assertEqual(completed[-1],dict(id='a24',capability='starter',parameters={},status='completed',depends_on=[]))
         self.assertEqual(snapshot['work_queue'],[]);self.assertIn('immutable',snapshot['last_planner_error'])
         context=self.s._snapshot();results=queue.Queue();results.put((True,decision(nodes=[node('fresh')])))
         self.s.pending_decision={'result':results,'context':context,'started_at':self.clock()}

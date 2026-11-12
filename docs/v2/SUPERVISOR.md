@@ -33,7 +33,7 @@ states and the pending queue. A bounded semantic blocker summary includes
 material item/have/need, prerequisite identifiers and the last executor failure.
 It strips coordinates, raw commands, paths and credential fields or strings.
 The most recent 16 completed queue identities keep their immutable ID,
-capability and parameters visible; the latest planner error is included until
+capability, parameters and accepted dependencies visible; the latest planner error is included until
 a decision is accepted. Full entity lists, geometry, old world histories,
 credentials and JSONL journals are not given to Luna. World and the current
 native pinned owner's actor, job status and capability schema are checked again
@@ -57,6 +57,11 @@ have stable IDs, documented capability/parameters, integer priority and dependen
 IDs. `work_queue.json` is bound to one world and persists pending/ready/running/
 blocked/completed nodes. Job keys derive from world, node ID, capability and
 parameters. Node task identity cannot change; use a new ID for a new effect.
+Dependency order and repeated dependency IDs have no meaning and are normalized.
+For a running or completed node the actual dependency set remains immutable,
+even when a newly proposed prerequisite has already completed. Such additions
+or removals reject the entire merge and name the node and changed edges in the
+bounded planner error. Unstarted nodes may still update their dependencies.
 Cycles, unknown references, raw coordinates/commands and invalid Request schemas
 are rejected before queue acceptance. Request validation runs in a fresh private
 subprocess mode, without accessing the game. Native capability prerequisites
