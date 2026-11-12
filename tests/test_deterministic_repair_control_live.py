@@ -12,7 +12,7 @@ from factorio_ai.deterministic_game import DeterministicGame, run_config
 
 FIXTURE_LUA = r'''
 local o=helpers.json_to_table(OPTIONS)
-local game={tick=o.tick or 20};local storage=nil;local f={};local s={}
+local game={tick=o.tick or 20};local storage=nil;local f={};local s={};local defines={controllers={character=1,remote=7}}
 local d={world_id="fixture",crafting_player_index=1,crafting_actor_unit_number=15}
 local x={expected_world_id=o.world or "fixture",expected_actor_unit=o.actor or 15,
  expected_entity_unit=o.unit or 44,name="steel-chest",position={x=3.5,y=.5},request="request"}
@@ -42,7 +42,9 @@ if o.surface then e.surface={} end
 local function target() if o.missing then return nil end;return e end
 local a={valid=true,unit_number=15,force=f,surface=s,cursor_stack=cursor,crafting_queue_size=0,
  selected=previous,can_reach_entity=function() return not o.distant end,get_main_inventory=function() return inv end}
-a.player={connected=not o.disconnected,name="FactoryAutomaton",character=a,index=1}
+a.player={connected=not o.disconnected,name="FactoryAutomaton",character=a,index=1,
+ controller_type=o.remote and 7 or 1}
+a.player.exit_remote_view=function()if not o.remote_exit_fails then a.player.controller_type=1 end end
 a.clear_selected_entity=function() a.selected=nil end
 a.update_selected_entity=function() a.selected=e end
 if o.cursor_busy then cursor.name="wood";cursor.valid_for_read=true;cursor.count=1;cursor.is_repair_tool=false end

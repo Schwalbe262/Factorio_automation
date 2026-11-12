@@ -47,6 +47,12 @@ CAPABILITIES = {
                         "effect":"normally add an engine pair with dedicated paired coal and shared water; preserve old plant and verify thirty game seconds of native generation"},
     "defense_perimeter": {"parameters":{},"requires":["starter"],
                           "effect":"normally build and arm strategic gun posts, native land/range/identity checks; refill known posts during later jobs; native gun research required"},
+    "defense_watch": {"parameters":{},"requires":["defense_perimeter"],
+                      "effect":"continuously inspect, normally restock and rebuild known defensive posts during a bounded worker session; yields waiting while armed so development pauses do not leave defenses unattended"},
+    "defense_hardening": {"parameters":{},"requires":["defense_perimeter"],
+                          "effect":"normally build mutually covering gun posts and open-rear wall bastions at an observed loss hotspot; preserve production reservations and service access"},
+    "radar_network": {"parameters":{},"requires":["defense_perimeter"],
+                      "effect":"normally build a defended radar behind the front with measured electrical headroom; prove native scanning"},
     "main_bus_factory": {"parameters":{},"requires":["paired_smelting","logistic_science","defense_perimeter"],
                          "effect":"replace separate raw plate corridors with shared northbound iron/copper buses and native priority taps; commission compact green then normally retire obsolete western hardware; no throughput certification"},
     "dedicated_materials": {"parameters":{"resource":"coal|stone"},"requires":["paired_mining"],
@@ -339,6 +345,13 @@ class StarterExecutors:
         self.steam_expansion=SteamExpansion(game,self.builder,catalog,self.outposts)
         from .defense_perimeter import DefensePerimeter
         self.perimeter=DefensePerimeter(game,self.bootstrap,catalog)
+        from .defense_repairs import DefenseRepairs
+        self.defense_repairs=DefenseRepairs(game,self.bootstrap,self.perimeter)
+        from .defense_hardening import DefenseHardening
+        self.hardening=DefenseHardening(game,self.bootstrap,self.builder,catalog,self.perimeter)
+        self.hardening.wall_repair=self.defense_repairs.wall_action
+        from .radar_network import RadarNetwork
+        self.radars=RadarNetwork(game,self.builder,catalog,self.perimeter)
         self.outposts.perimeter=self.perimeter
         from .bus_factory import BusFactory
         self.bus_factory=BusFactory(game,self.builder,catalog,self.smelting,self.science,self.green)
@@ -415,6 +428,12 @@ class StarterExecutors:
         if getattr(self,'perimeter',None):
             defense=self.perimeter.upkeep(obs)
             if defense:return defense
+        if getattr(self,'defense_repairs',None):
+            if getattr(self,'hardening',None):
+                wall=self.hardening.upkeep(obs)
+                if wall:return wall
+            repair=self.defense_repairs.next_action(obs)
+            if repair:return repair
         filtered=self.starter_observation(obs)
         if not getattr(self,'industrial_mode',False):return self.bootstrap.next_action(filtered)
         if self.smelting.state.get('world_id')!=obs['world_id']:
@@ -426,6 +445,26 @@ class StarterExecutors:
         return upkeep or {'status':'succeeded','reason':'industrial supplies retain ordinary starter fuel upkeep'}
 
     def step(self, capability: str, obs: dict, parameters: dict | None = None) -> dict:
+        from factorio_ai.deterministic_repair_control import pending_repair
+        cleanup=pending_repair(obs)
+        if cleanup:return cleanup
+        if capability == "defense_hardening":
+            self.builder._sync(obs)
+            return self.hardening.step(obs,parameters or {})
+        if capability == "defense_watch":
+            self.builder._sync(obs)
+            from .upgrades import next_upgrade
+            upgrade=next_upgrade(obs,self.normal_research)
+            if upgrade:return upgrade
+            result=self.perimeter.step(obs)
+            if result.get('status')=='succeeded':
+                wall=self.hardening.upkeep(obs)
+                if wall:return wall
+                repair=self.defense_repairs.next_action(obs)
+                if repair:return repair
+                return {'status':'waiting','reason':'watching armed defenses and replenishing normal ammunition',
+                        'evidence':result.get('evidence',{})}
+            return result
         if capability == "starter":
             self.builder._sync(obs)
             return self.starter_upkeep(obs)
@@ -443,6 +482,10 @@ class StarterExecutors:
         result = self.starter_upkeep(obs)
         if result.get("status") != "succeeded":
             return result
+        if capability not in ("research","defense_perimeter"):
+            from .upgrades import next_upgrade
+            upgrade=next_upgrade(obs,self.normal_research)
+            if upgrade:return upgrade
         if capability == "starter_capacity":
             return self.capacity.step(filtered, parameters or {})
         if capability == "power":
@@ -490,6 +533,8 @@ class StarterExecutors:
             return self.steam_expansion.step(obs)
         if capability == "defense_perimeter":
             return self.perimeter.step(obs)
+        if capability == "radar_network":
+            return self.radars.step(obs,parameters or {})
         if capability == "main_bus_factory":
             return self.bus_factory.step(obs,parameters or {})
         if capability == "dedicated_materials":
@@ -563,6 +608,10 @@ class StarterExecutors:
             return self.steam_expansion.proof(obs)
         if capability == "defense_perimeter":
             return self.perimeter.proof(obs)
+        if capability == "defense_hardening":
+            return self.hardening.proof(obs)
+        if capability == "radar_network":
+            return self.radars.proof(obs)
         if capability == "main_bus_factory":
             return self.bus_factory.proof(obs)
         if capability == "dedicated_materials":

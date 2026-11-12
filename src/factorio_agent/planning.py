@@ -6,6 +6,15 @@ from .transport import xy
 from .resource_policy import policy_specs,mining_reservations,RESOURCE_CHECK_LUA
 
 
+OWNED_CONFIGURATION_GUARD=r'''
+local same_direction=old.direction==(spec.direction or 0)
+if spec.name=="gun-turret"then same_direction=true end
+if spec.name=="steam-engine"or spec.name=="steam-turbine"then same_direction=old.direction%8==(spec.direction or 0)%8 end
+if old.force~=f or(not same_direction and old.type~="electric-pole"and not spec.recipe)then
+ return {ok=false,reason="owned_block_entity_configuration_changed"}end
+'''
+
+
 def overlap(a,b):
     return a[0][0]<b[1][0] and a[1][0]>b[0][0] and a[0][1]<b[1][1] and a[1][1]>b[0][1]
 
@@ -58,9 +67,7 @@ for _,spec in ipairs(specs) do
  local old=target(spec.position,spec.name)
  if old and ignored[old.unit_number] then old=nil end
  if old then
-  local same_direction=old.direction==(spec.direction or 0)
-  if spec.name=="steam-engine" or spec.name=="steam-turbine" then same_direction=old.direction%8==(spec.direction or 0)%8 end
-  if old.force~=f or (not same_direction and old.type~="electric-pole" and not spec.recipe) then return {ok=false,reason="owned_block_entity_configuration_changed"} end
+'''+OWNED_CONFIGURATION_GUARD+'''
  else
   local legal=s.can_place_entity{name=spec.name,position=spec.position,direction=spec.direction or 0,force=f,
     type=spec.belt_to_ground_type,build_check_type=defines.build_check_type.manual_ghost,forced=true}

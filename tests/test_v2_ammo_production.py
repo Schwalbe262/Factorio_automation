@@ -144,7 +144,7 @@ class AmmoProductionTests(unittest.TestCase):
     def test_refill_requests_are_bounded_and_only_full_actor_stock_counts(self):
         self.installed();self.c.state['phase']='verified'
         self.game.query.reset_mock()
-        for count in (True,0,51):
+        for count in (True,0,101):
             with self.assertRaises(ValueError):self.c.ensure_full_magazines(self.obs,count)
         self.game.query.assert_not_called()
         self.buffer.update(actor_full_magazines=9,full_magazines=80)
@@ -153,6 +153,19 @@ class AmmoProductionTests(unittest.TestCase):
         self.assertIsNone(self.c.ensure_full_magazines(self.obs,10))
         self.buffer.update(actor_full_magazines=0,insertable=0)
         self.assertEqual(self.c.ensure_full_magazines(self.obs,10)['reason'],'actor_inventory_has_no_ammo_capacity')
+
+    def test_sixty_magazine_target_uses_fifty_then_ten_without_raising_transfer_cap(self):
+        self.installed();self.c.state['phase']='verified'
+        self.buffer.update(actor_full_magazines=0,full_magazines=100,insertable=100)
+        first=self.c.ensure_full_magazines(self.obs,60);self.assertEqual(first['count'],50)
+        validate_ammo_action(first,kind='take_full_magazines',expected_world='w')
+        self.buffer.update(actor_full_magazines=50,full_magazines=50)
+        second=self.c.ensure_full_magazines(self.obs,60);self.assertEqual(second['count'],10)
+        validate_ammo_action(second,kind='take_full_magazines',expected_world='w')
+        self.buffer['actor_full_magazines']=60
+        self.assertIsNone(self.c.ensure_full_magazines(self.obs,60))
+        self.buffer['actor_full_magazines']=0
+        self.assertEqual(self.c.ensure_full_magazines(self.obs,100)['count'],50)
 
     def test_real_lua_factory_proof_checks_current_production_power_drop_and_critical_priority(self):
         from tests.test_v2_ammo_transfer import NativeAmmoTransferTests,LuaRuntime

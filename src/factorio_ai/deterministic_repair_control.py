@@ -97,6 +97,10 @@ local count,durability=repair_stock()
  Refuse spare packs so even an interrupted driver can spend only one real tool.
  The pulse deadline bounds issued inputs; it is not an autonomous engine timer. ]]
 if count~=1 then return failure("native_repair_single_carried_pack_required") end
+local player=a.player
+if player.controller_type==defines.controllers.remote then player.exit_remote_view()end
+if player.controller_type~=defines.controllers.character or player.character~=a then
+ return failure("native_repair_character_controller_required")end
 local job={request=x.request,world_id=d.world_id,actor_unit=a.unit_number,entity_unit=e.unit_number,
  name=e.name,position=pos(e.position),started_tick=game.tick,deadline=game.tick+120,
  previous_selected=a.selected,last_selected=a.selected,quality=stack.quality.name,health=e.health,
@@ -115,6 +119,7 @@ local job=d.native_repair
 if not job or job.request~=x.request then return failure("native_repair_request_changed") end
 local e=repair_target(job);local cursor=a.cursor_stack
 if game.tick<job.started_tick then job.reason="native_repair_tick_rollback"
+elseif a.player.controller_type~=defines.controllers.character then job.reason="native_repair_controller_changed"
 elseif not e then job.reason="native_repair_target_changed"
 elseif e.health>=e.max_health then job.reason="native_repair_target_restored"
 elseif game.tick>=job.deadline then job.reason="native_repair_tick_budget_reached"

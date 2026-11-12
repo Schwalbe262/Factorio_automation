@@ -28,6 +28,9 @@ The command format is `python -B -m factorio_agent --runtime <directory> <comman
   concise heartbeat about every 50 seconds and stops on a real terminal status.
 - `pause --key <key>` / `resume --key <key>`: suspend an unfinished goal while
   another goal runs, preserving partial construction. Only one unpaused goal.
+- `retry --key <key>`: retry a known blocked outcome in the same world after
+  its cause is addressed, retaining action/history counts and partial state.
+  `resume` accepts paused jobs only; uncertain actions need `reconcile` first.
 - `stop-worker`: request a safe stop between durable actions, even while a
   worker holds the writer lock. Poll that exact worker to completion, then use
   `pause` on its job. `clear-worker-stop` removes only this CLI's marker before
@@ -78,6 +81,9 @@ Current capabilities:
 | gas_distribution | none | basic_petroleum; protected shared header before consumers, separate Plastic/Sulfur outlets and one unchanged source capacity |
 | advanced_circuit_production | none | chemical_production and main_bus_factory; exact Plastic proof, dedicated green/wire cells, fresh iron/copper surplus taps and reserved expansion |
 | chemical_science | none | engine_production, advanced_circuit_production, chemical_production and automation_science; exact three-product supply and separate blue feed to all eight preserved labs |
+| defense_watch | none | defense_perimeter; bounded worker restocks/rebuilds known posts, selects ordinary prerequisite-ready combat/productivity research, and natively repairs damaged posts at quiet armed service sites |
+| defense_hardening | none | defense_perimeter and naturally researched walls; add two/three mutually covering paid turrets and open-rear wall bastions at an observed loss hotspot |
+| radar_network | none | defense_perimeter and naturally researched radar; one paid defended base radar with measured power headroom and native scan proof |
 | steam_coal_reroute | none | steam_expansion; prebuild alternative, verify loaded engines, recover obsolete owned transport |
 | legacy_coal_cleanup | none | steam_expansion and dedicated_materials; isolated burner/cache recovery after replacement supply and headroom proof |
 | research | `--technology` native catalog name | automation_science; native prerequisites and continuous supported science supply |
