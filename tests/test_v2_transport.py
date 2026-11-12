@@ -111,6 +111,22 @@ class LayeredCorridorTests(unittest.TestCase):
         self.assertGreater(result["layer_candidates_rejected"], 0)
         self.assertLessEqual(result["route_metrics"]["turns"], 6)
 
+    def test_collector_turning_into_its_own_source_port_is_upstream_not_a_foreign_feed(self):
+        # Live seed 1400895309: the iron bank's collector runs south and turns
+        # east at its output port. Every corridor was rejected as a foreign feed.
+        game = SimpleNamespace(query=lambda _: {"ok": True, "blocked": [], "max_span": 5})
+        cls = __import__("factorio_agent.core.deterministic_builder", fromlist=["FactoryBuilder"]).FactoryBuilder
+        geometry = cls.__new__(cls)
+        builder = SimpleNamespace(_occupied_by_plan=geometry._occupied_by_plan, can_place=lambda _: {"ok": True})
+        collector = [entity("transport-belt", -28.5, 10.5 + i, 8) for i in range(8)]
+        port_belt = entity("transport-belt", -28.5, 18.5, 4)
+        a = {"item": "iron-ore", "position": {"x": -28.5, "y": 18.5}, "facing": 4}
+        b = {"item": "iron-ore", "position": {"x": 10.5, "y": -11.5}, "facing": 0}
+        result = plan_connection(game, builder, {"world_id": "w", "entities": collector + [port_belt]}, a, b)
+        self.assertTrue(result["ok"], result.get("reason"))
+        route = {(e["position"]["x"], e["position"]["y"]) for e in result["entities"]}
+        self.assertFalse(route & {(e["position"]["x"], e["position"]["y"]) for e in collector})
+
     def test_approved_nature_is_normally_mined_and_bound_to_current_world(self):
         builder = V2FactoryBuilder.__new__(V2FactoryBuilder)
         obstacle = {"name": "tree-01", "position": {"x": 0.5, "y": 0.5}}

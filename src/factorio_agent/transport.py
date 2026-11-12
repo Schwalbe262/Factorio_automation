@@ -474,6 +474,13 @@ def _production_keepouts(game, builder, obs, source, destination, reserved, boun
         return {"ok": False, "reason": "invalid_transport_production_reservation", "detail": str(exc)}
 
 
+def _recipient(belt):
+    """The tile a surface belt delivers onto."""
+    vx, vy = VECTORS[belt["direction"]]
+    x, y = xy(belt)
+    return (x + vx, y + vy)
+
+
 def guided_bounds(bounds, guide):
     """Widen the search box to cover ``guide`` = (x0, y0, x1, y1) tile rect.
 
@@ -709,8 +716,14 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
         and xy(e) not in ends
         and not (e["name"] == "transport-belt" and e["direction"] == shared_headings.get(xy(e)))
     ]
+    # A belt that already runs into the source port is that block's own
+    # upstream (a bank's collector may turn into its port). It is fixed
+    # hardware to route around, not a foreign belt merging into the route.
+    feeders = {xy(e) for e in foreign if e["name"] == "transport-belt" and _recipient(e) == (a["x"], a["y"])}
+    foreign = [e for e in foreign if xy(e) not in feeders]
     foreign += pipes
     hard = {(p["x"], p["y"]) for p in survey["blocked"]}
+    hard.update(feeders)
     hard.update(production["hard"])
     hard.update(builder._occupied_by_plan([e for e in reserved if e["name"] != "transport-belt"]))
     hard -= ends
