@@ -1,5 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import Mock,patch
+from pathlib import Path
+import json
+import tempfile
 import unittest
 
 from factorio_agent.jobs import StarterExecutors
@@ -22,6 +25,145 @@ class EmergencyDispatchTests(unittest.TestCase):
         ex.water_distribution=SimpleNamespace(step=Mock(return_value={'type':'build','name':'pipe'}))
         ex.starter_upkeep=Mock(return_value={'status':'blocked','reason':'old_hotspot_missing'})
         return ex
+
+    def approved_initial(self):
+        temporary=tempfile.TemporaryDirectory();self.addCleanup(temporary.cleanup);root=Path(temporary.name)
+        ex=self.executor();ex.game=SimpleNamespace(cfg=SimpleNamespace(runtime_dir=root))
+        ex.perimeter.state={};ex.perimeter.step.return_value={'type':'build','name':'gun-turret'}
+        ex.starter_observation=Mock(side_effect=lambda obs:obs)
+        obs={'world_id':'w','enabled_recipes':{'gun-turret':True,'firearm-magazine':True}}
+        ledger={'schema_version':2,'world_id':'w','jobs':{'defense':{
+            'key':'defense','world_id':'w','capability':'defense_perimeter','parameters':{},
+            'status':'blocked','reason':'native_gun_turret_and_normal_magazine_recipes_required'}}}
+        path=root/'jobs.json';path.write_text(json.dumps(ledger),encoding='utf-8')
+        return ex,obs,ledger,path
+
+    def test_explicit_perimeter_build_bypasses_damaged_starter_and_remote_power(self):
+        ex=self.executor();ex.builder.ensure_power=Mock(side_effect=AssertionError('no power needed for guns'))
+        self.assertEqual(ex.step('defense_perimeter',{})['status'],'succeeded')
+        ex.starter_upkeep.assert_not_called();ex.builder.ensure_power.assert_not_called()
+        ex.perimeter.step.assert_called_once_with({})
+
+    def test_waiting_initial_defense_maintains_fuel_without_recursive_upkeep_or_remote_power(self):
+        ex,obs,ledger,path=self.approved_initial()
+        waiting={'status':'waiting','reason':'waiting for drill-fed iron-plate production','have':39,'need':40}
+        ex.perimeter.step.return_value=waiting
+        filtered={'world_id':'w','entities':[{'name':'burner-mining-drill','unit_number':1165}]}
+        ex.starter_observation.return_value=filtered;ex.starter_observation.side_effect=None
+        fuel={'type':'insert','item':'coal','count':1,'name':'burner-mining-drill'}
+        ex.bootstrap=SimpleNamespace(maintain_fuel=Mock(return_value=fuel))
+        ex.builder.ensure_power=Mock(side_effect=AssertionError('no remote power repair'))
+        self.assertEqual(ex.step('starter_capacity',obs,{'resource':'copper-ore','cells':8}),fuel)
+        ex.bootstrap.maintain_fuel.assert_called_once_with(filtered)
+        ex.starter_upkeep.assert_not_called();ex.builder.ensure_power.assert_not_called()
+        self.assertEqual(json.loads(path.read_text(encoding='utf-8')),ledger)
+
+    def test_explicit_defense_wait_uses_only_a_real_fuel_action_and_keeps_original_wait_otherwise(self):
+        ex=self.executor();obs={'world_id':'w'}
+        waiting={'status':'waiting','reason':'engine crafting queue is busy'}
+        ex.perimeter.step.return_value=waiting;ex.starter_observation=Mock(return_value=obs)
+        fuel={'type':'insert','item':'coal','count':1}
+        ex.bootstrap=SimpleNamespace(maintain_fuel=Mock(return_value=fuel))
+        self.assertEqual(ex.step('defense_perimeter',obs),fuel)
+        for unavailable in (None,{'status':'waiting','reason':'coal not available'},{'status':'succeeded'}):
+            ex.bootstrap.maintain_fuel.return_value=unavailable
+            self.assertIs(ex.step('defense_perimeter',obs),waiting)
+        ex.starter_upkeep.assert_not_called()
+
+    def test_real_defense_actions_success_and_blockers_never_invoke_fuel_fallback(self):
+        ex=self.executor();ex.bootstrap=SimpleNamespace(maintain_fuel=Mock(side_effect=AssertionError('defense first')))
+        for result in ({'type':'build','name':'gun-turret'},{'type':'craft','recipe':'gun-turret'},
+                {'type':'insert','item':'firearm-magazine'},{'status':'succeeded'},{'status':'blocked','reason':'site_changed'}):
+            ex.perimeter.step.return_value=result
+            self.assertIs(ex.step('defense_perimeter',{}),result)
+        ex.bootstrap.maintain_fuel.assert_not_called();ex.starter_upkeep.assert_not_called()
+
+    def test_waiting_known_post_ammo_upkeep_can_restart_its_fuel_prerequisite(self):
+        ex,obs,ledger,path=self.approved_initial();ex.perimeter.state={'phase':'armed'}
+        ex.perimeter.upkeep=Mock(return_value={'status':'waiting','reason':'waiting for iron to craft ammunition'})
+        fuel={'type':'insert','item':'coal','count':1};ex.bootstrap=SimpleNamespace(maintain_fuel=Mock(return_value=fuel))
+        self.assertEqual(ex.step('bootstrap_research',obs,{'technology':'electric-mining-drill'}),fuel)
+        ex.perimeter.step.assert_not_called();ex.starter_upkeep.assert_not_called()
+
+    def test_approved_previously_locked_defense_precedes_ordinary_work_without_fake_ledger_success(self):
+        ex,obs,ledger,path=self.approved_initial();before=path.read_bytes()
+        self.assertEqual(ex.step('starter_capacity',obs,{'resource':'copper-ore','cells':8})['name'],'gun-turret')
+        ex.starter_upkeep.assert_not_called();self.assertEqual(path.read_bytes(),before)
+        self.assertEqual(json.loads(path.read_text(encoding='utf-8'))['jobs']['defense']['status'],'blocked')
+        ex.perimeter.step.return_value={'status':'succeeded','reason':'real armed perimeter'}
+        ex.starter_upkeep.return_value={'status':'succeeded'};ex._continue_background_construction=Mock(return_value=None)
+        ex.capacity=SimpleNamespace(step=Mock(return_value={'type':'take','item':'coal'}))
+        self.assertEqual(ex.step('starter_capacity',obs,{'resource':'copper-ore','cells':8}),{'type':'take','item':'coal'})
+        self.assertEqual(path.read_bytes(),before)
+
+    def test_no_approval_world_mismatch_native_recipe_or_unknown_status_never_initiates_defense(self):
+        ex,obs,ledger,path=self.approved_initial()
+        variants=[{**ledger,'jobs':{}},{**ledger,'world_id':'foreign'},
+            {**ledger,'jobs':{'defense':{**ledger['jobs']['defense'],'world_id':'foreign'}}},
+            {**ledger,'jobs':{'defense':{**ledger['jobs']['defense'],'status':'unrecognized'}}}]
+        for value in variants:
+            path.write_text(json.dumps(value),encoding='utf-8')
+            self.assertIsNone(ex._approved_initial_defense(obs))
+        path.write_text(json.dumps(ledger),encoding='utf-8')
+        for item in ('gun-turret','firearm-magazine'):
+            obs['enabled_recipes'][item]=False;self.assertIsNone(ex._approved_initial_defense(obs));obs['enabled_recipes'][item]=True
+        ex.perimeter.step.assert_not_called()
+
+    def test_any_same_world_uncertain_intent_even_empty_blocks_background_defense(self):
+        ex,obs,ledger,path=self.approved_initial()
+        for extra in ({'pending_action':{}},{'pending_action':{'type':'build'}},
+                {'reason':'action_outcome_unknown_reconcile_required'}, {'reason':'world_rollback_requires_reconciliation'}):
+            with self.subTest(extra=extra):
+                ledger['jobs']['other']={'key':'other','world_id':'w','capability':'mining_outpost','status':'blocked',**extra}
+                path.write_text(json.dumps(ledger),encoding='utf-8');before=path.read_bytes()
+                self.assertIsNone(ex._approved_initial_defense(obs));self.assertEqual(path.read_bytes(),before)
+        ex.perimeter.step.assert_not_called()
+
+    def test_armed_configuration_is_not_recommissioned_and_all_known_approval_statuses_work(self):
+        ex,obs,ledger,path=self.approved_initial()
+        ex.perimeter.state={'phase':'armed','posts':[{'name':'owned','unit_number':51,'commissioned':True}]}
+        self.assertIsNone(ex._approved_initial_defense(obs));ex.perimeter.step.assert_not_called()
+        ex.perimeter.state={}
+        for status in ('pending','running','waiting','paused','blocked','failed','succeeded'):
+            ledger['jobs']['defense']['status']=status;path.write_text(json.dumps(ledger),encoding='utf-8')
+            self.assertEqual(ex._approved_initial_defense(obs)['name'],'gun-turret')
+
+    def test_non_gun_research_finishes_approved_defense_first_but_gun_proof_is_not_preempted(self):
+        ex,obs,ledger,path=self.approved_initial()
+        target=SimpleNamespace(step=Mock(return_value={'status':'waiting','reason':'machine target proof'}))
+        ex._bootstrap_research=Mock(return_value=target)
+        for technology in ('stone-wall','electric-mining-drill'):
+            self.assertEqual(ex.step('bootstrap_research',obs,{'technology':technology})['name'],'gun-turret')
+        ex._bootstrap_research.assert_not_called();ex.perimeter.step.reset_mock()
+        self.assertEqual(ex.step('bootstrap_research',obs,{'technology':'gun-turret'})['reason'],'machine target proof')
+        ex.perimeter.step.assert_not_called();ex.starter_upkeep.assert_not_called()
+
+    def test_known_armed_posts_keep_normal_ammo_upkeep_during_long_non_gun_machine_research(self):
+        ex,obs,ledger,path=self.approved_initial()
+        ex.perimeter.state={'phase':'armed'}
+        ex.perimeter.upkeep=Mock(return_value={'type':'insert','item':'firearm-magazine','count':5})
+        ex._bootstrap_research=Mock(side_effect=AssertionError('refill existing approved posts first'))
+        result=ex.step('bootstrap_research',obs,{'technology':'electric-mining-drill'})
+        self.assertEqual((result['type'],result['item']),('insert','firearm-magazine'))
+        ex.perimeter.step.assert_not_called();ex.starter_upkeep.assert_not_called()
+        self.assertEqual(json.loads(path.read_text(encoding='utf-8')),ledger)
+
+    def test_partial_reserved_perimeter_reuses_same_posts_and_builds_only_the_missing_gun(self):
+        from factorio_agent.defense_perimeter import DefensePerimeter
+        ex,obs,ledger,path=self.approved_initial()
+        perimeter=DefensePerimeter.__new__(DefensePerimeter)
+        perimeter.state={'phase':'deploy','posts':[
+            {'name':'existing','position':{'x':1,'y':2},'unit_number':51,'commissioned':True},
+            {'name':'reserved','position':{'x':5,'y':2},'commissioned':False}]}
+        perimeter.prepare=Mock(side_effect=AssertionError('reserved posts must not be resurveyed'))
+        perimeter._save=Mock();perimeter.game=SimpleNamespace(query=Mock(return_value={'ok':True,'resources':0}))
+        perimeter.inspect=Mock(return_value={'ok':True,'changed':[],'actor_full_magazines':10,'posts':[
+            {'name':'existing','unit_number':51,'full_magazines':10}, {'name':'reserved','missing':True}]})
+        ex.perimeter=perimeter;obs['inventory']={'gun-turret':1,'firearm-magazine':10}
+        result=ex.step('starter_capacity',obs,{'resource':'copper-ore','cells':8})
+        self.assertEqual((result['type'],result['name'],result['position']),('build','gun-turret',{'x':5,'y':2}))
+        self.assertEqual(perimeter.state['posts'][0]['unit_number'],51);perimeter.prepare.assert_not_called()
+        ex.starter_upkeep.assert_not_called()
 
     def test_new_mutual_bastion_construction_is_not_deadlocked_by_old_missing_post(self):
         ex=self.executor()

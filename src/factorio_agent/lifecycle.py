@@ -22,6 +22,7 @@ from factorio_ai.deterministic_character import _identity,set_client_visibility
 from factorio_ai.factorio import no_mod_save_path
 from factorio_ai.rcon import FactorioRconClient
 from . import runtime
+from .automation_config import load_automation_config
 
 DEFAULT_RUNTIME=Path('runtime/v2/eval-1053994892')
 STATE=Path('logs/controller-state.json')
@@ -217,7 +218,9 @@ class Lifecycle:
                     or state.get('world_id')!=value.get('world_id')or state.get('saved')is not True):raise RuntimeError('supervisor stop marker has no exact saved acknowledgement')
             marker.unlink()
 
-    def _start(self,root,*,visible=True):
+    def _start(self,root,*,visible=True,automation_config=None):
+        options=automation_config if automation_config is not None else load_automation_config(self.repo/'automation_config.json')
+        options.validate()
         self._ensure_server(root);existing=self._owned(root,'supervisor')
         if existing:
             if (root/STOP).exists():raise RuntimeError('supervisor safe stop is still pending')
@@ -227,7 +230,9 @@ class Lifecycle:
         self._client(root,visible=visible)
         with RunLock(root/'writer.lock'):self._clear_stops(root);self._game_pause(root,False)
         env=os.environ.copy();env['PYTHONPATH']=str(self.repo/'src')
-        command=[sys.executable,'-B','-m','factorio_agent.supervisor','--runtime',str(root),'--decision-interval','60','--slice-seconds','25']
+        interval=options.controller.decision_interval_seconds;slice_seconds=options.controller.execution_slice_seconds
+        number=lambda n:str(int(n))if float(n).is_integer()else str(n)
+        command=[sys.executable,'-B','-m','factorio_agent.supervisor','--runtime',str(root),'--decision-interval',number(interval),'--slice-seconds',number(slice_seconds)]
         (root/'logs').mkdir(exist_ok=True);pid=self.processes.spawn(command,cwd=self.repo,env=env,log=root/'logs/supervisor-process.log')
         record=dict(pid=pid,creation_time=_identity(pid),runtime=str(root),world_id=read(root/'world-settings.json')['world_id'],started_at=time.time())
         _atomic_json(root/PROCESS,record)
@@ -236,6 +241,8 @@ class Lifecycle:
         record=dict(pid=pid,creation_time=snapshot['creation_time'],runtime=str(root),world_id=read(root/'world-settings.json')['world_id'],started_at=time.time())
         if not matches(snapshot,record,root,'supervisor'):raise RuntimeError('launched supervisor command line does not match its runtime')
         _atomic_json(root/PROCESS,record);self._select(root)
+        _atomic_json(root/'controller-config.json',dict(options.controller_snapshot(),runtime=str(root),world_id=record['world_id'],
+            supervisor_pid=pid,native_creation_time=record['creation_time']))
         return dict(status='running',runtime=str(root),seed=read(root/'run.json')['seed'],supervisor_pid=pid,reused=False)
 
     def start(self,*,visible=True):
@@ -359,15 +366,21 @@ class Lifecycle:
         raise RuntimeError('no free bounded v2 server/RCON port pair')
 
     def new_map(self,*,visible=True):
+        options=load_automation_config(self.repo/'automation_config.json')
         with RunLock(self.base/'lifecycle.lock'):
-            old=self._root();stopped=self._stop(old);backup=self._backup(old);self._shutdown(old,stopped)
-            for _ in range(16):
-                seed=secrets.randbits(32);root=self.base/'v2'/('eval-'+str(seed))
-                if not root.exists():break
-            else:raise FileExistsError('could not choose an unused random runtime; old world preserved')
-            server,rcon=self._ports();runtime.create(root,seed=seed,server_port=server,rcon_port=rcon)
+            old=self._root();seed=options.world.seed
+            if seed is not None:
+                root=self.base/'v2'/('eval-'+str(seed))
+                if root.exists():raise FileExistsError('configured new-map seed already has a runtime; nothing stopped or overwritten')
+            else:
+                for _ in range(16):
+                    seed=secrets.randbits(32);root=self.base/'v2'/('eval-'+str(seed))
+                    if not root.exists():break
+                else:raise FileExistsError('could not choose an unused random runtime; old world preserved')
+            stopped=self._stop(old);backup=self._backup(old);self._shutdown(old,stopped)
+            server,rcon=self._ports();runtime.create(root,seed=seed,server_port=server,rcon_port=rcon,automation_config=options)
             self._select(root)
-            result=self._start(root,visible=visible)
+            result=self._start(root,visible=visible,automation_config=options)
             return dict(result,backup=str(backup),previous_runtime=str(old))
 
     def status(self):

@@ -77,12 +77,17 @@ class RateEvidenceTests(unittest.TestCase):
                 'boiler':{'electric':False,'energy_usage':30000},
                 'steam-engine':{'electric':True,'energy_production':15000},
                 'assembling-machine-1':{'electric':True,'energy_usage':1250}})
-            obs={'world_id':'w','entities':[{'name':'boiler'},{'name':'steam-engine'},
-                {'name':'assembling-machine-1','status_name':'low_power'}]}
+            obs={'world_id':'w','entities':[{'name':'boiler','status_name':'no_fuel'},{'name':'steam-engine'},
+                {'name':'assembling-machine-1','status_name':'low_power'},
+                {'name':'stone-furnace','status_name':'no_ingredients'},
+                {'name':'stone-furnace','status_name':'full_output'}]}
             result=factory_constraints(Path(directory),obs,catalog)
             self.assertEqual(result['installed_consumer_peak_kw'],75)
             self.assertEqual(result['installed_generation_nameplate_kw'],900)
             self.assertEqual(result['live_low_or_no_power_entities'],{'assembling-machine-1':1})
+            self.assertEqual(result['live_no_fuel_entities'],{'boiler':1})
+            self.assertEqual(result['live_waiting_for_ingredients_entities'],{'stone-furnace':1})
+            self.assertEqual(result['live_full_output_entities'],{'stone-furnace':1})
 
 
 if __name__=='__main__':unittest.main()

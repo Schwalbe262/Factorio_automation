@@ -16,6 +16,7 @@ from factorio_ai.deterministic_game import DeterministicGame
 from factorio_ai.deterministic_state import RunLock, _atomic_json
 from factorio_ai.factorio import (build_create_no_mod_save_command,
     build_start_no_mod_server_command, no_mod_save_path, wait_for_rcon)
+from .automation_config import AutomationConfig,load_automation_config
 
 
 class WorldBoundGame(DeterministicGame):
@@ -166,12 +167,16 @@ def configuration(root: Path):
                    slurm_enabled=False)
 
 
-def create(root: Path, *, seed: int, server_port: int, rcon_port: int) -> dict:
+def create(root: Path, *, seed: int, server_port: int, rcon_port: int,
+           automation_config: AutomationConfig | None = None) -> dict:
     root = root.resolve()
     if any(type(p) is not int or not 1024 <= p <= 65535 for p in (server_port, rcon_port)):
         raise ValueError("ports must be integers between 1024 and 65535")
     if server_port == rcon_port or type(seed) is not int or not 0 <= seed <= 2**32 - 1:
         raise ValueError("distinct ports and an unsigned 32-bit seed are required")
+    options=automation_config if automation_config is not None else load_automation_config()
+    if not isinstance(options,AutomationConfig):raise ValueError('validated automation config required')
+    options.validate()
     root.mkdir(parents=True, exist_ok=True)
     with RunLock(root / "writer.lock"):
         if (root / "run.json").exists() or (root / "vanilla").exists():
@@ -185,9 +190,9 @@ def create(root: Path, *, seed: int, server_port: int, rcon_port: int) -> dict:
         target.parent.mkdir(parents=True, exist_ok=True)
         command = build_create_no_mod_save_command(cfg, target)
         settings = Path(command[command.index("--map-gen-settings") + 1])
-        # User preference for new Nauvis maps; other generation settings default.
-        _atomic_json(settings, {"seed": seed, "cliff_settings": {
-            "cliff_elevation_interval": 0, "richness": 0}})
+        # This snapshot applies only to this new generation, never to start().
+        _atomic_json(settings,options.map_gen_settings(seed))
+        _atomic_json(root/'world-generation-config.json',options.generation_snapshot(seed))
         with (cfg.log_dir / "create-world.log").open("wb") as output:
             subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, check=True,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

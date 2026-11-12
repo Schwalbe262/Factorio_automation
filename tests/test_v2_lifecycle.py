@@ -194,7 +194,56 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual((self.root/'run.json').read_bytes(),original);self.assertTrue(self.root.exists())
         backup=Path(result['backup']);self.assertTrue((backup/'no-mod-rcon.zip').exists());self.assertTrue((backup/'backup-manifest.json').exists())
         self.assertEqual(json.loads(self.control.pointer.read_text())['seed'],123);self.assertEqual(len(self.proc.spawned),1)
-        self.assertEqual([q for q in self.calls if q[0]=='create'][0][2],dict(seed=123,server_port=34262,rcon_port=27062))
+        created=[q for q in self.calls if q[0]=='create'][0][2]
+        self.assertEqual({k:v for k,v in created.items()if k!='automation_config'},dict(seed=123,server_port=34262,rcon_port=27062))
+        self.assertEqual(created['automation_config'].world.starting_area_percent,200)
+
+    def test_configured_start_changes_controller_only_on_actual_restart(self):
+        before=(self.root/'world-settings.json').read_bytes()
+        self.write(self.repo/'automation_config.json',{'controller':{'decision_interval_seconds':120,'execution_slice_seconds':15}})
+        self.launch();command=self.proc.spawned[-1][0]
+        self.assertEqual(command[command.index('--decision-interval')+1],'120')
+        self.assertEqual(command[command.index('--slice-seconds')+1],'15')
+        path=self.root/'controller-config.json';snapshot=path.read_bytes()
+        self.assertEqual(json.loads(snapshot)['controller']['execution_slice_seconds'],15)
+        self.write(self.repo/'automation_config.json',{'world':{'starting_area_percent':100},'controller':{'decision_interval_seconds':180}})
+        self.assertTrue(self.control.start()['reused']);self.assertEqual(path.read_bytes(),snapshot)
+        self.control.stop(timeout=2);self.control.start()
+        self.assertEqual(self.proc.spawned[-1][0][-3],'180')
+        self.assertEqual((self.root/'world-settings.json').read_bytes(),before)
+        self.assertFalse((self.root/'world-generation-config.json').exists())
+
+    def test_invalid_config_start_or_new_map_has_no_process_or_save_effect(self):
+        for value in ({'controller':{'model':'other'}},{'world':{'starting_area_percent':True}},{'world':None}):
+            with self.subTest(value=value):
+                self.write(self.repo/'automation_config.json',value)
+                before=(self.root/'vanilla/saves/no-mod-rcon.zip').stat().st_mtime_ns
+                with self.assertRaises(ValueError):self.control.new_map()
+                with self.assertRaises(ValueError):self.control.start()
+                self.assertEqual(self.calls,[]);self.assertEqual(self.proc.spawned,[])
+                self.assertEqual((self.root/'vanilla/saves/no-mod-rcon.zip').stat().st_mtime_ns,before)
+
+    def test_configured_seed_collision_preserves_running_old_world(self):
+        self.launch();self.write(self.repo/'automation_config.json',{'world':{'seed':1053994892}})
+        before=list(self.calls)
+        with self.assertRaises(FileExistsError):self.control.new_map()
+        self.assertEqual(self.calls,before);self.assertFalse(self.paused);self.assertEqual(self.proc.closed,[])
+
+    def test_new_map_uses_prevalidated_seed_and_options_after_old_world_stops(self):
+        self.write(self.repo/'automation_config.json',{'world':{'seed':321},'controller':{'execution_slice_seconds':12}})
+        original_stop=self.control._stop
+        def stop(root):
+            result=original_stop(root)
+            (self.repo/'automation_config.json').write_text('{invalid-after-safe-stop')
+            return result
+        with patch.object(self.control,'_stop',side_effect=stop),patch.object(self.control,'_shutdown',return_value={}),\
+             patch.object(self.control,'_ports',return_value=(34262,27062)),\
+             patch('factorio_agent.lifecycle.secrets.randbits')as random:
+            result=self.control.new_map()
+        self.assertEqual(result['seed'],321);random.assert_not_called()
+        options=[q for q in self.calls if q[0]=='create'][0][2]['automation_config']
+        self.assertEqual(options.world.seed,321);self.assertEqual(options.controller.execution_slice_seconds,12)
+        self.assertEqual(self.proc.spawned[-1][0][-1],'12')
 
     def test_failed_backup_prevents_new_world_or_process_close(self):
         self.server(self.root);(self.root/'vanilla/saves/no-mod-rcon.zip').write_bytes(b'broken')

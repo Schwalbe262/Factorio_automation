@@ -648,6 +648,37 @@ class StarterExecutors:
             and not (getattr(self,'legacy_coal_cleanup',None) and self.legacy_coal_cleanup.retires_legacy(e,obs))
             and not (getattr(self,'steam_expansion',None) and self.steam_expansion.owns_burner(e,obs))]}
 
+    def _defense_with_fuel(self,obs,result):
+        if result and not result.get('type')and result.get('status')=='waiting':
+            fuel=self.bootstrap.maintain_fuel(self.starter_observation(obs))
+            if fuel and fuel.get('type'):return fuel
+        return result
+
+    def _approved_initial_defense(self,obs,*,maintain_armed=False):
+        """Finish an already requested perimeter; never invent a defense job."""
+        perimeter=getattr(self,'perimeter',None)
+        if perimeter is None:return None
+        armed=getattr(perimeter,'state',{}).get('phase')=='armed'
+        if armed and not maintain_armed:return None
+        if not all(obs.get('enabled_recipes',{}).get(name)for name in ('gun-turret','firearm-magazine')):return None
+        game=getattr(self,'game',None)
+        if game is None:return None
+        path=Path(game.cfg.runtime_dir)/'jobs.json'
+        if not path.exists():return None
+        ledger=json.loads(path.read_text(encoding='utf-8'))
+        if ledger.get('schema_version')!=2 or ledger.get('world_id')!=obs.get('world_id'):return None
+        same_world=[job for job in ledger.get('jobs',{}).values()if job.get('world_id')==obs['world_id']]
+        # No background defense mutation during any unresolved world effect,
+        # even an empty durable intent or a clean older defense approval.
+        if any('pending_action'in job or 'outcome_unknown'in str(job.get('reason',''))
+               or job.get('reason')=='world_rollback_requires_reconciliation'for job in same_world):return None
+        rows=[job for job in same_world if job.get('capability')=='defense_perimeter']
+        known={'pending','running','waiting','paused','blocked','failed','succeeded'}
+        if not any(job.get('status')in known and job.get('parameters')=={}for job in rows):return None
+        result=self._defense_with_fuel(obs,perimeter.upkeep(obs)if armed else perimeter.step(obs))
+        # Commissioning defense cannot complete the unrelated mining/build job.
+        return result if result and(result.get('type')or result.get('status')!='succeeded')else None
+
     def starter_upkeep(self,obs):
         if getattr(self,'storage',None):
             storage=self.storage.step(obs)
@@ -678,13 +709,20 @@ class StarterExecutors:
         from factorio_ai.deterministic_repair_control import pending_repair
         cleanup=pending_repair(obs)
         if cleanup:return cleanup
+        if capability == 'nest_assault':
+            return {'status':'blocked','reason':'staged_assault_retired_use_concentrated_nest_sweep'}
+        gun_bridge=(capability=='bootstrap_research'and (parameters or{}).get('technology')=='gun-turret')
+        if capability!='defense_perimeter'and not gun_bridge:
+            initial_defense=self._approved_initial_defense(obs,maintain_armed=capability=='bootstrap_research')
+            if initial_defense:return initial_defense
         if capability=='bootstrap_research':
             # Early defense research must not first rebuild remote damaged
             # starter/coal assets. The controller checks its own live power.
             self.builder._sync(obs)
             return self._bootstrap_research(parameters or{}).step(obs)
-        if capability == 'nest_assault':
-            return {'status':'blocked','reason':'staged_assault_retired_use_concentrated_nest_sweep'}
+        if capability=='defense_perimeter':
+            self.builder._sync(obs)
+            return self._defense_with_fuel(obs,self.perimeter.step(obs))
         if capability == 'radar_network':
             self.builder._sync(obs)
             result=self.radars.step(obs,parameters or {})
@@ -889,8 +927,6 @@ class StarterExecutors:
             return self.green.step(obs,parameters or {})
         if capability == "steam_expansion":
             return self.steam_expansion.step(obs)
-        if capability == "defense_perimeter":
-            return self.perimeter.step(obs)
         if capability == "main_bus_factory":
             return self.bus_factory.step(obs,parameters or {})
         if capability == "dedicated_materials":

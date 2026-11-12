@@ -71,6 +71,23 @@ def validate_take_many(action):
 
 
 class V2Bootstrap(DeterministicBootstrap):
+    def maintain_fuel(self,observation):
+        entities=observation.get('entities',[])
+        hungry=any(e.get('name')in {'burner-mining-drill','stone-furnace'}
+            and sum((e.get('inventory')or{}).get(item,0)for item in ('coal','wood'))<2 for e in entities)
+        if not hungry:return None
+        survey=self._existing_cells('coal')
+        if not survey.get('ok'):
+            return {'status':'blocked','reason':'starter_coal_priority_survey_failed'}
+        producers={(c['drill']['name'],c['drill']['position']['x'],c['drill']['position']['y'])
+            for c in survey.get('cells',[])if not c.get('electric')and c.get('receiver')and c.get('remaining',0)>0}
+        # Keep a real coal producer running before spending the last carried
+        # fuel on its consumers. The base routine retains ordinary partial
+        # transfers and its existing bounded emergency mining behavior.
+        ordered=sorted(entities,key=lambda e:(e.get('name'),(e.get('position')or{}).get('x'),
+            (e.get('position')or{}).get('y'))not in producers)
+        return super().maintain_fuel(dict(observation,entities=ordered))
+
     def _ensure_cell(self,observation,resource,receiver_name):
         result=super()._ensure_cell(observation,resource,receiver_name)
         cleanup=getattr(self,'cell_site_cleanup',None)

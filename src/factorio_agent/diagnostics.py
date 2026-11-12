@@ -196,15 +196,20 @@ def factory_constraints(root,obs,catalog):
         needs=green['rated_demand']['raw_items_per_minute'];demand.update(needs)
         lines.append({'product':'logistic-science-pack','nominal_per_minute':green['nominal_machine_rate'],
                       'raw_demand':needs,'phase':green['phase']})
-    peak=0;generation=0;low_power=Counter()
+    peak=0;generation=0;low_power=Counter();no_fuel=Counter();no_inputs=Counter();full_output=Counter()
     for e in obs['entities']:
         proto=catalog.entities.get(e['name'],{})
         if proto.get('electric'):peak+=proto.get('energy_usage',0)*60/1000
         generation+=proto.get('energy_production',0)*60/1000
         if e.get('status_name') in ('low_power','no_power'):low_power[e['name']]+=1
+        if e.get('status_name')=='no_fuel':no_fuel[e['name']]+=1
+        if e.get('status_name')=='no_ingredients':no_inputs[e['name']]+=1
+        if e.get('status_name')=='full_output':full_output[e['name']]+=1
     return {'registered_design_lines':lines,'nominal_plate_supply_per_minute':nominal,
             'simultaneous_rated_plate_demand_per_minute':dict(demand),
             'rated_plate_deficit_per_minute':{item:max(0,n-nominal.get(item,0)) for item,n in demand.items()},
             'installed_generation_nameplate_kw':generation,'installed_consumer_peak_kw':peak,
             'live_low_or_no_power_entities':dict(low_power),
+            'live_no_fuel_entities':dict(no_fuel),'live_waiting_for_ingredients_entities':dict(no_inputs),
+            'live_full_output_entities':dict(full_output),
             'scope':'catalog design bounds and instantaneous native status; peak is not average demand; construction/mall/ammo/steel add further demand; no measured throughput claim'}

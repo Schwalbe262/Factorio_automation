@@ -21,8 +21,9 @@ planning, execution and model waits separately. Later freeze code for independen
 ## Rules
 - Pin installed Factorio/Space Age 2.1.20 and export its actual game data.
 - New isolated worlds keep default resources/enemies/pollution/evolution.
-  Future Nauvis maps disable cliffs by user request; dev-101 retains its original
-  generation settings. Do not alter an existing world's terrain to apply this.
+  Future Nauvis maps use automation_config.json: starting area200% and no cliffs
+  by default, per user request. dev-101 and eval-1053994892 retain their original
+  generation settings; apply generation changes only when creating a new world.
 - RCON direct construction allowed; ordinary material costs are mandatory.
 - Engine crafting, machine production, science consumption and launch are real.
 - Never grant materials, unlock research by script, or edit progress counters.

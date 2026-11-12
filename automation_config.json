@@ -1,0 +1,11 @@
+{
+  "world": {
+    "starting_area_percent": 200,
+    "nauvis_cliffs": false,
+    "seed": null
+  },
+  "controller": {
+    "decision_interval_seconds": 60,
+    "execution_slice_seconds": 25
+  }
+}
