@@ -25,6 +25,14 @@ from factorio_agent.core.factorio import (
 from .automation_config import AutomationConfig, load_automation_config
 
 
+NETWORK_SEGMENT_SETTINGS = {
+    "minimum_segment_size": 16384,
+    "minimum_segment_size_peer_count": 20,
+    "maximum_segment_size": 16384,
+    "maximum_segment_size_peer_count": 10,
+}
+
+
 class WorldBoundGame(DeterministicGame):
     """Check world identity inside the same Lua command as every effect."""
 
@@ -332,6 +340,10 @@ def start(root: Path) -> dict:
         settings.update(
             visibility={"public": False, "lan": False}, auto_pause=False, name="Factorio Luna v2", max_players=2
         )
+        # With a client connected the server forwards each console command in
+        # network segments, one per tick. The default 100-byte segment made a
+        # 1 KB query take about 100 ms and a full observation over 500 ms.
+        settings.update(NETWORK_SEGMENT_SETTINGS)
         _atomic_json(settings_path, settings)
         process = spawn_console_independent(command, log_path=cfg.log_dir / "server-process.log")
         from factorio_agent.core.deterministic_character import _identity
@@ -346,6 +358,11 @@ def start(root: Path) -> dict:
         expected = json.loads(old_settings.read_text(encoding="utf-8"))["world_id"] if old_settings.exists() else None
         game = WorldBoundGame(cfg, expected)
         initialized = game.initialize()
+        if expected and initialized.get("reason") == "agent_dead":
+            # Resuming after a full shutdown: the world matched (the query is
+            # bound to it) but the actor is the GUI player's character, which
+            # only becomes valid again when the client reconnects.
+            initialized = {"ok": True, "world_id": expected}
         if not initialized.get("ok"):
             raise RuntimeError(initialized.get("reason", "initialization_failed"))
         game.expected_world = initialized["world_id"]
