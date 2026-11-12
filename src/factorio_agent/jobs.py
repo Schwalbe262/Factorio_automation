@@ -663,8 +663,13 @@ def _unresolved_world_effect(jobs) -> bool:
 
 
 def _owns_research(capability) -> bool:
-    """A capability that selects a technology itself owns the lab while it is active."""
-    return "technology" in CAPABILITIES.get(capability, {}).get("parameters", {})
+    """A capability that drives research owns the lab while it is active.
+
+    The admission rule and the idle research lane must agree, so both use
+    RESEARCH_CAPABILITIES; any capability taking a ``technology`` parameter
+    counts too, in case one is added without updating that set.
+    """
+    return capability in RESEARCH_CAPABILITIES or "technology" in CAPABILITIES.get(capability, {}).get("parameters", {})
 
 
 class StarterExecutors:

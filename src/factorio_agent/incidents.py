@@ -49,6 +49,8 @@ class IncidentConfig:
     - ``idle_grace_seconds`` (60): an empty queue becomes an incident after this.
     - ``progress_minutes`` (10): no success for this long, with repetitive actions.
     - ``repeat_share`` (0.5): share of the last 100 actions held by the top two.
+    - ``quiet_actions`` (10): fewer actions than this in the progress window
+      also counts as no progress (jobs that only wait).
     - ``incident_retry_seconds`` (300): one consultation per incident per window.
     - ``outcome_minutes`` (10): an episode still open after this is ``expired``.
     - ``review_minutes`` (None): periodic ``planner_review``; off by default.
@@ -59,6 +61,7 @@ class IncidentConfig:
     idle_grace_seconds: float = 60
     progress_minutes: float = 10
     repeat_share: float = 0.5
+    quiet_actions: int = 10
     incident_retry_seconds: float = 300
     outcome_minutes: float = 10
     review_minutes: float | None = None
@@ -406,10 +409,16 @@ class IncidentTracker:
             intents = [r for r in inputs.intents() if isinstance(r.get("time"), (int, float))][-100:]
             capability = {j["key"]: j.get("capability") for j in inputs.jobs}
             top, share = repeat_summary(intents, capability)
-            if intents and share >= config.repeat_share:
-                in_window = Counter(r.get("key") for r in intents if r["time"] >= window)
+            in_window = Counter(r.get("key") for r in intents if r["time"] >= window)
+            # Stuck looks like one of two things: the same small action over
+            # and over, or jobs that only wait (a dead drill, a proof that can
+            # never hold) and perform almost no action at all.
+            quiet = sum(in_window.values()) < config.quiet_actions
+            if (intents and share >= config.repeat_share) or quiet:
                 facts = dict(
                     minutes_since_success=round((now - self.last_success_at) / 60, 1),
+                    pattern="idle" if quiet else "repetitive",
+                    actions_in_window=sum(in_window.values()),
                     repeat_share=share,
                     top_repeated_action=top[0] if top else None,
                     active_jobs=[

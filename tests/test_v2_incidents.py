@@ -79,7 +79,7 @@ class Harness:
 
 class BlockedJobTests(unittest.TestCase):
     def setUp(self):
-        self.h = Harness()
+        self.h = Harness(IncidentConfig(quiet_actions=0))
         self.h.jobs = [job("s", status="succeeded"), job("b", "power", "blocked"), job("w", "smelting")]
         self.h.nodes = [node("n_b", "b", "power", "blocked"), node("n_w", "w", "smelting", "running")]
 
@@ -185,19 +185,29 @@ class NoProgressTests(unittest.TestCase):
         self.assertEqual([o for _, o, _ in self.h.at(610).closed], ["resolved"])
 
     def test_varied_actions_are_not_an_incident(self):
-        self.h.intents = [dict(key="a", time=i, action={"type": "craft", "item": "i" + str(i)}) for i in range(100)]
+        self.h.intents = [
+            dict(key="a", time=400 + i, action={"type": "craft", "item": "i" + str(i)}) for i in range(100)
+        ]
         self.h.at(0)
         self.assertEqual(self.h.at(900).opened, [])
+
+    def test_jobs_that_only_wait_are_an_incident_too(self):
+        self.h.intents = [dict(key="a", time=i, action={"type": "craft", "item": "i" + str(i)}) for i in range(100)]
+        self.h.at(0)
+        incident = self.h.at(900).opened[0]
+        self.assertEqual(incident.kind, "no_progress")
+        self.assertEqual(incident.facts["pattern"], "idle")
+        self.assertEqual(incident.facts["actions_in_window"], 0)
 
 
 class ReviewAndSeverityTests(unittest.TestCase):
     def test_planner_review_is_off_by_default_and_periodic_when_enabled(self):
-        h = Harness()
+        h = Harness(IncidentConfig(quiet_actions=0))
         h.jobs = [job("a", "smelting")]
         h.nodes = [node("n_a", "a", "smelting", "running")]
         h.at(0)
         self.assertEqual(h.at(7200).opened, [])
-        h = Harness(IncidentConfig(review_minutes=30))
+        h = Harness(IncidentConfig(review_minutes=30, quiet_actions=0))
         h.jobs = [job("a", "smelting")]
         h.nodes = [node("n_a", "a", "smelting", "running")]
         h.at(0)
