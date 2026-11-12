@@ -14,6 +14,7 @@ from .transport import plan_connection as belt_connection, underground_proof, xy
 from .planning import preflight
 
 FURNACE_NAMES = frozenset({"stone-furnace", "steel-furnace", "electric-furnace"})
+DISTRICT_TILES = 32  # side of the square a smelting district reserves
 
 
 def smelting_site_anchors(sources):
@@ -310,6 +311,24 @@ class SmeltingDistrict:
             }
         return {"status": "waiting", "reason": "waiting for added furnaces to smelt ordinary belt inputs"}
 
+    def _map_site_anchors(self, game, sources):
+        """District anchors on free land nearest the ore and coal sources, from one bulk map survey.
+
+        Fixed coordinates and offsets around the sources can all land on ore or
+        water on an unfamiliar map; a surveyed tile map finds real free land.
+        Any survey problem returns no anchors, leaving the older candidates.
+        """
+        from .site.candidates import free_sites, survey_around
+
+        points = [(p["position"]["x"], p["position"]["y"]) for p in sources.values()]
+        try:
+            world = survey_around(game, points)
+            rects = free_sites(world, points, DISTRICT_TILES, DISTRICT_TILES, limit=12)
+        except Exception:  # noqa: BLE001 - site search is an optimisation, never a new failure mode
+            return []
+        # The district's reserved area is [x - 8, x + 24) x [y - 8, y + 24).
+        return [(rect.x0 + 8, rect.y0 + 8) for rect in rects]
+
     def prepare(self, obs):
         from .industrial import PlanningBudget
 
@@ -348,7 +367,7 @@ class SmeltingDistrict:
             for r, product, rate in (("iron-ore", "iron-plate", 60), ("copper-ore", "copper-plate", 30))
         }
         candidates = []
-        for x, y in smelting_site_anchors(sources):
+        for x, y in self._map_site_anchors(game, sources) + list(smelting_site_anchors(sources)):
             area = [[x - 8, y - 8], [x + 24, y + 24]]
             if any(
                 area[0][0] < b["reserved_area"][1][0]
@@ -393,7 +412,9 @@ local plans=helpers.json_to_table("""
 for i,plan in ipairs(plans) do
  local clear=s.count_entities_filtered{area=plan.area,type="resource"}==0
  if clear then for _,e in pairs(s.find_entities_filtered{area=plan.area}) do
-  if e.type~="electric-pole" and e.type~="character" and not e.prototype.collision_mask.colliding_with_tiles_only then clear=false;break end
+  local natural=e.force.name=="neutral" and e.minable and (e.type=="tree" or e.type=="simple-entity")
+  if e.type~="electric-pole" and e.type~="character" and not natural
+   and not e.prototype.collision_mask.colliding_with_tiles_only then clear=false;break end
  end end
  if clear then for _,tile in pairs(s.find_tiles_filtered{area=plan.area}) do
   for layer in pairs(prototypes.entity["stone-furnace"].collision_mask.layers) do
@@ -404,7 +425,8 @@ for i,plan in ipairs(plans) do
  if clear then for _,e in ipairs(plan.entities) do
   local old=target(e.position,e.name)
   if not (old and old.force==f and old.type=="electric-pole")
-   and not s.can_place_entity{name=e.name,position=e.position,direction=e.direction,force=f} then clear=false;break end
+   and not s.can_place_entity{name=e.name,position=e.position,direction=e.direction,force=f,
+    build_check_type=defines.build_check_type.manual_ghost,forced=true} then clear=false;break end
  end end
  if clear then legal[#legal+1]=i end
 end
