@@ -11,7 +11,8 @@
   },
   "controller": {
     "decision_interval_seconds": 60,
-    "execution_slice_seconds": 25
+    "execution_slice_seconds": 25,
+    "planner": "luna"
   }
 }
 ```
@@ -21,10 +22,11 @@
 | `world.starting_area_percent` | 0–600의 유한한 숫자 | 새 월드 생성: 200% → Factorio `starting_area=2.0`, 600% → `6.0` |
 | `world.nauvis_cliffs` | `false` 또는 `true` | 새 월드 생성: 기본 `false`는 Nauvis 절벽 비활성화, `true`는 게임 기본 절벽 설정 |
 | `world.seed` | `null` 또는 0–4294967295 정수 | 메뉴 3 / `tools/windows/new_map.bat`: `null`은 사용하지 않은 무작위 시드, 정수는 해당 시드 |
-| `controller.decision_interval_seconds` | 10–3600초 | 다음 컨트롤러 프로세스 시작 |
+| `controller.decision_interval_seconds` | 10–3600초 | 다음 컨트롤러 프로세스 시작: 모델 호출 사이 최소 간격 |
 | `controller.execution_slice_seconds` | 1–50초 | 다음 컨트롤러 프로세스 시작 |
+| `controller.planner` | `"luna"`(기본) 또는 `"none"` | 다음 컨트롤러 프로세스 시작(`--planner`) |
 
-메뉴 1 / `tools/windows/start.bat`은 현재 월드를 재개합니다. 설정을 바꿔도 기존 월드의 지형, 시작 구역, 적 설정은 바뀌지 않습니다. 실행 중인 컨트롤러도 재시작하기 전까지 기존 주기를 유지합니다. 설정 주기는 의사 결정의 기준 간격이며 기존 이벤트 대응 스케줄링은 유지됩니다. 모델은 기존 `gpt-6-luna` / `medium` 계약을 사용합니다.
+메뉴 1 / `tools/windows/start.bat`은 현재 월드를 재개합니다. 설정을 바꿔도 기존 월드의 지형, 시작 구역, 적 설정은 바뀌지 않습니다. 실행 중인 컨트롤러도 재시작하기 전까지 기존 설정을 유지합니다. 일상적인 순서 결정은 프레임워크(오토파일럿, 자동 재시도, 디스패치)가 합니다. `planner: "luna"`는 프레임워크가 규칙 없이 막힌 경우(인시던트)에만 기존 `gpt-6-luna` / `medium` 계약으로 모델에 묻습니다. `planner: "none"`은 모델 클라이언트를 만들지 않고 Codex CLI를 실행하지 않으며, 인시던트는 `handled_by: "none"`으로 기록만 합니다. 자세한 규칙은 [SUPERVISOR.md](SUPERVISOR.md)를 참고하십시오.
 
 메뉴 3 / `tools/windows/new_map.bat`을 명시적으로 실행하면 기존 월드를 안전 정지·저장·백업한 뒤 새 월드를 생성합니다. 설정 오류와 이미 존재하는 지정 시드는 정지·저장 전에 거부합니다. 이전 런타임을 덮어쓰거나 삭제하지 않습니다. 일반 CLI의 `create --seed ...`는 명시한 시드를 우선하며 시작 구역·절벽 설정만 설정 파일에서 가져옵니다.
 

@@ -30,9 +30,10 @@ class AutomationConfigTests(unittest.TestCase):
             options.to_dict(),
             dict(
                 world=dict(starting_area_percent=200, nauvis_cliffs=False, seed=None),
-                controller=dict(decision_interval_seconds=60, execution_slice_seconds=25),
+                controller=dict(decision_interval_seconds=60, execution_slice_seconds=25, planner="luna"),
             ),
         )
+        self.assertEqual(self.load({"controller": {"planner": "none"}}).controller.planner, "none")
         self.assertIsNone(options.source_sha256)
         self.path.write_text("\ufeff" + json.dumps({"world": {"starting_area_percent": 600}}), encoding="utf-8")
         options = load_automation_config(self.path)
@@ -76,6 +77,7 @@ class AutomationConfigTests(unittest.TestCase):
             for key, values in (
                 ("decision_interval_seconds", (9, 3601, True, None, "60", float("nan"))),
                 ("execution_slice_seconds", (0, 51, False, "25", float("inf"))),
+                ("planner", ("other", None, True, "", "Luna")),
             )
             for v in values
         ]

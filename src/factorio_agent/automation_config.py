@@ -48,12 +48,26 @@ class WorldConfig:
             raise ValueError("world.seed must be null or an unsigned32-bit integer")
 
 
+PLANNERS = ("luna", "none")
+
+
 @dataclass(frozen=True)
 class ControllerConfig:
+    """Supervisor startup arguments.
+
+    ``planner`` (default "luna"): "luna" consults the pinned model only on
+    incidents; "none" runs on framework rules alone and never starts the model.
+    ``decision_interval_seconds`` (60): minimum seconds between model calls.
+    ``execution_slice_seconds`` (25): length of one ``run --all`` slice.
+    """
+
     decision_interval_seconds: int | float = 60
     execution_slice_seconds: int | float = 25
+    planner: str = "luna"
 
     def validate(self):
+        if self.planner not in PLANNERS:
+            raise ValueError("controller.planner must be one of " + ", ".join(PLANNERS))
         _number(self.decision_interval_seconds, 10, 3600, "controller.decision_interval_seconds")
         _number(self.execution_slice_seconds, 1, 50, "controller.execution_slice_seconds")
 
@@ -133,7 +147,7 @@ def load_automation_config(path=None):
     world = value.get("world", {})
     controller = value.get("controller", {})
     _keys(world, ("starting_area_percent", "nauvis_cliffs", "seed"), "world")
-    _keys(controller, ("decision_interval_seconds", "execution_slice_seconds"), "controller")
+    _keys(controller, ("decision_interval_seconds", "execution_slice_seconds", "planner"), "controller")
     return AutomationConfig(
         WorldConfig(**world),
         ControllerConfig(**controller),

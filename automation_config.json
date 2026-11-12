@@ -6,6 +6,7 @@
   },
   "controller": {
     "decision_interval_seconds": 60,
-    "execution_slice_seconds": 25
+    "execution_slice_seconds": 25,
+    "planner": "luna"
   }
 }

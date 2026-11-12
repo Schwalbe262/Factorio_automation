@@ -1,80 +1,86 @@
-# Event-driven Luna supervisor
+# Supervisor: framework sequencing, model as exception handler
 
 ```text
-python -B -m factorio_agent.supervisor --runtime ABS --decision-interval 60 --slice-seconds 25
+python -B -m factorio_agent.supervisor --runtime ABS --planner luna|none --decision-interval 60 --slice-seconds 25
 ```
 
-`--max-seconds N` ends the session through safe stop; `--max-decision-interval` overrides the
-maximum Luna interval. `--bridge inprocess` (default) keeps one game session in the supervisor
-process; `--bridge cli` starts a child per command. Lifecycle owns the game/client and game pause. The supervisor never sets research, grants goods,
-chooses coordinates or sends raw RCON.
+`--max-seconds N` ends through safe stop. `--bridge inprocess` (default) keeps one game session in
+the process; `--bridge cli` starts a child per command. Lifecycle passes `controller.planner`,
+`decision_interval_seconds` and `execution_slice_seconds` from `automation_config.json`. The
+supervisor never sets research, grants goods, chooses coordinates or sends raw RCON.
+
+## Role split
+
+The framework sequences routine work: `progression.autopilot_nodes` (roadmap steps and
+demand-driven capacity), `_auto_retry` (a blocked job is retried after another job succeeds, at most
+3 times; never unknown outcomes, rollbacks or deadlines) and dispatch of up to 4 concurrent jobs.
+The model (`gpt-6-luna`, medium, Codex CLI, no tools) is consulted only for an open incident.
+
+- `planner: none`: no model client, no decision thread, no Codex import. Incidents are still
+  opened, closed and recorded (`handled_by: "none"`) so the run can be audited.
+- `planner: luna`: one call per open incident not consulted within `incident_retry_seconds` (300),
+  one incident per call, most severe first, at least `decision_interval` seconds between calls,
+  never during error backoff. Calls run in a background thread; dispatch never waits.
 
 ## Cycle
 
-1. Snapshot: `observe`, `status`, `capabilities`, `actor-status`; world and rollback guards;
-   queue refresh. State records `active_job_keys` (priority order) and `active_job_key` (first).
-2. Resume every job the previous successful safe stop paused (`pause_receipts`).
-3. Autopilot: when fewer than 2 nodes are pending or ready, `progression.autopilot_nodes(jobs,
-   queue_nodes, observation, capabilities, limit=3)` adds up to 3 `auto_*` nodes in Luna's format
-   through the same merge validation (rejections are logged, not backed off; no module = skip).
-4. Accept a finished Luna decision, then maybe start the next call (below).
-5. Dispatch: while fewer than `MAX_ACTIVE_JOBS` (4) are active, submit ready nodes, highest
-   priority first (`request --priority`). A node whose capability is already active stays ready.
-   A retryable admission refusal (capability active, 4 active, stale observation) keeps the node
-   ready; any other refusal blocks that node only.
-6. One `run --all --seconds <slice>` interleaves every active job per action. Stop handling
-   (`stop_requested`/`on_stop`) is unchanged.
+1. Snapshot (`observe`, `status`, `capabilities`, `actor-status`), world/rollback guards, queue refresh.
+2. Resume jobs paused by the last successful safe stop.
+3. Autopilot when fewer than 2 nodes are pending/ready (`auto_*` ids, same merge validation).
+4. Auto-retry; accept a finished model decision.
+5. Update incidents; maybe start one consultation.
+6. Dispatch ready nodes (priority order, one job per capability, at most 4 active), then one
+   `run --all --seconds <slice>`.
 
-## When Luna is called
+## Incidents (`incidents.py`, pure)
 
-One call is in flight at a time, asynchronously; dispatch never waits for Luna.
+| kind | opens when | resolved when |
+| --- | --- | --- |
+| `empty_queue` | no active job, no pending/ready node, roadmap unfinished, for `idle_grace_seconds` (60) | an active job or queued node exists |
+| `blocked_job` | a job stays blocked for `blocked_grace_seconds` (60); auto-retry restarts the timer | the job leaves `blocked` |
+| `no_progress` | jobs active, no success for `progress_minutes` (10), top two of the last 100 actions >= `repeat_share` (0.5) | a job succeeds |
+| `planner_review` | every `review_minutes` (off by default) | a job succeeds |
 
-- first cycle, or forced;
-- a job became succeeded/blocked/failed, or a blocked/failed reason changed;
-- the queue became low (fewer than 2 pending/ready nodes), once per low episode;
-- `max_decision_interval` elapsed: default `max(decision_interval, 300)`, explicit values as given.
+Severity: `empty_queue` > `blocked_job` > `no_progress` > `planner_review`. An episode still open
+after `outcome_minutes` (10) closes `expired`; a persisting condition opens a new episode. The id is
+a stable hash of kind and subject (job key or `queue`). Facts are bounded and redacted.
 
-Never sooner than `minimum_decision_interval` (20 s) after the previous call, never during error
-backoff (10 s doubling, at most 300 s). `wait` suppresses the low-queue and interval triggers for
-`decision_interval` seconds; terminal events still trigger, and ready nodes and active jobs keep
-running. Errors never select a fallback model.
+## Remedy menu
 
-## Decisions
+Each incident carries its menu; anything else is rejected (`decision_rejected`, at most once per
+incident per 5 minutes, no error backoff). The decision schema is unchanged:
 
-```json
-{"operation":"plan","capability":null,"parameters":{},"target_task_id":null,"reason":"bootstrap",
- "queue":[{"id":"starter","capability":"starter","parameters":{},
- "priority":100,"depends_on":[],"reason":"normally produce starting materials"}]}
-```
+- `retry` -> `operation=retry` on a listed blocked task (never for an unknown outcome);
+- `pause` -> `operation=pause` on a listed active task (`no_progress`, `planner_review`);
+- `add_nodes` -> `operation=plan` with 1-3 nodes of listed capabilities (`requires` satisfied,
+  native recipes not locked), with their parameter contracts;
+- `wait` -> `operation=wait` with a reason; it changes nothing (the retry window spaces calls).
 
-- `plan` merges queue nodes. IDs are immutable identities (capability + exact parameters); job
-  keys derive from world, ID, capability and parameters. Cycles, unknown references, raw
-  coordinates/commands and invalid requests reject the whole merge. Started nodes keep their
-  dependency set. A NEW ID whose capability and parameters equal an existing pending, ready,
-  running or completed node is skipped and dependencies on it are redirected; blocked nodes do
-  not absorb duplicates. This keeps Luna and autopilot from queuing the same work twice.
-- `request` adds one `now_*` node; admission happens at dispatch.
-- `continue` without a target is a no-op; with `target_task_id` it resumes that exact paused job.
-- `retry` / `pause` act on the exact job from the decision snapshot (`target_task_id`, or one
-  unambiguous match). A target that finished meanwhile is a logged stale response; nothing is
-  retargeted to a successor. Unknown action outcomes are never retried.
-- `wait` delays the next Luna call only.
+`request` and `continue` are never on the menu. A decision for an incident that closed while the
+model was thinking is a `stale_decision`. Retry/pause still go through `_control`: exact target
+from the decision snapshot, never a successor, unknown outcomes never retried.
 
-The snapshot holds native unlocks, research options, power, bounded inventory/entity counts,
-`max_active_jobs`, `active_jobs`, up to 12 jobs (all active ones first) with bounded blocker
-summaries, the open queue, the last 16 completed nodes and the latest planner error. Coordinates,
-commands, paths and credentials are stripped. World/actor/tick are re-checked before a decision
-is applied. Older queue files may carry `scheduler_pause` fields; they are dropped on load.
+## Consultation input
+
+`document()`: the incident (kind, subject, facts), the menu, and a factory status (researched count
+and the 10 most recently seen technologies, 15 most common entities, per-item `shortfall`,
+`produced_per_minute`, `consumed_per_minute`, `net_per_minute`, open jobs one line each, next 5
+roadmap steps with what each waits on). Hard cap 24,000 characters (~6,000 tokens) with
+`...<truncated>` markers; a typical document is about 3,000 characters plus a 1,350-character prompt.
+
+## Logs
+
+Controller events: `supervisor_started` (planner), `incident_opened`, `incident_decision` (remedy,
+accepted, latency, input/cached/output tokens), `decision_rejected`, `incident_outcome` (`resolved`
+or `expired`, seconds, remedy). `logs/incidents.jsonl` stores each document sent (or that would be
+sent with `none`), once per incident per retry window, capped at 5 MB. State shows `planner` and
+`open_incidents`. `tools/report_run.py` summarises them; `tools/luna_incident_replay.py RUNTIME
+[--limit N] [--dry-run|--send]` replays recorded documents (dry run by default).
 
 ## Stop protocol
 
-The supervisor holds `controller.lock`; state is `logs/controller-state.json`, events
-`logs/controller-events.jsonl`. Lifecycle writes `supervisor-stop.json`
-(`request_id`, `world_id`, `requested_at`, `source`). It is polled while idle and during a slice;
-a running slice gets the exclusively created `stop.json` latch (`worker_stop_owned`,
-`worker_stop_sha256`) plus `stop-worker`, and finishes its current action. Then every active job
-is paused (one `pause` per key) and a checkpoint is requested. Only after both succeed does state
-record `status='safe_stopped', state='stopped', saved=true, stop_request_id=<id>`,
-`pause_receipts` (all) and `pause_receipt` (first). A failed checkpoint or foreign world yields
-`saved=false`. Late model responses after stop are discarded. Another operator's `stop.json` is
-never claimed or overwritten. Tests use a fake CLI and clock and make no game changes.
+The supervisor holds `controller.lock`; state is `logs/controller-state.json`. Lifecycle writes
+`supervisor-stop.json`; a running slice gets the exclusively created `stop.json` latch plus
+`stop-worker` and finishes its action. Every active job is paused, then a checkpoint is requested;
+only after both succeed does state record `safe_stopped`, `saved=true` and `pause_receipts`.
+Late model responses after stop are discarded; another operator's `stop.json` is never claimed.

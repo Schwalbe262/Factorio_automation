@@ -4,7 +4,8 @@ Usage: python -B tools/report_run.py runtime/v2/<name> [--json] [--gap-seconds 3
 
 The numbers are the yardstick for speed work: actions per minute, the share of
 wall time with no action for longer than the gap threshold, framework planning
-time against action execution time, and how often the model was consulted.
+time against action execution time, how often the model was consulted, and
+which incidents opened, what was chosen for them and whether they resolved.
 """
 
 from __future__ import annotations
@@ -13,6 +14,11 @@ import argparse
 from collections import Counter, defaultdict
 import json
 from pathlib import Path
+import statistics
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from factorio_agent.incidents import repeat_summary  # noqa: E402
 
 
 def rows(path):
@@ -64,15 +70,7 @@ def report(root, gap_seconds=30.0):
     ]
     intents = [r for r in job_events if r.get("event") == "action_intent"]
     recent = intents[-100:]
-    repeated = Counter(
-        (
-            capability.get(r.get("key")),
-            r.get("action", {}).get("type"),
-            r.get("action", {}).get("item") or r.get("action", {}).get("name"),
-            r.get("action", {}).get("count"),
-        )
-        for r in recent
-    ).most_common(3)
+    repeated, repeat_share = repeat_summary(recent, capability)
     last_success = milestones[-1]["minute"] if milestones else None
 
     decisions = Counter(r.get("operation") for r in controller if r.get("event") == "decision")
@@ -116,10 +114,8 @@ def report(root, gap_seconds=30.0):
         "jobs_succeeded": len(milestones),
         "minutes_since_last_success": round(minutes - last_success, 1) if last_success is not None else None,
         "milestones": milestones,
-        "recent_100_actions_top": [
-            {"job": j, "type": ty, "item": i, "count": c, "times": n} for (j, ty, i, c), n in repeated
-        ],
-        "recent_repeat_share": round(sum(n for _, n in repeated[:2]) / len(recent), 2) if recent else 0.0,
+        "recent_100_actions_top": repeated,
+        "recent_repeat_share": repeat_share,
         "planning_seconds": round(planning, 1),
         "execution_seconds": round(execution, 1),
         "planning_per_execution": round(planning / execution, 2) if execution else None,
@@ -133,6 +129,52 @@ def report(root, gap_seconds=30.0):
         "commands": {k: {"count": v["count"], "seconds": round(v["seconds"], 1)} for k, v in commands.items()},
         "kernel_totals": kernel,
         "per_job": per_job,
+        **incident_report(root, controller),
+    }
+
+
+def incident_report(root, controller):
+    """Planner mode, model cost and incident outcomes from controller events.
+
+    One episode per ``incident_opened``; its remedy is the last accepted
+    ``incident_decision`` and its outcome the next ``incident_outcome`` for the
+    same incident id (``open`` while none was logged).
+    """
+    started = [r for r in controller if r.get("event") == "supervisor_started"]
+    planner = started[-1].get("planner") if started else None
+    if planner is None:
+        state = Path(root) / "logs" / "controller-state.json"
+        planner = json.loads(state.read_text(encoding="utf-8")).get("planner") if state.exists() else None
+    episodes = []
+    current = {}
+    consultations = [r for r in controller if r.get("event") == "incident_decision"]
+    for r in controller:
+        event = r.get("event")
+        key = r.get("incident_id")
+        if event == "incident_opened":
+            current[key] = dict(
+                kind=r.get("incident_kind"),
+                capability=r.get("capability"),
+                remedy=None,
+                outcome="open",
+                seconds=None,
+            )
+            episodes.append(current[key])
+        elif event == "incident_decision" and key in current and r.get("accepted"):
+            current[key]["remedy"] = r.get("remedy")
+        elif event == "incident_outcome" and key in current:
+            current.pop(key).update(outcome=r.get("outcome"), seconds=r.get("seconds"))
+    resolved = [e["seconds"] for e in episodes if e["outcome"] == "resolved" and e["seconds"] is not None]
+    return {
+        "planner_mode": planner or "luna (legacy run)",
+        "model_consultations": len(consultations),
+        "model_seconds": round(sum(r.get("latency_seconds") or 0 for r in consultations), 1),
+        "model_input_tokens": sum(r.get("input_tokens") or 0 for r in consultations),
+        "incidents_by_kind": dict(Counter(e["kind"] for e in episodes)),
+        "incidents_resolved": sum(e["outcome"] == "resolved" for e in episodes),
+        "incidents_expired": sum(e["outcome"] == "expired" for e in episodes),
+        "median_seconds_to_resolution": round(statistics.median(resolved), 1) if resolved else None,
+        "incidents": episodes,
     }
 
 
@@ -158,6 +200,10 @@ def main(argv=None):
                     "  {capability:24s} {status:10s} actions={actions:4d} plan={planning_seconds:7.1f}s "
                     "exec={execution_seconds:6.1f}s  {reason}".format(**job)
                 )
+        elif key == "incidents":
+            print("incidents:")
+            for row in value:
+                print("  {kind:14s} {capability!s:24s} remedy={remedy!s:10s} {outcome}".format(**row))
         else:
             print(f"{key}: {value}")
 

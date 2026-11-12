@@ -5,6 +5,7 @@ import queue
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 from unittest.mock import Mock, patch
@@ -223,7 +224,7 @@ class SimpleClient:
         self.result = result
         self.calls = []
         self.called = threading.Event()
-        self.last_usage = {"input_tokens": 100, "output_tokens": 10}
+        self.last_usage = {"input_tokens": 100, "cached_input_tokens": 40, "output_tokens": 10}
         self.last_session_id = "fake"
 
     def decide(self, snapshot):
@@ -340,8 +341,7 @@ class QueueTests(Fixture):
                             [node("new_independent"), node("c", "power", deps)], CAPS, self.cli.validate_requests, 2
                         )
                     self.assertEqual(work.path.read_bytes(), before)
-                    self.s._save(last_error=str(error.exception))
-                    message = self.s._snapshot()[4]["last_planner_error"]
+                    message = str(error.exception)
                     self.assertIn("c; added=" + added + "; removed=" + removed, message)
                     self.assertNotIn("new_independent", [q["id"] for q in work.data["nodes"]])
 
@@ -369,16 +369,13 @@ class DecisionTests(Fixture):
                 validate_decision(value)
         self.assertEqual(validate_decision(decision("wait"))["operation"], "wait")
 
-    def test_snapshot_contains_current_native_unlocks_and_compact_queue_without_entities_or_geometry(self):
-        context = self.s._snapshot()
-        snapshot = context[4]
-        self.assertEqual(snapshot["native_enabled_recipes"], ["assembling-machine-1"])
-        self.assertEqual(snapshot["native_researched_technologies"], ["automation"])
-        self.assertEqual(snapshot["actor"]["owner_name"], "NEC")
-        self.assertIn("requires", snapshot["capabilities"]["power"])
-        self.assertEqual(snapshot["entity_counts"], {"stone-furnace": 1})
-        self.assertNotIn("entities", snapshot)
-        self.assertNotIn("rcon_password", json.dumps(snapshot))
+    def test_snapshot_context_is_observation_status_capabilities_and_actor_only(self):
+        observation, status, capabilities, bound = self.s._snapshot()
+        self.assertEqual(observation["enabled_recipes"], ["assembling-machine-1"])
+        self.assertEqual(status["world_id"], "w")
+        self.assertIn("requires", capabilities["power"])
+        self.assertEqual(bound["owner_name"], "NEC")
+        self.assertEqual(self.s.technology_order, ["automation"])
 
     def test_world_or_actor_changes_during_decision_prevent_acceptance_and_requests(self):
         context = self.s._snapshot()
@@ -481,15 +478,21 @@ class DecisionTests(Fixture):
             self.s._apply(decision("retry"), context)
         self.assertFalse(any(c[0] == "retry" for c in self.cli.calls))
 
-    def test_blocker_snapshot_keeps_material_amounts_and_failure_but_excludes_raw_private_payloads(self):
+    def blocked_incident(self, **job_fields):
+        """One queue node whose job stays blocked past the grace period; returns its open incident."""
         self.s.work.merge([node("a")], CAPS, self.cli.validate_requests, 1)
         a = self.s.work.data["nodes"][0]
         self.cli.jobs[a["job_key"]] = dict(
-            key=a["job_key"],
-            world_id="w",
-            capability="starter",
-            parameters={},
-            status="waiting",
+            key=a["job_key"], world_id="w", capability="starter", parameters={}, status="blocked", **job_fields
+        )
+        self.s._check_incidents(self.s._snapshot())
+        self.clock.advance(61)
+        inputs, roadmap = self.s._check_incidents(self.s._snapshot())
+        incident = next(q for q in self.s.incidents.open.values() if q.kind == "blocked_job")
+        return incident, self.s._document(incident, inputs, roadmap)
+
+    def test_blocked_incident_keeps_material_amounts_and_failure_but_excludes_raw_private_payloads(self):
+        incident, document = self.blocked_incident(
             reason="waiting_for_materials",
             last_failure="insufficient_inventory",
             evidence={
@@ -509,58 +512,32 @@ class DecisionTests(Fixture):
                 "oversized": [{"item": "copper-plate", "have": i, "need": 100} for i in range(1000)],
             },
         )
-        snapshot = self.s._snapshot()[4]
-        row = snapshot["jobs"][0]
-        self.assertEqual(row["last_failure"], "insufficient_inventory")
-        self.assertIn('"have": 3', json.dumps(row["evidence"]))
-        self.assertIn('"need": 40', json.dumps(row["evidence"]))
-        self.assertIn("automation", json.dumps(row["evidence"]))
-        self.assertIn("layout_planning", json.dumps(row["evidence"]))
-        encoded = json.dumps({"jobs": snapshot["jobs"], "queue": snapshot["work_queue"]})
+        evidence = json.dumps(incident.facts["evidence"])
+        self.assertEqual(incident.facts["evidence"]["last_failure"], "insufficient_inventory")
+        for text in ('"have": 3', '"need": 40', "automation", "layout_planning"):
+            self.assertIn(text, evidence)
+        encoded = json.dumps(document)
         for forbidden in ("STEAL_THIS", '"position"', '"x"', '"y"', "rcon_password", '"command"'):
             self.assertNotIn(forbidden, encoded)
         self.assertLess(len(encoded), 6000)
-        self.assertIn("insufficient_inventory", json.dumps(snapshot["work_queue"][0]["blocker"]))
 
-    def test_recent_completed_identities_and_latest_planner_error_are_bounded_and_cleared_after_acceptance(self):
-        self.s.work.merge([node("a" + str(i)) for i in range(25)], CAPS, self.cli.validate_requests, 1)
-        for q in self.s.work.data["nodes"]:
-            self.cli.jobs[q["job_key"]] = dict(
-                key=q["job_key"], world_id="w", capability="starter", parameters={}, status="succeeded"
-            )
-        self.s._save(last_error="queue task identity is immutable; use a new node id")
-        snapshot = self.s._snapshot()[4]
-        completed = snapshot["recent_completed_queue"]
-        self.assertEqual(len(completed), 16)
-        self.assertEqual(
-            completed[-1], dict(id="a24", capability="starter", parameters={}, status="completed", depends_on=[])
+    def test_power_wait_incident_distinguishes_missing_coal_from_live_water_and_steam(self):
+        facts = dict(drill_fuel=0, drill_powered=False, water=200, steam=400, energized_engines=2, coal_on_belts=141)
+        incident, document = self.blocked_incident(
+            reason="waiting for dedicated coal, water, and steam flow", evidence=dict(facts, rcon_password="secret")
         )
-        self.assertEqual(snapshot["work_queue"], [])
-        self.assertIn("immutable", snapshot["last_planner_error"])
+        self.assertEqual(incident.facts["evidence"]["evidence"], facts)
+        self.assertNotIn("secret", json.dumps(document))
+
+    def test_accepted_decision_clears_the_latest_planner_error(self):
+        self.s._save(last_error="queue task identity is immutable; use a new node id")
         context = self.s._snapshot()
         results = queue.Queue()
         results.put((True, decision(nodes=[node("fresh")])))
         self.s.pending_decision = {"result": results, "context": context, "started_at": self.clock()}
         self.s.last_decision_time = self.clock()
         self.s._poll_decision()
-        self.assertIsNone(self.s._snapshot()[4]["last_planner_error"])
-
-    def test_power_wait_snapshot_distinguishes_missing_coal_from_live_water_and_steam(self):
-        self.s.work.merge([node("a")], CAPS, self.cli.validate_requests, 1)
-        a = self.s.work.data["nodes"][0]
-        facts = dict(drill_fuel=0, drill_powered=False, water=200, steam=400, energized_engines=2, coal_on_belts=141)
-        self.cli.jobs[a["job_key"]] = dict(
-            key=a["job_key"],
-            world_id="w",
-            capability="starter",
-            parameters={},
-            status="waiting",
-            reason="waiting for dedicated coal, water, and steam flow",
-            evidence=dict(facts, rcon_password="secret"),
-        )
-        snapshot = self.s._snapshot()[4]
-        self.assertEqual(snapshot["jobs"][0]["evidence"], facts)
-        self.assertNotIn("secret", json.dumps(snapshot))
+        self.assertIsNone(self.s.state["last_error"])
 
 
 class TaskTargetTests(Fixture):
@@ -681,16 +658,11 @@ class ExecutionTests(Fixture):
         )
         self.cli.run_status = "waiting"
         self.s._apply(decision("wait"), self.s._snapshot())
-        self.assertGreater(self.s.wait_until, self.clock())
         self.assertTrue(self.s._run_authorized(self.s._snapshot()))
         self.assertEqual(self.cli.ran, [["a"]])
 
-    def test_wait_delays_only_idle_planning_and_ready_queue_dispatches_immediately(self):
-        self.s.last_decision_time = self.clock()
-        self.s.force_decision = False
+    def test_wait_changes_nothing_and_ready_queue_dispatches_immediately(self):
         self.s._apply(decision("wait"), self.s._snapshot())
-        self.clock.advance(30)
-        self.assertFalse(self.s._decision_due(self.s._snapshot()[1]))
         self.s.work.merge([node("approved")], CAPS, self.cli.validate_requests, 1)
         self.assertTrue(self.s._run_authorized(self.s._snapshot()))
         self.assertEqual(len([c for c in self.cli.calls if c[0] == "request"]), 1)
@@ -737,6 +709,7 @@ class ExecutionTests(Fixture):
         self.assertEqual(self.s.work.data["nodes"][0]["status"], "blocked")
 
     def test_safe_stop_waits_run_boundary_pauses_and_checkpoints_without_new_work(self):
+        self.s.work.merge([node("starter")], CAPS, self.cli.validate_requests, 1)
         self.cli.stop_on_run = True
         result = self.s.run()
         self.assertEqual(result["status"], "safe_stopped")
@@ -903,7 +876,6 @@ class MultiJobTests(Fixture):
         self.s.work.merge([node("ready", "c1")], CAPS, self.cli.validate_requests, 1)
         self.cli.run_status = "waiting"
         self.s._apply(decision("wait"), self.s._snapshot())
-        self.assertGreater(self.s.wait_until, self.clock())
         self.assertTrue(self.s._run_authorized(self.s._snapshot()))
         self.assertEqual(len(self.requested()), 1)
         self.assertEqual(sorted(self.cli.ran[0]), sorted(["running", self.s.work.data["nodes"][0]["job_key"]]))
@@ -927,130 +899,235 @@ class MultiJobTests(Fixture):
         self.assertEqual([c[c.index("--capability") + 1] for c in self.requested()], ["c1"])
         self.assertEqual(len(self.cli.ran[0]), 2)
 
-    def test_snapshot_lists_every_active_job_before_recent_history(self):
+    def test_state_lists_every_active_job_and_not_finished_history(self):
         for i in range(14):
             self.cli.jobs["done" + str(i)] = job("done" + str(i), "c0", "succeeded", created_at=2000 + i)
         for i in range(3):
             self.cli.jobs["old" + str(i)] = job("old" + str(i), "c" + str(i + 1), created_at=i)
-        snapshot = self.s._snapshot()[4]
-        self.assertEqual(sorted(snapshot["active_jobs"]), ["old0", "old1", "old2"])
-        self.assertEqual(snapshot["max_active_jobs"], 4)
-        self.assertEqual(len(snapshot["jobs"]), 12)
-        self.assertEqual(sorted(q["key"] for q in snapshot["jobs"][:3]), ["old0", "old1", "old2"])
-        self.assertNotIn("opportunistic", json.dumps(snapshot["capabilities"]))
+        self.s._snapshot()
+        self.assertEqual(self.s.state["active_job_keys"], ["old0", "old1", "old2"])
 
 
-class LunaTriggerTests(Fixture):
-    def accept(self, result=None):
-        """Simulate one Luna decision that finished now."""
+def events(root, kind=None):
+    path = root / "logs/controller-events.jsonl"
+    rows = [json.loads(q) for q in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+    return [q for q in rows if kind is None or q["event"] == kind]
+
+
+class IncidentTriggerTests(Fixture):
+    """The model is consulted only for open incidents, once per incident per retry window."""
+
+    def blocked(self, name="b", **extra):
+        self.s.work.merge([node(name)], CAPS, self.cli.validate_requests, 1)
+        q = next(q for q in self.s.work.data["nodes"] if q["id"] == name)
+        self.cli.jobs[q["job_key"]] = job(q["job_key"], status="blocked", reason="coal_bank_required", **extra)
+        return q
+
+    def check(self):
         context = self.s._snapshot()
-        results = queue.Queue()
-        results.put((True, result or decision()))
-        self.s.pending_decision = {"result": results, "context": context, "started_at": self.clock()}
-        self.s.last_decision_time = self.clock()
-        self.s.queue_low_at_decision = self.s._queue_low()
-        self.s._poll_decision()
+        inputs, roadmap = self.s._check_incidents(context)
+        return context, inputs, roadmap
 
-    def fill(self):
-        self.s.work.merge([node("q1", priority=1), node("q2", "power", ["q1"])], CAPS, self.cli.validate_requests, 1)
+    def consult(self, result):
+        """Start the due consultation, let the fake model answer and accept the answer."""
+        self.client.result = result
+        context, inputs, roadmap = self.check()
+        incident = self.s._incident_due()
+        self.assertIsNotNone(incident)
+        self.s._start_decision(context, incident, self.s._document(incident, inputs, roadmap))
+        for _ in range(500):
+            if self.s._poll_decision():
+                return incident
+            time.sleep(0.01)
+        self.fail("fake model did not answer")
 
-    def due(self):
-        return self.s._decision_due(self.s._snapshot()[1])
+    def test_running_work_without_incident_never_calls_the_model(self):
+        self.s.work.merge([node("a")], CAPS, self.cli.validate_requests, 1)
+        self.cli.run_status = "waiting"
+        for _ in range(5):
+            self.s._cycle()
+            self.clock.advance(120)
+        self.assertEqual(self.client.calls, [])
+        self.assertEqual(self.s.incidents.open, {})
 
-    def start_queued_nodes(self):
-        """Both queued nodes become running jobs: the queue drains without a terminal event."""
-        for q in self.s.work.data["nodes"]:
-            self.cli.jobs[q["job_key"]] = job(q["job_key"], q["capability"])
-
-    def test_first_cycle_and_forced_decisions_are_due(self):
-        self.assertTrue(self.due())
-        self.fill()
-        self.accept()
-        self.clock.advance(21)
-        self.assertFalse(self.due())
-        self.s.force_decision = True
-        self.assertTrue(self.due())
-
-    def test_terminal_states_and_changed_blocked_reasons_trigger_but_running_changes_do_not(self):
-        self.fill()
-        self.cli.jobs = {"old": job("old", status="succeeded"), "b": job("b", "power")}
-        self.accept()
-        self.clock.advance(21)
-        self.cli.jobs["b"]["status"] = "running"
-        self.assertFalse(self.due())
-        self.cli.jobs["b"].update(status="blocked", reason="missing_iron")
-        self.assertTrue(self.due())
-        self.accept()
-        self.clock.advance(21)
-        self.assertFalse(self.due())
-        self.cli.jobs["b"]["reason"] = "missing_power"
-        self.assertTrue(self.due())
-
-    def test_terminal_change_while_luna_thinks_remains_a_new_event(self):
-        self.fill()
-        self.cli.jobs["a"] = job("a")
-        context = self.s._snapshot()
-        results = queue.Queue()
-        results.put((True, decision()))
-        self.s.pending_decision = {"result": results, "context": context, "started_at": self.clock()}
-        self.s.last_decision_time = self.clock()
-        self.cli.jobs["a"]["status"] = "succeeded"
-        self.s._poll_decision()
-        self.clock.advance(21)
-        self.assertTrue(self.due())
-
-    def test_queue_becoming_low_triggers_once_per_low_episode(self):
-        self.fill()
-        self.accept()
-        self.clock.advance(21)
-        self.assertFalse(self.due())
-        self.start_queued_nodes()
-        self.assertTrue(self.due())
-        self.accept()
-        self.clock.advance(21)
-        self.assertFalse(self.due())
-
-    def test_max_interval_triggers_with_a_full_queue(self):
-        self.fill()
-        self.accept()
+    def test_blocked_job_opens_after_grace_and_is_consulted_once_per_retry_window(self):
+        target = self.blocked()
+        self.s.work.merge([node("busy", "power")], CAPS, self.cli.validate_requests, 1)
+        self.check()
+        self.assertIsNone(self.s._incident_due())
+        self.clock.advance(61)
+        incident = self.consult(dict(decision("wait"), reason="coal bank must finish first"))
+        self.assertEqual((incident.kind, incident.subject), ("blocked_job", target["job_key"]))
+        self.assertEqual(len(self.client.calls), 1)
+        sent = self.client.calls[0]
+        self.assertEqual(sent["incident"]["kind"], "blocked_job")
+        self.assertIn("retry", [r["remedy"] for r in sent["remedies"]])
+        row = events(self.root, "incident_decision")[0]
+        self.assertEqual((row["remedy"], row["accepted"], row["input_tokens"]), ("wait", True, 100))
+        self.assertEqual(row["cached_input_tokens"], 40)
+        self.assertIn("latency_seconds", row)
         self.clock.advance(299)
-        self.assertFalse(self.due())
+        self.check()
+        self.assertIsNone(self.s._incident_due())
         self.clock.advance(2)
-        self.assertTrue(self.due())
+        self.check()
+        self.assertEqual(self.s._incident_due().id, incident.id)
+        recorded = (self.root / "logs/incidents.jsonl").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(recorded), 1)
+        self.assertEqual(json.loads(recorded[0])["document"], sent)
 
-    def test_minimum_interval_and_error_backoff_hold_every_trigger(self):
-        self.cli.jobs["a"] = job("a")
-        self.accept()
-        self.cli.jobs["a"]["status"] = "succeeded"
-        self.clock.advance(19)
-        self.assertFalse(self.due())
-        self.clock.advance(2)
-        self.assertTrue(self.due())
-        self.s.backoff_until = self.clock() + 30
-        self.assertFalse(self.due())
+    def test_most_severe_incident_first_and_minimum_interval_between_calls(self):
+        self.blocked()
+        self.check()
+        self.clock.advance(61)
+        self.check()
+        self.assertEqual({q.kind for q in self.s.incidents.open.values()}, {"empty_queue", "blocked_job"})
+        first = self.consult(dict(decision("wait"), reason="nothing safe"))
+        self.assertEqual(first.kind, "empty_queue")
+        self.check()
+        self.assertIsNone(self.s._incident_due())
+        self.clock.advance(60)
+        self.check()
+        self.assertEqual(self.s._incident_due().kind, "blocked_job")
 
-    def test_wait_suppresses_low_queue_trigger_until_it_expires_but_not_terminal_events(self):
-        self.fill()
-        self.accept(decision("wait"))
-        self.start_queued_nodes()
-        self.clock.advance(30)
-        self.assertFalse(self.due())
-        self.clock.advance(31)
-        self.assertTrue(self.due())
-        self.clock.advance(-31)
-        first = self.s.work.data["nodes"][0]["job_key"]
-        self.cli.jobs[first]["status"] = "failed"
-        self.assertTrue(self.due())
+    def test_decision_outside_the_menu_is_rejected_and_logged_once_per_window_without_backoff(self):
+        self.blocked()
+        self.s.work.merge([node("busy", "power")], CAPS, self.cli.validate_requests, 1)
+        self.check()
+        self.clock.advance(61)
+        self.consult(decision("request", "power"))
+        self.assertEqual(self.s.errors, 0)
+        self.assertEqual(self.s.backoff_until, 0)
+        self.assertFalse(any(c[0] in ("request", "retry") for c in self.cli.calls))
+        incident = next(iter(self.s.incidents.open.values()))
+        self.s._reject(incident, "again")
+        rejected = events(self.root, "decision_rejected")
+        self.assertEqual(len(rejected), 1)
+        self.assertIn("request is not on the menu", rejected[0]["reason"])
+        self.assertFalse(events(self.root, "incident_decision")[0]["accepted"])
 
-    def test_interval_rule_uses_the_decision_interval_as_max_floor_unless_max_is_explicit(self):
-        def make(**kwargs):
-            return Supervisor(self.root, self.client, cli=self.cli, clock=self.clock, **kwargs)
+    def test_retry_remedy_runs_on_the_menu_target_and_the_outcome_is_resolved(self):
+        target = self.blocked()
+        self.s.work.merge([node("busy", "power")], CAPS, self.cli.validate_requests, 1)
+        self.check()
+        self.clock.advance(61)
+        self.consult(dict(decision("retry"), target_task_id="b"))
+        self.assertEqual([c for c in self.cli.calls if c[0] == "retry"], [["retry", "--key", target["job_key"]]])
+        self.clock.advance(5)
+        self.check()
+        outcome = events(self.root, "incident_outcome")
+        self.assertEqual(
+            [(q["outcome"], q["remedy"], q["incident_kind"]) for q in outcome], [("resolved", "retry", "blocked_job")]
+        )
+        self.assertEqual(outcome[0]["seconds"], 5)
 
-        self.assertEqual(make(decision_interval=60).max_decision_interval, 300)
-        self.assertEqual(make(decision_interval=600).max_decision_interval, 600)
-        small = make(decision_interval=60, max_decision_interval=10)
-        self.assertEqual((small.max_decision_interval, small.minimum_decision_interval), (10, 10))
-        self.assertEqual(make().minimum_decision_interval, 20)
+    def test_unknown_outcome_job_has_no_retry_remedy_and_a_retry_is_rejected(self):
+        self.blocked(pending_action={"type": "build"})
+        self.s.work.merge([node("busy", "power")], CAPS, self.cli.validate_requests, 1)
+        self.check()
+        self.clock.advance(61)
+        incident = self.consult(dict(decision("retry"), target_task_id="b"))
+        self.assertNotIn("retry", [r.kind for r in incident.remedies])
+        self.assertFalse(any(c[0] == "retry" for c in self.cli.calls))
+        self.assertEqual(len(events(self.root, "decision_rejected")), 1)
+
+    def test_incident_closed_while_the_model_thinks_is_a_stale_decision(self):
+        target = self.blocked()
+        self.s.work.merge([node("busy", "power")], CAPS, self.cli.validate_requests, 1)
+        self.check()
+        self.clock.advance(61)
+        context, inputs, roadmap = self.check()
+        incident = self.s._incident_due()
+        self.cli.jobs[target["job_key"]]["status"] = "waiting"
+        self.check()
+        results = queue.Queue()
+        results.put((True, dict(decision("retry"), target_task_id="b")))
+        self.s.pending_decision = dict(result=results, context=context, started_at=self.clock(), incident=incident)
+        self.assertTrue(self.s._poll_decision())
+        self.assertEqual(len(events(self.root, "stale_decision")), 1)
+        self.assertFalse(any(c[0] == "retry" for c in self.cli.calls))
+
+    def test_open_incident_expires_after_outcome_minutes_and_reopens_as_a_new_episode(self):
+        self.blocked()
+        self.s.work.merge([node("busy", "power")], CAPS, self.cli.validate_requests, 1)
+        self.check()
+        self.clock.advance(61)
+        self.check()
+        self.clock.advance(600)
+        self.check()
+        self.assertEqual([q["outcome"] for q in events(self.root, "incident_outcome")], ["expired"])
+        self.assertEqual(len(events(self.root, "incident_opened")), 2)
+        self.assertEqual(len(self.s.incidents.open), 1)
+
+    def test_recent_intents_read_only_a_bounded_tail(self):
+        path = self.root / "job-events.jsonl"
+        rows = [dict(key="k", event="action_intent", time=i, action={"type": "mine"}) for i in range(5000)]
+        path.write_text("".join(json.dumps(q) + "\n" for q in rows), encoding="utf-8")
+        intents = self.s._recent_intents()
+        self.assertEqual(len(intents), 100)
+        self.assertEqual(intents[-1]["time"], 4999)
+
+
+class PlannerNoneTests(Fixture):
+    def setUp(self):
+        super().setUp()
+        self.s = Supervisor(
+            self.root, None, cli=self.cli, planner="none", clock=self.clock, sleep=self.clock.advance, max_seconds=200
+        )
+
+    def test_constructor_requires_a_client_exactly_for_luna(self):
+        for planner, client in (("luna", None), ("none", self.client), ("other", None)):
+            with self.subTest(planner=planner), self.assertRaises(ValueError):
+                Supervisor(self.root, client, cli=self.cli, planner=planner, clock=self.clock)
+        self.assertEqual((self.s.state["planner"], self.s.state["model"]), ("none", None))
+
+    def test_dispatch_autopilot_and_auto_retry_run_without_any_model_call(self):
+        rows = [node("auto_power", "power")]
+        with patch.object(Supervisor, "_load_autopilot", return_value=lambda *a, **k: deepcopy(rows)):
+            self.cli.jobs["s"] = job("s", status="succeeded")
+            self.cli.jobs["stuck"] = job("stuck", "c9", status="blocked", reason="coal_bank_required")
+            self.s._auto_retries = {"stuck": {"successes": 0, "count": 0}}
+            self.cli.run_status = "waiting"
+            self.assertTrue(self.s._cycle())
+        self.assertIn(["retry", "--key", "stuck"], self.cli.calls)
+        requested = [c[c.index("--capability") + 1] for c in self.cli.calls if c[0] == "request"]
+        self.assertEqual(requested, ["power"])
+        self.assertIsNone(self.s.pending_decision)
+        self.assertEqual(self.client.calls, [])
+
+    def test_unresolved_situation_is_recorded_as_an_incident_handled_by_none(self):
+        self.s._check_incidents(self.s._snapshot())
+        self.clock.advance(61)
+        for _ in range(3):
+            self.s._cycle()
+            self.clock.advance(10)
+        opened = events(self.root, "incident_opened")
+        self.assertEqual([(q["incident_kind"], q["handled_by"]) for q in opened], [("empty_queue", "none")])
+        self.assertIsNone(self.s._incident_due())
+        self.assertFalse(any(q["event"] == "incident_decision" for q in events(self.root)))
+        recorded = (self.root / "logs/incidents.jsonl").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(recorded), 1)
+        self.assertEqual(json.loads(recorded[0])["handled_by"], "none")
+        self.s.work.merge([node("a")], CAPS, self.cli.validate_requests, 1)
+        self.s._check_incidents(self.s._snapshot())
+        self.assertEqual([q["outcome"] for q in events(self.root, "incident_outcome")], ["resolved"])
+
+    def test_main_with_planner_none_never_imports_the_model_client(self):
+        from factorio_agent import supervisor as module
+
+        seen = {}
+
+        def run(instance):
+            seen.update(planner=instance.planner, client=instance.client)
+            return dict(status="safe_stopped", world_id="w", saved=True, stop_request_id="x")
+
+        with (
+            patch.dict(sys.modules, {"factorio_agent.luna_client": None}),
+            patch.object(Supervisor, "run", run),
+            patch("builtins.print"),
+        ):
+            module.main(["--runtime", str(self.root), "--planner", "none", "--bridge", "cli"])
+        self.assertEqual(seen, dict(planner="none", client=None))
 
 
 class AutopilotTests(Fixture):
@@ -1114,12 +1191,13 @@ class AutopilotTests(Fixture):
         self.s._apply(decision(nodes=[node("again")]), self.s._snapshot())
         self.assertEqual([q["id"] for q in self.s.work.data["nodes"]], ["auto_starter", "again"])
 
-    def test_cycle_merges_autopilot_before_luna_sees_the_snapshot(self):
+    def test_cycle_dispatches_autopilot_work_without_consulting_the_model(self):
         self.install([node("auto_starter")])
         self.cli.run_status = "waiting"
-        self.s._cycle()
-        self.assertTrue(self.client.called.wait(5))
-        self.assertIn("auto_starter", [q["id"] for q in self.client.calls[0]["work_queue"]])
+        self.assertTrue(self.s._cycle())
+        self.assertEqual(self.client.calls, [])
+        self.assertIsNone(self.s.pending_decision)
+        self.assertEqual(len(self.cli.ran), 1)
 
 
 class SafeStopTests(Fixture):
@@ -1178,7 +1256,8 @@ class LegacyQueueTests(Fixture):
         loaded.save()
         self.assertNotIn("scheduler_pause", loaded.path.read_text(encoding="utf-8"))
         restarted = Supervisor(self.root, self.client, cli=self.cli, clock=self.clock, sleep=self.clock.advance)
-        self.assertNotIn("scheduler_pause", json.dumps(restarted._snapshot()[4]["work_queue"]))
+        restarted._snapshot()
+        self.assertNotIn("scheduler_pause", json.dumps(restarted.work.data["nodes"]))
 
 
 class BridgeTests(unittest.TestCase):

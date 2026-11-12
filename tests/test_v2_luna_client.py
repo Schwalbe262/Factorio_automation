@@ -4,7 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
 
-from factorio_agent.luna_client import LunaDecisionClient, normalize_decision
+from factorio_agent.incidents import DOCUMENT_CHAR_CAP
+from factorio_agent.luna_client import PROMPT, LunaDecisionClient, normalize_decision
 
 
 def response(**changes):
@@ -84,9 +85,7 @@ class LunaDecisionTests(unittest.TestCase):
             self.assertIn("target_task_id", schema["required"])
             self.assertEqual(schema["properties"]["target_task_id"]["type"], ["string", "null"])
             prompt = kwargs["input"].decode("utf-8")
-            self.assertIn("Reuse the SAME ID for retries of the SAME effect", prompt)
-            self.assertIn("FULL output buffers is not evidence of a shortage", prompt)
-            self.assertIn("Finish or repair an existing funded science batch", prompt)
+            self.assertTrue(prompt.startswith(PROMPT + "\nINCIDENT DOCUMENT:\n"))
             Path(command[command.index("--output-last-message") + 1]).write_text(
                 json.dumps(response()), encoding="utf-8"
             )
@@ -104,6 +103,27 @@ class LunaDecisionTests(unittest.TestCase):
             result = client.decide({"world_id": "w", "rcon_password": "do-not-send"})
         self.assertEqual(result["operation"], "wait")
         self.assertEqual(client.last_usage["input_tokens"], 20)
+
+    def test_prompt_states_the_exception_handler_role_menu_and_hard_rules_briefly(self):
+        for text in (
+            "asked only when",
+            "sequences routine work itself",
+            "Choose exactly ONE remedy from the menu",
+            "Never invent capabilities, parameters",
+            "Never retry an unknown action outcome",
+            "Never grant items or research",
+            "Do not call tools",
+        ):
+            self.assertIn(text, PROMPT)
+        self.assertLess(len(PROMPT), 2000)
+        for removed in ("resource_supply_options", "adaptive_defense_risk", "starter_capacity"):
+            self.assertNotIn(removed, PROMPT)
+
+    def test_document_over_the_character_cap_is_refused_before_any_model_process(self):
+        with patch("factorio_agent.luna_client.LunaDecisionClient._invoke") as invoke:
+            with self.assertRaisesRegex(ValueError, "character cap"):
+                LunaDecisionClient().decide({"incident": "x" * DOCUMENT_CHAR_CAP})
+        invoke.assert_not_called()
 
     def test_tool_attempt_or_model_failure_does_not_authorize_a_game_decision(self):
         def run(command, **kwargs):

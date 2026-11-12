@@ -1,4 +1,4 @@
-"""Event-driven Luna task decisions over a durable DAG; up to four interleaved jobs per slice."""
+"""Framework-sequenced durable DAG; up to four interleaved jobs per slice; the model only handles incidents."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ import uuid
 from factorio_agent.core.deterministic_character import _identity
 from factorio_agent.core.deterministic_state import RunLock, _atomic_json
 from factorio_agent.jobs import MAX_ACTIVE_JOBS
+from factorio_agent import incidents as incident_rules
 
 
 STATE_FILE = Path("logs/controller-state.json")
@@ -37,7 +38,12 @@ QUEUED = ("pending", "ready")
 DEDUPE_STATUSES = {"pending", "ready", "running", "completed"}
 # Submit/control refusals that clear by themselves once another job finishes or a fresh observation exists.
 RETRYABLE_ADMISSION = ("is already active", "jobs may be active", "observe again")
-DEFAULT_MAX_DECISION_INTERVAL = 300
+PLANNERS = ("luna", "none")
+INCIDENT_LOG = Path("logs/incidents.jsonl")
+# The incident log stops growing past this size; an event records the cut.
+INCIDENT_LOG_BYTES = 5_000_000
+# Bounded tail of job-events.jsonl read for the recent action sample.
+INTENT_TAIL_BYTES = 262_144
 LOW_QUEUE = 2
 AUTOPILOT_LIMIT = 3
 FORBIDDEN = {
@@ -168,14 +174,6 @@ def blocker_summary(job):
 
     return {
         key: clean for key in ("reason", "last_failure", "evidence") if (clean := compact(job.get(key))) is not None
-    }
-
-
-def _terminal_signature(status):
-    return {
-        j["key"]: (j["status"], j.get("reason", "") if j["status"] in {"blocked", "failed"} else "")
-        for j in status.get("jobs", {}).values()
-        if j["status"] in TERMINAL
     }
 
 
@@ -487,37 +485,6 @@ class WorkQueue:
     def node_for_job(self, key):
         return next((q for q in self.data["nodes"] if q["job_key"] == key), None)
 
-    def compact(self):
-        return [
-            {
-                k: q.get(k)
-                for k in (
-                    "id",
-                    "capability",
-                    "parameters",
-                    "priority",
-                    "depends_on",
-                    "status",
-                    "job_key",
-                    "missing_dependencies",
-                    "missing_prerequisites",
-                )
-            }
-            | {
-                "last_reason": _diagnostic_text(q.get("last_reason", "")),
-                "blocker": blocker_summary(q.get("last_blocker", {})),
-            }
-            for q in self.data["nodes"]
-            if q["status"] != "completed"
-        ][:64]
-
-    def compact_completed(self):
-        return [
-            {k: q.get(k) for k in ("id", "capability", "parameters", "status", "depends_on")}
-            for q in self.data["nodes"]
-            if q["status"] == "completed"
-        ][-16:]
-
 
 class CLIError(RuntimeError):
     pass
@@ -637,78 +604,13 @@ def _retryable_admission(reason):
     return any(text in reason for text in RETRYABLE_ADMISSION)
 
 
-def compact_snapshot(observation, status, capabilities, work, actor, planner_error=None):
-    def compact(value, depth=0):
-        if depth > 5:
-            return "<depth limit>"
-        if isinstance(value, dict):
-            return {k: compact(v, depth + 1) for k, v in list(value.items())[:64] if k.lower() not in FORBIDDEN}
-        if isinstance(value, list):
-            return [compact(v, depth + 1) for v in value[:48]]
-        if isinstance(value, str):
-            return value[:600]
-        return value
-
-    jobs = list(status.get("jobs", {}).values())
-    active = _active_keys(jobs)
-    # Every active job is listed first; the remaining rows are the most recent.
-    recent = sorted(jobs, key=lambda q: (q["key"] not in active, -q.get("created_at", 0)))
+def _usage(value):
+    """Model token usage as reported by the CLI: input, cached input and output tokens."""
+    value = value if isinstance(value, dict) else {}
     return dict(
-        schema_version=1,
-        world_id=observation["world_id"],
-        observed_tick=observation["tick"],
-        actor=actor,
-        objective="Progress to a real Space Age rocket using typed capabilities, ordinary costs and current native prerequisites.",
-        native_researched_technologies=observation.get("technologies", []),
-        current_research=observation.get("research"),
-        native_enabled_recipes=observation.get("enabled_recipes", []),
-        research_progress=observation.get("research_progress"),
-        available_research=compact(observation.get("available_research")),
-        native_capability_gates=compact(observation.get("native_capability_gates")),
-        inventory=compact(observation.get("inventory", {})),
-        entity_counts=compact(observation.get("entities", {})),
-        electricity=compact(observation.get("electricity")),
-        factory_constraints=compact(observation.get("factory_constraints")),
-        enemies_near_start=compact(observation.get("enemies_near_start")),
-        construction_budget=compact(observation.get("known_project_construction_budget")),
-        crafting_queue=compact(observation.get("crafting_queue")),
-        production_rate_measurement=compact(observation.get("production_rate_measurement")),
-        resource_supply_options=compact(observation.get("resource_supply_options")),
-        adaptive_defense_risk=compact(observation.get("adaptive_defense_risk")),
-        capabilities={
-            k: {
-                "parameters": v.get("parameters", {}),
-                "requires": v.get("requires", []),
-                "effect": v.get("effect", "")[:160],
-            }
-            for k, v in capabilities.items()
-        },
-        verified_capabilities=sorted({q["capability"] for q in jobs if q["status"] == "succeeded"}),
-        max_active_jobs=MAX_ACTIVE_JOBS,
-        active_jobs=active,
-        jobs=[
-            {
-                k: q.get(k)
-                for k in (
-                    "key",
-                    "capability",
-                    "parameters",
-                    "status",
-                    "actions",
-                    "last_tick",
-                    "created_tick",
-                    "planning_seconds",
-                    "execution_seconds",
-                )
-            }
-            | blocker_summary(q)
-            | {"uncertain_action": bool(q.get("pending_action"))}
-            for q in recent[:12]
-        ],
-        work_queue=work.compact(),
-        recent_completed_queue=work.compact_completed(),
-        last_planner_error=_diagnostic_text(planner_error),
-        policy="Only structured task/DAG decisions; no shell, coordinates, RCON, research setters or model fallback. Verification and actual execution remain in the framework.",
+        input_tokens=value.get("input_tokens"),
+        cached_input_tokens=value.get("cached_input_tokens"),
+        output_tokens=value.get("output_tokens"),
     )
 
 
@@ -725,39 +627,35 @@ def _resume_keys(prior, world):
 
 
 class Supervisor:
-    """Durable queue dispatch with event-driven Luna planning.
+    """Durable queue dispatch sequenced by the framework; the model only handles incidents.
 
     Each cycle: snapshot -> resume jobs paused by the last safe stop -> merge
-    autopilot nodes when the queue is low -> accept a finished Luna decision ->
-    maybe start a Luna call -> submit ready nodes -> one ``run --all`` slice.
+    autopilot nodes when the queue is low -> auto-retry blocked jobs after a
+    success -> accept a finished incident decision -> update incidents and maybe
+    consult the model -> submit ready nodes -> one ``run --all`` slice.
 
     Up to ``MAX_ACTIVE_JOBS`` jobs are active; the job layer interleaves them per
-    action. Luna never gates dispatch: ready nodes run while Luna thinks, after a
-    ``wait`` decision and during error backoff.
+    action. The model never gates dispatch.
 
-    Luna is called (see ``_decision_due``) on the first cycle, when a job became
-    terminal or changed its blocked/failed reason, when fewer than two nodes are
-    pending or ready (once per low episode: not again while the queue stays low
-    after a call made while it was low), or when ``max_decision_interval``
-    elapsed; never sooner than
-    ``minimum_decision_interval`` after the previous call and never during error
-    backoff. Interval rule: ``max_decision_interval`` defaults to
-    ``max(decision_interval, 300)``; an explicit value is used as given, and the
-    minimum interval is capped at that maximum. A ``wait`` decision suppresses
-    the low-queue and interval triggers for ``decision_interval`` seconds.
+    Planner rule: ``planner="none"`` creates no model client and never starts a
+    decision thread; incidents are still opened, logged (``handled_by: none``)
+    and closed. ``planner="luna"`` consults the model only for an open incident
+    not consulted within ``incident_retry_seconds`` (default 300), one incident
+    per call, most severe first, never sooner than ``decision_interval`` seconds
+    after the previous call and never during error backoff.
     """
 
     def __init__(
         self,
         runtime,
-        client,
+        client=None,
         *,
         cli=None,
+        planner="luna",
         decision_interval=60,
         slice_seconds=25,
         max_seconds=None,
-        minimum_decision_interval=20,
-        max_decision_interval=None,
+        incident_config=None,
         clock=time.time,
         sleep=time.sleep,
     ):
@@ -769,27 +667,26 @@ class Supervisor:
             or not _positive(slice_seconds)
             or slice_seconds > 50
             or (max_seconds is not None and not _positive(max_seconds))
-            or (max_decision_interval is not None and not _positive(max_decision_interval))
         ):
             raise ValueError("positive decision interval, slice<=50 and optional duration required")
+        if planner not in PLANNERS:
+            raise ValueError("planner must be one of " + ", ".join(PLANNERS))
+        if (planner == "luna") != (client is not None):
+            raise ValueError("planner luna needs a model client; planner none takes none")
         self.root = self.root.resolve()
         self.clock, self.sleep = clock, sleep
         self.client = client
+        self.planner = planner
         self.decision_interval = decision_interval
-        self.max_decision_interval = (
-            max(decision_interval, DEFAULT_MAX_DECISION_INTERVAL)
-            if max_decision_interval is None
-            else max_decision_interval
-        )
         self.slice_seconds = slice_seconds
         self.max_seconds = max_seconds
-        self.minimum_decision_interval = min(minimum_decision_interval, self.max_decision_interval)
         self.world = json.loads((self.root / "world-settings.json").read_text(encoding="utf-8"))["world_id"]
         if not isinstance(self.world, str) or not self.world:
             raise ValueError("installed world identity required")
         self.work = WorkQueue(self.root / QUEUE_FILE, self.world)
         self.state_path = self.root / STATE_FILE
         self.event_path = self.root / "logs/controller-events.jsonl"
+        self.incident_path = self.root / INCIDENT_LOG
         prior = json.loads(self.state_path.read_text(encoding="utf-8")) if self.state_path.exists() else {}
         self.resume_job_keys = _resume_keys(prior, self.world)
         self.controller_id = uuid.uuid4().hex
@@ -810,14 +707,14 @@ class Supervisor:
             state="running",
             active_job_key=None,
             active_job_keys=[],
+            planner=planner,
             decision_interval=decision_interval,
-            max_decision_interval=self.max_decision_interval,
             slice_seconds=slice_seconds,
-            model="gpt-6-luna",
-            reasoning_effort="medium",
+            model="gpt-6-luna" if planner == "luna" else None,
+            reasoning_effort="medium" if planner == "luna" else None,
             last_decision_at=None,
-            next_decision_at=now,
             decision_sequence=int(prior.get("decision_sequence", 0)),
+            open_incidents=[],
             worker_stop_owned=False,
             saved=False,
             resume_job_keys=list(self.resume_job_keys),
@@ -825,15 +722,19 @@ class Supervisor:
         self.cli = cli or CLIBridge(self.root, on_spawn=self._child_spawn, on_exit=self._child_exit)
         self.stop_marker = None
         self.stopping = False
-        self.last_job_signature = None
-        self.last_snapshot = None
-        self.wait_until = 0
         self.errors = 0
         self.backoff_until = 0
         self.last_decision_time = None
-        self.force_decision = True
         self.pending_decision = None
-        self.queue_low_at_decision = False
+        self.incidents = incident_rules.IncidentTracker(
+            incident_config, summarize=blocker_summary, text=_diagnostic_text, started_at=now
+        )
+        self.incident_config = self.incidents.config
+        self.documents = {}
+        self.recorded = {}
+        self.rejections = {}
+        self.technology_order = []
+        self.incident_log_full = False
 
     def _save(self, **updates):
         self.state.update(updates, updated_at=self.clock())
@@ -982,52 +883,172 @@ class Supervisor:
             active_job_keys=keys,
             active_job_key=keys[0] if keys else None,
         )
-        snapshot = compact_snapshot(observation, status, capabilities, self.work, actor, self.state.get("last_error"))
-        self.last_snapshot = snapshot
-        return observation, status, capabilities, actor, snapshot
+        self._note_technologies(observation)
+        return observation, status, capabilities, actor
+
+    def _note_technologies(self, observation):
+        """Researched technologies in the order this controller first saw them; receipts list them sorted."""
+        seen = set(self.technology_order)
+        for name in observation.get("technologies") or []:
+            if isinstance(name, str) and name not in seen:
+                seen.add(name)
+                self.technology_order.append(name)
 
     def _queue_low(self):
         return self.work.queued_count() < LOW_QUEUE
 
-    def _decision_due(self, status):
-        """Whether to start a Luna call now; see the class docstring for the rule."""
-        now = self.clock()
-        if self.pending_decision is not None or now < self.backoff_until:
-            return False
-        if self.last_decision_time is None:
-            return True
-        since = now - self.last_decision_time
-        if since < self.minimum_decision_interval:
-            return False
-        if self.force_decision:
-            return True
-        signature = _terminal_signature(status)
-        if any((self.last_job_signature or {}).get(key) != value for key, value in signature.items()):
-            return True
-        if now < self.wait_until:
-            return False
-        if self._queue_low() and not self.queue_low_at_decision:
-            return True
-        return since >= self.max_decision_interval
+    def _load_roadmap(self):
+        """The framework roadmap steps, or None while the progression module is unavailable."""
+        try:
+            return tuple(import_module(__package__ + ".progression").ROADMAP)
+        except (ImportError, AttributeError, TypeError):
+            return None
 
-    def _start_decision(self, context):
-        snapshot = context[4]
+    def _recent_intents(self):
+        """The last 100 ``action_intent`` rows from a bounded tail of job-events.jsonl."""
+        path = self.root / "job-events.jsonl"
+        try:
+            with path.open("rb") as source:
+                source.seek(0, os.SEEK_END)
+                size = source.tell()
+                source.seek(max(0, size - INTENT_TAIL_BYTES))
+                data = source.read()
+        except OSError:
+            return []
+        lines = data.decode("utf-8", errors="replace").splitlines()
+        if size > INTENT_TAIL_BYTES:
+            # The first line of a cut tail may be partial.
+            lines = lines[1:]
+        rows = []
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and row.get("event") == "action_intent":
+                rows.append(row)
+        return rows[-100:]
+
+    def _check_incidents(self, context):
+        """Open and close incident episodes for this snapshot; log openings and outcomes."""
+        observation, status, capabilities, _ = context
+        jobs = list(status.get("jobs", {}).values())
+        roadmap = self._load_roadmap()
+        retries = {key: row["count"] for key, row in self.__dict__.get("_auto_retries", {}).items()}
+        inputs = incident_rules.Inputs(
+            now=self.clock(),
+            jobs=jobs,
+            nodes=self.work.data["nodes"],
+            observation=observation,
+            capabilities=capabilities,
+            auto_retries=retries,
+            intents=self._recent_intents,
+            roadmap=roadmap,
+            recent_technologies=self.technology_order[-10:],
+        )
+        changes = self.incidents.update(inputs)
+        for incident in changes.opened:
+            self._event("incident_opened", handled_by=self.planner, **self._incident_fields(incident))
+            if self.planner == "none":
+                self._record_incident(incident, self._document(incident, inputs, roadmap))
+        for incident, outcome, seconds in changes.closed:
+            self._event(
+                "incident_outcome",
+                handled_by=self.planner,
+                outcome=outcome,
+                seconds=seconds,
+                remedy=incident.remedy,
+                **self._incident_fields(incident),
+            )
+        if changes.opened or changes.closed:
+            self._save(
+                open_incidents=[
+                    dict(id=q.id, kind=q.kind, subject=q.subject, since=q.since) for q in self.incidents.open.values()
+                ]
+            )
+        return inputs, roadmap
+
+    @staticmethod
+    def _incident_fields(incident):
+        return dict(
+            incident_id=incident.id,
+            incident_kind=incident.kind,
+            subject=incident.subject,
+            capability=incident.capability,
+        )
+
+    def _document(self, incident, inputs, roadmap):
+        """The bounded consultation document for one incident (also recorded in planner none mode)."""
+        rows = None
+        if roadmap is not None:
+            rows = incident_rules.roadmap_position(
+                inputs.jobs, inputs.nodes, inputs.observation, inputs.capabilities, roadmap
+            )
+        factory = incident_rules.factory_status(
+            inputs.observation, inputs.jobs, rows, inputs.recent_technologies, text=_diagnostic_text
+        )
+        return incident_rules.document(incident, factory)
+
+    def _record_incident(self, incident, document):
+        """Append the document to logs/incidents.jsonl, once per incident per retry window, size-capped."""
+        now = self.clock()
+        last = self.recorded.get(incident.id)
+        if self.incident_log_full or (last is not None and now - last < self.incident_config.incident_retry_seconds):
+            return
+        self.incident_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.incident_path.exists() and self.incident_path.stat().st_size >= INCIDENT_LOG_BYTES:
+            self.incident_log_full = True
+            self._event("incident_log_full", bytes=INCIDENT_LOG_BYTES)
+            return
+        self.recorded[incident.id] = now
+        row = dict(
+            time=now,
+            controller_id=self.controller_id,
+            handled_by=self.planner,
+            **self._incident_fields(incident),
+            document=document,
+        )
+        with self.incident_path.open("a", encoding="utf-8") as out:
+            out.write(json.dumps(row, ensure_ascii=False, allow_nan=False, default=str) + "\n")
+
+    def _incident_due(self):
+        """The incident to consult the model about now, or None (see the class docstring)."""
+        if self.planner != "luna" or self.pending_decision is not None:
+            return None
+        now = self.clock()
+        if now < self.backoff_until:
+            return None
+        if self.last_decision_time is not None and now - self.last_decision_time < self.decision_interval:
+            return None
+        return self.incidents.due(now)
+
+    def _start_decision(self, context, incident, document):
         result = queue.Queue(maxsize=1)
 
         def call():
             try:
-                result.put((True, self.client.decide(snapshot)))
+                result.put((True, self.client.decide(document)))
             except BaseException as exc:
                 result.put((False, exc))
 
-        self.last_decision_time = self.clock()
-        self.queue_low_at_decision = self._queue_low()
+        now = self.clock()
+        self.last_decision_time = now
+        self.incidents.mark_consulted(incident, now)
         self.state["decision_sequence"] += 1
-        self.pending_decision = dict(result=result, context=context, started_at=self.last_decision_time)
-        self._save(status="deciding", luna_pending=True, last_decision_started_at=self.last_decision_time)
-        threading.Thread(target=call, daemon=True, name="luna-structured-decision").start()
+        self._record_incident(incident, document)
+        self.pending_decision = dict(result=result, context=context, started_at=now, incident=incident)
+        self._save(status="deciding", luna_pending=True, last_decision_started_at=now, consulting_incident=incident.id)
+        threading.Thread(target=call, daemon=True, name="luna-incident-decision").start()
 
     def _poll_decision(self):
+        """Accept a finished model call: check it against the incident menu, then apply it.
+
+        A decision outside the menu (or failing the schema) is logged as
+        ``decision_rejected`` at most once per incident per
+        ``rejection_log_seconds`` and does not enter error backoff. A decision
+        for an incident that closed meanwhile is stale and not applied.
+        Without an incident (tests only) the decision is applied directly.
+        """
         if self.pending_decision is None:
             return False
         if self._stop_requested():
@@ -1039,19 +1060,56 @@ class Supervisor:
             return False
         self.pending_decision = None
         self._save(luna_pending=False)
+        incident = pending.get("incident")
+        latency = round(self.clock() - pending["started_at"], 2)
+        usage = _usage(getattr(self.client, "last_usage", None))
+        fields = self._incident_fields(incident) if incident else {}
         if not ok:
+            if incident:
+                self._event(
+                    "incident_decision",
+                    remedy=None,
+                    accepted=False,
+                    error=str(value)[:300],
+                    latency_seconds=latency,
+                    **usage,
+                    **fields,
+                )
             raise RuntimeError(str(value)) from value
-        decision = validate_decision(value)
-        self._apply(decision, pending["context"])
-        # A terminal change that happened while Luna was thinking was not in
-        # its prompt and must remain visible as the next bounded event.
-        self.last_job_signature = _terminal_signature(pending["context"][1])
-        self.force_decision = False
+        rejected = None
+        try:
+            decision = validate_decision(value)
+        except ValueError as exc:
+            if incident is None:
+                raise
+            decision = None
+            rejected = "invalid decision: " + str(exc)[:200]
+        if decision is not None and incident is not None:
+            rejected = incident_rules.check_decision(incident, decision)
+        stale = incident is not None and rejected is None and incident.id not in self.incidents.open
+        if incident is not None:
+            self._event(
+                "incident_decision",
+                remedy=incident_rules.remedy_of(decision) if decision else None,
+                target_task_id=(decision or {}).get("target_task_id"),
+                accepted=rejected is None and not stale,
+                reason=_diagnostic_text((decision or {}).get("reason", "")),
+                latency_seconds=latency,
+                **usage,
+                **fields,
+            )
+        if rejected is not None:
+            self._reject(incident, rejected)
+        elif stale:
+            self._event("stale_decision", reason="incident_closed_while_deciding", **fields)
+        else:
+            self._apply(decision, pending["context"])
+            if incident is not None:
+                incident.remedy = incident_rules.remedy_of(decision)
         self.errors = 0
         self.backoff_until = 0
         self._save(
             last_decision_at=self.clock(),
-            next_decision_at=self.last_decision_time + self.max_decision_interval,
             last_decision=decision,
             status="running",
             last_error=None,
@@ -1059,6 +1117,15 @@ class Supervisor:
             last_luna_session_id=getattr(self.client, "last_session_id", None),
         )
         return True
+
+    def _reject(self, incident, reason):
+        """Log one ``decision_rejected`` per incident per ``rejection_log_seconds``."""
+        now = self.clock()
+        last = self.rejections.get(incident.id)
+        if last is not None and now - last < self.incident_config.rejection_log_seconds:
+            return
+        self.rejections[incident.id] = now
+        self._event("decision_rejected", reason=reason[:300], **self._incident_fields(incident))
 
     def _target(self, decision, status, allowed, *, missing_ok=False):
         target = decision.get("target_task_id")
@@ -1154,7 +1221,7 @@ class Supervisor:
         planner = self._load_autopilot()
         if planner is None:
             return False
-        observation, status, capabilities, _, _ = context
+        observation, status, capabilities, _ = context
         jobs = list(status.get("jobs", {}).values())
         known = {q["id"] for q in self.work.data["nodes"]}
         try:
@@ -1186,7 +1253,7 @@ class Supervisor:
             self._event("queue_duplicates_skipped", source=source, task_ids=skipped[:16])
 
     def _apply(self, decision, context):
-        observation, prompt_status, _, actor, _ = context
+        observation, prompt_status, _, actor = context
         if self._stop_requested():
             return
         # A potentially slow model call cannot authorize a stale actor/world.
@@ -1220,7 +1287,7 @@ class Supervisor:
             self._queue_request(decision, capabilities, fresh)
         elif operation in ("continue", "retry", "pause"):
             self._control(decision, prompt_status, status)
-        self.wait_until = self.clock() + self.decision_interval if operation == "wait" else 0
+        # ``wait`` changes nothing: the incident's retry window spaces the next consultation.
 
     def _queue_request(self, decision, capabilities, observation):
         """A request is one more queue node; admission happens at dispatch."""
@@ -1314,7 +1381,7 @@ class Supervisor:
         submit is refused for a retryable admission reason; any other refusal
         blocks that node. Returns the active job keys after submission.
         """
-        _, status, _, actor, _ = context
+        _, status, _, actor = context
         jobs = list(status.get("jobs", {}).values())
         active = _active_keys(jobs)
         busy = {j["capability"] for j in jobs if j["status"] in ACTIVE}
@@ -1459,11 +1526,13 @@ class Supervisor:
             if self._stop_requested():
                 return True
             context = self._snapshot()
-        if self._decision_due(context[1]):
-            self._start_decision(context)
+        inputs, roadmap = self._check_incidents(context)
+        incident = self._incident_due()
+        if incident is not None:
+            self._start_decision(context, incident, self._document(incident, inputs, roadmap))
         if self._stop_requested():
             return True
-        # Approved queue work runs while the Luna call is pending.
+        # Approved queue work runs while a model call is pending.
         return self._run_authorized(context)
 
     def _auto_retry(self, context):
@@ -1508,6 +1577,7 @@ class Supervisor:
     def run(self):
         with RunLock(self.root / "controller.lock"):
             self._save()
+            self._event("supervisor_started", planner=self.planner, model=self.state["model"])
             try:
                 while not self._stop_requested():
                     try:
@@ -1534,8 +1604,13 @@ class Supervisor:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime", type=Path)
-    parser.add_argument("--decision-interval", type=float, default=60, help="wait delay; max interval floor")
-    parser.add_argument("--max-decision-interval", type=float, help="default: max(decision interval, 300)")
+    parser.add_argument(
+        "--planner",
+        choices=PLANNERS,
+        default="luna",
+        help="luna consults the model on incidents; none runs on framework rules only and never starts the model",
+    )
+    parser.add_argument("--decision-interval", type=float, default=60, help="minimum seconds between model calls")
     parser.add_argument("--slice-seconds", type=float, default=25)
     parser.add_argument("--max-seconds", type=float)
     parser.add_argument("--validate-requests", action="store_true", help=argparse.SUPPRESS)
@@ -1558,14 +1633,17 @@ def main(argv=None):
         return
     if args.runtime is None:
         parser.error("--runtime ABS is required")
-    from .luna_client import LunaDecisionClient
+    client = None
+    if args.planner == "luna":
+        # Imported only when enabled: planner none never loads or starts the Codex CLI.
+        from .luna_client import LunaDecisionClient
 
-    client = LunaDecisionClient(model="gpt-6-luna", reasoning_effort="medium", timeout_seconds=120)
+        client = LunaDecisionClient(model="gpt-6-luna", reasoning_effort="medium", timeout_seconds=120)
     supervisor = Supervisor(
         args.runtime,
         client,
+        planner=args.planner,
         decision_interval=args.decision_interval,
-        max_decision_interval=args.max_decision_interval,
         slice_seconds=args.slice_seconds,
         max_seconds=args.max_seconds,
     )

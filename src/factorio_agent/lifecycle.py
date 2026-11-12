@@ -391,6 +391,8 @@ class Lifecycle:
             "factorio_agent.supervisor",
             "--runtime",
             str(root),
+            "--planner",
+            options.controller.planner,
             "--decision-interval",
             number(interval),
             "--slice-seconds",

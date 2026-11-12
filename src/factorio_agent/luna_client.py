@@ -1,4 +1,4 @@
-"""Structured strategy decisions through the user's authenticated Codex CLI."""
+"""Incident decisions (one remedy from a menu) through the user's authenticated Codex CLI."""
 
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ import shutil
 import subprocess
 import tempfile
 import threading
+
+from .incidents import DOCUMENT_CHAR_CAP
 
 
 OPERATIONS = ("plan", "request", "continue", "retry", "pause", "wait")
@@ -49,87 +51,26 @@ DECISION_SCHEMA = {
     },
 }
 
-PROMPT = """You are the strategy planner for a Factorio Space Age framework.
-Return only the required structured decision. Do not call tools, browse files,
-execute commands, modify code, or interact with the game. The snapshot contains
-your entire allowed context. The framework executes validated capabilities.
-Plan a small dependency queue so ready work can continue without another model
-call. Replenish that queue before its remaining ready work runs out; include
-missing prerequisites as tasks instead of repeatedly selecting an unavailable
-target. Repeated material waits are a reason to assess producer capacity using
-the observed item/have/need evidence and available capacity capabilities.
-Compare measured item production per minute with the outstanding raw-material
-construction budget. Estimate the wait before committing to slow serial supply;
-invest in the resource that actually limits construction. Repeated one-item
-collections do not establish adequate capacity. A paused job preserves its paid
-work: if supply dominates the delay, pause that exact job, queue a bounded
-capacity improvement, then continue the original job after the improvement.
-Zero measured production with FULL output buffers is not evidence of a shortage.
-Use available stocks and current producer statuses before requesting expansion.
-Read resource_supply_options: collect existing stock or advance when the bill
-is funded; clear downstream blockage before adding supply. For a real shortage,
-compare net output, extra-cell costs, projected wait and payback. An expansion
-must shorten the current limiting wait and remain affordable in all inputs.
-After native electric mining unlocks, expand iron/copper through mining_outpost
-and smelting rather than new large burner starter_capacity targets. Up to two
-starter cells remain available for bootstrapping or recovery; paid cells stay.
-Finish or repair an existing funded science batch before parallel handcrafting
-or starting another instance of the same research work.
-Up to 4 jobs run concurrently and are interleaved per action; only one job per
-capability is active at a time, and higher priority ready tasks start first.
-Queue several independent ready tasks instead of waiting: capacity or
-prepare_components work runs beside a material-starved job without pausing it.
-prepare_components should target the next approved job's actual unlocked
-buildings with bounded absolute stock goals, current recipes and protected
-primary costs; never prepare a future locked design.
-When the queue runs low the framework itself adds default next steps (IDs
-starting auto_); do not duplicate them. You are consulted on events (a job
-finished, blocked or failed, or the queue ran low), not on a timer.
-Use only documented capabilities and parameters. Current native research,
-enabled recipes, resources, power and producer readiness govern design choice.
-Never assume a later design is available because its prototype or an old game's
-maximum tier exists. Bootstrap with available early designs, then upgrade after
-their real prerequisites. Do not choose coordinates or arbitrary commands.
-Prioritize observed threats, power and resource failures. Read adaptive_defense_risk.
-In the quiet early stage its turret target is zero: advance production and
-research without preemptive turret factories or whole-area turret coverage.
-Do not turn an absent threat into mandatory early defense spending. The framework
-also surveys proposed industrial sites before deferring their defense gate.
-As enemies approach or damage appears, establish the risk-scaled defenses;
-if needed recipes are locked, use the finite machine research bridge.
-Preserve paid partial work and stable queue IDs. An ID permanently identifies one capability and exact
-parameters, including after completion; use a new ID for a different target.
-Reuse the SAME ID for retries of the SAME effect. Do not create new IDs just to
-retry a fresh plan or escape an ambiguous existing-job error. For continue,
-retry or pause, set target_task_id to the particular existing paused/blocked or
-active queue ID. Repeat that node's exact parameters; capability may be null or
-its exact capability. Other operations must use target_task_id=null.
-Read the latest planner error before proposing a replacement decision.
-Read native_capability_gates before planning factories. Research that unlocks a
-factory recipe must run BEFORE that factory, using science already available.
-For example, unlock logistic-science-pack and fast-inserter with existing red
-science before logistic_science; never make either unlock depend on that factory.
-Never retry unknown outcomes. If a job is running,
-normally continue it. A locked or blocked task needs a concrete prerequisite or
-repair, not repeated blind retries. Do not claim completion without native proof.
-A waiting job's reason is its real executor condition, even after a time slice.
-Judge that condition and native progress before continuing; a slice ending does
-not resolve missing fuel, inputs or prerequisite research.
-For combined coal/water/steam waits, compare drill_fuel/drill_powered, water,
-steam and energized_engines to locate the missing condition before choosing
-a repair. Positive water and steam with an unfueled drill calls for coal-source
-startup or its documented repair, rather than a separate water-gathering plan.
-Layout planning or search-budget failures are executor faults, not evidence of
-insufficient mining capacity. Do not repeatedly expand a resource to treat them.
-The user's goal is rapid scalable progress toward a rocket, with clean layouts,
-both belt lanes, main-bus priorities, capped construction stock, full factory
-radar coverage, timely defenses and eventual external mines/rail transport.
-Use operation=plan to add/update a short queue; request for one immediate job;
-continue for the existing job; retry only a known blocked outcome whose cause
-is now resolved; pause when necessary; wait when no safe executable work exists.
-Routine replanning must not pause a progressing job. A wait decision delays the
-next planning opportunity; already approved executable queue work continues.
-parameters_json must encode an object. Queue dependencies refer to queue IDs.
+PROMPT = """You are the exception handler of a Factorio Space Age automation framework.
+The framework sequences routine work itself (roadmap autopilot, demand-driven
+capacity, automatic retries, up to 4 concurrent jobs). You are asked only when it
+is stuck without a rule. The document below describes one incident: its kind,
+subject and facts, a menu of allowed remedies, and a short factory status.
+
+Choose exactly ONE remedy from the menu and return it as the structured decision:
+- retry: operation=retry, target_task_id and parameters_json copied from that menu
+  entry, queue=[]. Only when the facts show the cause is gone.
+- pause: operation=pause, target_task_id and parameters_json from the menu, queue=[].
+- add_nodes: operation=plan, capability=null, parameters_json="{}", queue of 1-3
+  nodes using only menu capabilities and their documented parameters; new ids.
+- wait: operation=wait, queue=[], reason says what must change first.
+Every other field is null, "{}" or [] as the schema allows. reason: one or two sentences.
+
+Hard rules:
+- Never invent capabilities, parameters, task ids or technology names.
+- Never retry an unknown action outcome (unknown_outcome=true); it needs review.
+- Never grant items or research, choose coordinates, or issue commands.
+- Do not call tools, read files or run commands; the document is your whole context.
 """
 
 
@@ -270,12 +211,14 @@ class LunaDecisionClient:
             with self._lock:
                 self._process = None
 
-    def decide(self, snapshot):
-        if not isinstance(snapshot, dict):
-            raise ValueError("A structured current-world snapshot is required")
-        raw = json.dumps(_redact(snapshot), ensure_ascii=False, separators=(",", ":"))
-        if len(raw) > 180000:
-            raise ValueError("Planner snapshot too large; compact entities and logs first")
+    def decide(self, document):
+        """One decision for one incident document; at most ``DOCUMENT_CHAR_CAP`` characters."""
+        if not isinstance(document, dict):
+            raise ValueError("A structured incident document is required")
+        raw = json.dumps(_redact(document), ensure_ascii=False, separators=(",", ":"))
+        if len(raw) > DOCUMENT_CHAR_CAP:
+            raise ValueError("Incident document exceeds its character cap; it must be truncated first")
+        self.last_usage = None
         with tempfile.TemporaryDirectory(prefix="factorio-luna-") as directory:
             root = Path(directory)
             schema = root / "decision-schema.json"
@@ -308,7 +251,7 @@ class LunaDecisionClient:
             try:
                 result = self._invoke(
                     command,
-                    input=(PROMPT + "\nCURRENT SNAPSHOT:\n" + raw).encode("utf-8"),
+                    input=(PROMPT + "\nINCIDENT DOCUMENT:\n" + raw).encode("utf-8"),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     timeout=self.timeout_seconds,

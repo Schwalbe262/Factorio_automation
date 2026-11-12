@@ -394,6 +394,7 @@ class LifecycleTests(unittest.TestCase):
         command = self.proc.spawned[-1][0]
         self.assertEqual(command[command.index("--decision-interval") + 1], "120")
         self.assertEqual(command[command.index("--slice-seconds") + 1], "15")
+        self.assertEqual(command[command.index("--planner") + 1], "luna")
         path = self.root / "controller-config.json"
         snapshot = path.read_bytes()
         self.assertEqual(json.loads(snapshot)["controller"]["execution_slice_seconds"], 15)
@@ -406,6 +407,12 @@ class LifecycleTests(unittest.TestCase):
         self.control.stop(timeout=2)
         self.control.start()
         self.assertEqual(self.proc.spawned[-1][0][-3], "180")
+        self.write(self.repo / "automation_config.json", {"controller": {"planner": "none"}})
+        self.control.stop(timeout=2)
+        self.control.start()
+        command = self.proc.spawned[-1][0]
+        self.assertEqual(command[command.index("--planner") + 1], "none")
+        self.assertEqual(json.loads(path.read_bytes())["controller"]["planner"], "none")
         self.assertEqual((self.root / "world-settings.json").read_bytes(), before)
         self.assertFalse((self.root / "world-generation-config.json").exists())
 
