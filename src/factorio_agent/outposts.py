@@ -65,78 +65,24 @@ class MiningOutposts:
             area=declared['reserved_area']
             if any(key!=name and overlap(area,b['reserved_area']) for key,b in board['blocks'].items()):
                 return {'status':'blocked','reason':'paired_mining_reserved_area_conflicts_with_registered_block','block':name}
-            board['blocks'][name]=dict(declared['plan'],reserved_area=area)
+            extra={}
+            for field in('mining_reserved_area','layout_contract'):
+                if declared.get(field) is not None:extra[field]=declared[field]
+            board['blocks'][name]=dict(declared['plan'],reserved_area=area,**extra)
         _atomic_json(path,board)
         return None
 
     def prepare(self,obs,resource,count,*,extra_reservations=()):
-        if resource in ('iron-ore','copper-ore'):
-            from .paired_mining import prepare_new_bank
-            board_path=self.path.parent/'pcb-board.json'
-            board=json.loads(board_path.read_text(encoding='utf-8')) if board_path.exists() else {}
-            reservations=[b['reserved_area'] for b in board.get('blocks',{}).values()]
-            reservations += [r['area'] for r in board.get('shared_main_bus',{}).get('reservations',[]) if r.get('area')]
-            reservations += [b['reserved_area'] for b in self.state.get('banks',[]) if b.get('reserved_area')]
-            reservations += list(extra_reservations)
-            return prepare_new_bank(self.game,self.builder,obs,resource,count,reservations)
-        areas=[];board=self.path.parent/"pcb-board.json"
-        if board.exists():
-            saved=json.loads(board.read_text(encoding="utf-8"))
-            areas=[p["reserved_area"] for p in saved.get("blocks",{}).values()]
-            areas += [r['area'] for r in saved.get('shared_main_bus',{}).get('reservations',[]) if r.get('area')]
-        areas += list(extra_reservations)
-        args=json.dumps(json.dumps({"resource":resource,"count":count,"reserved":areas},separators=(",",":")))
-        candidates=self.game.query('''
-local args=helpers.json_to_table('''+args+''');local resource=args.resource;local count=args.count
-local proto=prototypes.entity["electric-mining-drill"];local radius=proto.mining_drill_radius
-local best={};local seen={}
-for _,ore in pairs(s.find_entities_filtered{position={0,0},radius=384,name=resource,limit=2000}) do
- local x=math.floor(ore.position.x)+.5;local y=math.floor(ore.position.y)+.5;local key=x..":"..y
- if not seen[key] then
-  seen[key]=true;local legal=true;local amount=0;local coverage=0
-  for i=0,count-1 do
-   local p={x=x+4*i,y=y}
-   for _,area in ipairs(args.reserved) do
-    if p.x+2>area[1][1] and p.x-2<area[2][1] and p.y+2>area[1][2] and p.y-2<area[2][2] then legal=false;break end
-   end
-   if not s.can_place_entity{name="electric-mining-drill",position=p,direction=8,force=f} then legal=false;break end
-   local covered=0;local available=0
-   for _,r in pairs(s.find_entities_filtered{area={{p.x-radius,p.y-radius},{p.x+radius,p.y+radius}},type="resource"}) do
-    if r.name~=resource then legal=false;break end;covered=covered+1;available=available+r.amount
-   end
-   if covered<4 or available<1800 then legal=false;break end
-   amount=amount+available;coverage=coverage+covered
-   if not s.can_place_entity{name="small-electric-pole",position={x=p.x+2,y=y},force=f} then legal=false;break end
-  end
-  if legal then for dx=-1,4*(count-1)+4 do
-   if not s.can_place_entity{name="transport-belt",position={x=x+dx,y=y+2},direction=4,force=f} then legal=false;break end
-  end end
-  if legal then
-   best[#best+1]={x=x,y=y,amount=amount,score=coverage*100000+math.min(amount,10000)-x*x-y*y}
-   table.sort(best,function(a,b) return a.score>b.score end)
-   if #best>8 then table.remove(best) end
-  end
- end
-end
-local mined=prototypes.entity[resource].mineable_properties
-return {ok=true,candidates=best,nominal_drill_rate=proto.mining_speed*60/mined.mining_time}
-''')
-        if not candidates.get("ok"):return candidates
-        for site in candidates.get("candidates",[]):
-            base=mining_bank(site["x"],site["y"],count,resource)
-            pole=next(e for e in base["entities"] if e["name"]=="small-electric-pole")
-            reserved=[e for e in base["entities"] if e["name"]!="small-electric-pole"]
-            power=plan_connection(self.game,self.builder,obs,pole["position"],reserved)
-            if not power.get("ok"):continue
-            all_entities={(e["name"],e["position"]["x"],e["position"]["y"]):e
-                          for e in power["entities"]+base["entities"]}
-            full=_plan(list(all_entities.values()),base["ports"],resource_cell=True,
-                       resource=resource,drill_count=count,mining_footprint=base['mining_footprint'],layout_policy="pcb-mining-row-v1")
-            footprints=[self.builder._occupied_by_plan([e]) for e in full["entities"]]
-            if sum(map(len,footprints))!=len(set().union(*footprints)):continue
-            return {"ok":True,"plan":full,"nominal_rate_per_minute":count*candidates["nominal_drill_rate"],
-                    "remaining_resource_survey":site["amount"],"wire_hops":power["wire_hops"],"ready":False}
-        return {"ok":False,"reason":"no_clear_electric_mining_row_with_power"}
+        from .paired_mining import prepare_new_bank
+        board_path=self.path.parent/'pcb-board.json'
+        board=json.loads(board_path.read_text(encoding='utf-8')) if board_path.exists() else {}
+        if board and board.get('world_id')!=obs['world_id']:
+            return {'ok':False,'reason':'mining_planning_board_world_changed'}
+        reservations=[b['reserved_area'] for b in board.get('blocks',{}).values()]
+        reservations += [r['area'] for r in board.get('shared_main_bus',{}).get('reservations',[]) if r.get('area')]
+        reservations += [b['reserved_area'] for b in self.state.get('banks',[]) if b.get('reserved_area')]
+        reservations += list(extra_reservations)
+        return prepare_new_bank(self.game,self.builder,obs,resource,count,reservations)
 
     def bank_proof(self,obs,bank):
         defense=None
@@ -377,6 +323,9 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
                 bank['pending_extension']=extension;_atomic_json(self.path,self.state)
             reservation=self.publish_reservations(obs)
             if reservation:return reservation
+            from .mining_layout_policy import validate_retained_units
+            retained=validate_retained_units(obs,extension)
+            if not retained.get('ok'):return dict(retained,status='blocked')
             coverage=self._construction_coverage(obs,extension)
             if coverage is not None:return coverage
             result=self.builder.ensure_plan(obs,extension['plan'])

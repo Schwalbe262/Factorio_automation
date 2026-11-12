@@ -1,6 +1,7 @@
 """An additive normally fueled boiler/engine pair; preserve the running plant."""
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from pathlib import Path
 from factorio_ai.deterministic_builder import _plan
@@ -77,6 +78,24 @@ class SteamExpansion:
             if 'startup_science' in board['blocks']:board['blocks']['startup_science']['reserved_area'][1][0]=35
             board['blocks']['steam_expansion']=dict(self.state['plan'],reserved_area=self.state['core']['reserved_area'])
             _atomic_json(path,board)
+        bank=self.state['bank']
+        if bank.get('layout_contract'):
+            # Publish the mining-only growth area separately from its clear exit.
+            saved=json.loads(self.outposts.path.read_text(encoding='utf-8')) if self.outposts.path.exists() else deepcopy(self.outposts.state)
+            if(saved.get('world_id')!=obs['world_id']or saved.get('catalog_fingerprint',self.catalog.fingerprint)!=self.catalog.fingerprint):
+                return {'status':'blocked','reason':'steam_coal_registry_identity_changed'}
+            matches=[b for b in saved.get('banks',[])if b['plan']['ports']==bank['plan']['ports']]
+            if len(matches)>1 or(matches and matches[0]['plan']!=bank['plan']):
+                return {'status':'blocked','reason':'steam_fixed_coal_bank_plan_changed'}
+            if not matches:
+                saved.setdefault('banks',[]).append(dict(deepcopy(bank),ready=False,power_only=True))
+                _atomic_json(self.outposts.path,saved)
+            self.outposts.state=saved
+            reservation=self.outposts.publish_reservations(obs)
+            if reservation:return reservation
+        from .mining_layout_policy import validate_retained_units
+        retained=validate_retained_units(obs,bank)
+        if not retained.get('ok'):return dict(retained,status='blocked')
         result=self.builder.ensure_plan(obs,self.state['plan'])
         if result.get('status')!='succeeded':return result
         sample=self.sample(obs)
@@ -95,7 +114,10 @@ class SteamExpansion:
         proof=self.proof(obs)
         if not proof:return {'status':'waiting','reason':'sampling native generation from the new engine pair for thirty game seconds'}
         bank=self.state['bank'];bank['ready']=True;bank['power_only']=True
-        if not any(b['plan']['ports'][0]['position']==bank['plan']['ports'][0]['position'] for b in self.outposts.state['banks']):
+        matches=[b for b in self.outposts.state['banks']if b['plan']['ports']==bank['plan']['ports']]
+        if matches and bank.get('layout_contract'):
+            matches[0].update(deepcopy(bank));_atomic_json(self.outposts.path,self.outposts.state)
+        elif not matches:
             self.outposts.state['banks'].append(bank);_atomic_json(self.outposts.path,self.outposts.state)
         return {'status':'succeeded','reason':'paid additive steam generation has automatic dedicated coal and shared normal water','evidence':proof}
 

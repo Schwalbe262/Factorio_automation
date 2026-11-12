@@ -97,6 +97,9 @@ return {ok=true,tick=game.tick,producer_rows=rows,left=lanes[1],right=lanes[2]}
 
 
 def prepare_extension(game,builder,obs,bank,added_drills):
+    if bank.get('layout_contract')or bank['plan'].get('layout_contract'):
+        from .mining_layout_policy import prepare_extension as prepare_policy_extension
+        return prepare_policy_extension(game,builder,obs,bank,added_drills)
     old=bank['plan'];pairs=old['pair_count']+math.ceil(added_drills/2)
     if pairs>bank.get('reserved_pair_slots',old['pair_count']):
         return {'ok':False,'reason':'paired_mining_reserved_columns_exhausted'}
@@ -117,57 +120,9 @@ def prepare_extension(game,builder,obs,bank,added_drills):
 
 
 def prepare_new_bank(game,builder,obs,resource,count,reservations):
-    """A mineral edge starts another paired block rather than a crooked row."""
-    pairs=math.ceil(count/2)
-    payload=json.dumps(json.dumps({'resource':resource,'pairs':pairs,'areas':reservations},separators=(',',':')))
-    sites=game.query('''
-local args=helpers.json_to_table('''+payload+''');local seen={};local best={};local radius=prototypes.entity["electric-mining-drill"].mining_drill_radius
-for _,ore in pairs(s.find_entities_filtered{position={0,0},radius=320,name=args.resource,limit=2000}) do
- local x=math.floor(ore.position.x/2)*2+.5;local y=math.floor(ore.position.y/2)*2+.5;local key=x..":"..y
- if not seen[key] then
-  seen[key]=true;local area={{x-4*(args.pairs-1)-1.5,y-1.5},{x+2.5,y+5.5}};local legal=true;local score=0
-  for _,r in ipairs(args.areas) do if area[1][1]<r[2][1] and area[2][1]>r[1][1] and area[1][2]<r[2][2] and area[2][2]>r[1][2] then legal=false;break end end
-  if legal then for i=0,args.pairs-1 do for row=0,1 do
-   local p={x=x-4*i,y=y+4*row};local amount=0;local tiles=0
-   if not s.can_place_entity{name="electric-mining-drill",position=p,direction=row==0 and 8 or 0,force=f} then legal=false;break end
-   for _,r in pairs(s.find_entities_filtered{area={{p.x-radius,p.y-radius},{p.x+radius,p.y+radius}},type="resource"}) do
-    if r.name~=args.resource then legal=false;break end
-    amount=amount+r.amount;tiles=tiles+1
-   end
-   if amount<1800 or tiles<4 then legal=false;break end
-   score=score+math.min(amount,10000)
-  end if not legal then break end end end
-  if legal then best[#best+1]={x=x,y=y,score=score-x*x-y*y};table.sort(best,function(a,b)return a.score>b.score end);if #best>12 then table.remove(best) end end
- end
-end
-return {ok=true,sites=best}
-''')
-    if not sites.get('ok'):return sites
-    failures=[]
-    for site in sites['sites']:
-        core=mining_pair(site['x'],site['y'],pairs,resource)
-        check=preflight(game,builder,obs,core['entities'])
-        if not check.get('ok'):failures.append(check.get('reason'));continue
-        survey=resource_survey(game,core)
-        if not survey.get('ok'):failures.append(survey.get('reason'));continue
-        slots=pairs
-        for columns in range(pairs+1,min(4,pairs+2)+1):
-            future=mining_pair(site['x'],site['y'],columns,resource)
-            area=[[site['x']-4*(columns-1)-1.5,site['y']-1.5],[site['x']+2.5,site['y']+5.5]]
-            if any(overlap(area,r) for r in reservations) or not preflight(game,builder,obs,future['entities']).get('ok') or not resource_survey(game,future).get('ok'):break
-            slots=columns
-        pole=next(e for e in core['entities'] if e['name']=='small-electric-pole')
-        bridge=power_connection(game,builder,obs,pole['position'],[e for e in core['entities'] if e['name']!='small-electric-pole'])
-        if not bridge.get('ok'):failures.append(bridge.get('reason'));continue
-        es=merge_entities(core['entities'],bridge['entities']);check=preflight(game,builder,obs,es)
-        if not check.get('ok'):failures.append(check.get('reason'));continue
-        extra={k:v for k,v in core.items() if k not in ('ok','reason','entities','ports','required_items')}
-        plan=_plan(es,core['ports'],**extra,clear_obstacles=check['clear_obstacles'],clearance_world_id=obs['world_id'])
-        return {'ok':True,'plan':plan,'ready':False,'reserved_pair_slots':slots,
-                'reserved_area':[[site['x']-4*(slots-1)-1.5,site['y']-1.5],[site['x']+2.5,site['y']+5.5]],
-                'nominal_rate_per_minute':2*pairs*survey['rate_per_drill'],
-                'remaining_resource_survey':survey['unique_remaining_resource'],'wire_hops':bridge['wire_hops']}
-    return {'ok':False,'reason':'no_clear_resource_backed_paired_bank_with_power','candidate_failures':failures}
+    """Plan declared grid/growth and a fixed off-resource outlet before acceptance."""
+    from .mining_layout_policy import prepare_new_bank as prepare_policy_bank
+    return prepare_policy_bank(game,builder,obs,resource,count,reservations)
 
 
 class PairedMining:

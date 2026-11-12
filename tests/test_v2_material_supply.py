@@ -12,12 +12,32 @@ from factorio_agent.outposts import MiningOutposts
 from factorio_agent.paired_mining import mining_pair
 from factorio_agent.transport import xy
 from factorio_agent.resource_policy import mining_exit_candidates, mining_reservations, validate_annotations
+from factorio_agent.mining_layout_policy import make_policy,layout_contract
+
+try:
+    from lupa import LuaRuntime
+except ImportError:
+    LuaRuntime=None
 
 
 def bank(resource, x=30.5, y=20.5):
     return {'ok': True, 'ready': False, 'plan': mining_pair(x, y, 1, resource),
             'reserved_area': [[x-1.5, y-1.5], [x+2.5, y+5.5]], 'reserved_pair_slots': 1,
             'nominal_rate_per_minute': 60, 'wire_hops': 0, 'remaining_resource_survey': 10000}
+
+
+def offore_bank():
+    b=bank('coal');p=deepcopy(b['plan']['ports'][0]);b['plan']['collector_port']=deepcopy(p)
+    path=[{'x':p['position']['x']+i,'y':p['position']['y']}for i in range(5)]
+    es=b['plan']['entities']+[{'name':'transport-belt','position':q,'direction':4}for q in path[1:]]
+    from factorio_agent.resource_policy import annotate_mining_exit
+    annotate_mining_exit(es,'coal',p['position'],3,path=path)
+    p['position']=path[-1];p.pop('mining_resource',None);b['plan'].update(entities=es,ports=[p])
+    b['plan']['mining_reserved_area']=deepcopy(b['reserved_area']);b['mining_reserved_area']=deepcopy(b['reserved_area'])
+    b['reserved_area'][1][0]=p['position']['x']+3.5;b['output_resource_free_verified']=True
+    b['layout_contract']=layout_contract(b,make_policy('w','catalog','coal',minimum_growth_pairs=0))
+    b['plan']['layout_contract']=deepcopy(b['layout_contract'])
+    return b
 
 
 class MaterialSupplyTests(unittest.TestCase):
@@ -73,6 +93,48 @@ class MaterialSupplyTests(unittest.TestCase):
         self.assertEqual(self.outposts.state['banks'], [self.old_bank])
         self.assertFalse(self.controller.path.exists())
         self.assertFalse(self.controller.sources_path.exists())
+
+    def test_contracted_offore_source_keeps_exit_annotations_and_separate_mining_area(self):
+        prepared=offore_bank();self.prepare_bank.side_effect=lambda *args:deepcopy(prepared)
+        result=self.controller.prepare(self.obs,{'resource':'coal'})
+        self.assertTrue(result['ok'],result);new=result['bank']
+        self.assertEqual(new['plan']['ports'],prepared['plan']['ports'])
+        self.assertEqual(new['plan']['collector_port'],prepared['plan']['collector_port'])
+        self.assertEqual(new['plan']['mining_reserved_area'],prepared['mining_reserved_area'])
+        outlet=next(e for e in new['plan']['entities']if e['name']=='transport-belt'and e['position']==new['plan']['ports'][0]['position'])
+        self.assertNotIn('mining_resource',outlet)
+        for e in prepared['plan']['entities']:
+            if e.get('mining_exit'):self.assertIn(e,new['plan']['entities'])
+        validate_annotations(new['plan']['entities'],self.builder)
+
+    def test_moved_or_unverified_offore_port_blocks_before_native_query(self):
+        b=offore_bank();source=deepcopy(b['plan']['ports'][0]);source['position']['x']+=1;self.game.query.reset_mock()
+        result=self.controller._coal_hub(source,[],b['plan']['entities'],b['mining_reserved_area'],layout_contract=b['layout_contract'])
+        self.assertEqual(result['reason'],'coal_ordinary_output_requires_exact_verified_layout_contract')
+        self.game.query.assert_not_called()
+
+    @unittest.skipUnless(LuaRuntime,'optional executable Lua runtime')
+    def test_native_offore_coal_hub_uses_ordinary_land_and_never_needs_a_nearby_drill(self):
+        b=offore_bank();lua=LuaRuntime(unpack_returned_tuples=True)
+        def table(v):
+            if isinstance(v,dict):return lua.table_from({k:table(a)for k,a in v.items()})
+            if isinstance(v,list):return lua.table_from([table(a)for a in v])
+            return v
+        lua.globals().helpers=lua.table_from({'json_to_table':lambda raw:table(json.loads(raw))})
+        lua.execute('''d={world_id="w"};f={};s={};ore=false;existing=nil
+prototypes={entity={["transport-belt"]={tile_width=1,tile_height=1},["small-electric-pole"]={tile_width=1,tile_height=1},
+ ["electric-mining-drill"]={tile_width=3,tile_height=3}}}
+target=function()return existing end
+s.count_entities_filtered=function()return ore and 1 or 0 end
+s.find_entities_filtered=function()return ore and{{name="coal"}}or{}end
+s.can_place_entity=function()return true end
+''')
+        self.game.query.side_effect=lambda script:dict(lua.execute('return(function()'+' '.join(script.splitlines())+'end)()').items())
+        r=self.controller._coal_hub(b['plan']['ports'][0],[],b['plan']['entities'],b['mining_reserved_area'],layout_contract=b['layout_contract'])
+        self.assertTrue(r['ok'],r);self.assertTrue(r['ordinary_offore_source']);self.assertEqual(r['exit_length'],-1)
+        lua.execute('ore=true')
+        r=self.controller._coal_hub(b['plan']['ports'][0],[],b['plan']['entities'],b['mining_reserved_area'],layout_contract=b['layout_contract'])
+        self.assertEqual(r['reason'],'no_clear_ordinary_coal_distribution_hub')
 
     def test_defense_action_or_wait_precedes_any_new_mining_construction(self):
         perimeter = Mock()

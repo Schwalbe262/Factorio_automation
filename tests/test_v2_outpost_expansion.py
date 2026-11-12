@@ -46,6 +46,23 @@ class OutpostExpansionTests(unittest.TestCase):
         self.assertEqual(self.new['defense_scope_id'],scope)
         self.assertEqual(len(self.c.state['banks']),2)
 
+    def test_all_new_solid_banks_use_the_policy_and_preserve_every_reservation(self):
+        self.c.state['banks']=[dict(self.old,reserved_area=[[1,1],[4,4]])]
+        board={'world_id':'w','blocks':{'factory':{'reserved_area':[[20,20],[30,30]]}},
+               'shared_main_bus':{'reservations':[{'area':[[-12,-120],[8,-10]]}]}}
+        (self.root/'pcb-board.json').write_text(json.dumps(board));before=deepcopy(self.c.state)
+        for resource in('iron-ore','copper-ore','coal','stone'):
+            with patch('factorio_agent.paired_mining.prepare_new_bank',return_value={'ok':True})as prepare:
+                self.assertTrue(self.c.prepare(self.obs,resource,2,extra_reservations=[[[40,40],[44,44]]])['ok'])
+                self.assertEqual(prepare.call_args.args[3:5],(resource,2))
+                self.assertEqual(prepare.call_args.args[5],[board['blocks']['factory']['reserved_area'],
+                    board['shared_main_bus']['reservations'][0]['area'],[[1,1],[4,4]],[[40,40],[44,44]]])
+        self.assertEqual(self.c.state,before);self.assertFalse(self.c.path.exists())
+        board['world_id']='foreign';(self.root/'pcb-board.json').write_text(json.dumps(board))
+        with patch('factorio_agent.paired_mining.prepare_new_bank')as prepare:
+            self.assertEqual(self.c.prepare(self.obs,'coal',2)['reason'],'mining_planning_board_world_changed')
+            prepare.assert_not_called()
+
     def test_pending_extension_also_gates_before_first_new_producer(self):
         self.c.state['banks']=[self.old]
         extension=deepcopy(self.new)
@@ -53,6 +70,24 @@ class OutpostExpansionTests(unittest.TestCase):
         self.assertEqual(self.c.step(self.obs,self.request)['type'],'craft')
         self.c.builder.ensure_plan.assert_not_called()
         self.assertIn('defense_scope_id',extension)
+
+    def test_changed_retained_unit_blocks_before_even_new_defense_construction(self):
+        self.c.state['banks']=[self.old];extension=deepcopy(self.new)
+        extension['retained_units']=[{k:self.obs['entities'][0][k]for k in('name','position','unit_number','direction')}]
+        self.old['pending_extension']=extension;self.obs['entities'][0]['unit_number']+=1000
+        result=self.c.step(self.obs,self.request)
+        self.assertEqual(result['reason'],'mining_retained_native_identity_changed')
+        self.c.builder.ensure_plan.assert_not_called();self.c.perimeter.ensure_coverage.assert_not_called()
+
+    def test_published_outer_bank_does_not_turn_clear_exit_into_an_ore_reservation(self):
+        self.new['mining_reserved_area']=[[9,9],[13,16]];self.new['reserved_area']=[[9,9],[23,16]]
+        self.new['layout_contract']={'fixed_output':'exact'}
+        (self.root/'pcb-board.json').write_text(json.dumps({'world_id':'w','blocks':{}}))
+        self.assertIsNone(MiningOutposts.publish_reservations(self.c,self.obs))
+        block=json.loads((self.root/'pcb-board.json').read_text())['blocks']['iron-ore_mining']
+        self.assertEqual(block['reserved_area'],self.new['reserved_area'])
+        self.assertEqual(block['mining_reserved_area'],[[9,9],[13,16]])
+        self.assertEqual(block['layout_contract'],self.new['layout_contract'])
 
     def test_declared_coverage_geometry_change_blocks_without_retargeting(self):
         self.c.step(self.obs,self.request)

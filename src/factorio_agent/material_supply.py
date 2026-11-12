@@ -64,11 +64,23 @@ class DedicatedMaterials:
                 and entry['bank'].get('plan', {}).get('resource') == resource
                 and (self.purpose is None or resource == 'coal'))
 
-    def _coal_hub(self, source, reservations, planned=(), mining_area=None, *, game=None):
+    def _coal_hub(self, source, reservations, planned=(), mining_area=None, *, game=None, layout_contract=None):
+        ordinary=source.get('mining_resource') is None
+        if ordinary:
+            from .mining_layout_policy import _hash,validate_policy
+            if(not isinstance(layout_contract,dict)or not layout_contract.get('output_resource_free_verified')
+                    or layout_contract.get('fixed_output_port')!=source
+                    or source.get('kind')!='item'or source.get('item')!='coal'or source.get('facing')!=4
+                    or source.get('direction')!='output'
+                    or layout_contract.get('contract_id')!=_hash({k:v for k,v in layout_contract.items()if k!='contract_id'})):
+                return {'ok':False,'reason':'coal_ordinary_output_requires_exact_verified_layout_contract'}
+            try:validate_policy(layout_contract['policy'],layout_contract['policy']['world_id'],self.catalog.fingerprint,'coal')
+            except(KeyError,TypeError,ValueError):return {'ok':False,'reason':'coal_ordinary_output_layout_policy_changed'}
         zones = [{'area': area, 'resource': '__other_reserved_area__'} for area in reservations]
         if mining_area:
             zones.append({'area': mining_area, 'resource': 'coal'})
-        payload = json.dumps(json.dumps({'source': source, 'areas': reservations, 'zones': zones,
+        payload = json.dumps(json.dumps({'source': source, 'areas': reservations, 'zones': zones,'ordinary':ordinary,
+            'world_id':layout_contract['policy']['world_id']if ordinary else None,
             'planned': list(planned), 'exit_candidates': mining_exit_candidates(source['position'], extra_clear_steps=4)}, separators=(',', ':')))
         return (game or self.game).query('''
 local args=helpers.json_to_table('''+payload+''');
@@ -93,6 +105,32 @@ local function hub_clear(p)
   and s.can_place_entity{name="transport-belt",position={x=x+2,y=y+1},direction=4,force=f}
   and s.can_place_entity{name="transport-belt",position={x=x+3,y=y},direction=4,force=f}
   and s.can_place_entity{name="transport-belt",position={x=x+3,y=y+1},direction=4,force=f}
+end
+if args.ordinary then
+ if not d or d.world_id~=args.world_id then return {ok=false,reason="coal_ordinary_source_world_changed"}end
+ local path={};local origin=args.source.position;local declared=false
+ for _,spec in ipairs(args.planned)do if spec.name=="transport-belt"and spec.direction==4
+  and spec.position.x==origin.x and spec.position.y==origin.y and not spec.mining_resource then declared=true end end
+ local live=target(origin,"transport-belt")
+ if live and(not args.source.unit_number or live.unit_number~=args.source.unit_number or live.force~=f or live.surface~=s
+  or live.direction~=4 or live.position.x~=origin.x or live.position.y~=origin.y)then
+  return {ok=false,reason="coal_ordinary_source_native_identity_changed"}end
+ if not declared then return {ok=false,reason="coal_ordinary_source_not_in_whole_plan"}end
+ for step=0,4 do local p={x=origin.x+step,y=origin.y};local occupied=mining_patch_at(p,"coal",args.zones)
+  if occupied then break end
+  if step>0 then
+   local conflict=false
+   for _,spec in ipairs(args.planned)do local proto=prototypes.entity[spec.name];local w=spec._width or proto.tile_width;local h=spec._height or proto.tile_height
+    if spec.direction==4 or spec.direction==12 then w,h=h,w end
+    if math.abs(spec.position.x-p.x)<w/2+.49 and math.abs(spec.position.y-p.y)<h/2+.49 then conflict=true;break end
+   end
+   if conflict or not s.can_place_entity{name="transport-belt",position=p,direction=4,force=f}then break end
+  end
+  path[#path+1]=p
+  if hub_clear(p)then local connector={};for i=2,#path do connector[#connector+1]=path[i]end
+   return {ok=true,exit_prefix={origin},exit_length=-1,hub_connector=connector,hub_position=p,ordinary_offore_source=true}end
+ end
+ return {ok=false,reason="no_clear_ordinary_coal_distribution_hub"}
 end
 return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candidates,hub_clear,false,4)
 ''')
@@ -184,7 +222,8 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
                     return dict(bank, candidate_failures=failures, attempted_banks=attempt+1)
                 if resource != 'coal':
                     break
-                hub = self._coal_hub(bank['plan']['ports'][0], reservations, bank['plan']['entities'], bank['reserved_area'], game=planning_game)
+                hub = self._coal_hub(bank['plan']['ports'][0], reservations, bank['plan']['entities'],
+                    bank['plan'].get('mining_reserved_area',bank['reserved_area']), game=planning_game,layout_contract=bank.get('layout_contract'))
                 if hub.get('ok'):
                     grown = self._distribution_area(bank, hub)
                     if not any(overlap(grown, r) for r in reservations):
@@ -202,18 +241,25 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
             drills = [e for row in bank['plan']['producer_rows'].values() for e in row]
             drill_positions = {xy(e) for e in drills}
             pole_positions = {(x+2, y) for x, y in drill_positions}
-            output_x, output_y = xy(bank['plan']['ports'][0])
-            left_x = min(x for x, _ in drill_positions)-1
-            core = [e for e in bank['plan']['entities'] if
-                    (e['name'] == 'electric-mining-drill' and xy(e) in drill_positions)
-                    or (e['name'] == 'small-electric-pole' and xy(e) in pole_positions)
-                    or (e['name'] == 'transport-belt' and xy(e)[1] == output_y and left_x <= xy(e)[0] <= output_x)]
-            occupied = self.builder._occupied_by_plan(core)
-            core_area = [[min(x for x, _ in occupied)-.5, min(y for _, y in occupied)-.5],
-                         [max(x for x, _ in occupied)+.5, max(y for _, y in occupied)+.5]]
-            bank['plan']['mining_footprint'] = core_area
+            contracted=bool(bank.get('layout_contract'))
+            if contracted:
+                # Keep the generator's narrow local and exit annotations intact.
+                core=[e for e in bank['plan']['entities']if e['name']!='small-electric-pole'or e.get('mining_resource')]
+                core_area=bank['plan']['mining_footprint']
+            else:
+                output_x, output_y = xy(bank['plan']['ports'][0])
+                left_x = min(x for x, _ in drill_positions)-1
+                core = [e for e in bank['plan']['entities'] if
+                        (e['name'] == 'electric-mining-drill' and xy(e) in drill_positions)
+                        or (e['name'] == 'small-electric-pole' and xy(e) in pole_positions)
+                        or (e['name'] == 'transport-belt' and xy(e)[1] == output_y and left_x <= xy(e)[0] <= output_x)]
+                occupied = self.builder._occupied_by_plan(core)
+                core_area = [[min(x for x, _ in occupied)-.5, min(y for _, y in occupied)-.5],
+                             [max(x for x, _ in occupied)+.5, max(y for _, y in occupied)+.5]]
+                bank['plan']['mining_footprint'] = core_area
             core_keys = {(e['name'], *xy(e)) for e in core}
             for spec in bank['plan']['entities']:
+                if contracted:continue
                 if (spec['name'], *xy(spec)) in core_keys:
                     spec['mining_resource'] = resource
                     spec['mining_footprint'] = core_area
@@ -222,7 +268,7 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
                     spec.pop('mining_resource', None); spec.pop('mining_footprint', None)
             if resource == 'coal':
                 source = bank['plan']['ports'][0]
-                bank['plan']['mining_reserved_area'] = deepcopy(bank['reserved_area'])
+                if not contracted:bank['plan']['mining_reserved_area'] = deepcopy(bank['reserved_area'])
                 path, hub_x, hub_y = self._hub_geometry(source, hub)
                 mining_path = hub.get('exit_prefix', path)
                 if len(path)>1:
@@ -247,7 +293,9 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
                     return {'ok':False,'reason':'coal_output_access_obstructed_by_prospective_entity'}
                 keepouts=self._published_power_keepouts(saved.get('banks',[]))
                 keepouts += [entity('transport-belt',x,y,4)for x,y in sorted(empty)]
-                pole=next(e for e in core if e['name']=='small-electric-pole')
+                if contracted:keepouts+=bank['layout_contract']['growth_entities']
+                pole=next(e for e in core if e['name']=='small-electric-pole'and
+                    (not contracted or e['position']==bank['layout_contract']['fixed_power_port']))
                 power=power_connection(planning_game,self.builder,obs,pole['position'],
                     [e for e in es if e['name']!='small-electric-pole']+keepouts)
                 if not power.get('ok'):
@@ -357,6 +405,9 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
         result = self._register(obs, entry, ready=entry['phase'] == 'verified')
         if result:
             return result
+        from .mining_layout_policy import validate_retained_units
+        retained=validate_retained_units(obs,entry['bank'])
+        if not retained.get('ok'):return dict(retained,status='blocked')
         if self.perimeter is not None:
             result = self.perimeter.ensure_coverage(obs, entry['material_supply_id'], [entry['bank']['reserved_area']])
             if result is not None:
