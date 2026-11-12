@@ -678,13 +678,13 @@ class StarterExecutors:
         from .electric_mining import ElectricCoal
 
         self.electric_coal = ElectricCoal(game, self.bootstrap, self.builder)
-        from .outposts import MiningOutposts
-
-        self.outposts = MiningOutposts(game, self.bootstrap, self.builder)
         from .site.service import SiteService
 
         # One map survey + master plan per runtime, shared by every site consumer.
         self.site = SiteService(game)
+        from .outposts import MiningOutposts
+
+        self.outposts = MiningOutposts(game, self.bootstrap, self.builder, site=self.site)
         from .smelting import SmeltingDistrict
 
         self.smelting = SmeltingDistrict(game, self.bootstrap, self.builder, catalog, site=self.site)

@@ -2,6 +2,24 @@
 
 No method builds, mines, saves runtime state or changes an accepted source port.
 The prepare_new_bank signature is compatible with paired_mining's current caller.
+
+Orientation conventions (map tiles, x east, y south; directions 0 north,
+4 east, 8 south, 12 west):
+
+* The canonical paired bank flows EAST (:func:`paired_mining.mining_pair`):
+  the collector runs east, the "left" drill row sits north of it and the
+  "right" row south, the output port is the east end and new columns are
+  added at the west end (growth opposite the flow).
+* Any other flow is that canonical layout turned clockwise about the output
+  port with :class:`site.transform.Transform` (rotation only, never a
+  mirror), so "left" stays the left lane of the turned collector and both
+  lanes are still fed by their own row.
+* A bank's orientation is carried by its ``layout_contract.policy.flow`` /
+  ``flow_direction`` and the ``facing`` of its collector and output ports.
+  Banks saved without a contract or orientation field are EAST.
+* Only policies made with ``site_oriented=True`` (orientation decided by the
+  site master plan, see :mod:`mining_site`) may execute a non-east flow;
+  without a plan every new bank is EAST exactly as before.
 """
 
 from __future__ import annotations
@@ -19,6 +37,7 @@ from .planning import overlap, preflight
 from .paired_mining import mining_pair, resource_survey
 from .power_grid import plan_connection as power_connection
 from .resource_policy import MINING_EXIT_LUA, annotate_mining_exit, mining_exit_candidates
+from .site.transform import Transform, apply
 from .smelting import merge_entities
 
 
@@ -59,9 +78,22 @@ def _position(p):
 
 
 def make_policy(
-    world_id, catalog_fingerprint, resource, *, flow="west_to_east", grid_origin=None, minimum_growth_pairs=1
+    world_id,
+    catalog_fingerprint,
+    resource,
+    *,
+    flow="west_to_east",
+    grid_origin=None,
+    minimum_growth_pairs=1,
+    site_oriented=False,
 ):
-    """Choose flow, opposite column growth and perpendicular new-bank growth first."""
+    """Choose flow, opposite column growth and perpendicular new-bank growth first.
+
+    ``site_oriented`` marks a flow decided by the site master plan; it adds
+    ``orientation_source="site-plan"`` and allows any cardinal flow to
+    execute. Without it the policy is byte-identical to earlier versions
+    (only EAST executes), so saved contracts keep validating.
+    """
     origin = deepcopy(grid_origin or {"x": 0.5, "y": 0.5})
     if (
         not isinstance(world_id, str)
@@ -97,8 +129,10 @@ def make_policy(
         minimum_growth_pairs=minimum_growth_pairs,
         collector_lanes={"left": resource, "right": resource},
         main_bus_flow="south_to_north",
-        orientation_execution_supported=direction == 4,
+        orientation_execution_supported=direction == 4 or bool(site_oriented),
     )
+    if site_oriented:
+        value["orientation_source"] = "site-plan"
     value["policy_id"] = _hash(value)
     return value
 
@@ -113,13 +147,33 @@ def validate_policy(policy, world_id, catalog_fingerprint, resource):
         flow=policy.get("flow"),
         grid_origin=policy.get("grid_origin"),
         minimum_growth_pairs=policy.get("minimum_growth_pairs"),
+        site_oriented=policy.get("orientation_source") == "site-plan",
     )
     if policy != expected:
         raise ValueError("mining policy frame, pitch, growth or immutable identity changed")
 
 
+def flow_transform(flow, origin):
+    """The clockwise turn mapping the canonical EAST layout to ``flow`` about ``origin`` (x, y).
+
+    Rotation only: a mirror would swap the lane sides of the producer rows.
+    """
+    return Transform((FLOWS[flow] - 4) % 16, None, (origin[0], origin[1]))
+
+
+def turned_bank(plan, flow, origin):
+    """``plan`` (a canonical EAST bank or candidate plan) turned to ``flow`` about ``origin``."""
+    t = flow_transform(flow, origin)
+    return plan if t.identity else apply(t, plan)
+
+
 def oriented_pair_core(output, pairs, resource, flow="west_to_east"):
-    """Pure quarter-turn geometry; only EAST execution currently has all shared proofs."""
+    """The paired core whose collector ends at ``output`` and flows ``flow``.
+
+    The canonical EAST core :func:`paired_mining.mining_pair` with its output
+    port on ``output`` is turned about ``output`` (see :func:`flow_transform`);
+    EAST is the canonical core unchanged.
+    """
     if (
         not _position(output)
         or any((v - 0.5) % 1 for v in output.values())
@@ -129,35 +183,16 @@ def oriented_pair_core(output, pairs, resource, flow="west_to_east"):
         or flow not in FLOWS
     ):
         raise ValueError("half-tile output, 1..8 paired columns and cardinal flow required")
-    base = mining_pair(-2, -2, pairs, resource)
-    turns = ((FLOWS[flow] - 4) % 16) // 4
-
-    def point(p):
-        x, y = p["x"], p["y"]
-        for _ in range(turns):
-            x, y = -y, x
-        return {"x": x + output["x"], "y": y + output["y"]}
-
-    def area(box):
-        points = [point({"x": x, "y": y}) for x in (box[0][0], box[1][0]) for y in (box[0][1], box[1][1])]
-        return [[min(p[k] for p in points) for k in ("x", "y")], [max(p[k] for p in points) for k in ("x", "y")]]
-
-    entities = []
-    mapping = {}
-    for e in base["entities"]:
-        q = deepcopy(e)
-        q["position"] = point(e["position"])
-        q["direction"] = (e.get("direction", 0) + turns * 4) % 16
+    base = turned_bank(mining_pair(output["x"] - 2, output["y"] - 2, pairs, resource), flow, (output["x"], output["y"]))
+    entities = deepcopy(base["entities"])
+    for e in entities:
         # Pole facing has no production effect; retain the canonical zero value.
-        if q["name"] == "small-electric-pole":
-            q["direction"] = 0
-        q["mining_footprint"] = area(e["mining_footprint"])
-        entities.append(q)
-        mapping[_signature(e)] = q
-    port = deepcopy(base["ports"][0])
-    port["position"] = point(port["position"])
-    port["facing"] = FLOWS[flow]
+        if e["name"] == "small-electric-pole":
+            e["direction"] = 0
+    mapping = {_signature(e): e for e in entities}
     rows = {side: [mapping[_signature(e)] for e in base["producer_rows"][side]] for side in ("left", "right")}
+    port = deepcopy(base["ports"][0])
+    port["position"] = dict(output)
     return _plan(
         entities,
         [port],
@@ -167,7 +202,7 @@ def oriented_pair_core(output, pairs, resource, flow="west_to_east"):
         pair_count=pairs,
         drill_count=2 * pairs,
         producer_rows=rows,
-        mining_footprint=area(base["mining_footprint"]),
+        mining_footprint=deepcopy(base["mining_footprint"]),
         layout_policy="pcb-paired-mining-policy-v1",
         flow=flow,
         growth_direction=(FLOWS[flow] + 8) % 16,
@@ -243,7 +278,9 @@ def layout_contract(bank, policy):
         growth_area=deepcopy(future["mining_footprint"]),
         growth_entities=[deepcopy(e) for e in future["entities"] if _signature(e) not in expected],
         output_access=output_access,
-        output_access_scope="three reserved off-resource EAST continuation cells",
+        output_access_scope="three reserved off-resource "
+        + DIRECTION_NAMES[outlet["facing"]].upper()
+        + " continuation cells",
         output_resource_free_verified=bool(bank.get("output_resource_free_verified")),
         service_side=DIRECTION_NAMES[(port["facing"] + 12) % 16],
         defense_rule="outside growth footprint, output approach and power/service access",
@@ -374,20 +411,83 @@ def survey_patch(game, obs, catalog, resource, area, *, maximum_tiles=MAX_TILES)
     return result
 
 
-def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDIDATES):
-    """Pure coherent grid; score unique ore and contiguous future columns once."""
+MAX_EXIT_CELLS = 12
+
+
+def _canonical_inputs(snapshot, policy, reservations):
+    """Snapshot tiles, survey area and reservations in the canonical EAST frame.
+
+    The frame is the policy flow's turn about the grid origin, inverted; the
+    half-tile grid maps onto itself. Returns ``(transform, tiles, area,
+    reservations)``; for EAST the inputs are returned unchanged.
+    """
+    origin = policy["grid_origin"]
+    t = flow_transform(policy["flow"], (origin["x"], origin["y"]))
+    if t.identity:
+        return t, snapshot["tiles"], snapshot["area"], list(reservations)
+    back = t.inverse()
+    tiles = []
+    for tile in snapshot["tiles"]:
+        x, y = back.point(*_xy(tile))
+        tiles.append(dict(tile, position={"x": x, "y": y}))
+
+    def box(a):
+        x0, y0, x1, y1 = back.rect(a[0][0], a[0][1], a[1][0], a[1][1])
+        return [[x0, y0], [x1, y1]]
+
+    return t, tiles, box(snapshot["area"]), [box(a) for a in reservations]
+
+
+def _exit_cells(tiles, port):
+    """Cells from the canonical (EAST) output port to the first resource-free cell.
+
+    0 means the port itself is off the ore. Only 1..:data:`MAX_EXIT_CELLS`
+    can be served by the bounded native exit (it starts on the bank's ore).
+    """
+    x, y = _xy(port)
+    for step in range(MAX_EXIT_CELLS + 2):
+        if (x + step, y) not in tiles:
+            return step
+    return MAX_EXIT_CELLS + 2
+
+
+def _inside(area, rect):
+    """True when ``area`` [[x0, y0], [x1, y1]] lies inside ``rect`` [x0, y0, x1, y1]."""
+    return rect[0] <= area[0][0] and rect[1] <= area[0][1] and area[1][0] <= rect[2] and area[1][1] <= rect[3]
+
+
+def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDIDATES, site_exit=None):
+    """Pure coherent grid; score unique ore and contiguous future columns once.
+
+    Sites are searched in the canonical EAST frame of the policy flow and
+    returned on the map. The score, compared as a tuple (bigger is better):
+
+    * without ``site_exit``: (extra growth columns, ore tiles of the poorer
+      drill row, unique ore tiles, ore amount (capped), closeness to the map
+      origin) - unchanged from earlier versions;
+    * with ``site_exit`` (see :mod:`mining_site`): (extra growth columns, ore
+      tiles of the poorer drill row, -exit cost, unique ore tiles, ore
+      amount (capped)), where exit cost = on-ore exit cells + Manhattan
+      distance from the first off-ore cell to ``site_exit["corridor_start"]``.
+      Sites whose exit cannot leave the ore within the bounded native exit,
+      or whose growth footprint leaves the plan's mining zone, are dropped.
+    """
     if type(pairs) is not int or not 1 <= pairs <= MAX_PAIRS or type(maximum) is not int or not 1 <= maximum <= 12:
         raise ValueError("1..8 pairs and1..12 candidates required")
     validate_policy(policy, snapshot["world_id"], snapshot["catalog_fingerprint"], snapshot["resource"])
-    if policy["flow_direction"] != 4:
+    if not policy["orientation_execution_supported"]:
         raise ValueError("non-EAST new-bank execution requires native exit and lane-proof integration")
+    frame, canonical_tiles, bounds, reservations = _canonical_inputs(snapshot, policy, reservations)
     origin = policy["grid_origin"]
     resource = policy["resource"]
     native = snapshot["native"]
     radius = native["mining_radius"]
-    tiles = {_xy(t): t for t in snapshot["tiles"]}
+    tiles = {_xy(tile): tile for tile in canonical_tiles}
+    zone = None
+    if site_exit and site_exit.get("zone_rect"):
+        zone = list(frame.inverse().rect(*site_exit["zone_rect"]))
     anchors = set()
-    for t in snapshot["tiles"]:
+    for t in canonical_tiles:
         if t["name"] != resource:
             continue
         x, y = _xy(t)
@@ -395,10 +495,20 @@ def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDID
         y = origin["y"] + BANK_PITCH * math.floor((y - origin["y"]) / BANK_PITCH)
         anchors.update((x + dx, y + dy) for dx in (-4, 0, 4) for dy in (-8, 0, 8))
 
+    def exit_cost(core):
+        """On-ore exit cells plus the distance to the corridor start, or None if unreachable."""
+        port = core["ports"][0]
+        cells = _exit_cells(tiles, port)
+        # The native exit starts on the bank's own ore and must leave it in bounds.
+        if not 1 <= cells <= MAX_EXIT_CELLS:
+            return None
+        x, y = frame.point(port["position"]["x"] + cells, port["position"]["y"])
+        tx, ty = site_exit["corridor_start"]
+        return cells + abs(x - tx) + abs(y - ty)
+
     def covered(plan):
         seen = {}
         counts = {"left": 0, "right": 0}
-        bounds = snapshot["area"]
         for side in ("left", "right"):
             for e in plan["producer_rows"][side]:
                 x, y = _xy(e)
@@ -438,6 +548,15 @@ def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDID
             overlap(core["mining_footprint"], a) for a in reservations
         ):
             continue
+        row_tiles = min(base[2].values())
+        amount = min(base[0], 100000)
+        if site_exit is None:
+            score = (slots - pairs, row_tiles, base[1], amount, -x * x - y * y)
+        else:
+            cost = exit_cost(core)
+            if cost is None or (zone is not None and not _inside(future["mining_footprint"], zone)):
+                continue
+            score = (slots - pairs, row_tiles, -cost, base[1], amount)
         ranked.append(
             dict(
                 x=x,
@@ -448,16 +567,40 @@ def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDID
                 unique_resource_amount=base[0],
                 unique_resource_tiles=base[1],
                 row_resource_tiles=base[2],
-                score=(slots - pairs, min(base[2].values()), base[1], min(base[0], 100000), -x * x - y * y),
+                score=score,
             )
         )
     ranked.sort(key=lambda q: (q["score"], q["x"], q["y"]), reverse=True)
-    return ranked[:maximum]
+    if frame.identity:
+        return ranked[:maximum]
+    flow = policy["flow"]
+    result = []
+    for q in ranked[:maximum]:
+        x, y = frame.point(q["x"], q["y"])
+        result.append(
+            dict(
+                q,
+                x=x,
+                y=y,
+                plan=turned_bank(q["plan"], flow, (origin["x"], origin["y"])),
+                future_plan=turned_bank(q["future_plan"], flow, (origin["x"], origin["y"])),
+            )
+        )
+    return result
 
 
 def plan_offore_exit(game, builder, obs, core, future, reservations):
-    """Use only the shared bounded local escape, then a fixed clear EAST outlet."""
+    """Use only the shared bounded local escape, then a fixed clear outlet.
+
+    The exit leaves in the collector port's ``facing`` (EAST for the
+    canonical layout); the outlet and its three-cell access apron continue
+    in that facing.
+    """
     source = core["ports"][0]
+    facing = source.get("facing", 4)
+    if facing not in VECTORS:
+        return {"ok": False, "reason": "invalid_registered_mining_exit_source"}
+    ux, uy = VECTORS[facing]
     zones = [{"area": a, "resource": "__foreign_reservation__"} for a in reservations]
     zones.append({"area": future["mining_footprint"], "resource": core["resource"]})
     args = dict(
@@ -465,7 +608,8 @@ def plan_offore_exit(game, builder, obs, core, future, reservations):
         source=source,
         zones=zones,
         planned=future["entities"],
-        exit_candidates=mining_exit_candidates(source["position"]),
+        exit_candidates=mining_exit_candidates(source["position"], facing=facing),
+        vector={"x": ux, "y": uy},
     )
     result = game.query(
         "local x=helpers.json_to_table("
@@ -475,7 +619,7 @@ def plan_offore_exit(game, builder, obs, core, future, reservations):
         + r"""
 if not d or d.world_id~=x.world_id then return {ok=false,reason="mining_exit_world_changed"}end
 local function clear_apron(p)
- for step=0,3 do local q={x=p.x+step,y=p.y};local occupied=mining_patch_at(q,x.source.item,x.zones)
+ for step=0,3 do local q={x=p.x+step*x.vector.x,y=p.y+step*x.vector.y};local occupied=mining_patch_at(q,x.source.item,x.zones)
   if occupied then return false end
   for _,spec in ipairs(x.planned)do local size=spec.name=="electric-mining-drill"and 3 or 1
    if math.abs(spec.position.x-q.x)<size/2+.49 and math.abs(spec.position.y-q.y)<size/2+.49 then return false end
@@ -506,17 +650,17 @@ return select_mining_exit(x.source,x.zones,{},x.planned,x.exit_candidates,clear_
         return {"ok": False, "reason": "mining_exit_native_receipt_changed"}
     belts = []
     for i, p in enumerate(path):
-        dx, dy = (path[i + 1]["x"] - p["x"], path[i + 1]["y"] - p["y"]) if i + 1 < len(path) else (1, 0)
+        dx, dy = (path[i + 1]["x"] - p["x"], path[i + 1]["y"] - p["y"]) if i + 1 < len(path) else (ux, uy)
         direction = next((k for k, v in VECTORS.items() if v == (dx, dy)), None)
         if direction is None:
             return {"ok": False, "reason": "mining_exit_native_receipt_changed"}
         belts.append(entity("transport-belt", p["x"], p["y"], direction))
     # Merge before tagging so the existing source retains its exact core scope.
     es = merge_entities(belts, core["entities"])
-    annotate_mining_exit(es, core["resource"], source["position"], length, path=path)
+    annotate_mining_exit(es, core["resource"], source["position"], length, path=path, facing=facing)
     outlet = dict(core["ports"][0], position=deepcopy(path[-1]))
     outlet.pop("mining_resource", None)
-    apron = [entity("transport-belt", path[-1]["x"] + i, path[-1]["y"], 4) for i in range(1, 4)]
+    apron = [entity("transport-belt", path[-1]["x"] + i * ux, path[-1]["y"] + i * uy, facing) for i in range(1, 4)]
     check = preflight(game, builder, obs, merge_entities(future["entities"], es, apron))
     if not check.get("ok"):
         return check
@@ -574,11 +718,11 @@ def prepare_extension(game, builder, obs, bank, added_drills):
         validate_policy(contract["policy"], obs["world_id"], builder.catalog.fingerprint, old["resource"])
         if pairs > contract["reserved_pair_slots"]:
             return {"ok": False, "reason": "paired_mining_reserved_columns_exhausted"}
-        if contract["policy"]["flow_direction"] != 4:
+        if not contract["policy"]["orientation_execution_supported"]:
             return {"ok": False, "reason": "mining_orientation_requires_native_exit_and_lane_proof_integration"}
         collector = old.get("collector_port", old["ports"][0])
-        x, y = _xy(collector)
-        core = mining_pair(x - 2, y - 2, pairs, old["resource"])
+        # The declared grid in the contract's flow (EAST: the canonical core).
+        core = oriented_pair_core(collector["position"], pairs, old["resource"], contract["policy"]["flow"])
         es = merge_entities(core["entities"], old["entities"])
         extra = {
             k: v
@@ -653,15 +797,28 @@ def prepare_extension(game, builder, obs, bank, added_drills):
         return {"ok": False, "reason": "invalid_mining_extension_contract", "detail": str(exc)}
 
 
-def prepare_new_bank(game, builder, obs, resource, count, reservations, *, policy=None):
-    """Drop-in current paired-bank planner with policy decided before entities/power."""
+def prepare_new_bank(game, builder, obs, resource, count, reservations, *, policy=None, site_exit=None):
+    """Drop-in current paired-bank planner with policy decided before entities/power.
+
+    ``site_exit`` (from :func:`mining_site.site_exit`) turns the bank so its
+    collector flows toward the plan zone's output side and ranks sites by
+    exit cost (see :func:`candidate_sites`); the record is stored as
+    ``plan["site_exit"]``. Without it every bank is the historical EAST one.
+    """
     catalog = builder.catalog
     try:
         if resource not in RESOURCES or type(count) is not int or not 1 <= count <= 2 * MAX_PAIRS:
             raise ValueError("solid resource and1..16 electric drills required")
-        selected = (
-            deepcopy(policy) if policy is not None else make_policy(obs["world_id"], catalog.fingerprint, resource)
-        )
+        if site_exit is not None and (site_exit.get("resource") != resource or site_exit.get("flow") not in FLOWS):
+            raise ValueError("site exit belongs to another resource or has no cardinal flow")
+        if policy is not None:
+            selected = deepcopy(policy)
+        elif site_exit is not None:
+            selected = make_policy(
+                obs["world_id"], catalog.fingerprint, resource, flow=site_exit["flow"], site_oriented=True
+            )
+        else:
+            selected = make_policy(obs["world_id"], catalog.fingerprint, resource)
         validate_policy(selected, obs["world_id"], catalog.fingerprint, resource)
         if not selected["orientation_execution_supported"]:
             return {
@@ -677,7 +834,7 @@ def prepare_new_bank(game, builder, obs, resource, count, reservations, *, polic
         snapshot = survey_patch(planning, obs, catalog, resource, area)
         if not snapshot.get("ok"):
             return snapshot
-        sites = candidate_sites(snapshot, selected, math.ceil(count / 2), reservations)
+        sites = candidate_sites(snapshot, selected, math.ceil(count / 2), reservations, site_exit=site_exit)
         failures = []
         product = catalog.entities[resource]["mining_products"]
         if len(product) != 1 or product[0]["name"] != resource:
@@ -713,7 +870,8 @@ def prepare_new_bank(game, builder, obs, resource, count, reservations, *, polic
             # Attach power on the fixed outlet edge and forbid future drills/belts.
             reserve = [e for e in future["entities"] if e["name"] != "small-electric-pole"]
             reserve = merge_entities(reserve, [e for e in core["entities"] if e["name"] == "transport-belt"])
-            reserve += [entity("transport-belt", p["x"], p["y"], 4) for p in contract["output_access"]]
+            facing = exit_plan["port"]["facing"]
+            reserve += [entity("transport-belt", p["x"], p["y"], facing) for p in contract["output_access"]]
             bridge = power_connection(planning, builder, obs, contract["fixed_power_port"], reserve)
             if not bridge.get("ok"):
                 failures.append(bridge.get("reason"))
@@ -764,6 +922,8 @@ def prepare_new_bank(game, builder, obs, resource, count, reservations, *, polic
                     "field_growth": selected["field_growth"],
                 },
             )
+            if site_exit is not None:
+                plan["site_exit"] = dict(deepcopy(site_exit), exit_position=deepcopy(exit_plan["port"]["position"]))
             return dict(
                 ok=True,
                 world_id=obs["world_id"],
@@ -786,6 +946,7 @@ def prepare_new_bank(game, builder, obs, resource, count, reservations, *, polic
                     growth=selected["growth"],
                     candidate_count=len(sites),
                     native_queries=planning.queries,
+                    **({"site_score": list(candidate["score"])} if site_exit is not None else {}),
                 ),
             )
         return {
@@ -803,7 +964,8 @@ def prepare_new_bank(game, builder, obs, resource, count, reservations, *, polic
 CAPACITY_DIAGNOSTIC_LUA = r"""
 if not d or d.world_id~=x.world_id then return {ok=false,reason="mining_capacity_world_changed"}end
 local rows={};local drill=prototypes.entity["electric-mining-drill"];local ore=prototypes.entity[x.resource]
-local radius=drill.mining_drill_radius
+local radius=drill.mining_drill_radius;local facing=x.facing or 4;local normal=x.normal or {x=0,y=-1}
+local collector=x.collector or {x=0,y=x.collector_y}
 for _,q in ipairs(x.drills)do local e=target(q.position,q.name);local row={side=q.side,position=q.position,present=false}
  if e then
   if e.force~=f or e.surface~=s or e.unit_number~=q.unit_number or e.direction~=q.direction
@@ -814,10 +976,12 @@ for _,q in ipairs(x.drills)do local e=target(q.position,q.name);local row={side=
   for _,v in pairs(s.find_entities_filtered{area={{q.position.x-radius,q.position.y-radius},{q.position.x+radius,q.position.y+radius}},type="resource"})do
    if v.name~=x.resource then return {ok=false,reason="mining_capacity_mixed_resource"}end;amount=amount+v.amount
   end
-  row.remaining_resource=amount;local p=e.drop_position
-  row.drop_lane_verified=math.abs(p.y-x.collector_y)<.49 and(q.side=="left"and p.y<x.collector_y or q.side=="right"and p.y>x.collector_y)
-  local receiver=target({x=math.floor(p.x)+.5,y=x.collector_y},"transport-belt")
-  row.drop_lane_verified=row.drop_lane_verified and receiver and receiver.force==f and receiver.surface==s and receiver.direction==4 or false
+  row.remaining_resource=amount;local p=e.drop_position;local offset=(p.x-collector.x)*normal.x+(p.y-collector.y)*normal.y
+  row.drop_lane_verified=math.abs(offset)<.49 and(q.side=="left"and offset>0 or q.side=="right"and offset<0)
+  local cell={x=math.floor(p.x)+.5,y=collector.y}
+  if normal.x~=0 then cell={x=collector.x,y=math.floor(p.y)+.5}end
+  local receiver=target(cell,"transport-belt")
+  row.drop_lane_verified=row.drop_lane_verified and receiver and receiver.force==f and receiver.surface==s and receiver.direction==facing or false
  end
  rows[#rows+1]=row
 end
@@ -854,8 +1018,11 @@ def diagnose_bank_capacity(game, obs, catalog, bank):
             valid = validate_extension_contract(bank, historical)
             if not valid.get("ok"):
                 return valid
-        if plan.get("collector_port", plan["ports"][0])["facing"] != 4:
-            raise ValueError("native EAST physical lane proof required")
+        collector = plan.get("collector_port", plan["ports"][0])
+        facing = collector.get("facing", 4)
+        if facing not in VECTORS:
+            raise ValueError("native cardinal physical lane proof required")
+        ux, uy = VECTORS[facing]
         actual = {(e["name"], *_xy(e)): e for e in obs.get("entities", [])}
         specs = []
         for side in ("left", "right"):
@@ -872,7 +1039,11 @@ def diagnose_bank_capacity(game, obs, catalog, bank):
             world_id=obs["world_id"],
             resource=resource,
             drills=specs,
-            collector_y=plan.get("collector_port", plan["ports"][0])["position"]["y"],
+            collector_y=collector["position"]["y"],
+            collector=collector["position"],
+            facing=facing,
+            # "left" of the collector flow (north of an EAST belt).
+            normal={"x": uy, "y": -ux},
         )
         native = game.query("local x=helpers.json_to_table(" + _payload(args) + ");" + CAPACITY_DIAGNOSTIC_LUA)
         if not native.get("ok"):

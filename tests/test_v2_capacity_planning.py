@@ -119,9 +119,12 @@ class TimeComparisonTests(unittest.TestCase):
         self.assertEqual(plan_capacity({}, {"iron-plate": 100}), [])
 
     def test_max_cells_cap(self):
-        decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=7)}, {})
+        decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=3)}, {})
+        self.assertEqual(decisions[0].target_cells, 4)
+        self.assertEqual(plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=4)}, {}), [])
+        roomy = CapacityConfig(max_plate_cells=8)
+        decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=7)}, {}, config=roomy)
         self.assertEqual(decisions[0].target_cells, 8)
-        self.assertEqual(plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=8)}, {}), [])
 
     def test_build_seconds_from_evidence(self):
         decision = plan_capacity({"iron-plate": iron(shortfall=100, build_seconds=60)}, {})[0]

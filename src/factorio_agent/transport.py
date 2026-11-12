@@ -209,7 +209,7 @@ def _prospective_mining_source(game, builder, obs, source, reserved):
     except (ValueError, KeyError, TypeError) as exc:
         return {"ok": False, "reason": "invalid_prospective_mining_core", "detail": str(exc)}
     core = [e for e in reserved if e.get("mining_resource") == resource and e.get("mining_footprint")]
-    sources = [e for e in matching if e in core and e.get("direction") == 4]
+    sources = [e for e in matching if e in core and e.get("direction") == source.get("facing", 4)]
     nearby = [
         e
         for e in core
@@ -516,7 +516,7 @@ def plan_connection(
         return {"ok": False, "reason": "port_item_mismatch"}
     mining_resource = source.get("mining_resource")
     if mining_resource is not None and (
-        mining_resource not in RESOURCES or mining_resource != source.get("item") or source.get("facing") != 4
+        mining_resource not in RESOURCES or mining_resource != source.get("item") or source.get("facing") not in VECTORS
     ):
         return {"ok": False, "reason": "invalid_registered_mining_exit_source"}
     a, b = source["position"], destination["position"]
@@ -561,7 +561,9 @@ def plan_connection(
                 "pipe_candidates": pipe_candidates,
                 "production_aprons": production["aprons"],
                 "prospective_core": prospective["entities"],
-                "exit_candidates": mining_exit_candidates(a),
+                "exit_candidates": mining_exit_candidates(
+                    a, facing=source["facing"] if source.get("facing") in VECTORS else 4
+                ),
             },
             separators=(",", ":"),
         )
@@ -595,7 +597,7 @@ end
 local exit_allowed={};local exit_shared={};local exit_prefix={};local exit_length=-1;local exit_directions={}
 local source_patch=patch_at(args.source.position)
 if source_patch then
- if not args.source.mining_resource or args.source.facing~=4 then return {ok=false,reason="corridor_resource_source_requires_registered_exit"} end
+ if not args.source.mining_resource or not cardinal_facing(args.source.facing) then return {ok=false,reason="corridor_resource_source_requires_registered_exit"} end
  for _,spec in ipairs(args.prospective_core)do
   if spec.name=="electric-mining-drill" or spec.name=="burner-mining-drill" then
    local radius=prototypes.entity[spec.name].mining_drill_radius;local count=0
@@ -613,7 +615,7 @@ if source_patch then
   exit_shared[key(p)]=true
   if index<#exit_prefix then
    exit_allowed[key(p)]=index-1;local q=exit_prefix[index+1]
-   exit_directions[key(p)]=q.y<p.y and 0 or q.y>p.y and 8 or 4
+   exit_directions[key(p)]=step_direction(p,q)
   end
  end
 end
@@ -691,7 +693,11 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
         prefix = production["source_prefix"]
     try:
         prefix_directions = (
-            ([source["facing"]] * len(prefix) if production["source_prefix"] else exit_directions(prefix))
+            (
+                [source["facing"]] * len(prefix)
+                if production["source_prefix"]
+                else exit_directions(prefix, source["facing"])
+            )
             if prefix
             else []
         )
@@ -774,7 +780,9 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
         return {"ok": False, "reason": "bounded_layered_corridor_replanning_exhausted"}
     compiled["routing_attempts"] = attempt + 1
     if survey.get("exit_length", -1) >= 0:
-        annotate_mining_exit(compiled["entities"], mining_resource, a, survey["exit_length"], path=prefix)
+        annotate_mining_exit(
+            compiled["entities"], mining_resource, a, survey["exit_length"], path=prefix, facing=source["facing"]
+        )
         compiled["mining_exit"] = {
             "resource": mining_resource,
             "source_position": dict(a),

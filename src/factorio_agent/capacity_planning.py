@@ -56,7 +56,14 @@ class CapacityConfig:
 
     # Most cells added by one decision, and the capability's absolute limit.
     max_step: int = 2
+    # Every burner cell is hand-fuelled by the one actor, a cost the time
+    # comparison does not see. On a live run the planner grew iron 1 -> 8
+    # cells in four steps, then fuelling them slowed everything else. The
+    # capability allows 8 (max_cells, still the cap for coal, which must fuel
+    # the rest); plate and stone cells stop at max_plate_cells because
+    # electric mining replaces them soon after.
     max_cells: int = 8
+    max_plate_cells: int = 4
     # Items/minute of one starter cell when the receipt has no measurement:
     # a burner mining drill mines 0.25 ore/s = 15/min.
     default_cell_rate: float = 15.0
@@ -231,7 +238,8 @@ def _assess(
         return None
     net = facts.net - extra_fuel_burn if facts.item == FUEL_ITEM else facts.net
     wait = _seconds(facts.required, net)
-    room = min(config.max_step, config.max_cells - facts.current)
+    cap = config.max_cells if facts.item == FUEL_ITEM else min(config.max_cells, config.max_plate_cells)
+    room = min(config.max_step, cap - facts.current)
     if room < 1:
         return None
     options = [_option_seconds(facts, k, supply, net, config) for k in range(1, room + 1)]

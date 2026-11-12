@@ -849,12 +849,16 @@ for _,bank in ipairs(x.banks)do local ore=prototypes.entity[bank.resource]
   for _,r in pairs(s.find_entities_filtered{area={{e.position.x-radius,e.position.y-radius},{e.position.x+radius,e.position.y+radius}},type="resource"})do
    if r.amount>0 then if r.name~=bank.resource then return {ok=false,reason="mining_potential_mixed_resource"}end;amount=amount+r.amount end
   end
-  local p=e.drop_position;local side=q.side
-  if not side then if p.y<bank.collector_y then side="left"elseif p.y>bank.collector_y then side="right"end end
-  local receiver=target({x=math.floor(p.x)+.5,y=bank.collector_y},"transport-belt")
-  local drop=(side=="left"or side=="right")and math.abs(p.y-bank.collector_y)<.49
-   and(side=="left"and p.y<bank.collector_y or side=="right"and p.y>bank.collector_y)
-   and receiver and receiver.force==f and receiver.surface==s and receiver.direction==4 and receiver.quality.name=="normal"
+  local p=e.drop_position;local side=q.side;local facing=bank.facing or 4;local normal=bank.normal or {x=0,y=-1}
+  local collector=bank.collector or {x=0,y=bank.collector_y}
+  local offset=(p.x-collector.x)*normal.x+(p.y-collector.y)*normal.y
+  if not side then if offset>0 then side="left"elseif offset<0 then side="right"end end
+  local cell={x=math.floor(p.x)+.5,y=collector.y}
+  if normal.x~=0 then cell={x=collector.x,y=math.floor(p.y)+.5}end
+  local receiver=target(cell,"transport-belt")
+  local drop=(side=="left"or side=="right")and math.abs(offset)<.49
+   and(side=="left"and offset>0 or side=="right"and offset<0)
+   and receiver and receiver.force==f and receiver.surface==s and receiver.direction==facing and receiver.quality.name=="normal"
   local powered=e.is_connected_to_electric_network()and e.energy>0
   local offered=drill.mining_speed*60/ore.mineable_properties.mining_time*(1+e.speed_bonus)*(1+e.productivity_bonus)*bank.product_yield
   if side=="left"or side=="right"then row["installed_"..side]=row["installed_"..side]+offered end
@@ -884,6 +888,10 @@ def mining_capacity_summary(game, catalog, *, obs=None):
             if not b.get("ready"):
                 continue
             plan = b["plan"]
+            collector = plan.get("collector_port", plan["ports"][0])
+            # Saved banks without an orientation are EAST; "left" is left of the collector flow.
+            facing = collector.get("facing", 4)
+            ux, uy = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}[facing]
             side = {xy(q): lane for lane, rows in plan.get("producer_rows", {}).items() for q in rows}
             specs = [q for q in plan["entities"] if q["name"] == "electric-mining-drill"]
             historical += len(specs)
@@ -899,7 +907,10 @@ def mining_capacity_summary(game, catalog, *, obs=None):
                 dict(
                     index=i,
                     resource=plan["resource"],
-                    collector_y=xy(plan.get("collector_port", plan["ports"][0]))[1],
+                    collector_y=xy(collector)[1],
+                    collector=collector["position"],
+                    facing=facing,
+                    normal={"x": uy, "y": -ux},
                     product_yield=products[0]["amount"],
                     drills=[dict(q, side=side.get(xy(q))) for q in specs if xy(q) not in retired],
                 )

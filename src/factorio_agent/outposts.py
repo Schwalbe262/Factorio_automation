@@ -14,6 +14,7 @@ from .power_grid import plan_connection
 from .transport import VECTORS, xy, plan_connection as belt_connection, underground_proof
 from .planning import overlap, preflight
 from .resource_policy import mark_mining_core, mining_reservations
+from .mining_site import guide_tuple, site_exit
 
 
 RESOURCES = {"iron-ore", "copper-ore", "coal", "stone"}
@@ -55,9 +56,18 @@ def mining_bank(x, y, count, resource):
 
 
 class MiningOutposts:
-    def __init__(self, game, bootstrap, builder, *, perimeter=None):
+    """Electric mining banks per resource, grown to a requested nominal rate.
+
+    ``site`` (a :class:`site.service.SiteService`, optional) supplies the
+    master plan: a new primary bank then flows toward its plan zone's output
+    side and routes along the reserved feeder corridor (see
+    :mod:`mining_site`). Without it every new bank flows EAST as before.
+    """
+
+    def __init__(self, game, bootstrap, builder, *, perimeter=None, site=None):
         self.game, self.bootstrap, self.builder = game, bootstrap, builder
         self.perimeter = perimeter
+        self.site = site
         self.path = Path(game.cfg.runtime_dir) / "mining-outposts.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
 
@@ -108,7 +118,10 @@ class MiningOutposts:
         reservations += [r["area"] for r in board.get("shared_main_bus", {}).get("reservations", []) if r.get("area")]
         reservations += [b["reserved_area"] for b in self.state.get("banks", []) if b.get("reserved_area")]
         reservations += list(extra_reservations)
-        return prepare_new_bank(self.game, self.builder, obs, resource, count, reservations)
+        exit_record = site_exit(getattr(self, "site", None), obs.get("world_id"), resource)
+        if exit_record is None:
+            return prepare_new_bank(self.game, self.builder, obs, resource, count, reservations)
+        return prepare_new_bank(self.game, self.builder, obs, resource, count, reservations, site_exit=exit_record)
 
     def bank_proof(self, obs, bank):
         from .depleted_drill_retirement import effective_mining_plan, FILE as RETIREMENT_FILE
@@ -358,10 +371,15 @@ end;return {ok=true,indices=indices}"""
                 targets, key=lambda row: sum(abs(a - b) for a, b in zip(xy(source), xy(row["destination"])))
             )
             probes = [ranked[i] for i in sorted({0, len(ranked) // 2, len(ranked) - 1})] if ranked else []
+            # A plan-oriented module routes inside its reserved feeder corridor.
+            guide = guide_tuple(extra["plan"].get("site_exit"))
+            routing = {} if guide is None else {"guide": guide}
             for row in probes:
                 destination, target = row["destination"], row["target"]
                 attempts += 1
-                route = belt_connection(self.game, self.builder, obs, source, destination, extra["plan"]["entities"])
+                route = belt_connection(
+                    self.game, self.builder, obs, source, destination, extra["plan"]["entities"], **routing
+                )
                 if not route.get("ok"):
                     failures.append(route.get("reason"))
                     if route.get("reason") in {

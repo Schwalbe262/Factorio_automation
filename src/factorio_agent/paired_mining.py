@@ -104,6 +104,12 @@ def retain_output(core, output):
 
 
 def lane_evidence(game, obs, bank):
+    """Native proof that each producer row drops on its own collector lane.
+
+    The collector port's ``facing`` (missing: east, the historical layout)
+    gives the belt flow; "left" drills sit on the left of that flow (north
+    of an east belt, east of a south belt) and must drop on the left lane.
+    """
     from .depleted_drill_retirement import effective_mining_plan
 
     effective = effective_mining_plan(game, obs, bank["plan"])
@@ -112,18 +118,22 @@ def lane_evidence(game, obs, bank):
         """
 local plan=helpers.json_to_table("""
         + payload
-        + """);local row_y=(plan.collector_port or plan.ports[1]).position.y
+        + """);local collector=plan.collector_port or plan.ports[1];local facing=collector.facing or 4
+local origin=collector.position;local nx,ny=0,-1
+if facing==8 then nx,ny=1,0 elseif facing==12 then nx,ny=0,1 elseif facing==0 then nx,ny=-1,0 end
 local rows={};for _,side in ipairs({"left","right"}) do
  local units={};for _,spec in ipairs(plan.producer_rows[side]) do
   local e=target(spec.position,"electric-mining-drill")
   if not e or e.direction~=spec.direction then return {ok=false,reason="paired_drill_missing_or_rotated",position=spec.position} end
   if not e.is_connected_to_electric_network() or e.energy<=0 then return {ok=false,reason="paired_drill_unpowered",position=spec.position} end
-  local p=e.drop_position
-  if math.abs(p.y-row_y)>.49 or (side=="left" and p.y>=row_y) or (side=="right" and p.y<=row_y) then
+  local p=e.drop_position;local offset=(p.x-origin.x)*nx+(p.y-origin.y)*ny
+  if math.abs(offset)>.49 or (side=="left" and offset<=0) or (side=="right" and offset>=0) then
    return {ok=false,reason="paired_drill_does_not_drop_on_declared_collector_lane"}
   end
-  local receiver=target({x=math.floor(p.x)+.5,y=row_y},"transport-belt")
-  if not receiver or receiver.direction~=4 then return {ok=false,reason="paired_drill_drop_receiver_missing"} end
+  local cell={x=math.floor(p.x)+.5,y=origin.y}
+  if nx~=0 then cell={x=origin.x,y=math.floor(p.y)+.5} end
+  local receiver=target(cell,"transport-belt")
+  if not receiver or receiver.direction~=facing then return {ok=false,reason="paired_drill_drop_receiver_missing"} end
   units[#units+1]={unit_number=e.unit_number,direction=e.direction,drop_position=pos(p)}
  end
  rows[side]=units
@@ -190,11 +200,14 @@ def prepare_extension(game, builder, obs, bank, added_drills):
     }
 
 
-def prepare_new_bank(game, builder, obs, resource, count, reservations):
-    """Plan declared grid/growth and a fixed off-resource outlet before acceptance."""
+def prepare_new_bank(game, builder, obs, resource, count, reservations, **options):
+    """Plan declared grid/growth and a fixed off-resource outlet before acceptance.
+
+    ``options`` (for example ``site_exit``) are passed on unchanged.
+    """
     from .mining_layout_policy import prepare_new_bank as prepare_policy_bank
 
-    return prepare_policy_bank(game, builder, obs, resource, count, reservations)
+    return prepare_policy_bank(game, builder, obs, resource, count, reservations, **options)
 
 
 class PairedMining:

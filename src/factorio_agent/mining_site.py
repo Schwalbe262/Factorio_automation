@@ -1,0 +1,103 @@
+"""Where a new primary mining bank sends its ore, read from the site master plan.
+
+Conventions (map tiles, x east, y south; sides and ports as in
+:mod:`site.planzones`):
+
+* The primary patch of ``resource`` is the plan zone ``mining:<resource>``
+  (kind "mining"). Its ``output_side`` is the edge its feeder corridor leaves
+  from, toward the consumer. A new bank's collector flows toward that side,
+  so its exit runs off the ore straight into the reserved corridor.
+* Outpost zones (kind "outpost") and zones without an output side give no
+  exit: the caller keeps the historical east-flowing bank.
+* :func:`plan_exit` returns a plain JSON-serialisable dict that is stored
+  with the bank (``plan["site_exit"]``) so a restart keeps the decision:
+
+  ``resource``, ``zone``, ``zone_rect`` [x0, y0, x1, y1], ``side``,
+  ``flow`` (a :data:`mining_layout_policy.FLOWS` name), ``facing``
+  (0/4/8/12), ``corridor`` (name or None), ``corridor_start`` [x, y] (the
+  zone's out port, else the consumer's entry port), ``entry_port``
+  ({"zone", "side", "point"} or None) and ``guide`` [x0, y0, x1, y1] (the
+  corridor's bounding box, None when the zones touch).
+"""
+
+from __future__ import annotations
+
+SIDE_FLOWS = {"N": "south_to_north", "E": "west_to_east", "S": "north_to_south", "W": "east_to_west"}
+SIDE_FACINGS = {"N": 0, "E": 4, "S": 8, "W": 12}
+INWARD = {"N": (0, 1), "S": (0, -1), "W": (1, 0), "E": (-1, 0)}
+
+
+def corridor_box(corridor):
+    """Bounding box ``[x0, y0, x1, y1]`` of a corridor's segments, or None."""
+    if corridor is None or not corridor.segments:
+        return None
+    rects = corridor.rects
+    return [min(r.x0 for r in rects), min(r.y0 for r in rects), max(r.x1 for r in rects), max(r.y1 for r in rects)]
+
+
+def plan_exit(plan, resource):
+    """The exit decision for a new ``resource`` bank on ``plan`` (a MasterPlan), or None."""
+    zone = plan.zone("mining:" + resource)
+    if zone is None or zone.kind != "mining" or zone.output_side not in SIDE_FLOWS:
+        return None
+    corridor = next((c for c in plan.corridors if c.kind == "feeder" and c.source == zone.name), None)
+    consumer = plan.zone(corridor.target) if corridor is not None else None
+    entry = consumer.port(resource, "in") if consumer is not None else None
+    out = zone.port(resource, "out")
+    start = out.point if out is not None else (entry.point if entry is not None else None)
+    if start is None:
+        return None
+    return {
+        "resource": resource,
+        "zone": zone.name,
+        "zone_rect": zone.rect.to_list(),
+        "side": zone.output_side,
+        "flow": SIDE_FLOWS[zone.output_side],
+        "facing": SIDE_FACINGS[zone.output_side],
+        "corridor": corridor.name if corridor is not None else None,
+        "corridor_start": [float(start[0]), float(start[1])],
+        "entry_port": (
+            {"zone": consumer.name, "side": entry.side, "point": [float(entry.point[0]), float(entry.point[1])]}
+            if entry is not None
+            else None
+        ),
+        "guide": corridor_box(corridor),
+    }
+
+
+def site_exit(site, world_id, resource):
+    """:func:`plan_exit` on the site service's plan; None without a service or plan."""
+    if site is None:
+        return None
+    try:
+        plan = site.plan(world_id)
+    except Exception:  # noqa: BLE001 - the plan is preferred, never a new failure mode
+        return None
+    if plan is None:
+        return None
+    return plan_exit(plan, resource)
+
+
+def entry_tile(entry):
+    """Router destination for an entry port: the first tile inside the consumer.
+
+    ``entry`` is the ``entry_port`` dict of :func:`plan_exit`. The port point
+    lies on the edge line between two tiles; the tile on its lower-coordinate
+    side along the edge is used. Returns ``({"x", "y"}, facing)`` where
+    ``facing`` is the direction material travels as it enters.
+    """
+    side = entry["side"]
+    x, y = entry["point"]
+    ix, iy = INWARD[side]
+    if side in ("N", "S"):
+        tile = {"x": x - 0.5, "y": y + 0.5 * iy}
+    else:
+        tile = {"x": x + 0.5 * ix, "y": y - 0.5}
+    facing = {(0, 1): 8, (0, -1): 0, (1, 0): 4, (-1, 0): 12}[(ix, iy)]
+    return tile, facing
+
+
+def guide_tuple(record):
+    """The ``guide`` of a stored exit record as ``plan_connection``'s ``(x0, y0, x1, y1)``, or None."""
+    guide = (record or {}).get("guide")
+    return tuple(guide) if guide else None

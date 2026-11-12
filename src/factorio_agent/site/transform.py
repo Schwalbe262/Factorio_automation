@@ -29,7 +29,8 @@ Conventions (map tiles, x east, y south, Factorio 2.0 16-way directions:
 Recognised plan keys, recursively (so nested ``banks`` / candidate dicts
 work): any point dict {x, y, ...} (``position``, ``join``, ...);
 ``facing`` and integer ``direction``;
-``reserved_area`` / ``area`` [[x0, y0], [x1, y1]]; underground pair
+``reserved_area`` / ``area`` / ``mining_footprint`` / ``mining_reserved_area``
+[[x0, y0], [x1, y1]]; underground pair
 ``input`` / ``output`` [x, y]; splitter priorities. ``clear_obstacles``
 names real map objects and must be empty (transform before preflight).
 """
@@ -72,6 +73,7 @@ ORIENTED = frozenset(
     }
 )
 SIDED_KEYS = frozenset({"input_priority", "output_priority", "lane"})
+RECT_KEYS = frozenset({"reserved_area", "area", "mining_footprint", "mining_reserved_area"})
 UNMIRRORABLE = frozenset({"chemical-plant", "oil-refinery"})
 FOOTPRINTS = {"boiler": (3, 2), "steam-engine": (3, 5), "rocket-silo": (9, 9)}
 
@@ -190,7 +192,7 @@ def _value(t: Transform, key, value):
             return {("right" if k == "left" else "left"): v for k, v in value.items()}
         return {k: _value(t, k, v) for k, v in value.items()}
     if isinstance(value, list):
-        if key in ("reserved_area", "area") and len(value) == 2 and all(len(c) == 2 for c in value):
+        if key in RECT_KEYS and len(value) == 2 and all(len(c) == 2 for c in value):
             x0, y0, x1, y1 = t.rect(value[0][0], value[0][1], value[1][0], value[1][1])
             return [[_number(x0), _number(y0)], [_number(x1), _number(y1)]]
         if key in ("input", "output") and len(value) == 2 and all(isinstance(v, (int, float)) for v in value):

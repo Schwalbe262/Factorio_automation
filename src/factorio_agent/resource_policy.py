@@ -247,22 +247,42 @@ def mark_pumpjack(entity):
     return area
 
 
-def mining_exit_candidates(source_position, *, extra_clear_steps=0):
-    """Three bounded whole prefixes, in preference order; never maze search."""
+EXIT_VECTORS = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}
+
+
+def mining_exit_candidates(source_position, *, extra_clear_steps=0, facing=4):
+    """Three bounded whole prefixes, in preference order; never maze search.
+
+    ``facing`` is the collector port's facing (0 north, 4 east, 8 south,
+    12 west; default east, the historical layout). The first prefix runs
+    straight in ``facing``; the other two take one step in ``facing`` and
+    then turn once to either perpendicular side (for east: north, then south).
+    """
     if type(extra_clear_steps) is not int or not 0 <= extra_clear_steps <= 4:
         raise ValueError("off-patch mining connector is limited to four additional cells")
+    if facing not in EXIT_VECTORS:
+        raise ValueError("mining exit facing must be a cardinal direction")
     x, y = source_position["x"], source_position["y"]
-    return [[{"x": x + i, "y": y} for i in range(13 + extra_clear_steps)]] + [
-        [dict(source_position)] + [{"x": x + 1, "y": y + sign * i} for i in range(12 + extra_clear_steps)]
-        for sign in (-1, 1)
+    ux, uy = EXIT_VECTORS[facing]
+    # Perpendiculars in the historical order: for east, north (-) first.
+    sides = [(uy, -ux), (-uy, ux)] if ux else [(-uy, ux), (uy, -ux)]
+    return [[{"x": x + i * ux, "y": y + i * uy} for i in range(13 + extra_clear_steps)]] + [
+        [dict(source_position)] + [{"x": x + ux + i * px, "y": y + uy + i * py} for i in range(12 + extra_clear_steps)]
+        for px, py in sides
     ]
 
 
-def exit_directions(path):
-    vectors = {(0, -1): 0, (1, 0): 4, (0, 1): 8, (-1, 0): 12}
+def exit_directions(path, facing=4):
+    """Belt directions along a mining exit path that leaves in ``facing`` (default east).
+
+    Valid paths are straight in ``facing``, or one step in ``facing`` and then
+    straight to one perpendicular side.
+    """
+    vectors = {v: d for d, v in EXIT_VECTORS.items()}
     try:
         if (
-            not 2 <= len(path) <= 13
+            facing not in EXIT_VECTORS
+            or not 2 <= len(path) <= 13
             or any(
                 not isinstance(p, dict)
                 or set(p) != {"x", "y"}
@@ -273,22 +293,29 @@ def exit_directions(path):
         ):
             raise ValueError("invalid mining exit path")
         directions = [vectors[(b["x"] - a["x"], b["y"] - a["y"])] for a, b in zip(path, path[1:])]
-        if directions[0] != 4 or (
+        turned = {(facing + 4) % 16, (facing + 12) % 16}
+        if directions[0] != facing or (
             len(set(directions)) != 1
-            and (directions[1] not in (0, 8) or any(d != directions[1] for d in directions[1:]))
+            and (directions[1] not in turned or any(d != directions[1] for d in directions[1:]))
         ):
-            raise ValueError("mining exit must go EAST straight or EAST once then NORTH/SOUTH")
+            raise ValueError("mining exit must go straight in its facing, or one step then turn once")
         return directions
     except (KeyError, TypeError, IndexError) as exc:
         raise ValueError("invalid mining exit path") from exc
 
 
-def annotate_mining_exit(entities, resource, source_position, length, *, path=None):
-    """Tag only the necessary on-patch prefix; the first clear cell is untagged."""
+def annotate_mining_exit(entities, resource, source_position, length, *, path=None, facing=4):
+    """Tag only the necessary on-patch prefix; the first clear cell is untagged.
+
+    ``facing`` is the collector port's facing; the default east keeps the
+    historical metadata. It is recorded as ``mining_exit.facing``.
+    """
     if resource not in RESOURCES or type(length) is not int or not 0 <= length <= 11:
         raise ValueError("mining exit needs a known resource and first-clear tile within twelve steps")
+    if facing not in EXIT_VECTORS:
+        raise ValueError("mining exit facing must be a cardinal direction")
     if path is not None:
-        directions = exit_directions(path)
+        directions = exit_directions(path, facing)
         if path[0] != source_position or len(path) != length + 2:
             raise ValueError("mining exit path must include the source through the first clear tile")
         by_position = {_position(e): e for e in entities}
@@ -303,21 +330,24 @@ def annotate_mining_exit(entities, resource, source_position, length, *, path=No
             e["mining_resource"] = resource
             e["mining_exit"] = {
                 "source_position": dict(source_position),
-                "facing": 4,
+                "facing": facing,
                 "step": i,
                 "length": length,
                 "path": deepcopy(path),
             }
         return entities
+    ux, uy = EXIT_VECTORS[facing]
     for e in entities:
-        step = e["position"]["x"] - source_position["x"]
-        if e["position"]["y"] == source_position["y"] and step % 1 == 0 and 0 <= step <= length:
-            if e["name"] != "transport-belt" or e.get("direction") != 4:
+        dx = e["position"]["x"] - source_position["x"]
+        dy = e["position"]["y"] - source_position["y"]
+        step = dx * ux + dy * uy
+        if dx * uy == dy * ux and step % 1 == 0 and 0 <= step <= length:
+            if e["name"] != "transport-belt" or e.get("direction") != facing:
                 raise ValueError("mining exit cannot turn or use underground mouths on the patch")
             e["mining_resource"] = resource
             e["mining_exit"] = {
                 "source_position": dict(source_position),
-                "facing": 4,
+                "facing": facing,
                 "step": int(step),
                 "length": length,
             }
@@ -363,17 +393,20 @@ def validate_annotations(entities, builder):
                 or set(p) != {"x", "y"}
                 or any(type(p[k]) not in (int, float) or not math.isfinite(p[k]) for k in ("x", "y"))
                 or e["name"] != "transport-belt"
-                or exit_spec.get("facing") != 4
+                or exit_spec.get("facing") not in EXIT_VECTORS
                 or type(exit_spec.get("step")) is not int
                 or type(exit_spec.get("length")) is not int
                 or not 0 <= exit_spec["step"] <= exit_spec["length"] <= 11
             ):
-                raise ValueError("mining exit must be a bounded EAST source prefix")
+                raise ValueError("mining exit must be a bounded cardinal source prefix")
+            facing = exit_spec["facing"]
             if path is None:
-                if e.get("direction") != 4 or _position(e) != (p["x"] + exit_spec["step"], p["y"]):
-                    raise ValueError("mining exit must be a bounded straight EAST prefix")
+                ux, uy = EXIT_VECTORS[facing]
+                step = exit_spec["step"]
+                if e.get("direction") != facing or _position(e) != (p["x"] + step * ux, p["y"] + step * uy):
+                    raise ValueError("mining exit must be a bounded straight prefix in its facing")
             else:
-                directions = exit_directions(path)
+                directions = exit_directions(path, facing)
                 if (
                     path[0] != p
                     or len(path) != exit_spec["length"] + 2
@@ -559,17 +592,23 @@ local function mining_patch_at(p,resource,zones)
  end
  return occupied,mismatch
 end
+local function cardinal_facing(d)
+ return d==0 or d==4 or d==8 or d==12
+end
+local function step_direction(p,q)
+ if q.x>p.x then return 4 elseif q.x<p.x then return 12 elseif q.y<p.y then return 0 else return 8 end
+end
 local function select_mining_exit(source,zones,ignored,planned,candidates,accept_clear,allow_natural,clear_extension)
  clear_extension=clear_extension or 0
  local origin=source.position;local old=target(origin,"transport-belt");local declared=false;local drill=false
- if source.facing~=4 or source.item~=source.mining_resource then return {ok=false,reason="invalid_registered_mining_exit_source"} end
+ if not cardinal_facing(source.facing) or source.item~=source.mining_resource then return {ok=false,reason="invalid_registered_mining_exit_source"} end
  for _,spec in ipairs(planned) do
   if spec.name=="transport-belt" and spec.position.x==origin.x and spec.position.y==origin.y
-   and spec.direction==4 and spec.mining_resource==source.mining_resource then declared=true end
+   and spec.direction==source.facing and spec.mining_resource==source.mining_resource then declared=true end
   if (spec.name=="electric-mining-drill" or spec.name=="burner-mining-drill") and spec.mining_resource==source.mining_resource
    and math.abs(spec.position.x-origin.x)<=3 and math.abs(spec.position.y-origin.y)<=3 then drill=true end
  end
- if old and (old.force~=f or ignored[old.unit_number] or old.direction~=4) then
+ if old and (old.force~=f or ignored[old.unit_number] or old.direction~=source.facing) then
   return {ok=false,reason="mining_exit_source_identity_or_direction_changed"}
  end
  if not old and not declared then return {ok=false,reason="mining_exit_requires_owned_source"} end
@@ -610,15 +649,15 @@ local function select_mining_exit(source,zones,ignored,planned,candidates,accept
    if mismatch then break end
    if first_clear and (occupied or index-first_clear>clear_extension) then break end
    if not first_clear and index>13 then break end
-   local direction=4;local next_p=candidate[index+1]
-   if next_p then direction=next_p.y<p.y and 0 or next_p.y>p.y and 8 or 4 end
+   local direction=source.facing;local next_p=candidate[index+1]
+   if next_p then direction=step_direction(p,next_p) end
    if not placeable(p,direction,index-1) then break end
    path[#path+1]=p
    if not occupied then
     if not first_clear then
      first_clear=index;prefix={};for _,cell in ipairs(path) do prefix[#prefix+1]=cell end
      local previous=candidate[index-1]
-     clear_direction=previous and (p.y<previous.y and 0 or p.y>previous.y and 8 or 4) or 4
+     clear_direction=previous and step_direction(previous,p) or source.facing
     else connector[#connector+1]=p end
     if not accept_clear or accept_clear(p) then return {ok=true,exit_prefix=prefix,exit_length=first_clear-2,
      clear_position=prefix[#prefix],hub_connector=connector,hub_position=p} end
