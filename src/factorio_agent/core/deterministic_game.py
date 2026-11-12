@@ -366,9 +366,16 @@ return success{world_id=d.world_id,surface=s.name,tick=game.tick,actor_unit_numb
         try:
             return parse_json_response(self._execute(command, drain_seconds=0.02))
         finally:
+            elapsed = time.perf_counter() - started
             stats = self.__dict__.setdefault("query_stats", {"count": 0, "seconds": 0.0})
             stats["count"] += 1
-            stats["seconds"] += time.perf_counter() - started
+            stats["seconds"] += elapsed
+            # Per-script totals show which query dominates a slow planner.
+            # Keyed by the start of the script, which names it well enough.
+            label = " ".join(body.split())[:72]
+            row = self.__dict__.setdefault("query_profile", {}).setdefault(label, [0, 0.0])
+            row[0] += 1
+            row[1] += elapsed
 
     def _execute(self, command: str, *, drain_seconds: float) -> str:
         """Send one command. A long-lived session sets keep_connection to reuse one authenticated socket."""

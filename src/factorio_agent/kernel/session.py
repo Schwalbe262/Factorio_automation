@@ -107,7 +107,13 @@ class Session:
     def metrics(self):
         """Totals since the session started: per-command time and RCON query time."""
         queries = getattr(self._game, "query_stats", None) or {"count": 0, "seconds": 0.0}
-        return {"commands": {k: dict(v) for k, v in self.calls.items()}, "queries": dict(queries)}
+        profile = getattr(self._game, "query_profile", None) or {}
+        slowest = sorted(profile.items(), key=lambda item: -item[1][1])[:12]
+        return {
+            "commands": {k: dict(v) for k, v in self.calls.items()},
+            "queries": dict(queries),
+            "top_queries": [{"script": k, "count": v[0], "seconds": round(v[1], 2)} for k, v in slowest],
+        }
 
     def close(self):
         if self._game is not None:
