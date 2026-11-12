@@ -133,6 +133,32 @@ def validate_take_many(action):
         positions.add(position)
 
 
+BURNERS = frozenset({"burner-mining-drill", "stone-furnace"})
+FUELS = ("coal", "wood")
+FUEL_BATCH = 8  # coal pieces worth one fetch-and-fuel trip
+FUEL_SKIP_STOCK = 50  # finished items in a cell that make more fuel pointless
+
+
+def _entity_key(entity):
+    position = entity.get("position") or {}
+    return (entity.get("name"), position.get("x"), position.get("y"))
+
+
+def _produced_coal(observation, coal_cells):
+    """Coal lying in the receivers (chests) of the given coal cells."""
+    places = {
+        (
+            c["receiver"].get("name"),
+            (c["receiver"].get("position") or {}).get("x"),
+            (c["receiver"].get("position") or {}).get("y"),
+        )
+        for c in coal_cells
+    }
+    return sum(
+        (e.get("inventory") or {}).get("coal", 0) for e in observation.get("entities", []) if _entity_key(e) in places
+    )
+
+
 class V2Bootstrap(DeterministicBootstrap):
     def _unreserved_stock_observation(self, observation, item):
         root = getattr(getattr(getattr(self, "game", None), "cfg", None), "runtime_dir", None)
@@ -184,46 +210,94 @@ class V2Bootstrap(DeterministicBootstrap):
         return dict(observation, entities=[e for e in observation.get("entities", []) if available(e)])
 
     def maintain_fuel(self, observation):
-        # Only imminent fuel loss may interrupt the primary build. Refilling
-        # every live burner below two items can consume all newly mined coal
-        # forever, especially when its output is already backed up.
+        """Hand-fuel burners only where it pays, and only in batches.
+
+        Rules, in order:
+        - A burner whose output is backed up, or whose cell already holds
+          FUEL_SKIP_STOCK finished items, gets no fuel: burning coal to make
+          plates nobody is taking starves the coal drills and the boiler.
+        - Only a burner that is out of fuel (or about to be) is urgent.
+        - Coal producers are fuelled before coal consumers.
+        - With no coal in hand, wait until FUEL_BATCH coal has piled up at a
+          running coal drill instead of fetching it one piece at a time. The
+          primary job keeps working meanwhile.
+        """
+        skipped = None
+
         def urgent(entity):
-            if entity.get("name") not in {"burner-mining-drill", "stone-furnace"}:
+            if entity.get("name") not in BURNERS:
                 return True
             if entity.get("status_name") in {"full_output", "waiting_for_space", "waiting_for_space_in_destination"}:
                 return False
             fuel = entity.get("inventory") or {}
             if fuel.get("coal", 0) + fuel.get("wood", 0) > 0:
                 return False
-            return entity.get("remaining_burning_fuel", 0) <= 1_000_000
+            if entity.get("remaining_burning_fuel", 0) > 1_000_000:
+                return False
+            return _entity_key(entity) not in skipped
 
-        entities = [e for e in observation.get("entities", []) if urgent(e)]
-        observation = dict(observation, entities=entities)
-        hungry = any(
-            e.get("name") in {"burner-mining-drill", "stone-furnace"}
-            and sum((e.get("inventory") or {}).get(item, 0) for item in ("coal", "wood")) < 2
-            for e in entities
-        )
-        if not hungry:
+        def hungry(rows):
+            return any(
+                e.get("name") in BURNERS and sum((e.get("inventory") or {}).get(item, 0) for item in FUELS) < 2
+                for e in rows
+            )
+
+        skipped = set()
+        if not hungry([e for e in observation.get("entities", []) if urgent(e)]):
             return None
+        skipped = self._well_stocked_burners(observation)
+        entities = [e for e in observation.get("entities", []) if urgent(e)]
+        if not hungry(entities):
+            return None
+        observation = dict(observation, entities=entities)
         survey = self._existing_cells("coal")
         if not survey.get("ok"):
             return {"status": "blocked", "reason": "starter_coal_priority_survey_failed"}
-        producers = {
-            (c["drill"]["name"], c["drill"]["position"]["x"], c["drill"]["position"]["y"])
+        coal_cells = [
+            c
             for c in survey.get("cells", [])
             if not c.get("electric") and c.get("receiver") and c.get("remaining", 0) > 0
-        }
+        ]
+        producers = {(c["drill"]["name"], c["drill"]["position"]["x"], c["drill"]["position"]["y"]) for c in coal_cells}
+        if self._count(observation, "coal") <= 0:
+            running = any(c.get("fuel", 0) > 0 or c.get("burning") for c in coal_cells)
+            if running and _produced_coal(observation, coal_cells) < FUEL_BATCH:
+                return None
         # Keep a real coal producer running before spending the last carried
         # fuel on its consumers. The base routine retains ordinary partial
         # transfers and its existing bounded emergency mining behavior.
-        ordered = sorted(
-            entities,
-            key=lambda e: (
-                (e.get("name"), (e.get("position") or {}).get("x"), (e.get("position") or {}).get("y")) not in producers
-            ),
-        )
+        ordered = sorted(entities, key=lambda e: _entity_key(e) not in producers)
         return super().maintain_fuel(dict(observation, entities=ordered))
+
+    def _well_stocked_burners(self, observation):
+        """Drills and furnaces of non-coal cells that already hold enough finished output."""
+        by_place = {
+            (e.get("name"), (e.get("position") or {}).get("x"), (e.get("position") or {}).get("y")): e
+            for e in observation.get("entities", [])
+        }
+        stocked = set()
+        for e in observation.get("entities", []):
+            if e.get("name") == "stone-furnace" and sum((e.get("output_inventory") or {}).values()) >= FUEL_SKIP_STOCK:
+                stocked.add(_entity_key(e))
+        for resource in observation.get("resources") or {}:
+            if resource in FUELS:
+                continue
+            survey = self._existing_cells(resource)
+            if not survey.get("ok"):
+                continue
+            for cell in survey.get("cells", []):
+                receiver = cell.get("receiver") or {}
+                place = receiver.get("position") or {}
+                held = by_place.get((receiver.get("name"), place.get("x"), place.get("y")))
+                if held is None:
+                    continue
+                finished = held.get("output_inventory")
+                if finished is None:
+                    finished = {k: v for k, v in (held.get("inventory") or {}).items() if k not in FUELS}
+                if sum(finished.values()) >= FUEL_SKIP_STOCK:
+                    drill = cell["drill"]
+                    stocked.add((drill["name"], drill["position"]["x"], drill["position"]["y"]))
+        return stocked
 
     def _ensure_cell(self, observation, resource, receiver_name):
         result = super()._ensure_cell(observation, resource, receiver_name)
