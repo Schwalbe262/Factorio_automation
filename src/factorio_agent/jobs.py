@@ -464,11 +464,18 @@ def is_active(job: dict) -> bool:
     return job["status"] not in TERMINAL | {"paused"}
 
 
+# Capabilities that each drive the single research slot. Running two of them
+# at once makes the second block with another_research_is_running.
+RESEARCH_CAPABILITIES = frozenset({"starter_research", "bootstrap_research", "bootstrap_logistics", "research"})
+
+
 def _admission_error(jobs: dict, capability: str, exclude_key: str | None = None) -> str | None:
     """Why another job with this capability may not become active now, if anything refuses it."""
     active = [job for key, job in jobs.items() if key != exclude_key and is_active(job)]
     if any(job["capability"] == capability for job in active):
         return f"another job with capability {capability} is already active"
+    if capability in RESEARCH_CAPABILITIES and any(job["capability"] in RESEARCH_CAPABILITIES for job in active):
+        return "another job that owns research is already active"
     if len(active) >= MAX_ACTIVE_JOBS:
         return f"another job must finish or pause first: at most {MAX_ACTIVE_JOBS} jobs may be active"
     return None

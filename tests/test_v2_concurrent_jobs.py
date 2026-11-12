@@ -95,6 +95,20 @@ class ConcurrentJobTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "capability power is already active"):
             control(self.root, self.game, "a", "resume")
 
+    def test_only_one_research_owning_job_is_active(self):
+        self.submit("power", "power")
+        run_slice(self.root, self.game, Executor({"power": [{"status": "succeeded"}]}, {"power": {"ok": 1}}), "power")
+        self.submit("logistics", "bootstrap_logistics")
+        request = Request(
+            "drill", "world", self.game.observation["tick"], "starter_research", {"technology": "automation"}
+        )
+        with self.assertRaisesRegex(ValueError, "owns research is already active"):
+            submit(self.root, self.game, request)
+        control(self.root, self.game, "logistics", "pause")
+        submit(self.root, self.game, request)
+        with self.assertRaisesRegex(ValueError, "owns research is already active"):
+            control(self.root, self.game, "logistics", "resume")
+
     def test_fifth_active_job_is_refused(self):
         self.submit("power", "power")
         run_slice(self.root, self.game, Executor({"power": [{"status": "succeeded"}]}, {"power": {"ok": 1}}), "power")
