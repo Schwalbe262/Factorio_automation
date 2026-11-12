@@ -20,6 +20,7 @@ import uuid
 
 from factorio_agent.core.deterministic_character import _identity
 from factorio_agent.core.deterministic_state import RunLock, _atomic_json
+from factorio_agent.errors import CLIError
 from factorio_agent.jobs import MAX_ACTIVE_JOBS
 from factorio_agent import incidents as incident_rules
 
@@ -484,10 +485,6 @@ class WorkQueue:
 
     def node_for_job(self, key):
         return next((q for q in self.data["nodes"] if q["job_key"] == key), None)
-
-
-class CLIError(RuntimeError):
-    pass
 
 
 class CLIBridge:

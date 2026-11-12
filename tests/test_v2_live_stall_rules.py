@@ -60,5 +60,24 @@ class ResearchOwnershipTests(unittest.TestCase):
         self.assertFalse(_owns_research("power"))
 
 
+class SharedErrorClassTests(unittest.TestCase):
+    def test_supervisor_run_as_a_script_catches_the_bridge_error(self):
+        """A refused submit raised by the in-process bridge must be the class the supervisor catches.
+
+        Running ``python -m factorio_agent.supervisor`` loads supervisor.py a
+        second time under another module name; a class defined inside it would
+        then differ from the one the bridge raises, and every deferred dispatch
+        became a controller error with up to 300 s of backoff.
+        """
+        import runpy
+
+        from factorio_agent import errors
+        from factorio_agent.kernel import session
+
+        as_script = runpy.run_module("factorio_agent.supervisor", run_name="supervisor_as_script")
+        self.assertIs(as_script["CLIError"], errors.CLIError)
+        self.assertIs(session.CLIError, errors.CLIError)
+
+
 if __name__ == "__main__":
     unittest.main()

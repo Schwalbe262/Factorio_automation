@@ -23,6 +23,7 @@ import traceback
 
 from .. import runtime
 from ..__main__ import execute
+from ..errors import CLIError
 from ..jobs import Request, StarterExecutors
 
 # Commands that only read. Their receipts may be reused for a moment.
@@ -150,8 +151,6 @@ class InProcessBridge:
         self.on_call = on_call
 
     def invoke(self, args, *, stop_requested=None, on_stop=None):
-        from ..supervisor import CLIError
-
         args = [str(a) for a in args]
         started = time.perf_counter()
         outcome: dict = {}
@@ -198,8 +197,6 @@ class InProcessBridge:
     def validate_requests(self, rows):
         if not rows:
             return
-        from ..supervisor import CLIError
-
         try:
             if not isinstance(rows, list) or len(rows) > 64:
                 raise ValueError("bounded typed request batch required")
