@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
 import time
 from pathlib import Path
 
-from .config import AppConfig, REPO_ROOT
+from .config import AppConfig
 from .rcon import FactorioRconClient, RconError
 from .vanilla_gui import prepare_vanilla_mod_directory
 

@@ -855,7 +855,6 @@ class ChemicalProduction:
 
     def _sources(self, obs, product):
         result = {}
-        snapshots = {}
         wanted = ["petroleum-gas"] + (["coal"] if product == "plastic-bar" else ["water"])
         for item in wanted:
             fluid = item != "coal"

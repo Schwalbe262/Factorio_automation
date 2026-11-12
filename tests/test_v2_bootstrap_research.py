@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from factorio_agent.board import startup_science_cell
-from factorio_agent.industry import BootstrapLogistics, validate_bootstrap_research
+from factorio_agent.industry import BootstrapLogistics
 from factorio_agent.jobs import CAPABILITIES, Ledger, Request, StarterExecutors, run_slice, submit
 
 

@@ -9,7 +9,6 @@ import math
 from pathlib import Path
 
 from factorio_agent.core.deterministic_builder import _plan
-from factorio_agent.core.deterministic_state import _atomic_json
 from .board import entity
 from .defense_hardening import _box
 from .defense_perimeter import protected_factory_areas

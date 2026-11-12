@@ -2,7 +2,7 @@ from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from factorio_agent.defense_coverage import coverage_cells, coverage_report, select_cover, native_candidate_survey
 from factorio_agent.defense_perimeter import DefensePerimeter

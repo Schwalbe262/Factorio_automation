@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.board import entity
 from factorio_agent.chemical_production import (
     ChemicalProduction,
@@ -846,7 +846,7 @@ class ChemicalControllerTests(unittest.TestCase):
         game.query.assert_not_called()
 
     def test_defense_gate_then_declaration_before_any_builder_action(self):
-        entry = self.install()
+        self.install()
         self.perimeter.ensure_coverage.return_value = {"status": "waiting", "reason": "arm post"}
         self.assertEqual(self.c.step(self.obs, self.params)["reason"], "arm post")
         self.handoff.assert_not_called()

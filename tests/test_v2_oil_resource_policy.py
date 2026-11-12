@@ -1,5 +1,4 @@
 from copy import deepcopy
-from types import SimpleNamespace
 import unittest
 
 from factorio_agent.core.deterministic_builder import FactoryBuilder

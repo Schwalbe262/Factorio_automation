@@ -11,7 +11,6 @@ from pathlib import Path
 
 from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.core.deterministic_state import _atomic_json
-from .board import entity
 from .defense_coverage import coverage_cells
 from .defense_hardening import wall_bastion, mutual_coverage, _cluster_area, _box, SERVICE_ACCESS_LUA
 from .defense_perimeter import protected_factory_areas

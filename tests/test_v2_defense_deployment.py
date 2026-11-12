@@ -5,7 +5,6 @@ import unittest
 from unittest.mock import Mock
 
 from factorio_agent.defense_deployment import (
-    ACTION,
     DEPLOY_BASTION_LUA,
     GROUP_DEPLOY_LUA,
     bastion_deployment_action,

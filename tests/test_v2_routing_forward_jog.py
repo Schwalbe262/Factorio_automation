@@ -10,7 +10,6 @@ from factorio_agent.routing import (
     clear_skeleton,
     expand,
     forward_jog_skeletons,
-    metrics,
     obstacle_index,
     route_trunks,
 )

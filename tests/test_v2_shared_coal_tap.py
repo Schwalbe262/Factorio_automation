@@ -1,4 +1,3 @@
-from copy import deepcopy
 import json
 from pathlib import Path
 import tempfile
@@ -8,7 +7,7 @@ from unittest.mock import Mock, patch
 from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.board import entity
 from factorio_agent.brick_production import brick_core
-from factorio_agent.industrial import _plan_revision, _source_identity
+from factorio_agent.industrial import _plan_revision
 from factorio_agent.shared_coal_tap import SharedCoalTap, coal_header_candidates, replace_header
 from factorio_agent.smelting import merge_entities
 from test_v2_industrial import fixture, material

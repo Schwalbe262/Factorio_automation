@@ -16,7 +16,6 @@ from factorio_agent.defense_relocation import (
     DefenseRelocation,
     _hash,
     _key,
-    validate_relocation_action,
     execute_build_replacement,
     execute_retire_post,
     execute_reconcile_retirement,

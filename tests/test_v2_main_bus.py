@@ -1,6 +1,5 @@
 import json
 import unittest
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from factorio_agent.core.deterministic_builder import FactoryBuilder

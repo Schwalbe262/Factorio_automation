@@ -1,4 +1,3 @@
-from copy import deepcopy
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock

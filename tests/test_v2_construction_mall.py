@@ -13,7 +13,6 @@ from factorio_agent.construction_mall import (
     mall_rates,
     audit_mall_core,
     execute_mall_stock_limit,
-    MALL_CONTROL_LUA,
     MALL_PROOF_LUA,
     _key,
     _product,

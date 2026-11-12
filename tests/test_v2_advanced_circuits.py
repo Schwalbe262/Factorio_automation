@@ -10,12 +10,10 @@ from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
 from factorio_agent.advanced_circuits import (
     AdvancedCircuitProduction,
     ADVANCED_CIRCUIT_PROOF_LUA,
-    _hash,
     _key,
     advanced_circuit_core,
     advanced_circuit_rates,
     audit_advanced_circuit_core,
-    combine_tap_previews,
 )
 from factorio_agent.board import entity
 from factorio_agent.bus_tap import extend_bus

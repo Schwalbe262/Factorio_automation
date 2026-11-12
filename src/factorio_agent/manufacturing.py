@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import Counter
 from copy import deepcopy
-import math
 from factorio_agent.core.deterministic_builder import _plan
 from .board import entity
 from .smelting import port, merge_entities

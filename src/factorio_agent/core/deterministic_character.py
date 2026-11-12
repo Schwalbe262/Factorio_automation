@@ -13,7 +13,6 @@ from ctypes import wintypes
 import json
 import os
 from pathlib import Path
-import subprocess
 from .process_launch import spawn_console_independent
 import time
 from typing import Any

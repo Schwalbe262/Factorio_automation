@@ -29,8 +29,8 @@ class FurnaceBankGeometryTests(unittest.TestCase):
         plans = [furnace_bank(-40, -32, count, "iron-ore") for count in range(1, 7)]
         self.assertTrue(all(p["ports"][-1] == plans[0]["ports"][-1] for p in plans))
         for before, after in zip(plans, plans[1:]):
-            for entity in before["entities"]:
-                self.assertIn(entity, after["entities"])
+            for placed in before["entities"]:
+                self.assertIn(placed, after["entities"])
 
     def test_automatic_furnace_is_excluded_from_starter_upkeep_and_old_fuel_is_recovered(self):
         with TemporaryDirectory() as directory:

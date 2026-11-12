@@ -12,7 +12,7 @@ from factorio_agent.core.deterministic_state import _atomic_json
 from .board import entity
 from .manufacturing import green_core, raw_demand, connect_power_groups, lab_green_entry
 from .planning import preflight, overlap, survey_slots
-from .smelting import merge_entities, port
+from .smelting import merge_entities
 from .transport import plan_connection, xy, underground_proof
 
 

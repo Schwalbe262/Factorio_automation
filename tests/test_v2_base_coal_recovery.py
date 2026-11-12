@@ -14,7 +14,6 @@ from factorio_agent.base_coal_recovery import (
     power_forks,
     COAL_HEALTH_LUA,
     DEPLETION_LUA,
-    _key,
     _hash,
     active_coal_plan,
 )

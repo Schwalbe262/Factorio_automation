@@ -11,7 +11,6 @@ from factorio_agent.board import entity
 from factorio_agent.petroleum import (
     BasicPetroleum,
     PETROLEUM_PROOF_LUA,
-    _fluid_edges,
     _key,
     basic_petroleum_rates,
     compile_pipe_crossings,

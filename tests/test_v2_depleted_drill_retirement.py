@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.board import entity
 from factorio_agent.depleted_drill_retirement import (
     DepletedDrillRetirement,
@@ -15,7 +14,6 @@ from factorio_agent.depleted_drill_retirement import (
     UNKNOWN,
     RETIRE_LUA,
     SURVEY_LUA,
-    MINING_POTENTIAL_LUA,
     _hash,
     load_retirements,
     effective_mining_plan,

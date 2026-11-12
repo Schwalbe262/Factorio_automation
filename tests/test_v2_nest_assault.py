@@ -13,10 +13,9 @@ from factorio_agent.nest_assault import (
     deployment_stage,
     execute_start_assault,
     START_ASSAULT_LUA,
-    _payload,
     _hash,
 )
-from factorio_agent.defense_hardening import wall_bastion, mutual_coverage
+from factorio_agent.defense_hardening import mutual_coverage
 
 try:
     from lupa import LuaRuntime

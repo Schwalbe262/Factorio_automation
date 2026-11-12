@@ -16,8 +16,6 @@ from factorio_agent.supervisor import (
     STOP_FILE,
     SOURCE_ROOT,
     REPO_ROOT,
-    actor_binding,
-    compact_snapshot,
     stable_job_key,
     validate_decision,
 )

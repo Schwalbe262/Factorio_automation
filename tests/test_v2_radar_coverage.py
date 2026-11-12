@@ -23,7 +23,7 @@ from factorio_agent.radar_coverage import (
     select_radar_cover,
     coverage_candidates,
 )
-from factorio_agent.radar_network import radar_core, _key
+from factorio_agent.radar_network import radar_core
 
 try:
     from lupa import LuaRuntime

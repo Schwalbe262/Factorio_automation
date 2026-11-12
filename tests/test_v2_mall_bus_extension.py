@@ -1,6 +1,4 @@
 from copy import deepcopy
-from types import SimpleNamespace
-from unittest.mock import Mock
 import unittest
 
 from factorio_agent.board import entity

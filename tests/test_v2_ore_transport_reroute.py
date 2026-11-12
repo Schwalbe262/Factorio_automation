@@ -8,7 +8,6 @@ from unittest.mock import Mock, patch
 
 from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
 from factorio_agent.board import entity
-from factorio_agent.bus_factory import identity
 from factorio_agent.ore_transport_reroute import OreTransportReroute, delivery_context, plan_revision
 from factorio_agent.routing import expand, metrics
 from factorio_agent.smelting import merge_entities, port

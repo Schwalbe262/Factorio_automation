@@ -20,7 +20,7 @@ from factorio_agent.engine_capacity import (
     validate_parameters,
     verify_engine_capacity,
 )
-from factorio_agent.engine_production import engine_core, engine_rates
+from factorio_agent.engine_production import engine_core
 
 try:
     from lupa import LuaRuntime

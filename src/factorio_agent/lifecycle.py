@@ -565,7 +565,7 @@ class Lifecycle:
     def _shutdown(self, root, stopped=None):
         stopped = stopped or self._stop(root)
         server = self._owned(root, "server")
-        client = self._owned(root, "client")
+        self._owned(root, "client")
         if server:
             cfg = runtime.configuration(root)
             try:

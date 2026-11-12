@@ -1,7 +1,5 @@
-from copy import deepcopy
 import json
 import unittest
-from unittest.mock import patch
 
 from factorio_agent.construction_mall import (
     mall_core,

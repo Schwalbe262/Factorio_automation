@@ -7,7 +7,6 @@ import unittest
 from unittest.mock import Mock, patch
 
 from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
-from factorio_agent.board import entity
 from factorio_agent.brick_production import brick_core
 from factorio_agent.bus_tap import extend_bus, replace_bus
 from factorio_agent.industrial import IndustrialOperations, PlanningBudget, free_tap_parameters, industrial_site_anchors

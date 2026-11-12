@@ -347,7 +347,7 @@ return{ok=true,extent=e.get_fluid_segment_extent_bounding_box(1),limit=prototype
     def _crossed_assets(self, obs, route):
         buried = set()
         for pair in route["underground_pairs"]:
-            a, b = pair["first"], pair["last"]
+            a = pair["first"]
             dx, dy = VECTORS[pair["direction"]]
             buried.update((a[0] + dx * i, a[1] + dy * i) for i in range(1, pair["span"]))
         allowed = {

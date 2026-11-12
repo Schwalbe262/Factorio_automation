@@ -1,4 +1,5 @@
 """Sample one explicit Codex thread's real counters, never estimate quota share."""
+
 from __future__ import annotations
 
 import argparse
@@ -23,9 +24,14 @@ def sample(thread_id: str) -> dict:
     value = summarize_codex_session_usage(paths[0])
     if value["thread_id"] != thread_id:
         raise ValueError("session identity mismatch")
-    return {"sampled_at": time.time(), "thread_id": thread_id, "tokens": value["tokens_used"],
-            "weekly_account_percent": value["weekly_used_percent"],
-            "weekly_resets_at": value["weekly_resets_at"], "source": value["source"]}
+    return {
+        "sampled_at": time.time(),
+        "thread_id": thread_id,
+        "tokens": value["tokens_used"],
+        "weekly_account_percent": value["weekly_used_percent"],
+        "weekly_resets_at": value["weekly_resets_at"],
+        "source": value["source"],
+    }
 
 
 def main():
@@ -52,13 +58,21 @@ def main():
     if delta < 0:
         raise ValueError("counter reset; start another interval")
     weekly_delta = None
-    if (current["weekly_resets_at"] == first["weekly_resets_at"]
-            and first["weekly_account_percent"] is not None and current["weekly_account_percent"] is not None):
+    if (
+        current["weekly_resets_at"] == first["weekly_resets_at"]
+        and first["weekly_account_percent"] is not None
+        and current["weekly_account_percent"] is not None
+    ):
         weekly_delta = current["weekly_account_percent"] - first["weekly_account_percent"]
-    result = {"part": args.part, "first": first, "latest": current, "tokens_including_cached_input": delta,
-              "account_weekly_delta_percentage_points": weekly_delta,
-              "exact_part_weekly_share": None,
-              "limitation": "Account meter includes concurrent activity; absolute weekly token quota is unavailable."}
+    result = {
+        "part": args.part,
+        "first": first,
+        "latest": current,
+        "tokens_including_cached_input": delta,
+        "account_weekly_delta_percentage_points": weekly_delta,
+        "exact_part_weekly_share": None,
+        "limitation": "Account meter includes concurrent activity; absolute weekly token quota is unavailable.",
+    }
     _atomic_json(path, result)
     print(json.dumps(result))
 

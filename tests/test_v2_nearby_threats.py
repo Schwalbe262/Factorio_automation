@@ -1,10 +1,9 @@
-from copy import deepcopy
 import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from factorio_agent.nearby_threats import (
     NearbyThreats,

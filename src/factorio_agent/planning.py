@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from .transport import xy
 from .resource_policy import policy_specs, mining_reservations, RESOURCE_CHECK_LUA
 
 

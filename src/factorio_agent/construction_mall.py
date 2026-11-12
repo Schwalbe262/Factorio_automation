@@ -13,14 +13,13 @@ from factorio_agent.core.deterministic_state import _atomic_json
 from factorio_agent.core.world_catalog import _yield, WorldCatalog
 from .board import entity
 from .industrial import PlanningBudget
-from .manufacturing import connect_power_groups
 from .planning import overlap, preflight, survey_slots
 from .power_grid import plan_connection as power_connection
 from .radar_network import RADAR_POWER_LUA, planned_power_watts
 from .routing import VECTORS
 from .smelting import merge_entities, port
 from .transport import plan_connection, surface_pipe_proof, underground_proof, unbuilt_external_keepouts, xy
-from .bus_tap import BusTap, extend_bus, signature
+from .bus_tap import BusTap, signature
 from .mall_bus_extension import MallBusExtension, propose_mall_taps
 from .bus_budget import declared_bus_demand
 

@@ -15,7 +15,7 @@ from .brick_production import BrickProduction
 from .bus_tap import BusTap, reconstruct_bus, signature
 from .planning import overlap, preflight
 from .steel_production import SteelProduction, steel_rates
-from .transport import VECTORS, xy
+from .transport import VECTORS
 
 
 STEEL_TAP_NAME = "steel-iron"

@@ -1,4 +1,3 @@
-from copy import deepcopy
 import json
 from pathlib import Path
 import tempfile
@@ -10,7 +9,6 @@ from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.water_gathering import water_core
 from factorio_agent.water_distribution import (
     WaterDistribution,
-    header_core,
     _edges,
     _key,
     HEADER_PROOF_LUA,

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from factorio_agent.core.deterministic_builder import _plan
 from .board import entity
-from .bus_tap import BusTap, _hash, preserve_bus_ports, reconstruct_bus, signature, extend_bus
+from .bus_tap import BusTap, _hash, preserve_bus_ports, reconstruct_bus, extend_bus
 from .main_bus import plan_main_bus
 from .planning import preflight
 from .transport import underground_proof, xy, unbuilt_external_keepouts
