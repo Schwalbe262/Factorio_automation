@@ -14,12 +14,57 @@ from copy import deepcopy
 from pathlib import Path
 
 from factorio_agent.core.deterministic_state import _atomic_json
-from .board import Board
+from .board import (
+    MAX_STARTUP_LABS,
+    MAX_STARTUP_SCIENCE_MACHINES,
+    Board,
+    lab_slot_entities,
+    lab_slot_plan,
+    science_machine_count,
+)
 
 
 BOOTSTRAP_RESEARCH_MAX_UNITS = 100
 DIVERSION_STALL_TICKS = 1800
 SCIENCE_COURIER_BATCH = 5
+# One sizing decision per finite target batch, kept outside the bound state.
+CAPACITY_FILE = "startup-science-capacity.json"
+# Further red-only roadmap technologies that justify one expansion.
+CAPACITY_QUEUE_HORIZON = 3
+RED_PACK = "automation-science-pack"
+
+
+def _red_only_fixed(catalog, name):
+    """True when ``name`` is a finite red-only technology this cell can research."""
+    tech = (getattr(catalog, "technologies", None) or {}).get(name)
+    return bool(
+        isinstance(tech, dict)
+        and not tech.get("research_trigger")
+        and not tech.get("count_formula")
+        and tech.get("ingredients") == [{"name": RED_PACK, "type": "item", "amount": 1}]
+        and type(tech.get("unit_count")) is int
+        and 1 <= tech["unit_count"] <= BOOTSTRAP_RESEARCH_MAX_UNITS
+    )
+
+
+def _sampled_rates(root, world_id):
+    """Read-only plate rates from the observer's ``rate-samples.json``: item -> (produced, consumed)/min."""
+    path = Path(root) / "rate-samples.json"
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("world_id") != world_id:
+        return {}
+    samples = data.get("samples") or []
+    if len(samples) < 2 or samples[-1]["tick"] - samples[0]["tick"] < 300:
+        return {}
+    first, last = samples[0], samples[-1]
+    minutes = (last["tick"] - first["tick"]) / 3600
+    rates = {}
+    for name, row in last["production"].items():
+        base = first["production"].get(name, {})
+        rates[name] = tuple((row.get(k, 0) - base.get(k, 0)) / minutes for k in ("produced", "consumed"))
+    return rates
 
 
 def validate_bootstrap_research(parameters):
@@ -818,7 +863,7 @@ class BootstrapLogistics:
         return self._legacy_repurchase_step(obs)
 
     def _recovery_frame(self):
-        return {
+        frame = {
             key: deepcopy(self.state[key])
             for key in (
                 "world_id",
@@ -835,6 +880,30 @@ class BootstrapLogistics:
                 "lab",
             )
         }
+        # Multi-machine/multi-lab bindings exist only in newer states, so an
+        # older single-machine frame (and its hash) is unchanged.
+        for key in ("red_machines", "labs"):
+            if key in self.state:
+                frame[key] = deepcopy(self.state[key])
+        return frame
+
+    def _red_pins(self):
+        """Bound science machines; an older state binds exactly ``red_machine``."""
+        return self.state.get("red_machines") or [self.state["red_machine"]]
+
+    def _lab_pins(self):
+        """Bound labs; an older state binds exactly ``lab``."""
+        return self.state.get("labs") or [self.state["lab"]]
+
+    def _finished(self, obs):
+        """Summed ``products_finished`` of the bound science machines, or None if any is unreadable."""
+        total = 0
+        for pin in self._red_pins():
+            value = (self.find(obs, pin) or {}).get("products_finished")
+            if type(value) not in (int, float) or not math.isfinite(value):
+                return None
+            total += value
+        return total
 
     def _replacement_inputs(self, gears):
         recipe = self.catalog.recipe_for_product("iron-gear-wheel")
@@ -958,20 +1027,27 @@ class BootstrapLogistics:
 
     def _recover_stalled_diversion(self, obs, plan):
         gear = next(self.find(obs, p) for p in self.state["machines"] if p.get("recipe") == "iron-gear-wheel")
-        red = self.find(obs, self.state["red_machine"])
-        iron = next(
-            self.find(obs, p)
-            for p in self.state["ports"]
-            if p["position"] == next(q["position"] for q in plan["ports"] if q.get("item") == "iron-plate")
-        )
+        reds = [self.find(obs, p) for p in self._red_pins()]
+
+        def port(item):
+            return next(
+                self.find(obs, p)
+                for p in self.state["ports"]
+                if p["position"] == next(q["position"] for q in plan["ports"] if q.get("item") == item)
+            )
+
+        iron = port("iron-plate")
+        # The two-machine cell buffers gears in the copper hub chest.
+        hub = port("copper-plate")
         recipe = self.catalog.recipe_for_product("automation-science-pack")
         yield_count = sum(p["amount"] for p in recipe["products"] if p["name"] == "automation-science-pack")
         short = (
-            (red["products_finished"] - self.state["baseline_products_finished"]) * yield_count
+            (self._finished(obs) - self.state["baseline_products_finished"]) * yield_count
             < self.state["required_packs"]
             and gear.get("inventory", {}).get("iron-gear-wheel", 0) == 0
             and gear.get("inventory", {}).get("iron-plate", 0) == 0
-            and red.get("inventory", {}).get("iron-gear-wheel", 0) == 0
+            and all(red.get("inventory", {}).get("iron-gear-wheel", 0) == 0 for red in reds)
+            and hub.get("inventory", {}).get("iron-gear-wheel", 0) == 0
             and iron.get("inventory", {}).get("iron-plate", 0) == 0
         )
         if not short:
@@ -1011,21 +1087,18 @@ class BootstrapLogistics:
             return "bootstrap_research_target_changed"
         if state.get("plan_hash") != _hash(plan):
             return "bootstrap_research_startup_plan_changed"
-        red = self.find(obs, state["red_machine"])
-        if not red or red.get("unit_number") != state["red_machine"]["unit_number"]:
-            return "bootstrap_research_red_machine_unit_changed"
-        for pin in state.get("machines", []) + state.get("ports", []) + [state["lab"]]:
+        for bound in self._red_pins():
+            red = self.find(obs, bound)
+            if not red or red.get("unit_number") != bound["unit_number"]:
+                return "bootstrap_research_red_machine_unit_changed"
+        for pin in state.get("machines", []) + state.get("ports", []) + self._lab_pins():
             actual = self.find(obs, pin)
             if not actual or actual.get("unit_number") != pin["unit_number"]:
                 return "bootstrap_research_bound_entity_changed"
             if pin.get("recipe") and actual.get("recipe") != pin["recipe"]:
                 return "bootstrap_research_machine_recipe_changed"
-        finished = red.get("products_finished")
-        if (
-            type(finished) not in (int, float)
-            or not math.isfinite(finished)
-            or finished < state["baseline_products_finished"]
-        ):
+        finished = self._finished(obs)
+        if finished is None or finished < state["baseline_products_finished"]:
             return "bootstrap_research_machine_counter_rollback"
         consumed = obs.get("production", {}).get("automation-science-pack", {}).get("consumed")
         if type(consumed) not in (int, float) or not math.isfinite(consumed) or consumed < state["baseline_consumed"]:
@@ -1044,7 +1117,12 @@ class BootstrapLogistics:
         if not plan:
             return False
         machines = [p for p in plan.get("entities", []) if p.get("name") == "assembling-machine-1"]
-        if len(machines) != 2 or {p.get("recipe") for p in machines} != {"iron-gear-wheel", "automation-science-pack"}:
+        count = science_machine_count(plan)
+        if (
+            count is None
+            or len(machines) != 1 + count
+            or {p.get("recipe") for p in machines} != {"iron-gear-wheel", "automation-science-pack"}
+        ):
             return False
         for pin in machines:
             actual = self.find(obs, pin)
@@ -1055,6 +1133,144 @@ class BootstrapLogistics:
             ):
                 return False
         return any(e.get("name") == "lab" and _powered(e) for e in obs.get("entities", []))
+
+    def _capacity_path(self):
+        return self.path.parent / CAPACITY_FILE
+
+    def _saved_capacity(self, obs):
+        path = self._capacity_path()
+        if not path.exists():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if data.get("world_id") == obs["world_id"] else {}
+
+    def _capacity_decision(self, obs, plan):
+        """The research_capacity decision for this batch: computed once, then reused.
+
+        It is kept in ``startup-science-capacity.json`` (one row per target),
+        never in the bound batch state, so older states and their hashes are
+        untouched. Missing evidence or catalog data returns None: keep the
+        current size.
+        """
+        try:
+            saved = self._saved_capacity(obs)
+            row = saved.get("decisions", {}).get(self.technology)
+            if row is not None:
+                return row
+            row = self._plan_capacity(obs, plan)
+        except (OSError, AttributeError, KeyError, TypeError, ValueError, ZeroDivisionError):
+            return None
+        if row is None:
+            return None
+        saved = dict(world_id=obs["world_id"], decisions=dict(saved.get("decisions", {})))
+        saved["decisions"][self.technology] = row
+        _atomic_json(self._capacity_path(), saved)
+        return row
+
+    def _plan_capacity(self, obs, plan):
+        """Size science machines (new cell only) and labs for this batch and the next red-only research.
+
+        Evidence: held plates minus this batch's inputs (which are paid
+        first), and plate rates from the observer's rate samples (a file
+        read; no game query). The batch is pre-funded, so its packs consume
+        no further plate rate and no materials cap applies.
+        """
+        from .progression import roadmap_wanted_technologies
+        from .research_capacity import (
+            ResearchCapacityConfig,
+            ResearchHardware,
+            ResearchMaterials,
+            expansion_costs,
+            plan_research_capacity,
+            research_targets,
+        )
+
+        researched = {k for k, v in obs.get("technologies", {}).items() if v}
+        names = [self.technology]
+        ledger = self.path.parent / "jobs.json"
+        jobs = []
+        if ledger.exists():
+            data = json.loads(ledger.read_text(encoding="utf-8"))
+            if data.get("world_id") == obs["world_id"]:
+                jobs = list(data.get("jobs", {}).values())
+        for wanted in roadmap_wanted_technologies(jobs, researched):
+            if len(names) > CAPACITY_QUEUE_HORIZON:
+                break
+            if wanted not in names and wanted not in researched and _red_only_fixed(self.catalog, wanted):
+                names.append(wanted)
+        targets = research_targets(self.catalog, names)
+        if not targets or targets[0].technology != self.technology:
+            return None
+        science = science_machine_count(plan) if plan else 1
+        slots = lab_slot_entities(plan) if plan else [None] * (MAX_STARTUP_LABS - 1)
+        built = [s for s in slots if s and _powered(self.find(obs, s["lab"]))]
+        labs = 1 + len(built)
+        costs = expansion_costs(self.catalog, RED_PACK, current_assemblers=science)
+        _, inputs = self.requirements()
+        rates = _sampled_rates(self.path.parent, obs["world_id"])
+        evidence = {}
+        for item in sorted(set(costs["assembler"]) | set(costs["lab"]) | set(inputs)):
+            held = obs.get("inventory", {}).get(item, 0)
+            row = {"available": max(0, held - inputs.get(item, 0))}
+            if item in rates:
+                produced, consumed = rates[item]
+                row.update(produced_per_minute=produced, net_per_minute=produced - consumed)
+            evidence[item] = row
+        config = ResearchCapacityConfig(
+            max_assemblers=MAX_STARTUP_SCIENCE_MACHINES if plan is None else science,
+            max_labs=1 + len(slots),
+        )
+        decision = plan_research_capacity(
+            targets,
+            ResearchHardware({RED_PACK: science}, {RED_PACK: costs["pack_rate_per_assembler"]}, labs),
+            ResearchMaterials(
+                evidence=evidence,
+                assembler_cost={RED_PACK: costs["assembler"]},
+                lab_cost=costs["lab"],
+                machines_per_assembler={RED_PACK: costs["machines_per_assembler"]},
+            ),
+            config=config,
+        )
+        row = decision.as_dict()
+        row["decided_tick"] = obs["tick"]
+        return row
+
+    def _extend_labs(self, obs, plan):
+        """Build the planned extra labs into the cell's lab slots before a new batch binds labs.
+
+        Returns a builder action, or None to continue with the labs that are
+        powered. A placement the builder reports as blocked is recorded and
+        not retried for this target. The cell's bound machines, ports and
+        plan hash are never changed: lab slots are a separate builder plan.
+        """
+        decision = self._capacity_decision(obs, plan)
+        if not decision or decision.get("lab_extension_blocked"):
+            return None
+        want = min(MAX_STARTUP_LABS, decision.get("target_labs", 1)) - 1
+        slots = lab_slot_entities(plan)[: max(0, want)]
+        if not slots or all(self.find(obs, s["lab"]) for s in slots):
+            return None
+        result = self.builder.ensure_plan(obs, lab_slot_plan(plan, len(slots)))
+        if result.get("type"):
+            return result
+        if result.get("status") == "succeeded":
+            return None
+        if result.get("status") not in ("blocked", "failed"):
+            return result
+        saved = self._saved_capacity(obs)
+        saved.setdefault("decisions", {}).setdefault(self.technology, dict(decision))
+        saved["decisions"][self.technology]["lab_extension_blocked"] = str(result.get("reason", "blocked"))[:200]
+        saved["world_id"] = obs["world_id"]
+        _atomic_json(self._capacity_path(), saved)
+        return None
+
+    def _batch_labs(self, obs, plan, labs):
+        """Labs a new batch binds: one lab outside the slots (the starter lab) plus every powered slot lab."""
+        slot_positions = [s["lab"]["position"] for s in lab_slot_entities(plan)]
+        outside = [e for e in labs if e["position"] not in slot_positions]
+        primary = outside[0] if outside else labs[0]
+        extra = [e for position in slot_positions for e in labs if e["position"] == position and e is not primary]
+        return [primary] + extra[: MAX_STARTUP_LABS - 1]
 
     def _research_step(self, obs):
         name = self.technology
@@ -1117,7 +1333,14 @@ class BootstrapLogistics:
         if plan is None:
             if self.state:
                 return {"status": "blocked", "reason": "bootstrap_research_registered_cell_missing"}
-            plan = self.board.reserve_startup_science(obs)
+            # A new cell is sized once, from this batch and the next red-only
+            # roadmap research; a saved cell keeps its machines forever.
+            decision = self._capacity_decision(obs, None)
+            machines = min(MAX_STARTUP_SCIENCE_MACHINES, (decision or {}).get("target_assemblers", 1))
+            if machines > 1:
+                plan = self.board.reserve_startup_science(obs, science_machines=machines)
+            else:
+                plan = self.board.reserve_startup_science(obs)
             if not plan.get("ok"):
                 return {"status": "blocked", "reason": plan.get("reason", "bootstrap_science_reservation_failed")}
         if self.state:
@@ -1133,24 +1356,31 @@ class BootstrapLogistics:
         result = self.builder.ensure_plan(obs, plan)
         if result.get("status") != "succeeded":
             return result
+        science = science_machine_count(plan)
+        if science is None:
+            return {"status": "blocked", "reason": "bootstrap_research_startup_plan_unsupported"}
         machines = [self.find(obs, e) for e in plan["entities"] if e["name"] == "assembling-machine-1"]
-        if len(machines) != 2 or any(not _powered(e) for e in machines):
+        if len(machines) != 1 + science or any(not _powered(e) for e in machines):
             return {"status": "blocked", "reason": "science_cell_power_not_connected"}
-        red = next((e for e in machines if e.get("recipe") == "automation-science-pack"), None)
+        reds = [e for e in machines if e.get("recipe") == "automation-science-pack"]
         gear = next((e for e in machines if e.get("recipe") == "iron-gear-wheel"), None)
-        if red is None or gear is None:
+        if len(reds) != science or gear is None:
             return {"status": "blocked", "reason": "bootstrap_research_machine_recipe_changed"}
         labs = [e for e in obs["entities"] if e["name"] == "lab" and _powered(e)]
         if not labs:
             return {"status": "blocked", "reason": "powered_research_lab_missing"}
         if not self.state:
+            extension = self._extend_labs(obs, plan)
+            if extension is not None:
+                return extension
+            labs = self._batch_labs(obs, plan, labs)
             ports = [self.find(obs, {"name": "wooden-chest", "position": p["position"]}) for p in plan["ports"]]
-            pins = machines + ports + [labs[0]]
+            pins = machines + ports + labs
             if any(not e or type(e.get("unit_number")) is not int or e["unit_number"] < 1 for e in pins):
                 return {"status": "blocked", "reason": "bootstrap_research_native_entity_identity_required"}
-            finished = red.get("products_finished")
+            finished = [red.get("products_finished") for red in reds]
             consumed = obs.get("production", {}).get("automation-science-pack", {}).get("consumed")
-            if any(type(n) not in (int, float) or not math.isfinite(n) or n < 0 for n in (finished, consumed)):
+            if any(type(n) not in (int, float) or not math.isfinite(n) or n < 0 for n in finished + [consumed]):
                 return {"status": "blocked", "reason": "bootstrap_research_native_baseline_required"}
 
             def pin(e):
@@ -1165,16 +1395,22 @@ class BootstrapLogistics:
                 required_packs=count,
                 required_inputs=inputs,
                 allocated_inputs={},
-                red_machine=pin(red),
+                red_machine=pin(reds[0]),
                 machines=[pin(e) for e in machines],
                 ports=[pin(e) for e in ports],
                 lab=pin(labs[0]),
-                baseline_products_finished=finished,
+                baseline_products_finished=sum(finished),
                 baseline_consumed=consumed,
                 collected_packs=0,
                 supplied_packs=0,
                 transfer_sequence=0,
             )
+            # Only multi-machine/multi-lab batches carry the list bindings; a
+            # one-machine, one-lab state keeps the original shape.
+            if len(reds) > 1:
+                self.state["red_machines"] = [pin(e) for e in reds]
+            if len(labs) > 1:
+                self.state["labs"] = [pin(e) for e in labs]
             self._save()
         proof = self._research_proof(obs)
         if proof:
@@ -1225,16 +1461,28 @@ class BootstrapLogistics:
         held = obs.get("inventory", {}).get("automation-science-pack", 0)
         collected = self.state["collected_packs"]
         supplied = self.state["supplied_packs"]
+        lab_pins = self._lab_pins()
         if held and collected > supplied:
+            pending = collected - supplied
+            # Spread carried packs over the bound labs: the emptiest lab gets
+            # an even share, never fewer than one courier batch per action.
+            share = max(SCIENCE_COURIER_BATCH, math.ceil(pending / len(lab_pins)))
+            target = min(
+                enumerate(lab_pins),
+                key=lambda row: (
+                    (self.find(obs, row[1]) or {}).get("inventory", {}).get("automation-science-pack", 0),
+                    row[0],
+                ),
+            )[1]
             return self._transfer(
                 "lab",
                 dict(
                     type="insert",
                     name="lab",
-                    position=self.state["lab"]["position"],
+                    position=target["position"],
                     inventory="lab_input",
                     item="automation-science-pack",
-                    count=min(held, collected - supplied),
+                    count=min(held, pending, share),
                     reason="supply collected machine-built bootstrap science",
                 ),
             )
@@ -1242,8 +1490,9 @@ class BootstrapLogistics:
         output = self.find(obs, {"name": "wooden-chest", "position": port["position"]})
         available = output.get("inventory", {}).get("automation-science-pack", 0)
         # Carrying each pack as it is made costs two actions per pack. Let a
-        # small batch pile up; the last few packs are still fetched together.
-        if available >= min(SCIENCE_COURIER_BATCH, count - collected) and collected < count:
+        # small batch per lab pile up; the last few packs are still fetched together.
+        batch = SCIENCE_COURIER_BATCH * len(lab_pins)
+        if available >= min(batch, count - collected) and collected < count:
             return self._transfer(
                 "collect",
                 dict(
@@ -1387,12 +1636,13 @@ class BootstrapLogistics:
             for e in self.state.get("diversion_recoveries", [])
         ):
             return None
-        if any(not _powered(self.find(obs, p)) for p in self.state["machines"] + [self.state["lab"]]):
+        if any(not _powered(self.find(obs, p)) for p in self.state["machines"] + self._lab_pins()):
             return None
         red = self.find(obs, self.state["red_machine"])
+        finished = self._finished(obs)
         recipe = self.catalog.recipe_for_product("automation-science-pack")
         amount = sum(p["amount"] for p in recipe["products"] if p["name"] == "automation-science-pack")
-        packs = (red["products_finished"] - self.state["baseline_products_finished"]) * amount
+        packs = (finished - self.state["baseline_products_finished"]) * amount
         if packs < count:
             return None
         return dict(
@@ -1401,7 +1651,7 @@ class BootstrapLogistics:
             catalog_fingerprint=self.catalog.fingerprint,
             owner_guard=_hash(self._recovery_frame()),
             red_unit=red["unit_number"],
-            products_finished=red["products_finished"],
+            products_finished=finished,
             normally_assembled_packs=packs,
             collected_packs=count,
             supplied_packs=count,
@@ -1593,6 +1843,10 @@ class BootstrapLogistics:
                         reserved_tick=obs["tick"],
                     ),
                 )
+                # The prewarmed batch shares the owner's exact bindings.
+                for key in ("red_machines", "labs"):
+                    if key in owner.state:
+                        self.state[key] = deepcopy(owner.state[key])
                 self._save()
             warm = self.state.get("prewarm")
             if (
@@ -1615,7 +1869,7 @@ class BootstrapLogistics:
             return dict(status="blocked", reason="science_prewarm_context_invalid", evidence={"detail": str(exc)})
 
     def _progress(self, obs):
-        actual = self.find(obs, self.state["red_machine"])
+        finished = self._finished(obs)
         recoveries = [
             dict(
                 id=e["id"],
@@ -1632,7 +1886,7 @@ class BootstrapLogistics:
         return dict(
             technology=self.technology,
             required_packs=self.state["required_packs"],
-            machine_products_finished_delta=actual["products_finished"] - self.state["baseline_products_finished"],
+            machine_products_finished_delta=finished - self.state["baseline_products_finished"],
             research_science_consumed=obs["production"]["automation-science-pack"]["consumed"]
             - self.state["baseline_consumed"],
             allocated_normal_inputs=deepcopy(self.state["allocated_inputs"]),
@@ -1651,7 +1905,7 @@ class BootstrapLogistics:
             return None
         if self.state.get("pending_transfer") or self.state.get("transfer_error"):
             return None
-        if any(not _powered(self.find(obs, pin)) for pin in self.state["machines"] + [self.state["lab"]]):
+        if any(not _powered(self.find(obs, pin)) for pin in self.state["machines"] + self._lab_pins()):
             return None
         evidence = self._progress(obs)
         recipe = self.catalog.recipe_for_product("automation-science-pack")

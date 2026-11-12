@@ -233,8 +233,48 @@ def _names(value) -> set[str]:
     return set()
 
 
+# Science stages whose ``rate_per_minute`` the autopilot takes from the observe
+# receipt's ``research_capacity.recommended_rates`` (capability -> pack). A job
+# or node matches such a step whatever rate it was given.
+RATE_SIZED_CAPABILITIES = {
+    "automation_science": "automation-science-pack",
+    "logistic_science": "logistic-science-pack",
+}
+
+
 def _same(row: Mapping, step: Step) -> bool:
-    return row.get("capability") == step.capability and row.get("parameters", {}) == step.parameters
+    if row.get("capability") != step.capability:
+        return False
+    parameters = row.get("parameters", {})
+    if step.capability in RATE_SIZED_CAPABILITIES and isinstance(parameters, Mapping):
+        return _without_rate(parameters) == _without_rate(step.parameters)
+    return parameters == step.parameters
+
+
+def _without_rate(parameters: Mapping) -> dict:
+    return {key: value for key, value in parameters.items() if key != "rate_per_minute"}
+
+
+def _sized_parameters(step: Step, observation: Mapping) -> tuple[dict, str]:
+    """The step's parameters, with a science rate from the receipt when it recommends one.
+
+    The recommendation (``research_capacity.recommended_science_rate``) is used
+    only when it is a number in ``(0, step default]``; otherwise the default
+    stays. Returns the parameters and a note for the node reason.
+    """
+    parameters = dict(step.parameters)
+    pack = RATE_SIZED_CAPABILITIES.get(step.capability)
+    default = parameters.get("rate_per_minute")
+    receipt = observation.get("research_capacity")
+    if pack is None or not isinstance(default, (int, float)) or not isinstance(receipt, Mapping):
+        return parameters, ""
+    rates = receipt.get("recommended_rates")
+    row = rates.get(pack) if isinstance(rates, Mapping) else None
+    rate = row.get("rate_per_minute") if isinstance(row, Mapping) else None
+    if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not 0 < rate <= default:
+        return parameters, ""
+    parameters["rate_per_minute"] = rate
+    return parameters, f"; rate {rate}/min from research_capacity ({row.get('reason', '')})"[:300]
 
 
 @dataclass(frozen=True)
@@ -398,14 +438,15 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
             continue
         if not _recipes_ready(step, capabilities, observation) or not _research_ready(step, observation):
             continue
+        parameters, note = _sized_parameters(step, observation)
         proposed.append(
             {
                 "id": node_id,
                 "capability": step.capability,
-                "parameters": dict(step.parameters),
+                "parameters": parameters,
                 "priority": TOP_PRIORITY - index,
                 "depends_on": [],
-                "reason": f"autopilot roadmap step {index + 1}/{len(ROADMAP)}: {step.id}",
+                "reason": f"autopilot roadmap step {index + 1}/{len(ROADMAP)}: {step.id}{note}",
             }
         )
     return proposed

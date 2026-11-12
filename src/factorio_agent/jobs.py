@@ -446,6 +446,8 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "resource_supply_options": obs.get("resource_supply_options"),
         "roadmap_material_demand": obs.get("roadmap_material_demand"),
         "roadmap_material_demand_error": obs.get("roadmap_material_demand_error"),
+        "research_capacity": obs.get("research_capacity"),
+        "research_capacity_error": obs.get("research_capacity_error"),
         "capabilities": CAPABILITIES,
         "jobs": [
             {k: v for k, v in job.items() if k in {"key", "capability", "status", "reason", "actions", "last_tick"}}
