@@ -10,8 +10,20 @@ from factorio_ai.deterministic_state import _atomic_json
 from .board import entity
 from .power_grid import plan_connection as power_connection
 from .transport import plan_connection as belt_connection,underground_proof,xy
+from .planning import preflight
 
 FURNACE_NAMES = frozenset({'stone-furnace', 'steel-furnace', 'electric-furnace'})
+
+
+def smelting_site_anchors(sources):
+    """Keep accepted legacy ordering, then search a bounded current-source grid."""
+    old = ((24,-48),(-24,-48),(24,-64),(-24,-32),(32,-48),(-40,-32),(8,-16),(-40,-48),(24,-24))
+    points = [p['position'] for p in sources.values()]
+    bx = math.floor(sum(p['x'] for p in points)/len(points)/16)*16
+    by = math.floor((sum(p['y'] for p in points)/len(points)-32)/16)*16
+    offsets = ((0,0),(32,0),(-32,0),(0,-32),(32,-32),(-32,-32),(0,32),(32,32),
+               (-32,32),(64,0),(-64,0),(0,-64),(0,64),(64,-32),(-64,-32),(32,-64))
+    return tuple(dict.fromkeys((*old, *((bx+dx,by+dy)for dx,dy in offsets))))
 
 
 def port(item,x,y,facing,direction='input'):
@@ -198,6 +210,8 @@ class SmeltingDistrict:
         return {'status':'waiting','reason':'waiting for added furnaces to smelt ordinary belt inputs'}
 
     def prepare(self,obs):
+        from .industrial import PlanningBudget
+        budget=PlanningBudget(self.game);game=budget.game
         if not obs.get('technologies',{}).get('logistics'):
             return {'ok':False,'reason':'native_logistics_research_required'}
         p=self.path.parent/'mining-outposts.json'
@@ -216,11 +230,11 @@ class SmeltingDistrict:
         counts={r:math.ceil(rate*self.catalog.recipes[product]['energy']/60/self.catalog.entities['stone-furnace']['crafting_speed'])
                 for r,product,rate in (('iron-ore','iron-plate',60),('copper-ore','copper-plate',30))}
         candidates=[]
-        for x,y in ((24,-48),(-24,-48),(24,-64),(-24,-32),(32,-48),(-40,-32),(8,-16),(-40,-48),(24,-24)):
+        for x,y in smelting_site_anchors(sources):
             area=[[x-8,y-8],[x+24,y+24]]
             if any(area[0][0]<b['reserved_area'][1][0] and area[1][0]>b['reserved_area'][0][0]
                    and area[0][1]<b['reserved_area'][1][1] and area[1][1]>b['reserved_area'][0][1]
-                   for b in board.get('blocks',{}).values()):continue
+                   for b in board.get('blocks',{}).values()if b.get('reserved_area')):continue
             banks=[furnace_bank(x,y,counts['iron-ore'],'iron-ore'),furnace_bank(x,y+12,counts['copper-ore'],'copper-ore')]
             splitter=dict(entity('splitter',x-5.5,y+4,4),_width=2,_height=1)
             split=[splitter,entity('transport-belt',x-7.5,y+3.5,4),entity('transport-belt',x-6.5,y+3.5,4),
@@ -230,7 +244,7 @@ class SmeltingDistrict:
                 'coal_input':port('coal',x-7.5,y+3.5,4),
                 'coal_branches':[port('coal',x-4.5,y+3.5,4,'output'),port('coal',x-4.5,y+4.5,4,'output')]})
         args=json.dumps(json.dumps(candidates,separators=(',',':')))
-        survey=self.game.query('''
+        survey=game.query('''
 local plans=helpers.json_to_table('''+args+''');local legal={}
 for i,plan in ipairs(plans) do
  local clear=s.count_entities_filtered{area=plan.area,type="resource"}==0
@@ -255,6 +269,7 @@ return {ok=true,legal=legal}
         if not survey.get('ok'):return survey
         failures=[]
         for index in survey.get('legal',[]):
+            if budget.expired():break
             site=candidates[index-1];es=site['entities'];routes=[];good=True
             connections=[]
             for bank,branch in zip(site['banks'],site['coal_branches']):
@@ -262,30 +277,43 @@ return {ok=true,legal=legal}
                 connections.append((sources[bank['resource']],next(p for p in bank['ports'] if p['item']==bank['resource'])))
             connections.append((sources['coal'],site['coal_input']))
             for source,destination in connections:
-                route=belt_connection(self.game,self.builder,obs,source,destination,es)
+                if budget.expired():good=False;failures.append({'stage':'planning_budget','reason':'smelting_planning_budget_exhausted'});break
+                route=belt_connection(game,self.builder,obs,source,destination,es)
                 if not route.get('ok'):
-                    failures.append({'area':site['area'],'item':source['item'],'source':source['position'],
+                    failures.append({'stage':'corridor','area':site['area'],'item':source['item'],'source':source['position'],
                                      'destination':destination['position'],'reason':route.get('reason')});good=False;break
                 routes.append(route);es=merge_entities(es,route['entities'])
             if not good:continue
             for bank in site['banks']:
                 pole=next(e for e in bank['entities'] if e['name']=='small-electric-pole')
-                power=power_connection(self.game,self.builder,obs,pole['position'],[e for e in es if e['name']!='small-electric-pole'])
+                power=power_connection(game,self.builder,obs,pole['position'],[e for e in es if e['name']!='small-electric-pole'])
                 if not power.get('ok'):
-                    failures.append({'area':site['area'],'reason':power.get('reason')});good=False;break
+                    failures.append({'stage':'power','area':site['area'],'reason':power.get('reason')});good=False;break
                 es=merge_entities(es,power['entities'])
             if not good:continue
             boxes=[self.builder._occupied_by_plan([e]) for e in es]
             if sum(map(len,boxes))!=len(set().union(*boxes)):
-                failures.append({'area':site['area'],'reason':'whole_prospective_plan_overlaps'});continue
-            if not self.builder.can_place(es).get('ok'):continue
+                failures.append({'stage':'whole_geometry','area':site['area'],'reason':'whole_prospective_plan_overlaps'});continue
+            # Corridors may include exact approved natural clearances. A raw
+            # can_place repeat rejects those trees and discards its own earlier
+            # route approval. Recheck the complete resource/ownership footprint
+            # with the same native preflight used by paid clearance/building.
+            whole=preflight(game,self.builder,obs,es)
+            if not whole.get('ok'):
+                failures.append({'stage':'whole_preflight','area':site['area'],'reason':whole.get('reason')});continue
             pairs=[pair for route in routes for pair in route.get('underground_pairs',[])]
             plan=_plan(es,[p for b in site['banks'] for p in b['ports'] if p['direction']=='output'],
-                reserved_area=site['area'],layout_policy='pcb-smelting-district-v1',underground_pairs=pairs)
+                reserved_area=site['area'],layout_policy='pcb-smelting-district-v1',underground_pairs=pairs,
+                clear_obstacles=whole['clear_obstacles'],clearance_world_id=obs['world_id'])
             return {'ok':True,'world_id':obs['world_id'],'catalog_fingerprint':self.catalog.fingerprint,'plan':plan,
                     'banks':site['banks'],'routes':[{'metrics':r['route_metrics'],'pairs':r['underground_pairs']} for r in routes],
                     'nominal_input_rates':{'iron-ore':60,'copper-ore':30},'coal_splitter_policy':'ordinary balanced outputs; existing power feed remains separate'}
-        return {'ok':False,'reason':'no_clear_pcb_smelting_district_with_corridors','legal_sites':len(survey.get('legal',[])),'failures':failures}
+        stages={stage:sum(f['stage']==stage for f in failures)for stage in dict.fromkeys(f['stage']for f in failures)}
+        return {'ok':False,'reason':'no_clear_pcb_smelting_district_with_corridors','legal_sites':len(survey.get('legal',[])),
+                'candidate_count':len(candidates),'failures':failures[-6:],
+                'evidence':{'legal_sites':len(survey.get('legal',[])),'candidate_count':len(candidates),
+                    'failure_stage_counts':stages,'last_failure_reason':failures[-1]['reason']if failures else'no_legal_land_site',
+                    'planning_budget_exhausted':budget.expired()}}
 
     def step(self,obs):
         if not self.state:
