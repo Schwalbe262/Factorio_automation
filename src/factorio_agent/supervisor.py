@@ -31,6 +31,7 @@ REPO_ROOT = SOURCE_ROOT.parent
 ACTIVE = {"pending", "running", "waiting"}
 TERMINAL = {"succeeded", "blocked", "failed"}
 OPERATIONS = {"plan", "request", "continue", "retry", "pause", "wait"}
+AUTO_RETRY_LIMIT = 3
 QUEUED = ("pending", "ready")
 # Existing nodes in these states absorb a new node with the same capability and parameters.
 DEDUPE_STATUSES = {"pending", "ready", "running", "completed"}
@@ -1452,6 +1453,8 @@ class Supervisor:
             context = self._snapshot()
         if self._autopilot(context):
             context = self._snapshot()
+        if self._auto_retry(context):
+            context = self._snapshot()
         if self._poll_decision():
             if self._stop_requested():
                 return True
@@ -1462,6 +1465,38 @@ class Supervisor:
             return True
         # Approved queue work runs while the Luna call is pending.
         return self._run_authorized(context)
+
+    def _auto_retry(self, context):
+        """Retry a blocked job once another job has succeeded since it blocked.
+
+        Most blockers are a missing prerequisite ("coal bank required") that a
+        later success removes. Waiting for the planner to notice wastes minutes,
+        so the framework retries by itself, at most AUTO_RETRY_LIMIT times per
+        job. Unknown action outcomes, rollbacks and deadlines are never retried.
+        """
+        jobs = list(context[1].get("jobs", {}).values())
+        succeeded = sum(job["status"] == "succeeded" for job in jobs)
+        memory = self.__dict__.setdefault("_auto_retries", {})
+        retried = False
+        for job in jobs:
+            key = job["key"]
+            if job["status"] != "blocked":
+                # Keep the count while the job is merely running again, so a job
+                # that keeps blocking cannot be retried without limit.
+                if job["status"] == "succeeded":
+                    memory.pop(key, None)
+                continue
+            reason = str(job.get("reason", ""))
+            if _unknown(job) or "rollback" in reason or "deadline" in reason:
+                continue
+            seen = memory.setdefault(key, {"successes": succeeded, "count": 0})
+            if succeeded <= seen["successes"] or seen["count"] >= AUTO_RETRY_LIMIT:
+                continue
+            seen.update(successes=succeeded, count=seen["count"] + 1)
+            if self._control_command("retry", key):
+                self._event("auto_retry", key=key, capability=job.get("capability"), blocked_reason=reason[:200])
+                retried = True
+        return retried
 
     def _idle(self, seconds):
         until = self.clock() + seconds

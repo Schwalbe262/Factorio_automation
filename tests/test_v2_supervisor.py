@@ -846,6 +846,28 @@ class MultiJobTests(Fixture):
         self.assertEqual(sorted(q["id"] for q in self.s.work.ready_nodes()), ["n0", "n4"])
         self.assertEqual(self.s.state["active_job_key"], self.requested()[0][2])
 
+    def test_blocked_job_is_retried_after_another_job_succeeds_and_only_a_few_times(self):
+        self.cli.jobs["stuck"] = job("stuck", "c0", status="blocked", reason="coal_bank_required")
+        self.cli.jobs["lost"] = job("lost", "c1", status="blocked", reason="action_outcome_unknown_reconcile_required")
+
+        def retries():
+            return [c for c in self.cli.calls if c[0] == "retry"]
+
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        self.assertEqual(retries(), [])
+        self.cli.jobs["done1"] = job("done1", "c2", status="succeeded")
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        self.assertEqual(retries(), [["retry", "--key", "stuck"]])
+        # Blocked again with no new success: no further retry.
+        self.cli.jobs["stuck"].update(status="blocked", reason="coal_bank_required")
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        for index in range(2, 8):
+            self.cli.jobs["done" + str(index)] = job("done" + str(index), "c3", status="succeeded")
+            self.cli.jobs["stuck"].update(status="blocked", reason="coal_bank_required")
+            self.s._auto_retry(self.s._snapshot())
+        self.assertEqual(len(retries()), 3)
+        self.assertNotIn(["retry", "--key", "lost"], retries())
+
     def test_same_capability_as_an_active_job_is_held_back_and_stays_ready(self):
         self.cli.jobs["manual"] = job("manual", "c0")
         self.s.work.merge(

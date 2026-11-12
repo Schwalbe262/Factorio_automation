@@ -19,6 +19,7 @@ from .board import Board
 
 BOOTSTRAP_RESEARCH_MAX_UNITS = 100
 DIVERSION_STALL_TICKS = 1800
+SCIENCE_COURIER_BATCH = 5
 
 
 def validate_bootstrap_research(parameters):
@@ -1240,7 +1241,9 @@ class BootstrapLogistics:
         port = next(p for p in plan["ports"] if p["direction"] == "output")
         output = self.find(obs, {"name": "wooden-chest", "position": port["position"]})
         available = output.get("inventory", {}).get("automation-science-pack", 0)
-        if available and collected < count:
+        # Carrying each pack as it is made costs two actions per pack. Let a
+        # small batch pile up; the last few packs are still fetched together.
+        if available >= min(SCIENCE_COURIER_BATCH, count - collected) and collected < count:
             return self._transfer(
                 "collect",
                 dict(
