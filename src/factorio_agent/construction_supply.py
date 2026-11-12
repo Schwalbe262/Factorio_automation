@@ -363,6 +363,22 @@ class V2Bootstrap(DeterministicBootstrap):
             result = dict(result, reason=(str(result.get("reason") or "") + note)[:300])
         return result
 
+    def _fuel_is_piling_up(self, item):
+        """True while some drill is still filling a chest with this fuel.
+
+        Waiting for a batch only makes sense if the batch can arrive. When
+        every chest-feeding drill is out of fuel, the few pieces left are the
+        only way to restart one; on a live map all eleven burners sat idle
+        beside a chest of five coal. A survey failure counts as not piling up.
+        """
+        survey = self._existing_cells(item)
+        if not isinstance(survey, dict) or not survey.get("ok"):
+            return False
+        return any(
+            cell.get("receiver") and (cell.get("fuel", 0) > 0 or cell.get("burning") or cell.get("operating"))
+            for cell in survey.get("cells", [])
+        )
+
     def _take_output(self, observation, item, count):
         catalog_item = getattr(self.catalog, "items", {}).get(item, {})
         if item in AMMO_ITEMS or catalog_item.get("type") == "ammo":
@@ -378,6 +394,7 @@ class V2Bootstrap(DeterministicBootstrap):
                 and action is not None
                 and type(action.get("count")) is int
                 and action["count"] < min(count, FUEL_BATCH)
+                and self._fuel_is_piling_up(item)
             ):
                 # Any job that needs fuel waits for a batch instead of taking
                 # single pieces; callers then report the ordinary supply wait.

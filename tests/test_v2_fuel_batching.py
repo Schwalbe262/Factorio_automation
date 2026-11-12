@@ -99,6 +99,11 @@ class FuelBatchingTests(unittest.TestCase):
         with patch.object(DeterministicBootstrap, "_take_output", return_value=single):
             self.assertIsNone(self.bootstrap._take_output(self.obs, "coal", 16))
             self.assertEqual(self.bootstrap._take_output(self.obs, "coal", 1), single)
+            # Every chest-feeding coal drill is out of fuel: the batch can never
+            # arrive, so the few pieces left must be taken to restart a drill.
+            self.coal_cells[0].update(fuel=0, burning=False)
+            self.assertEqual(self.bootstrap._take_output(self.obs, "coal", 16), single)
+            self.coal_cells[0].update(fuel=1, burning=True)
         batch = {"type": "take", "item": "coal", "count": FUEL_BATCH}
         with patch.object(DeterministicBootstrap, "_take_output", return_value=batch):
             self.assertEqual(self.bootstrap._take_output(self.obs, "coal", 16), batch)

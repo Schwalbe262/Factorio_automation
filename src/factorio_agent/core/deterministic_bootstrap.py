@@ -516,8 +516,13 @@ return best and {ok=true,name=best.name,position=pos(best.position)} or {ok=fals
         if cells.get("cells"):
             # A coal drill with no fuel cannot bootstrap itself. A small emergency
             # seed may restart it; once operating, wait for its actual chest output.
+            # Only a drill that fills a chest can end this wait. A drill that
+            # drops straight onto a belt (the dedicated power feed) never
+            # produces collectable coal, so it must not count as supply.
             if item != "coal" or any(
-                c.get("electric") or c.get("fuel", 0) > 0 or c.get("burning") for c in cells["cells"]
+                (c.get("receiver") or not c.get("direct_belt"))
+                and (c.get("electric") or c.get("fuel", 0) > 0 or c.get("burning"))
+                for c in cells["cells"]
             ):
                 return _report("waiting", f"waiting for automated {item} output")
             count = min(count, 8)
