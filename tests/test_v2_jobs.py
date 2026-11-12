@@ -362,6 +362,18 @@ class JobBoundaryTests(unittest.TestCase):
         result = run_slice(self.root, self.game, Executor({"status": "succeeded"}, {"native": True}), "test")
         self.assertEqual(result["reason"], "job_deadline_exceeded")
 
+    def test_retried_stalled_job_gets_a_fresh_stall_window(self):
+        submit(self.root, self.game, self.request())
+        waiting = Executor({"status": "waiting", "reason": "waiting for coal"})
+        run_slice(self.root, self.game, waiting, "test", seconds=0.001)
+        self.game.observation["tick"] += 18001
+        stalled = run_slice(self.root, self.game, waiting, "test", seconds=0.001)
+        self.assertEqual(stalled["reason"], "objective_progress_stalled")
+        self.game.observation["tick"] += 600
+        control(self.root, self.game, "test", "retry")
+        again = run_slice(self.root, self.game, waiting, "test", seconds=0.001)
+        self.assertEqual((again["status"], again["reason"]), ("waiting", "waiting for coal"))
+
     def test_uncertain_storage_deposit_keeps_intent_and_forbids_retry(self):
         submit(self.root, self.game, self.request())
         self.game.act = lambda _: {"ok": False, "reason": "storage_transfer_outcome_unknown", "confirmed_moved": 10}

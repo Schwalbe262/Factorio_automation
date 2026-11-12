@@ -543,6 +543,11 @@ def control(root: Path, game, key: str, operation: str) -> dict:
                 job["paused_seconds"] = job.get("paused_seconds", 0) + seconds
                 job["progress_at_tick"] += ticks
                 job["progress_at_time"] += seconds
+                if job["reason"] == "objective_progress_stalled":
+                    # The stall window was already used up when the job blocked.
+                    # Carrying it over would block the retry on its first step.
+                    job["progress_at_tick"] = ledger.data["last_tick"]
+                    job["progress_at_time"] = now
                 ledger.event(
                     key, "blocked_interval_excluded", tick=ledger.data["last_tick"], ticks=ticks, seconds=seconds
                 )
