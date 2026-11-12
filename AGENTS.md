@@ -70,3 +70,23 @@ At the end of each small part:
 \- append one concise event to `note.md`;
 \- append to `insight.md` only if there is a confirmed reusable improvement;
 \- record current Codex thread token usage if the project supports it.
+
+## Working rules for maintainers
+
+Read first: `docs/v2/ARCHITECTURE.md`, then `docs/v2/ADDING_A_CAPABILITY.md`,
+`docs/v2/DEBUGGING_A_STALL.md`, `docs/v2/PLANNERS.md` (index: `docs/v2/README.md`).
+
+Non-negotiable:
+- No granted items or research: every effect is a paid Lua body in `DeterministicGame.act`.
+- Store `pending_action` before acting; never retry an unknown outcome, only `reconcile`.
+- Every query is world-bound (`WorldBoundGame`); a changed world or a tick rollback blocks all jobs.
+- Never build on ore except annotated mining entities (`resource_policy`, `planning.preflight`).
+- One research-owning job; at most 4 active jobs, one per capability (`jobs._admission_error`).
+- Fuel, stock and science move in batches (`FUEL_BATCH`, `COLLECT_BATCH`, `SCIENCE_COURIER_BATCH`); hand crafting stops above `HANDCRAFT_LIMIT` when a produce row exists.
+- Sites come only from `SiteService` (`site.placement`, `site.fit`); never add fixed coordinates.
+- Decisions are rules in code (roadmap, planners, auto-retry); the model only answers incidents.
+- Measure progress with `python -B tools/report_run.py runtime/v2/<name>` milestones, not actions/min.
+- Never hand-edit `jobs.json`, state files or the live game; fix the rule, add a test, `lifecycle new-map`.
+- Run `powershell -ExecutionPolicy Bypass -File tools/check.ps1` from PowerShell before every commit.
+- `git add` specific files only; `oil_gathering.py` and `water_gathering.py` hold frozen WIP and stay unstaged.
+- Merge finished worktrees promptly and delete them.

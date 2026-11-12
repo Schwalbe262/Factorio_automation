@@ -2,18 +2,19 @@
 
 Active development: `v2`. The previous implementation is preserved on the `v1` branch.
 
-The first v2 goal is an autonomous, resource-backed Space Age rocket launch,
-using a GPT-6 Luna medium subagent for strategic decisions. The main Codex
-session develops the framework; it must not supply decisions during evaluation.
+The first v2 goal is an autonomous, resource-backed Space Age rocket launch.
+Routine decisions (roadmap order, capacity, research, retries) are rules in
+code; a model (GPT-6 Luna, `controller.planner: luna`) is consulted only for
+incidents, and `planner: none` runs without any model.
 The game uses the default map/enemy rules and the installed 2.1.20 expansion.
 
 Start from [HANDOFF_CURRENT.md](HANDOFF_CURRENT.md) and [goal.md](goal.md).
 V2 is under construction; an autonomous v2 rocket launch is **not verified**.
 
-Current capabilities: starter cells, starter capacity expansion, self-fueled
-steam setup, finite starter research, and regular coal-trunk migration. The live
-starter and layout are verified; broader science/oil/rail/rocket execution is
-unfinished. See the [gameplay API](docs/v2/PLAYER_API.md).
+Capabilities are listed in `CAPABILITIES` (`src/factorio_agent/jobs.py`) and
+ordered by `ROADMAP` (`src/factorio_agent/progression.py`). Stages up to power
+and early research are proven on fresh seeds; later stages are unfinished.
+Maintainer documentation: [docs/v2/README.md](docs/v2/README.md).
 
 Public blueprint examples and the bounded structural importer are documented in
 [reference sources](docs/v2/REFERENCE_SOURCES.md). Imported examples remain

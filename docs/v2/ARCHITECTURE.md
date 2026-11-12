@@ -1,100 +1,146 @@
-# V2: strategic model, verified execution
+# V2 architecture (current code)
 
-## Objective and rules
+Package `src/factorio_agent`, Factorio Space Age 2.1.20 over RCON. Every
+statement below names the file that implements it; if code and this file
+disagree, the code wins and this file must be fixed.
 
-First goal: a real Space Age rocket launch from a new default-settings Nauvis
-world. Long-term goal: the solar system edge. Use installed 2.1.20 game data,
-default enemies/resources/cliffs, ordinary resource costs, engine crafting,
-machine production, science consumption and launch. No research flags, material
-grants or production/launch counter edits. Initial freeplay inventory is once.
+## Runtime loop
 
-Development uses the main Codex session. Evaluation uses a fresh GPT-6 Luna
-medium subagent. No strong-model assistance or code edits during a scored run.
+```
+Factorio.bat / tools/windows/*.bat
+  -> python -m factorio_agent.lifecycle start|stop|new-map|status|logs|gui|shutdown   (lifecycle.py)
+       spawns: python -m factorio_agent.supervisor --runtime ABS --planner none|luna  (automation_config.json)
+Supervisor.run (supervisor.py) loops _cycle():
+  1 _snapshot        observe + status + capabilities + actor-status; world/rollback guard
+  2 _resume_known    resume jobs the last safe stop paused
+  3 _autopilot       queue < 2 pending/ready -> progression.autopilot_nodes (<= 3 "auto_" nodes)
+  4 _auto_retry      retry blocked jobs once another job succeeded (<= 3 per job)
+  5 _poll_decision   accept a finished model decision (planner luna only)
+  6 _check_incidents incidents.IncidentTracker opens/closes episodes; luna: maybe start one model call
+  7 _dispatch        submit ready nodes by priority while < 4 jobs active   (jobs.submit)
+  8 _run_slice       "run --all --seconds 25" -> jobs.run_jobs
+Commands go through kernel.InProcessBridge -> kernel.Session -> __main__.execute (one RCON socket).
+jobs.run_jobs: per pass one observe; jobs in priority order; StarterExecutors.step(capability)
+  -> action dict: durable pending_action, game.act, receipt -> pass ends (fresh observe next)
+  -> status dict: recorded; next job gets the same observation
+  pass without any action -> StarterExecutors.idle_action (research lane "lane:research")
+```
 
-## Boundary
+## Module map
 
-- Model: choose objectives, production rates, research, expansion and logistics.
-- Framework: observe, calculate requirements, reserve sites/corridors, compile
-  parameterized layouts, execute resource-backed jobs, prove effects, recover.
-- Emergency control: deterministic fuel/defense/repair upkeep with bounded cost.
-- One writer per world. Independent evaluation worlds can run separately.
+| Area | Module | Responsibility |
+|---|---|---|
+| Entry | `lifecycle.py` | start/stop/new-map/status/logs/shutdown; process identity; `runtime/active-runtime.json` pointer |
+| Entry | `supervisor.py` | cycle above; `WorkQueue` (`work_queue.json`); auto-retry; incident logging; model calls |
+| Entry | `__main__.py` | `execute(argv)`: typed commands (`observe`, `request`, `run`, `pause`, `retry`, ...); builds the observe receipt |
+| Entry | `kernel/session.py` | `Session` (cached game + catalog, 2 s observe reuse, profiler), `InProcessBridge` |
+| Entry | `automation_config.py` | validated `automation_config.json`: world seed/settings, `controller.planner` |
+| Jobs | `jobs.py` | `CAPABILITIES`, `Request.validate`, `Ledger`, `submit`/`control`, `run_jobs`/`run_slice`, `StarterExecutors` |
+| Plan | `progression.py` | `ROADMAP` (Step list), `autopilot_nodes`, `capacity_nodes`, `produce_nodes`, `lookahead_demand`, `bulk_item_demand` |
+| Plan | `capacity_planning.py` | `plan_capacity`: starter cells, wait vs expand by time |
+| Plan | `research_capacity.py` | labs + science assemblers sized together; `research_capacity_receipt`, `recommended_science_rate` |
+| Plan | `research_policy.py` | `choose_research` from catalog data (idle research lane) |
+| Plan | `incidents.py` | incident kinds, remedy menus, incident documents, `check_decision` |
+| Plan | `luna_client.py` | `LunaDecisionClient.decide(document)` via the Codex CLI (planner luna only) |
+| Game | `core/rcon.py`, `core/deterministic_game.py` | RCON client; `query`/`observe`/`act` (all world effects are Lua bodies in `act`) |
+| Game | `runtime.py` | `create`/`start`/`game_for`/`catalog_for`; `WorldBoundGame`; `NETWORK_SEGMENT_SETTINGS` |
+| Game | `core/deterministic_builder.py` | `_plan(entities, ports)`, `FactoryBuilder.ensure_plan` (one action per call), coal sites |
+| Game | `power_layout.py` | `V2FactoryBuilder.ensure_plan` = resource policy check + base `ensure_plan`; `RegularizePower` |
+| Game | `core/deterministic_bootstrap.py`, `construction_supply.py` | starter cells; `V2Bootstrap`: fuel/stock batching, hand-craft cap |
+| Game | `core/world_catalog.py` | live recipes/entities/technologies (`catalog.json`) |
+| Space | `site/service.py` | `SiteService`: one survey + master plan per runtime, allocation of district blocks |
+| Space | `site/worldmap.py`, `site/survey.py` | tile map; bulk read-only survey |
+| Space | `site/masterplan.py`, `site/planbuild.py`, `site/orientation.py`, `site/planrail.py` | bus, zones, feeder corridors, entry/exit sides, rail reservations |
+| Space | `site/allocator.py`, `site/placement.py`, `site/fit.py`, `site/transform.py` | blocks along the bus; orient a template into a block (rotate/mirror) |
+| Space | `site/candidates.py`, `site/render.py`, `site/planrender.py`, `site/fakeworld.py`, `site/fakegame.py` | free sites; SVG; synthetic maps and a lupa survey fake for tests |
+| Space | `smelting_site.py`, `mining_site.py` | smelting district on the plan zone; mining bank exit side from the plan |
+| Space | `production_rows.py`, `production_layout.py`, `production_site.py`, `production_sources.py` | `produce` capability: design, place, route, power, preflight, stock chest |
+| Space | `blocks/` | recipe rows: `sizing`, `row`, `derate`, `audit`, `stock_tail`, ASCII `render` |
+| Space | `planning.py` | `preflight` (whole-block native check), `survey_slots` |
+| Space | `transport.py`, `routing.py`, `power_grid.py`, `manufacturing.py` | belt corridors (`plan_connection`), trunks, pole plans, `connect_power_groups` |
+| Space | `board.py` | `pcb-board.json` block registry; startup science cell |
+| Space | `resource_policy.py` | ore keepouts; only annotated mining entities may stand on ore |
+| Tools | `tools/check.ps1`, `tools/report_run.py`, `tools/luna_incident_replay.py` | lint + tests; run report; offline incident replay |
 
-The initial integration may reuse reviewed v1 transport, world catalog,
-character-crafting and bootstrap executors. It must not call the v1 strategic
-supervisor or treat its full-game policy as Luna's decisions. Every remaining
-legacy dependency is explicit and removable.
+All other top-level modules are capability controllers constructed in
+`StarterExecutors.__init__` (`jobs.py:673`).
 
-## Job contract
+## Runtime directory files (`runtime/v2/<name>/`)
 
-Each request binds a world ID and observed tick, has an idempotency key, names a
-registered capability and validates bounded typed parameters. State records
-pending/running/waiting/blocked/failed/succeeded plus reason and evidence.
-Success requires a live postcondition. Command acknowledgement is not success.
-Partial construction persists; timeout means reconcile, never blindly repeat a
-mutation. World rollback invalidates evidence and requires reconciliation.
+| File | Writer | Content |
+|---|---|---|
+| `run.json`, `world-settings.json` | `runtime.create`, `runtime.start` | ports, seed, rcon password; `world_id` |
+| `jobs.json` | `jobs.Ledger.save` (under `writer.lock`) | jobs: status, reason, evidence, pending_action, priority, timings |
+| `job-events.jsonl` | `jobs.Ledger.event` | submitted, action_intent, action_result, terminal, pause/resume/retry |
+| `work_queue.json` | `supervisor.WorkQueue.save` | queue nodes (id, capability, parameters, priority, depends_on, status, job_key) |
+| `pcb-board.json` | `board.Board` and each controller's publish step | registered blocks, ports, connections, shared bus |
+| `site-map.json`, `site-plan.json` | `site.service.SiteService.save` | surveyed map with reservations; master plan + allocations |
+| `catalog.json` | `runtime.catalog_for` | world catalog |
+| `rate-samples.json` | `diagnostics.production_rates` (every CLI `observe`) | production rate samples |
+| `logs/controller-events.jsonl` | `Supervisor._event` | cycle events: slice, autopilot, auto_retry, incident_*, call, error |
+| `logs/controller-state.json` | `Supervisor._save` | status, active jobs, open incidents, resume keys |
+| `logs/incidents.jsonl` | `Supervisor._record_incident` | incident documents (also with planner none) |
+| `logs/actions.jsonl` | `DeterministicGame._record_action` | every act and its receipt |
+| `logs/profile-run.txt` | `kernel.Session._write_profile` | only with `FACTORIO_AGENT_PROFILE=1` |
+| controller state, e.g. `factory-builder.json`, `smelting-district.json`, `mining-outposts.json`, `automation-science.json`, `production-row-<item>.json`, `startup-science-capacity.json` | the controller | its plan, phase, world_id |
+| `stop.json` / `supervisor-stop.json` | `stop-worker` command / lifecycle stop | stop markers; `writer.lock`, `controller.lock` are `RunLock` files |
 
-Missing capabilities are reported as such rather than simulated or silently
-substituted. Repeated identical errors and objective stalls terminate a bounded
-attempt. Waiting has an expected condition and game/wall-clock deadlines.
+## Decision layers (in cycle order)
 
-## Production and logistics
+| Layer | Code | May | May not |
+|---|---|---|---|
+| Roadmap autopilot | `progression.autopilot_nodes` via `Supervisor._autopilot` | add up to 3 `auto_<step>` nodes for ready steps, priority `-100 - index` | propose a step whose job is blocked/failed; touch the world |
+| Capacity planner | `progression.capacity_nodes` -> `capacity_planning.plan_capacity` | add `starter_capacity` nodes at priority -50 | expand without measured production and known cell cost; before `starter` succeeded; after that resource's `mining_outpost` succeeded |
+| Produce planner | `progression.produce_nodes` | add `produce` nodes at priority -51 | propose without positive measured plate net rate |
+| Research planners | `research_capacity` (observe receipt, `industry.py` startup cell), `research_policy.choose_research` (`StarterExecutors.idle_action`) | size science rate/labs; start lab research when no job acts | start research while a job owns research or any job has an unresolved world effect |
+| Auto-retry | `Supervisor._auto_retry` | `retry` a blocked job after a new success, <= 3 times | retry unknown outcomes, rollbacks, deadlines |
+| Incidents | `incidents.IncidentTracker` | open `empty_queue`, `blocked_job`, `no_progress`, `planner_review` | act; planner none only logs |
+| Model (luna) | `luna_client` + `Supervisor._poll_decision` | one menu remedy: retry/pause a task, add <= 3 nodes, wait | send coordinates, Lua or entities (`supervisor.FORBIDDEN`); gate dispatch; retry unknown outcomes |
 
-Mining stays on patches; production districts reserve expansion and logistics
-corridors before construction. Recipes and capacities come from the live game.
-Ports carry item/fluid, rate, position, orientation and ownership. Belt lanes,
-underground pairs, splitter priority and flow are validated. Reuse tested local
-patterns before widening layout search. Preserve operating supplies while
-expanding. Reserve rail corridors early; implement remote mining by midgame.
+Inside a job, `StarterExecutors.step` first runs shared upkeep before the
+capability's own controller: `pending_repair` and `_approved_initial_defense`
+(`jobs.py:1381-1395`); fuel upkeep is folded into several branches. So an
+action in a job's events may belong to upkeep, not to the capability.
 
-Oil coproducts, recipe alternatives and multi-output/cyclic chains require
-explicit material balance; they are not forced into a single-product recipe DAG.
+## Safety invariants
 
-## PCB-style layout policy
-
-- Place production districts and reserve logistics corridors together. Blocks
-  expose fixed typed input/output ports at their boundaries, including rate and
-  facing. Reserve extension footprints before funding initial construction.
-- Use a shared eight-tile orthogonal trunk grid. Short local port escapes join
-  whole horizontal/vertical corridors. A route currently allows at most six
-  turns and 1.35 times direct distance plus four tiles for port escapes.
-- A failed corridor gate is an explicit planning failure. Reconsider port,
-  block position or corridor; do not fall back to a free-form maze route.
-- Underground crossings are research-gated, resource-backed links with actual
-  span/orientation/partner checks. Preserve the foreign surface belt and reject
-  parallel reuse, accidental merges and endpoints that could steal pairing.
-  Splitters are explicit branching components with declared policies; the first
-  smelting district uses ordinary balanced coal outputs and a separate source.
-- Avoid interference with other item/fluid networks. Separate trunk allocation,
-  local routing, construction and observed-throughput validation.
-- Rank future power coast candidates using coal distance as well as access to
-  the starter area. Do not choose a water-only location and ignore fuel cost.
-
-The first live migration replaced the unfinished starter coal layout, keeping
-its paid drill and existing power plant. Native preflight, ordinary guarded
-hardware recovery and fresh entity checks verified a four-belt self-feed and
-four-turn trunk. Whole-plan belts changed from 140 to 132; route length itself
-was 128 versus 126 previously, so this is not a route-length speedup claim.
-The first reserved16x16 cell now assembles finite red science to unlock logistics
-naturally. Aligned electric mining banks expose collector ports and preserve
-existing banks when adding capacity. These are verified development components;
-automatic smelting with controlled crossings passed native development checks
-(EXP-0006). Permanent science supply and later processing remain pending. They must not be
-described as a complete PCB factory or sustained30SPM.
-
-![Previous and rebuilt coal layout plans](images/coal-layout-comparison.png)
-
-![Live PCB blocks, fixed ports and constructed corridors](images/pcb-layout-current.png)
-
-## Evaluation
-
-Compare target-only, target+diagnosis and candidate-choice interfaces on paired
-snapshots to measure Luna's required abstraction. Classify failures as decision,
-observation, executor, missing capability or environment. Record code/model,
-seed/save, settings, actions, production/consumption, game/wall time, waiting,
-retry counts, interventions and tokens. Use development and unseen seeds.
-
-Milestones: starter mining/power; construction mall and red/green science;
-belt expansion and repair; oil/blue science and rail outpost; silo, real rocket
-parts, platform starter pack, launch-count increase and natural platform arrival.
-The initial science gate is red and green each 30/min for five game minutes.
-No fixture-granted test save counts as autonomous acceptance.
+1. No granted items or research. All effects are Lua bodies in
+   `DeterministicGame.act` (`core/deterministic_game.py:527`): `build` removes
+   the item from the actor before `create_entity`; `insert`/`take` move between
+   inventories; `research` uses `add_research` after prerequisites and refuses
+   trigger technologies. The freeplay inventory is inserted once in `initialize`.
+   Nothing checks this automatically: review every new Lua body for it.
+2. Durable intent, no blind retry. `_advance_job` (`jobs.py:1969`) stores
+   `pending_action` before `game.act`; an exception or a reason in
+   `UNKNOWN_BATCH_OUTCOMES` leaves the job blocked with
+   `action_outcome_unknown_reconcile_required`. `control("retry")` refuses it,
+   only `reconcile` clears it (`jobs.py:570-645`); `DeterministicGame._execute`
+   never resends a command (`deterministic_game.py:401`).
+3. World identity. `WorldBoundGame.query` prefixes every Lua body with a
+   `world_id` check (`runtime.py:43`); `Ledger.sync` raises on a changed world
+   (`jobs.py:426`); `Supervisor._world_guard` / `_snapshot` (`supervisor.py:809,861`);
+   controller state and `SiteService` caches carry `world_id`.
+4. Rollback detection. A tick below `last_tick` blocks every job with
+   `world_rollback_requires_reconciliation` and records `rollback_tick`
+   (`jobs.py:429`); `submit` and `Supervisor._snapshot` then refuse to continue.
+5. Resource protection. `V2FactoryBuilder.ensure_plan` runs
+   `resource_policy.ensure_resource_policy` before any build (`power_layout.py:295`);
+   `planning.preflight` rejects resource violations; only entities annotated by
+   `mark_mining_core` / `annotate_mining_exit` may stand on ore; `mine` refuses
+   crash-site artifacts.
+6. One research-owning job. `jobs._admission_error` with `RESEARCH_CAPABILITIES`
+   (`jobs.py:485`); `idle_action` yields to any active job taking a `technology`.
+7. Admission limits (`jobs.py:474-543`, `1991-2042`): at most `MAX_ACTIVE_JOBS = 4`
+   active, one per capability; request observation at most 3600 ticks old;
+   `requires` capabilities succeeded; job deadline 108000 ticks or 3600 s;
+   blocked after 18000 ticks without a `progress_key` change or 3 identical
+   failures; slices at most 50 s.
+8. Batching (`construction_supply.py:136-148`): fuel in batches of `FUEL_BATCH = 8`
+   for every job; no fuel for burners with full output or `FUEL_SKIP_STOCK = 50`
+   finished items; stock collected in `take_many` batches of `COLLECT_BATCH = 10`;
+   bootstrap science carried in `SCIENCE_COURIER_BATCH = 5` per lab (`industry.py:33`).
+9. Hand-craft cap. Above `HANDCRAFT_LIMIT = 10` missing items with a producing
+   `produce` row, `V2Bootstrap.ensure_item` collects or waits instead of crafting
+   (`construction_supply.py:324`, `machine_stock.py`).
+10. One writer. `submit`, `control`, `run_*` hold `writer.lock`; the supervisor
+    holds `controller.lock` (`core/deterministic_state.RunLock`).
