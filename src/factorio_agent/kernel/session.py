@@ -11,8 +11,12 @@ state files when constructed, and other commands may rewrite those files.
 
 from __future__ import annotations
 
+import cProfile
+import io
 import json
+import os
 from pathlib import Path
+import pstats
 import threading
 import time
 import traceback
@@ -88,6 +92,12 @@ class Session:
 
     def _timed(self, command, args):
         started = time.perf_counter()
+        profiler = None
+        if command == "run" and os.environ.get("FACTORIO_AGENT_PROFILE"):
+            # Developer aid: where does a slice spend Python time? Writes the
+            # top functions of the latest slice to logs/profile-run.txt.
+            profiler = cProfile.Profile()
+            profiler.enable()
         try:
             result = execute(["--runtime", str(self.root), *args], services=self)
             # A receipt crosses the same boundary as CLI stdout: plain JSON only.
@@ -97,7 +107,17 @@ class Session:
                 self._observation = None
             raise
         finally:
+            if profiler is not None:
+                profiler.disable()
+                self._write_profile(profiler)
             self._count(command, time.perf_counter() - started)
+
+    def _write_profile(self, profiler):
+        text = io.StringIO()
+        pstats.Stats(profiler, stream=text).sort_stats("cumulative").print_stats(45)
+        path = self.root / "logs" / "profile-run.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text.getvalue(), encoding="utf-8")
 
     def _count(self, command, seconds):
         row = self.calls.setdefault(command, {"count": 0, "seconds": 0.0})

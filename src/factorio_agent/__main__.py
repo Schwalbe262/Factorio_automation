@@ -10,7 +10,7 @@ import time
 
 from factorio_agent.core.deterministic_state import RunLock, _atomic_json
 from . import runtime
-from .jobs import CAPABILITIES, Ledger, Request, StarterExecutors, control, run_slice, submit, summary
+from .jobs import CAPABILITIES, Ledger, Request, StarterExecutors, control, run_jobs, run_slice, submit, summary
 
 
 class OneShotServices:
@@ -64,8 +64,11 @@ def execute(argv=None, services=None):
     request.add_argument("--technology")
     request.add_argument("--product")
     request.add_argument("--rate-per-minute", type=float)
+    request.add_argument("--priority", type=int, default=0, help="higher runs first among active jobs")
     execute = commands.add_parser("run")
-    execute.add_argument("--key", required=True)
+    selection = execute.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--key")
+    selection.add_argument("--all", action="store_true", help="interleave every active job")
     execute.add_argument("--seconds", type=float, default=25)
     worker = commands.add_parser("worker")
     worker.add_argument("--key", required=True)
@@ -233,6 +236,7 @@ def execute(argv=None, services=None):
             root,
             services.game(root),
             Request(args.key, args.world_id, args.observed_tick, args.capability, parameters),
+            priority=args.priority,
         )
     elif args.command in {"pause", "resume", "reconcile", "retry"}:
         result = control(root, services.game(root), args.key, args.command)
@@ -242,7 +246,9 @@ def execute(argv=None, services=None):
         with RunLock(root / "writer.lock"):
             catalog = services.catalog(root, game)
         executors = services.executors(root, game, catalog)
-        if args.command == "run":
+        if args.command == "run" and args.all:
+            result = run_jobs(root, game, executors, seconds=args.seconds)
+        elif args.command == "run":
             result = run_slice(root, game, executors, args.key, seconds=args.seconds)
         else:
             if not 0 < args.max_seconds <= 3600:

@@ -453,8 +453,29 @@ def summary(obs: dict, ledger: Ledger) -> dict:
     }
 
 
-def submit(root: Path, game, request: Request) -> dict:
+MAX_ACTIVE_JOBS = 4
+MIN_PRIORITY = -10000
+MAX_PRIORITY = 10000
+
+
+def is_active(job: dict) -> bool:
+    return job["status"] not in TERMINAL | {"paused"}
+
+
+def _admission_error(jobs: dict, capability: str, exclude_key: str | None = None) -> str | None:
+    """Why another job with this capability may not become active now, if anything refuses it."""
+    active = [job for key, job in jobs.items() if key != exclude_key and is_active(job)]
+    if any(job["capability"] == capability for job in active):
+        return f"another job with capability {capability} is already active"
+    if len(active) >= MAX_ACTIVE_JOBS:
+        return f"another job must finish or pause first: at most {MAX_ACTIVE_JOBS} jobs may be active"
+    return None
+
+
+def submit(root: Path, game, request: Request, *, priority: int = 0) -> dict:
     request.validate()
+    if type(priority) is not int or not MIN_PRIORITY <= priority <= MAX_PRIORITY:
+        raise ValueError(f"priority must be an integer in {MIN_PRIORITY}..{MAX_PRIORITY}")
     with RunLock(root / "writer.lock"):
         obs = game.observe()
         ledger = Ledger(root)
@@ -468,8 +489,9 @@ def submit(root: Path, game, request: Request) -> dict:
             return old
         if not 0 <= obs["tick"] - request.observed_tick <= 3600:
             raise ValueError("observation is stale or newer than the game; observe again")
-        if any(j["status"] not in TERMINAL | {"paused"} for j in ledger.data["jobs"].values()):
-            raise ValueError("another job is active; finish it before submitting another")
+        refusal = _admission_error(ledger.data["jobs"], request.capability)
+        if refusal:
+            raise ValueError(refusal)
         if "rollback_tick" in ledger.data:
             raise ValueError("world rollback requires explicit reconciliation")
         completed = {j["capability"] for j in ledger.data["jobs"].values() if j["status"] == "succeeded"}
@@ -480,6 +502,7 @@ def submit(root: Path, game, request: Request) -> dict:
             "request": request.identity(),
             "status": "pending",
             "reason": "model_requested",
+            "priority": priority,
             "created_tick": obs["tick"],
             "last_tick": obs["tick"],
             "created_at": time.time(),
@@ -514,8 +537,9 @@ def control(root: Path, game, key: str, operation: str) -> dict:
                 job.update(paused_at_tick=ledger.data["last_tick"], paused_at_time=time.time())
             job.update(status="paused", reason="model_requested_pause")
         else:
-            if any(j["key"] != key and j["status"] not in TERMINAL | {"paused"} for j in ledger.data["jobs"].values()):
-                raise ValueError("another job is active")
+            refusal = _admission_error(ledger.data["jobs"], job["capability"], exclude_key=key)
+            if refusal:
+                raise ValueError(refusal)
             if operation == "resume" and job["status"] != "paused":
                 raise ValueError("only a paused job can be resumed")
             if operation == "retry":
@@ -1826,11 +1850,182 @@ def progress_key(obs: dict, capability: str) -> str:
 
 
 SAVE_INTERVAL_SECONDS = 60
+UNKNOWN_BATCH_OUTCOMES = (
+    "build_batch_outcome_unknown",
+    "mine_batch_outcome_unknown",
+    "storage_transfer_outcome_unknown",
+    "mall_stock_transfer_outcome_unknown",
+    "infrastructure_repair_outcome_unknown",
+)
+
+
+def _advance_job(root: Path, game, executors, ledger: Ledger, key: str, obs: dict) -> tuple[str, dict]:
+    """Advance one job by at most one executor step against an already synced observation.
+
+    Returns (outcome, result). outcome is one of:
+    "inactive" (terminal or paused before stepping), "stopped" (operator stop
+    file), "terminal" (the job is now terminal), "action" (an action was
+    performed and the job is still active), "status" (a non-action status was
+    recorded and the job is still active). result is the executor's result, or
+    {} when the executor was not called.
+    """
+    job = ledger.data["jobs"][key]
+    if job["status"] in TERMINAL | {"paused"}:
+        # A terminal receipt is historical; callers must not assume it
+        # proves present production after damage or world rollback.
+        return "inactive", {}
+    job["last_tick"] = obs["tick"]
+    if job.get("pending_action"):
+        # A prior process may have died after sending a mutation. Stop
+        # rather than replaying an action whose outcome is unknown.
+        job.update(status="blocked", reason="action_outcome_unknown_reconcile_required")
+        ledger.save()
+        return "terminal", {}
+    if (
+        obs["tick"] - job["created_tick"] - job.get("paused_ticks", 0) > 108000
+        or time.time() - job["created_at"] - job.get("paused_seconds", 0) > 3600
+    ):
+        job.update(status="blocked", reason="job_deadline_exceeded")
+        ledger.save()
+        return "terminal", {}
+    if (root / "stop.json").exists():
+        job.update(status="waiting", reason="operator_stop_requested")
+        ledger.save()
+        return "stopped", {}
+    progress = progress_key(obs, job["capability"])
+    if progress != job.get("progress"):
+        job.update(progress=progress, progress_at_tick=obs["tick"], progress_at_time=time.time())
+    if obs["tick"] - job["progress_at_tick"] > 18000:
+        job.update(status="blocked", reason="objective_progress_stalled")
+        ledger.save()
+        return "terminal", {}
+    started = time.perf_counter()
+    result = executors.step(job["capability"], obs, job["parameters"])
+    job["planning_seconds"] = job.get("planning_seconds", 0) + time.perf_counter() - started
+    if result.get("type"):
+        job.update(
+            status="running",
+            reason=result.get("reason", result["type"]),
+            pending_action=result,
+            evidence_status="retained_from_prior_observation",
+        )
+        ledger.save()
+        ledger.event(key, "action_intent", tick=obs["tick"], action=result)
+        started = time.perf_counter()
+        try:
+            receipt = game.act(result)
+            if receipt.get("reason") in UNKNOWN_BATCH_OUTCOMES:
+                job["uncertain_batch_receipt"] = receipt
+                raise RuntimeError("batch outcome unknown; observe and reconcile before continuing")
+            record = getattr(executors, "record_action", None)
+            if callable(record):
+                record(job["capability"], obs, result, receipt, job["parameters"])
+        except Exception:
+            # Durable intent survives connection errors; explicit
+            # reconciliation is necessary before further mutations.
+            job.update(status="blocked", reason="action_outcome_unknown_reconcile_required")
+            ledger.save()
+            raise
+        job["execution_seconds"] = job.get("execution_seconds", 0) + time.perf_counter() - started
+        job.pop("pending_action")
+        job["actions"] += 1
+        failure = None if receipt.get("ok") else receipt.get("reason", "action_failed")
+        job["failures"] = job["failures"] + 1 if failure == job.get("last_failure") and failure else int(bool(failure))
+        job["last_failure"] = failure
+        if job["failures"] >= 3:
+            job.update(status="blocked", reason="repeated_executor_failure:" + str(failure))
+        ledger.event(key, "action_result", tick=obs["tick"], result=receipt)
+    else:
+        status = result.get("status")
+        if status not in {"running", "waiting", "blocked", "failed", "succeeded"}:
+            raise ValueError("executor returned no recognized action or status")
+        if status == "succeeded":
+            # sync() persists this same mutable job. Never publish a
+            # terminal success before the independent proof returns.
+            job.update(
+                status="waiting",
+                reason="verifying_postcondition",
+                evidence={},
+                evidence_status="unavailable",
+                evidence_observed_tick=None,
+            )
+            fresh = game.observe()
+            ledger.sync(fresh)
+            try:
+                proof = executors.proof(job["capability"], fresh, result, job["parameters"])
+            except Exception:
+                job.update(status="blocked", reason="postcondition_verification_error", evidence={})
+                ledger.save()
+                raise
+            if proof is None:
+                job.update(status="blocked", reason="postcondition_not_verified", evidence={})
+            else:
+                job.update(
+                    status="succeeded",
+                    reason=result.get("reason", ""),
+                    evidence=proof,
+                    evidence_status="verified_postcondition",
+                    evidence_observed_tick=fresh["tick"],
+                )
+            game.save()
+        else:
+            evidence = result.get("evidence", {})
+            if not evidence and status in {"waiting", "blocked", "failed"}:
+                evidence = {
+                    k: v
+                    for k, v in result.items()
+                    if k not in {"status", "reason", "ok", "evidence"}
+                    and type(v) in (int, float, bool, str)
+                    and (not isinstance(v, str) or len(v) <= 500)
+                }
+                position = result.get("position")
+                if (
+                    isinstance(position, dict)
+                    and set(position) == {"x", "y"}
+                    and all(type(v) in (int, float) and math.isfinite(v) for v in position.values())
+                ):
+                    evidence["position"] = dict(position)
+            job.update(
+                status=status,
+                reason=result.get("reason", ""),
+                evidence=evidence,
+                evidence_status="observation_result",
+                evidence_observed_tick=obs["tick"],
+            )
+    ledger.save()
+    if job["status"] in TERMINAL:
+        if job["status"] == "blocked":
+            job.update(blocked_at_tick=obs["tick"], blocked_at_time=time.time())
+            ledger.save()
+        ledger.event(key, "terminal", status=job["status"], reason=job["reason"], evidence=job["evidence"])
+        return "terminal", result
+    return ("action" if result.get("type") else "status"), result
+
+
+def _yield_at_slice_end(job: dict, last_result: dict) -> None:
+    # A slice boundary must not replace a real executor blocker
+    # with a generic success-sounding scheduling reason.
+    if job["status"] == "waiting" and not last_result.get("type"):
+        job["slice_yield_reason"] = "execution_slice_complete"
+    else:
+        job.update(status="waiting", reason="execution_slice_complete")
+
+
+def _save_if_due(game) -> None:
+    # A one-shot CLI game has never saved, so it still saves every
+    # slice. A long-lived session saves at most once per interval.
+    last_save = getattr(game, "last_save_at", None)
+    if type(last_save) is not float or time.monotonic() - last_save >= SAVE_INTERVAL_SECONDS:
+        game.save()
+
+
+def _validate_slice_seconds(seconds) -> None:
+    if not isinstance(seconds, (int, float)) or not 0 < seconds <= 50:
+        raise ValueError("slice duration must be greater than zero and at most 50 seconds")
 
 
 def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> dict:
-    if not isinstance(seconds, (int, float)) or not 0 < seconds <= 50:
-        raise ValueError("slice duration must be greater than zero and at most 50 seconds")
+    _validate_slice_seconds(seconds)
     with RunLock(root / "writer.lock"):
         ledger = Ledger(root)
         if key not in ledger.data["jobs"]:
@@ -1840,156 +2035,107 @@ def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> 
         while True:
             obs = game.observe()
             ledger.sync(obs)
-            if job["status"] in TERMINAL | {"paused"}:
-                # A terminal receipt is historical; callers must not assume it
-                # proves present production after damage or world rollback.
-                return job
-            job["last_tick"] = obs["tick"]
-            if job.get("pending_action"):
-                # A prior process may have died after sending a mutation. Stop
-                # rather than replaying an action whose outcome is unknown.
-                job.update(status="blocked", reason="action_outcome_unknown_reconcile_required")
-                ledger.save()
-                return job
-            if (
-                obs["tick"] - job["created_tick"] - job.get("paused_ticks", 0) > 108000
-                or time.time() - job["created_at"] - job.get("paused_seconds", 0) > 3600
-            ):
-                job.update(status="blocked", reason="job_deadline_exceeded")
-                ledger.save()
-                return job
-            if (root / "stop.json").exists():
-                job.update(status="waiting", reason="operator_stop_requested")
-                ledger.save()
-                return job
-            progress = progress_key(obs, job["capability"])
-            if progress != job.get("progress"):
-                job.update(progress=progress, progress_at_tick=obs["tick"], progress_at_time=time.time())
-            if obs["tick"] - job["progress_at_tick"] > 18000:
-                job.update(status="blocked", reason="objective_progress_stalled")
-                ledger.save()
-                return job
-            started = time.perf_counter()
-            result = executors.step(job["capability"], obs, job["parameters"])
-            job["planning_seconds"] = job.get("planning_seconds", 0) + time.perf_counter() - started
-            if result.get("type"):
-                job.update(
-                    status="running",
-                    reason=result.get("reason", result["type"]),
-                    pending_action=result,
-                    evidence_status="retained_from_prior_observation",
-                )
-                ledger.save()
-                ledger.event(key, "action_intent", tick=obs["tick"], action=result)
-                started = time.perf_counter()
-                try:
-                    receipt = game.act(result)
-                    if receipt.get("reason") in (
-                        "build_batch_outcome_unknown",
-                        "mine_batch_outcome_unknown",
-                        "storage_transfer_outcome_unknown",
-                        "mall_stock_transfer_outcome_unknown",
-                        "infrastructure_repair_outcome_unknown",
-                    ):
-                        job["uncertain_batch_receipt"] = receipt
-                        raise RuntimeError("batch outcome unknown; observe and reconcile before continuing")
-                    record = getattr(executors, "record_action", None)
-                    if callable(record):
-                        record(job["capability"], obs, result, receipt, job["parameters"])
-                except Exception:
-                    # Durable intent survives connection errors; explicit
-                    # reconciliation is necessary before further mutations.
-                    job.update(status="blocked", reason="action_outcome_unknown_reconcile_required")
-                    ledger.save()
-                    raise
-                job["execution_seconds"] = job.get("execution_seconds", 0) + time.perf_counter() - started
-                job.pop("pending_action")
-                job["actions"] += 1
-                failure = None if receipt.get("ok") else receipt.get("reason", "action_failed")
-                job["failures"] = (
-                    job["failures"] + 1 if failure == job.get("last_failure") and failure else int(bool(failure))
-                )
-                job["last_failure"] = failure
-                if job["failures"] >= 3:
-                    job.update(status="blocked", reason="repeated_executor_failure:" + str(failure))
-                ledger.event(key, "action_result", tick=obs["tick"], result=receipt)
-            else:
-                status = result.get("status")
-                if status not in {"running", "waiting", "blocked", "failed", "succeeded"}:
-                    raise ValueError("executor returned no recognized action or status")
-                if status == "succeeded":
-                    # sync() persists this same mutable job. Never publish a
-                    # terminal success before the independent proof returns.
-                    job.update(
-                        status="waiting",
-                        reason="verifying_postcondition",
-                        evidence={},
-                        evidence_status="unavailable",
-                        evidence_observed_tick=None,
-                    )
-                    fresh = game.observe()
-                    ledger.sync(fresh)
-                    try:
-                        proof = executors.proof(job["capability"], fresh, result, job["parameters"])
-                    except Exception:
-                        job.update(status="blocked", reason="postcondition_verification_error", evidence={})
-                        ledger.save()
-                        raise
-                    if proof is None:
-                        job.update(status="blocked", reason="postcondition_not_verified", evidence={})
-                    else:
-                        job.update(
-                            status="succeeded",
-                            reason=result.get("reason", ""),
-                            evidence=proof,
-                            evidence_status="verified_postcondition",
-                            evidence_observed_tick=fresh["tick"],
-                        )
-                    game.save()
-                else:
-                    evidence = result.get("evidence", {})
-                    if not evidence and status in {"waiting", "blocked", "failed"}:
-                        evidence = {
-                            k: v
-                            for k, v in result.items()
-                            if k not in {"status", "reason", "ok", "evidence"}
-                            and type(v) in (int, float, bool, str)
-                            and (not isinstance(v, str) or len(v) <= 500)
-                        }
-                        position = result.get("position")
-                        if (
-                            isinstance(position, dict)
-                            and set(position) == {"x", "y"}
-                            and all(type(v) in (int, float) and math.isfinite(v) for v in position.values())
-                        ):
-                            evidence["position"] = dict(position)
-                    job.update(
-                        status=status,
-                        reason=result.get("reason", ""),
-                        evidence=evidence,
-                        evidence_status="observation_result",
-                        evidence_observed_tick=obs["tick"],
-                    )
-            ledger.save()
-            if job["status"] in TERMINAL:
-                if job["status"] == "blocked":
-                    job.update(blocked_at_tick=obs["tick"], blocked_at_time=time.time())
-                    ledger.save()
-                ledger.event(key, "terminal", status=job["status"], reason=job["reason"], evidence=job["evidence"])
+            outcome, result = _advance_job(root, game, executors, ledger, key, obs)
+            if outcome in ("inactive", "stopped", "terminal"):
                 return job
             if time.monotonic() >= deadline:
-                # A slice boundary must not replace a real executor blocker
-                # with a generic success-sounding scheduling reason.
-                if job["status"] == "waiting" and not result.get("type"):
-                    job["slice_yield_reason"] = "execution_slice_complete"
-                else:
-                    job.update(status="waiting", reason="execution_slice_complete")
+                _yield_at_slice_end(job, result)
                 ledger.save()
-                # A one-shot CLI game has never saved, so it still saves every
-                # slice. A long-lived session saves at most once per interval.
-                last_save = getattr(game, "last_save_at", None)
-                if type(last_save) is not float or time.monotonic() - last_save >= SAVE_INTERVAL_SECONDS:
-                    game.save()
+                _save_if_due(game)
                 return job
             if not result.get("type") or result.get("type") == "wait":
+                time.sleep(min(0.5, max(0, deadline - time.monotonic())))
+
+
+def _active_in_priority_order(ledger: Ledger) -> list[str]:
+    active = [job for job in ledger.data["jobs"].values() if is_active(job)]
+    active.sort(key=lambda job: (-job.get("priority", 0), job["created_at"], job["key"]))
+    return [job["key"] for job in active]
+
+
+def run_jobs(root: Path, game, executors, *, seconds: float = 25) -> dict:
+    """Interleave every active job at action granularity for one bounded slice.
+
+    Each pass shares one observation. A job that only waits or reports a
+    status hands the same observation to the next job; the first job that
+    performs a world-changing action ends the pass so that the next pass
+    plans against a fresh observation.
+    """
+    _validate_slice_seconds(seconds)
+    with RunLock(root / "writer.lock"):
+        ledger = Ledger(root)
+        deadline = time.monotonic() + seconds
+        last_results: dict[str, dict] = {}
+        touched: list[str] = []
+        actions = 0
+        any_active = False
+
+        def receipt(status: str) -> dict:
+            jobs = ledger.data["jobs"]
+            return {
+                "status": status,
+                "jobs": {
+                    key: {
+                        "status": jobs[key]["status"],
+                        "reason": jobs[key]["reason"],
+                        "actions": jobs[key]["actions"],
+                        "capability": jobs[key]["capability"],
+                    }
+                    for key in touched
+                },
+                "actions": actions,
+                "last_tick": ledger.data["last_tick"],
+            }
+
+        def finished() -> dict:
+            if not any_active:
+                return receipt("idle")
+            return receipt("running" if actions else "waiting")
+
+        while True:
+            obs = game.observe()
+            ledger.sync(obs)
+            order = _active_in_priority_order(ledger)
+            if not order:
+                return finished()
+            any_active = True
+            for key in order:
+                if key not in touched:
+                    touched.append(key)
+            if (root / "stop.json").exists():
+                # Every active job gets the same stop treatment as run_slice.
+                for key in order:
+                    _advance_job(root, game, executors, ledger, key, obs)
+                return finished()
+            acted = False
+            stopped = False
+            for key in order:
+                job = ledger.data["jobs"][key]
+                before = job["actions"]
+                outcome, result = _advance_job(root, game, executors, ledger, key, obs)
+                last_results[key] = result
+                performed = job["actions"] - before
+                actions += performed
+                if outcome == "stopped":
+                    stopped = True
+                    break
+                # A "wait" action does not change the world in a way that
+                # invalidates the shared observation, so the pass continues.
+                if performed and result.get("type") != "wait":
+                    acted = True
+                    break
+                if time.monotonic() >= deadline:
+                    break
+            if stopped:
+                # The stop file appeared mid-pass: the next pass stops every job.
+                continue
+            if time.monotonic() >= deadline:
+                remaining = [key for key in touched if is_active(ledger.data["jobs"][key])]
+                for key in remaining:
+                    _yield_at_slice_end(ledger.data["jobs"][key], last_results.get(key, {}))
+                ledger.save()
+                if remaining:
+                    _save_if_due(game)
+                return finished()
+            if not acted:
                 time.sleep(min(0.5, max(0, deadline - time.monotonic())))
