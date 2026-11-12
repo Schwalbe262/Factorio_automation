@@ -85,12 +85,15 @@ class MiningOutposts:
         return prepare_new_bank(self.game,self.builder,obs,resource,count,reservations)
 
     def bank_proof(self,obs,bank):
+        from .depleted_drill_retirement import effective_mining_plan,FILE as RETIREMENT_FILE
+        try:plan=effective_mining_plan(getattr(self,'game',None),obs,bank['plan'])
+        except(OSError,ValueError,KeyError,TypeError):return None
         defense=None
         if bank.get('defense_scope_id'):
             perimeter=getattr(self,'perimeter',None)
             defense=perimeter.coverage_proof(obs,bank['defense_scope_id']) if perimeter is not None else None
             if not defense:return None
-        if not underground_proof(obs,bank['plan']):return None
+        if not underground_proof(obs,plan):return None
         lane_proof=None
         if bank['plan'].get('paired'):
             from .paired_mining import lane_evidence
@@ -102,28 +105,44 @@ class MiningOutposts:
             if (not target or target['unit_number']!=connection['target']['unit_number']
                     or target['direction']!=connection['target']['direction']
                     or set(target.get('belt_inventory',{}))-{bank['plan']['resource']}):return None
-        drills=[self.find(obs,e) for e in bank["plan"]["entities"] if e["name"]=="electric-mining-drill"]
-        if not drills or any(not e or not e.get("electric_network_connected") or e.get("energy",0)<=0
+        drills=[self.find(obs,e) for e in plan["entities"] if e["name"]=="electric-mining-drill"]
+        if(not drills and not plan.get('retired_drill_units'))or any(not e or not e.get("electric_network_connected") or e.get("energy",0)<=0
                              or e.get("status_name")=="no_power" for e in drills):return None
         depleted = [e['unit_number'] for e in drills
                     if e.get('status_name') in {'no_minable_resources','no_mineable_resources'}]
         installed = bank['nominal_rate_per_minute']
-        available = installed * (len(drills)-len(depleted)) / len(drills)
+        historical_count=sum(q['name']=='electric-mining-drill'for q in bank['plan']['entities'])
+        available = installed * (len(drills)-len(depleted)) / historical_count
+        capacity=None
+        if hasattr(self,'path')and(self.path.parent/RETIREMENT_FILE).exists():
+            from .mining_layout_policy import diagnose_bank_capacity
+            key=(obs['world_id'],obs['tick'],hashlib.sha256(json.dumps(bank['plan'],sort_keys=True).encode()).hexdigest(),tuple(plan.get('retired_drill_units',[])))
+            cache=getattr(self,'_retirement_capacity_cache',{})
+            if key not in cache:
+                cache={k:v for k,v in cache.items()if k[:2]==key[:2]}
+                cache[key]=diagnose_bank_capacity(self.game,obs,self.builder.catalog,bank);self._retirement_capacity_cache=cache
+            capacity=cache[key]
+            if not capacity.get('ok')or not capacity.get('all_installed_drop_lanes_verified'):return None
+            available=capacity['active_collector_ceiling_per_minute']
         unit_ids=sorted(e["unit_number"] for e in drills)
         counts=0
-        for wanted in bank["plan"]["entities"]:
+        for wanted in plan["entities"]:
             if wanted["name"]=="transport-belt":
                 actual=self.find(obs,wanted)
                 counts+=(actual or {}).get("belt_inventory",{}).get(bank["plan"]["resource"],0)
         if counts:
             bank["output_evidence"]={"tick":obs["tick"],"count":counts,"drill_units":unit_ids}
+            if available>0:
+                bank['native_drill_bindings']=[{'unit_number':q['unit_number'],'position':q['position'],'direction':q['direction']}for q in drills]
         evidence=bank.get("output_evidence")
-        if not evidence or evidence["drill_units"]!=unit_ids or not 0<=obs["tick"]-evidence["tick"]<=600:return None
+        if available>0 and(not evidence or evidence["drill_units"]!=unit_ids or not 0<=obs["tick"]-evidence["tick"]<=600):return None
         return {"nominal_rate_per_minute":available,"installed_nominal_rate_per_minute":installed,
                 "exhausted_drill_units":depleted,"drill_units":unit_ids,
                 "native_output_evidence":evidence,"output_port":bank["plan"]["ports"][0],
                 "consumer_connection":connection,"native_producer_lanes":lane_proof,
-                "defense_coverage":defense}
+                "defense_coverage":defense,"native_active_capacity":capacity,
+                "paid_retired_drill_units":plan.get('retired_drill_units',[]),"historical_drill_count":historical_count,
+                "inactive":available==0,"scope":"native resource-backed powered potential; historical installed nameplate retained separately"}
 
     def _construction_coverage(self,obs,bank):
         perimeter=getattr(self,'perimeter',None)
@@ -296,7 +315,10 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
         resource,target=parameters["resource"],parameters["rate_per_minute"]
         banks=[b for b in self.state["banks"] if b["plan"]["resource"]==resource]
         for bank in banks:
-            if bank.get("ready") and any(self.find(obs,e) is None for e in bank["plan"]["entities"]):
+            from .depleted_drill_retirement import effective_mining_plan
+            try:effective=effective_mining_plan(getattr(self,'game',None),obs,bank['plan'])
+            except(OSError,ValueError,KeyError,TypeError)as exc:return {'status':'blocked','reason':'mining_retirement_active_plan_invalid','detail':str(exc)}
+            if bank.get("ready") and any(self.find(obs,e) is None for e in effective["entities"]):
                 return {"status":"blocked","reason":"existing_outpost_damaged_requires_repair_before_expansion"}
             if bank.get("ready") and self.bank_proof(obs,bank) is None:
                 return {"status":"waiting","reason":"restore existing outpost power/output before adding capacity"}

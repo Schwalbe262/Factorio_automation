@@ -10,6 +10,23 @@ from .main_bus import capacity_report
 from .smelting import bank_capacities
 
 
+def _source_capacities(game,catalog,source):
+    capacities=bank_capacities(catalog,source['banks']);evidence=None
+    from .depleted_drill_retirement import FILE as RETIREMENT_FILE,mining_capacity_summary
+    if(Path(game.cfg.runtime_dir)/RETIREMENT_FILE).exists():
+        evidence=mining_capacity_summary(game,catalog)
+        if not evidence.get('ok'):raise ValueError('fresh active mining backing required: '+str(evidence.get('reason')))
+        for bank in source['banks']:
+            resource,product=bank['resource'],bank['product'];recipe=catalog.recipes[product]
+            ingredients=[q for q in recipe['ingredients']if q['name']==resource]
+            products=[q for q in recipe['products']if q['name']==product]
+            if len(ingredients)!=1 or len(products)!=1 or ingredients[0].get('amount',0)<=0 or products[0].get('amount',0)<=0:
+                raise ValueError('one deterministic ore-to-plate conversion required')
+            backed=evidence['resources'].get(resource,0)*products[0]['amount']/ingredients[0]['amount']
+            capacities[resource]=min(capacities[resource],backed)
+    return capacities,evidence
+
+
 def rebase_tap_capacity(game, catalog, old_bus, new_bus, current_buses):
     """Rebase only derived profiles after a verified source upgrade, read-only."""
     root=Path(game.cfg.runtime_dir)
@@ -23,7 +40,7 @@ def rebase_tap_capacity(game, catalog, old_bus, new_bus, current_buses):
         contracts=[{k:v for k,v in b.items()if k!='capacity'}for b in(old_bus,new_bus)]
         if any({k:v for k,v in b.items()if k!='capacity'}not in contracts for b in current_buses):
             return {'ok':False,'reason':'tap_capacity_cannot_rebase_changed_bus_contract'}
-        capacities=bank_capacities(catalog,source['banks'])
+        capacities,mining=_source_capacities(game,catalog,source)
         by_product={b['product']:capacities[b['resource']]for b in source['banks']}
         def profile(bus):
             materials,taps,*_=reconstruct_bus(bus);refreshed=[]
@@ -37,7 +54,7 @@ def rebase_tap_capacity(game, catalog, old_bus, new_bus, current_buses):
             return {'ok':False,'reason':'tap_current_capacity_disagrees_with_verified_source'}
         old,new=deepcopy(old_bus),deepcopy(new_bus)
         old['capacity']=profile(old);new['capacity']=profile(new)
-        return {'ok':True,'old_bus':old,'new_bus':new}
+        return {'ok':True,'old_bus':old,'new_bus':new,'mining_source_potential':mining}
     except(OSError,ValueError,KeyError,TypeError)as exc:
         return {'ok':False,'reason':'tap_capacity_rebase_unavailable','detail':str(exc)}
 
@@ -67,7 +84,7 @@ def refresh_bus_capacity(game, catalog, bus_factory):
         return {'ok': False, 'reason': 'capacity_profile_bus_contracts_differ'}
     try:
         materials, taps, _, _, _, _ = reconstruct_bus(buses[0])
-        capacities = bank_capacities(catalog, source['banks'])
+        capacities,mining = _source_capacities(game,catalog,source)
         by_product = {b['product']: capacities[b['resource']] for b in source['banks']}
         refreshed = []
         for material in materials:
@@ -86,5 +103,5 @@ def refresh_bus_capacity(game, catalog, bus_factory):
             _atomic_json(path, document)
             changed = True
     bus_factory.state = factory
-    return {'ok': True, 'changed': changed, 'capacity': profile,
-            'scope': 'derived catalog source budgets; live throughput is measured separately'}
+    return {'ok': True, 'changed': changed, 'capacity': profile,'mining_source_potential':mining,
+            'scope': 'derived furnace ceiling capped by fresh resource-backed powered mining after retirement; live throughput is measured separately'}

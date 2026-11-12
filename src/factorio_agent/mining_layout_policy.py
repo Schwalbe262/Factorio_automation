@@ -331,22 +331,30 @@ def prepare_extension(game,builder,obs,bank,added_drills):
         plan=_plan(es,deepcopy(old['ports']),**extra)
         guard=validate_extension_contract(bank,plan)
         if not guard.get('ok'):return guard
+        from .depleted_drill_retirement import effective_mining_plan
+        effective_old=effective_mining_plan(game,obs,old,catalog_fingerprint=builder.catalog.fingerprint)
+        effective=effective_mining_plan(game,obs,plan,catalog_fingerprint=builder.catalog.fingerprint)
         actual={(e['name'],*_xy(e)):e for e in obs.get('entities',[])};retained=[]
-        for spec in old['entities']:
+        for spec in effective_old['entities']:
             live=actual.get((spec['name'],*_xy(spec)))
             if(not live or type(live.get('unit_number'))is not int or live['unit_number']<1
                     or any(live.get(k)!=spec.get(k)for k in('direction','belt_to_ground_type'))):
                 return {'ok':False,'reason':'mining_old_layout_not_installed_exactly','entity':spec}
             retained.append({k:deepcopy(live[k])for k in('name','position','unit_number','direction','belt_to_ground_type')if k in live})
-        check=preflight(game,builder,obs,es)
+        check=preflight(game,builder,obs,effective['entities'])
         if not check.get('ok'):return check
-        resources=resource_survey(game,plan)
+        old_keys={_signature(q)for q in old['entities']}
+        # Existing low-resource/retired grid positions remain historical. Only
+        # newly accepted drills must satisfy the new-bank richness threshold.
+        fresh=[q for q in plan['entities']if q['name']=='electric-mining-drill'and _signature(q)not in old_keys]
+        resources=resource_survey(game,effective,required_drills=fresh)
         if not resources.get('ok'):return resources
         native=game.query('return {ok=true,belt_speed=prototypes.entity["transport-belt"].belt_speed,force_productivity_bonus=f.mining_drill_productivity_bonus}')
         if not native.get('ok'):return native
         product=builder.catalog.entities[old['resource']]['mining_products']
         if len(product)!=1 or product[0]['name']!=old['resource']:raise ValueError('one deterministic mining product required')
-        profile=capacity_budget(resources['rate_per_drill']*_yield(product[0]),pairs,pairs,belt_speed=native['belt_speed'],force_productivity_bonus=native['force_productivity_bonus'])
+        profile=capacity_budget(resources['rate_per_drill']*_yield(product[0]),len(effective['producer_rows']['left']),len(effective['producer_rows']['right']),
+            belt_speed=native['belt_speed'],force_productivity_bonus=native['force_productivity_bonus'])
         plan=_plan(es,old['ports'],**extra,clear_obstacles=check['clear_obstacles'])
         result=deepcopy(bank);result.update(ok=True,plan=plan,ready=False,retained_units=retained,capacity_profile=profile,
             nominal_rate_per_minute=profile['collector_ceiling_per_minute'],remaining_resource_survey=resources['unique_remaining_resource'])
@@ -448,13 +456,21 @@ def diagnose_bank_capacity(game,obs,catalog,bank):
     """Installed and resource-backed powered potential; deliberately no timed rate."""
     try:
         if not obs.get('ok',True)or not obs.get('world_id'):raise ValueError('fresh bound observation required')
-        plan=bank['plan'];resource=plan['resource'];rows=plan['producer_rows']
-        if resource not in RESOURCES or not plan.get('paired'):raise ValueError('paired solid mining bank required')
-        if not 2<=sum(len(rows[k])for k in('left','right'))<=64:raise ValueError('bounded2..64drill diagnostic required')
-        contract=bank.get('layout_contract')or plan.get('layout_contract')
+        from .depleted_drill_retirement import effective_mining_plan
+        historical=bank['plan'];plan=effective_mining_plan(game,obs,historical,catalog_fingerprint=catalog.fingerprint);resource=plan['resource']
+        rows=plan.get('producer_rows')
+        if rows is None:
+            rows={'left':[],'right':[]}
+            for q in plan['entities']:
+                if q['name']=='electric-mining-drill':
+                    if q['direction']not in(0,8):raise ValueError('unsupported single-row native mining lane')
+                    rows['left'if q['direction']==8 else'right'].append(q)
+        if resource not in RESOURCES:raise ValueError('typed solid mining bank required')
+        if not 0<=sum(len(rows[k])for k in('left','right'))<=64:raise ValueError('bounded0..64active drill diagnostic required')
+        contract=bank.get('layout_contract')or historical.get('layout_contract')
         if contract:
             validate_policy(contract['policy'],obs['world_id'],catalog.fingerprint,resource)
-            valid=validate_extension_contract(bank,plan)
+            valid=validate_extension_contract(bank,historical)
             if not valid.get('ok'):return valid
         if plan.get('collector_port',plan['ports'][0])['facing']!=4:raise ValueError('native EAST physical lane proof required')
         actual={(e['name'],*_xy(e)):e for e in obs.get('entities',[])};specs=[]
@@ -493,5 +509,7 @@ def diagnose_bank_capacity(game,obs,catalog,bank):
             missing_drill_positions=missing,inactive_drill_units=inactive,unsupported_drill_units=unsupported,
             physical_lane_receipt=native['drills'],all_installed_drop_lanes_verified=not missing and all(r.get('drop_lane_verified')for r in native['drills']),
             nominal_profile_complete=not missing and not unsupported,measured_rate_per_minute=None,
+            historical_planned_drill_count=sum(q['name']=='electric-mining-drill'for q in historical['entities']),
+            paid_retired_drill_units=plan.get('retired_drill_units',[]),
             scope='native snapshot identity and powered resource-backed potential; output packets, downstream proof and timed throughput remain separate')
     except(KeyError,TypeError,ValueError,ZeroDivisionError)as exc:return {'ok':False,'reason':'invalid_mining_capacity_diagnostic','detail':str(exc)}

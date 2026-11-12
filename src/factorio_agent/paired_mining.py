@@ -28,8 +28,10 @@ def mining_pair(right_x,top_y,pairs,resource):
                  producer_rows=rows,paired=True,mining_footprint=footprint,layout_policy='pcb-paired-mining-v1')
 
 
-def resource_survey(game,plan):
-    payload=json.dumps(json.dumps({'resource':plan['resource'],'drills':[e for e in plan['entities'] if e['name']=='electric-mining-drill']},separators=(',',':')))
+def resource_survey(game,plan,*,required_drills=None):
+    required=None if required_drills is None else{(q['name'],*xy(q))for q in required_drills}
+    drills=[dict(q,require_coverage=required is None or(q['name'],*xy(q))in required)for q in plan['entities']if q['name']=='electric-mining-drill']
+    payload=json.dumps(json.dumps({'resource':plan['resource'],'drills':drills},separators=(',',':')))
     return game.query('''
 local args=helpers.json_to_table('''+payload+''');local proto=prototypes.entity["electric-mining-drill"];local radius=proto.mining_drill_radius
 local seen={};local amount=0;local unique=0
@@ -41,7 +43,7 @@ for _,drill in ipairs(args.drills) do
   local key=ore.position.x..":"..ore.position.y
   if not seen[key] then seen[key]=true;unique=unique+1;amount=amount+ore.amount end
  end
- if count<4 or available<1800 then return {ok=false,reason="paired_mining_insufficient_resource",position=p} end
+ if drill.require_coverage and(count<4 or available<1800)then return {ok=false,reason="paired_mining_insufficient_resource",position=p} end
 end
 return {ok=true,unique_remaining_resource=amount,unique_resource_tiles=unique,
  rate_per_drill=proto.mining_speed*60/prototypes.entity[args.resource].mineable_properties.mining_time}
@@ -66,7 +68,9 @@ def retain_output(core,output):
 
 
 def lane_evidence(game,obs,bank):
-    payload=json.dumps(json.dumps(bank['plan'],separators=(',',':')))
+    from .depleted_drill_retirement import effective_mining_plan
+    effective=effective_mining_plan(game,obs,bank['plan'])
+    payload=json.dumps(json.dumps(effective,separators=(',',':')))
     return game.query('''
 local plan=helpers.json_to_table('''+payload+''');local row_y=(plan.collector_port or plan.ports[1]).position.y
 local rows={};for _,side in ipairs({"left","right"}) do
@@ -107,13 +111,18 @@ def prepare_extension(game,builder,obs,bank,added_drills):
     core=retain_output(core,old['ports'][0])
     core['entities']=merge_entities(old['entities'],core['entities'])
     core['underground_pairs']=old.get('underground_pairs',[])
-    native=preflight(game,builder,obs,core['entities'])
+    from .depleted_drill_retirement import effective_mining_plan
+    effective=effective_mining_plan(game,obs,core,catalog_fingerprint=getattr(getattr(builder,'catalog',None),'fingerprint',None))
+    native=preflight(game,builder,obs,effective['entities'])
     if not native.get('ok'):return native
-    resources=resource_survey(game,core)
+    prior={(q['name'],*xy(q))for q in old['entities']}
+    fresh=[q for q in core['entities']if q['name']=='electric-mining-drill'and(q['name'],*xy(q))not in prior]
+    resources=resource_survey(game,effective,required_drills=fresh)
     if not resources.get('ok'):return resources
     extra={k:v for k,v in core.items() if k not in ('ok','reason','entities','ports','required_items')}
     full=_plan(core['entities'],core['ports'],**extra,clear_obstacles=native['clear_obstacles'],clearance_world_id=obs['world_id'])
-    return {'ok':True,'plan':full,'ready':False,'nominal_rate_per_minute':2*pairs*resources['rate_per_drill'],
+    count=sum(q['name']=='electric-mining-drill'for q in effective['entities'])
+    return {'ok':True,'plan':full,'ready':False,'nominal_rate_per_minute':count*resources['rate_per_drill'],
             'reserved_pair_slots':bank['reserved_pair_slots'],'reserved_area':bank['reserved_area'],
             'remaining_resource_survey':resources['unique_remaining_resource'],'wire_hops':bank.get('wire_hops',0),
             'consumer_connection':bank.get('consumer_connection')}
@@ -278,8 +287,18 @@ return {ok=true,units=found}
         for bank in banks:
             evidence=lane_evidence(self.game,obs,bank)
             item=bank['plan']['resource']
-            if not evidence.get('ok') or any(not isinstance(evidence[side],dict) or evidence[side].get(item,0)<1 or set(evidence[side])-{item} for side in ('left','right')):return None
-            result.append({'resource':item,'nominal_rate_per_minute':bank['nominal_rate_per_minute'],
+            from .depleted_drill_retirement import FILE as RETIREMENT_FILE
+            current=None;required=('left','right');nominal=bank['nominal_rate_per_minute']
+            if(self.path.parent/RETIREMENT_FILE).exists():
+                current=self.outposts.bank_proof(obs,bank)
+                if not current:return None
+                native=current.get('native_active_capacity')
+                if not native:return None
+                required=tuple(side for side in('left','right')if native['active_offered_per_minute'][side]>0)
+                nominal=current['nominal_rate_per_minute']
+            if not evidence.get('ok')or any(not isinstance(evidence[side],dict)or set(evidence[side])-{item}or(side in required and evidence[side].get(item,0)<1)for side in('left','right')):return None
+            result.append({'resource':item,'nominal_rate_per_minute':nominal,'historical_installed_nominal_per_minute':bank['nominal_rate_per_minute'],
                 'reserved_pair_slots':bank['reserved_pair_slots'],'fixed_output':bank['plan']['ports'][0],
-                'native_lane_evidence':evidence,'unique_remaining_resource':bank['remaining_resource_survey']})
+                'native_lane_evidence':evidence,'unique_remaining_resource':bank['remaining_resource_survey'],
+                'active_source':current,'required_productive_lanes':list(required)})
         return {'tick':obs['tick'],'banks':result,'scope':'independent opposing native drill drops and ore on both collector lanes; nominal rates are not sustained throughput measurements'}
