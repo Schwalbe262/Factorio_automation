@@ -4,17 +4,19 @@ Rules (all derived from the map geometry, never a fixed compass default):
 
 * **Bus**: items flow from the head (next to smelting) towards the open
   land; ``input_side`` is the head edge, ``output_side`` the tail edge.
-* **Smelting**: ``output_side`` is the edge facing the bus head.
-  ``input_side`` is chosen among the other three edges by routing every
-  feeder to it and taking the smallest total
-  ``length + crossing_weight * crossings + unroutable_penalty * failures``,
-  plus ``turn_penalty`` when the edge is not opposite the output (so ore
-  prefers to flow straight through). Feeders get entry slots on the input
-  edge in the lateral order of their mining zones (west to east on a
-  north/south edge, north to south on an east/west edge); if feeders still
-  cross, pairs of slots are swapped while that lowers the cost, so swapping
-  entry order is preferred to crossing. A feeder that fits no
-  straight/single-elbow shape falls back to a two-elbow Z/U shape.
+* **Smelting**: ``output_side`` is the edge facing the bus head. Every
+  feeder chooses its own entry edge among the other three: feeders are taken
+  in material-name order and each takes the edge with the cheapest corridor
+  ``length + crossing_weight * crossings`` against the feeders already
+  routed (a corridor that fits no straight/single-elbow shape falls back to
+  a two-elbow Z/U shape, and an unroutable feeder costs
+  ``unroutable_penalty``). Feeders sharing an edge then get entry slots in
+  the lateral order of their mining zones (west to east on a north/south
+  edge, north to south on an east/west edge); if they still cross, pairs of
+  slots are swapped while that lowers the cost, so swapping entry order is
+  preferred to crossing. Each entry port records its own ``side``; the
+  zone's ``input_side`` is the edge most feeders use (ties: the edge
+  opposite the output first, then the edge facing the feeders).
 * **Mining zone**: ``output_side`` is the edge its feeder leaves from
   (facing the consumer); if the feeder is unroutable, the edge facing the
   consumer's centre.
@@ -186,17 +188,23 @@ def _best_double(occupancy, source: Zone, material: str, target: Rect, t: str, o
 
 
 def route_into_edge(
-    occupancy: Occupancy, sources: list[tuple[str, Zone]], target: Rect, t: str, config: SiteConfig
+    occupancy: Occupancy,
+    sources: list[tuple[str, Zone]],
+    target: Rect,
+    t: str,
+    config: SiteConfig,
+    others: tuple[tuple[Rect, ...], ...] = (),
 ) -> tuple[list[Feeder], float]:
     """Route ``(material, zone)`` sources to the slots of edge ``t``.
 
     The i-th source gets the i-th slot. Routing happens in material-name order
     (not slot order), so a mirrored map routes - and counts crossings - in the
-    same sequence. Feeders are returned in slot order.
+    same sequence. ``others`` are corridors already fixed elsewhere (crossing
+    them costs ``crossing_weight``). Feeders are returned in slot order.
     """
     slots = entry_slots(edge_range(target, t), len(sources))
     feeders = []
-    routed: list[tuple[Rect, ...]] = []
+    routed: list[tuple[Rect, ...]] = list(others)
     total = 0.0
     for (material, zone), slot in sorted(zip(sources, slots), key=lambda item: item[0][0]):
         feeder = best_feeder(occupancy, zone, material, target, t, slot, routed, config, allow_double=False)
@@ -218,25 +226,53 @@ def feeder_crossings(feeders: list[Feeder]) -> int:
     return sum(count_crossings(rects[i], rects[i + 1 :]) for i in range(len(rects)))
 
 
-def choose_input_side(
+def choose_entry_sides(
     occupancy: Occupancy, smelting: Rect, output_side: str, sources: list[tuple[str, Zone]], config: SiteConfig
 ) -> tuple[str, list[Feeder]]:
-    """Input edge of the smelting zone and its feeders, in slot order (see module rules)."""
+    """Per-feeder entry edges of the smelting zone (see module rules).
+
+    Returns ``(input_side, feeders)``; feeders are grouped by edge and in
+    slot order within an edge.
+    """
     opposite = OPPOSITE_SIDE[output_side]
     feed_centre = _mean_centre([zone for _material, zone in sources]) or smelting.centre()
-    facing = sides_facing(smelting, feed_centre)
-    sides = [opposite] + [s for s in facing if s not in (opposite, output_side)]
-    best = None
-    for t in sides:
-        ordered = _ordered_sources(sources, t)
-        feeders, total = route_into_edge(occupancy, ordered, smelting, t, config)
-        if t != opposite:
-            total += config.turn_penalty
-        if best is None or total < best[0]:
-            best = (total, t, feeders)
-    if not sources or feeder_crossings(best[2]) == 0:
-        return best[1], best[2]
-    return best[1], _untangle(occupancy, smelting, best[1], best[2], best[0], config)
+    edges = [opposite] + [s for s in sides_facing(smelting, feed_centre) if s not in (opposite, output_side)]
+    chosen = _pick_edges(occupancy, smelting, output_side, sources, config)
+    feeders: list[Feeder] = []
+    # Edges in the order their first feeder (by material name) was routed,
+    # so mirrored maps settle the edges in the same sequence.
+    edge_order = list(dict.fromkeys(chosen[material] for material, _zone in sorted(sources, key=lambda i: i[0])))
+    for t in edge_order:
+        group = [(material, zone) for material, zone in sources if chosen[material] == t]
+        others = tuple(f.route.rects for f in feeders if f.route is not None)
+        ordered = _ordered_sources(group, t)
+        routed, total = route_into_edge(occupancy, ordered, smelting, t, config, others)
+        if len(group) > 1 and feeder_crossings(routed) > 0:
+            routed = _untangle(occupancy, smelting, t, routed, total, config, others)
+        feeders.extend(routed)
+    counts = {t: sum(1 for f in feeders if f.to_side == t and f.route is not None) for t in edges}
+    input_side = max(edges, key=lambda t: (counts[t], -edges.index(t)))
+    return input_side, feeders
+
+
+def _pick_edges(
+    occupancy: Occupancy, smelting: Rect, output_side: str, sources: list[tuple[str, Zone]], config: SiteConfig
+) -> dict[str, str]:
+    """Material -> entry edge with the cheapest corridor given the earlier feeders."""
+    chosen: dict[str, str] = {}
+    routed: list[tuple[Rect, ...]] = []
+    for material, zone in sorted(sources, key=lambda item: item[0]):
+        best = None
+        for t in sides_facing(smelting, zone.rect.centre()):
+            if t == output_side:
+                continue
+            feeder = best_feeder(occupancy, zone, material, smelting, t, None, routed, config)
+            if best is None or feeder.cost < best.cost:
+                best = feeder
+        chosen[material] = best.to_side
+        if best.route is not None:
+            routed.append(best.route.rects)
+    return chosen
 
 
 def _mean_centre(zones: list[Zone]) -> tuple[float, float] | None:
@@ -252,7 +288,9 @@ def _ordered_sources(sources: list[tuple[str, Zone]], t: str) -> list[tuple[str,
     return [(by_zone[zone.name], zone) for zone in lateral_order([z for _m, z in sources], t)]
 
 
-def _untangle(occupancy, smelting: Rect, t: str, feeders: list[Feeder], total: float, config) -> list[Feeder]:
+def _untangle(
+    occupancy, smelting: Rect, t: str, feeders: list[Feeder], total: float, config, others=()
+) -> list[Feeder]:
     """Swap entry slots of two feeders at a time while that lowers the cost
     (crossings are part of the cost), so swapping is preferred to crossing."""
     order = [(f.material, f.source) for f in feeders]
@@ -267,7 +305,7 @@ def _untangle(occupancy, smelting: Rect, t: str, feeders: list[Feeder], total: f
             j = next(k for k, item in enumerate(order) if item[0] == second)
             trial = list(order)
             trial[i], trial[j] = trial[j], trial[i]
-            candidate, cost = route_into_edge(occupancy, trial, smelting, t, config)
+            candidate, cost = route_into_edge(occupancy, trial, smelting, t, config, others)
             if cost < best[0]:
                 best = (cost, candidate)
                 order = trial

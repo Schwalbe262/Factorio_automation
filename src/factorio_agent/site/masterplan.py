@@ -66,6 +66,7 @@ class MasterPlan:
     corridors: tuple[Corridor, ...]
     warnings: tuple[str, ...] = ()
     allocations: list[Allocation] = field(default_factory=list)
+    rail_crossings: tuple[dict, ...] = ()
 
     # ----- lookups ---------------------------------------------------------
     def zone(self, name: str) -> Zone | None:
@@ -121,6 +122,7 @@ class MasterPlan:
             "corridors": [c.to_dict() for c in self.corridors],
             "warnings": list(self.warnings),
             "allocations": [a.to_dict() for a in self.allocations],
+            "rail_crossings": list(self.rail_crossings),
         }
 
     def to_json(self) -> str:
@@ -143,6 +145,7 @@ class MasterPlan:
             corridors=tuple(Corridor.from_dict(c) for c in data["corridors"]),
             warnings=tuple(data["warnings"]),
             allocations=[Allocation.from_dict(a) for a in data["allocations"]],
+            rail_crossings=tuple(data.get("rail_crossings", ())),
         )
 
     @classmethod
@@ -165,9 +168,10 @@ def _reserve_all(world: WorldMap, zones, strips, corridors) -> None:
 
 
 def _zone_order(zones: dict[str, Zone]) -> tuple[Zone, ...]:
-    """Bus, smelting, power, then mining zones in planning order."""
+    """Bus, smelting, power, mining zones, then rail/outpost zones, in planning order."""
     first = [zones[name] for name in ("bus", "smelting", "power") if name in zones]
-    return tuple(first + [z for z in zones.values() if z.kind == "mining"])
+    first += [z for z in zones.values() if z.kind == "mining"]
+    return tuple(first + [z for z in zones.values() if z not in first])
 
 
 def plan_site(world: WorldMap, *, start: tuple[int, int] = (0, 0), config: SiteConfig = SiteConfig()) -> MasterPlan:
@@ -195,6 +199,7 @@ def plan_site(world: WorldMap, *, start: tuple[int, int] = (0, 0), config: SiteC
         strips=tuple(draft.strips),
         corridors=tuple(corridors),
         warnings=tuple(draft.warnings),
+        rail_crossings=tuple(draft.rail_crossings),
     )
 
 
@@ -230,6 +235,8 @@ def plan_summary(plan: MasterPlan) -> str:
         lines.append(f"  water shore at {plan.water.water}")
     for zone in plan.zones:
         sides = f"in {zone.input_side or '-'} out {zone.output_side or '-'}"
+        if zone.kind == "rail" and zone.growth:
+            sides += f" tracks {zone.growth}"
         lines.append(f"zone {zone.name:<18} {_rect_text(zone.rect)} {sides}  {_ports_text(zone)}")
     for side in ("left", "right"):
         runs = [s for s in plan.strips if s.side == side]
@@ -246,6 +253,8 @@ def plan_summary(plan: MasterPlan) -> str:
         lines.append(
             f"block {a.name} {a.side} along {a.along0}-{a.along1} in {a.input_side} flow {a.flow} out {a.output_side}"
         )
+    for crossing in plan.rail_crossings:
+        lines.append(f"rail:trunk crosses {crossing['corridor']} at {crossing['rect']}")
     for warning in plan.warnings:
         lines.append(f"WARNING {warning}")
     return "\n".join(lines)

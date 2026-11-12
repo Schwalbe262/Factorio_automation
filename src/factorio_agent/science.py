@@ -13,6 +13,7 @@ from .smelting import port, merge_entities
 from .transport import plan_connection as belt_connection, xy, underground_proof
 from .power_grid import plan_connection as power_connection
 from .planning import overlap, survey_slots, preflight
+from .site.placement import settle
 
 
 def validate_rate(parameters):
@@ -83,9 +84,56 @@ def lab_row(x, y, count=8):
     )
 
 
+SCIENCE_BLOCK = (32, 32)  # science row (south half) + lab row (north half), canonical
+
+
+def science_block(x0, y0, count):
+    """Canonical science + lab rows filling the tile square ``[x0, x0 + 32) x [y0, y0 + 32)``.
+
+    Labs take the north half, the science row the south half; plates enter
+    on the west, science flows east to the labs' westbound feed.
+    """
+    return {"science": science_row(x0 + 8.5, y0 + 22.5, count), "labs": lab_row(x0 + 1.5, y0 + 8.5)}
+
+
+def legacy_science_candidates(count):
+    """The development-map candidate list, used when no master plan site is available."""
+    found = []
+    for left, top in ((-48, -72), (-80, -72), (-48, -104), (-80, -104), (-16, -104), (16, -104), (-112, -72)):
+        found.append(science_block(left, top - 16, count))
+    return found
+
+
+def planned_science_candidates(site, world_id, count):
+    """Allocator blocks with the template turned so plate inputs face the bus edge."""
+    from .site.placement import allocated_placements
+
+    def inputs(block):
+        return [p for p in block["science"]["ports"] if p["direction"] == "input"]
+
+    found = []
+    placements = allocated_placements(
+        site,
+        world_id,
+        kind="science",
+        name="automation_science",
+        size=SCIENCE_BLOCK,
+        build=lambda x0, y0: science_block(x0, y0, count),
+        inputs=inputs,
+    )
+    for allocation, placement in placements:
+        block = placement.plan
+        for key in ("science", "labs"):
+            block[key]["site_transform"] = placement.transform.to_dict()
+        block["allocation"] = allocation
+        found.append(block)
+    return found
+
+
 class AutomaticScience:
-    def __init__(self, game, builder, catalog):
+    def __init__(self, game, builder, catalog, site=None):
         self.game, self.builder, self.catalog = game, builder, catalog
+        self.site = site
         self.path = Path(game.cfg.runtime_dir) / "automation-science.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
 
@@ -144,15 +192,16 @@ class AutomaticScience:
                     "available_nominal": min(ore, plates),
                 }
         candidates = []
-        for left, top in ((-48, -72), (-80, -72), (-48, -104), (-80, -104), (-16, -104), (16, -104), (-112, -72)):
-            science = science_row(left + 8.5, top + 6.5, count)
-            labs = lab_row(left + 1.5, top - 7.5)
+        planned = planned_science_candidates(self.site, obs["world_id"], count)
+        for block in planned or legacy_science_candidates(count):
+            science, labs = block["science"], block["labs"]
             areas = [science["reserved_area"], labs["reserved_area"]]
             if any(overlap(area, b["reserved_area"]) for area in areas for b in board["blocks"].values()):
                 continue
-            candidates.append({"science": science, "labs": labs, "areas": areas})
+            candidates.append({"science": science, "labs": labs, "areas": areas, "allocation": block.get("allocation")})
         survey = survey_slots(self.game, [c["areas"] for c in candidates])
         if not survey.get("ok"):
+            settle(self.site, obs["world_id"], "automation_science", None)
             return survey
         failures = []
         for index in survey.get("legal", []):
@@ -211,6 +260,7 @@ class AutomaticScience:
                 clearance_world_id=obs["world_id"],
                 layout_policy="pcb-permanent-science-v1",
             )
+            settle(self.site, obs["world_id"], "automation_science", site.get("allocation"))
             return {
                 "ok": True,
                 "world_id": obs["world_id"],
@@ -231,6 +281,7 @@ class AutomaticScience:
                 ],
                 "route_metrics": [r["route_metrics"] for r in routes],
             }
+        settle(self.site, obs["world_id"], "automation_science", None)
         return {
             "ok": False,
             "reason": "no_reserved_science_and_lab_slots_with_clean_connections",

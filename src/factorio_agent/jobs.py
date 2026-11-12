@@ -681,9 +681,13 @@ class StarterExecutors:
         from .outposts import MiningOutposts
 
         self.outposts = MiningOutposts(game, self.bootstrap, self.builder)
+        from .site.service import SiteService
+
+        # One map survey + master plan per runtime, shared by every site consumer.
+        self.site = SiteService(game)
         from .smelting import SmeltingDistrict
 
-        self.smelting = SmeltingDistrict(game, self.bootstrap, self.builder, catalog)
+        self.smelting = SmeltingDistrict(game, self.bootstrap, self.builder, catalog, site=self.site)
         from .paired_smelting import PairedSmelting
 
         self.paired = PairedSmelting(game, self.builder, catalog, self.smelting)
@@ -692,10 +696,10 @@ class StarterExecutors:
         self.paired_mining = PairedMining(game, self.bootstrap, self.builder, catalog, self.outposts, self.smelting)
         from .science import AutomaticScience
 
-        self.science = AutomaticScience(game, self.builder, catalog)
+        self.science = AutomaticScience(game, self.builder, catalog, site=self.site)
         from .green_science import LogisticScience
 
-        self.green = LogisticScience(game, self.builder, catalog, self.smelting, self.science)
+        self.green = LogisticScience(game, self.builder, catalog, self.smelting, self.science, site=self.site)
         from .steam_expansion import SteamExpansion
 
         self.steam_expansion = SteamExpansion(game, self.builder, catalog, self.outposts)

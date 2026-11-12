@@ -73,6 +73,16 @@ class SiteConfig:
     power_height: int = 32
     shore_search_radius: int = 224
     corridor_width: int = 4
+    # Rail reservations (data only) ------------------------------------------
+    rail_unload_tracks: int = 2
+    rail_train_tiles: int = 35  # 1 locomotive + 4 wagons, 7 tiles each
+    rail_approach_tiles: int = 16
+    rail_track_tiles: int = 8  # per track: rail plus inserters/chests/belts
+    rail_trunk_width: int = 8
+    rail_outpost_min_tiles: int = 300
+    rail_outposts_max: int = 6
+    rail_load_length: int = 56
+    rail_load_width: int = 16
     # Orientation weights (corridor tiles) ---------------------------------
     crossing_weight: float = 60.0
     turn_penalty: float = 20.0
@@ -92,6 +102,16 @@ class SiteConfig:
             raise ValueError("bus_min_length must not exceed bus_target_length")
         if self.first_side not in ("left", "right"):
             raise ValueError("first_side must be 'left' or 'right'")
+
+    @property
+    def rail_unload_length(self) -> int:
+        """Station length along the tracks: train + approach/exit, rounded up to 8."""
+        return -(-(self.rail_train_tiles + self.rail_approach_tiles) // 8) * 8
+
+    @property
+    def rail_unload_width(self) -> int:
+        """Station width across the tracks (2 tracks: 2 x 8 + 4 = 20)."""
+        return self.rail_unload_tracks * self.rail_track_tiles + 4
 
     def to_dict(self) -> dict:
         data = {}

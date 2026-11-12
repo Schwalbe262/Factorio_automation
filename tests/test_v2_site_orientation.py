@@ -173,7 +173,9 @@ class ValidateSideTests(unittest.TestCase):
         world = north_ore_world()
         plan = plan_site(world)
         smelting = plan.zone("smelting")
-        bad = replace(smelting, input_side=smelting.output_side)
+        # Corridors are checked against their own entry port's side.
+        ports = tuple(replace(p, side="W") if (p.material, p.role) == ("iron-ore", "in") else p for p in smelting.ports)
+        bad = replace(smelting, input_side=smelting.output_side, ports=ports)
         plan.zones = tuple(bad if z.name == "smelting" else z for z in plan.zones)
         problems = plan.validate(world)
         self.assertTrue(any("same side" in p for p in problems), problems)

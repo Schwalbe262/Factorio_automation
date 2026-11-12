@@ -13,6 +13,9 @@ from .board import entity
 from .manufacturing import green_core, raw_demand, connect_power_groups, lab_green_entry
 from .planning import preflight, overlap, survey_slots
 from .smelting import merge_entities
+from .site.placement import allocated_placements, settle
+from .site.transform import Transform, apply as apply_transform, in_canonical, plan_transform
+from .site.transform import point as transform_point
 from .transport import plan_connection, xy, underground_proof
 
 
@@ -24,9 +27,49 @@ def validate_rate(parameters):
         raise ValueError("green science target must be finite in (0,30]")
 
 
+GREEN_BLOCK = (54, 54)  # green core reserved area (54 x 53) padded to a square for turning
+LEGACY_GREEN_ANCHORS = (
+    (40.5, -72.5),
+    (56.5, -72.5),
+    (72.5, -72.5),
+    (40.5, -8.5),
+    (-96.5, -72.5),
+    (-96.5, -8.5),
+    (104.5, -72.5),
+)
+
+
+def planned_green_cores(site, world_id, count):
+    """Allocator blocks for the green core, turned so plate inputs face the bus edge.
+
+    The core's reserved area is ``[x - 10.5, x + 43.5) x [y - 10.5, y + 42.5)``
+    for anchor ``(x, y)``; the block square starts at its north-west corner.
+    With the default 48-tile district depth no block is deep enough, so this
+    returns nothing and the legacy anchors are used.
+    """
+
+    def build(x0, y0):
+        return green_core(x0 + 10.5, y0 + 10.5, count)
+
+    def inputs(core):
+        return [p for p in core["ports"] if p["direction"] == "input"]
+
+    found = []
+    placements = allocated_placements(
+        site, world_id, kind="science", name="logistic_science", size=GREEN_BLOCK, build=build, inputs=inputs
+    )
+    for allocation, placement in placements:
+        core = placement.plan
+        core["site_transform"] = placement.transform.to_dict()
+        core["allocation"] = allocation
+        found.append(core)
+    return found
+
+
 class LogisticScience:
-    def __init__(self, game, builder, catalog, smelting, science):
+    def __init__(self, game, builder, catalog, smelting, science, site=None):
         self.game, self.builder, self.catalog, self.smelting, self.science = game, builder, catalog, smelting, science
+        self.site = site
         self.path = Path(game.cfg.runtime_dir) / "logistic-science.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
 
@@ -57,15 +100,20 @@ class LogisticScience:
         removed = []
         branches = []
         sources = {}
+        # The branch is defined in the district's canonical frame (plates
+        # leaving east) and turned like the district (identity when unturned).
+        turn = Transform.from_dict(source_plan.get("site_transform"))
         for p in source_plan["ports"]:
             if p["item"] not in ("iron-plate", "copper-plate"):
                 continue
-            x, y = xy(p)
+            x, y = xy(apply_transform(turn.inverse(), p))
+            anchor = xy({"position": transform_point(turn, {"x": x - 1, "y": y})})
+            heading = turn.direction(4)
             old = next(
                 (
                     e
                     for e in obs["entities"]
-                    if e["name"] == "transport-belt" and xy(e) == (x - 1, y) and e["direction"] == 4
+                    if e["name"] == "transport-belt" and xy(e) == anchor and e["direction"] == heading
                 ),
                 None,
             )
@@ -74,11 +122,14 @@ class LogisticScience:
             if not any(e["name"] == "transport-belt" and xy(e) == xy(old) for e in source_plan["entities"]):
                 return {"ok": False, "reason": "plate_branch_anchor_not_owned"}
             removed.append(old)
-            branches += [
-                dict(entity("splitter", x - 1, y - 0.5, 4), _width=2, _height=1),
-                entity("transport-belt", x, y - 1, 0),
-            ]
-            sources[p["item"]] = dict(p, position={"x": x, "y": y - 1}, facing=0)
+            branches += apply_transform(
+                turn,
+                [
+                    dict(entity("splitter", x - 1, y - 0.5, 4), _width=2, _height=1),
+                    entity("transport-belt", x, y - 1, 0),
+                ],
+            )
+            sources[p["item"]] = apply_transform(turn, dict(p, position={"x": x, "y": y - 1}, facing=0))
         ignored = {e["unit_number"] for e in removed}
         source_plan["entities"] = [
             e for e in source_plan["entities"] if not any(e["name"] == r["name"] and xy(e) == xy(r) for r in removed)
@@ -90,13 +141,15 @@ class LogisticScience:
                 k: v for k, v in source_plan.items() if k not in ("ok", "reason", "entities", "ports", "required_items")
             },
         )
-        entry = lab_green_entry(self.science.state["labs"])
+        labs_plan = self.science.state["labs"]
+        entry = in_canonical(labs_plan, lab_green_entry)
+        lab_heading = plan_transform(labs_plan).direction(12)
         jx, jy = xy({"position": entry["join"]})
         join = next(
             (
                 e
                 for e in obs["entities"]
-                if e["name"] == "transport-belt" and xy(e) == (jx, jy) and e["direction"] == 12
+                if e["name"] == "transport-belt" and xy(e) == (jx, jy) and e["direction"] == lab_heading
             ),
             None,
         )
@@ -111,20 +164,13 @@ class LogisticScience:
             can_place=lambda es: preflight(self.game, self.builder, obs, es, ignored_units=ignored),
         )
         candidates = []
-        for x, y in (
-            (40.5, -72.5),
-            (56.5, -72.5),
-            (72.5, -72.5),
-            (40.5, -8.5),
-            (-96.5, -72.5),
-            (-96.5, -8.5),
-            (104.5, -72.5),
-        ):
-            core = green_core(x, y, count)
+        planned = planned_green_cores(self.site, obs["world_id"], count)
+        for core in planned or [green_core(x, y, count) for x, y in LEGACY_GREEN_ANCHORS]:
             if not any(overlap(core["reserved_area"], b["reserved_area"]) for b in board["blocks"].values()):
                 candidates.append(core)
         survey = survey_slots(self.game, [[c["reserved_area"]] for c in candidates])
         if not survey.get("ok"):
+            settle(self.site, obs["world_id"], "logistic_science", None)
             return survey
         failures = []
         for index in survey.get("legal", []):
@@ -180,6 +226,7 @@ class LogisticScience:
                 clearance_world_id=obs["world_id"],
                 layout_policy="pcb-green-science-cells-v1",
             )
+            settle(self.site, obs["world_id"], "logistic_science", core.get("allocation"))
             return {
                 "ok": True,
                 "world_id": obs["world_id"],
@@ -195,10 +242,13 @@ class LogisticScience:
                 "rated_demand": demand,
                 "route_metrics": [r["route_metrics"] for r in routes],
             }
+        settle(self.site, obs["world_id"], "logistic_science", None)
         return {"ok": False, "reason": "no_green_science_site_with_clean_connections", "failures": failures}
 
     def repair_lab_join(self, obs):
         """Migrate an early development join that omitted the upstream lab."""
+        if not plan_transform(self.science.state["labs"]).identity:
+            return None  # only canonical development-map lab rows have the old join
         entry = lab_green_entry(self.science.state["labs"])
         new_x = entry["join"]["x"]
         old = self.state["lab_join"]

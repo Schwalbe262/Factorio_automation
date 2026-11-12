@@ -2,7 +2,9 @@
 
 On top of :func:`site.render.render_svg` it draws, per zone, a green bar on
 the input edge and a red bar on the output edge, a small "in/out" label, and
-an arrow along every corridor segment in its travel direction. Same pixel
+an arrow along every corridor segment in its travel direction. Rail zones
+and the rail trunk are outlined in purple with an arrow along the track
+axis (the zone's ``growth``) and along each trunk segment. Same pixel
 convention as ``render``: ``scale`` pixels per tile, origin at the north-west
 corner of the surveyed bounds.
 """
@@ -16,6 +18,7 @@ from .worldmap import WorldMap
 INPUT_COLOUR = "#1b9e3e"
 OUTPUT_COLOUR = "#d62828"
 ARROW_COLOUR = "#111111"
+RAIL_COLOUR = "#7b2cbf"
 MARKER = (
     '<defs><marker id="plan-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" '
     f'orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="{ARROW_COLOUR}"/></marker></defs>'
@@ -60,6 +63,14 @@ class _Marks:
             f'<line x1="{x0}" y1="{y0}" x2="{x1}" y2="{y1}" stroke="{colour}" stroke-width="{width}"{tail}/>'
         )
 
+    def outline(self, rect: Rect, colour: str) -> None:
+        x0, y0 = self._px(rect.x0, rect.y0)
+        x1, y1 = self._px(rect.x1, rect.y1)
+        self.parts.append(
+            f'<rect x="{x0}" y="{y0}" width="{x1 - x0}" height="{y1 - y0}" fill="none" '
+            f'stroke="{colour}" stroke-width="3" stroke-dasharray="6,3"/>'
+        )
+
     def text(self, x: float, y: float, label: str) -> None:
         px, py = self._px(x, y)
         self.parts.append(f'<text x="{px + 2}" y="{py + 24}" font-size="10" font-family="sans-serif">{label}</text>')
@@ -70,14 +81,23 @@ def render_plan_svg(world: WorldMap, plan, scale: int = 4) -> str:
     svg = render_svg(world, scale=scale)
     marks = _Marks(world.bounds() or Rect(0, 0, CHUNK_TILES, CHUNK_TILES), scale)
     for zone in plan.zones:
-        if zone.input_side:
-            marks.line(_edge_line(zone.rect, zone.input_side), INPUT_COLOUR, 4)
+        entries = [zone.input_side] + [p.side for p in zone.ports if p.role == "in"]
+        for side in dict.fromkeys(s for s in entries if s and s != zone.output_side):
+            marks.line(_edge_line(zone.rect, side), INPUT_COLOUR, 4)
         if zone.output_side:
             marks.line(_edge_line(zone.rect, zone.output_side), OUTPUT_COLOUR, 4)
         marks.text(zone.rect.x0, zone.rect.y0, f"in {zone.input_side or '-'} out {zone.output_side or '-'}")
+    for zone in plan.zones:
+        if zone.kind == "rail":
+            marks.outline(zone.rect, RAIL_COLOUR)
+            if zone.growth:
+                marks.line(_segment_line(zone.rect, zone.growth), RAIL_COLOUR, 2.5, arrow=True)
     for corridor in plan.corridors:
+        colour = RAIL_COLOUR if corridor.kind == "rail" else ARROW_COLOUR
         for segment in corridor.segments:
-            marks.line(_segment_line(segment.rect, segment.direction), ARROW_COLOUR, 1.5, arrow=True)
+            if corridor.kind == "rail":
+                marks.outline(segment.rect, RAIL_COLOUR)
+            marks.line(_segment_line(segment.rect, segment.direction), colour, 1.5, arrow=True)
     for allocation in plan.allocations:
         marks.line(_segment_line(allocation.rect, allocation.flow), ARROW_COLOUR, 1.5, arrow=True)
     body = MARKER + "\n" + "\n".join(marks.parts)

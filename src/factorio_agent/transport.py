@@ -478,9 +478,40 @@ def _production_keepouts(game, builder, obs, source, destination, reserved, boun
         return {"ok": False, "reason": "invalid_transport_production_reservation", "detail": str(exc)}
 
 
+def guided_bounds(bounds, guide):
+    """Widen the search box to cover ``guide`` = (x0, y0, x1, y1) tile rect.
+
+    The box keeps its tile-centre alignment. Only the searched area grows:
+    turn, detour, resource and survey-budget rules are unchanged.
+    """
+    if guide is None:
+        return bounds
+    x0, y0, x1, y1 = guide
+    widened = dict(bounds)
+    widened["min_x"] -= max(0, math.ceil(bounds["min_x"] - (x0 + 0.5)))
+    widened["min_y"] -= max(0, math.ceil(bounds["min_y"] - (y0 + 0.5)))
+    widened["max_x"] += max(0, math.ceil((x1 - 0.5) - bounds["max_x"]))
+    widened["max_y"] += max(0, math.ceil((y1 - 0.5) - bounds["max_y"]))
+    return widened
+
+
 def plan_connection(
-    game, builder, obs, source, destination, reserved=(), *, ignored_units=(), released_unbuilt_receiver=None
+    game,
+    builder,
+    obs,
+    source,
+    destination,
+    reserved=(),
+    *,
+    ignored_units=(),
+    released_unbuilt_receiver=None,
+    guide=None,
 ):
+    """Route one belt from ``source`` to ``destination`` port.
+
+    ``guide`` is an optional reserved corridor bounding box (x0, y0, x1, y1)
+    in tiles from the master plan; it only widens the search box.
+    """
     if source.get("item") != destination.get("item"):
         return {"ok": False, "reason": "port_item_mismatch"}
     mining_resource = source.get("mining_resource")
@@ -496,6 +527,7 @@ def plan_connection(
         "min_y": min(a["y"], b["y"]) - 16,
         "max_y": max(a["y"], b["y"]) + 16,
     }
+    bounds = guided_bounds(bounds, guide)
     if (bounds["max_x"] - bounds["min_x"] + 1) * (bounds["max_y"] - bounds["min_y"] + 1) > 40000:
         return {"ok": False, "reason": "belt_corridor_survey_budget_exceeded"}
     prospective = _prospective_mining_source(game, builder, obs, source, reserved)

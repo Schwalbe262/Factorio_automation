@@ -99,9 +99,26 @@ def _other_side(side: str) -> str:
 
 
 def _preferred_side(plan) -> str:
-    if not plan.allocations:
-        return plan.config.first_side
-    return _other_side(plan.allocations[-1].side)
+    """Side tried first: alternate after the previous block.
+
+    The very first block goes to the side with more district strip (tie: the
+    side whose strips lie nearer the start, then ``first_side``), so a
+    mirrored map makes the mirrored choice.
+    """
+    if plan.allocations:
+        return _other_side(plan.allocations[-1].side)
+
+    def rank(side: str) -> tuple:
+        strips = _side_strips(plan, side)
+        total = sum(s.along1 - s.along0 for s in strips)
+        near = min((_distance(s.rect.centre(), plan.start) for s in strips), default=float("inf"))
+        return (-total, round(near, 6), side != plan.config.first_side)
+
+    return min(("left", "right"), key=rank)
+
+
+def _distance(a, b) -> float:
+    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
 
 
 def _output_point(plan, side: str, along1: int, depth: int, returns_to_bus: bool) -> tuple[float, float]:

@@ -9,7 +9,9 @@ Order of decisions (each step only sees what earlier steps reserved):
 5. smelting input edge and feeders from every smelting-feed mining zone;
 6. power on a shore (avoiding the feeders), its water and output edges;
 7. the power corridor to smelting (it may move the power output edge);
-8. coal goes to the nearer consumer (smelting or power); final sides/ports.
+8. coal goes to the nearer consumer (smelting or power); final sides/ports;
+9. rail reservations: unload station, trunk, outpost loading stations
+   (:mod:`site.planrail`).
 
 Orientation rules are documented in :mod:`site.orientation`.
 """
@@ -24,7 +26,7 @@ from .corridors import route_double, route_sided
 from .orientation import (
     Feeder,
     best_feeder,
-    choose_input_side,
+    choose_entry_sides,
     edge_point,
     entry_port,
     exit_port,
@@ -35,6 +37,7 @@ from .orientation import (
 )
 from .planmodel import SiteConfig, SiteError, Strip
 from .planzones import Corridor, Port, Segment, Zone
+from .planrail import plan_rail
 from .powersite import place_power
 from .siteselect import BusChoice, choose_resources, header_rect, place_smelting, search_bus, strip_runs
 from .tilegrid import Occupancy
@@ -59,6 +62,8 @@ class Draft:
     water: object = None
     bus: Bus | None = None
     depth: int = 0
+    rail_trunk: Corridor | None = None
+    rail_crossings: list = field(default_factory=list)
 
     def add_zone(self, zone: Zone) -> None:
         self.zones[zone.name] = zone
@@ -162,7 +167,7 @@ def _hub(draft: Draft) -> Zone:
 
 
 def plan_feeders(draft: Draft) -> None:
-    """Choose the smelting input edge and route the smelting feeders to it."""
+    """Route every smelting feeder to its own entry edge (see site.orientation)."""
     config = draft.config
     sources = []
     for material in config.smelting_feeds:
@@ -171,7 +176,7 @@ def plan_feeders(draft: Draft) -> None:
             sources.append((material, zone))
     hub = _hub(draft)
     if hub.kind == "smelting":
-        side, feeders = choose_input_side(draft.occupancy, hub.rect, hub.output_side, sources, config)
+        side, feeders = choose_entry_sides(draft.occupancy, hub.rect, hub.output_side, sources, config)
         draft.zones["smelting"] = replace(hub, input_side=side)
     else:
         feeders, _total = route_into_edge(draft.occupancy, sources, hub.rect, hub.input_side, config)
@@ -327,6 +332,8 @@ def corridors_of(draft: Draft) -> list[Corridor]:
                 corridors.append(corridor)
     if draft.power_corridor is not None:
         corridors.append(draft.power_corridor)
+    if draft.rail_trunk is not None:
+        corridors.append(draft.rail_trunk)
     return corridors
 
 
@@ -347,3 +354,4 @@ def run_pipeline(draft: Draft) -> None:
     plan_power_corridor(draft)
     plan_fuel(draft)
     finish_zones(draft)
+    plan_rail(draft)

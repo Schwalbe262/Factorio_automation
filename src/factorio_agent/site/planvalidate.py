@@ -130,7 +130,9 @@ def _check_reservations(plan, world: WorldMap) -> list[str]:
             problems.append(f"{wrong} tiles of {strip.owner}[{strip.along0}:{strip.along1}] are not reserved")
     for corridor in plan.corridors:
         for leg in corridor.rects:
-            wrong = sum(1 for x, y in leg.tiles() if not str(world.reserved_by(x, y)).startswith("corridor:"))
+            wrong = sum(
+                1 for x, y in leg.tiles() if not str(world.reserved_by(x, y)).startswith(("corridor:", "rail:trunk"))
+            )
             if wrong:
                 problems.append(f"{wrong} tiles of {corridor.name} are not reserved for a corridor")
     return problems
@@ -152,7 +154,7 @@ def _expected_to_side(corridor, target) -> str | None:
     """Edge the corridor must enter ``target`` by, or None when any edge is allowed."""
     if corridor.kind == "power":
         return None
-    if corridor.kind == "header" or target.kind == "smelting":
+    if corridor.kind == "header":
         return target.input_side
     port = target.port(corridor.material, "in")
     return port.side if port is not None else ""
@@ -163,6 +165,8 @@ def _check_corridor_ends(plan) -> list[str]:
     problems = []
     zones = {zone.name: zone for zone in plan.zones}
     for corridor in plan.corridors:
+        if corridor.kind == "rail":
+            continue  # checked by _check_rail
         source = zones.get(corridor.source)
         target = zones.get(corridor.target)
         if source is None or target is None:
@@ -222,7 +226,7 @@ def validate_plan(plan, world: WorldMap) -> list[str]:
         return problems
     problems += _check_bus(plan, world)
     problems += _check_disjoint(solid, legs, blocks)
-    mining = {zone.name for zone in plan.zones if zone.kind == "mining"}
+    mining = {zone.name for zone in plan.zones if zone.kind in ("mining", "outpost")}
     ground = [(label, rect) for label, rect in everything if label not in mining]
     problems += _check_ground(world, ground)
     problems += _check_allocations(plan)
@@ -230,4 +234,25 @@ def validate_plan(plan, world: WorldMap) -> list[str]:
     problems += _check_zone_sides(plan)
     problems += _check_corridor_ends(plan)
     problems += _check_allocation_flow(plan)
+    problems += _check_rail(plan)
+    return problems
+
+
+def _check_rail(plan) -> list[str]:
+    """Unload tracks point away from the bus; the trunk reaches the survey boundary."""
+    problems = []
+    station = plan.zone("rail:unload")
+    if station is not None:
+        bx, by = plan.bus.rect().centre()
+        sx, sy = station.rect.centre()
+        vx, vy = {"N": (0, -1), "E": (1, 0), "S": (0, 1), "W": (-1, 0)}.get(station.growth, (0, 0))
+        if vx * (sx - bx) + vy * (sy - by) <= 0:
+            problems.append(f"rail:unload track axis {station.growth or '-'} does not point away from the bus")
+    trunk = plan.corridor("rail:trunk")
+    if trunk is not None:
+        b = plan.bounds
+        last = trunk.segments[-1].rect if trunk.segments else None
+        reach = {"E": last.x0 == b.x0, "W": last.x1 == b.x1, "S": last.y0 == b.y0, "N": last.y1 == b.y1}
+        if last is None or not reach.get(trunk.to_side, False):
+            problems.append("rail:trunk does not reach the survey boundary")
     return problems

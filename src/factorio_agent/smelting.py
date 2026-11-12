@@ -12,6 +12,8 @@ from .board import entity
 from .power_grid import plan_connection as power_connection
 from .transport import plan_connection as belt_connection, underground_proof, xy
 from .planning import preflight
+from .site.transform import apply as apply_transform
+from .smelting_site import canonical_bank, corridor_guide, district_candidate, plan_candidates
 
 FURNACE_NAMES = frozenset({"stone-furnace", "steel-furnace", "electric-furnace"})
 DISTRICT_TILES = 32  # side of the square a smelting district reserves
@@ -161,11 +163,43 @@ def bank_capacities(catalog, banks):
     return rates
 
 
+def guided(guide):
+    """Keyword arguments for ``belt_connection``: a corridor guide only when there is one."""
+    return {} if guide is None else {"guide": guide}
+
+
+def feed_lane_positions(bank):
+    """Map positions of the bank's shared furnace input belt (east of the ore junction).
+
+    The canonical rule (same row as the first entity minus 2.5, from its x +
+    0.5 on) is applied in the bank's canonical frame, so a turned or mirrored
+    bank selects the same belts.
+    """
+    canonical, _turn = canonical_bank(bank)
+    first = canonical["entities"][0]["position"]
+    picked = []
+    for e, original in zip(canonical["entities"], bank["entities"]):
+        p = e["position"]
+        if e["name"] == "transport-belt" and p["y"] == first["y"] - 2.5 and p["x"] >= first["x"] + 0.5:
+            picked.append(original["position"])
+    return picked
+
+
 class SmeltingDistrict:
-    def __init__(self, game, bootstrap, builder, catalog):
+    def __init__(self, game, bootstrap, builder, catalog, site=None):
         self.game, self.bootstrap, self.builder, self.catalog = game, bootstrap, builder, catalog
+        self.site = site
         self.path = Path(game.cfg.runtime_dir) / "smelting-district.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
+
+    def _master_plan(self, obs):
+        """The shared master plan for the observed world, or None (no service, survey failure)."""
+        if self.site is None:
+            return None
+        try:
+            return self.site.plan(obs["world_id"])
+        except Exception:  # noqa: BLE001 - the plan is preferred, never a new failure mode
+            return None
 
     def owns_furnace(self, e, obs):
         if self.state.get("world_id") != obs["world_id"] or e["name"] not in FURNACE_NAMES:
@@ -237,13 +271,18 @@ class SmeltingDistrict:
         )
         if count > 6:
             return {"status": "blocked", "reason": "reserved_row_has_six_furnace_slots"}
-        first = next(e for e in old["entities"] if e["name"] in FURNACE_NAMES)
+        # Rebuild in the canonical frame, then turn back like the original bank.
+        canonical_old, turn = canonical_bank(old)
+        first = next(e for e in canonical_old["entities"] if e["name"] in FURNACE_NAMES)
         if paired:
             from .paired_smelting import paired_bank
 
             new = paired_bank(first["position"]["x"], first["position"]["y"], count, resource, furnace_name=preferred)
         else:
             new = furnace_bank(first["position"]["x"], first["position"]["y"], count, resource, furnace_name=preferred)
+        if not turn.identity:
+            new = apply_transform(turn, new)
+            new["site_transform"] = old["site_transform"]
         for e in new["entities"]:
             if e["name"] in FURNACE_NAMES and xy(e) in existing:
                 e["name"] = existing[xy(e)]
@@ -366,9 +405,18 @@ class SmeltingDistrict:
             )
             for r, product, rate in (("iron-ore", "iron-plate", 60), ("copper-ore", "copper-plate", 30))
         }
+        master = self._master_plan(obs)
+        # The master plan's smelting zone comes first; free-land and legacy
+        # anchors remain as fallbacks for saved worlds and plan failures.
+        planned = plan_candidates(master, counts) if master is not None else []
+        if planned:
+            fallback = []
+        else:
+            fallback = self._map_site_anchors(game, sources)
+        fallback = [district_candidate(x, y, counts) for x, y in fallback + list(smelting_site_anchors(sources))]
         candidates = []
-        for x, y in self._map_site_anchors(game, sources) + list(smelting_site_anchors(sources)):
-            area = [[x - 8, y - 8], [x + 24, y + 24]]
+        for candidate in planned + fallback:
+            area = candidate["area"]
             if any(
                 area[0][0] < b["reserved_area"][1][0]
                 and area[1][0] > b["reserved_area"][0][0]
@@ -378,31 +426,7 @@ class SmeltingDistrict:
                 if b.get("reserved_area")
             ):
                 continue
-            banks = [
-                furnace_bank(x, y, counts["iron-ore"], "iron-ore"),
-                furnace_bank(x, y + 12, counts["copper-ore"], "copper-ore"),
-            ]
-            splitter = dict(entity("splitter", x - 5.5, y + 4, 4), _width=2, _height=1)
-            split = [
-                splitter,
-                entity("transport-belt", x - 7.5, y + 3.5, 4),
-                entity("transport-belt", x - 6.5, y + 3.5, 4),
-                entity("transport-belt", x - 4.5, y + 3.5, 4),
-                entity("transport-belt", x - 4.5, y + 4.5, 4),
-            ]
-            es = merge_entities(*(b["entities"] for b in banks), split)
-            candidates.append(
-                {
-                    "area": area,
-                    "banks": banks,
-                    "entities": es,
-                    "coal_input": port("coal", x - 7.5, y + 3.5, 4),
-                    "coal_branches": [
-                        port("coal", x - 4.5, y + 3.5, 4, "output"),
-                        port("coal", x - 4.5, y + 4.5, 4, "output"),
-                    ],
-                }
-            )
+            candidates.append(candidate)
         args = json.dumps(json.dumps(candidates, separators=(",", ":")))
         survey = game.query(
             """
@@ -455,7 +479,10 @@ return {ok=true,legal=legal}
                     good = False
                     failures.append({"stage": "planning_budget", "reason": "smelting_planning_budget_exhausted"})
                     break
-                route = belt_connection(game, self.builder, obs, source, destination, es)
+                guide = None
+                if master is not None and source in sources.values():
+                    guide = corridor_guide(master, source["item"])
+                route = belt_connection(game, self.builder, obs, source, destination, es, **guided(guide))
                 if not route.get("ok"):
                     failures.append(
                         {
@@ -508,6 +535,7 @@ return {ok=true,legal=legal}
                 underground_pairs=pairs,
                 clear_obstacles=whole["clear_obstacles"],
                 clearance_world_id=obs["world_id"],
+                **({"site_transform": site["site_transform"]} if "site_transform" in site else {}),
             )
             return {
                 "ok": True,
@@ -626,19 +654,7 @@ return {ok=true,legal=legal}
             )
         payload = json.dumps(
             json.dumps(
-                [
-                    {
-                        "resource": b["resource"],
-                        "positions": [
-                            e["position"]
-                            for e in b["entities"]
-                            if e["name"] == "transport-belt"
-                            and e["position"]["y"] == b["entities"][0]["position"]["y"] - 2.5
-                            and e["position"]["x"] >= b["entities"][0]["position"]["x"] + 0.5
-                        ],
-                    }
-                    for b in self.state["banks"]
-                ],
+                [{"resource": b["resource"], "positions": feed_lane_positions(b)} for b in self.state["banks"]],
                 separators=(",", ":"),
             )
         )
