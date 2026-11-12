@@ -16,7 +16,7 @@
 | 메뉴 2 / `tools/windows/stop.bat` | AI의 현재 행동 경계, 작업 일시정지와 저장 ACK를 기다린 뒤 게임 시간도 멈추고 저장합니다. GUI는 유지합니다. |
 | 메뉴 3 / `tools/windows/new_map.bat` | 이전 월드 정지·저장·백업·종료 후 설정에 따라 별도 새 월드를 생성하고 실행합니다. |
 | 메뉴 4 / `tools/windows/gui.bat` | 현재 월드 GUI를 연결하거나 표시합니다. AI를 시작하거나 게임 일시정지를 해제하지 않습니다. |
-| 메뉴 5 / `tools/windows/status.bat` | 현재 시드, 월드, 검증된 프로세스 PID, 작업 큐의 우선순위·의존관계·막힌 이유를 표시합니다. |
+| 메뉴 5 / `tools/windows/status.bat` | 현재 시드·월드·검증된 PID와 작업 큐를 표시합니다. `current_task`에서 현재 작업, 실제 대기 이유, 행동·실패 수, 마지막 진행 이후 경과 초를 확인할 수 있습니다. |
 | 메뉴 6 / `tools/windows/logs.bat` | 최대 60줄의 로그를 표시합니다. `--open`은 로그 폴더를 엽니다. |
 | 메뉴 7 | 설정 파일을 메모장으로 편집합니다. 적용 시점은 [설정 문서](AUTOMATION_CONFIG.md)를 참고하세요. |
 | 메뉴 8 / `tools/windows/shutdown.bat` | 안전 정지와 저장을 마친 뒤 검증된 소유 서버/클라이언트를 종료합니다. |

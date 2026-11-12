@@ -27,7 +27,7 @@ CAPABILITIES = {
     "regularize_power_layout": {"parameters": {}, "requires": ["starter"],
                                "effect": "recover obsolete unfinished coal feed and install validated straight trunks; no hot cutover"},
     "bootstrap_logistics": {"parameters": {}, "requires": ["power"],
-                            "effect": "reserve a PCB cell, normally assemble finite red science, naturally unlock underground belts/splitters"},
+                            "effect": "normally assemble finite science to unlock native logistics; repair a known replaced legacy input cell through one receipt-audited paid repurchase, preserving its old budget"},
     "bootstrap_research": {"parameters": {"technology":"gun-turret|stone-wall|electric-mining-drill"}, "requires": ["power"],
                            "effect": "resume or repair a funded machine-science batch at normal cost, including audited gear diversion; unlock early native defenses or electric mining"},
     "electric_coal": {"parameters": {}, "requires": ["power"],
@@ -503,6 +503,7 @@ class StarterExecutors:
         elif capability=='bootstrap_logistics':
             batch=self._funded_startup_owner(obs)
             if batch is not None:batch.record_action(action,receipt)
+            else:self.industry.record_action(action,receipt)
 
     def _funded_startup_owner(self,obs):
         technology=obs.get('research')
@@ -1151,6 +1152,17 @@ class StarterExecutors:
 
 def progress_key(obs: dict, capability: str) -> str:
     # Relevant effects only: unrelated inventory churn must not hide a stall.
+    if capability in('bootstrap_logistics','bootstrap_research','starter_research'):
+        required_structures={'assembling-machine-1','lab','inserter','wooden-chest',
+            'small-electric-pole','burner-mining-drill','offshore-pump','boiler','steam-engine',
+            'pipe','pipe-to-ground','transport-belt','underground-belt','splitter'}
+        value={'science':obs.get('production',{}).get('automation-science-pack'),
+            'research':obs.get('research'),'research_progress':obs.get('research_progress'),
+            'technologies':{k:obs.get('technologies',{}).get(k)for k in
+                ('automation','electric-mining-drill','logistics','gun-turret','stone-wall')},
+            'structures':sorted((e.get('unit_number'),e.get('name'))for e in obs.get('entities',[])
+                if e.get('name')in required_structures and type(e.get('unit_number'))is int)}
+        return hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest()
     value = {"production": {n: obs.get("production", {}).get(n) for n in ("iron-plate", "copper-plate", "coal", "automation-science-pack", "logistic-science-pack", "chemical-science-pack")},
              "techs": [n for n in ("steam-power", "electronics", "automation-science-pack", "automation", "electric-mining-drill", "logistics")
                        if obs.get("technologies", {}).get(n)],
@@ -1271,7 +1283,11 @@ def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> 
                 ledger.event(key, "terminal", status=job["status"], reason=job["reason"], evidence=job["evidence"])
                 return job
             if time.monotonic() >= deadline:
-                job.update(status="waiting", reason="execution_slice_complete")
+                # A slice boundary must not replace a real executor blocker
+                # with a generic success-sounding scheduling reason.
+                if job['status']=='waiting'and not result.get('type'):
+                    job['slice_yield_reason']='execution_slice_complete'
+                else:job.update(status="waiting", reason="execution_slice_complete")
                 ledger.save()
                 game.save()
                 return job

@@ -41,8 +41,10 @@ def _audit_gear_diversions(root,state,plan,obs):
     if ledger.get('schema_version')!=2 or ledger.get('world_id')!=state['world_id']:
         raise ValueError('diversion ledger world changed')
     jobs=ledger.get('jobs',{})
-    targets=[(key,j)for key,j in jobs.items()if j.get('capability')=='bootstrap_research'
-        and j.get('parameters')=={'technology':state['technology']}and j.get('world_id')==state['world_id']]
+    capability='bootstrap_logistics'if state['technology']=='logistics'else'bootstrap_research'
+    parameters={}if state['technology']=='logistics'else{'technology':state['technology']}
+    targets=[(key,j)for key,j in jobs.items()if j.get('capability')==capability
+        and j.get('parameters')==parameters and j.get('world_id')==state['world_id']]
     if len(targets)!=1:raise ValueError('unique target research job required')
     target_key,target=targets[0]
     if target.get('pending_action'):raise ValueError('target job has an unresolved action')
@@ -124,6 +126,50 @@ def _audit_gear_diversions(root,state,plan,obs):
     return target_key,funding,list(receipts.values())
 
 
+def _audit_legacy_input_replacement(root,world,port,amount,tick):
+    """Known paid replacement chain, explicitly not a quantity-of-goods loss proof."""
+    ledger=json.loads((root/'jobs.json').read_text(encoding='utf-8'))
+    if ledger.get('schema_version')!=2 or ledger.get('world_id')!=world:raise ValueError('legacy ledger world changed')
+    if any(j.get('capability')=='bootstrap_logistics'and j.get('world_id')==world and j.get('pending_action')for j in ledger.get('jobs',{}).values()):
+        raise ValueError('legacy target has an unresolved native action')
+    pending={};birth=None;funding=None;chain=None;path=root/'job-events.jsonl'
+    if path.stat().st_size>64*1024*1024:raise ValueError('legacy history exceeds bounded scan')
+    with path.open('rb')as stream:
+        for index,raw in enumerate(stream):
+            if index>=200000 or len(raw)>1024*1024:raise ValueError('legacy history exceeds bounded scan')
+            row=json.loads(raw);event=row.get('event');key=row.get('key');at=row.get('tick')
+            if event not in('action_intent','action_result')or type(at)is not int or not 0<=at<=tick:continue
+            if event=='action_intent':
+                if key in pending:raise ValueError('legacy relevant intent unresolved')
+                action=row.get('action',{})
+                if action.get('position')==port['position']and action.get('name')==port['name']and action.get('type')in('build','insert','mine'):
+                    pending[key]=(row,raw)
+                continue
+            previous=pending.pop(key,None)
+            if not previous:continue
+            intent,first=previous;action=intent['action'];result=row.get('result',{});job=ledger.get('jobs',{}).get(key,{})
+            if(job.get('world_id')!=world or job.get('key')!=key or intent['tick']!=at or result.get('ok')is not True or result.get('world_id',world)!=world):
+                raise ValueError('legacy pair world/identity/outcome unknown')
+            ref=dict(id=hashlib.sha256(first+b'\0'+raw).hexdigest(),action_sha256=hashlib.sha256(first).hexdigest(),
+                result_sha256=hashlib.sha256(raw).hexdigest(),tick=at,job_key=key)
+            if action['type']=='build':
+                unit=result.get('unit_number')
+                if result.get('reused')is True or type(unit)is not int or unit<1:raise ValueError('legacy birth is not a paid new chest')
+                current=dict(ref,unit_number=unit)
+                if funding and unit==port['unit_number']and unit!=funding['original_chest']['unit_number']:
+                    chain=dict(funding=funding,replacement=current)
+                birth=current
+            elif action['type']=='mine'and funding:raise ValueError('legacy input was normally recovered; loss scope unsupported')
+            elif(action['type']=='insert'and action.get('item')=='iron-plate'
+                    and action.get('reason')=='fund finite normal machine-science inputs'and funding is None):
+                if(job.get('capability')!='bootstrap_logistics'or job.get('parameters')!={}or not birth
+                        or action.get('inventory')!='chest'or action.get('count')!=amount or result.get('moved')!=amount):
+                    raise ValueError('legacy original normal funding not fully proved')
+                funding=dict(ref,original_chest=deepcopy(birth),item='iron-plate',moved=amount)
+    if pending or chain is None:raise ValueError('legacy paid funding and current paid replacement chain missing')
+    return chain
+
+
 class BootstrapLogistics:
     def __init__(self,game,bootstrap,builder,catalog,technology='logistics'):
         if technology!='logistics':validate_bootstrap_research({'technology':technology})
@@ -142,14 +188,14 @@ class BootstrapLogistics:
         name=getattr(self,'technology','logistics');tech=self.catalog.technologies[name]
         if tech.get("research_trigger") or tech["ingredients"]!=[{"name":"automation-science-pack","type":"item","amount":1}]:
             raise ValueError(name+" science rules changed")
-        if name!='logistics'and(type(tech.get('unit_count'))is not int or not 1<=tech['unit_count']<=100 or tech.get('count_formula')):
+        if not self._is_legacy()and(type(tech.get('unit_count'))is not int or not 1<=tech['unit_count']<=100 or tech.get('count_formula')):
             raise ValueError('bootstrap research requires a fixed positive unit count no greater than100')
         count=int(tech["unit_count"])
         science=self.catalog.recipe_for_product("automation-science-pack")
         gears=self.catalog.recipe_for_product("iron-gear-wheel")
         def product(recipe,item):
             return sum(p["amount"] for p in recipe["products"] if p["name"]==item and p.get("probability",1)==1)
-        if name!='logistics':
+        if not self._is_legacy():
             if({p['name']for p in science['ingredients']}!={'iron-gear-wheel','copper-plate'}
                     or {p['name']for p in gears['ingredients']}!={'iron-plate'}
                     or any(p.get('type','item')!='item'or type(p.get('amount'))is not int or p['amount']<=0
@@ -164,11 +210,15 @@ class BootstrapLogistics:
         return count,{"iron-plate":int(iron),"copper-plate":int(ingredients["copper-plate"])}
 
     def step(self,obs):
-        if self.technology=='logistics':return self._legacy_step(obs)
+        if self._is_legacy():
+            if self.state.get('legacy_repurchase'):return self._legacy_repurchase_step(obs)
+            return self._legacy_step(obs)
         return self._research_step(obs)
 
     def proof(self,obs):
-        if self.technology=='logistics':return self._legacy_proof(obs)
+        if self._is_legacy():
+            if self.state.get('legacy_repurchase'):return self._legacy_repurchase_proof(obs)
+            return self._legacy_proof(obs)
         return self._research_proof(obs)
 
     def _legacy_step(self,obs):
@@ -219,6 +269,8 @@ class BootstrapLogistics:
         if available:
             return {"type":"take","name":"wooden-chest","position":port["position"],"inventory":"chest",
                     "item":"automation-science-pack","count":min(available,count),"reason":"collect real assembled bootstrap science"}
+        recovery=self._legacy_repurchase_monitor(obs)
+        if recovery:return recovery
         return {"status":"waiting","reason":"waiting for machine science and natural logistics research",
                 "evidence":{"required_packs":count,"machine_products_finished":[e.get("products_finished",0) for e in machines],
                             "research_progress":obs.get("research_progress",0)}}
@@ -238,6 +290,131 @@ class BootstrapLogistics:
                 "scope":"finite starter machine funding; not sustained automated raw input or30SPM"}
 
     def _save(self):_atomic_json(self.path,self.state)
+
+    def _is_legacy(self):
+        state=getattr(self,'state',{})
+        return getattr(self,'technology','logistics')=='logistics'and bool(state)and'baseline_produced'in state and'baseline_products_finished'not in state
+
+    def _legacy_original(self):
+        return {k:deepcopy(self.state[k])for k in('world_id','required_packs','allocated_inputs','baseline_produced','baseline_consumed')}
+
+    def _legacy_repurchase_candidate(self,obs):
+        if not self._is_legacy()or self.state.get('legacy_repurchase'):raise ValueError('legacy repurchase is limited to one epoch')
+        count,inputs=self.requirements();plan=self._startup_plan(obs)
+        if(plan is None or self.state['world_id']!=obs['world_id']or self.state['required_packs']!=count
+                or self.state['allocated_inputs']!=inputs):raise ValueError('legacy original funding or registered plan changed')
+        if(obs.get('research')!='logistics'or obs.get('technologies',{}).get('logistics')
+                or type(obs.get('research_progress'))not in(int,float)or obs['research_progress']!=0):
+            raise ValueError('legacy repurchase requires native zero-progress logistics')
+        specs=[e for e in plan['entities']if e['name']in('assembling-machine-1','wooden-chest')]
+        cell=[self.find(obs,e)for e in specs];labs=[e for e in obs['entities']if e['name']=='lab']
+        if(len(cell)!=5 or any(not e or type(e.get('unit_number'))is not int for e in cell)
+                or not labs or not _powered(labs[0])):raise ValueError('legacy live cell/lab identity or power missing')
+        machines=[e for e in cell if e['name']=='assembling-machine-1']
+        if any(not _powered(e)for e in machines):raise ValueError('legacy live machine power missing')
+        red=next(e for e in machines if e.get('recipe')=='automation-science-pack')
+        gear=next(e for e in machines if e.get('recipe')=='iron-gear-wheel')
+        stock=lambda name:sum(e.get('inventory',{}).get(name,0)for e in cell)
+        science=stock('automation-science-pack')+obs.get('inventory',{}).get('automation-science-pack',0)+sum(e.get('inventory',{}).get('automation-science-pack',0)for e in labs)
+        if stock('iron-plate')or stock('iron-gear-wheel')or science or stock('copper-plate')!=inputs['copper-plate']:
+            raise ValueError('legacy repurchase requires Fe/gears/science zero and preserved full copper batch')
+        stats=obs['production']['automation-science-pack']
+        counters=dict(red=red['products_finished'],gear=gear['products_finished'],produced=stats['produced'],consumed=stats['consumed'])
+        if any(type(n)not in(int,float)or not math.isfinite(n)or n<0 for n in counters.values()):raise ValueError('legacy current native counters required')
+        pin=lambda e:{k:deepcopy(e[k])for k in('name','position','unit_number','recipe')if k in e}
+        return plan,dict(original=self._legacy_original(),world_id=obs['world_id'],catalog_fingerprint=self.catalog.fingerprint,
+            plan_hash=_hash(plan),pins=[pin(e)for e in cell]+[pin(labs[0])],baseline=counters,
+            required_packs=count,repurchase_inputs={'iron-plate':inputs['iron-plate']},preserved_copper=inputs['copper-plate'])
+
+    def prepare_legacy_repurchase(self,obs):
+        """Read-only known-replacement repurchase; original goods loss remains unknown."""
+        try:
+            plan,auth=self._legacy_repurchase_candidate(obs)
+            port=next(p for p in auth['pins']if p['position']==next(q['position']for q in plan['ports']if q.get('item')=='iron-plate'))
+            auth['receipt_chain']=_audit_legacy_input_replacement(Path(self.game.cfg.runtime_dir),obs['world_id'],port,auth['repurchase_inputs']['iron-plate'],obs['tick'])
+            auth.update(observed_tick=obs['tick'],historical_goods_loss_quantity='unknown',scope='one normally paid repurchase after known input replacement; no refund or original allocation reset')
+            return dict(ok=True,epoch=dict(id=_hash(auth),authorization=auth,allocated_inputs={},collected_packs=0,supplied_packs=0))
+        except (OSError,KeyError,TypeError,ValueError,StopIteration)as exc:
+            return dict(ok=False,reason='legacy_science_repurchase_audit_unavailable',detail=str(exc))
+
+    def _legacy_epoch_error(self,obs):
+        try:
+            epoch=self.state['legacy_repurchase'];auth=epoch['authorization'];plan=self._startup_plan(obs)
+            if(epoch['id']!=_hash(auth)or auth['original']!=self._legacy_original()or auth['world_id']!=obs['world_id']
+                    or auth['catalog_fingerprint']!=self.catalog.fingerprint or plan is None or auth['plan_hash']!=_hash(plan)):
+                raise ValueError('legacy repurchase world/catalog/original/plan changed')
+            if set(epoch['allocated_inputs'])-set(auth['repurchase_inputs']):raise ValueError('legacy extra funding item')
+            if any(type(n)is not int or not 0<=n<=auth['repurchase_inputs'][k]for k,n in epoch['allocated_inputs'].items()):raise ValueError('legacy repurchase budget exceeded')
+            if any(type(epoch.get(k))is not int for k in('collected_packs','supplied_packs'))or not 0<=epoch['supplied_packs']<=epoch['collected_packs']<=auth['required_packs']:
+                raise ValueError('legacy science transfer credits changed')
+            for pin in auth['pins']:
+                actual=self.find(obs,pin)
+                if not actual or any(actual.get(k)!=v for k,v in pin.items()):raise ValueError('legacy current unit or recipe changed')
+                if pin['name']in('assembling-machine-1','lab')and not _powered(actual):raise ValueError('legacy power unavailable')
+            red=next(self.find(obs,p)for p in auth['pins']if p.get('recipe')=='automation-science-pack')
+            gear=next(self.find(obs,p)for p in auth['pins']if p.get('recipe')=='iron-gear-wheel')
+            now=dict(red=red['products_finished'],gear=gear['products_finished'],**obs['production']['automation-science-pack'])
+            if any(type(now[k])not in(int,float)or not math.isfinite(now[k])or now[k]<n for k,n in auth['baseline'].items()):raise ValueError('legacy native counter rollback')
+        except (KeyError,TypeError,ValueError,StopIteration):return 'legacy_science_repurchase_binding_changed'
+        return None
+
+    def _legacy_repurchase_step(self,obs):
+        error=self._legacy_epoch_error(obs)
+        if error:return dict(status='blocked',reason=error)
+        if self.state.get('pending_transfer'):return dict(status='blocked',reason='bootstrap_research_transfer_outcome_requires_reconciliation')
+        if self.state.get('transfer_error'):return dict(status='blocked',reason=self.state['transfer_error'])
+        proof=self._legacy_repurchase_proof(obs)
+        if proof:return dict(status='succeeded',reason='legacy logistics normally repurchased and researched',evidence=proof)
+        epoch=self.state['legacy_repurchase'];auth=epoch['authorization'];item='iron-plate'
+        left=auth['repurchase_inputs'][item]-epoch['allocated_inputs'].get(item,0)
+        if left:
+            if obs.get('inventory',{}).get(item,0)<left:return self.bootstrap.ensure_item(obs,item,left)
+            plan=self._startup_plan(obs);port=next(p for p in plan['ports']if p.get('item')==item)
+            return self._transfer('legacy_repurchase_fund',dict(type='insert',name='wooden-chest',position=port['position'],inventory='chest',item=item,count=left,
+                reason='normally repurchase finite legacy logistics inputs after known chest replacement'),epoch['id'])
+        if obs.get('research')not in(None,'logistics')and not obs.get('technologies',{}).get('logistics'):
+            return dict(status='blocked',reason='another_research_is_running')
+        if obs.get('research')!='logistics'and not obs.get('technologies',{}).get('logistics'):
+            return dict(type='research',technology='logistics',reason='consume normally repurchased legacy machine science')
+        held=obs.get('inventory',{}).get('automation-science-pack',0);credit=epoch['collected_packs']-epoch['supplied_packs']
+        lab=next(p for p in auth['pins']if p['name']=='lab')
+        if held and credit:return self._transfer('legacy_repurchase_lab',dict(type='insert',name='lab',position=lab['position'],inventory='lab_input',
+            item='automation-science-pack',count=min(held,credit),reason='supply newly collected repurchase science'),epoch['id'])
+        output=next(p for p in self._startup_plan(obs)['ports']if p.get('direction')=='output')
+        chest=self.find(obs,dict(name='wooden-chest',position=output['position']));available=chest.get('inventory',{}).get('automation-science-pack',0)
+        remaining=auth['required_packs']-epoch['collected_packs']
+        if available and remaining:return self._transfer('legacy_repurchase_collect',dict(type='take',name='wooden-chest',position=output['position'],inventory='chest',
+            item='automation-science-pack',count=min(available,remaining),reason='collect newly made repurchase science'),epoch['id'])
+        return dict(status='waiting',reason='waiting_for_new_legacy_repurchase_machine_science',evidence=self._legacy_repurchase_progress(obs))
+
+    def _legacy_repurchase_progress(self,obs):
+        epoch=self.state['legacy_repurchase'];auth=epoch['authorization']
+        red=next(self.find(obs,p)for p in auth['pins']if p.get('recipe')=='automation-science-pack')
+        recipe=self.catalog.recipe_for_product('automation-science-pack');yield_count=sum(p['amount']for p in recipe['products']if p['name']=='automation-science-pack')
+        return dict(technology='logistics',normally_assembled_packs=(red['products_finished']-auth['baseline']['red'])*yield_count,
+            research_science_consumed=obs['production']['automation-science-pack']['consumed']-auth['baseline']['consumed'],
+            original_allocated_inputs=deepcopy(self.state['allocated_inputs']),repurchase_allocated_inputs=deepcopy(epoch['allocated_inputs']),
+            repurchase_id=epoch['id'],historical_goods_loss_quantity='unknown')
+
+    def _legacy_repurchase_proof(self,obs):
+        if not obs.get('technologies',{}).get('logistics')or self._legacy_epoch_error(obs)or self.state.get('pending_transfer')or self.state.get('transfer_error'):return None
+        evidence=self._legacy_repurchase_progress(obs);auth=self.state['legacy_repurchase']['authorization']
+        if self.state['legacy_repurchase']['allocated_inputs']!=auth['repurchase_inputs']:return None
+        if evidence['normally_assembled_packs']<auth['required_packs']or evidence['research_science_consumed']<auth['required_packs']:return None
+        return dict(evidence,tick=obs['tick'],receipt_chain=auth['receipt_chain'],scope=auth['scope'])
+
+    def _legacy_repurchase_monitor(self,obs):
+        try:_,auth=self._legacy_repurchase_candidate(obs)
+        except (KeyError,TypeError,ValueError,StopIteration):return None
+        signature=_hash(auth);previous=self.state.get('legacy_repurchase_stall')
+        if not previous or previous['signature']!=signature:
+            self.state['legacy_repurchase_stall']=dict(signature=signature,tick=obs['tick']);self._save();return None
+        if obs['tick']<previous['tick']:return dict(status='blocked',reason='legacy_science_stall_tick_rollback')
+        if obs['tick']-previous['tick']<DIVERSION_STALL_TICKS:return None
+        proposal=self.prepare_legacy_repurchase(obs)
+        if not proposal['ok']:return dict(status='blocked',reason=proposal['reason'],evidence=proposal)
+        self.state['legacy_repurchase']=proposal['epoch'];self._save()
+        return self._legacy_repurchase_step(obs)
 
     def _recovery_frame(self):
         return {key:deepcopy(self.state[key])for key in ('world_id','catalog_fingerprint','technology','plan_hash',
@@ -463,7 +640,7 @@ class BootstrapLogistics:
         return {'status':'waiting','reason':'waiting_for_finite_machine_science_and_native_research','evidence':self._progress(obs)}
 
     def _transfer(self,kind,action,recovery_id=None):
-        self.state['transfer_sequence']+=1
+        self.state['transfer_sequence']=self.state.get('transfer_sequence',0)+1
         self.state['pending_transfer']=dict(kind=kind,action=deepcopy(action),sequence=self.state['transfer_sequence'])
         if recovery_id:self.state['pending_transfer']['recovery_id']=recovery_id
         self._save();return action
@@ -477,6 +654,16 @@ class BootstrapLogistics:
             raise ValueError('bootstrap research transfer outcome unknown; retain durable intent')
         kind=pending['kind'];item=action['item']
         if kind=='fund':self.state['allocated_inputs'][item]=self.state['allocated_inputs'].get(item,0)+moved
+        elif kind in('legacy_repurchase_fund','legacy_repurchase_collect','legacy_repurchase_lab'):
+            epoch=self.state.get('legacy_repurchase',{});auth=epoch.get('authorization',{})
+            if(epoch.get('id')!=pending.get('recovery_id')or epoch.get('id')!=_hash(auth)or auth.get('original')!=self._legacy_original()):
+                raise ValueError('legacy repurchase funding contract changed; retain durable intent')
+            if kind=='legacy_repurchase_fund':
+                total=epoch['allocated_inputs'].get(item,0)+moved
+                if total>auth['repurchase_inputs'].get(item,0):raise ValueError('legacy repurchase funding exceeds finite budget')
+                epoch['allocated_inputs'][item]=total
+            elif kind=='legacy_repurchase_collect':epoch['collected_packs']+=moved
+            else:epoch['supplied_packs']+=moved
         elif kind=='repair_fund':
             epoch=next((e for e in self.state.get('diversion_recoveries',[])if e['id']==pending.get('recovery_id')),None)
             if epoch is None or self._recovery_error():raise ValueError('audited repair funding contract changed; retain durable intent')

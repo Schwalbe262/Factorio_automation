@@ -275,6 +275,24 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(self.control.logs(lines=3)['logs']['supervisor-process.log'],['97','98','99'])
         with self.assertRaises(ValueError):self.control.logs(lines=201)
 
+    def test_status_explains_active_wait_without_exposing_native_payloads(self):
+        self.now=100;self.launch();state={'active_job_key':'science'}
+        state['last_error']='password=secret';self.write(self.root/STATE,state)
+        self.write(self.root/'jobs.json',dict(world_id='world',jobs={'science':dict(
+            capability='bootstrap_logistics',status='waiting',reason='legacy_science_raw_input_shortage',
+            actions=22,failures=0,last_tick=100,progress_at_time=self.now-40,
+            evidence={'item':'iron-plate','required':40,'position':{'x':9,'y':3},'password':'secret'})}))
+        # Fixture world identity is read from the native settings, just as in a real run.
+        value=json.loads((self.root/'jobs.json').read_text())
+        value['world_id']=json.loads((self.root/'world-settings.json').read_text())['world_id']
+        self.write(self.root/'jobs.json',value)
+        result=self.control.status();current=result['current_task']
+        self.assertEqual(current['diagnosis']['reason'],'legacy_science_raw_input_shortage')
+        self.assertEqual(current['seconds_without_progress'],40)
+        self.assertNotIn('secret',json.dumps(result));self.assertNotIn('position',json.dumps(current))
+        value['world_id']='foreign';self.write(self.root/'jobs.json',value)
+        with self.assertRaises(ValueError):self.control.status()
+
     def test_all_batch_files_delegate_with_absolute_repo_source_and_no_process_kills(self):
         repo=Path(__file__).resolve().parents[1]
         for name,command in [('start','start'),('stop','stop'),('new_map','new-map'),('gui','gui'),('status','status'),('logs','logs'),('shutdown','shutdown')]:

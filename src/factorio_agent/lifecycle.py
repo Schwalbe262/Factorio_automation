@@ -391,6 +391,21 @@ class Lifecycle:
         nodes=work.get('nodes',[])
         tasks=[{k:node.get(k)for k in('id','capability','status','priority','depends_on','last_reason')}
                for node in nodes if node.get('status')!='completed'][:32]
+        from .supervisor import blocker_summary,_diagnostic_text
+        ledger=read(root/'jobs.json',{})
+        world=read(root/'world-settings.json',{}).get('world_id')
+        if(ledger.get('jobs')or ledger.get('world_id'))and ledger.get('world_id')!=world:
+            raise ValueError('job diagnostics belong to a different world')
+        key=state.get('active_job_key');job=ledger.get('jobs',{}).get(key)
+        current=None
+        if job is not None:
+            node=next((n for n in nodes if n.get('job_key')==key),{})
+            current={k:job.get(k)for k in('capability','status','actions','failures','last_tick')}
+            current.update(task_id=node.get('id'),diagnosis=blocker_summary(job))
+            since=job.get('progress_at_time')
+            if type(since)in(int,float)and since>0:
+                until=job.get('paused_at_time')if job.get('status')=='paused'else self.clock()
+                if type(until)in(int,float):current['seconds_without_progress']=round(max(0,until-since),1)
         processes={}
         for kind in('server','client','supervisor'):
             try:
@@ -398,6 +413,7 @@ class Lifecycle:
             except (RuntimeError,OSError)as exc:processes[kind]=dict(running=False,reason=str(exc))
         return dict(runtime=str(root),seed=cfg['seed'],world_id=read(root/'world-settings.json',{}).get('world_id'),processes=processes,
             controller_status=state.get('status'),active_job=state.get('active_job_key'),game_pause=read(root/PAUSE,{}).get('phase'),
+            current_task=current,controller_error=_diagnostic_text(state.get('last_error')),
             queue_completed=sum(node.get('status')=='completed'for node in nodes),queue_tasks=tasks)
 
     def logs(self,*,lines=60,open_folder=False):

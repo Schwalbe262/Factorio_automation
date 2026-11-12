@@ -90,3 +90,10 @@ class FundedResearchReuseTests(unittest.TestCase):
             result=self.executor.step('bootstrap_logistics',self.obs,{})
         self.assertEqual(result['reason'],'native_machine_science')
         self.executor.industry.local_power_ready.assert_called_once_with(self.obs)
+
+    def test_logistics_acknowledges_its_own_recovery_after_shared_owner_finishes(self):
+        self.executor.industry=SimpleNamespace(record_action=Mock())
+        action={'type':'insert','item':'iron-plate','count':40};receipt={'ok':True,'moved':40}
+        self.executor.record_action('bootstrap_logistics',self.obs,action,receipt,{})
+        self.executor.industry.record_action.assert_called_once_with(action,receipt)
+        self.batch.record_action.assert_not_called()

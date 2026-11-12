@@ -66,6 +66,9 @@ Read the latest planner error before proposing a replacement decision.
 Never retry unknown outcomes. If a job is running,
 normally continue it. A locked or blocked task needs a concrete prerequisite or
 repair, not repeated blind retries. Do not claim completion without native proof.
+A waiting job's reason is its real executor condition, even after a time slice.
+Judge that condition and native progress before continuing; a slice ending does
+not resolve missing fuel, inputs or prerequisite research.
 Layout planning or search-budget failures are executor faults, not evidence of
 insufficient mining capacity. Do not repeatedly expand a resource to treat them.
 The user's goal is rapid scalable progress toward a rocket, with clean layouts,

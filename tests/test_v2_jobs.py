@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 from factorio_ai.deterministic_state import RunLock
-from factorio_agent.jobs import Ledger, Request, control, run_slice, submit
+from factorio_agent.jobs import Ledger, Request, control, progress_key, run_slice, submit
 from factorio_agent.__main__ import main
 
 
@@ -55,6 +55,32 @@ class JobBoundaryTests(unittest.TestCase):
 
     def request(self, key="test", capability="starter", tick=100):
         return Request(key, "world", tick, capability)
+
+    def test_unrelated_ore_production_cannot_mask_stalled_science(self):
+        obs=self.game.observation
+        for capability in ('bootstrap_logistics','bootstrap_research','starter_research'):
+            before=progress_key(obs,capability)
+            obs['production']['iron-plate']={'produced':100,'consumed':20}
+            obs['production']['coal']={'produced':400,'consumed':300}
+            obs['inventory']={'iron-plate':300}
+            self.assertEqual(before,progress_key(obs,capability))
+            obs['production'].clear()
+
+    def test_real_science_or_research_advances_the_science_watchdog(self):
+        obs=self.game.observation
+        for field,value in (('research','logistics'),('research_progress',.1)):
+            before=progress_key(obs,'bootstrap_logistics');obs[field]=value
+            self.assertNotEqual(before,progress_key(obs,'bootstrap_logistics'))
+        before=progress_key(obs,'bootstrap_logistics')
+        obs['production']['automation-science-pack']={'produced':1,'consumed':0}
+        self.assertNotEqual(before,progress_key(obs,'bootstrap_logistics'))
+
+    def test_science_construction_counts_while_unrelated_defense_does_not(self):
+        obs=self.game.observation;before=progress_key(obs,'bootstrap_logistics')
+        obs['entities']=[{'name':'gun-turret','unit_number':1}]
+        self.assertEqual(before,progress_key(obs,'bootstrap_logistics'))
+        obs['entities'].append({'name':'assembling-machine-1','unit_number':2})
+        self.assertNotEqual(before,progress_key(obs,'bootstrap_logistics'))
 
     def test_worker_stop_is_lock_independent_input_and_stops_before_next_action(self):
         submit(self.root, self.game, self.request())
@@ -192,8 +218,18 @@ class JobBoundaryTests(unittest.TestCase):
         submit(self.root, self.game, self.request())
         result = run_slice(self.root, self.game, Executor({"status": "waiting", "reason": "crafting"}), "test", seconds=.001)
         self.assertEqual(result["status"], "waiting")
-        self.assertEqual(result["reason"], "execution_slice_complete")
+        self.assertEqual(result["reason"], "crafting")
+        self.assertEqual(result['slice_yield_reason'],'execution_slice_complete')
         self.assertEqual(self.game.actions, [])
+
+    def test_real_power_blocker_survives_the_slice_and_restart(self):
+        submit(self.root,self.game,self.request())
+        result=run_slice(self.root,self.game,Executor({'status':'waiting',
+            'reason':'waiting for dedicated coal, water, and steam flow','evidence':{'drill_fuel':0}}),'test',seconds=.001)
+        saved=Ledger(self.root).data['jobs']['test']
+        self.assertEqual(saved['reason'],result['reason'])
+        self.assertEqual(saved['evidence']['drill_fuel'],0)
+        self.assertNotEqual(saved['reason'],'execution_slice_complete')
 
     def test_model_can_pause_a_slow_goal_do_another_job_and_resume(self):
         submit(self.root, self.game, self.request())
