@@ -90,16 +90,16 @@ Current capabilities:
 | electric_coal | none | power and naturally unlocked electric-mining-drill |
 | mining_outpost | `--resource iron-ore` (or copper-ore/coal/stone), `--rate-per-minute 1..960` absolute nominal target | power and electric-mining-drill |
 | smelting_district | none; initial district has iron60/copper30 nominal inputs | power, bootstrap_logistics, mining_outpost; one ready bank each iron60/copper30/coal30 |
-| smelting_capacity | `--resource iron-ore` or copper-ore, `--rate-per-minute` finite (0,450] absolute nominal target | paired_smelting; connected ore and installed furnace types must cover the target within six reserved pairs |
-| paired_smelting | none | smelting_district; migrate to independent upper/lower producer rows |
-| paired_mining | none | paired_smelting; normally recover legacy ore cells, directly feed both collector lanes |
-| automation_science | `--rate-per-minute` finite (0,30] requested red-science rate | paired_smelting; normally connect raw plate belts, machines and labs |
+| smelting_capacity | `--resource iron-ore` or copper-ore, `--rate-per-minute` finite (0,450] absolute nominal target | smelting_district; connected ore and installed furnace types must cover the target within six reserved pairs |
+| paired_smelting | none | smelting_district; old development map migration only, not a roadmap step |
+| paired_mining | none | paired_smelting; old development map migration only, not a roadmap step (fresh banks are built paired) |
+| automation_science | `--rate-per-minute` finite (0,30] requested red-science rate | smelting_district; normally connect the district's plate output ports, machines and labs |
 | logistic_science | `--rate-per-minute` finite (0,30] requested green-science rate | automation_science; native green-science and fast-inserter unlocks |
 | steam_expansion | none | electric_coal; ordinary paired coal bank and another boiler/engine pair |
 | defense_perimeter | none | starter; native gun-turret research and recipes |
-| main_bus_factory | none | paired_smelting, logistic_science, defense_perimeter; migrate to shared bus and compact green |
-| dedicated_materials | `--resource coal` or stone | paired_mining; independent opposing drill pair and identity-bound material outlets |
-| chemical_coal_supply | none | paired_mining; separate defended chemistry coal pair, preserve current supplies and publish only plastic-coal |
+| main_bus_factory | none | smelting_district, logistic_science, defense_perimeter; migrate to shared bus and compact green |
+| dedicated_materials | `--resource coal` or stone | mining_outpost; independent opposing drill pair and identity-bound material outlets |
+| chemical_coal_supply | none | mining_outpost; separate defended chemistry coal pair, preserve current supplies and publish only plastic-coal |
 | green_bus_reroute | none | main_bus_factory; move only green raw branches off resources, preserve production core |
 | ore_transport_reroute | none | paired_mining and paired_smelting; move iron delivery after the last join, preserve mining, prove new ore flow and iron production |
 | steel_supply | none | main_bus_factory; dynamic surplus-priority iron outlet |

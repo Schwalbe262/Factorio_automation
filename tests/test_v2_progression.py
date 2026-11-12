@@ -150,10 +150,16 @@ class AutopilotTests(unittest.TestCase):
         self.assertFalse([n for n in self.propose(jobs, observation=gates) if n["capability"] == "mining_outpost"])
 
     def test_requires_must_have_succeeded_jobs(self):
-        # automation_science requires paired_smelting; a queued node is not enough.
-        jobs = done_through("smelting_district")
-        queue = [{"id": "x", "capability": "paired_smelting", "parameters": {}}]
+        # automation_science requires smelting_district; a queued node is not enough.
+        jobs = done_through("mining_outpost_coal")
+        queue = [{"id": "x", "capability": "smelting_district", "parameters": {}}]
         self.assertNotIn("auto_automation_science", ids(self.propose(jobs, queue, limit=10)))
+
+    def test_red_science_follows_the_smelting_district_without_migrations(self):
+        # paired_smelting / paired_mining migrate the old development map only.
+        self.assertFalse({"paired_smelting", "paired_mining"} & {s.capability for s in pg.ROADMAP})
+        nodes = self.propose(done_through("smelting_district"), limit=10)
+        self.assertEqual(ids(nodes)[0], "auto_automation_science")
 
     def test_research_step_waits_for_available_research_listing(self):
         jobs = done_through("automation_science")
@@ -341,7 +347,7 @@ class WantedRecipeTests(unittest.TestCase):
         self.assertEqual(recipes, ["electric-mining-drill", "underground-belt", "splitter"])
 
     def test_horizon_limits_the_lookahead(self):
-        jobs = done_through("paired_mining")
+        jobs = done_through("smelting_district")
         self.assertEqual(
             pg.roadmap_wanted_recipes(jobs, CAPABILITIES, horizon=1),
             ["assembling-machine-1", "automation-science-pack", "lab"],

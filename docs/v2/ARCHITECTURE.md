@@ -58,6 +58,7 @@ jobs.run_jobs: per pass one observe; jobs in priority order; StarterExecutors.st
 | Space | `site/candidates.py`, `site/render.py`, `site/planrender.py`, `site/fakeworld.py`, `site/fakegame.py` | free sites; SVG; synthetic maps and a lupa survey fake for tests |
 | Space | `smelting_site.py`, `mining_site.py` | smelting district on the plan zone; mining bank exit side from the plan |
 | Space | `production_rows.py`, `production_layout.py`, `production_site.py`, `production_sources.py` | `produce` capability: design, place, route, power, preflight, stock chest |
+| Space | `plate_supply.py` | plate source ports for red science: the district's registered output ports (old `smelter-lanes.json` only as a same-world fallback), never a port another owner took |
 | Space | `blocks/` | recipe rows: `sizing`, `row`, `derate`, `audit`, `stock_tail`, ASCII `render` |
 | Space | `planning.py` | `preflight` (whole-block native check), `survey_slots` |
 | Space | `transport.py`, `routing.py`, `power_grid.py`, `manufacturing.py` | belt corridors (`plan_connection`), trunks, pole plans, `connect_power_groups` |

@@ -107,6 +107,61 @@ class PowerBridgeAvoidsOtherBlocksTests(unittest.TestCase):
         self.assertEqual(_foreign_block_points(SimpleNamespace(), self.builder, (0.5, 0.5), {(1.5, 1.5)}), set())
 
 
+class PowerBridgeLeavesDeepBlockPolesTests(unittest.TestCase):
+    """Live seed 1400895309: red science sites failed with no_bounded_pole_hop_connection.
+
+    The nearest supplied pole was a smelting furnace pole more than one hop
+    from the district edge; every hop out of it lay on the district's
+    reserved land, so the search box around it had no way out.
+    """
+
+    def test_search_falls_back_to_the_nearest_supplied_pole_outside_other_blocks(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        from factorio_agent.power_grid import plan_connection
+
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        board = {"world_id": "w1", "blocks": {"smelting_district": {"reserved_area": [[0, -20], [40, 20]]}}}
+        (root / "pcb-board.json").write_text(json.dumps(board), encoding="utf-8")
+
+        def query(lua):
+            payload = lua.split("helpers.json_to_table(", 1)[1].split(");local clear", 1)[0]
+            points = json.loads(json.loads(payload))["points"]
+            return {"ok": True, "clear": list(range(1, len(points) + 1))}
+
+        game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=root), query=query)
+        builder = SimpleNamespace(
+            _occupied_by_plan=lambda entities: {(e["position"]["x"], e["position"]["y"]) for e in entities}
+        )
+
+        def pole(x, y, unit):
+            return {
+                "name": "small-electric-pole",
+                "position": {"x": x, "y": y},
+                "electric_network_id": 1,
+                "unit_number": unit,
+            }
+
+        engine = {"name": "steam-engine", "position": {"x": 0, "y": 90}, "electric_network_id": 1, "energy": 1}
+        deep = pole(30.5, 0.5, 1)  # nearest to the goal, 9.5 tiles inside the district edge
+        outside = pole(30.5, 40.5, 2)
+        obs = {"world_id": "w1", "entities": [engine, deep]}
+        self.assertEqual(
+            plan_connection(game, builder, obs, {"x": 60.5, "y": 0.5})["reason"], "no_bounded_pole_hop_connection"
+        )
+        obs["entities"].append(outside)
+        result = plan_connection(game, builder, obs, {"x": 60.5, "y": 0.5})
+        self.assertTrue(result["ok"], result.get("reason"))
+        self.assertEqual(result["source_unit_number"], 2)
+        for e in result["entities"]:
+            self.assertFalse(0 <= e["position"]["x"] <= 40 and -20 <= e["position"]["y"] <= 20, e)
+
+
 class SharedErrorClassTests(unittest.TestCase):
     def test_supervisor_run_as_a_script_catches_the_bridge_error(self):
         """A refused submit raised by the in-process bridge must be the class the supervisor catches.
