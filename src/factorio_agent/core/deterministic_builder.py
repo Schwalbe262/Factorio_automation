@@ -151,6 +151,11 @@ def _plan(entities: list[dict], ports: list[dict], **extra: Any) -> dict:
     }
 
 
+# Coal under a dedicated power drill's 3x3 search area, in items. A burner
+# drill mines 15 coal/min, so this is several hours of boiler fuel.
+DEDICATED_COAL_MINIMUM = 4000
+
+
 class FactoryBuilder:
     def __init__(self, game: Any, bootstrap: Any, catalog: Any):
         self.game, self.bootstrap, self.catalog = game, bootstrap, catalog
@@ -816,22 +821,29 @@ return success{blocked=blocked,clearable=clearable}
         return sorted(banks, key=detour)
 
     def coal_sites(self) -> list[dict]:
-        result = self.game.query("""
+        # A drill on the thin fringe of a patch runs dry within minutes and the
+        # power feed then waits forever, so require real ore under the drill.
+        result = self.game.query(
+            "local MINIMUM="
+            + str(int(DEDICATED_COAL_MINIMUM))
+            + """
 local out={};local seen={}
 for _,e in pairs(s.find_entities_filtered{position={0,0},radius=192,name="coal",limit=3000}) do
  local p={x=math.floor(e.position.x+0.5),y=math.floor(e.position.y+0.5)};local key=p.x..":"..p.y
  if not seen[key] then
   seen[key]=true
-  local mixed=false
+  local mixed=false;local amount=0
   for _,r in pairs(s.find_entities_filtered{area={{p.x-1,p.y-1},{p.x+1,p.y+1}},type="resource"}) do
    if r.name~="coal" then mixed=true;break end
+   amount=amount+r.amount
   end
-  if not mixed then out[#out+1]=p end
+  if not mixed and amount>=MINIMUM then out[#out+1]=p end
  end
 end
 table.sort(out,function(a,b) return a.x*a.x+a.y*a.y<b.x*b.x+b.y*b.y end)
 return success{sites=out}
-""")
+"""
+        )
         return result.get("sites", [])
 
     @staticmethod

@@ -118,6 +118,12 @@ class TimeComparisonTests(unittest.TestCase):
         self.assertEqual(plan_capacity(None, {}), [])
         self.assertEqual(plan_capacity({}, {"iron-plate": 100}), [])
 
+    def test_spare_stock_covers_upcoming_demand(self):
+        stocked = iron(shortfall=0, available=195, required=21, net_per_minute=-5, produced_per_minute=15)
+        self.assertEqual(plan_capacity({"iron-plate": stocked}, {"iron-plate": 62}), [])
+        short = iron(shortfall=0, available=30, required=21, net_per_minute=-5, produced_per_minute=15)
+        self.assertEqual(len(plan_capacity({"iron-plate": short}, {"iron-plate": 400})), 1)
+
     def test_max_cells_cap(self):
         decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=3)}, {})
         self.assertEqual(decisions[0].target_cells, 4)

@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 from factorio_agent.core.deterministic_state import _atomic_json
+from .construction_supply import FUELS, FUEL_SKIP_STOCK
 
 
 def validate_parameters(parameters: dict) -> None:
@@ -86,7 +87,16 @@ return best or {ok=false,reason="no_clear_starter_capacity_site"}
         productive = []
         for cell in cells:
             receiver = self.matching(obs, cell["receiver"])
-            if not receiver or not (cell.get("fuel", 0) > 0 or cell.get("burning") or cell.get("operating")):
+            if not receiver:
+                continue
+            # Fuel upkeep deliberately stops feeding a cell whose receiver
+            # already holds FUEL_SKIP_STOCK finished items. Such a cell is idle
+            # by design and still counts; an empty unfuelled cell does not.
+            finished = receiver.get("output_inventory")
+            if finished is None:
+                finished = {k: v for k, v in (receiver.get("inventory") or {}).items() if k not in FUELS}
+            stocked = sum(finished.values()) >= FUEL_SKIP_STOCK
+            if not (stocked or cell.get("fuel", 0) > 0 or cell.get("burning") or cell.get("operating")):
                 continue
             produced = (
                 receiver.get("products_finished", 0)

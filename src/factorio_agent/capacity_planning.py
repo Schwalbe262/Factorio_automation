@@ -7,7 +7,8 @@ the current construction bill (``progression.lookahead_demand``).
 
 Decision rule per raw item (all times in seconds, rates in items/minute):
 
-- ``required = max(0, shortfall) + demand[item]`` (items).
+- ``required = max(0, shortfall) + max(0, demand[item] - spare stock)`` (items),
+  where spare stock is what is on hand beyond the current bill.
 - Waiting: ``T(0) = 60 * required / net`` (infinite when ``net <= 0``).
 - Expanding by ``k = 1..max_step`` cells: the cells cost
   ``k * raw_cost_per_cell``. The capacity job runs at top priority, so it gets
@@ -167,6 +168,12 @@ class _Facts:
 def _facts(item: str, evidence: Mapping, demand: Mapping, config: CapacityConfig) -> _Facts:
     shortfall = max(0.0, _number(evidence.get("shortfall")) or 0.0)
     extra = max(0.0, _number(demand.get(item)) or 0.0) if isinstance(demand, Mapping) else 0.0
+    # Stock beyond the current bill (plates sitting in furnaces and chests)
+    # already covers part of the upcoming demand; do not expand to make it twice.
+    available = _number(evidence.get("available"))
+    billed = _number(evidence.get("required"))
+    if available is not None and billed is not None:
+        extra = max(0.0, extra - max(0.0, available - billed))
     produced = _number(evidence.get("produced_per_minute"))
     productive = _number(evidence.get("productive_cells"))
     cell_rate = _number(evidence.get("cell_capacity_per_minute"))
