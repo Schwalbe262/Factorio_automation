@@ -123,6 +123,50 @@ def clear_skeleton(vertices,rows,columns,bounds,max_turns):
     return tuple(points)
 
 
+def return_jog_skeletons(a,b,limits,start_direction,end_direction,rows,columns,trunk_lanes,clearance,max_turns):
+    """Bounded local source return, followed by complete clearance trunks.
+
+    A nearby parallel consumer can trap a straight port escape between two
+    producers. One short sideways step and return can reach a different trunk
+    without moving either port. These are whole six-turn candidates, not a
+    tile search, and are considered only after the established families fail.
+    """
+    if(max_turns<6 or start_direction not in VECTORS or end_direction not in VECTORS
+            or start_direction%8!=end_direction%8):return []
+    axis=0 if start_direction%8==4 else 1;other=1-axis
+    forward=VECTORS[start_direction][axis];arrival=VECTORS[end_direction][axis]
+    def coords(u,v):
+        p=[0,0];p[axis]=u;p[other]=v;return tuple(p)
+    first=coords(a[axis]+forward,a[other])
+    if clear_skeleton([a,first],rows,columns,limits,0)is None:return []
+    bars=sorted(set(trunk_lanes[other])|clearance[other])
+    low,high=limits['min_x'if axis==0 else'min_y'],limits['max_x'if axis==0 else'max_y']
+    lanes=[a[axis]+i for i in range(math.ceil(low-a[axis]),math.floor(high-a[axis])+1)
+           if(b[axis]-a[axis]-i)*arrival>0]
+    lanes.sort(key=lambda lane:(abs(lane-b[axis]),lane))
+    destinations={}
+    for bar in bars:
+        clear=[]
+        for lane in lanes:
+            tail=[coords(lane,bar),coords(lane,b[other]),b]
+            if clear_skeleton(tail,rows,columns,limits,2)is not None:
+                clear.append(lane)
+                if len(clear)==16:break
+        if clear:destinations[bar]=clear
+    candidates=[]
+    for escape in range(1,5):
+        pe=coords(a[axis]+escape*forward,a[other])
+        for jog in(-4,-3,-2,-1,1,2,3,4):
+            corner=coords(pe[axis],a[other]+jog)
+            for back in range(1,5):
+                returned=coords(pe[axis]-back*forward,corner[other])
+                for bar,ends in destinations.items():
+                    prefix=[a,pe,corner,returned,coords(returned[axis],bar)]
+                    if clear_skeleton(prefix,rows,columns,limits,4)is None:continue
+                    candidates.extend(prefix+[coords(lane,bar),coords(lane,b[other]),b]for lane in ends)
+    return candidates
+
+
 def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
                  end_direction=None, max_nodes=25000, max_turns=6,
                  max_detour_ratio=1.35, grid_pitch=8, candidate_validator=None):
@@ -253,8 +297,12 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
         valid = [];seen_skeletons=set()
         visited = 0;rejected_skeletons=0
         direct = abs(a[0]-b[0]) + abs(a[1]-b[1])
-        for legacy,candidates in ((True,legacy_skeletons),(False,skeletons)):
+        for family in range(3):
             if visited >= max_nodes:break
+            if family==0:candidates=legacy_skeletons
+            elif family==1:candidates=skeletons
+            else:candidates=return_jog_skeletons(a,b,limits,start_direction,end_direction,hard_rows,hard_columns,
+                                                trunk_lanes,clearance,max_turns)
             candidates.sort(key=lambda vs: sum(abs(p[0]-q[0])+abs(p[1]-q[1]) for p,q in zip(vs,vs[1:])))
             for skeleton in candidates:
                 estimated = sum(abs(p[0]-q[0])+abs(p[1]-q[1]) for p,q in zip(skeleton,skeleton[1:]))
@@ -264,7 +312,7 @@ def route_trunks(start, end, *, occupied=(), bounds=None, start_direction=None,
                 if canonical is None:rejected_skeletons+=1;continue
                 if canonical in seen_skeletons:continue
                 seen_skeletons.add(canonical)
-                # One shared budget covers every materialized node in BOTH
+                # One shared budget covers every materialized node in ALL
                 # families. Impossible polylines are rejected by indexed ranges
                 # before expand(), rather than spending the fallback's budget.
                 if visited+int(estimated)+1>max_nodes:break
