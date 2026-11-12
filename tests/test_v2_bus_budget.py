@@ -66,3 +66,25 @@ class SteelCapacityDispatchTests(unittest.TestCase):
         ex.steel_capacity.step.assert_called_once_with(obs,params)
         self.assertEqual(ex.proof('steel_capacity',obs,{},params)['new_furnace_units'],[10,11])
         ex.steel_capacity.proof.assert_called_once_with(obs)
+
+
+class EngineCapacityDispatchTests(unittest.TestCase):
+    def test_request_rejects_invalid_or_extra_rate_parameters(self):
+        Request('engine12','world',100,'engine_capacity',{'rate_per_minute':12}).validate()
+        for params in ({},{'rate_per_minute':True},{'rate_per_minute':float('nan')},
+                       {'rate_per_minute':-1},{'rate_per_minute':12,'ignore_costs':True}):
+            with self.subTest(params=params),self.assertRaises(ValueError):
+                Request('engine12','world',100,'engine_capacity',params).validate()
+
+    def test_public_step_and_independent_proof_use_the_same_engine_extension(self):
+        ex=StarterExecutors.__new__(StarterExecutors)
+        ex.builder=SimpleNamespace(_sync=Mock());ex.starter_observation=Mock(return_value={})
+        ex.starter_upkeep=Mock(return_value={'status':'succeeded'});ex.normal_research=SimpleNamespace()
+        ex.engine_capacity=SimpleNamespace(step=Mock(return_value={'type':'build_many'}),
+            proof=Mock(return_value={'new_machine_units':[20,21]}))
+        obs={'tick':100};params={'rate_per_minute':12}
+        with patch('factorio_agent.upgrades.next_upgrade',return_value=None):
+            self.assertEqual(ex.step('engine_capacity',obs,params)['type'],'build_many')
+        ex.engine_capacity.step.assert_called_once_with(obs,params)
+        self.assertEqual(ex.proof('engine_capacity',obs,{},params)['new_machine_units'],[20,21])
+        ex.engine_capacity.proof.assert_called_once_with(obs)

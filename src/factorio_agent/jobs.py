@@ -97,6 +97,8 @@ CAPABILITIES = {
                         "effect":"normally connect the exact proven crude source to a defended refinery using isolated bounded pipe segments; prove native petroleum production and publish a fixed gas outlet"},
     "engine_production": {"parameters":{},"requires":["steel_production","main_bus_factory"],
                           "effect":"normally build a defended compact engine district with a surplus iron tap, fixed steel supply and reserved machine expansion; prove real engines on its output"},
+    "engine_capacity": {"parameters":{"rate_per_minute":"positive absolute engine target within reserved machine slots"},"requires":["engine_production","steel_capacity"],
+                        "effect":"normally add engine machines in reserved space, preserve old units and source pins, verify new output and publish additive iron demand"},
     "chemical_production": {"parameters":{"product":"plastic-bar|sulfur"},"requires":["basic_petroleum"],
                             "effect":"normally build compact defended chemical cells with exact declared fluid handoffs and paid typed ingredient connections; prove actual solid chemical output"},
     "gas_distribution": {"parameters":{},"requires":["basic_petroleum"],
@@ -145,6 +147,9 @@ class Request:
             validate_capacity(self.parameters)
         elif self.capability == "steel_capacity":
             from .steel_capacity import validate_parameters
+            validate_parameters(self.parameters)
+        elif self.capability == "engine_capacity":
+            from .engine_capacity import validate_parameters
             validate_parameters(self.parameters)
         elif self.capability == "automation_science":
             from .science import validate_rate
@@ -441,6 +446,7 @@ class StarterExecutors:
         self.infrastructure_repair=None
         self.registered_belt_repair=None
         self.steel_capacity=None
+        self.engine_capacity=None
         from .advanced_circuits import AdvancedCircuitProduction
         self.advanced_circuits=AdvancedCircuitProduction(game,self.builder,catalog,self.perimeter,
                                                         bus_factory=self.bus_factory,science=self.science,
@@ -520,6 +526,13 @@ class StarterExecutors:
             self.steel_capacity=SteelCapacity(self.game,self.builder,self.catalog,self.perimeter,
                 steel=self.industrial_operations.steel,industrial=self.industrial_operations)
         return self.steel_capacity
+
+    def _engine_capacity(self):
+        if self.engine_capacity is None:
+            from .engine_capacity import EngineCapacity
+            self.engine_capacity=EngineCapacity(self.game,self.builder,self.catalog,self.perimeter,
+                engine=self.engines)
+        return self.engine_capacity
 
     def _piercing_upkeep(self,obs):
         factory=getattr(self,'piercing_ammo',None)
@@ -815,6 +828,8 @@ class StarterExecutors:
             return self.ammo.step(obs)
         if capability == "engine_production":
             return self.engines.step(obs)
+        if capability == "engine_capacity":
+            return self._engine_capacity().step(obs,parameters or {})
         if capability == "chemical_production":
             return self.chemicals.step(obs,parameters or {})
         if capability == "gas_distribution":
@@ -913,6 +928,8 @@ class StarterExecutors:
             return self.ammo.proof(obs)
         if capability == "engine_production":
             return self.engines.proof(obs)
+        if capability == "engine_capacity":
+            return self.engine_capacity.proof(obs) if self.engine_capacity is not None else None
         if capability == "chemical_production":
             return self.chemicals.proof(obs,parameters or {})
         if capability == "gas_distribution":

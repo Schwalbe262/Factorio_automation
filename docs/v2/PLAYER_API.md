@@ -259,6 +259,13 @@ preserved original IDs are required; existing Engine pins accept only verified
 additive ancestry. Shared iron demand includes the added allocation; catalog
 capacity is not measured throughput. See [steel expansion](STEEL_CAPACITY.md).
 
+`engine_capacity --rate-per-minute 12` adds two normally paid engine assemblers
+inside the existing reservation, retaining every old unit and port. It requires
+the commissioned Steel extension. New machines must start with empty process
+inventories and zero counters before their input arms are built, then actually
+produce. The fixed iron tap stays24/min; a separate allocation records its
+additional24/min demand. See [engine extension](ENGINE_CAPACITY.md).
+
 `steam_expansion` preserves the original plant, adds a dedicated paired coal
 bank and another boiler/two-engine cell, then samples actual native generation
 for thirty game seconds. Added1800kW is nameplate capacity; loaded positive
