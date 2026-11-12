@@ -40,6 +40,9 @@ class WorldBoundGame(DeterministicGame):
         if action.get('type')=='start_nest_assault':
             from .nest_assault import execute_start_assault
             return self._record_action(action,execute_start_assault(self,action))
+        if action.get('type')=='start_nest_sweep':
+            from .nest_sweep import execute_start_sweep
+            return self._record_action(action,execute_start_sweep(self,action))
         if action.get('type')=='build_defense_replacement':
             from .defense_relocation import execute_build_replacement
             return self._record_action(action,execute_build_replacement(self,action))

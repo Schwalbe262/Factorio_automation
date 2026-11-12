@@ -26,6 +26,15 @@ only the framework interface and its documented state, with no parent decisions.
   cluster before more bus or science expansion. Spawners replenish local units
   independently of pollution; proximity combat can sustain the repeated losses.
   Keep the paid wall backstop armed, then use bounded prepared native combat.
+- Latest combat steering: keep an armed rear cover, then accept ordinary worm
+  hits while rapidly placing enough guns where they can actually hit spawners.
+  Commit a prepared concentrated push; never sustain nest-adjacent harassment or
+  incrementally rebuild offensive posts. A group's complete stock, fixed target
+  coverage and paid deployment must be ready before the attack begins. Actual
+  native projectile deaths remain the success evidence. In default rules, time,
+  pollution and destroyed spawners affect evolution; ordinary unit kills do not.
+- Radar is an active installation priority: normally paid, powered, defended
+  coverage must expose the growing factory and support threat observations.
 - User instructions are persistent automatic policies, not one-time interventions.
   Declare material-flow, producer-row and expansion directions before placing a
   district; preserve fixed ports and reserve growth, service, power and defense
@@ -106,6 +115,11 @@ successor10915 is rebound after actor11's death;4103 corpse items were recovered
 with conserved rounds/durability, one spare repair tool remains in the corpse.
 Nearby-nest assault preparation now runs through the typed Luna worker; actual
 combat victory, automatic construction mall and sustained rates remain unproved.
+One normally paid, defended radar is working at105.5,-27.5, native3941213 with
+positive scan progress. The installation gate uses fresh local coverage,
+walk access and actual hostile ranges, without waiting for unrelated global
+refills. User-rejected staged assault is retired; one concentrated prepaid wave
+replaces it. No target death or nest-clear victory has been accepted yet.
 Finish defense/radar/nearby-nest combat, these consumers, bulk bus growth, blue,
 rail and rocket. No enemy deletion, granted health or retroactive conservation claim.
 Do not close the continuous-rate gate from filling output buffers. No rocket yet.

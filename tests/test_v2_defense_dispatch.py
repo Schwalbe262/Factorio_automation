@@ -15,6 +15,8 @@ class EmergencyDispatchTests(unittest.TestCase):
         ex.normal_research=SimpleNamespace(catalog=SimpleNamespace(technologies={}))
         ex.bastion_maintenance=SimpleNamespace(step=Mock(return_value=None))
         ex.nest_assault=SimpleNamespace(step=Mock(return_value={'type':'craft','recipe':'piercing-rounds-magazine'}))
+        ex.nest_sweep=SimpleNamespace(step=Mock(return_value={'type':'craft','recipe':'piercing-rounds-magazine'}))
+        ex.radars=SimpleNamespace(step=Mock(return_value={'type':'build','name':'radar'}))
         ex.starter_upkeep=Mock(return_value={'status':'blocked','reason':'old_hotspot_missing'})
         return ex
 
@@ -35,11 +37,27 @@ class EmergencyDispatchTests(unittest.TestCase):
         self.assertEqual(ex.step('defense_hardening',obs)['type'],'finish_repair')
         ex.hardening.step.assert_not_called();ex.builder._sync.assert_not_called()
 
-    def test_empty_base_ammo_buffer_does_not_prevent_native_offensive_progress(self):
+    def test_concentrated_sweep_converts_reserved_precursors_before_base_topoff(self):
         ex=self.executor();ex.perimeter.upkeep=Mock(return_value={'status':'waiting','reason':'factory_empty'})
-        self.assertEqual(ex.step('nest_assault',{})['recipe'],'piercing-rounds-magazine')
+        self.assertEqual(ex.step('nest_sweep',{})['recipe'],'piercing-rounds-magazine')
+        ex.perimeter.upkeep.assert_not_called()
         ex.perimeter.upkeep.return_value={'type':'insert','item':'firearm-magazine'}
-        self.assertEqual(ex.step('nest_assault',{})['item'],'firearm-magazine')
+        ex.nest_sweep.step.return_value={'status':'waiting','reason':'native_crafting_queue_busy'}
+        self.assertEqual(ex.step('nest_sweep',{})['item'],'firearm-magazine')
+
+    def test_old_staged_capability_cannot_resume_harassment(self):
+        from factorio_agent.jobs import CAPABILITIES
+        self.assertNotIn('nest_assault',CAPABILITIES)
+        ex=self.executor()
+        self.assertEqual(ex.step('nest_assault',{})['reason'],'staged_assault_retired_use_concentrated_nest_sweep')
+        ex.nest_assault.step.assert_not_called()
+
+    def test_locally_defended_radar_build_is_not_starved_by_global_refill(self):
+        ex=self.executor();ex.perimeter.upkeep=Mock(return_value={'type':'insert','item':'firearm-magazine'})
+        self.assertEqual(ex.step('radar_network',{})['name'],'radar')
+        ex.perimeter.upkeep.assert_not_called();ex.starter_upkeep.assert_not_called()
+        ex.radars.step.return_value={'status':'waiting','reason':'waiting_native_crafting'}
+        self.assertEqual(ex.step('radar_network',{})['item'],'firearm-magazine')
 
 
 if __name__=='__main__':unittest.main()

@@ -16,7 +16,7 @@ from .transport import VECTORS
 ACTION='build_and_arm_bastion_post'
 GROUP_ACTION='build_and_arm_bastion_group'
 AMMO_ITEMS={'firearm-magazine','piercing-rounds-magazine'}
-OWNER_FILES={'hardening':'defense-hardening.json','nest_assault':'nest-assault.json'}
+OWNER_FILES={'hardening':'defense-hardening.json','nest_assault':'nest-assault.json','nest_sweep':'nest-sweep.json'}
 SCOPE_FIELDS=('areas','cells','effective_range','covering_posts','new_posts')
 def _hash(v):return hashlib.sha256(json.dumps(v,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 def _payload(v):return json.dumps(json.dumps(v,separators=(',',':')))
@@ -86,6 +86,7 @@ def _load_owner(root,owner_kind):
     if owner_kind not in OWNER_FILES:raise ValueError('unknown deployment owner authority')
     document=json.loads((root/OWNER_FILES[owner_kind]).read_text(encoding='utf-8'))
     if owner_kind=='hardening':return document,document,None,_hash({'owner_kind':'hardening','worm_policy':'exclude'})
+    if owner_kind=='nest_sweep':return _load_sweep(document)
     try:from .nest_assault import deployment_stage
     except ImportError as exc:raise ValueError('trusted NestAssault authority not installed')from exc
     stage=deployment_stage(document);policy=stage.get('underfire_policy',{})
@@ -120,12 +121,52 @@ def _load_owner(root,owner_kind):
         'stage_index':document['active_stage'],'policy':policy})
 
 
+def _load_sweep(document):
+    """Only the installed known-file adapter may authorize a committed wave."""
+    try:from .nest_sweep import deployment_wave
+    except ImportError as exc:raise ValueError('trusted NestSweep authority not installed')from exc
+    wave=deployment_wave(document);policy=wave.get('underfire_policy',{});posts=wave.get('posts',[])
+    count=policy.get('post_count');start=document.get('started_tick');deadline=policy.get('deadline_tick')
+    entities=wave.get('plan',{}).get('entities',[]);profile=policy.get('force_profile')
+    if(policy.get('mode')!='committed_projectile_wave_v2'or policy.get('operation_id')!=document.get('id')
+            or type(count)is not int or not 6<=count<=12 or len(posts)!=count
+            or policy.get('ammo_item')!='piercing-rounds-magazine'or wave.get('ammo_item')!=policy['ammo_item']
+            or policy.get('max_enemy_range')!=25 or policy.get('coverage_margin')!=2
+            or policy.get('min_planned_neighbors')!=2 or policy.get('min_target_coverage')!=2
+            or policy.get('min_backstop_count')!=2 or policy.get('min_backstop_health_fraction')!=.5
+            or policy.get('min_backstop_full_mags')!=5 or policy.get('planned_posts')!=posts
+            or type(start)is not int or type(deadline)is not int or not start<deadline<=start+10800
+            or policy.get('started_tick')!=start or document.get('deadline_tick')!=deadline
+            or not isinstance(policy.get('targets'),list)or not 1<=len(policy['targets'])<=12
+            or policy['targets']!=document.get('targets')or _hash(policy['targets'])!=document.get('target_set_hash')
+            or policy.get('target_set_hash')!=document.get('target_set_hash')
+            or not isinstance(policy.get('backstop_specs'),list)or not 2<=len(policy['backstop_specs'])<=12
+            or not isinstance(profile,dict)or any(type(profile.get(k))not in(int,float)or not math.isfinite(profile[k])
+                for k in('ammo_damage','turret_damage','gun_speed'))
+            or sum(e.get('name')=='gun-turret'for e in entities)!=count
+            or not 0<=sum(e.get('name')=='stone-wall'for e in entities)<=8*count
+            or type(document.get('actor_unit'))is not int or document['actor_unit']<1):
+        raise ValueError('registered committed wave policy is invalid, changed or unbounded')
+    for witnesses in(policy['targets'],policy['backstop_specs']):
+        units=[]
+        for q in witnesses:
+            p=q.get('position')
+            if(type(q.get('unit_number'))is not int or q['unit_number']<1 or not isinstance(q.get('name'),str)or not q['name']
+                    or not isinstance(p,dict)or set(p)!={'x','y'}or any(type(v)not in(int,float)or not math.isfinite(v)for v in p.values())):
+                raise ValueError('exact finite committed wave witness required')
+            units.append(q['unit_number'])
+        if len(set(units))!=len(units):raise ValueError('distinct committed wave witnesses required')
+    return document,wave,policy,_hash({'owner_kind':'nest_sweep','operation_id':document['id'],'policy':policy})
+
+
 def _context(game,action):
     validate_bastion_deployment(action,getattr(game,'expected_world',None))
     if getattr(game,'expected_world',None)!=action['expected_world_id']or getattr(game,'backend',None)!='assisted':
         raise ValueError('bastion deployment requires the bound ordinary assisted game')
     root=Path(game.cfg.runtime_dir);document,state,policy,authority=_load_owner(root,action['owner_kind'])
     if action['authority_revision']!=authority:raise ValueError('deployment owner policy revision changed')
+    if action['owner_kind']=='nest_sweep'and action['expected_actor_unit']!=document['actor_unit']:
+        raise ValueError('committed wave actor changed')
     board=json.loads((root/'pcb-board.json').read_text(encoding='utf-8'))
     perimeter=(json.loads((root/'defense-perimeter.json').read_text(encoding='utf-8'))
                if action['owner_kind']=='hardening'else state.get('perimeter',{}))
@@ -190,7 +231,7 @@ AMMO_PLAIN_LUA=('local function normal(stack)'+AMMO_GUARD_LUA.split('local funct
 
 DEPLOY_BASTION_LUA=r'''
 local function reject(reason)return {ok=false,status="blocked",reason=reason}end
-if x.owner_kind~="hardening"and x.owner_kind~="nest_assault"then return reject("bastion_deployment_owner_invalid")end
+if x.owner_kind~="hardening"and x.owner_kind~="nest_assault"and x.owner_kind~="nest_sweep"then return reject("bastion_deployment_owner_invalid")end
 if not d or d.world_id~=x.expected_world_id then return reject("bastion_deployment_world_changed")end
 if not a or not a.valid or a.unit_number~=x.expected_actor_unit or a.force~=f or a.surface~=s then return reject("bastion_deployment_actor_changed")end
 local main=a.get_main_inventory();if not main or not main.valid then return reject("bastion_main_inventory_missing")end
@@ -235,7 +276,7 @@ local area={{p.x-1,p.y-1},{p.x+1,p.y+1}}
 if s.count_entities_filtered{area=area,type="resource"}>0 or not s.can_place_entity{name="gun-turret",position=p,direction=0,force=f}then return reject("bastion_site_changed_or_resource_overlap")end
 for layer in pairs(gun.collision_mask.layers)do if s.get_tile(p).collides_with(layer)then return reject("bastion_site_tile_changed")end end
 local assault_operation=nil
-if x.owner_kind=="nest_assault"then
+if x.owner_kind~="hardening"then
  return reject("nest_assault_guard_not_linked")
 else
  for _,enemy in pairs(s.find_entities_filtered{position=x.hotspot,radius=48,force="enemy",type="turret"})do local attack=enemy.prototype.attack_parameters
@@ -296,7 +337,7 @@ local after=totals(main);local loaded=totals(dest)
 if not after or not loaded or moved~=20 or loaded.magazines~=20 or loaded.rounds~=20*size or loaded.guns~=0
  or after.guns~=before.guns-1 or before.magazines~=after.magazines+loaded.magazines
  or before.rounds~=after.rounds+loaded.rounds or game.tick~=marker.start_tick then return reject("bastion_payment_or_round_conservation_failed")end
-if x.owner_kind=="nest_assault"then local e=built;local op=assault_operation
+if x.owner_kind~="hardening"then local e=built;local op=assault_operation
  return reject("nest_assault_configure_not_linked")
 end
 marker.phase="complete";marker.receipt={ok=true,status="succeeded",deployment_id=x.deployment_id,world_id=x.expected_world_id,
@@ -312,17 +353,23 @@ return marker.receipt
 
 def _native_body(owner_kind):
     body=DEPLOY_BASTION_LUA
-    if owner_kind=='nest_assault':
-        from .nest_assault import ASSAULT_DEPLOYMENT_GUARD_LUA,ASSAULT_CONFIGURE_POST_LUA
-        if not all(isinstance(v,str)and v.strip()and '--'not in v for v in(ASSAULT_DEPLOYMENT_GUARD_LUA,ASSAULT_CONFIGURE_POST_LUA)):
+    if owner_kind!='hardening':
+        if owner_kind=='nest_assault':
+            from .nest_assault import ASSAULT_DEPLOYMENT_GUARD_LUA as guard,ASSAULT_CONFIGURE_POST_LUA as configure
+        elif owner_kind=='nest_sweep':
+            from .nest_sweep import SWEEP_DEPLOYMENT_GUARD_LUA as guard,SWEEP_CONFIGURE_POST_LUA as configure
+        else:raise ValueError('unknown trusted deployment owner')
+        if not all(isinstance(v,str)and v.strip()and '--'not in v for v in(guard,configure)):
             raise ValueError('trusted native assault guards must be nonempty flattenable module constants')
-        body=body.replace('return reject("nest_assault_guard_not_linked")',ASSAULT_DEPLOYMENT_GUARD_LUA+';assault_operation=op')
-        body=body.replace('return reject("nest_assault_configure_not_linked")',ASSAULT_CONFIGURE_POST_LUA)
+        body=body.replace('return reject("nest_assault_guard_not_linked")',guard+';assault_operation=op')
+        body=body.replace('return reject("nest_assault_configure_not_linked")',configure)
     return body
 
 
 def execute_bastion_deployment(game,action):
-    payload=_context(game,action);body=_native_body(action['owner_kind'])
+    payload=_context(game,action)
+    if action['owner_kind']=='nest_sweep':raise ValueError('committed nest sweep requires its complete registered wave in one group')
+    body=_native_body(action['owner_kind'])
     return game.query('local x=helpers.json_to_table('+_payload(payload)+');'+body)
 
 
@@ -333,36 +380,41 @@ def _group_id(deployments):
 def validate_bastion_group(action,world=None):
     if(not isinstance(action,dict)or set(action)-{'type','group_id','deployments','reason'}
             or not {'type','group_id','deployments'}<=set(action)or action['type']!=GROUP_ACTION
-            or not isinstance(action['deployments'],list)or len(action['deployments'])!=3
-            or('reason'in action and not isinstance(action['reason'],str))):raise ValueError('exact three-post deployment group required')
+            or not isinstance(action['deployments'],list)or len(action['deployments'])not in(3,6,7,8,9,10,11,12)
+            or('reason'in action and not isinstance(action['reason'],str))):raise ValueError('exact bounded registered deployment group required')
     rows=action['deployments']
     for q in rows:validate_bastion_deployment(q,world)
+    count=len(rows)
     common=('owner_kind','authority_revision','ammo_item','scope_id','plan_revision','expected_world_id','expected_actor_unit')
     if(any(any(q[k]!=rows[0][k]for k in common)for q in rows)
-            or len({q['post_name']for q in rows})!=3
-            or len({tuple(q['position'][k]for k in('x','y'))for q in rows})!=3
-            or action['group_id']!=_group_id(rows)):raise ValueError('one immutable stage, actor, ammunition and three distinct posts required')
+            or(count!=3 if rows[0]['owner_kind']!='nest_sweep'else not 6<=count<=12)
+            or len({q['post_name']for q in rows})!=count
+            or len({tuple(q['position'][k]for k in('x','y'))for q in rows})!=count
+            or action['group_id']!=_group_id(rows)):raise ValueError('one immutable complete stage, actor, ammunition and distinct posts required')
 
 
 def bastion_group_deployment_action(game,obs,*,owner_kind='nest_assault'):
-    """Read-only emitter for all three posts of the current trusted stage."""
+    """Read-only emitter for the complete current trusted stage or committed wave."""
     _,state,_,_=_load_owner(Path(game.cfg.runtime_dir),owner_kind)
-    if len(state.get('posts',[]))!=3:raise ValueError('exact three-post registered stage required')
+    count=len(state.get('posts',[]))
+    if(count!=3 if owner_kind!='nest_sweep'else not 6<=count<=12):raise ValueError('complete bounded registered stage or wave required')
     rows=[bastion_deployment_action(game,obs,p['name'],owner_kind=owner_kind)for p in state['posts']]
     action=dict(type=GROUP_ACTION,group_id=_group_id(rows),deployments=rows,
-        reason='normally pay and arm three registered posts in one native tick')
+        reason='normally pay and arm the complete registered group in one native tick')
     validate_bastion_group(action,getattr(game,'expected_world',None));return action
 
 
 GROUP_DEPLOY_LUA=r'''
 local function reject(reason)return {ok=false,status="blocked",reason=reason,group_id=g.group_id}end
 local first=g.deployments[1]
+local count=#g.deployments;local magazines=20*count
+if(first.owner_kind=="nest_sweep"and(count<6 or count>12))or(first.owner_kind~="nest_sweep"and count~=3)then return reject("bastion_group_native_count_invalid")end
 local record=d and d.defense_deployment_groups and d.defense_deployment_groups[g.group_id]
 if record then
  if record.revision~=g.revision or record.actor_unit~=first.expected_actor_unit or record.world_id~=first.expected_world_id
   or record.ammo_item~=first.ammo_item then return reject("bastion_group_marker_identity_changed")end
  if record.phase~="complete"then return reject("bastion_group_incomplete_intent_requires_recovery")end
- for _,q in ipairs(g.deployments)do q.preflight_only=true;local r=deploy_one(q)
+ for _,q in ipairs(g.deployments)do q.group_id=g.group_id;q.preflight_only=true;local r=deploy_one(q)
   if not r.ok or not r.reused_receipt then return reject("paid_bastion_group_missing_or_replaced")end
  end
  local r={};for k,v in pairs(record.receipt)do r[k]=v end
@@ -370,18 +422,21 @@ if record then
 end
 local before=nil
 for i,q in ipairs(g.deployments)do
- q.preflight_only=true;local r=deploy_one(q)
+ q.group_id=g.group_id;q.preflight_only=true;local r=deploy_one(q)
  if not r.ok then r.group_id=g.group_id;r.failed_index=i;r.preflight_failed=true;return r end
- if not r.preflight then return reject("bastion_group_requires_three_unbuilt_posts")end
+ if not r.preflight then return reject("bastion_group_requires_all_registered_posts_unbuilt")end
  if not before then before=r.before end
 end
-if before.guns<3 or before.full_magazines<60 then return reject("bastion_group_three_guns_and_sixty_full_main_magazines_required")end
+if before.guns<count or before.full_magazines<magazines then return reject(count==3 and"bastion_group_three_guns_and_sixty_full_main_magazines_required"or"bastion_wave_all_guns_and_full_main_magazines_required")end
 d.defense_deployment_groups=d.defense_deployment_groups or{}
 record={phase="intent",revision=g.revision,world_id=first.expected_world_id,catalog_fingerprint=first.catalog_fingerprint,
  owner_kind=first.owner_kind,authority_revision=first.authority_revision,actor_unit=first.expected_actor_unit,
  ammo_item=first.ammo_item,plan_revision=first.plan_revision,scope_id=first.scope_id,
  before=before,start_tick=game.tick,completed_prefix={}}
 d.defense_deployment_groups[g.group_id]=record
+if first.owner_kind=="nest_sweep"then
+ return reject("nest_sweep_group_commit_not_linked")
+end
 local after=nil;local total_rounds=0
 for i,q in ipairs(g.deployments)do
  q.preflight_only=false;local ok,r=pcall(function()return deploy_one(q)end)
@@ -394,27 +449,33 @@ for i,q in ipairs(g.deployments)do
  if r.paid_this_call~=1 or r.loaded_this_call~=20 or r.start_tick~=record.start_tick or r.armed_tick~=record.start_tick then
   record.phase="incomplete";record.failure="group_payment_or_tick_changed";return reject("bastion_group_payment_or_tick_changed")end
 end
-if after.guns~=before.guns-3 or before.magazines~=after.magazines+60 or before.rounds~=after.rounds+total_rounds
- or total_rounds~=60*record.completed_prefix[1].magazine_size or game.tick~=record.start_tick then
+if after.guns~=before.guns-count or before.magazines~=after.magazines+magazines or before.rounds~=after.rounds+total_rounds
+ or total_rounds~=magazines*record.completed_prefix[1].magazine_size or game.tick~=record.start_tick then
  record.phase="incomplete";record.failure="group_conservation_failed";return reject("bastion_group_conservation_failed")end
 record.phase="complete";record.receipt={ok=true,status="succeeded",group_id=g.group_id,
  owner_kind=first.owner_kind,authority_revision=first.authority_revision,world_id=first.expected_world_id,
  catalog_fingerprint=first.catalog_fingerprint,actor_unit=first.expected_actor_unit,plan_revision=first.plan_revision,
  scope_id=first.scope_id,ammo_item=first.ammo_item,magazine_size=record.completed_prefix[1].magazine_size,
- ammo_category=record.completed_prefix[1].ammo_category,paid_turrets=3,loaded_magazines=60,loaded_rounds=total_rounds,
- paid_this_call=3,loaded_this_call=60,start_tick=record.start_tick,armed_tick=game.tick,
+ ammo_category=record.completed_prefix[1].ammo_category,paid_turrets=count,loaded_magazines=magazines,loaded_rounds=total_rounds,
+ paid_this_call=count,loaded_this_call=magazines,start_tick=record.start_tick,armed_tick=game.tick,
  same_tick=true,before=before,after=after,deployments=record.completed_prefix,quality="normal"}
 return record.receipt
 '''
 
 
 def execute_bastion_group(game,action):
-    """Validate all three trusted contexts, then execute ONE native query."""
+    """Validate every trusted context, then execute ONE native query."""
     validate_bastion_group(action,getattr(game,'expected_world',None))
     rows=[_context(game,q)for q in action['deployments']]
     _,stage,_,_=_load_owner(Path(game.cfg.runtime_dir),rows[0]['owner_kind'])
     if [q['post_name']for q in rows]!=[p['name']for p in stage['posts']]:raise ValueError('group must contain the complete registered stage in plan order')
     payload=dict(group_id=action['group_id'],deployments=rows,revision=_hash([dict(_generation(q),
         expected_actor_unit=q['expected_actor_unit'],catalog_fingerprint=q['catalog_fingerprint'],scope_revision=q['scope_revision'])for q in rows]))
+    group_body=GROUP_DEPLOY_LUA
+    if rows[0]['owner_kind']=='nest_sweep':
+        from .nest_sweep import SWEEP_BEGIN_WAVE_LUA
+        if not isinstance(SWEEP_BEGIN_WAVE_LUA,str)or not SWEEP_BEGIN_WAVE_LUA.strip()or'--'in SWEEP_BEGIN_WAVE_LUA:
+            raise ValueError('trusted native sweep commit must be a nonempty flattenable module constant')
+        group_body=group_body.replace('return reject("nest_sweep_group_commit_not_linked")',SWEEP_BEGIN_WAVE_LUA)
     return game.query('local g=helpers.json_to_table('+_payload(payload)+');local function deploy_one(x) '
-        +_native_body(rows[0]['owner_kind'])+' end;'+GROUP_DEPLOY_LUA)
+        +_native_body(rows[0]['owner_kind'])+' end;'+group_body)

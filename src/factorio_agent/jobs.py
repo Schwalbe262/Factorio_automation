@@ -53,8 +53,8 @@ CAPABILITIES = {
                           "effect":"normally build mutually covering gun posts and open-rear wall bastions at an observed loss hotspot; preserve production reservations and service access"},
     "radar_network": {"parameters":{},"requires":["defense_perimeter"],
                       "effect":"normally build a defended radar behind the front with measured electrical headroom; prove native scanning"},
-    "nest_assault": {"parameters":{},"requires":["defense_hardening"],
-                    "effect":"identify a dangerously close charted nest cluster; prepay normal guns and preferred researched ammunition, deploy three armed posts in one native tick and clear bounded exact targets using actual gun fire"},
+    "nest_sweep": {"parameters":{},"requires":["defense_hardening"],
+                   "effect":"prestock one concentrated paid turret wave, retain armed rear cover and rapidly deploy multiple guns in actual spawner range despite reviewed worm fire; no incremental harassment or offensive rebuild loop"},
     "main_bus_factory": {"parameters":{},"requires":["paired_smelting","logistic_science","defense_perimeter"],
                          "effect":"replace separate raw plate corridors with shared northbound iron/copper buses and native priority taps; commission compact green then normally retire obsolete western hardware; no throughput certification"},
     "dedicated_materials": {"parameters":{"resource":"coal|stone"},"requires":["paired_mining"],
@@ -356,6 +356,7 @@ class StarterExecutors:
         self.bastion_maintenance=BastionMaintenance(game,self.bootstrap,catalog,self.perimeter,self.hardening)
         from .nest_assault import NestAssault
         self.nest_assault=NestAssault(game,self.bootstrap,self.builder,catalog,self.perimeter)
+        self.nest_sweep=None
         from .radar_network import RadarNetwork
         self.radars=RadarNetwork(game,self.builder,catalog,self.perimeter)
         self.outposts.perimeter=self.perimeter
@@ -458,14 +459,30 @@ class StarterExecutors:
         cleanup=pending_repair(obs)
         if cleanup:return cleanup
         if capability == 'nest_assault':
+            return {'status':'blocked','reason':'staged_assault_retired_use_concentrated_nest_sweep'}
+        if capability == 'radar_network':
             self.builder._sync(obs)
-            # Keep normal base ammunition supplied while finite raid crafting
-            # runs. An empty factory buffer must not deadlock native combat.
+            result=self.radars.step(obs,parameters or {})
+            if result.get('type')or result.get('status')!='waiting':return result
             restored=self.bastion_maintenance.step(obs)
             if restored and(restored.get('type')or restored.get('status')=='blocked'):return restored
             upkeep=self.perimeter.upkeep(obs)
             if upkeep and(upkeep.get('type')or upkeep.get('status')=='blocked'):return upkeep
-            return self.nest_assault.step(obs)
+            return result
+        if capability == 'nest_sweep':
+            self.builder._sync(obs)
+            if self.nest_sweep is None:
+                from .nest_sweep import NestSweep
+                self.nest_sweep=NestSweep(self.game,self.bootstrap,self.builder,self.catalog,self.perimeter)
+            restored=self.bastion_maintenance.step(obs)
+            if restored and(restored.get('type')or restored.get('status')=='blocked'):return restored
+            # Convert a funded ammunition batch before base topoffs consume its
+            # precursor. While native crafting runs, keep the rear guns supplied.
+            result=self.nest_sweep.step(obs)
+            if result.get('type')or result.get('status')!='waiting':return result
+            upkeep=self.perimeter.upkeep(obs)
+            if upkeep and(upkeep.get('type')or upkeep.get('status')=='blocked'):return upkeep
+            return result
         if capability == "defense_hardening":
             self.builder._sync(obs)
             return self.hardening.step(obs,parameters or {})
@@ -553,8 +570,6 @@ class StarterExecutors:
             return self.steam_expansion.step(obs)
         if capability == "defense_perimeter":
             return self.perimeter.step(obs)
-        if capability == "radar_network":
-            return self.radars.step(obs,parameters or {})
         if capability == "main_bus_factory":
             return self.bus_factory.step(obs,parameters or {})
         if capability == "dedicated_materials":
@@ -634,6 +649,8 @@ class StarterExecutors:
             return self.radars.proof(obs)
         if capability == 'nest_assault':
             return self.nest_assault.proof(obs)
+        if capability == 'nest_sweep':
+            return self.nest_sweep.proof(obs) if self.nest_sweep is not None else None
         if capability == "main_bus_factory":
             return self.bus_factory.proof(obs)
         if capability == "dedicated_materials":

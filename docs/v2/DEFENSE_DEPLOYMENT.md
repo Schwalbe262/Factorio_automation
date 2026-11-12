@@ -7,9 +7,12 @@ parent writer executes the action. This module does not modify framework files.
 
 `bastion_group_deployment_action(game, obs, *, owner_kind='nest_assault')`
 emits `type='build_and_arm_bastion_group'`, `group_id` and `deployments`: exactly
-three complete single-post envelopes in registered stage order.
+three complete single-post envelopes in registered stage order for Hardening or
+NestAssault-v1. With `owner_kind='nest_sweep'`, the same API emits the complete
+registered committed wave of six through twelve posts. The trusted saved policy
+and whole plan determine its size.
 `execute_bastion_group(game, action)` performs **one native query**. A native loop
-builds and arms all three posts at the same `game.tick`; there is no Python RPC
+builds and arms every post at the same `game.tick`; there is no Python RPC
 between posts. The whole group must be unbuilt and funded before its first payment.
 
 The envelope binds world, actor, registered scope/post, integer position, whole
@@ -20,8 +23,8 @@ scope geometry and post access. A stale Hardening binding is accepted only as a
 known ancestor in the registered lost-unit lineage, with the canonical current
 unit cleared. An unrelated stale binding is rejected.
 
-Owners are restricted to `hardening` (`defense-hardening.json`) and `nest_assault`
-(`nest-assault.json`). NestAssault uses only its active stage's private
+Owners are restricted to `hardening` (`defense-hardening.json`), `nest_assault`
+(`nest-assault.json`) and `nest_sweep` (`nest-sweep.json`). Offensive owners use only their registered private
 `perimeter` registry. Offensive posts are not added to the global Perimeter or
 its automatic rebuilding loop. The caller cannot select an arbitrary file,
 coordinates, native script or under-fire policy.
@@ -43,6 +46,27 @@ death journal must agree. A bounded scan derived from installed turret prototype
 ranges rejects new or changed covering worms. The paid posts receive ordinary
 worm-first turret UI priorities; the game fires their projectiles. This is an
 explicitly authorized material-risk policy, with no zero-loss or acid/DOT guarantee.
+
+NestSweep uses a separate `committed_projectile_wave_v2` policy. Its complete
+wave needs two current, exact, armed rear anchors. Every planned gun must have
+two planned neighbors within native range minus two, and the formation must
+remain connected to both anchors after removal of any single planned gun.
+Every exact target, including each spawner, must be in native firing range of
+at least two planned guns. Trusted module guards recompute this whole graph,
+target coverage, native death-listener ownership, enemy identities and current
+force profile before payment. Unlike v1, each front gun can rely on the coherent
+planned formation rather than being directly within range of both original
+rear anchors. Worm hits and ordinary losses are explicitly accepted; this is
+geometric support and firing coverage, not a zero-loss guarantee.
+
+For a wave of N guns, all N placements and N plain turret items plus 20N full
+normal piercing magazines must pass before the first debit. A durable native
+operation lock binds exactly one group identity before deployment. The group
+receipt records N paid turrets, 20N magazines and 200N rounds in one native tick.
+The external single-post action rejects NestSweep. A front-line loss never
+authorizes another group or automatic rebuilding. The legacy two-loss staged
+launch limit is not applied to this already committed wave; its controller
+observes the surviving guns and finite native deadline honestly.
 
 The operation requires one plain normal full-health turret item and twenty full
 normal magazines in MAIN inventory. It reuses the normal/metadata predicates
@@ -97,11 +121,15 @@ receipt, verify its world/actor/plan/unit and deduplicate by deployment ID.
 Generic `result.reused=True` build results remain ineligible as payment evidence.
 No existing controller is opted into the macro by this new module.
 
-Twenty-eight focused tests execute flattened Lua for costs, same-tick loading,
+Forty focused tests execute flattened Lua for costs, same-tick loading,
 round conservation, partial magazines, inventory sorting, marker retries,
 interrupted creation, aggregate prepayment, all-position-before-payment guards,
 same-query three-post deployment, piercing recipe/category checks, private
 assault registration and metadata/world/resource/worm/foreign-future negatives.
+Committed-wave fixtures execute six, ten and twelve-gun groups, reject a late
+blocked site before any payment, reject 199 full red magazines for ten guns,
+require two-gun spawner coverage and robust rear connectivity, reject a second
+wave or unowned death listener, and preserve an interrupted six-post prefix.
 Read-only native validation at tick3,550,851 confirmed the real registered
 context and actor10915. The installed2.1.20 prototype returned one turret ammo
 slot, magazine size10 and stack size100. No real build-and-arm action was run by
@@ -111,3 +139,9 @@ the authority for this implementation. Ammunition category and magazine size are
 read through the official [item prototype API](https://lua-api.factorio.com/latest/classes/LuaItemPrototype.html#ammo_category).
 Native macro execution and combat outcomes remain unverified by this agent;
 the executable Lua fixtures establish operation and failure semantics.
+
+Later parent acceptance inspected two real completed Hardening group receipts:
+native3930174 and3946305 each paid three guns and sixty full magazines with
+identical start/armed tick and `same_tick=true`. These were ordinary maintenance
+deployments in the development world. The ten-gun offensive wave remains pending
+its own native deployment and target-death proof.

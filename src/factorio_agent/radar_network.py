@@ -21,7 +21,7 @@ from .transport import unbuilt_external_keepouts, xy
 BASE_BLOCK = 'radar_base'
 FUTURE_BLOCK = 'radar_oil_future'
 DEFENSE_SCOPE = 'radar:network'
-ENEMY_EXCLUSION = 80
+ENEMY_EXCLUSION = 32
 MINIMUM_FULL_MAGAZINES = 5
 
 
@@ -81,9 +81,19 @@ def radar_candidates(obs, board, posts, *, oil=False, effective_range=16, keepou
     areas = [b['reserved_area'] for b in board.get('blocks', {}).values() if b.get('reserved_area')]
     areas += [r['area'] for r in board.get('shared_main_bus', {}).get('reservations', []) if r.get('area')]
     areas += list(extra_areas)
-    hard = set(keepout_cells);seen = set();sites = [];checked = 0
+    hard = set(keepout_cells);seen = set();pools = [];checked = 0
+    limit = 8 if oil else 16
+    def diverse_sites(extra=()):
+        groups = pools+([list(extra)] if extra else [])
+        result = []
+        for index in range(limit):
+            for group in groups:
+                if index < len(group):result.append(group[index])
+                if len(result) == limit:return result
+        return result
     radius = effective_range-3.5
     for _, point, first, second in pairs[:32]:
+        sites = []
         lo_x = math.ceil(max(first['position']['x'], second['position']['x'])-radius-.5)
         hi_x = math.floor(min(first['position']['x'], second['position']['x'])+radius-.5)
         lo_y = math.ceil(max(first['position']['y'], second['position']['y'])-radius-.5)
@@ -94,15 +104,16 @@ def radar_candidates(obs, board, posts, *, oil=False, effective_range=16, keepou
         for x,y in pool:
             if (x,y) in seen:continue
             seen.add((x,y));checked += 1
-            if checked > 16384:return sites
+            if checked > 16384:return diverse_sites(sites)
             area = [[x-3.5,y-3.5],[x+3.5,y+3.5]]
             if any(overlap(area,a) for a in areas):continue
             if any((x+dx,y+dy) in hard for dx in range(-3,4) for dy in range(-3,4)):continue
             if any(any(math.hypot(cx-p['position']['x'],cy-p['position']['y']) > effective_range
                        for cx in (area[0][0],area[1][0]) for cy in (area[0][1],area[1][1])) for p in (first,second)):continue
             sites.append((x,y))
-            if len(sites) >= (8 if oil else 16):return sites
-    return sites
+            if len(sites) >= limit:break
+        if sites:pools.append(sites)
+    return diverse_sites()
 
 
 def planned_power_watts(catalog, obs, board):
@@ -182,13 +193,43 @@ class RadarNetwork:
             'posts':posts, 'zones':mining_reservations(self.game, obs['world_id']), 'foreign_areas':areas,
             'enemy_radius':ENEMY_EXCLUSION, 'minimum_full_magazines':MINIMUM_FULL_MAGAZINES})))
 
+    def _local_coverage(self, site):
+        """Private existing-post evidence; unrelated perimeter upkeep is separate."""
+        if not isinstance(site, dict) or not site.get('ok'):return None
+        registered = {p.get('unit_number'):p for p in self.perimeter.state.get('posts', [])
+                      if type(p.get('unit_number')) is int and p['unit_number'] > 0}
+        posts = site.get('covering_posts')
+        if not isinstance(posts, list):return None
+        selected = [];seen = set()
+        for post in posts:
+            unit = post.get('unit_number');known = registered.get(unit)
+            if (type(unit) is not int or unit in seen or not known or post.get('position') != known.get('position')
+                    or not _finite(post.get('full_magazines'))
+                    or post['full_magazines'] < MINIMUM_FULL_MAGAZINES):return None
+            seen.add(unit);selected.append(dict(post, name=known['name']))
+        if len(selected) < 2:return None
+        return {'tick':site['tick'], 'posts':selected, 'minimum_full_normal_magazines':MINIMUM_FULL_MAGAZINES,
+                'health_policy':'native full-health check', 'area_coverage':'two exact registered guns cover the whole reserved area',
+                'access_scope':site.get('access_scope'), 'scope':'fresh local native coverage; unrelated perimeter state is not a prerequisite'}
+
     def _power_guard(self, game, obs, board, source, preserved, additional_radars):
         return game.query(RADAR_POWER_LUA.replace('PAYLOAD', _payload({'world_id':obs['world_id'], 'source':source,
             'preserved_poles':preserved, 'scheduled_watts':planned_power_watts(self.catalog, obs, board),
             'additional_watts':additional_radars*self.catalog.entities['radar']['energy_usage']*60})))
 
     def _choose(self, budget, obs, board, *, oil=False, prior=None):
-        posts = getattr(self.perimeter, 'state', {}).get('posts', [])
+        registered = getattr(self.perimeter, 'state', {}).get('posts', [])
+        report = self.perimeter.inspect(obs)
+        if not report.get('ok'):
+            return {'ok':False, 'reason':'radar_current_defense_inspection_required'}
+        live = {p.get('name'):p for p in report.get('posts', [])}
+        # Apply the native stock gate before the bounded candidate cap. Otherwise
+        # one unstocked pair can occupy every candidate and hide ready rear sites.
+        posts = [p for p in registered if p.get('name') in live
+                 and live[p['name']].get('unit_number') == p.get('unit_number')
+                 and not live[p['name']].get('missing')
+                 and not live[p['name']].get('identity_changed')
+                 and live[p['name']].get('full_magazines', 0) >= MINIMUM_FULL_MAGAZINES]
         native_range = getattr(self.perimeter, 'state', {}).get('range')
         if not _finite(native_range):return {'ok':False, 'reason':'radar_verified_native_defense_range_required'}
         extra = [prior['core']['reserved_area']] if prior else []
@@ -239,7 +280,9 @@ class RadarNetwork:
             if type(power.get('force_index')) is not int or power['force_index'] < 1:
                 failures.append('radar_native_power_force_unverified');continue
             for spec in preserved:spec['force_index'] = power['force_index']
-            whole = preflight(budget.game, self.builder, obs, es+core['service_keepouts'])
+            # Service cells reserve walking space; they are not belts to build.
+            # The native site guard proves their actual walk access separately.
+            whole = preflight(budget.game, self.builder, obs, es)
             if not whole.get('ok'):failures.append(whole.get('reason', 'radar_whole_preflight_failed'));continue
             plan = _plan(es, [], reserved_area=core['reserved_area'], defense_scope_id=DEFENSE_SCOPE,
                 clear_obstacles=whole['clear_obstacles'], clearance_world_id=obs['world_id'],
@@ -266,15 +309,15 @@ class RadarNetwork:
             base = self._choose(budget, obs, board)
             if not base.get('ok'):return base
             future = self._choose(budget, obs, board, oil=True, prior=base)
-            areas = [base['core']['reserved_area']]+([future['core']['reserved_area']] if future.get('ok') else [])
-            defense = self.perimeter.prepare_coverage(obs, DEFENSE_SCOPE, areas)
-            if not defense.get('ok'):return {'ok':False, 'reason':'radar_complete_defense_preview_required', 'evidence':{'reason':defense.get('reason')}}
+            areas = [base['core']['reserved_area']]
+            defense = self._local_coverage(base['site_preview'])
+            if not defense:return {'ok':False, 'reason':'radar_local_native_defense_preview_required'}
             if budget.expired():return budget.failure(stage='radar_complete_preparation')
         except (OSError, ValueError, KeyError, TypeError) as exc:
             return {'ok':False, 'reason':'radar_native_geometry_or_context_invalid', 'detail':str(exc)}
         return {'ok':True, 'schema_version':1, 'world_id':obs['world_id'], 'catalog_fingerprint':self.catalog.fingerprint,
                 'phase':'build', **{k:base[k] for k in ('core', 'plan', 'power_source', 'preserved_poles', 'power_preview', 'site_preview')},
-                'future_oil':dict(future, reserved=bool(future.get('ok'))), 'defense_scope_id':DEFENSE_SCOPE,
+                'future_oil':dict(future, reserved=bool(future.get('ok')), coverage_status='preview_only_not_live_proof'), 'defense_scope_id':DEFENSE_SCOPE,
                 'defense_areas':areas, 'defense_preview':defense, 'bindings':{}, 'prepared_tick':obs.get('tick')}
 
     def _save(self):_atomic_json(self.path, self.state)
@@ -322,19 +365,17 @@ class RadarNetwork:
         try:result = self._reserve(obs, board)
         except (OSError, ValueError, KeyError, TypeError):return {'status':'blocked', 'reason':'radar_reservation_context_changed'}
         if result:return result
-        result = self.perimeter.ensure_coverage(obs, DEFENSE_SCOPE, self.state['defense_areas'])
-        if result is not None:return result
         core = self.state['core']
         try:
             geometry = self._geometry(obs, board, core, [e for e in self.state['plan']['entities'] if e != core['radar']])
             if not geometry.get('ok'):return {'status':'blocked', 'reason':'radar_site_or_power_corridor_changed', 'evidence':geometry}
             site = self._site_guard(self.game, obs, core, board)
-            if not site.get('ok'):return {'status':'blocked', 'reason':'radar_security_or_service_changed', 'evidence':site}
+            if not self._local_coverage(site):return {'status':'blocked', 'reason':'radar_security_or_service_changed', 'evidence':site}
             installed = _key(core['radar']) in self.state['bindings']
-            additional = int(not installed)+int(self.state['future_oil']['reserved'])
+            additional = int(not installed)
             power = self._power_guard(self.game, obs, board, self.state['power_source'], self.state['preserved_poles'], additional)
             if not power.get('ok'):return {'status':'blocked', 'reason':'radar_native_power_margin_changed', 'evidence':power}
-            check = preflight(self.game, self.builder, obs, self.state['plan']['entities']+core['service_keepouts'])
+            check = preflight(self.game, self.builder, obs, self.state['plan']['entities'])
             if not check.get('ok'):return {'status':'blocked', 'reason':'radar_whole_preflight_changed', 'evidence':check}
         except (OSError, ValueError, KeyError, TypeError):return {'status':'blocked', 'reason':'radar_fresh_native_context_changed'}
         result = self.builder.ensure_plan(obs, self.state['plan'])
@@ -354,8 +395,6 @@ class RadarNetwork:
             unit = self.state['bindings'].get(_key(spec));live = actual.get((spec['name'], *xy(spec)))
             if not unit or not live or live.get('unit_number') != unit:return None
             specs.append(dict(spec, unit_number=unit))
-        defense = self.perimeter.coverage_proof(obs, DEFENSE_SCOPE)
-        if not defense:self.last_proof_failure = {'reason':'radar_complete_defense_proof_required'};return None
         try:board = self._board(obs)
         except (OSError, ValueError):self.last_proof_failure = {'reason':'radar_board_identity_changed'};return None
         if (board['blocks'].get(BASE_BLOCK) != self.state['plan']
@@ -365,8 +404,9 @@ class RadarNetwork:
             geometry = self._geometry(obs, board, self.state['core'], [e for e in self.state['plan']['entities'] if e != self.state['core']['radar']])
             if not geometry.get('ok'):self.last_proof_failure = geometry;return None
             site = self._site_guard(self.game, obs, self.state['core'], board)
-            if not site.get('ok'):self.last_proof_failure = site;return None
-            power = self._power_guard(self.game, obs, board, self.state['power_source'], self.state['preserved_poles'], int(self.state['future_oil']['reserved']))
+            defense = self._local_coverage(site)
+            if not defense:self.last_proof_failure = site if not site.get('ok')else{'reason':'radar_local_native_defense_proof_required'};return None
+            power = self._power_guard(self.game, obs, board, self.state['power_source'], self.state['preserved_poles'], 0)
             if not power.get('ok'):self.last_proof_failure = power;return None
         except (OSError, ValueError, KeyError, TypeError):
             self.last_proof_failure = {'reason':'radar_fresh_native_context_changed'};return None
@@ -375,6 +415,7 @@ class RadarNetwork:
         if not native.get('ok'):self.last_proof_failure = native;return None
         return {'tick':native['tick'], 'radar_count':1, 'radar':native, 'power':power, 'defense_coverage':defense,
                 'future_oil_reserved':self.state['future_oil']['reserved'],
+                'future_oil_coverage_status':'reservation preview; no current native defense or power proof claimed',
                 'scope':'exact powered working base radar and bounded chart sample; no full-map or sustained scan claim'}
 
 
@@ -417,8 +458,23 @@ if not proto or proto.tile_width~=3 or proto.tile_height~=3 or proto.get_max_ene
  or not f.technologies.radar or not f.technologies.radar.researched or not f.recipes.radar.enabled then
  return {ok=false,reason="radar_native_prototype_or_unlock_changed"}
 end
-if s.count_entities_filtered{position=p,radius=args.enemy_radius,force="enemy",type={"unit","unit-spawner","turret"}}>0 then
+if s.count_entities_filtered{position=p,radius=args.enemy_radius,force="enemy",type={"unit","unit-spawner"}}>0 then
  return {ok=false,reason="radar_nearby_enemies_require_security_first"}
+end
+local hostile_range=0
+for _,foe in pairs(prototypes.entity)do if foe.type=="turret"then
+ local attack=foe.attack_parameters
+ if not attack or type(attack.range)~="number"or attack.range<0 or attack.range>128 then
+  return {ok=false,reason="radar_hostile_turret_range_profile_unsupported"}
+ end
+ hostile_range=math.max(hostile_range,attack.range)
+end end
+for _,foe in pairs(s.find_entities_filtered{position=p,radius=hostile_range+7,force="enemy",type="turret"})do
+ local attack=foe.prototype.attack_parameters
+ if not attack or type(attack.range)~="number"then return {ok=false,reason="radar_hostile_turret_range_profile_unsupported"}end
+ local q=foe.position
+ local dx=math.max(area[1][1]-q.x,0,q.x-area[2][1]);local dy=math.max(area[1][2]-q.y,0,q.y-area[2][2])
+ if dx*dx+dy*dy<=(attack.range+2)^2 then return {ok=false,reason="radar_service_inside_hostile_turret_range"}end
 end
 local function overlaps(a,b)return a[1][1]<b[2][1]and a[2][1]>b[1][1]and a[1][2]<b[2][2]and a[2][2]>b[1][2]end
 if s.count_entities_filtered{area=area,type="resource"}>0 then return {ok=false,reason="radar_body_or_service_over_resource"}end

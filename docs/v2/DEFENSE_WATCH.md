@@ -52,3 +52,13 @@ equipment; each attempt must retain actual loss and ordinary rebuild evidence.
 
 Radar and nearby-nest removal remain separate capabilities. Restocking,
 geometric coverage and completed research do not prove combat victory.
+
+Radar installation uses its own current local native proof rather than global
+Perimeter commissioning. Two distinct, exact registered, fully healthy guns
+must each cover its whole service reservation and hold at least five full normal
+magazines. The same native site guard rechecks enemy exclusion, resource and
+factory keepouts, and walk access before building and in the final proof; native
+power headroom and working scan progress remain required. Unrelated distant
+missing posts or refill requests do not invalidate this local evidence. The
+optional oil radar site remains a reservation preview, with no current defense
+or power claim and no extra live guard blocking the base radar.

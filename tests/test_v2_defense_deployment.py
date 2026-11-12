@@ -421,4 +421,148 @@ class NativeGroupDeploymentTests(DeploymentFixture):
         self.assertNotIn('--',GROUP_DEPLOY_LUA)
 
 
+@unittest.skipUnless(LuaRuntime,'optional executable Lua runtime')
+class NativeWaveDeploymentTests(DeploymentFixture):
+    def setUp(self):
+        NativeAssaultDeploymentTests.setUp(self);self.install_wave(10)
+
+    def install_wave(self,count):
+        from factorio_agent.defense_deployment import _hash
+        from factorio_ai.deterministic_builder import _plan
+        old=self.document['stages'][0];posts=[dict(name='wave_'+str(i),position={'x':4*(i//2),'y':4*(i%2)},
+            coverage_scope='sweep:one-wave',local_walk_access=True,ammo_item='piercing-rounds-magazine')for i in range(count)]
+        entities=[dict(name='gun-turret',position=p['position'],direction=0)for p in posts]
+        plan=_plan(entities,[],reserved_area=[[-1,-1],[4*((count-1)//2)+1,5]],clear_obstacles=[],clearance_world_id='w')
+        scope=dict(old['scope'],new_posts=[p['name']for p in posts],covering_posts=[p['name']for p in posts])
+        worm=dict(self.document['targets'][0],position={'x':14,'y':10})
+        spawner=dict(worm,name='biter-spawner',type='unit-spawner',unit_number=201,position={'x':19,'y':2},reviewed_range=None)
+        targets=[worm,spawner];target_hash=_hash(targets)
+        wave=dict(world_id='w',catalog_fingerprint='c',phase='deploy',scope_id='sweep:one-wave',block='nest_sweep',
+            plan=plan,posts=posts,scope=scope,hotspot={'x':8,'y':2},bindings={},ammo_item='piercing-rounds-magazine')
+        policy=dict(mode='committed_projectile_wave_v2',operation_id='sweep-op',post_count=count,ammo_item='piercing-rounds-magazine',
+            targets=targets,target_set_hash=target_hash,started_tick=100,deadline_tick=10900,max_enemy_range=25,coverage_margin=2,
+            min_planned_neighbors=2,min_target_coverage=2,min_backstop_count=2,min_backstop_health_fraction=.5,min_backstop_full_mags=5,
+            backstop_specs=deepcopy(old['underfire_policy']['backstop_specs']),planned_posts=deepcopy(posts),
+            force_profile=dict(ammo_damage=0,turret_damage=0,gun_speed=0))
+        wave['underfire_policy']=policy;wave['perimeter']=dict(world_id='w',catalog_fingerprint='c',posts=deepcopy(posts),
+            coverage_scopes={wave['scope_id']:deepcopy(scope)})
+        self.sweep=dict(world_id='w',catalog_fingerprint='c',actor_unit=11,id='sweep-op',phase='deploy',targets=targets,
+            target_set_hash=target_hash,started_tick=100,deadline_tick=10900,wave=wave)
+        self.sweep_path=self.root/'nest-sweep.json';self.sweep_path.write_text(json.dumps(self.sweep))
+        board=json.loads((self.root/'pcb-board.json').read_text());board['blocks'].pop(old['block'],None);board['blocks']['nest_sweep']=plan
+        (self.root/'pcb-board.json').write_text(json.dumps(board))
+        self.lua.globals().world['small-worm-turret:0:14']=None;self.foe.position=self.table(worm['position'])
+        self.lua.globals().world['small-worm-turret:14:10']=self.foe
+        foe=self.table(dict(spawner,valid=True,health=350,max_health=350,prototype={}))
+        foe.force=self.lua.globals().enemy;foe.surface=self.lua.globals().s;self.spawner=foe
+        self.lua.globals().world['biter-spawner:19:2']=foe
+        operation=dict(world_id='w',catalog_fingerprint='c',actor_unit=11,target_set_hash=target_hash,started_tick=100,deadline_tick=10900,
+            posts={},deaths={},lost_posts={},loss_count=0,targets={str(q['unit_number']):q for q in targets})
+        self.lua.globals().d.nest_assaults=self.table({'sweep-op':operation})
+        self.lua.execute('main=inventory({stack("gun-turret",12),stack("piercing-rounds-magazine",100),stack("piercing-rounds-magazine",100),stack("piercing-rounds-magazine",41,3),stack("firearm-magazine",7,2),stack(nil,0)})')
+        self.group=bastion_group_deployment_action(self.game,self.obs,owner_kind='nest_sweep');self.game.query.reset_mock()
+
+    def assert_wave_paid(self,count):
+        result=execute_bastion_group(self.game,self.group);self.assertTrue(result['ok'],result)
+        self.game.query.assert_called_once();self.assertEqual(self.lua.globals().built_calls,count)
+        self.assertEqual((result['paid_turrets'],result['loaded_magazines'],result['loaded_rounds']),(count,20*count,200*count))
+        self.assertEqual(result['start_tick'],result['armed_tick']);self.assertEqual({q['armed_tick']for q in result['deployments']},{100})
+        self.assertEqual(self.lua.globals().d.nest_assaults['sweep-op'].wave_group_id,self.group['group_id'])
+        self.assertEqual((self.foe.health,self.spawner.health),(200,350))
+        return result
+
+    def test_ten_prepaid_guns_and_two_hundred_red_magazines_deploy_in_one_native_tick(self):self.assert_wave_paid(10)
+
+    def test_six_post_lower_bound_keeps_same_tick_and_exact_costs(self):
+        self.install_wave(6);self.assert_wave_paid(6)
+
+    def test_twelve_post_upper_bound_keeps_partial_magazine_and_yellow_stock(self):
+        self.install_wave(12);self.assert_wave_paid(12)
+        self.assertEqual((self.lua.globals().main[4].count,self.lua.globals().main[4].ammo),(1,3))
+        self.assertEqual((self.lua.globals().main[5].count,self.lua.globals().main[5].ammo),(7,2))
+
+    def test_wave_cannot_use_external_single_or_unregistered_partial_group(self):
+        self.game.query.reset_mock()
+        with self.assertRaises(ValueError):execute_bastion_deployment(self.game,self.group['deployments'][0])
+        partial=deepcopy(self.group);partial['deployments']=partial['deployments'][:6]
+        from factorio_agent.defense_deployment import _group_id
+        partial['group_id']=_group_id(partial['deployments'])
+        with self.assertRaises(ValueError):execute_bastion_group(self.game,partial)
+        self.game.query.assert_not_called()
+
+    def test_last_wave_site_and_whole_stock_are_checked_before_any_debit(self):
+        self.lua.execute('main[1].count=9');r=execute_bastion_group(self.game,self.group)
+        self.assertEqual(r['reason'],'bastion_wave_all_guns_and_full_main_magazines_required');self.assertEqual(self.lua.globals().built_calls,0)
+        self.lua.execute('main[1].count=12');p=self.group['deployments'][-1]['position']
+        self.lua.globals().block_x=p['x'];self.lua.globals().block_y=p['y']
+        self.lua.execute('local old=s.can_place_entity;s.can_place_entity=function(q)return not(q.position.x==block_x and q.position.y==block_y)and old(q)end')
+        r=execute_bastion_group(self.game,self.group);self.assertEqual(r['failed_index'],10)
+        self.assertEqual(self.lua.globals().built_calls,0);self.assertIsNone(self.lua.globals().d.defense_deployment_groups)
+        self.assertIsNone(self.lua.globals().d.nest_assaults['sweep-op'].wave_group_id)
+
+    def test_incomplete_wave_preserves_prefix_and_cannot_pay_or_launch_again(self):
+        self.lua.execute('local old=s.create_entity;s.create_entity=function(q)local e=old(q);if built_calls==7 then error("seventh creation interruption")end;return e end')
+        r=execute_bastion_group(self.game,self.group);self.assertFalse(r['ok']);self.assertEqual(r['failed_index'],7)
+        self.assertEqual(len(r['completed_prefix']),6);self.assertEqual(self.lua.globals().built_calls,7)
+        self.assertEqual(self.lua.globals().d.nest_assaults['sweep-op'].wave_group_id,self.group['group_id'])
+        self.assertEqual(execute_bastion_group(self.game,self.group)['reason'],'bastion_group_incomplete_intent_requires_recovery')
+        self.assertEqual(self.lua.globals().built_calls,7)
+
+    def regroup(self):
+        self.sweep_path.write_text(json.dumps(self.sweep));board=json.loads((self.root/'pcb-board.json').read_text())
+        board['blocks']['nest_sweep']=self.sweep['wave']['plan'];(self.root/'pcb-board.json').write_text(json.dumps(board))
+        self.group=bastion_group_deployment_action(self.game,self.obs,owner_kind='nest_sweep');self.game.query.reset_mock()
+
+    def test_uncovered_spawner_blocks_entire_wave_before_first_material_cost(self):
+        from factorio_agent.defense_deployment import _hash
+        q=self.sweep['targets'][1];q['position']={'x':100,'y':2}
+        self.sweep['target_set_hash']=_hash(self.sweep['targets']);policy=self.sweep['wave']['underfire_policy']
+        policy['target_set_hash']=self.sweep['target_set_hash'];policy['targets']=deepcopy(self.sweep['targets'])
+        self.lua.globals().world['biter-spawner:19:2']=None;self.spawner.position=self.table(q['position'])
+        self.lua.globals().world['biter-spawner:100:2']=self.spawner
+        self.lua.globals().d.nest_assaults['sweep-op'].target_set_hash=self.sweep['target_set_hash'];self.regroup()
+        r=execute_bastion_group(self.game,self.group);self.assertEqual(r['reason'],'sweep_target_not_covered_by_two_planned_guns')
+        self.assertEqual(self.lua.globals().built_calls,0);self.assertEqual(self.lua.globals().main[1].count,12)
+
+    def test_real_rear_anchors_require_whole_wave_connectivity_before_payment(self):
+        policy=self.sweep['wave']['underfire_policy']
+        for i,q in enumerate(policy['backstop_specs']):
+            old=q['position'];self.lua.globals().world[f"gun-turret:{old['x']}:{old['y']}"]=None
+            q['position']={'x':-30,'y':4*i};e=self.lua.globals().turret(self.table(q['position']),q['unit_number'])
+            e.inv[1]=self.lua.globals().stack('firearm-magazine',5)
+        self.regroup();r=execute_bastion_group(self.game,self.group)
+        self.assertEqual(r['reason'],'sweep_whole_wave_lacks_two_robust_rear_paths');self.assertEqual(self.lua.globals().built_calls,0)
+        self.assertIsNone(self.lua.globals().d.defense_deployment_groups)
+
+    def test_second_wave_lock_or_missing_native_listener_never_spends_stock(self):
+        op=self.lua.globals().d.nest_assaults['sweep-op'];op.wave_group_id='another-paid-wave'
+        r=execute_bastion_group(self.game,self.group);self.assertEqual(r['reason'],'sweep_operation_already_committed_to_another_wave')
+        self.assertEqual(self.lua.globals().built_calls,0);op.wave_group_id=None
+        self.lua.execute('_G.__factorio_nest_death_handler=nil')
+        self.assertFalse(execute_bastion_group(self.game,self.group)['ok']);self.assertEqual(self.lua.globals().built_calls,0)
+
+    def test_whole_wave_is_not_rejected_by_legacy_two_loss_stage_limit(self):
+        self.lua.globals().d.nest_assaults['sweep-op'].loss_count=3;self.assert_wave_paid(10)
+
+    def test_199_full_red_magazines_cannot_fund_ten_posts_even_with_partial_stock(self):
+        self.lua.execute('main[3].count=59')
+        r=execute_bastion_group(self.game,self.group)
+        self.assertEqual(r['reason'],'bastion_wave_all_guns_and_full_main_magazines_required');self.assertEqual(self.lua.globals().built_calls,0)
+        self.assertIsNone(self.lua.globals().d.nest_assaults['sweep-op'].wave_group_id)
+
+    def test_forged_registered_count_actor_or_foreign_future_slot_cannot_reach_io(self):
+        for change in('count','actor'):
+            original=deepcopy(self.sweep)
+            if change=='count':self.sweep['wave']['underfire_policy']['post_count']=13
+            else:self.sweep['actor_unit']=12
+            self.sweep_path.write_text(json.dumps(self.sweep))
+            with self.subTest(change=change),self.assertRaises(ValueError):execute_bastion_group(self.game,self.group)
+            self.sweep=original;self.sweep_path.write_text(json.dumps(original))
+        board=json.loads((self.root/'pcb-board.json').read_text());p=self.group['deployments'][-1]['position']
+        board['blocks']['reserved_future_factory']={'entities':[],'ports':[],'reserved_area':[[p['x']-1,p['y']-1],[p['x']+1,p['y']+1]]}
+        (self.root/'pcb-board.json').write_text(json.dumps(board))
+        with self.assertRaises(ValueError):execute_bastion_group(self.game,self.group)
+        self.game.query.assert_not_called()
+
+
 if __name__=='__main__':unittest.main()

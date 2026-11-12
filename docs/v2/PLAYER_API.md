@@ -101,13 +101,15 @@ Current capabilities:
 | chemical_science | none | engine_production, advanced_circuit_production, chemical_production and automation_science; exact three-product supply and separate blue feed to all eight preserved labs |
 | defense_watch | none | defense_perimeter; bounded worker restocks/rebuilds known posts, selects ordinary prerequisite-ready combat/productivity research, and natively repairs damaged posts at quiet armed service sites |
 | defense_hardening | none | defense_perimeter and naturally researched walls; add two/three mutually covering paid turrets and open-rear wall bastions at an observed loss hotspot |
-| nest_assault | none | defense_hardening; finite nearby-nest operation, normally fund guns/walls and preferred piercing ammunition before rapid grouped native-projectile combat; [contract](NEST_ASSAULT.md) |
+| nest_sweep | none | defense_hardening; one prepared concentrated wave, armed rear cover, multiple normally paid guns placed rapidly within actual spawner range; [contract](NEST_SWEEP.md) |
 | radar_network | none | defense_perimeter and naturally researched radar; one paid defended base radar with measured power headroom and native scan proof |
 | steam_coal_reroute | none | steam_expansion; prebuild alternative, verify loaded engines, recover obsolete owned transport |
 | legacy_coal_cleanup | none | steam_expansion and dedicated_materials; isolated burner/cache recovery after replacement supply and headroom proof |
 | research | `--technology` native catalog name | automation_science; native prerequisites and continuous supported science supply |
 
 Use the typed parameter flags above to avoid Windows shell JSON quoting issues.
+The older staged `nest_assault` capability is retired. Its paused development
+history is retained, but it cannot resume incremental nest-adjacent harassment.
 Starter capacity funds initial construction using extra drill-fed starter cells;
 it still requires starter fuel upkeep. This is not the final scalable mining
 system. Starter research uses finite normally crafted science budgets to unlock
@@ -118,7 +120,7 @@ implemented and commissioned in the development world. Iron steel-furnace upgrad
 and automatic ammunition are also commissioned. Basic petroleum, independent
 chemistry coal and independent water are commissioned in the development world.
 Engine and chemical interfaces are implemented; live commissioning remains
-pending. Native repair and wall bastions are commissioned. Construction mall,
+pending. Native repair, wall bastions and one powered base radar are commissioned. Construction mall,
 nearby-nest victory, blue science, rail and rocket remain pending.
 Do not claim a rocket-capable system.
 

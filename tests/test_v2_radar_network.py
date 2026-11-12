@@ -34,9 +34,10 @@ class RadarNetworkTests(unittest.TestCase):
         self.geometry = FactoryBuilder.__new__(FactoryBuilder)
         self.builder = SimpleNamespace(_occupied_by_plan=self.geometry._occupied_by_plan,
                                        ensure_plan=Mock(return_value={'type':'craft', 'recipe':'radar', 'count':1}))
-        self.posts = [{'position':{'x':x, 'y':.5}, 'unit_number':i} for x,i in ((-8.5,20), (8.5,21))]
+        self.posts = [{'name':'post_'+str(i), 'position':{'x':x, 'y':.5}, 'unit_number':i} for x,i in ((-8.5,20), (8.5,21))]
         self.perimeter = SimpleNamespace(state={'posts':self.posts,'range':18}, prepare_coverage=Mock(return_value={'ok':True}),
             ensure_coverage=Mock(return_value=None), coverage_proof=Mock(return_value={'complete':True}))
+        self.perimeter.inspect = Mock(return_value={'ok':True, 'posts':[dict(p, full_magazines=10) for p in self.posts]})
         self.source = dict(entity('small-electric-pole', -3.5, -.5), unit_number=1, electric_network_id=2)
         self.obs = {'ok':True, 'world_id':'w', 'tick':10, 'technologies':{'radar':True},
             'enabled_recipes':{'radar':True, 'small-electric-pole':True},
@@ -54,7 +55,8 @@ class RadarNetworkTests(unittest.TestCase):
 
     def query(self, script):
         if 'local flow=net.flow_last_tick' in script:return {'ok':True, 'tick':20, 'force_index':1, 'headroom_watts':2000000}
-        if 'local armed={}' in script:return {'ok':True, 'tick':20, 'covering_posts':self.posts, 'charted_sample_chunks':9}
+        if 'local armed={}' in script:return {'ok':True, 'tick':20,
+            'covering_posts':[dict(p,full_magazines=10)for p in self.posts], 'charted_sample_chunks':9}
         if 'local radar=nil' in script:return {'ok':True, 'tick':20, 'scan_progress':.25, 'charted_sample_chunks':9}
         raise AssertionError('unexpected native query')
 
@@ -74,6 +76,25 @@ class RadarNetworkTests(unittest.TestCase):
         self.assertEqual(sum(map(len, boxes)), len(set().union(*boxes)))
         self.assertEqual(core['reserved_area'], [[-3,-3], [4,4]])
         with self.assertRaises(ValueError):radar_core(self.catalog, 0, .5)
+
+    def test_candidate_cap_cannot_be_consumed_by_unstocked_or_replaced_pairs(self):
+        self.perimeter.inspect.return_value = {'ok':True, 'posts':[
+            dict(self.posts[0], full_magazines=4), dict(self.posts[1], full_magazines=10)]}
+        self.c.prepare(self.obs)
+        self.assertEqual(self.candidates.call_args.args[2], self.posts[1:])
+        self.perimeter.inspect.return_value['posts'][0].update(full_magazines=10, identity_changed=True)
+        self.c.prepare(self.obs)
+        self.assertEqual(self.candidates.call_args.args[2], self.posts[1:])
+        self.perimeter.inspect.return_value = {'ok':False}
+        self.candidates.reset_mock()
+        self.assertEqual(self.c.prepare(self.obs)['reason'], 'radar_current_defense_inspection_required')
+        self.candidates.assert_not_called()
+
+    def test_walk_service_cells_are_not_preflighted_as_belts_to_build(self):
+        self.assertTrue(self.c.prepare(self.obs)['ok'])
+        specs = self.preflight.call_args.args[3]
+        self.assertEqual({p['name'] for p in specs}, {'radar','small-electric-pole'})
+        self.assertGreater(len(self.c.prepare(self.obs)['core']['service_keepouts']),0)
 
     def test_prepare_is_readonly_and_natural_research_blocks_before_queries(self):
         before = {p.name:p.read_bytes() for p in self.root.glob('*.json')}
@@ -121,18 +142,13 @@ class RadarNetworkTests(unittest.TestCase):
         self.assertFalse(result['ok']);self.assertIn('radar_measured_power_headroom_insufficient', result['evidence']['failures'])
         self.assertEqual(self.c.state, {});self.builder.ensure_plan.assert_not_called()
 
-    def test_two_post_security_gate_and_canonical_coverage_precede_first_builder_action(self):
-        def coverage(obs, scope, areas):
-            block=json.loads((self.root/'pcb-board.json').read_text())['blocks']['radar_base']
-            self.assertEqual(block['defense_scope_id'],scope);self.assertEqual(areas,[block['reserved_area']])
-            return {'status':'waiting', 'reason':'normal perimeter ammunition'}
-        self.perimeter.ensure_coverage.side_effect = coverage
-        result = self.c.step(self.obs)
-        self.assertEqual(result['reason'], 'normal perimeter ammunition');self.builder.ensure_plan.assert_not_called()
-        self.perimeter.ensure_coverage.side_effect = None
+    def test_fresh_two_post_security_gate_precedes_first_builder_action(self):
+        self.c.state = self.c.prepare(self.obs)
         with patch.object(self.c, '_site_guard', return_value={'ok':False, 'reason':'radar_requires_two_healthy_armed_covering_posts'}):
             self.assertEqual(self.c.step(self.obs)['reason'], 'radar_security_or_service_changed')
         self.builder.ensure_plan.assert_not_called()
+        self.assertEqual(self.c.step(self.obs)['type'],'craft')
+        self.perimeter.prepare_coverage.assert_not_called();self.perimeter.ensure_coverage.assert_not_called()
 
     def test_changed_power_source_or_fresh_resource_preflight_blocks_resume(self):
         self.c.state = self.c.prepare(self.obs)
@@ -150,12 +166,13 @@ class RadarNetworkTests(unittest.TestCase):
         self.assertIsNone(self.c.proof(self.obs));self.builder.ensure_plan.assert_not_called()
         self.assertNotEqual(entry['bindings'][_key(radar)], live['unit_number'])
 
-    def test_proof_requires_native_working_scan_and_complete_current_defense(self):
+    def test_proof_requires_native_working_scan_and_local_current_defense(self):
         self.install();self.assertIsNotNone(self.c.proof(self.obs))
         self.perimeter.coverage_proof.return_value = None
-        self.assertIsNone(self.c.proof(self.obs))
-        self.assertEqual(self.c.last_proof_failure['reason'], 'radar_complete_defense_proof_required')
-        self.perimeter.coverage_proof.return_value = {'complete':True}
+        self.assertIsNotNone(self.c.proof(self.obs));self.perimeter.coverage_proof.assert_not_called()
+        with patch.object(self.c,'_site_guard',return_value={'ok':False,'reason':'radar_requires_two_healthy_armed_covering_posts'}):
+            self.assertIsNone(self.c.proof(self.obs))
+            self.assertEqual(self.c.last_proof_failure['reason'],'radar_requires_two_healthy_armed_covering_posts')
         original = self.game.query.side_effect
         self.game.query.side_effect = lambda script:({'ok':False, 'reason':'radar_native_scan_progress_required'}
             if 'local radar=nil' in script else original(script))
@@ -170,10 +187,51 @@ class RadarNetworkTests(unittest.TestCase):
         self.assertTrue(result['ok'], result);self.assertTrue(result['future_oil']['reserved'])
         self.assertTrue(result['future_oil']['plan']['reserved_only'])
         self.assertEqual(sum(e['name'] == 'radar' for e in result['plan']['entities']), 1)
-        self.assertEqual(len(result['defense_areas']), 2)
+        self.assertEqual(len(result['defense_areas']), 1)
+        self.assertEqual(result['future_oil']['coverage_status'],'preview_only_not_live_proof')
         power_scripts = [call.args[0] for call in self.game.query.call_args_list if 'local flow=net.flow_last_tick' in call.args[0]]
         raw = power_scripts[-1].split('json_to_table(',1)[1].split(')\n',1)[0]
         self.assertEqual(json.loads(json.loads(raw))['additional_watts'], 600000)
+
+    def test_unrelated_missing_refill_or_changed_post_does_not_block_local_radar(self):
+        unrelated={'name':'far_front','position':{'x':200,'y':200},'unit_number':500}
+        self.perimeter.state['posts'].append(unrelated)
+        self.perimeter.inspect.return_value={'ok':True,'missing':['far_front'],'refill':['far_front'],'changed':['far_front'],
+            'posts':[dict(p,full_magazines=10)for p in self.posts[:2]]+[dict(unrelated,missing=True,full_magazines=0,identity_changed=True)]}
+        self.perimeter.prepare_coverage.return_value={'ok':False,'reason':'existing_defense_perimeter_not_healthy'}
+        self.perimeter.ensure_coverage.return_value={'status':'blocked','reason':'existing_defense_post_missing_requires_explicit_repair'}
+        self.perimeter.coverage_proof.return_value=None
+        original=self.game.query.side_effect
+        self.game.query.side_effect=lambda script:({'ok':True,'tick':20,'covering_posts':[dict(p,full_magazines=5)for p in self.posts[:2]]}
+            if 'local armed={}'in script else original(script))
+        ready=self.c.prepare(self.obs);self.assertTrue(ready['ok'],ready)
+        self.assertEqual(self.c.step(self.obs)['type'],'craft')
+        self.perimeter.prepare_coverage.assert_not_called();self.perimeter.ensure_coverage.assert_not_called()
+        self.perimeter.coverage_proof.assert_not_called()
+
+    def test_duplicate_unregistered_or_low_stock_local_receipts_never_build(self):
+        self.c.state=self.c.prepare(self.obs)
+        rows=[dict(p,full_magazines=5)for p in self.posts]
+        for changed in([rows[0]], [rows[0],rows[0]], [rows[0],dict(rows[1],unit_number=999)],
+                       [rows[0],dict(rows[1],full_magazines=4)]):
+            with patch.object(self.c,'_site_guard',return_value={'ok':True,'tick':30,'covering_posts':changed}):
+                self.assertEqual(self.c.step(self.obs)['reason'],'radar_security_or_service_changed')
+            self.builder.ensure_plan.assert_not_called()
+
+    def test_reserved_future_oil_power_is_a_preview_and_not_a_base_build_prerequisite(self):
+        self.candidates.side_effect=lambda *args,oil=False,**kwargs:[(40.5,.5)]if oil else[(.5,.5)]
+        self.power.side_effect=lambda game,builder,obs,destination,reserved:{'ok':True,
+            'entities':[entity('small-electric-pole',destination['x'],destination['y'])],
+            'source_unit_number':1,'source_position':self.source['position']}
+        self.c.state=self.c.prepare(self.obs);self.assertTrue(self.c.state['future_oil']['reserved'])
+        original=self.game.query.side_effect
+        def query(script):
+            if 'local flow=net.flow_last_tick'in script:
+                raw=script.split('json_to_table(',1)[1].split(')\n',1)[0]
+                if json.loads(json.loads(raw))['additional_watts']>300000:return {'ok':False,'reason':'future_power_no_longer_available'}
+            return original(script)
+        self.game.query.side_effect=query
+        self.assertEqual(self.c.step(self.obs)['type'],'craft')
 
     def test_unproven_second_oil_power_is_deferred_without_spending_or_blocking_base(self):
         self.candidates.side_effect = lambda *args, oil=False, **kwargs:[(40.5,.5)] if oil else [(.5,.5)]
@@ -218,6 +276,16 @@ class RadarNetworkTests(unittest.TestCase):
 
 
 class RadarCandidateTests(unittest.TestCase):
+    def test_native_failures_at_one_pair_leave_candidates_at_another_pair(self):
+        posts = [{'unit_number':i, 'position':{'x':x,'y':.5}}
+                 for i,x in ((1,0),(2,12),(3,200),(4,212))]
+        obs = {'entities':[dict(name='gun-turret',health=400,max_health=400,**p) for p in posts]
+                         +[entity('lab',5.5,-5.5)]}
+        sites = radar_candidates(obs,{},posts,effective_range=16)
+        self.assertTrue(any(x < 20 for x,y in sites))
+        self.assertTrue(any(x > 190 for x,y in sites))
+        self.assertLessEqual(len(sites),16)
+
     def test_reserved_midpoints_do_not_hide_valid_exterior_service_sites_before_cap(self):
         posts=[{'unit_number':i,'position':{'x':x,'y':.5}}for i,x in((1,-7.5),(2,7.5))]
         obs={'entities':[dict(name='gun-turret',health=400,max_health=400,**p)for p in posts]+[entity('lab',.5,.5)]}
@@ -279,6 +347,7 @@ posts={};for i,x in ipairs{-8.5,8.5}do posts[i]={valid=true,name="gun-turret",un
 function pos(p)return{x=p.x,y=p.y}end
 function target(p,name)for _,e in ipairs{source,radar,pole,posts[1],posts[2]}do if e.name==name and e.position.x==p.x and e.position.y==p.y then return e end end end
 s.count_entities_filtered=function(q)if q.type=="resource"then return resource and 1 or 0 end;return enemy and 1 or 0 end
+s.find_entities_filtered=function(q)return{}end
 s.can_place_entity=function(q)return not walk_blocked end
 f.is_chunk_charted=function(surface,chunk)return true end''')
         self.source = dict(entity('small-electric-pole', -3.5,-.5), unit_number=1, electric_network_id=2, world_id='w', force_index=1)
@@ -292,10 +361,24 @@ f.is_chunk_charted=function(surface,chunk)return true end''')
 
     def site(self, **extra):return self.execute(RADAR_SITE_LUA, {'world_id':'w', 'core':self.core,
         'posts':[{'position':{'x':x,'y':.5}, 'unit_number':u} for x,u in ((-8.5,20),(8.5,21))],
-        'zones':[], 'foreign_areas':[], 'enemy_radius':80, 'minimum_full_magazines':5, **extra})
+        'zones':[], 'foreign_areas':[], 'enemy_radius':32, 'minimum_full_magazines':5, **extra})
 
     def proof(self):return self.execute(RADAR_PROOF_LUA, {'world_id':'w', 'source':self.source, 'radar_watts':300000,
         'specs':[dict(e, unit_number=i+100) for i,e in enumerate(self.core['entities'])]})
+
+    def test_distant_roving_enemy_does_not_block_rear_radar_but_close_enemy_does(self):
+        self.lua.execute('''enemy_distance=60
+s.count_entities_filtered=function(q)if q.force=="enemy"then return enemy_distance<=q.radius and 1 or 0 end;return 0 end''')
+        self.assertTrue(self.site()['ok'])
+        self.lua.execute('enemy_distance=24')
+        self.assertEqual(self.site()['reason'],'radar_nearby_enemies_require_security_first')
+
+    def test_actual_worm_range_protects_the_whole_service_area(self):
+        self.lua.execute('''worm={type="turret",attack_parameters={range=60}};prototypes.entity.worm=worm
+foe={position={x=45,y=.5},prototype=worm};s.find_entities_filtered=function(q)return{foe}end''')
+        self.assertEqual(self.site()['reason'],'radar_service_inside_hostile_turret_range')
+        self.lua.execute('worm.attack_parameters.range=25')
+        self.assertTrue(self.site()['ok'])
 
     def test_native_offered_headroom_measured_flow_reserve_and_exact_network(self):
         result = self.power();self.assertTrue(result['ok']);self.assertEqual(result['measured_5s_watts'],480000)

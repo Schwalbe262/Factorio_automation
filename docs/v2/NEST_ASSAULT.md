@@ -1,5 +1,10 @@
 # Finite normal-projectile nest assault
 
+Retired from the public gameplay capability list after user feedback. Historical
+paused checkpoints and native receipts remain intact. New work uses the single
+concentrated `nest_sweep` capability described in NEST_SWEEP.md; the dispatcher
+rejects resuming staged offensive harassment.
+
 `NestAssault(game,bootstrap,builder,catalog,perimeter)` exposes `prepare(obs)`,
 `step(obs)` and `proof(obs)`. Preparation is read-only. The controller saves only
 its own `nest-assault.json` checkpoint and registered PCB blocks when executed
