@@ -176,6 +176,29 @@ class SteelControllerTests(unittest.TestCase):
         c, obs = self.proof_fixture(); obs['entities'][0]['inventory'] = {}
         self.assertIsNone(c.proof(obs))
 
+    def test_active_consumer_may_drain_both_lanes_of_exact_commissioned_furnaces(self):
+        c,obs=self.proof_fixture();c.state['phase']='verified'
+        units=[e['unit_number']for e in obs['entities']if e['name']=='stone-furnace']
+        c.game.query.return_value.update(left={},right={})
+        self.assertIsNone(c.proof(obs))
+        proof=c.proof(obs,consumer_furnace_units=units)
+        self.assertIsNotNone(proof)
+        self.assertFalse(proof['output_buffers_present'])
+        self.assertEqual(proof['furnace_units'],units)
+
+    def test_consumed_output_does_not_bypass_identity_inputs_fuel_or_contamination(self):
+        for change in ('uncommissioned','changed_unit','wrong_output','missing_input','no_fuel'):
+            with self.subTest(change=change):
+                c,obs=self.proof_fixture();c.state['phase']='verified'
+                units=[e['unit_number']for e in obs['entities']if e['name']=='stone-furnace']
+                c.game.query.return_value.update(left={},right={})
+                if change=='uncommissioned':c.state['phase']='build'
+                elif change=='changed_unit':units[0]+=10000
+                elif change=='wrong_output':c.game.query.return_value['left']={'iron-plate':1}
+                elif change=='missing_input':c.game.query.return_value['input_left']={}
+                else:next(e for e in obs['entities']if e['name']=='stone-furnace')['inventory']={}
+                self.assertIsNone(c.proof(obs,consumer_furnace_units=units))
+
     def test_output_lane_query_excludes_vertical_raw_feed_crossing_the_output_row(self):
         c,obs=self.proof_fixture()
         y=c.state['core']['ports'][-1]['position']['y']

@@ -6656,3 +6656,9 @@ Improvement: distinguish a sole perpendicular belt corner from true side loading
 - Before: strict old identity blocked Engine despite paid normal repairs; full-magazine assumptions rejected or overcounted97 remaining rounds as100. After: current canonical coverage and native owner succession are independently validated; version3 receipt conserves actual main+equipped rounddelta and supports interrupted retirement.
 - Evidence: parentSHA unchanged after metadata4258772, ROwhole/future/pipe/coverage4251442PASS,91focusedtests; native4267346 ordinary7154retirement to paid15937 recovered1gun/10mags/97rounds with actor100to197. No historical7152 baseline/counts fabricated.
 - Remaining risk: recovery code supports this narrowly admitted single continuation shape; later unrelated state loss requires fresh honest evidence. Engine machine-output and broad end-to-end rocket acceptance remain separate gates.
+
+## 2026-11-12T15:42:18+09:00 | Source Part16 consumed source buffers versus production proof
+- Improvement: validate original commissioned furnace identities and normal native input/fuel/power for an active downstream consumer while retaining the strict first-commissioning requirement for both stocked Steel output lanes.
+- Before: Engine made real output4301891 but independentpublicproof failed becauseitconsumedbothSteelbuffers. After: consumer_furnace_units pins the previouslyacceptedactualunits; emptyoutput isexplicitlyreported, contamination/sourcechanges stillfail, nativeEngineproduction remainsrequired.
+- Evidence:4310262 normalSteelinputFe22/coal25 withbothoutputlanesempty;18Steel+20EnginefocusedPASS; correctednative4316623actual29Enginecycles/output4; samejobaccepted4326379with23+23cycles/148actions, all360assetsbound.
+- Remaining risk: sourcebuffers can beemptyfromstarvationaswell; identity/normalinputs/fuelchecks do not promise a sustained rate. Sourcecapacityandcontinuous-flow acceptance remain separate.

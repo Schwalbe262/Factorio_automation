@@ -5,6 +5,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import time
@@ -57,6 +58,9 @@ CAPABILITIES = {
                    "effect":"prestock one concentrated paid turret wave, retain armed rear cover and rapidly deploy multiple guns in actual spawner range despite reviewed worm fire; no incremental harassment or offensive rebuild loop"},
     "piercing_ammo": {"parameters":{},"requires":["ammo_production","defense_perimeter"],
                       "effect":"normally build a capped bulk ammunition factory with local yellow precursor assemblers and piercing assemblers; use real batch-fed ingredients and native machine production, never bulk character crafting"},
+    "construction_mall": {"parameters":{"product":"transport-belt|gun-turret"},
+                          "requires":["main_bus_factory","defense_perimeter"],
+                          "effect":"normally belt-feed expandable construction cells from surplus bus taps, cap native finished stocks, prove actual machine output and collect it for recurring construction"},
     "main_bus_factory": {"parameters":{},"requires":["paired_smelting","logistic_science","defense_perimeter"],
                          "effect":"replace separate raw plate corridors with shared northbound iron/copper buses and native priority taps; commission compact green then normally retire obsolete western hardware; no throughput certification"},
     "dedicated_materials": {"parameters":{"resource":"coal|stone"},"requires":["paired_mining"],
@@ -148,6 +152,9 @@ class Request:
         elif self.capability == "chemical_production":
             from .chemical_production import validate_chemical
             validate_chemical(self.parameters)
+        elif self.capability == "construction_mall":
+            from .construction_mall import _product
+            _product(self.parameters)
         elif self.capability == "research":
             from .normal_research import validate_parameters
             validate_parameters(self.parameters)
@@ -362,6 +369,9 @@ class StarterExecutors:
         self.nest_sweep=None
         self.piercing_ammo=None
         self.piercing_path=Path(game.cfg.runtime_dir)/'piercing-ammo.json'
+        self.construction_mall=None
+        self.construction_mall_path=Path(game.cfg.runtime_dir)/'construction-mall.json'
+        self.bootstrap.construction_stock_source=self._construction_stock
         from .radar_network import RadarNetwork
         self.radars=RadarNetwork(game,self.builder,catalog,self.perimeter)
         self.outposts.perimeter=self.perimeter
@@ -431,6 +441,21 @@ class StarterExecutors:
             self.piercing_ammo=PiercingAmmo(self.game,self.builder,self.catalog,self.perimeter)
         return self.piercing_ammo
 
+    def _construction_factory(self):
+        if self.construction_mall is None:
+            from .construction_mall import ConstructionMall
+            self.construction_mall=ConstructionMall(self.game,self.builder,self.catalog,self.perimeter,
+                bus_factory=self.bus_factory,science=self.science,green=self.green,smelting=self.smelting)
+        return self.construction_mall
+
+    def _construction_stock(self,obs,item,count):
+        factory=getattr(self,'construction_mall',None)
+        if factory is None:
+            path=getattr(self,'construction_mall_path',None)
+            if path is None or not path.exists():return None
+            factory=self._construction_factory()
+        return factory.ensure_stock(obs,item,count) if factory.has_stock_cell(item) else None
+
     def _piercing_upkeep(self,obs):
         factory=getattr(self,'piercing_ammo',None)
         if factory is None:
@@ -491,6 +516,15 @@ class StarterExecutors:
         if capability == 'piercing_ammo':
             self.builder._sync(obs)
             result=self._piercing_factory().step(obs)
+            if result.get('type')or result.get('status')!='waiting':return result
+            restored=self.bastion_maintenance.step(obs)
+            if restored and(restored.get('type')or restored.get('status')=='blocked'):return restored
+            upkeep=self.perimeter.upkeep(obs)
+            if upkeep and(upkeep.get('type')or upkeep.get('status')=='blocked'):return upkeep
+            return result
+        if capability == 'construction_mall':
+            self.builder._sync(obs)
+            result=self._construction_factory().step(obs,parameters or {})
             if result.get('type')or result.get('status')!='waiting':return result
             restored=self.bastion_maintenance.step(obs)
             if restored and(restored.get('type')or restored.get('status')=='blocked'):return restored
@@ -688,6 +722,8 @@ class StarterExecutors:
             return self.nest_sweep.proof(obs) if self.nest_sweep is not None else None
         if capability == 'piercing_ammo':
             return self.piercing_ammo.proof(obs) if self.piercing_ammo is not None else None
+        if capability == 'construction_mall':
+            return self.construction_mall.proof(obs,parameters or {}) if self.construction_mall is not None else None
         if capability == "main_bus_factory":
             return self.bus_factory.proof(obs)
         if capability == "dedicated_materials":
@@ -807,13 +843,14 @@ def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> 
             job["planning_seconds"] = job.get("planning_seconds", 0) + time.perf_counter() - started
             if result.get("type"):
                 job.update(status="running", reason=result.get("reason", result["type"]),
-                           pending_action=result)
+                           pending_action=result, evidence_status="retained_from_prior_observation")
                 ledger.save()
                 ledger.event(key, "action_intent", tick=obs["tick"], action=result)
                 started = time.perf_counter()
                 try:
                     receipt = game.act(result)
-                    if receipt.get('reason') in ('build_batch_outcome_unknown','mine_batch_outcome_unknown','storage_transfer_outcome_unknown'):
+                    if receipt.get('reason') in ('build_batch_outcome_unknown','mine_batch_outcome_unknown',
+                                                 'storage_transfer_outcome_unknown','mall_stock_transfer_outcome_unknown'):
                         job['uncertain_batch_receipt']=receipt
                         raise RuntimeError('batch outcome unknown; observe and reconcile before continuing')
                 except Exception:
@@ -838,7 +875,8 @@ def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> 
                 if status == "succeeded":
                     # sync() persists this same mutable job. Never publish a
                     # terminal success before the independent proof returns.
-                    job.update(status="waiting",reason="verifying_postcondition",evidence={})
+                    job.update(status="waiting",reason="verifying_postcondition",evidence={},
+                               evidence_status="unavailable", evidence_observed_tick=None)
                     fresh = game.observe()
                     ledger.sync(fresh)
                     try:
@@ -850,14 +888,20 @@ def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> 
                     if proof is None:
                         job.update(status="blocked", reason="postcondition_not_verified", evidence={})
                     else:
-                        job.update(status="succeeded",reason=result.get("reason",""),evidence=proof)
+                        job.update(status="succeeded",reason=result.get("reason",""),evidence=proof,
+                                   evidence_status="verified_postcondition", evidence_observed_tick=fresh["tick"])
                     game.save()
                 else:
                     evidence=result.get('evidence',{})
                     if not evidence and status in {'blocked','failed'}:
                         evidence={k:v for k,v in result.items()if k not in {'status','reason','ok','evidence'}
                                   and type(v)in(int,float,bool,str)and(not isinstance(v,str)or len(v)<=500)}
-                    job.update(status=status, reason=result.get("reason", ""), evidence=evidence)
+                        position=result.get('position')
+                        if (isinstance(position,dict)and set(position)=={'x','y'}
+                                and all(type(v)in(int,float)and math.isfinite(v)for v in position.values())):
+                            evidence['position']=dict(position)
+                    job.update(status=status, reason=result.get("reason", ""), evidence=evidence,
+                               evidence_status="observation_result", evidence_observed_tick=obs["tick"])
             ledger.save()
             if job["status"] in TERMINAL:
                 if job['status']=='blocked':job.update(blocked_at_tick=obs['tick'],blocked_at_time=time.time());ledger.save()

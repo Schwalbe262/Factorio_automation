@@ -56,3 +56,11 @@ Tests cover catalog-driven recipe/fuel calculations, footprint/feed/output
 audits, stable expansion, missing/unsafe handoffs, read-only preparation and
 commissioning gates. No sustained-rate, capacity-upgrade or rocket acceptance
 is claimed. Per-agent token/quota usage is unavailable; the root records meters.
+
+For a commissioned downstream consumer, `proof(obs, consumer_furnace_units=...)`
+can validate the exact previously pinned furnaces while their output belts have
+been drained. It still requires the verified producer, matching furnace units,
+actual products, normal fuel/iron inputs, pure output lanes, power and source
+contracts. Ordinary commissioning still needs steel on both physical lanes.
+The returned `output_buffers_present` reports the current distinction; this
+consumer proof makes no buffered-stock or sustained-rate claim.

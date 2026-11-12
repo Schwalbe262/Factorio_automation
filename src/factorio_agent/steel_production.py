@@ -315,8 +315,14 @@ return {ok=true}
         self.state['phase'] = 'verified'; _atomic_json(self.path, self.state)
         return {'status': 'succeeded', 'reason': 'normally belt-supplied opposing steel furnaces commissioned', 'evidence': evidence}
 
-    def proof(self, obs):
+    def proof(self, obs, *, consumer_furnace_units=None):
         self.last_proof_failure=None
+        if consumer_furnace_units is not None and (
+                self.state.get('phase')!='verified'
+                or not isinstance(consumer_furnace_units,(list,tuple)) or not consumer_furnace_units
+                or any(type(unit)is not int or unit<1 for unit in consumer_furnace_units)
+                or len(set(consumer_furnace_units))!=len(consumer_furnace_units)):
+            self.last_proof_failure={'reason':'steel_consumer_requires_commissioned_exact_furnaces'};return None
         if (not self.state or self.state['world_id'] != obs['world_id']
                 or self.state['catalog_fingerprint'] != self.catalog.fingerprint
                 or not underground_proof(obs, self.state['plan'])): return None
@@ -340,6 +346,8 @@ return {ok=true}
                 furnaces.append(live)
             if wanted['name'] == 'inserter' and (not live.get('electric_network_connected') or live.get('energy', 0) <= 0): return None
             if wanted['name'] == 'splitter' and any(live.get(k) != wanted[k] for k in ('splitter_input_priority', 'splitter_output_priority')): return None
+        if consumer_furnace_units is not None and sorted(consumer_furnace_units)!=sorted(e['unit_number']for e in furnaces):
+            self.last_proof_failure={'reason':'steel_consumer_furnace_identity_changed'};return None
         belt_specs = [e for e in self.state['core']['entities'] if e['name'] == 'transport-belt' and e['direction'] == 4
                       and e['position']['y'] == self.state['core']['ports'][-1]['position']['y']]
         first_furnace = self.state['core']['producer_rows']['right'][0]['position']
@@ -359,10 +367,18 @@ for _,group in ipairs({"input","output"}) do local lanes={{},{}}
 end
 return result''')
         if not lanes.get('ok'):self.last_proof_failure=lanes
-        if not lanes.get('ok') or any(set(lanes.get(side, {})) - {'steel-plate'} or lanes.get(side, {}).get('steel-plate', 0) <= 0 for side in ('left', 'right')): return None
+        if not lanes.get('ok'):return None
+        if any(set(lanes.get(side, {}))-{'steel-plate'} for side in ('left','right')):
+            self.last_proof_failure={'reason':'steel_output_lane_contaminated'};return None
+        buffered=all(lanes.get(side,{}).get('steel-plate',0)>0 for side in ('left','right'))
+        if not buffered and consumer_furnace_units is None:
+            self.last_proof_failure={'reason':'steel_commissioning_requires_both_buffered_output_lanes','native_output_lanes':lanes};return None
         for side, item in self.state['core']['input_lane_items'].items():
             content = lanes.get('input_' + side, {})
             if set(content) - {item} or content.get(item, 0) <= 0: return None
         return {'tick': obs['tick'], 'furnace_units': [e['unit_number'] for e in furnaces],
                 'products_finished': [e['products_finished'] for e in furnaces], 'native_output_lanes': lanes,
-                'rated': self.state['core']['rated'], 'scope': 'ordinary automatic steel commissioning; no sustained-rate acceptance'}
+                'output_buffers_present':buffered,
+                'rated': self.state['core']['rated'], 'scope': (
+                    'commissioned exact furnaces with normal automatic inputs for an active consumer; output buffers may be consumed; no sustained-rate acceptance'
+                    if consumer_furnace_units is not None else 'ordinary automatic steel commissioning; no sustained-rate acceptance')}

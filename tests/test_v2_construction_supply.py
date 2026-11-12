@@ -30,6 +30,38 @@ class ConstructionSupplyTests(unittest.TestCase):
                                         "sources": [{"unit_number": 1, "moved": 8}]}
         self.bootstrap = V2Bootstrap(self.game)
 
+    def test_commissioned_mall_stock_and_wait_precede_generic_collection_or_handcraft(self):
+        obs = {'inventory': {'transport-belt': 150}, 'entities': []}
+        pickup = {'type': 'take_mall_stock', 'item': 'transport-belt', 'count': 50}
+        provider = Mock(return_value=pickup)
+        self.bootstrap.construction_stock_source = provider
+        with patch.object(DeterministicBootstrap, 'ensure_item') as fallback:
+            self.assertEqual(self.bootstrap.ensure_item(obs, 'transport-belt', 200), pickup)
+            provider.assert_called_once_with(obs, 'transport-belt', 200)
+            provider.return_value = {'status': 'waiting', 'reason': 'normally_producing_mall_stock'}
+            self.assertEqual(self.bootstrap.ensure_item(obs, 'transport-belt', 200)['status'], 'waiting')
+            fallback.assert_not_called()
+
+    def test_missing_mall_allows_bootstrap_and_held_inventory_needs_no_provider(self):
+        provider = Mock(return_value=None)
+        self.bootstrap.construction_stock_source = provider
+        with patch.object(DeterministicBootstrap, 'ensure_item', return_value={'status': 'succeeded'}) as fallback:
+            self.bootstrap.ensure_item({'inventory': {'transport-belt': 200}}, 'transport-belt', 200)
+            provider.assert_not_called()
+            self.bootstrap.ensure_item({'inventory': {}}, 'transport-belt', 1)
+            provider.assert_called_once()
+            self.assertEqual(fallback.call_count, 2)
+
+    def test_stock_provider_cannot_substitute_handcraft_raw_inputs_or_oversized_pickups(self):
+        for invalid in ({'type': 'craft', 'recipe': 'transport-belt', 'count': 200},
+                        {'type': 'supply_piercing_input'},
+                        {'type': 'take_mall_stock', 'item': 'gun-turret', 'count': 1},
+                        {'type': 'take_mall_stock', 'item': 'transport-belt', 'count': True},
+                        {'type': 'take_mall_stock', 'item': 'transport-belt', 'count': 51}):
+            with self.subTest(action=invalid), self.assertRaises(ValueError):
+                self.bootstrap.construction_stock_source = Mock(return_value=invalid)
+                self.bootstrap.ensure_item({'inventory': {}}, 'transport-belt', 200)
+
     def test_global_request_does_not_shrink_to_single_stale_tile_stock(self):
         obs = {"world_id": "world", "entities": [entity(1, 1), entity(2, 8),
                 entity(3, 12, "stone-furnace", "output_inventory")]}

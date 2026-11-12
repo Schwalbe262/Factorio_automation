@@ -114,6 +114,27 @@ class JobBoundaryTests(unittest.TestCase):
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason"], "postcondition_not_verified")
 
+    def test_action_marks_old_production_evidence_as_retained_without_erasing_it(self):
+        submit(self.root, self.game, self.request())
+        old = {'machines_finished': [18, 11, 2, 1, 0, 0]}
+        run_slice(self.root, self.game, Executor({'status': 'waiting', 'evidence': old}),
+                  'test', seconds=.001)
+        self.game.observation['tick'] = 200
+        result = run_slice(self.root, self.game, Executor({'type': 'craft', 'recipe': 'lab', 'count': 1}),
+                           'test', seconds=.001)
+        self.assertEqual(result['evidence'], old)
+        self.assertEqual(result['evidence_observed_tick'], 100)
+        self.assertEqual(result['evidence_status'], 'retained_from_prior_observation')
+        self.assertEqual(result['last_tick'], 200)
+
+    def test_fresh_postcondition_evidence_replaces_retained_observation_metadata(self):
+        submit(self.root, self.game, self.request())
+        result = run_slice(self.root, self.game,
+                           Executor({'status': 'succeeded'}, {'native_output': 145}), 'test')
+        self.assertEqual(result['evidence'], {'native_output': 145})
+        self.assertEqual(result['evidence_status'], 'verified_postcondition')
+        self.assertEqual(result['evidence_observed_tick'], 100)
+
     def test_proof_exception_cannot_leave_success_in_persisted_receipt(self):
         submit(self.root,self.game,self.request())
         executor=Executor({'status':'succeeded'}, {'measured':True})
@@ -133,6 +154,13 @@ class JobBoundaryTests(unittest.TestCase):
         self.assertEqual(result['evidence'],dict(required_nominal_ore_rate=150,
             available_nominal_ore_rate=120,capacity_basis='native remaining'))
         self.assertEqual(Ledger(self.root).data['jobs']['test']['evidence'],result['evidence'])
+
+    def test_blocked_geometry_exposes_one_finite_position_without_large_native_details(self):
+        submit(self.root,self.game,self.request())
+        result=run_slice(self.root,self.game,Executor({'status':'blocked',
+            'reason':'block_protected_entity_obstruction','entity':'transport-belt',
+            'position':{'x':-11.5,'y':-140.5},'full_map':[{}]*1000}), 'test')
+        self.assertEqual(result['evidence'],{'entity':'transport-belt','position':{'x':-11.5,'y':-140.5}})
 
     def test_verified_success_survives_process_restart_but_rollback_invalidates_it(self):
         submit(self.root, self.game, self.request())
@@ -240,6 +268,18 @@ class JobBoundaryTests(unittest.TestCase):
         self.assertIn('pending_action',job)
         self.assertEqual(job['uncertain_batch_receipt']['confirmed_moved'],10)
         with self.assertRaises(ValueError):control(self.root,self.game,'test','retry')
+
+    def test_uncertain_mall_pickup_keeps_intent_and_requires_reobservation_before_replanning(self):
+        submit(self.root,self.game,self.request())
+        self.game.act=lambda _: {'ok':False,'reason':'mall_stock_transfer_outcome_unknown'}
+        with self.assertRaisesRegex(RuntimeError,'batch outcome unknown'):
+            run_slice(self.root,self.game,Executor({'type':'take_mall_stock','item':'transport-belt','count':50}),'test')
+        job=Ledger(self.root).data['jobs']['test']
+        self.assertEqual(job['reason'],'action_outcome_unknown_reconcile_required')
+        self.assertEqual(job['pending_action']['count'],50)
+        with self.assertRaises(ValueError):control(self.root,self.game,'test','retry')
+        control(self.root,self.game,'test','reconcile')
+        self.assertNotIn('pending_action',Ledger(self.root).data['jobs']['test'])
 
     def test_intentional_pause_does_not_spend_execution_deadline(self):
         submit(self.root, self.game, self.request())

@@ -98,10 +98,10 @@ Full-rated red36+green35 requires264.5iron/min before additional industrial dema
 ammo's bounded critical fill and surplus industrial buffers can temporarily reduce
 science supply. Neither nameplate budgets nor full buffers certify sustained rates.
 Normal underground-belt pipe crossings and whole producer-reservation keepouts
-now pass native consumer preparation. Engine construction stopped before its
-core because two newly commissioned posts obstruct a feed and its fixed input
-apron. Normally paid, armed replacements must preserve coverage before old
-posts are recovered; this guarded relocation remains under development.
+now pass native consumer preparation. Paid, armed replacements preserved cover
+while obstructing old posts were normally recovered. An append-only continuation
+preserves the first historical mine's unknown baseline; the second retirement
+conserved ten magazines with97 actual rounds, including equipped ammunition.
 The independent shared gas header is commissioned with exact Plastic/Sulfur
 aliases and one shared540/min nominal source. Future defense placement now
 protects complete registered plans, expansion spaces and fixed port exits.
@@ -109,12 +109,15 @@ Plastic is commissioned2991431. Advanced circuits are commissioned3100796
 after a paid one-belt mixer repair and conserved recovery of83copper plates.
 The shared analyzer now distinguishes corners from true side loading; Engine
 and Blue designs include the same required empty approach. Blue recipe research
-completed3104834; no Blue factory is commissioned yet. Engine and Sulfur remain
-uncommissioned. Engine prebuild routes passed native preparation, but an old-post
-recovery needs an honest legacy receipt after native auto-equipping exposed an
-inventory-accounting bug. A new bounded routing family passes the captured Sulfur
-Water corridor; the complete new site still needs native preparation. Current
-priority is repeated eastern turret loss: watch restocks/rebuilds known posts and
+completed3104834; no Blue factory is commissioned yet. Engine is commissioned
+4326379 on its original key with148 actions. All360 bound assets match and two
+engine machines have23 actual finished cycles each, with four units at the fixed
+outlet. Its Steel source proof pins the original commissioned furnace units and
+permits normally consumed empty output buffers; first Steel commissioning still
+requires both real output lanes. Sulfur still lacks a complete clean Water route,
+including after Engine construction4318374. A defended ordinary northern header
+is under investigation; no new water outlet is published yet. Watch maintains
+the remaining perimeter: it restocks/rebuilds known posts and
 ordinary defense research has unlocked walls, radar and repair packs. Three-post
 wall bastions are commissioned with24 paid walls and three armed posts. Native
 repair receipts prove real health gain and tool wear. The exact pinned player's
@@ -129,7 +132,7 @@ replaces it. Native4156939 accepted all six nearby spawners and four worms kille
 by the single paid ten-gun wave, with no turret losses. The capped2Yellow/4Red
 factory is commissioned4137210 and independently held200 output at4174070;
 raw delivery remains assisted finite couriers rather than continuous belt supply.
-Finish construction malls, Engine/chemical consumers, bulk bus growth, blue,
+Finish construction malls, Sulfur/chemical consumers, bulk bus growth, blue,
 rail and rocket. No enemy deletion, granted health or retroactive conservation claim.
 Do not close the continuous-rate gate from filling output buffers. No rocket yet.
 

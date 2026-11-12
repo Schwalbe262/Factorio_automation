@@ -262,6 +262,7 @@ function target(p,name)if owned and p.x==first.x and p.y==first.y then return{fo
         self.steel.state['plan']['entities'].pop()
         self.steel.proof.return_value['furnace_units']=[999,6176]
         self.assertIsNone(self.c.proof(self.obs));self.assertEqual(self.c.last_proof_failure['reason'],'engine_bound_steel_furnace_units_changed')
+        self.steel.proof.assert_called_with(self.obs,consumer_furnace_units=[6172,6176])
         self.steel.proof.return_value['furnace_units']=[6172,6176]
         next(e for e in self.obs['entities']if e['name']=='underground-belt')['underground_pair_verified']=False
         self.assertIsNone(self.c.proof(self.obs));self.assertEqual(self.c.last_proof_failure['reason'],'engine_native_underground_pairs_unverified')

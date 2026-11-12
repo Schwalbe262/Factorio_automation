@@ -46,6 +46,12 @@ class WorldBoundGame(DeterministicGame):
         if action.get('type')=='take_factory_magazines':
             from .factory_ammo_transfer import execute_take_factory_magazines
             return self._record_action(action,execute_take_factory_magazines(self,action))
+        if action.get('type')=='mall_stock_limit':
+            from .construction_mall import execute_mall_stock_limit
+            return self._record_action(action,execute_mall_stock_limit(self,action))
+        if action.get('type')=='take_mall_stock':
+            from .construction_mall import execute_take_mall_stock
+            return self._record_action(action,execute_take_mall_stock(self,action))
         if action.get('type')=='configure_piercing_factory':
             from .piercing_ammo import execute_configure_piercing
             return self._record_action(action,execute_configure_piercing(self,action))

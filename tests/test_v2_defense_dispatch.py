@@ -18,6 +18,7 @@ class EmergencyDispatchTests(unittest.TestCase):
         ex.nest_sweep=SimpleNamespace(step=Mock(return_value={'type':'craft','recipe':'piercing-rounds-magazine'}))
         ex.radars=SimpleNamespace(step=Mock(return_value={'type':'build','name':'radar'}))
         ex.piercing_ammo=SimpleNamespace(step=Mock(return_value={'type':'build','name':'assembling-machine-1'}))
+        ex.construction_mall=SimpleNamespace(step=Mock(return_value={'type':'build','name':'assembling-machine-1'}))
         ex.starter_upkeep=Mock(return_value={'status':'blocked','reason':'old_hotspot_missing'})
         return ex
 
@@ -66,6 +67,25 @@ class EmergencyDispatchTests(unittest.TestCase):
         ex.perimeter.upkeep.assert_not_called();ex.starter_upkeep.assert_not_called()
         ex.piercing_ammo.step.return_value={'status':'waiting','reason':'native_assembler_production'}
         self.assertEqual(ex.step('piercing_ammo',{})['item'],'firearm-magazine')
+
+    def test_construction_mall_uses_its_product_and_keeps_base_supplied_while_producing(self):
+        ex=self.executor();ex.perimeter.upkeep=Mock(return_value={'type':'insert','item':'firearm-magazine'})
+        self.assertEqual(ex.step('construction_mall',{}, {'product':'transport-belt'})['type'],'build')
+        ex.construction_mall.step.assert_called_once_with({}, {'product':'transport-belt'})
+        ex.perimeter.upkeep.assert_not_called()
+        ex.construction_mall.step.return_value={'status':'waiting','reason':'normal_machine_production'}
+        self.assertEqual(ex.step('construction_mall',{}, {'product':'transport-belt'})['item'],'firearm-magazine')
+
+    def test_bootstrap_stock_provider_uses_only_a_verified_matching_mall_cell(self):
+        ex=self.executor()
+        factory=ex.construction_mall
+        factory.has_stock_cell=Mock(return_value=False)
+        factory.ensure_stock=Mock(return_value={'status':'waiting'})
+        self.assertIsNone(ex._construction_stock({},'transport-belt',200))
+        factory.ensure_stock.assert_not_called()
+        factory.has_stock_cell.return_value=True
+        self.assertEqual(ex._construction_stock({},'transport-belt',200),{'status':'waiting'})
+        factory.ensure_stock.assert_called_once_with({},'transport-belt',200)
 
     def test_factory_inputs_are_serviced_during_stock_wait_but_not_committed_combat(self):
         ex=self.executor();ex.perimeter.upkeep=Mock(return_value=None)

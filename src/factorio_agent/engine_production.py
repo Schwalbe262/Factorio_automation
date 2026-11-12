@@ -675,7 +675,7 @@ return {ok=true}''')
             if(not live or type(unit)is not int or live.get('unit_number')!=unit
                     or(spec['name']!='small-electric-pole'and live.get('direction')!=spec['direction'])):
                 self.last_proof_failure={'reason':'engine_asset_identity_or_direction_changed','entity':spec};return None
-        steel_proof=self.steel.proof(obs)
+        steel_proof=self.steel.proof(obs,consumer_furnace_units=self.state['steel_furnace_units'])
         if _hash(self.steel.state.get('plan'))!=self.state['steel_plan_revision']or not steel_proof:
             self.last_proof_failure={'reason':'engine_normal_steel_source_proof_missing'};return None
         if sorted(steel_proof.get('furnace_units',[]))!=sorted(self.state['steel_furnace_units']):

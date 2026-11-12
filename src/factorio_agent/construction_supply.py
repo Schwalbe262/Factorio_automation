@@ -70,6 +70,22 @@ def validate_take_many(action):
 
 
 class V2Bootstrap(DeterministicBootstrap):
+    def ensure_item(self, observation, item, count, _stack=()):
+        source = getattr(self, 'construction_stock_source', None)
+        if source is not None and self._count(observation, item) < count:
+            supplied = source(observation, item, count)
+            if supplied is not None:
+                if (not isinstance(supplied, dict)
+                        or not (supplied.get('type') == 'take_mall_stock'
+                                or (not supplied.get('type') and supplied.get('status') in {'waiting', 'blocked'}))):
+                    raise ValueError('construction stock provider requires guarded mall collection or an explicit wait')
+                if supplied.get('type') == 'take_mall_stock' and (
+                        supplied.get('item') != item or type(supplied.get('count')) is not int
+                        or not 1 <= supplied['count'] <= min(50, count-self._count(observation, item))):
+                    raise ValueError('mall collection must match the requested missing stock')
+                return supplied
+        return super().ensure_item(observation, item, count, _stack)
+
     def _take_output(self, observation, item, count):
         catalog_item = getattr(self.catalog, "items", {}).get(item, {})
         if item in AMMO_ITEMS or catalog_item.get("type") == "ammo":

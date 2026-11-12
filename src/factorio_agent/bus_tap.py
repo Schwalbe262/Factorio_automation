@@ -85,6 +85,49 @@ def reconstruct_bus(bus):
     return materials, taps, merges, north.pop(), south.pop(), east.pop()
 
 
+def preserve_bus_ports(old, compiled):
+    """Keep fixed historical trunk outlets after an add-only NORTH extension.
+
+    Consumer/input/merge descriptors must still be emitted exactly. Only known
+    continuation/frontier outlets may remain inside an extended straight trunk.
+    """
+    result = deepcopy(compiled)
+    by_name = {p['name']: p for p in result['ports']}
+    if len(by_name) != len(result['ports']):
+        raise ValueError('duplicate compiled bus port')
+    for port in old['ports']:
+        if by_name.get(port['name']) == port:
+            continue
+        matches = [r for r in old['trunks'] if r['item'] == port.get('item') and r['x'] == port['position']['x']]
+        if len(matches) != 1:
+            raise ValueError('existing consumer/input/merge port changed')
+        trunk = matches[0]; prefix = f"{trunk['item']}:{trunk['line']}:"
+        if (port['name'] != prefix + 'continuation' and not port['name'].startswith(prefix + 'frontier:')):
+            raise ValueError('unrecognized historical bus alias')
+        expected = next((p for p in old['ports'] if p['name'] == prefix + 'continuation'), None)
+        if (expected is None or set(port) != set(expected)
+                or any(port.get(k) != expected.get(k) for k in set(port) - {'name', 'position'})
+                or (port['name'] != prefix + 'continuation' and port['name'] != prefix + 'frontier:' + str(port['position']['y']))):
+            raise ValueError('historical alias descriptor changed')
+        key = signature(entity('transport-belt', port['position']['x'], port['position']['y'], 0))
+        if key not in {signature(e) for e in old['entities']} or key not in {signature(e) for e in result['entities']}:
+            raise ValueError('historical outlet must remain an owned straight trunk')
+        current = by_name.get(port['name'])
+        if current is not None:
+            if set(current) != set(expected) or any(current.get(k) != expected.get(k) for k in set(expected) - {'name', 'position'}):
+                raise ValueError('new frontier descriptor changed')
+            # Moving the compiler's canonical continuation creates a new alias;
+            # the old canonical descriptor stays at its paid physical belt.
+            name = prefix + 'frontier:' + str(current['position']['y'])
+            frontier = dict(current, name=name)
+            if name in by_name and by_name[name] != frontier:
+                raise ValueError('conflicting bus frontier alias')
+            by_name[name] = frontier
+        by_name[port['name']] = deepcopy(port)
+    result['ports'] = list(by_name.values())
+    return result
+
+
 def extend_bus(bus, parameters, obs, *, maximum_span=5):
     """Recompile contracts and one complete branch, freezing old tunnel layers."""
     validate_parameters(parameters)
@@ -113,6 +156,10 @@ def extend_bus(bus, parameters, obs, *, maximum_span=5):
                              merges=merges, foreign_entities=virtual, maximum_span=maximum_span)
     if not compiled.get('ok'):
         return {**compiled, 'stage': 'recompile_existing_bus'}
+    try:
+        compiled = preserve_bus_ports(bus, compiled)
+    except ValueError as exc:
+        return {'ok': False, 'reason': 'tap_historical_bus_port_changed', 'detail': str(exc)}
     old_keys = {signature(e) for e in bus['entities']}; target_key = signature(old_tile)
     new_keys = {signature(e) for e in compiled['entities']}
     if (not old_keys - {target_key} <= new_keys or any(p not in compiled['ports'] for p in bus['ports'])

@@ -99,3 +99,16 @@ old or new board revision. Changed sources, coverage, foreign reservations or
 candidate core fail closed. Relocation can incur costs only after this adoption,
 and then binds the newly accepted core and plan. No positive native replan or
 post recovery is claimed by the focused offline tests.
+
+The downstream Engine proof pins its original Steel furnace units and uses the
+consumer supply contract. Empty steel output belts can be normal consumption;
+positive native Engine counters/output still prove actual downstream production.
+This prevents a race where initial acceptance passes and the independent fresh
+proof fails merely because Engine removed steel between observations.
+Native4316623 independently observed29 Engine craft cycles across the two bound
+machines, four engine units on the fixed outlet and normal core ingredients.
+The public same-key completion gate is retried separately after this correction.
+
+Public same-key acceptance then succeeded at4326379 with148 actions and no
+current failures: both Engine assemblers reached23 native cycles and the fixed
+outlet held four engine units. All360 bound assets remained exact.
