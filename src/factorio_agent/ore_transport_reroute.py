@@ -8,8 +8,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from factorio_ai.deterministic_builder import _plan
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_builder import _plan
+from factorio_agent.core.deterministic_state import _atomic_json
 from .bus_factory import identity, trace_corridor
 from .planning import preflight
 from .resource_reroute import _bound, _pair_geometry, _replace_route, partition_routes

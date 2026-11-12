@@ -2,7 +2,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 import unittest
 
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.board import entity
 from factorio_agent.resource_policy import mark_pumpjack,validate_annotations,RESOURCE_CHECK_LUA,RESOURCES,MINING_NAMES
 

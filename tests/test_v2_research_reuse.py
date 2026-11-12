@@ -25,7 +25,7 @@ class FundedResearchReuseTests(unittest.TestCase):
 
     def test_existing_machine_contract_is_executed_before_remote_power_or_new_handcraft_budget(self):
         self.create_batch()
-        with patch('factorio_ai.deterministic_repair_control.pending_repair',return_value=None):
+        with patch('factorio_agent.core.deterministic_repair_control.pending_repair',return_value=None):
             result=self.executor.step('starter_research',self.obs,self.params)
         self.assertEqual(result['reason'],'repairing_existing_machine_batch')
         self.batch.step.assert_called_once_with(self.obs)
@@ -38,7 +38,7 @@ class FundedResearchReuseTests(unittest.TestCase):
 
     def test_bound_batch_failure_is_preserved_instead_of_silently_funding_another_path(self):
         self.create_batch();self.batch.step.return_value={'status':'blocked','reason':'bootstrap_research_world_changed'}
-        with patch('factorio_ai.deterministic_repair_control.pending_repair',return_value=None):
+        with patch('factorio_agent.core.deterministic_repair_control.pending_repair',return_value=None):
             result=self.executor.step('starter_research',self.obs,self.params)
         self.assertEqual(result['reason'],'bootstrap_research_world_changed')
 
@@ -53,14 +53,14 @@ class FundedResearchReuseTests(unittest.TestCase):
         self.create_batch();self.obs['technologies']={'electric-mining-drill':True}
         self.executor.research=SimpleNamespace(step=Mock(return_value={'status':'succeeded','reason':'target researched naturally'}),
             proof=Mock(return_value={'technology':'electric-mining-drill','already_researched':True}))
-        with patch('factorio_ai.deterministic_repair_control.pending_repair',return_value=None):
+        with patch('factorio_agent.core.deterministic_repair_control.pending_repair',return_value=None):
             result=self.executor.step('starter_research',self.obs,self.params)
         self.assertEqual(result['status'],'succeeded');self.batch.step.assert_not_called()
         self.assertTrue(self.executor.proof('starter_research',self.obs,{},self.params)['already_researched'])
 
     def test_logistics_resumes_paid_current_owner_instead_of_reusing_its_shared_machines(self):
         self.create_batch();self.obs['research']='electric-mining-drill'
-        with patch('factorio_ai.deterministic_repair_control.pending_repair',return_value=None):
+        with patch('factorio_agent.core.deterministic_repair_control.pending_repair',return_value=None):
             result=self.executor.step('bootstrap_logistics',self.obs,{})
         self.assertEqual(result['reason'],'repairing_existing_machine_batch')
         action={'type':'insert','item':'iron-plate','count':12};receipt={'ok':True,'moved':12}
@@ -70,7 +70,7 @@ class FundedResearchReuseTests(unittest.TestCase):
     def test_prerequisite_completion_never_claims_logistics_completion(self):
         self.create_batch();self.obs['research']='electric-mining-drill'
         self.batch.step.return_value={'status':'succeeded','evidence':{'technology':'electric-mining-drill'}}
-        with patch('factorio_ai.deterministic_repair_control.pending_repair',return_value=None):
+        with patch('factorio_agent.core.deterministic_repair_control.pending_repair',return_value=None):
             result=self.executor.step('bootstrap_logistics',self.obs,{})
         self.assertEqual(result['status'],'waiting')
         self.assertEqual(result['reason'],'funded_science_prerequisite_finished')
@@ -95,7 +95,7 @@ class FundedResearchReuseTests(unittest.TestCase):
     def test_powered_local_science_runs_without_claiming_remote_source_is_ready(self):
         self.executor.industry=SimpleNamespace(local_power_ready=Mock(return_value=True),
             step=Mock(return_value={'status':'waiting','reason':'native_machine_science'}))
-        with patch('factorio_ai.deterministic_repair_control.pending_repair',return_value=None):
+        with patch('factorio_agent.core.deterministic_repair_control.pending_repair',return_value=None):
             result=self.executor.step('bootstrap_logistics',self.obs,{})
         self.assertEqual(result['reason'],'native_machine_science')
         self.executor.industry.local_power_ready.assert_called_once_with(self.obs)

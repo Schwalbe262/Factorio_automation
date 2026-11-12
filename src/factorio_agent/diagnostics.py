@@ -6,7 +6,7 @@ import json
 import math
 from pathlib import Path
 
-from factorio_ai.deterministic_state import RunLock,_atomic_json
+from factorio_agent.core.deterministic_state import RunLock,_atomic_json
 
 
 def port_lane_snapshot(root,game,obs):

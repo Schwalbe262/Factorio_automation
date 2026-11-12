@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 import tempfile
 
-from factorio_ai.deterministic_builder import power_flow_ready
+from factorio_agent.core.deterministic_builder import power_flow_ready
 from factorio_agent.electric_mining import ElectricCoal
 
 

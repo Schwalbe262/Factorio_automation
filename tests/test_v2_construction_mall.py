@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from factorio_ai.world_catalog import WorldCatalog
+from factorio_agent.core.world_catalog import WorldCatalog
 from factorio_agent.construction_mall import (ConstructionMall, mall_core, mall_rates, audit_mall_core,
     execute_mall_stock_limit, MALL_CONTROL_LUA, MALL_PROOF_LUA, _key, _product, _control_entities)
 from factorio_agent.board import entity

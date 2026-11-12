@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from factorio_ai.world_catalog import WorldCatalog
+from factorio_agent.core.world_catalog import WorldCatalog
 from .ammo_transfer import TAKE_FULL_MAGAZINES_LUA,validate_ammo_action
 
 

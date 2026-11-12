@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
 
-from factorio_ai.deterministic_builder import _plan
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_builder import _plan
+from factorio_agent.core.deterministic_state import _atomic_json
 from factorio_agent.board import entity
 from factorio_agent.engine_production import EngineProduction,engine_core,audit_engine_core,_key,_hash,SCOPE_ID
 from factorio_agent.smelting import merge_entities

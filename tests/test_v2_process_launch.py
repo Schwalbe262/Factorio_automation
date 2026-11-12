@@ -5,7 +5,7 @@ import subprocess
 import unittest
 from unittest.mock import Mock,patch
 
-from factorio_ai import process_launch as module
+from factorio_agent.core import process_launch as module
 
 
 @unittest.skipUnless(os.name=='nt','Windows console ownership')

@@ -7,7 +7,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock,patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.board import entity
 from factorio_agent.routing import route_trunks
 from factorio_agent.transport import compile_crossings,plan_connection,surface_pipe_proof,PIPE_WITNESS_LUA,_production_keepouts

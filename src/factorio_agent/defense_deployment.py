@@ -6,7 +6,7 @@ import json
 import math
 from pathlib import Path
 
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from .ammo_transfer import AMMO_GUARD_LUA
 from .planning import overlap
 from .resource_policy import mining_reservations

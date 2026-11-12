@@ -9,8 +9,8 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from factorio_ai.token_usage import summarize_codex_session_usage
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.token_usage import summarize_codex_session_usage
+from factorio_agent.core.deterministic_state import _atomic_json
 
 
 def sample(thread_id: str) -> dict:

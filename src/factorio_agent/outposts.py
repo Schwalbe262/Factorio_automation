@@ -6,8 +6,8 @@ import hashlib
 import math
 from pathlib import Path
 
-from factorio_ai.deterministic_builder import _plan
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_builder import _plan
+from factorio_agent.core.deterministic_state import _atomic_json
 from .board import entity
 from .power_grid import plan_connection
 from .transport import VECTORS,xy,plan_connection as belt_connection,underground_proof

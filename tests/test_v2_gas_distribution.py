@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.board import entity
 from factorio_agent.chemical_production import source_owned_apron
 from factorio_agent.gas_distribution import ALIASES,CONSUMER_ID,GAS_PROOF_LUA,GasDistribution,_key,gas_manifold_core

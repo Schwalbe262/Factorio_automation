@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.ammo_production import AmmoProduction,ammo_core,ammo_rates,_key
 from factorio_agent.ammo_transfer import validate_ammo_action
 from factorio_agent.main_bus import BusMaterial,ConsumerTap,plan_main_bus

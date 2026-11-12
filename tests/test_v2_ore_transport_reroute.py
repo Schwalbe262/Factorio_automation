@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder,_plan
+from factorio_agent.core.deterministic_builder import FactoryBuilder,_plan
 from factorio_agent.board import entity
 from factorio_agent.bus_factory import identity
 from factorio_agent.ore_transport_reroute import OreTransportReroute,delivery_context,plan_revision
@@ -182,7 +182,7 @@ class OreRerouteExecutionTests(unittest.TestCase):
     def test_partial_publication_resumes_from_mixed_old_and_new_documents(self):
         with tempfile.TemporaryDirectory() as root:
             c,_,_,_=self.running(root)
-            from factorio_ai.deterministic_state import _atomic_json
+            from factorio_agent.core.deterministic_state import _atomic_json
             writes=[]
             def interrupted(path,value):
                 writes.append(path)

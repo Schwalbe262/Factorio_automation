@@ -11,11 +11,11 @@ import socket
 import subprocess
 import time
 
-from factorio_ai.config import load_config
-from factorio_ai.deterministic_game import DeterministicGame
-from factorio_ai.process_launch import spawn_console_independent
-from factorio_ai.deterministic_state import RunLock, _atomic_json
-from factorio_ai.factorio import (build_create_no_mod_save_command,
+from factorio_agent.core.config import load_config
+from factorio_agent.core.deterministic_game import DeterministicGame
+from factorio_agent.core.process_launch import spawn_console_independent
+from factorio_agent.core.deterministic_state import RunLock, _atomic_json
+from factorio_agent.core.factorio import (build_create_no_mod_save_command,
     build_start_no_mod_server_command, no_mod_save_path, wait_for_rcon)
 from .automation_config import AutomationConfig,load_automation_config
 
@@ -226,7 +226,7 @@ def start(root: Path) -> dict:
                         name="Factorio Luna v2", max_players=2)
         _atomic_json(settings_path, settings)
         process=spawn_console_independent(command,log_path=cfg.log_dir/'server-process.log')
-        from factorio_ai.deterministic_character import _identity
+        from factorio_agent.core.deterministic_character import _identity
         _atomic_json(root / "server.json", {"pid": process.pid,
                      "creation_time": _identity(process.pid), "started_at": time.time()})
         # On timeout leave the handle/world in place for inspection, never restart.
@@ -257,7 +257,7 @@ def game_for(root: Path) -> DeterministicGame:
 
 
 def connect_player(root: Path) -> dict:
-    from factorio_ai.deterministic_character import ensure_crafting_player
+    from factorio_agent.core.deterministic_character import ensure_crafting_player
     game = game_for(root)
     with RunLock(root / "writer.lock"):
         deadline = time.monotonic() + 125
@@ -269,7 +269,7 @@ def connect_player(root: Path) -> dict:
 
 
 def catalog_for(root: Path, game: DeterministicGame):
-    from factorio_ai.world_catalog import WorldCatalog
+    from factorio_agent.core.world_catalog import WorldCatalog
     path = root / "catalog.json"
     # Recipe geometry is stable in a pinned run; per-job recipe availability is
     # always checked against a fresh observation by the executor.

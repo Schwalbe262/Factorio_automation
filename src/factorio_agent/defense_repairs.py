@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from factorio_ai.deterministic_repair_control import pending_repair,REPAIR_RETURN_HOME_LUA
+from factorio_agent.core.deterministic_repair_control import pending_repair,REPAIR_RETURN_HOME_LUA
 
 
 def return_to_spawn_action(game,world,actor):

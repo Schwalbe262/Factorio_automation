@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.water_gathering import WaterGathering,water_core,_key,WATER_PROOF_LUA
 
 try:

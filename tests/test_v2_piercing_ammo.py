@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from factorio_ai.world_catalog import WorldCatalog
+from factorio_agent.core.world_catalog import WorldCatalog
 from factorio_agent.piercing_ammo import (PiercingAmmo,piercing_core,piercing_rates,audit_piercing_core,
     execute_configure_piercing,execute_supply_piercing_input,PIERCING_CONTROL_LUA,PIERCING_INSPECT_LUA,_key)
 

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder, _plan
+from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
 from factorio_agent.board import entity
 from factorio_agent.bus_tap import BusTap, extend_bus, reconstruct_bus, replace_bus, signature, validate_parameters
 from factorio_agent.main_bus import BusMaterial, ConsumerTap, plan_main_bus

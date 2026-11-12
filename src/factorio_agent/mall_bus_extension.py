@@ -4,7 +4,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 
-from factorio_ai.deterministic_builder import _plan
+from factorio_agent.core.deterministic_builder import _plan
 from .board import entity
 from .bus_tap import BusTap, _hash, preserve_bus_ports, reconstruct_bus, signature, extend_bus
 from .main_bus import plan_main_bus

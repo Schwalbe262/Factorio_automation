@@ -5,9 +5,9 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
-from factorio_ai.deterministic_builder import FactoryBuilder
-from factorio_ai.deterministic_state import _atomic_json
-from factorio_ai.world_catalog import WorldCatalog
+from factorio_agent.core.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_state import _atomic_json
+from factorio_agent.core.world_catalog import WorldCatalog
 from factorio_agent.registered_belt_repair import (RegisteredBeltRepair,execute_repair_registered_belts,FILE,REPAIR_BELTS_LUA,
     execute_reconcile_registered_belts,approved_reconciliation)
 try:

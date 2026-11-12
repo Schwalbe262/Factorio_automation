@@ -9,8 +9,8 @@ import math
 from pathlib import Path
 import re
 
-from factorio_ai.deterministic_builder import _plan
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_builder import _plan
+from factorio_agent.core.deterministic_state import _atomic_json
 from .board import entity
 from .main_bus import BusMaterial, ConsumerTap, SourceMerge, PRIORITY_OUTPUT, plan_main_bus
 from .planning import preflight

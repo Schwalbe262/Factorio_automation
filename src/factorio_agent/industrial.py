@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import time
 
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_state import _atomic_json
 from .brick_production import BrickProduction
 from .bus_tap import BusTap,reconstruct_bus,signature
 from .planning import overlap,preflight

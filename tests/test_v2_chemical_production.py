@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder,_plan
+from factorio_agent.core.deterministic_builder import FactoryBuilder,_plan
 from factorio_agent.board import entity
 from factorio_agent.chemical_production import (ChemicalProduction,CHEMICAL_PROOF_LUA,CHEMICAL_PIPE_SURVEY_LUA,CHEMICAL_CROSSING_PROOF_LUA,
     _key,_payload,chemical_core,chemical_rates,chemical_fluid_ports,blue_chemistry_demand,

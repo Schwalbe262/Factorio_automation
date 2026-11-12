@@ -4,8 +4,8 @@ import json
 import math
 from pathlib import Path
 
-from factorio_ai.deterministic_builder import _plan
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_builder import _plan
+from factorio_agent.core.deterministic_state import _atomic_json
 from .bus_budget import declared_bus_demand
 from .bus_tap import signature
 from .engine_production import EngineProduction,engine_core,engine_rates,audit_engine_core,SCOPE_ID

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
 
-from factorio_ai.deterministic_builder import _plan
+from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.board import entity
 from factorio_agent.power_layout import V2FactoryBuilder,compact_coal_cell,_power_preflight_projection,_power_pipe_guard
 from factorio_agent.resource_policy import MINING_NAMES

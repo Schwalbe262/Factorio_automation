@@ -7,7 +7,7 @@ from factorio_agent.board import entity
 from factorio_agent.bus_tap import extend_bus, preserve_bus_ports, signature
 from factorio_agent.main_bus import BusMaterial, ConsumerTap, plan_main_bus
 from factorio_agent.mall_bus_extension import extend_frontier,propose_mall_taps
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 
 
 def bus():

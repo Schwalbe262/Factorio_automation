@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from factorio_ai.world_catalog import WorldCatalog
+from factorio_agent.core.world_catalog import WorldCatalog
 from factorio_agent.factory_ammo_transfer import (factory_magazine_action,execute_take_factory_magazines,
     TAKE_FACTORY_MAGAZINES_LUA)
 import test_v2_ammo_transfer as fixtures

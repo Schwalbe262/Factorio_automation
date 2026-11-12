@@ -9,7 +9,7 @@ from unittest.mock import Mock,patch
 from factorio_agent.board import entity
 from factorio_agent.base_coal_recovery import (BaseCoalRecovery,coal_budget,preserved_pipe_specs,power_forks,
     COAL_HEALTH_LUA,DEPLETION_LUA,_key,_hash,active_coal_plan)
-from factorio_ai.deterministic_builder import _plan
+from factorio_agent.core.deterministic_builder import _plan
 
 try:
     from lupa import LuaRuntime

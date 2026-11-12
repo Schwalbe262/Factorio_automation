@@ -23,8 +23,8 @@ def forced_forward_case(transform=lambda p:p,escape=5):
 
 def captured_water_case(capture_path,runtime_dir,vertical_shift=-28):
     """Manual benchmark helper only; unittest does not depend on ignored runtime files."""
-    from factorio_ai.deterministic_builder import FactoryBuilder
-    from factorio_ai.world_catalog import WorldCatalog
+    from factorio_agent.core.deterministic_builder import FactoryBuilder
+    from factorio_agent.core.world_catalog import WorldCatalog
     from factorio_agent.chemical_production import chemical_core
     from factorio_agent.petroleum import compile_pipe_crossings
     from factorio_agent.transport import unbuilt_external_keepouts,xy

@@ -34,7 +34,7 @@ class RegisteredStockOwnershipTests(unittest.TestCase):
         self.assertEqual(self.chest['inventory']['iron-plate'],50)
 
     def test_generic_fallback_also_excludes_finite_science_outputs(self):
-        with patch('factorio_ai.deterministic_bootstrap.DeterministicBootstrap._take_output',return_value=None)as fallback:
+        with patch('factorio_agent.core.deterministic_bootstrap.DeterministicBootstrap._take_output',return_value=None)as fallback:
             self.bootstrap._take_output(self.obs,'automation-science-pack',10)
         self.assertEqual([e['unit_number']for e in fallback.call_args.args[0]['entities']],[4])
 

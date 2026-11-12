@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder,_plan
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_builder import FactoryBuilder,_plan
+from factorio_agent.core.deterministic_state import _atomic_json
 from factorio_agent.board import entity
 from factorio_agent.defense_coverage import coverage_cells
 from factorio_agent.defense_perimeter import DefensePerimeter

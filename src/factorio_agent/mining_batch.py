@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import math
 
-from factorio_ai.deterministic_game import GUARDED_MINE_LUA, validate_mine_guard
+from factorio_agent.core.deterministic_game import GUARDED_MINE_LUA, validate_mine_guard
 
 # Advanced replacement guards are forbidden by this envelope. Reuse the exact
 # base owned-world/unit/force prefix without unrelated replacement programs.

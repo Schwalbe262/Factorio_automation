@@ -1,5 +1,5 @@
 import unittest
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.lanes import lane_balancer,inserter_output_lane
 
 

@@ -80,8 +80,8 @@ class LayeredCorridorTests(unittest.TestCase):
 
     def test_complete_corridor_selection_checks_foreign_layers_before_choosing(self):
         game=SimpleNamespace(query=lambda _: {'ok':True,'blocked':[],'max_span':5})
-        geometry=__import__('factorio_ai.deterministic_builder',fromlist=['FactoryBuilder']).FactoryBuilder.__new__(
-            __import__('factorio_ai.deterministic_builder',fromlist=['FactoryBuilder']).FactoryBuilder)
+        geometry=__import__('factorio_agent.core.deterministic_builder',fromlist=['FactoryBuilder']).FactoryBuilder.__new__(
+            __import__('factorio_agent.core.deterministic_builder',fromlist=['FactoryBuilder']).FactoryBuilder)
         builder=SimpleNamespace(_occupied_by_plan=geometry._occupied_by_plan,can_place=lambda _: {'ok':True})
         foreign=[entity('transport-belt',20.5,.5+i,0) for i in range(6)]
         a={'item':'iron-ore','position':{'x':.5,'y':.5},'facing':4}

@@ -5,7 +5,7 @@ import heapq
 import json
 import math
 
-from factorio_ai.deterministic_builder import _plan
+from factorio_agent.core.deterministic_builder import _plan
 from .board import entity
 from .resource_policy import mining_reservations,validate_annotations
 

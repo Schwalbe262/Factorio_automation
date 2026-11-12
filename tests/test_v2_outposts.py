@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.outposts import MiningOutposts,mining_bank,validate_parameters
 
 

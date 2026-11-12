@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock,patch
 
-from factorio_ai.deterministic_builder import _plan
+from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.board import entity
 from factorio_agent.brick_production import brick_core
 from factorio_agent.industrial import _plan_revision,_source_identity
@@ -160,7 +160,7 @@ class SharedCoalTapTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             tap,_,obs,_=self.live(root)
             with patch(MODULE+'BrickProduction.proof',return_value={'tick':100}):proof=tap._health(obs)
-            from factorio_ai.deterministic_state import _atomic_json
+            from factorio_agent.core.deterministic_state import _atomic_json
             writes=[]
             def interrupted(path,value):
                 writes.append(path)

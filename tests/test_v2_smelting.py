@@ -4,11 +4,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import Mock,patch
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.smelting import SmeltingDistrict,furnace_bank,merge_entities,smelting_site_anchors
 from factorio_agent.jobs import StarterExecutors
 from factorio_agent.board import entity
-from factorio_ai.deterministic_builder import _plan
+from factorio_agent.core.deterministic_builder import _plan
 
 
 class FurnaceBankGeometryTests(unittest.TestCase):

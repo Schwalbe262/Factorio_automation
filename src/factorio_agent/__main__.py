@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 import time
 
-from factorio_ai.deterministic_state import RunLock, _atomic_json
+from factorio_agent.core.deterministic_state import RunLock, _atomic_json
 from . import runtime
 from .jobs import CAPABILITIES, Ledger, Request, StarterExecutors, control, run_slice, submit, summary
 
@@ -74,7 +74,7 @@ def main(argv=None):
             Ledger(root).event('world-lifecycle','checkpoint_requested',tick=obs['tick'],world_id=obs['world_id'])
             result={'status':'checkpoint_requested','world_id':obs['world_id'],'observed_tick':obs['tick']}
     elif args.command == "watch":
-        from factorio_ai.deterministic_character import set_client_visibility
+        from factorio_agent.core.deterministic_character import set_client_visibility
         result = set_client_visibility(runtime.configuration(root), visible=not args.hide)
     elif args.command == "capabilities":
         result = CAPABILITIES

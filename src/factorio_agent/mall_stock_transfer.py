@@ -3,7 +3,7 @@ import json
 import math
 from pathlib import Path
 
-from factorio_ai.world_catalog import WorldCatalog
+from factorio_agent.core.world_catalog import WorldCatalog
 
 ACTION='take_mall_stock'
 PRODUCTS=('transport-belt','gun-turret','underground-belt','splitter','assembling-machine-1','inserter')

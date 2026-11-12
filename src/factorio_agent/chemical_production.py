@@ -7,9 +7,9 @@ import math
 from pathlib import Path
 import time
 
-from factorio_ai.deterministic_builder import _plan
-from factorio_ai.deterministic_state import _atomic_json
-from factorio_ai.world_catalog import _yield
+from factorio_agent.core.deterministic_builder import _plan
+from factorio_agent.core.deterministic_state import _atomic_json
+from factorio_agent.core.world_catalog import _yield
 from .board import entity
 from .manufacturing import connect_power_groups
 from .petroleum import compile_pipe_crossings,pipeline_extent,basic_petroleum_rates

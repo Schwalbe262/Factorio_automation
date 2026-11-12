@@ -8,7 +8,7 @@ from __future__ import annotations
 from copy import deepcopy
 import math
 
-from factorio_ai.deterministic_production import ProductionGraph
+from factorio_agent.core.deterministic_production import ProductionGraph
 
 
 def research_requirements(catalog, observation: dict, technology: str) -> dict:

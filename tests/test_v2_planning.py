@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 import unittest
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.board import entity
 from factorio_agent.planning import preflight,OWNED_CONFIGURATION_GUARD
 

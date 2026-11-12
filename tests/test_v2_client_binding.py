@@ -1,5 +1,5 @@
 import unittest
-from factorio_ai.deterministic_character import BIND_CRAFTING_PLAYER_LUA
+from factorio_agent.core.deterministic_character import BIND_CRAFTING_PLAYER_LUA
 try:
     from lupa import LuaRuntime
 except ImportError:

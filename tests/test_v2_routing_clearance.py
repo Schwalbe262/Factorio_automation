@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.board import entity
 from factorio_agent.manufacturing import green_core
 from factorio_agent.routing import blocked_port_prefix,clear_skeleton,clearance_lanes,expand,obstacle_index,route_trunks

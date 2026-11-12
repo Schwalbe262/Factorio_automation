@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder, _plan
+from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
 from factorio_agent.board import entity
 from factorio_agent.steel_production import SteelProduction, steel_rates, steel_core, audit_steel_core
 

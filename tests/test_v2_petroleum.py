@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder,_plan
+from factorio_agent.core.deterministic_builder import FactoryBuilder,_plan
 from factorio_agent.board import entity
 from factorio_agent.petroleum import (BasicPetroleum,PETROLEUM_PROOF_LUA,_fluid_edges,_key,
     basic_petroleum_rates,compile_pipe_crossings,fluid_plan_isolation,pipeline_extent,

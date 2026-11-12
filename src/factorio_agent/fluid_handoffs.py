@@ -11,7 +11,7 @@ import math
 from pathlib import Path
 import re
 
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_state import _atomic_json
 from .transport import VECTORS
 
 

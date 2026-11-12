@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.water_gathering import water_core
 from factorio_agent.water_distribution import WaterDistribution,header_core,_edges,_key,HEADER_PROOF_LUA,HEADER_GUARD_LUA,SURVEY_LUA
 from test_v2_water_gathering import catalog

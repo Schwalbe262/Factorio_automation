@@ -5,8 +5,8 @@ import json
 import math
 from pathlib import Path
 
-from factorio_ai.deterministic_builder import _plan
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_builder import _plan
+from factorio_agent.core.deterministic_state import _atomic_json
 from .board import entity
 from .defense_coverage import coverage_report as coverage_geometry
 from .defense_perimeter import DefensePerimeter

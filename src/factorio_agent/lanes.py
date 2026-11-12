@@ -1,7 +1,7 @@
 """Explicit lane contracts and ordinary output distribution across both lanes."""
 from __future__ import annotations
 
-from factorio_ai.deterministic_builder import _plan
+from factorio_agent.core.deterministic_builder import _plan
 from .board import entity
 from .transport import VECTORS
 

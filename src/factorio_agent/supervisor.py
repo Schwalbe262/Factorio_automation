@@ -16,8 +16,8 @@ import threading
 import time
 import uuid
 
-from factorio_ai.deterministic_character import _identity
-from factorio_ai.deterministic_state import RunLock,_atomic_json
+from factorio_agent.core.deterministic_character import _identity
+from factorio_agent.core.deterministic_state import RunLock,_atomic_json
 
 
 STATE_FILE=Path('logs/controller-state.json')

@@ -5,8 +5,8 @@ import json
 import math
 from pathlib import Path
 
-from factorio_ai.deterministic_builder import _plan
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_builder import _plan
+from factorio_agent.core.deterministic_state import _atomic_json
 from .transport import xy
 
 
@@ -218,7 +218,7 @@ def execute_retire_depleted_drill(game,action):
     rows=[q for q in state['targets']if q['retirement_id']==action['retirement_id']]
     if len(rows)!=1 or rows[0]['unit_number']!=action['expected_entity_unit']or rows[0].get('phase')not in('armed','complete'):
         raise ValueError('retirement action is not the exact armed registered target')
-    from factorio_ai.world_catalog import WorldCatalog
+    from factorio_agent.core.world_catalog import WorldCatalog
     catalog=WorldCatalog.from_dict(json.loads((_root(game)/'catalog.json').read_text()))
     products=catalog.entities['electric-mining-drill']['mining_products']
     if(catalog.fingerprint!=state['catalog_fingerprint']or len(products)!=1 or products[0].get('name')!='electric-mining-drill'

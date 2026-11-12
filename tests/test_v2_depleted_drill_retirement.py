@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.board import entity
 from factorio_agent.depleted_drill_retirement import (DepletedDrillRetirement,FILE,MODE,UNKNOWN,
     RETIRE_LUA,SURVEY_LUA,MINING_POTENTIAL_LUA,_hash,load_retirements,effective_mining_plan,
@@ -148,7 +148,7 @@ class TypedActionTests(RetirementFixture):
     def test_entire_identity_and_owner_catalog_are_validated_before_native_query(self):
         action=self.action();fake=SimpleNamespace(fingerprint='c',entities={'electric-mining-drill':{'mining_products':[dict(name='electric-mining-drill',amount=1)]}})
         self.game.query.return_value=receipt(self.target)
-        with patch('factorio_ai.world_catalog.WorldCatalog.from_dict',return_value=fake):
+        with patch('factorio_agent.core.world_catalog.WorldCatalog.from_dict',return_value=fake):
             self.assertTrue(execute_retire_depleted_drill(self.game,action)['ok'])
             self.game.query.reset_mock();bad=dict(action,position={'x':0,'y':0})
             with self.assertRaises(ValueError):execute_retire_depleted_drill(self.game,bad)
@@ -156,7 +156,7 @@ class TypedActionTests(RetirementFixture):
 
     def test_uncertain_native_result_or_exception_never_becomes_known_success(self):
         fake=SimpleNamespace(fingerprint='c',entities={'electric-mining-drill':{'mining_products':[dict(name='electric-mining-drill',amount=1)]}})
-        with patch('factorio_ai.world_catalog.WorldCatalog.from_dict',return_value=fake):
+        with patch('factorio_agent.core.world_catalog.WorldCatalog.from_dict',return_value=fake):
             for result in(None,{'ok':True},dict(receipt(self.target),after_drills=90)):
                 self.game.query.return_value=result;self.assertEqual(execute_retire_depleted_drill(self.game,self.action())['reason'],UNKNOWN)
             self.game.query.side_effect=TimeoutError('no receipt');self.assertEqual(execute_retire_depleted_drill(self.game,self.action())['reason'],UNKNOWN)

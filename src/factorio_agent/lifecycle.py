@@ -17,11 +17,11 @@ import time
 import uuid
 import zipfile
 
-from factorio_ai.deterministic_state import RunLock,_atomic_json
-from factorio_ai.deterministic_character import _identity,set_client_visibility
-from factorio_ai.factorio import no_mod_save_path
-from factorio_ai.rcon import FactorioRconClient
-from factorio_ai.process_launch import independent_process_options
+from factorio_agent.core.deterministic_state import RunLock,_atomic_json
+from factorio_agent.core.deterministic_character import _identity,set_client_visibility
+from factorio_agent.core.factorio import no_mod_save_path
+from factorio_agent.core.rcon import FactorioRconClient
+from factorio_agent.core.process_launch import independent_process_options
 from . import runtime
 from .automation_config import load_automation_config
 

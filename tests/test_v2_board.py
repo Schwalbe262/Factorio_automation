@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 import unittest
 
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.board import startup_science_cell,pole_chain
 
 

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
 
-from factorio_ai.deterministic_builder import _plan
+from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.bus_tap import signature
 from factorio_agent.engine_capacity import (EngineCapacity,MODE,NEW_ENGINE_LUA,PIN_FIELDS,
     _bound,_hash,_key,additive_engine_layout,validate_parameters,verify_engine_capacity)

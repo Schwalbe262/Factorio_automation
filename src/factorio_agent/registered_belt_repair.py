@@ -4,7 +4,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_state import _atomic_json
 from .infrastructure_repair import _hash,_key,_read,_payload,_same_frame
 from .bus_factory import trace_corridor
 from .compact_green import _transport

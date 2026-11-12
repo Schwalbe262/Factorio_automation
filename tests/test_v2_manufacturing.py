@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 import unittest
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.manufacturing import green_core,raw_demand,lab_green_entry
 from factorio_agent.science import lab_row
 from factorio_agent.transport import plan_connection,xy

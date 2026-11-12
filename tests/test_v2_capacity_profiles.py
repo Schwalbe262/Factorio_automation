@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_state import _atomic_json
 from factorio_agent.capacity_profiles import rebase_tap_capacity,refresh_bus_capacity
 from factorio_agent.main_bus import BusMaterial, ConsumerTap, plan_main_bus
 

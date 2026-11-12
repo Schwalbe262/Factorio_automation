@@ -7,9 +7,9 @@ import json
 import math
 from pathlib import Path
 
-from factorio_ai.deterministic_builder import FactoryBuilder, _plan
-from factorio_ai.deterministic_state import _atomic_json
-from factorio_ai.world_catalog import _yield, WorldCatalog
+from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
+from factorio_agent.core.deterministic_state import _atomic_json
+from factorio_agent.core.world_catalog import _yield, WorldCatalog
 from .board import entity
 from .industrial import PlanningBudget
 from .manufacturing import connect_power_groups

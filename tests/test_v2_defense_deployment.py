@@ -428,7 +428,7 @@ class NativeWaveDeploymentTests(DeploymentFixture):
 
     def install_wave(self,count):
         from factorio_agent.defense_deployment import _hash
-        from factorio_ai.deterministic_builder import _plan
+        from factorio_agent.core.deterministic_builder import _plan
         old=self.document['stages'][0];posts=[dict(name='wave_'+str(i),position={'x':4*(i//2),'y':4*(i%2)},
             coverage_scope='sweep:one-wave',local_walk_access=True,ammo_item='piercing-rounds-magazine')for i in range(count)]
         entities=[dict(name='gun-turret',position=p['position'],direction=0)for p in posts]

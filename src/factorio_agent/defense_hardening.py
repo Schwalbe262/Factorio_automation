@@ -8,9 +8,9 @@ import hashlib
 import math
 from pathlib import Path
 
-from factorio_ai.deterministic_builder import _plan
-from factorio_ai.deterministic_state import _atomic_json
-from factorio_ai.world_catalog import _yield
+from factorio_agent.core.deterministic_builder import _plan
+from factorio_agent.core.deterministic_state import _atomic_json
+from factorio_agent.core.world_catalog import _yield
 from .board import entity
 from .defense_coverage import coverage_cells,native_candidate_survey
 from .defense_perimeter import AMMO_TARGET,protected_factory_areas

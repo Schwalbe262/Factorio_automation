@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder, _plan
+from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
 from factorio_agent.brick_production import BrickProduction, audit_brick_core, brick_core, brick_rates
 
 

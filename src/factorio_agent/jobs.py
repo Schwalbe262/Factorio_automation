@@ -11,7 +11,7 @@ import re
 import time
 from typing import Any
 
-from factorio_ai.deterministic_state import RunLock, _atomic_json
+from factorio_agent.core.deterministic_state import RunLock, _atomic_json
 
 
 TERMINAL = {"succeeded", "blocked", "failed"}
@@ -779,7 +779,7 @@ class StarterExecutors:
         return upkeep or {'status':'succeeded','reason':'industrial supplies retain ordinary starter fuel upkeep'}
 
     def step(self, capability: str, obs: dict, parameters: dict | None = None) -> dict:
-        from factorio_ai.deterministic_repair_control import pending_repair
+        from factorio_agent.core.deterministic_repair_control import pending_repair
         cleanup=pending_repair(obs)
         if cleanup:return cleanup
         if capability == 'nest_assault':

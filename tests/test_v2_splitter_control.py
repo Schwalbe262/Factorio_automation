@@ -2,7 +2,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 import unittest
-from factorio_ai.deterministic_game import run_config
+from factorio_agent.core.deterministic_game import run_config
 from factorio_agent.runtime import WorldBoundGame
 
 

@@ -8,9 +8,9 @@ import math
 from pathlib import Path
 from types import SimpleNamespace
 
-from factorio_ai.deterministic_builder import FactoryBuilder, _plan
-from factorio_ai.deterministic_state import _atomic_json
-from factorio_ai.world_catalog import _yield
+from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
+from factorio_agent.core.deterministic_state import _atomic_json
+from factorio_agent.core.world_catalog import _yield
 from .advanced_circuits import AdvancedCircuitProduction, _candidate_failure, _hash, _key, _payload
 from .board import entity
 from .chemical_production import ChemicalProduction

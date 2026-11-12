@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 
-from factorio_ai.deterministic_state import RunLock
+from factorio_agent.core.deterministic_state import RunLock
 from factorio_agent.jobs import Ledger, Request, control, progress_key, run_slice, submit
 from factorio_agent.__main__ import main
 
@@ -369,7 +369,7 @@ class JobBoundaryTests(unittest.TestCase):
         self.assertEqual(result["paused_ticks"], 199900)
 
     def test_os_lock_prevents_another_process_writing_same_world(self):
-        script = ("from pathlib import Path; from factorio_ai.deterministic_state import RunLock; "
+        script = ("from pathlib import Path; from factorio_agent.core.deterministic_state import RunLock; "
                   "RunLock(Path(__import__('sys').argv[1])).acquire()")
         with RunLock(self.root / "writer.lock"):
             result = subprocess.run([sys.executable, "-B", "-c", script, str(self.root / "writer.lock")],

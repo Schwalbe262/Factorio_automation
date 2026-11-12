@@ -7,7 +7,7 @@ import json
 import math
 from pathlib import Path
 
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_state import _atomic_json
 from .planning import overlap,preflight
 
 OWNERS={'petroleum':('basic-petroleum.json','basic_petroleum'),'gas':('gas-distribution.json','gas_distribution')}

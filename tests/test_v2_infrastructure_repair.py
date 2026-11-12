@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
 
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_state import _atomic_json
 from factorio_agent.infrastructure_repair import (InfrastructureRepair,execute_repair_registered_infrastructure,
     REPAIR_INFRASTRUCTURE_LUA,FILE,_key)
 try:

@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 from factorio_agent.construction_supply import (
     V2Bootstrap, execute_take_many, validate_take_many, TAKE_MANY_LUA,
 )
-from factorio_ai.deterministic_bootstrap import DeterministicBootstrap
+from factorio_agent.core.deterministic_bootstrap import DeterministicBootstrap
 
 
 def source(unit=1, name="transport-belt", kind="belt", x=1.5):

@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from types import SimpleNamespace
 
-from factorio_ai.deterministic_builder import FactoryBuilder, _plan
+from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
 from .board import entity
 from .manufacturing import raw_demand
 from .smelting import port

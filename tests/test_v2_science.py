@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.science import science_row,lab_row,validate_rate
 from factorio_agent.jobs import StarterExecutors
 

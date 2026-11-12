@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder, _plan
+from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
 from factorio_agent.board import entity
 from factorio_agent.bus_factory import BusFactory
 from factorio_agent.paired_smelting import PairedSmelting, paired_bank

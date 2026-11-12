@@ -7,8 +7,8 @@ import json
 import math
 from pathlib import Path
 
-from factorio_ai.deterministic_builder import FactoryBuilder,_plan
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_builder import FactoryBuilder,_plan
+from factorio_agent.core.deterministic_state import _atomic_json
 from .board import entity
 from .planning import overlap,preflight
 from .power_grid import plan_connection as power_connection

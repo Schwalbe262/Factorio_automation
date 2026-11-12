@@ -11,8 +11,8 @@ import json
 from pathlib import Path
 import time
 
-from factorio_ai.deterministic_builder import FactoryBuilder, _plan
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
+from factorio_agent.core.deterministic_state import _atomic_json
 from .routing import route_trunks
 
 

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.defense_perimeter import DefensePerimeter
 from factorio_agent.defense_hardening import (DefenseHardening,wall_bastion,mutual_coverage,_key,
     HARDENING_PROOF_LUA,SERVICE_ACCESS_LUA,BASTION_SURVEY_LUA)

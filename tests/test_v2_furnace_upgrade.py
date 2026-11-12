@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder, _plan
+from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
 from factorio_agent.furnace_upgrade import FurnaceUpgrade
 from factorio_agent.paired_smelting import PairedSmelting, paired_bank
 from factorio_agent.smelting import SmeltingDistrict, FURNACE_NAMES, bank_capacities, merge_entities
@@ -328,7 +328,7 @@ class FurnaceUpgradeTests(unittest.TestCase):
         self.assertFalse(self.source.path.exists())
 
     def test_partial_publication_recovers_each_old_or_new_copy_after_restart(self):
-        from factorio_ai.deterministic_state import _atomic_json as write
+        from factorio_agent.core.deterministic_state import _atomic_json as write
         self.consumer_documents()
         failures = [True]
 

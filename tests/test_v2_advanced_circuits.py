@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder, _plan
+from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
 from factorio_agent.advanced_circuits import (AdvancedCircuitProduction, ADVANCED_CIRCUIT_PROOF_LUA,
     _hash, _key, advanced_circuit_core, advanced_circuit_rates, audit_advanced_circuit_core, combine_tap_previews)
 from factorio_agent.board import entity

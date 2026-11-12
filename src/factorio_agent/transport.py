@@ -6,7 +6,7 @@ import json
 import math
 from pathlib import Path
 
-from factorio_ai.deterministic_builder import _plan
+from factorio_agent.core.deterministic_builder import _plan
 from .board import entity
 from .routing import VECTORS,route_trunks
 from .resource_policy import (RESOURCES, mining_reservations, annotate_mining_exit,

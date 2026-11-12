@@ -3,8 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 import math
 
-from factorio_ai.deterministic_builder import FactoryBuilder,_plan
-from factorio_ai.world_catalog import _yield
+from factorio_agent.core.deterministic_builder import FactoryBuilder,_plan
+from factorio_agent.core.world_catalog import _yield
 from .board import entity
 from .routing import VECTORS
 from .smelting import port

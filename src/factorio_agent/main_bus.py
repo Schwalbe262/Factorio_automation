@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import math
 from typing import Iterable
 
-from factorio_ai.deterministic_builder import _plan
+from factorio_agent.core.deterministic_builder import _plan
 from .board import entity
 from .planning import preflight
 from .routing import route_trunks

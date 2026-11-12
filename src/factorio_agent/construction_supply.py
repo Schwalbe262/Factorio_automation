@@ -11,7 +11,7 @@ import json
 import math
 from pathlib import Path
 
-from factorio_ai.deterministic_bootstrap import DeterministicBootstrap
+from factorio_agent.core.deterministic_bootstrap import DeterministicBootstrap
 
 
 MAX_SOURCES = 16

@@ -6,7 +6,7 @@ import runpy
 import json
 
 from factorio_agent.defense_repairs import DefenseRepairs,REPAIR_SITE_LUA
-from factorio_ai.deterministic_repair_control import BEGIN_REPAIR_LUA,REPAIR_RETURN_HOME_LUA
+from factorio_agent.core.deterministic_repair_control import BEGIN_REPAIR_LUA,REPAIR_RETURN_HOME_LUA
 
 try:
     from lupa import LuaRuntime
@@ -109,7 +109,7 @@ target=function(p,name)if name=="stone-wall"then return e else return g end end
         self.assertIsNone(self.run_site(setup+'g.get_inventory=function()return{}end')['target'])
 
     def test_native_remote_view_exits_before_pack_claim_and_unexitables_do_not_spend(self):
-        fixture=runpy.run_path(str(Path(__file__).with_name('test_deterministic_repair_control_live.py')))['FIXTURE_LUA']
+        fixture=runpy.run_path(str(Path(__file__).with_name('test_v2_repair_control_live.py')))['FIXTURE_LUA']
         def evaluate(**options):
             body=fixture.replace('OPTIONS',json.dumps(json.dumps(options))).replace('BODY',BEGIN_REPAIR_LUA)
             lua=LuaRuntime(unpack_returned_tuples=True)
@@ -122,7 +122,7 @@ target=function(p,name)if name=="stone-wall"then return e else return g end end
         self.assertEqual(bad['inventory_count'],1);self.assertFalse(bad['pending'])
 
     def test_native_return_requires_owned_clean_actor_and_quiet_clear_spawn(self):
-        fixture=runpy.run_path(str(Path(__file__).with_name('test_deterministic_repair_control_live.py')))['FIXTURE_LUA']
+        fixture=runpy.run_path(str(Path(__file__).with_name('test_v2_repair_control_live.py')))['FIXTURE_LUA']
         base='''f.get_spawn_position=function()return{x=0,y=0}end
 s.find_non_colliding_position=function()return{x=0,y=0}end
 s.count_entities_filtered=function()return 0 end

@@ -11,7 +11,7 @@ import math
 from pathlib import Path
 import re
 
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_state import _atomic_json
 from .defense_coverage import COVERAGE_MARGIN, coverage_cells, coverage_report, native_candidate_survey, select_cover
 
 
@@ -43,7 +43,7 @@ def _result(status, reason, **evidence):
 
 def protected_factory_areas(game,world_id,catalog_fingerprint,*,runtime_dir=None):
     """Protect future blocks, external planned hardware and fixed-port exits."""
-    from factorio_ai.deterministic_builder import FactoryBuilder
+    from factorio_agent.core.deterministic_builder import FactoryBuilder
     root=runtime_dir if runtime_dir is not None else getattr(getattr(game,'cfg',None),'runtime_dir',None)
     if root is None:return []
     root=Path(root);path=root/'pcb-board.json'

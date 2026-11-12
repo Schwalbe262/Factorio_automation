@@ -8,7 +8,7 @@ import math
 import re
 from pathlib import Path
 
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_state import _atomic_json
 
 
 STATE_FILE='paid-burner-seeds.json'
@@ -197,7 +197,7 @@ def execute_paid_burner_seed(game,action):
             or not isinstance(action.get('expected_entity_world_id'),str)or not action['expected_entity_world_id']
             or not isinstance(action.get('expected_catalog_fingerprint'),str)or not action['expected_catalog_fingerprint']):raise ValueError('invalid paid burner seed envelope')
     root=Path(game.cfg.runtime_dir);path=root/STATE_FILE;state=_read(path)
-    from factorio_ai.world_catalog import WorldCatalog
+    from factorio_agent.core.world_catalog import WorldCatalog
     fingerprint=WorldCatalog.from_dict(_read(root/'catalog.json')).fingerprint
     if(state.get('world_id')!=action.get('expected_entity_world_id')or state.get('catalog_fingerprint')!=fingerprint
             or action.get('expected_catalog_fingerprint')!=fingerprint or getattr(game,'expected_world',state['world_id'])!=state['world_id']):raise ValueError('paid seed world/catalog authority changed')

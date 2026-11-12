@@ -7,7 +7,7 @@ import json
 import math
 from pathlib import Path
 
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_state import _atomic_json
 from .defense_coverage import coverage_report,native_candidate_survey
 from .defense_perimeter import AMMO_TARGET,protected_factory_areas
 from .engine_production import SCOPE_ID,engine_core

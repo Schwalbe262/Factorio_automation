@@ -1,5 +1,5 @@
 import unittest
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.paired_smelting import paired_bank
 from factorio_agent.lanes import inserter_output_lane
 from factorio_agent.routing import route_trunks

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from factorio_ai.world_catalog import WorldCatalog
+from factorio_agent.core.world_catalog import WorldCatalog
 from factorio_agent.paid_burner_seed import PaidBurnerSeed,execute_paid_burner_seed,SEED_LUA,STATE_FILE
 
 try:

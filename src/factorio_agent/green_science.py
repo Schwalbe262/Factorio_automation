@@ -6,8 +6,8 @@ import json
 import math
 from pathlib import Path
 from types import SimpleNamespace
-from factorio_ai.deterministic_builder import _plan
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_builder import _plan
+from factorio_agent.core.deterministic_state import _atomic_json
 from .board import entity
 from .manufacturing import green_core,raw_demand,connect_power_groups,lab_green_entry
 from .planning import preflight,overlap,survey_slots

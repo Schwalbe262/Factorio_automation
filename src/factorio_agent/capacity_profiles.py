@@ -4,7 +4,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_state import _atomic_json
 from .bus_tap import reconstruct_bus
 from .main_bus import capacity_report
 from .smelting import bank_capacities

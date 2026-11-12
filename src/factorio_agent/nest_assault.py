@@ -8,8 +8,8 @@ import json
 import math
 from pathlib import Path
 
-from factorio_ai.deterministic_builder import _plan
-from factorio_ai.deterministic_state import _atomic_json
+from factorio_agent.core.deterministic_builder import _plan
+from factorio_agent.core.deterministic_state import _atomic_json
 from .board import entity
 from .defense_coverage import coverage_cells
 from .defense_hardening import wall_bastion,mutual_coverage,_cluster_area,_box,SERVICE_ACCESS_LUA
@@ -17,7 +17,7 @@ from .defense_perimeter import protected_factory_areas
 from .nearby_threats import NearbyThreats
 from .planning import overlap,preflight
 from .resource_policy import mining_reservations
-from factorio_ai.world_catalog import _yield
+from factorio_agent.core.world_catalog import _yield
 
 MAX_STAGES=3
 MAX_LOSSES=2

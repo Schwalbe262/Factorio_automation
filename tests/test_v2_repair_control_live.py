@@ -5,9 +5,9 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from factorio_ai import deterministic_game
-from factorio_ai import deterministic_repair_control as repair
-from factorio_ai.deterministic_game import DeterministicGame, run_config
+from factorio_agent.core import deterministic_game
+from factorio_agent.core import deterministic_repair_control as repair
+from factorio_agent.core.deterministic_game import DeterministicGame, run_config
 
 
 FIXTURE_LUA = r'''

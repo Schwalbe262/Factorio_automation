@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from factorio_ai.deterministic_builder import FactoryBuilder
+from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.board import entity
 from factorio_agent.radar_network import (RadarNetwork, radar_core, radar_candidates, planned_power_watts,
     RADAR_POWER_LUA, RADAR_SITE_LUA, RADAR_PROOF_LUA, _payload, _key)
