@@ -42,6 +42,18 @@ class DefensePerimeterTests(unittest.TestCase):
         c.bootstrap.ensure_item.assert_not_called()
         c.game.query.assert_not_called()
 
+    def test_repeated_normal_losses_retain_prior_provenance_with_bounded_history(self):
+        c,_,report=self.perimeter();spec=c.state['posts'][0]
+        spec.update(lost_unit_number=90,lost_unit_numbers=[80])
+        report['posts'][0]['missing']=True;c._bind(report)
+        self.assertEqual(spec['lost_unit_numbers'],[80,90,100])
+        spec.update(unit_number=101,commissioned=True);c._bind(report)
+        self.assertEqual(spec['lost_unit_numbers'],[80,90,100,101])
+        for unit in range(102,122):spec['unit_number']=unit;c._bind(report)
+        self.assertEqual(len(spec['lost_unit_numbers']),16)
+        self.assertEqual(spec['lost_unit_numbers'][-2:],[120,121])
+        self.assertEqual(spec['lost_unit_origin'],80)
+
     def test_proactive_deployment_starts_with_western_producers_before_labs(self):
         names = [name for name, _, _ in POSTS]
         self.assertEqual(names[:3], ['west_smelter', 'north_smelter', 'coal_south'])

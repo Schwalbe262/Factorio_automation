@@ -13,7 +13,8 @@ from factorio_agent.board import entity
 from factorio_agent.defense_coverage import coverage_cells
 from factorio_agent.defense_perimeter import DefensePerimeter
 from factorio_agent.defense_relocation import (DefenseRelocation,_hash,_key,validate_relocation_action,
-    execute_build_replacement,execute_retire_post,BUILD_REPLACEMENT_LUA,RETIRE_POST_LUA)
+    execute_build_replacement,execute_retire_post,execute_reconcile_retirement,_perimeter_matches,
+    BUILD_REPLACEMENT_LUA,RETIRE_POST_LUA,RECONCILE_RETIREMENT_LUA)
 from factorio_agent.engine_production import engine_core,SCOPE_ID
 from factorio_agent.smelting import merge_entities
 from test_v2_engine_production import catalog
@@ -93,6 +94,49 @@ class RelocationFixture(unittest.TestCase):
 
 
 class RelocationControllerTests(RelocationFixture):
+    def unrelated_repair(self):
+        old=dict(name='plastic',position={'x':173,'y':-38},unit_number=7236,coverage_scope='plastic',
+                 commissioned=True,local_walk_access=True)
+        self.c.state['initial_posts'].append(old)
+        self.perimeter.state['posts'].append(dict(old,unit_number=8426,lost_unit_number=7236,lost_unit_numbers=[7236]))
+        self.perimeter.state['coverage_scopes']['plastic']=dict(commissioned=True,new_posts=['plastic'],covering_posts=['plastic'])
+        return old,self.perimeter.state['posts'][-1]
+
+    def test_unrelated_normal_repair_is_allowed_but_protected_posts_and_scope_revisions_stay_exact(self):
+        self.install();_,repaired=self.unrelated_repair()
+        self.assertTrue(_perimeter_matches(self.c.state,self.perimeter.state))
+        saved=deepcopy(repaired)
+        for change in(dict(position={'x':174,'y':-38}),dict(coverage_scope='different'),dict(local_walk_access=False),
+                      dict(lost_unit_number=None,lost_unit_numbers=[]),dict(commissioned=False)):
+            repaired.update(change);self.assertFalse(_perimeter_matches(self.c.state,self.perimeter.state))
+            repaired.clear();repaired.update(deepcopy(saved))
+        protected=self.perimeter.state['posts'][0];old=deepcopy(protected)
+        protected.update(unit_number=9999,lost_unit_number=old['unit_number'],lost_unit_numbers=[old['unit_number']])
+        self.assertFalse(_perimeter_matches(self.c.state,self.perimeter.state));protected.clear();protected.update(old)
+        self.perimeter.state['coverage_scopes'][SCOPE_ID]['effective_range']=17
+        self.assertFalse(_perimeter_matches(self.c.state,self.perimeter.state))
+
+    def test_only_commissioned_additions_in_new_unrelated_registered_scopes_are_allowed(self):
+        self.install();post=dict(name='bastion1',position={'x':180,'y':-30},unit_number=8500,
+            commissioned=True,coverage_scope='plastic-hardening')
+        self.perimeter.state['posts'].append(post)
+        self.assertFalse(_perimeter_matches(self.c.state,self.perimeter.state))
+        self.perimeter.state['coverage_scopes']['plastic-hardening']=dict(commissioned=True,new_posts=['bastion1'],covering_posts=['bastion1'])
+        self.assertTrue(_perimeter_matches(self.c.state,self.perimeter.state))
+        post['coverage_scope']=SCOPE_ID
+        self.assertFalse(_perimeter_matches(self.c.state,self.perimeter.state))
+
+    def test_loss_origin_remains_proven_after_recent_history_rolls_over(self):
+        self.install();old,repaired=self.unrelated_repair()
+        repaired.update(unit_number=9999,lost_unit_number=9998,lost_unit_numbers=list(range(9983,9999)),lost_unit_origin=7236)
+        self.assertTrue(_perimeter_matches(self.c.state,self.perimeter.state))
+        repaired['lost_unit_origin']=5555
+        self.assertFalse(_perimeter_matches(self.c.state,self.perimeter.state))
+        old['lost_unit_origin']=5555
+        self.assertTrue(_perimeter_matches(self.c.state,self.perimeter.state))
+        repaired['lost_unit_origin']=7236
+        self.assertFalse(_perimeter_matches(self.c.state,self.perimeter.state))
+
     def test_readonly_prepare_pays_two_replacements_and_checks_all_scope_references(self):
         before=self.engines.path.read_bytes();perimeter=self.perimeter.path.read_bytes()
         with patch('factorio_agent.defense_relocation._atomic_json')as write:
@@ -200,7 +244,7 @@ class NativeRelocationTests(RelocationFixture):
             return v
         self.table=table
         self.lua.globals().helpers=self.lua.table_from({'json_to_table':lambda raw:table(json.loads(raw))})
-        self.lua.execute('''d={world_id="w"};f={name="player"};enemy={name="enemy"};s={};a={valid=true,unit_number=100,force=f,surface=s};defines={inventory={turret_ammo=1}}
+        self.lua.execute('''game={tick=10};d={world_id="w"};f={name="player"};enemy={name="enemy"};s={};a={valid=true,unit_number=100,force=f,surface=s};defines={inventory={turret_ammo=1,character_ammo=2,character_main=3,character_corpse=3}}
 prototypes={item={["firearm-magazine"]={type="ammo",magazine_size=10,stack_size=100},["gun-turret"]={type="item",stack_size=50}},entity={["gun-turret"]={tile_width=2,tile_height=2,attack_parameters={range=18}}}}
 function empty()return{valid_for_read=false}end
 function stack(name,count,ammo)
@@ -221,6 +265,7 @@ main.insert=function(q)local left=q.count
   local n=math.min(left,prototypes.item[q.name].stack_size);main[i]=stack(q.name,n);left=left-n end end
  return q.count-left end
 a.get_main_inventory=function()return main end
+equipped={empty(),empty(),empty(),valid=true};a.get_inventory=function(index)if index==2 then return equipped elseif index==3 then return main else error("unexpected actor inventory")end end
 function key(name,p)return name..":"..p.x..":"..p.y end
 world={};next_unit=9000;mined_calls=0;built_calls=0;ore=false;failed_build=false
 function turret(p,unit,count)
@@ -235,14 +280,20 @@ s.count_entities_filtered=function()return ore and 1 or 0 end
 s.can_place_entity=function(q)return not target(q.position,q.name)end
 s.create_entity=function(q)if failed_build then return nil end;built_calls=built_calls+1;local e=turret(q.position,next_unit,0);next_unit=next_unit+1;return e end
 a.mine_entity=function(e)
- mined_calls=mined_calls+1;for i=1,#e.ammo_inventory do local st=e.ammo_inventory[i];if st.valid_for_read then main.insert{name=st.name,count=st.count,quality="normal"}end end
+ mined_calls=mined_calls+1;for i=1,#e.ammo_inventory do local st=e.ammo_inventory[i];if st.valid_for_read then
+  if autoequip then equipped[1]=stack(st.name,st.count,st.ammo)else main.insert{name=st.name,count=st.count,quality="normal"}end end end
  main.insert{name="gun-turret",count=1,quality="normal"};world[key(e.name,e.position)]=nil;e.valid=false;return true end
 function load_new(unit,count)
  for _,e in pairs(world)do if e.unit_number==unit then main[2].count=main[2].count-count;e.ammo_inventory[1]=stack("firearm-magazine",count);return end end end
 ''')
         for post in self.perimeter.state['posts']:self.lua.globals().turret(table(post['position']),post['unit_number'],10)
         for source in(self.iron,self.steel):self.lua.globals().belt(table(source))
-        self.game.query=Mock(side_effect=lambda body:dict(self.lua.execute('return(function() '+' '.join(body.splitlines())+' end)()').items()))
+        def python(v):
+            if not hasattr(v,'items'):return v
+            rows=dict(v.items())
+            if rows and set(rows)==set(range(1,len(rows)+1)):return [python(rows[i])for i in range(1,len(rows)+1)]
+            return {k:python(a)for k,a in rows.items()}
+        self.game.query=Mock(side_effect=lambda body:python(self.lua.execute('return(function() '+' '.join(body.splitlines())+' end)()')))
         self.action=dict(type='build_defense_replacement',transaction_id=self.c.state['id'],post_name=self.entry['name'],
             expected_old_unit=self.entry['old']['unit_number'],expected_actor_unit=100,expected_world_id='w',position=self.entry['new']['position'])
 
@@ -263,6 +314,18 @@ function load_new(unit,count)
         self.assertEqual(execute_build_replacement(self.game,self.action)['reason'],'paid_replacement_missing_or_replaced')
         self.assertEqual(marker.unit_number,9000)
 
+    def test_unrelated_repaired_post_requires_exact_native_owned_unit(self):
+        old=dict(name='plastic',position={'x':173,'y':-38},unit_number=7236,coverage_scope='plastic',commissioned=True)
+        self.c.state['initial_posts'].append(old)
+        repaired=dict(old,unit_number=8426,lost_unit_number=7236,lost_unit_numbers=[7236])
+        self.perimeter.state['posts'].append(repaired)
+        self.perimeter.state['coverage_scopes']['plastic']=dict(commissioned=True,new_posts=['plastic'],covering_posts=['plastic'])
+        self.c._save();self.perimeter._save()
+        self.lua.globals().turret(self.table(repaired['position']),8426,10)
+        self.assertTrue(execute_build_replacement(self.game,self.action)['ok'])
+        self.lua.globals().world['gun-turret:173:-38'].force=self.lua.globals().enemy
+        self.assertEqual(execute_build_replacement(self.game,self.action)['reason'],'unrelated_repaired_defense_post_native_identity_changed')
+
     def test_native_no_paid_normal_stock_foreign_unit_actor_world_or_resource_build(self):
         cases=(('main[1].valid_for_read=false','main[1].valid_for_read=true','paid_normal_turret_missing'),
             ('a.unit_number=999','a.unit_number=100','defense_relocation_actor_changed'),
@@ -280,6 +343,93 @@ function load_new(unit,count)
         self.assertEqual((result['recovered_turrets'],result['recovered_magazines'],result['recovered_rounds']),(1,10,100))
         self.assertEqual((self.lua.globals().main[1].count,self.lua.globals().main[2].count,self.lua.globals().main[2].ammo),(2,30,5))
         replay=execute_retire_post(self.game,action);self.assertTrue(replay['reused_receipt']);self.assertEqual(self.lua.globals().mined_calls,1)
+
+    def test_native_autoequipped_ammo_is_counted_once_with_actor_partial_rounds_preserved(self):
+        action=self.publish_paid();self.lua.execute('autoequip=true;main[2].ammo=5;equipped[2]=stack("firearm-magazine",2,4)')
+        result=execute_retire_post(self.game,action);self.assertTrue(result['ok'],result)
+        marker=self.lua.globals().d.defense_relocations[self.c.state['id']+':'+self.entry['name']]
+        self.assertEqual(marker.retirement_intent.before.magazines,22)
+        self.assertEqual(marker.retirement_receipt.after.magazines,32)
+        self.assertEqual(marker.retirement_receipt.after.rounds-marker.retirement_intent.before.rounds,100)
+        self.assertEqual(marker.retirement_receipt.after.gun_turrets,2)
+        self.assertEqual(self.lua.globals().main[2].ammo,5);self.assertEqual(self.lua.globals().equipped[2].ammo,4)
+        self.assertEqual(self.lua.globals().mined_calls,1)
+
+    def test_native_inventory_sort_and_stack_merge_preserve_unrelated_materials(self):
+        action=self.publish_paid()
+        self.lua.execute('''
+main[3]=stack("iron-plate",4);main[4]=stack("iron-plate",6);main[5]=empty();main[6]=empty()
+local mine=a.mine_entity
+a.mine_entity=function(e)local ok=mine(e);main[3]=empty();main[4]=empty();main[6]=stack("iron-plate",10);return ok end
+''')
+        result=execute_retire_post(self.game,action);self.assertTrue(result['ok'],result)
+        self.assertEqual(self.lua.globals().main[6].count,10)
+
+    def test_native_persisted_intent_resumes_missing_old_without_mining_twice(self):
+        action=self.publish_paid();self.lua.execute('autoequip=true')
+        self.assertTrue(execute_retire_post(self.game,action)['ok'])
+        marker=self.lua.globals().d.defense_relocations[self.c.state['id']+':'+self.entry['name']]
+        marker.retired=None;marker.retirement_receipt=None
+        resumed=execute_retire_post(self.game,action);self.assertTrue(resumed['ok'],resumed)
+        self.assertTrue(resumed['recovered_from_intent']);self.assertEqual(self.lua.globals().mined_calls,1)
+        marker.retired=None;marker.retirement_receipt=None;self.lua.globals().main[1].count+=1
+        self.assertEqual(execute_retire_post(self.game,action)['reason'],'retirement_intent_conservation_changed')
+        self.assertEqual(self.lua.globals().mined_calls,1)
+
+    def test_native_intent_precedes_mine_and_changed_before_inventory_blocks_retry(self):
+        action=self.publish_paid();marker=self.lua.globals().d.defense_relocations[self.c.state['id']+':'+self.entry['name']]
+        self.lua.execute('a.mine_entity=function(old)return false end')
+        self.assertEqual(execute_retire_post(self.game,action)['reason'],'ordinary_defense_post_mining_failed')
+        self.assertEqual(marker.retirement_intent.old_unit,self.entry['old']['unit_number'])
+        self.assertEqual(marker.retirement_intent.before.gun_turrets,1)
+        self.lua.execute('main[3]=stack("stone",1)')
+        self.assertEqual(execute_retire_post(self.game,action)['reason'],'retirement_intent_before_inventory_or_stock_changed')
+        self.assertEqual(self.lua.globals().mined_calls,0)
+
+    def test_unknown_missing_old_is_never_adopted_without_native_intent(self):
+        action=self.publish_paid();self.lua.execute('world["gun-turret:135:-95"]=nil')
+        self.assertEqual(execute_retire_post(self.game,action)['reason'],'old_post_missing_without_retirement_intent')
+        self.assertEqual(self.c._probe(self.obs,self.entry)['reason'],'old_post_missing_without_retirement_receipt')
+        self.assertEqual(self.lua.globals().mined_calls,0)
+
+    def legacy_case(self):
+        action=self.publish_paid();action['reason']='normally recover exact old post after paid armed replacement coverage'
+        self.lua.execute('autoequip=true');self.assertTrue(execute_retire_post(self.game,action)['ok'])
+        marker=self.lua.globals().d.defense_relocations[self.c.state['id']+':'+self.entry['name']]
+        for k in('retired','retirement_intent','retirement_receipt','recovered_magazines','recovered_rounds'):marker[k]=None
+        events=[dict(key='engine-job',event='action_intent',tick=10,action=action),
+            dict(key='engine-job',event='action_result',tick=10,result=dict(ok=False,status='blocked',reason='post_recovery_count_or_round_conservation_failed'))]
+        self.events=self.root/'job-events.jsonl';self.events.write_text(''.join(json.dumps(e)+'\n'for e in events))
+        self.add_new(self.entry);return action,marker
+
+    def test_legacy_readonly_proposal_requires_explicit_review_and_preserves_honest_receipt(self):
+        _,marker=self.legacy_case();before=self.c.path.read_bytes()
+        proposal=self.c.prepare_legacy_retirement_reconciliation(self.obs,'engine-job')
+        self.assertTrue(proposal['ok'],proposal);self.assertEqual(self.c.path.read_bytes(),before)
+        self.assertFalse(proposal['baseline_available']);self.assertFalse(proposal['recovered_counts_available'])
+        self.assertFalse(marker.retired);self.assertEqual(self.c.step(self.obs)['reason'],'old_post_missing_without_retirement_receipt')
+        self.entry['legacy_retirement_reconciliation']=proposal['intent'];self.c._save()
+        restarted=DefenseRelocation(self.game,self.bootstrap,self.builder,self.catalog,self.perimeter,self.engines)
+        action=restarted.step(self.obs);self.assertEqual(action['type'],'reconcile_defense_post_retirement')
+        result=execute_reconcile_retirement(self.game,action);self.assertTrue(result['ok'],result)
+        self.assertTrue(marker.retired);self.assertFalse(marker.retirement_receipt.baseline_available)
+        self.assertIsNone(marker.recovered_magazines);self.assertEqual(self.lua.globals().mined_calls,1)
+        self.assertTrue(execute_reconcile_retirement(self.game,action)['reused_receipt'])
+
+    def test_legacy_duplicate_pair_changed_actor_or_evidence_blocks_without_receipt(self):
+        _,marker=self.legacy_case();proposal=self.c.prepare_legacy_retirement_reconciliation(self.obs,'engine-job')
+        self.assertTrue(proposal['ok'],proposal)
+        self.events.write_text(self.events.read_text()*2)
+        self.assertFalse(self.c.prepare_legacy_retirement_reconciliation(self.obs,'engine-job')['ok'])
+        self.events.write_text('\n'.join(self.events.read_text().splitlines()[:2])+'\n')
+        self.entry['legacy_retirement_reconciliation']=proposal['intent'];self.c._save();action=self.c.step(self.obs)
+        self.lua.execute('main[3]=stack("stone",1)')
+        self.assertEqual(execute_reconcile_retirement(self.game,action)['reason'],'legacy_actor_inventory_changed_after_review')
+        self.assertFalse(marker.retired);self.assertEqual(self.lua.globals().mined_calls,1)
+        self.entry['legacy_retirement_reconciliation']['baseline_available']=True;self.c._save()
+        self.game.query.reset_mock()
+        with self.assertRaises(ValueError):execute_reconcile_retirement(self.game,action)
+        self.game.query.assert_not_called()
 
     def test_native_never_mines_before_ten_full_replacement_and_all_scope_coverage(self):
         action=self.publish_paid();new=self.lua.globals().world['gun-turret:135:-93']
@@ -300,7 +450,7 @@ function load_new(unit,count)
         self.assertEqual(self.lua.globals().mined_calls,0)
 
     def test_native_scripts_are_flattenable_and_never_set_ammo_health_or_research(self):
-        for script in(BUILD_REPLACEMENT_LUA,RETIRE_POST_LUA):
+        for script in(BUILD_REPLACEMENT_LUA,RETIRE_POST_LUA,RECONCILE_RETIREMENT_LUA):
             self.assertNotIn('--',script)
             self.assertIsNone(re.search(r'\.(?:ammo|health)\s*=(?!=)',script),'script must not set ammo or health')
             for forbidden in('set_research','insert_fluid','set_fluid'):

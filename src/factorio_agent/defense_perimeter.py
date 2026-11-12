@@ -221,7 +221,14 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
                 continue
             if live.get('missing'):
                 if spec.get('unit_number') is not None:
-                    spec['lost_unit_number'] = spec.pop('unit_number')
+                    lost = spec.pop('unit_number')
+                    history = list(spec.get('lost_unit_numbers', []))
+                    for prior in (spec.get('lost_unit_number'), lost):
+                        if type(prior) is int and prior > 0 and prior not in history:
+                            history.append(prior)
+                    spec.setdefault('lost_unit_origin', history[0])
+                    spec['lost_unit_numbers'] = history[-16:]
+                    spec['lost_unit_number'] = lost
                     spec['commissioned'] = False
                     changed = True
                 continue

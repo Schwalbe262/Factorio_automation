@@ -43,22 +43,56 @@ def _coverage_guards(perimeter,name):
 def _perimeter_matches(state,perimeter):
     expected={p['name']:p for p in state['initial_posts']}
     current={p['name']:p for p in perimeter.get('posts',[])}
-    if len(current)!=len(perimeter.get('posts',[]))or set(current)!=set(expected):return False
-    for entry in state['entries']:
-        if entry['phase']in('retire','done'):expected[entry['name']]=entry['new']
-        elif entry['phase']=='publish'and current[entry['name']]==entry['new']:expected[entry['name']]=entry['new']
-    if current!=expected:return False
+    if(len(expected)!=len(state['initial_posts'])or len(current)!=len(perimeter.get('posts',[]))
+            or not set(expected)<=set(current)):return False
+    protected=set();protected_scopes=set()
     for entry in state['entries']:
         refs=_referencing_scopes(perimeter,entry['name'])
         if set(refs)!=set(entry['scope_revisions'])or any(_hash(refs[k])!=v for k,v in entry['scope_revisions'].items()):return False
+        protected_scopes.update(refs)
+        for scope in refs.values():protected.update(set(scope['covering_posts'])|set(scope['new_posts']))
+    for entry in state['entries']:
+        if entry['phase']in('retire','done'):expected[entry['name']]=entry['new']
+        elif entry['phase']=='publish'and current[entry['name']]==entry['new']:expected[entry['name']]=entry['new']
+    if not protected<=set(expected)or any(current[name]!=expected[name]for name in protected):return False
+    mutable={'unit_number','lost_unit_number','lost_unit_numbers','lost_unit_origin','commissioned'}
+    for name,old in expected.items():
+        post=current[name]
+        if name in protected or post==old:continue
+        history=post.get('lost_unit_numbers',[])
+        if not isinstance(history,list)or len(history)>16 or any(type(u)is not int or u<1 for u in history):return False
+        lost=post.get('lost_unit_number')
+        if lost is not None and(type(lost)is not int or lost<1):return False
+        if(lost is not None):history=history+[lost]
+        origin=post.get('lost_unit_origin');old_origin=old.get('lost_unit_origin')
+        if origin is not None and(type(origin)is not int or origin<1):return False
+        if old_origin is not None and origin!=old_origin:return False
+        lineage=(old.get('unit_number')in history or old.get('unit_number')==origin
+                 or(old_origin is not None and origin==old_origin))
+        if(type(old.get('unit_number'))is not int or not lineage or type(post.get('unit_number'))is not int
+                or post['unit_number']<1 or post['unit_number']==old['unit_number']or post.get('commissioned')is not True
+                or {k:v for k,v in old.items()if k not in mutable}!={k:v for k,v in post.items()if k not in mutable}):return False
+    for name in set(current)-set(expected):
+        post=current[name];scope_id=post.get('coverage_scope');scope=perimeter.get('coverage_scopes',{}).get(scope_id,{})
+        if(scope_id in protected_scopes or not scope_id or not scope.get('commissioned')or name not in scope.get('new_posts',[])
+                or post.get('commissioned')is not True or type(post.get('unit_number'))is not int or post['unit_number']<1):return False
     return True
+
+
+def _unrelated_native_posts(state,perimeter):
+    protected=set()
+    for entry in state['entries']:
+        for scope in _referencing_scopes(perimeter,entry['name']).values():
+            protected.update(set(scope['covering_posts'])|set(scope['new_posts']))
+    return [{k:p[k]for k in('name','position','unit_number')}for p in perimeter['posts']if p['name']not in protected]
 
 
 def validate_relocation_action(action,kind,world=None):
     required={'type','transaction_id','post_name','expected_old_unit','expected_actor_unit','expected_world_id'}
     extra={'position'}if kind=='build_defense_replacement'else{'expected_new_unit'}
+    if kind=='reconcile_defense_post_retirement':extra|={'evidence_id'}
     if(not isinstance(action,dict)or set(action)-required-extra-{'reason'}or not required<=set(action)
-            or action.get('type')!=kind or kind not in('build_defense_replacement','retire_defense_post')
+            or action.get('type')!=kind or kind not in('build_defense_replacement','retire_defense_post','reconcile_defense_post_retirement')
             or any(type(action.get(k))is not int or action[k]<1 for k in('expected_old_unit','expected_actor_unit'))
             or any(not isinstance(action.get(k),str)or not action[k]or len(action[k])>180
                    for k in('transaction_id','post_name','expected_world_id'))
@@ -71,6 +105,9 @@ def validate_relocation_action(action,kind,world=None):
             raise ValueError('replacement turret requires an exact finite integer-center position')
     elif type(action.get('expected_new_unit'))is not int or action['expected_new_unit']<1:
         raise ValueError('retirement requires the exact paid replacement unit')
+    if kind=='reconcile_defense_post_retirement'and(not isinstance(action.get('evidence_id'),str)
+            or len(action['evidence_id'])!=64 or any(c not in'0123456789abcdef'for c in action['evidence_id'])):
+        raise ValueError('legacy retirement reconciliation requires exact persisted evidence')
 
 
 def _action_context(game,action,kind):
@@ -95,6 +132,7 @@ def _action_context(game,action,kind):
     for name,revision in entry['scope_revisions'].items():
         if _hash(perimeter.get('coverage_scopes',{}).get(name))!=revision:raise ValueError('referencing defense scope changed')
     marker=state['id']+':'+entry['name'];payload=dict(action,marker=marker,old=entry['old'],new=entry['new'],
+        other_posts=_unrelated_native_posts(state,perimeter),
         sources=[dict(engine[k],name='transport-belt')for k in('iron_source','steel_source')],
         consumer_specs=[{k:e[k]for k in('name','position')}for e in engine['plan']['entities']if _key(e)not in state['shared_bindings']])
     if kind=='build_defense_replacement':
@@ -108,6 +146,17 @@ def _action_context(game,action,kind):
             raise ValueError('persisted replacement publication intent required before retirement')
         payload['coverage']=_coverage_guards(perimeter,entry['name'])
         if not payload['coverage']:raise ValueError('referencing scope proof is required before retirement')
+        if kind=='reconcile_defense_post_retirement':
+            intent=entry.get('legacy_retirement_reconciliation',{})
+            if(intent.get('evidence_id')!=action['evidence_id']or intent.get('evidence_id')!=_hash({k:v for k,v in intent.items()if k!='evidence_id'})
+                    or intent.get('baseline_available')is not False or intent.get('recovered_counts_available')is not False
+                    or intent.get('version')!=1 or intent.get('transaction_id')!=state['id']or intent.get('post_name')!=entry['name']):
+                raise ValueError('exact explicitly reviewed legacy reconciliation intent required')
+            original={k:action[k]for k in('transaction_id','post_name','expected_old_unit','expected_actor_unit','expected_world_id','expected_new_unit')}
+            original.update(type='retire_defense_post',reason='normally recover exact old post after paid armed replacement coverage')
+            evidence=_legacy_action_evidence(root,original,intent.get('action_evidence',{}).get('job_key'))
+            if evidence!=intent.get('action_evidence'):raise ValueError('legacy paired action evidence changed')
+            payload['reconciliation']=intent
     return payload
 
 
@@ -126,6 +175,7 @@ local function exact(q)
  if not e or not e.valid or e.force~=f or e.surface~=s or e.unit_number~=q.unit_number
   or e.position.x~=q.position.x or e.position.y~=q.position.y or e.quality.name~="normal"then return nil end
  return e end
+for _,q in ipairs(x.other_posts or{})do if not exact(q)then return reject("unrelated_repaired_defense_post_native_identity_changed")end end
 local ammo_proto=prototypes.item["firearm-magazine"];local size=ammo_proto and ammo_proto.magazine_size
 if not ammo_proto or ammo_proto.type~="ammo"or not size or size<=0 then return reject("defense_magazine_prototype_missing")end
 local function plain(stack,name)
@@ -171,8 +221,8 @@ return {ok=true,status="succeeded",unit_number=e.unit_number,paid_turrets=1}
 '''
 
 
-RETIRE_POST_LUA=POST_GUARD_LUA+r'''
-if not marker or marker.unit_number~=x.new.unit_number then return reject("paid_replacement_receipt_required")end
+RETIRE_COVERAGE_LUA=POST_GUARD_LUA+r'''
+if not marker or marker.unit_number~=x.new.unit_number or marker.actor_unit~=a.unit_number or marker.paid_turrets~=1 then return reject("paid_replacement_receipt_required")end
 local replacement=exact(x.new);local loaded=replacement and ammo(replacement,false)
 if not replacement or replacement.health~=replacement.max_health or not loaded or loaded.full<10 then return reject("replacement_requires_ten_full_normal_magazines")end
 for _,scope in ipairs(x.coverage)do
@@ -189,27 +239,93 @@ for _,scope in ipairs(x.coverage)do
   if not covered then return reject("referencing_scope_coverage_missing")end
  end
 end
+'''
+
+
+ACTOR_TOTALS_LUA=r'''
+local function same(a,b)
+ if type(a)~=type(b)then return false end
+ if type(a)~="table"then return a==b end
+ for k,v in pairs(a)do if not same(v,b[k])then return false end end
+ for k in pairs(b)do if a[k]==nil then return false end end
+ return true end
+local function totals()
+ local equipped=a.get_inventory(defines.inventory.character_ammo)
+ if not equipped or not equipped.valid or equipped==main or #main>2000 or #equipped>100 then return nil end
+ local value={gun_turrets=0,magazines=0,rounds=0,snapshot={},other_items={}}
+ for index,inv in ipairs({main,equipped})do local slots={};value.snapshot[index]=slots
+  for i=1,#inv do local st=inv[i];local row={slot=i}
+   if st.valid_for_read then
+    row.name=st.name;row.count=st.count;row.quality=st.quality.name
+    if st.name=="gun-turret"or st.name=="firearm-magazine"then
+     if not plain(st,st.name)or type(st.count)~="number"or st.count<1 or st.count%1~=0 then return nil end
+     if st.name=="gun-turret"then
+      if st.prototype.type~="item"then return nil end;value.gun_turrets=value.gun_turrets+st.count
+     else
+      if st.prototype.type~="ammo"or type(st.ammo)~="number"or st.ammo<1 or st.ammo>size or st.ammo%1~=0 then return nil end
+      row.magazine_rounds=st.ammo;value.magazines=value.magazines+st.count;value.rounds=value.rounds+(st.count-1)*size+st.ammo
+     end
+    else value.other_items[#value.other_items+1]={inventory=index,slot=i,name=row.name,count=row.count,quality=row.quality}end
+   else row.empty=true end
+   slots[#slots+1]=row
+  end
+ end
+ return value end
+local function valid_totals(q)
+ if type(q)~="table"or type(q.other_items)~="table"or type(q.snapshot)~="table"then return false end
+ for _,name in ipairs({"gun_turrets","magazines","rounds"})do if type(q[name])~="number"or q[name]<0 or q[name]%1~=0 then return false end end
+ return true end
+local function conserved(before,after,stock)
+ local function other_totals(rows)
+  local result={}
+  for _,q in ipairs(rows)do local inv=result[q.inventory]or{};result[q.inventory]=inv
+   local names=inv[q.name]or{};inv[q.name]=names;names[q.quality]=(names[q.quality]or 0)+q.count end
+  return result end
+ return valid_totals(before)and valid_totals(after)and after.gun_turrets==before.gun_turrets+1 and after.magazines==before.magazines+stock
+  and after.rounds==before.rounds+stock*size and same(other_totals(before.other_items),other_totals(after.other_items))end
+'''
+
+
+RETIRE_POST_LUA=RETIRE_COVERAGE_LUA+ACTOR_TOTALS_LUA+r'''
 local old=target(x.old.position,"gun-turret")
 if marker.retired then if old then return reject("retired_post_location_reoccupied")end;return {ok=true,status="succeeded",reused_receipt=true}end
-old=exact(x.old);if not old then return reject("old_defense_post_identity_changed")end
-local stock=ammo(old,true)
-if old.health~=old.max_health or not stock then return reject("old_post_partial_or_nonplain_ammo_requires_explicit_handling")end
+local before=totals();if not before then return reject("actor_recovery_inventory_metadata_unsupported")end
+local intent=marker.retirement_intent
+if intent and(intent.version~=2 or intent.world_id~=x.expected_world_id or intent.actor_unit~=a.unit_number
+ or intent.old_unit~=x.old.unit_number or intent.new_unit~=x.new.unit_number or not same(intent.old_position,x.old.position)
+ or not same(intent.new_position,x.new.position)or type(intent.old_magazines)~="number"or intent.old_magazines<0
+ or intent.old_magazines%1~=0 or intent.old_rounds~=intent.old_magazines*size or not valid_totals(intent.before)
+ or intent.inventory_scope~="character_main+character_ammo")then
+ return reject("retirement_intent_identity_changed")end
+local recovered_from_intent=not old
+if not old then
+ if not intent then return reject("old_post_missing_without_retirement_intent")end
+ if not conserved(intent.before,before,intent.old_magazines)then return reject("retirement_intent_conservation_changed")end
+else
+ old=exact(x.old);if not old then return reject("old_defense_post_identity_changed")end
+ local stock=ammo(old,true)
+ if old.health~=old.max_health or not stock then return reject("old_post_partial_or_nonplain_ammo_requires_explicit_handling")end
+ if intent and(not same(intent.before,before)or intent.old_magazines~=stock.count)then return reject("retirement_intent_before_inventory_or_stock_changed")end
 local empty=0
 for i=1,#main do if not main[i].valid_for_read and(not main.supports_filters()or not main.get_filter(i))then empty=empty+1 end end
 local required=1+math.ceil(stock.count/ammo_proto.stack_size)
 if empty<required or main.get_insertable_count{name="gun-turret",quality="normal"}<1
  or main.get_insertable_count{name="firearm-magazine",quality="normal"}<stock.count then return reject("aggregate_post_recovery_inventory_capacity_missing")end
-local function totals()
- local guns=main.get_item_count{name="gun-turret",quality="normal"};local count,rounds=0,0
- for i=1,#main do local st=main[i];if st.valid_for_read and st.name=="firearm-magazine"and st.quality.name=="normal"then
-  count=count+st.count;rounds=rounds+(st.count-1)*size+st.ammo end end
- return guns,count,rounds end
-local guns,count,rounds=totals()
-if not a.mine_entity(old)then return reject("ordinary_defense_post_mining_failed")end
-local guns2,count2,rounds2=totals()
-if target(x.old.position,"gun-turret")or guns2~=guns+1 or count2~=count+stock.count or rounds2~=rounds+stock.count*size then return reject("post_recovery_count_or_round_conservation_failed")end
-marker.retired=true;marker.recovered_magazines=stock.count;marker.recovered_rounds=stock.count*size
-return {ok=true,status="succeeded",recovered_turrets=1,recovered_magazines=stock.count,recovered_rounds=stock.count*size}
+ if not intent then
+  intent={version=2,world_id=x.expected_world_id,actor_unit=a.unit_number,old_unit=x.old.unit_number,new_unit=x.new.unit_number,
+   old_position=x.old.position,new_position=x.new.position,before=before,old_magazines=stock.count,old_rounds=stock.count*size,
+   inventory_scope="character_main+character_ammo",tick=game.tick};marker.retirement_intent=intent
+ end
+ if not a.mine_entity(old)then return reject("ordinary_defense_post_mining_failed")end
+ intent.native_mine_returned_true=true;before=totals()
+ if target(x.old.position,"gun-turret")or not conserved(intent.before,before,intent.old_magazines)then return reject("post_recovery_count_or_round_conservation_failed")end
+end
+marker.retired=true;marker.recovered_magazines=intent.old_magazines;marker.recovered_rounds=intent.old_magazines*size
+marker.retirement_receipt={version=2,kind="ordinary_mine_conserved",before=intent.before,after=before,
+ inventory_scope=intent.inventory_scope,recovered_turrets=1,recovered_magazines=marker.recovered_magazines,
+ recovered_rounds=marker.recovered_rounds,recovered_from_intent=recovered_from_intent,tick=game.tick}
+return {ok=true,status="succeeded",recovered_turrets=1,recovered_magazines=marker.recovered_magazines,
+ recovered_rounds=marker.recovered_rounds,recovered_from_intent=recovered_from_intent}
 '''
 
 
@@ -221,6 +337,65 @@ def execute_build_replacement(game,action):
 def execute_retire_post(game,action):
     payload=_action_context(game,action,'retire_defense_post')
     return game.query('local x=helpers.json_to_table('+_payload(payload)+');'+RETIRE_POST_LUA)
+
+
+def _legacy_action_evidence(root,action,job_key):
+    if not isinstance(job_key,str)or not job_key or len(job_key)>180:raise ValueError('exact legacy job key required')
+    path=Path(root)/'job-events.jsonl';pending={};matches=[];matching_actions=0
+    with path.open('rb')as stream:
+        start=max(0,path.stat().st_size-3*1024*1024);stream.seek(start)
+        if start:stream.readline()
+        for raw in stream:
+            row=json.loads(raw)
+            if row.get('key')!=job_key:continue
+            if row.get('event')=='action_intent':
+                pending[job_key]=(row,hashlib.sha256(raw).hexdigest())
+                if row.get('action')==action:matching_actions+=1
+            elif row.get('event')=='action_result'and job_key in pending:
+                before,digest=pending.pop(job_key)
+                if before.get('action')!=action:continue
+                if(row.get('tick')!=before.get('tick')or row.get('result')!={'ok':False,'status':'blocked',
+                        'reason':'post_recovery_count_or_round_conservation_failed'}):continue
+                matches.append({'job_key':job_key,'event_tick':row['tick'],'original_action':action,
+                    'intent_line_sha256':digest,'result_line_sha256':hashlib.sha256(raw).hexdigest()})
+    if matching_actions!=1 or len(matches)!=1:raise ValueError('one exact paired legacy ordinary-mine conservation failure required in bounded ledger tail')
+    return matches[0]
+
+
+LEGACY_RECONCILIATION_PROBE_LUA=RETIRE_COVERAGE_LUA+ACTOR_TOTALS_LUA+r'''
+if target(x.old.position,"gun-turret")then return reject("legacy_retired_post_not_absent")end
+if marker.retired or marker.retirement_intent then return reject("legacy_reconciliation_requires_missing_old_intent")end
+local current=totals()
+if not current or current.gun_turrets<1 or current.magazines<10 or current.rounds~=current.magazines*size then
+ return reject("legacy_actor_plain_full_recovery_stock_required")end
+local p=x.old.position
+if s.count_entities_filtered{area={{p.x-2,p.y-2},{p.x+2,p.y+2}},type="item-entity"}>0 then return reject("legacy_old_post_ground_items_require_explicit_handling")end
+return {ok=true,current_actor_totals=current,baseline_available=false,recovered_counts_available=false}
+'''
+
+
+RECONCILE_RETIREMENT_LUA=RETIRE_COVERAGE_LUA+ACTOR_TOTALS_LUA+r'''
+if target(x.old.position,"gun-turret")then return reject("legacy_retired_post_not_absent")end
+if marker.retired then
+ local receipt=marker.retirement_receipt
+ if not receipt or receipt.kind~="legacy_action_evidence_reconciliation"or receipt.evidence_id~=x.evidence_id then return reject("legacy_reconciliation_receipt_changed")end
+ return {ok=true,status="succeeded",reused_receipt=true,baseline_available=false,recovered_counts_available=false}end
+if marker.retirement_intent then return reject("legacy_reconciliation_cannot_replace_native_intent")end
+local current=totals()
+if not current or not same(current,x.reconciliation.current_actor_totals)then return reject("legacy_actor_inventory_changed_after_review")end
+if current.gun_turrets<1 or current.magazines<10 or current.rounds~=current.magazines*size then return reject("legacy_actor_plain_full_recovery_stock_required")end
+local p=x.old.position
+if s.count_entities_filtered{area={{p.x-2,p.y-2},{p.x+2,p.y+2}},type="item-entity"}>0 then return reject("legacy_old_post_ground_items_require_explicit_handling")end
+marker.retirement_receipt={version=1,kind="legacy_action_evidence_reconciliation",evidence_id=x.evidence_id,
+ evidence=x.reconciliation.action_evidence,current_actor_totals=current,baseline_available=false,recovered_counts_available=false,tick=game.tick}
+marker.retired=true
+return {ok=true,status="succeeded",legacy_reconciliation=true,baseline_available=false,recovered_counts_available=false}
+'''
+
+
+def execute_reconcile_retirement(game,action):
+    payload=_action_context(game,action,'reconcile_defense_post_retirement')
+    return game.query('local x=helpers.json_to_table('+_payload(payload)+');'+RECONCILE_RETIREMENT_LUA)
 
 
 class DefenseRelocation:
@@ -334,17 +509,26 @@ class DefenseRelocation:
 
     def _probe(self,obs,entry):
         x={'expected_world_id':obs['world_id'],'expected_actor_unit':obs['actor_unit_number'],
-            'marker':self.state['id']+':'+entry['name'],'old':entry['old'],'new':entry['new']}
+            'marker':self.state['id']+':'+entry['name'],'old':entry['old'],'new':entry['new'],
+            'other_posts':_unrelated_native_posts(self.state,self.perimeter.state),
+            'legacy_approved':bool(entry.get('legacy_retirement_reconciliation')),
+            'legacy_evidence_id':entry.get('legacy_retirement_reconciliation',{}).get('evidence_id')}
         return self.game.query('local x=helpers.json_to_table('+_payload(x)+');'+POST_GUARD_LUA+r'''
 local old=target(x.old.position,"gun-turret")
 if old and not exact(x.old)then return reject("old_defense_post_identity_changed")end
 local stock=old and ammo(old,true)
 if old and(old.health~=old.max_health or not stock)then return reject("old_post_partial_or_nonplain_ammo_requires_explicit_handling")end
-if not old and not(marker and marker.retired)then return reject("old_post_missing_without_retirement_receipt")end
+if not old and not(marker and(marker.retired or marker.retirement_intent)or x.legacy_approved)then return reject("old_post_missing_without_retirement_receipt")end
 local new=nil
 if marker then
  new=exact({position=marker.position,unit_number=marker.unit_number})
- if not new or marker.paid_turrets~=1 then return reject("paid_replacement_missing_or_replaced")end
+ if not new or marker.paid_turrets~=1 or marker.actor_unit~=a.unit_number then return reject("paid_replacement_missing_or_replaced")end
+ if marker.retired then local receipt=marker.retirement_receipt
+  if not receipt then return reject("retirement_receipt_missing")end
+  if x.legacy_evidence_id then
+   if receipt.kind~="legacy_action_evidence_reconciliation"or receipt.evidence_id~=x.legacy_evidence_id then return reject("legacy_reconciliation_receipt_changed")end
+  elseif receipt.kind~="ordinary_mine_conserved"or receipt.version~=2 then return reject("retirement_receipt_kind_changed")end
+ end
 else if target(x.new.position,"gun-turret")then return reject("unexpected_replacement_post_before_paid_build")end end
 local turrets,empty=0,0
 for i=1,#main do local st=main[i]
@@ -352,8 +536,38 @@ for i=1,#main do local st=main[i]
  if not st.valid_for_read and(not main.supports_filters()or not main.get_filter(i))then empty=empty+1 end
 end
 return {ok=true,new_unit=new and new.unit_number or nil,retired=marker and marker.retired or false,
- old_present=old~=nil,old_magazines=stock and stock.count or 0,normal_turrets=turrets,empty_slots=empty}
+ old_present=old~=nil,old_magazines=stock and stock.count or 0,normal_turrets=turrets,empty_slots=empty,
+ pending_retirement_intent=marker and marker.retirement_intent~=nil or false,
+ retirement_kind=marker and marker.retirement_receipt and marker.retirement_receipt.kind or nil}
 ''')
+
+    def prepare_legacy_retirement_reconciliation(self,obs,job_key):
+        """Read-only proposal; an operator must explicitly persist the returned intent."""
+        try:
+            if not _identity(obs,self.state,self.catalog)or json.loads(self.path.read_text(encoding='utf-8'))!=self.state:
+                return {'ok':False,'reason':'legacy_reconciliation_checkpoint_changed'}
+            ready=self._engine_ready(obs)
+            if not ready.get('ok'):return ready
+            entries=[e for e in self.state['entries']if e['phase']!='done']
+            if not entries or entries[0]['phase']!='retire':return {'ok':False,'reason':'legacy_reconciliation_requires_published_retirement_phase'}
+            entry=entries[0]
+            if entry.get('legacy_retirement_reconciliation'):return {'ok':False,'reason':'legacy_reconciliation_already_has_reviewed_intent'}
+            action=dict(type='retire_defense_post',transaction_id=self.state['id'],post_name=entry['name'],
+                expected_old_unit=entry['old']['unit_number'],expected_new_unit=entry['new']['unit_number'],
+                expected_actor_unit=obs['actor_unit_number'],expected_world_id=obs['world_id'],
+                reason='normally recover exact old post after paid armed replacement coverage')
+            payload=_action_context(self.game,action,'retire_defense_post')
+            evidence=_legacy_action_evidence(self.path.parent,action,job_key)
+            native=self.game.query('local x=helpers.json_to_table('+_payload(payload)+');'+LEGACY_RECONCILIATION_PROBE_LUA)
+            if not native.get('ok'):return native
+            intent=dict(version=1,transaction_id=self.state['id'],post_name=entry['name'],action_evidence=evidence,
+                current_actor_totals=native['current_actor_totals'],baseline_available=False,recovered_counts_available=False,
+                prepared_tick=obs.get('tick'))
+            intent['evidence_id']=_hash(intent)
+            return {'ok':True,'intent':intent,'post_name':entry['name'],'action_type':'reconcile_defense_post_retirement',
+                'baseline_available':False,'recovered_counts_available':False}
+        except(OSError,ValueError,KeyError,TypeError)as exc:
+            return {'ok':False,'reason':'legacy_reconciliation_evidence_invalid','detail':str(exc)}
 
     def _virtual(self,obs,entry):
         virtual=copy(self.perimeter);virtual.state=deepcopy(self.perimeter.state)
@@ -444,6 +658,14 @@ return {ok=true,new_unit=new and new.unit_number or nil,retired=marker and marke
                 entry['phase']='done';self._save();return {'status':'waiting','reason':'old_post_recovered_from_exact_atomic_receipt'}
             proofs,_=self._virtual(obs,entry)
             if not proofs:return {'status':'blocked','reason':'replacement_all_scope_coverage_proof_missing'}
+            if entry.get('legacy_retirement_reconciliation'):
+                result=dict(action,type='reconcile_defense_post_retirement',expected_new_unit=entry['new']['unit_number'],
+                    evidence_id=entry['legacy_retirement_reconciliation']['evidence_id'],reason='reconcile exact logged legacy ordinary post recovery without inventing before totals')
+                try:_action_context(self.game,result,'reconcile_defense_post_retirement')
+                except(OSError,ValueError,KeyError,TypeError)as exc:return {'status':'blocked','reason':'legacy_reconciliation_evidence_invalid','detail':str(exc)}
+                return result
+            if not probe.get('old_present')and probe.get('pending_retirement_intent'):
+                return dict(action,type='retire_defense_post',expected_new_unit=entry['new']['unit_number'],reason='finish exact persisted native post retirement intent')
             required=1+math.ceil(probe['old_magazines']/self.catalog.items['firearm-magazine']['stack_size'])
             if probe['empty_slots']<required:return {'status':'blocked','reason':'aggregate_post_recovery_inventory_capacity_missing','required_empty_slots':required}
             return dict(action,type='retire_defense_post',expected_new_unit=entry['new']['unit_number'],reason='normally recover exact old post after paid armed replacement coverage')
@@ -453,6 +675,7 @@ return {ok=true,new_unit=new and new.unit_number or nil,retired=marker and marke
         if not self.state or not _identity(obs,self.state,self.catalog)or any(e['phase']!='done'for e in self.state['entries']):return None
         ready=self._engine_ready(obs,allow_constructed=self.state.get('phase')=='verified')
         if not ready.get('ok'):return None
+        recovery=[]
         for entry in self.state['entries']:
             probe=self._probe(obs,entry)
             if not probe.get('ok')or probe.get('old_present')or not probe.get('retired')or probe.get('new_unit')!=entry['new']['unit_number']:return None
@@ -460,6 +683,8 @@ return {ok=true,new_unit=new and new.unit_number or nil,retired=marker and marke
             if current!=entry['new']:return None
             proofs,_=self._virtual(obs,entry)
             if not proofs:return None
+            recovery.append({'name':entry['name'],'kind':probe.get('retirement_kind'),
+                'baseline_available':probe.get('retirement_kind')=='ordinary_mine_conserved'})
         plan=self.engines.state['plan'];x,y=xy({'position':self.engines.state['core']['anchor']})
         future=engine_core(self.catalog,x,y,4)
         if not preflight(self.game,self.builder,obs,plan['entities']).get('ok'):return None
@@ -467,4 +692,5 @@ return {ok=true,new_unit=new and new.unit_number or nil,retired=marker and marke
         if not surface_pipe_proof(self.game,obs,plan).get('ok'):return None
         return {'tick':obs.get('tick'),'relocated':[{'name':e['name'],'old_unit':e['old']['unit_number'],
             'replacement_unit':e['new']['unit_number'],'position':e['new']['position']}for e in self.state['entries']],
-            'engine_plan_unchanged':True,'future_core_preflight':True,'scope':'geometric armed coverage and ordinary conserved recovery; no combat victory claim'}
+            'engine_plan_unchanged':True,'future_core_preflight':True,'recovery_evidence':recovery,
+            'scope':'geometric armed coverage and normal recovery receipts; legacy reconciliations have no original conservation baseline; no combat victory claim'}

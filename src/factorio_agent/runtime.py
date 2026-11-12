@@ -37,6 +37,9 @@ class WorldBoundGame(DeterministicGame):
         if action.get('type')=='retire_defense_post':
             from .defense_relocation import execute_retire_post
             return self._record_action(action,execute_retire_post(self,action))
+        if action.get('type')=='reconcile_defense_post_retirement':
+            from .defense_relocation import execute_reconcile_retirement
+            return self._record_action(action,execute_reconcile_retirement(self,action))
         if action.get('type')=='build_furnace_gap':
             from .furnace_gap import execute_gap_build
             return self._record_action(action,execute_gap_build(self,action))
