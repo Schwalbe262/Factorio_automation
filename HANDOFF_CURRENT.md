@@ -1,10 +1,10 @@
-USER PAUSED Codex goal/development for Claude takeover. Read CLAUDE_HANDOFF.md then AGENTS.md; archives search-only. Do not resume until user steers.
-Current eval-3083327785 UUID8d2cc1ed-d4fe-4b09-b16a-a42babe6963f;200%start/noNauviscliffs/speed1. Lifecycle.stop saved+pausedgame, GUIleftopen; priorserver50076/GUI19852, supervisor26144 exited. Recheckownership.
-Current smelting SAMEkey lunaq_6067a7cea0b54d0ea94076211ce0e48266038cf6b51a86ea PAUSED27actions/306111. Preservepaidstate/ID; no newmap. Fe60/Cu60/Coal30 mining allSUCCEEDED withactualoutput; sustainedratesunproven.
-Part33 pushed529dca5 urgentfuel-onlymaintenance+validemptyenemysurvey,88testsPASS. Rootassistedretry, not Luna-only proof.
-Part34 validatedindex publication: supplyadvice, boundedprepare_components, guardedopportunisticwait/ownerreturn, Electric->Logisticspreproduction, earlyquietturret0+96tileplannedsitechecks.1547total/1545PASS/2reference skips56.483s.
-LatestUSER: noearlyoverbuildingturrets; usefulprep whilewaiting; keepresearchgoingifotherworkblocked. Researchfallback NOTDONE. Currentquiettarget0 applied/fourretainedturrets/oneindustrialscopedeferred.
-UNSTAGED smelting.py+test_v2_smelting.py fixesapprovednaturalclearance+current-sourcegridfallback;13focusedPASS/RO463entities4obstaclesvalid; SAMEjobretried12->27 beforestop. Review/commit separately; no completionclaim.
-UNSTAGED industry.py+test_v2_bootstrap_research.py interruptedgeneralfinite-redresearch(1..100) WIP. jobs._funded_startup_owner/CAPdescription/Luna idle-selection stillneeded; CLAUDE_HANDOFF details.
-Preserve/exclude oldretirementdependentfourfiles(outposts/paired_mining/mining_layout_policy/capacity_profiles), untrackedfuturefluid/oil/ammo/repairWIP; no broadstage/reset/clean. IndexvalidationdoesnotcoverallcurrentWIP.
-Usage33root16679413/account71->73(+2pp);34handoffsample12472170/account73->74(+1pp), includingcache; exactpartweeklyshare/childtotalsunknown. Goalpaused; rocket/rail/fresh-hour/Luna-onlysuccessunproved.
+Claude owns development since 2026-11-13. Read AGENTS.md, then this file. CLAUDE_HANDOFF.md is the older Codex handoff (history only).
+Approved restructure plan, in order: P0 baseline (DONE) -> P1 absorb used factorio_ai modules into factorio_agent/core and delete the rest -> P2 long-lived kernel (one RCON session, cached world, batched actions, no CLI child per step, metrics) -> P3 lane scheduler + capability registry -> P4 Luna interface v2 (goals, event-driven calls, autopilot default) -> P5 global site plan (sitemap, allocator, ratio-sized blocks, offline layout harness) -> P6 fresh-map 60 min runs -> P7 docs for mid-tier models.
+P0 pushed: 637816b smelting site search/clearance, 513ad29 finite red-only bootstrap research, bf510bf depleted drill retirement. Clean checkout 1577 run/2 skips PASS; working tree 1668 PASS.
+User decisions: validate on a NEW map (ask before first creation); keep runtime/v2/eval-3083327785 untouched, do not resume its smelting job; Luna prompt/schema may change, model/CLI pinning may not.
+Baseline to beat (old map, 84.6 min): 823 actions, 43% of time in >30 s gaps, planning/execution 5.5, 84 Luna calls at 26k input tokens.
+Targets for a 60 min run: gaps <=10%, planning/execution <=1, >=40 actions/min, <=30 Luna calls at <=8k tokens, red+green science automated.
+Uncommitted and frozen: advanced_petroleum, fluid_products, fluid_distribution, defense_ammo_policy, post_ammo_transfer, post_raid_recovery, registered_asset_repair (+tests/docs), oil_gathering/water_gathering source_key edits. Do not stage broadly, reset or clean.
+Tests: $env:PYTHONPATH='src;tests;runtime/v2/lua-test-deps'; python -B -m unittest discover -s tests -p 'test_v2*.py'
+Never grant items/research or claim game progress from unit tests.
+NEXT: Part 1.
