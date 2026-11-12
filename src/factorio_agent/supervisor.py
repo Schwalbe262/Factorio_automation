@@ -34,6 +34,7 @@ ACTIVE = {"pending", "running", "waiting"}
 TERMINAL = {"succeeded", "blocked", "failed"}
 OPERATIONS = incident_rules.OPERATIONS
 AUTO_RETRY_LIMIT = 3
+AUTO_RETRY_STALL_SECONDS = 120
 QUEUED = ("pending", "ready")
 # Existing nodes in these states absorb a new node with the same capability and parameters.
 DEDUPE_STATUSES = {"pending", "ready", "running", "completed"}
@@ -1556,7 +1557,16 @@ class Supervisor:
             if _unknown(job) or "rollback" in reason or "deadline" in reason:
                 continue
             seen = memory.setdefault(key, {"successes": succeeded, "count": 0})
-            if succeeded <= seen["successes"] or seen["count"] >= AUTO_RETRY_LIMIT:
+            if seen["count"] >= AUTO_RETRY_LIMIT:
+                continue
+            # A stalled job waited on something (fuel, plates) that upkeep may
+            # since have fixed; with every job blocked no success can ever
+            # arrive, so a stall is also retried after a quiet interval.
+            stalled_long_enough = (
+                reason == "objective_progress_stalled"
+                and self.clock() - float(job.get("blocked_at_time") or self.clock()) >= AUTO_RETRY_STALL_SECONDS
+            )
+            if succeeded <= seen["successes"] and not stalled_long_enough:
                 continue
             seen.update(successes=succeeded, count=seen["count"] + 1)
             if self._control_command("retry", key):

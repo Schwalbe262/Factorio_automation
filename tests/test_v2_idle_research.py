@@ -204,6 +204,22 @@ class IdleActionTests(unittest.TestCase):
         self.jobs = {}
         self.write_jobs()
 
+    def test_burner_fuel_upkeep_comes_before_research_and_runs_while_research_is_active(self):
+        fuel = {"type": "insert", "item": "coal", "count": 8}
+        seen = []
+
+        def maintain_fuel(observation):
+            seen.append(observation)
+            return fuel
+
+        self.executors.bootstrap = SimpleNamespace(maintain_fuel=maintain_fuel)
+        self.executors.starter_observation = lambda obs: obs
+        self.assertEqual(self.executors.idle_action(self.obs(research="cheap")), fuel)
+        self.assertEqual(len(seen), 1)
+        # A plain wait from fuel upkeep is not an action; research selection follows.
+        self.executors.bootstrap = SimpleNamespace(maintain_fuel=lambda observation: {"status": "waiting"})
+        self.assertIsNone(self.executors.idle_action(self.obs(research="cheap")))
+
     def write_jobs(self, *rows):
         jobs = {f"j{index}": dict(row, world_id="world") for index, row in enumerate(rows)}
         ledger = {"schema_version": 2, "world_id": "world", "jobs": jobs, "last_tick": 0}

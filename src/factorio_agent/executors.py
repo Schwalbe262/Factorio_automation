@@ -627,7 +627,10 @@ class StarterExecutors:
         return [job for job in ledger.get("jobs", {}).values() if job.get("world_id") == obs["world_id"]]
 
     def idle_action(self, obs):
-        """Start lab research while no job acts, or return None.
+        """Use a pass in which no job acted: burner fuel upkeep first, then lab research.
+
+        Fuel upkeep returns the ordinary batched take/insert action from
+        ``bootstrap.maintain_fuel``. The rest describes the research start:
 
         None while research is running, while any job has an unresolved world
         effect or an active job owns research (a capability taking a
@@ -637,10 +640,18 @@ class StarterExecutors:
         upcoming roadmap steps, and the ``research`` capability's own step
         produces the start action, so its shape and start record are unchanged.
         """
-        if obs.get("research"):
-            return None
         jobs = self._same_world_jobs(obs)
         if jobs is None or _unresolved_world_effect(jobs):
+            return None
+        # Burner fuel first. Research jobs deliberately skip starter upkeep, so
+        # while only they are active nobody fuelled the iron cells and a machine
+        # science batch waited for plates until it stalled (live, seed 397906970).
+        bootstrap = getattr(self, "bootstrap", None)
+        if bootstrap is not None:
+            fuel = bootstrap.maintain_fuel(self.starter_observation(obs))
+            if isinstance(fuel, dict) and fuel.get("type"):
+                return fuel
+        if obs.get("research"):
             return None
         if any(is_active(job) and _owns_research(job.get("capability")) for job in jobs):
             return None
