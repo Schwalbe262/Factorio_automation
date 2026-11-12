@@ -143,6 +143,21 @@ class NormalResearch:
             },
         }
 
+    def supplied_packs(self, obs):
+        """Science packs with a proven automatic lab supply, by the same proofs ``step`` requires.
+
+        Red needs the machine science proof; without it nothing is supplied.
+        Green and blue each additionally need their own commissioned supply proof.
+        """
+        if not self.science.proof(obs):
+            return set()
+        packs = {"automation-science-pack"}
+        if getattr(self, "green", None) and self.green.proof(obs):
+            packs.add("logistic-science-pack")
+        if getattr(self, "blue", None) and self.blue.proof(obs):
+            packs.add("chemical-science-pack")
+        return packs
+
     def proof(self, obs, parameters):
         name = parameters["technology"]
         if not obs.get("technologies", {}).get(name):

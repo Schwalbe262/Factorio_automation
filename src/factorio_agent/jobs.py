@@ -623,6 +623,25 @@ def control(root: Path, game, key: str, operation: str) -> dict:
         return job
 
 
+IDLE_RESEARCH_INTERVAL_TICKS = 600
+IDLE_LANE = "lane:research"
+
+
+def _unresolved_world_effect(jobs) -> bool:
+    """Any durable intent, unknown action outcome or unreconciled rollback among these jobs."""
+    return any(
+        "pending_action" in job
+        or "outcome_unknown" in str(job.get("reason", ""))
+        or job.get("reason") == "world_rollback_requires_reconciliation"
+        for job in jobs
+    )
+
+
+def _owns_research(capability) -> bool:
+    """A capability that selects a technology itself owns the lab while it is active."""
+    return "technology" in CAPABILITIES.get(capability, {}).get("parameters", {})
+
+
 class StarterExecutors:
     """Explicit temporary v1 executor reuse, with no v1 strategic supervisor."""
 
@@ -1197,6 +1216,60 @@ class StarterExecutors:
                 return fuel
         return result
 
+    def _same_world_jobs(self, obs):
+        """Persisted jobs of the observed world, or None when no matching ledger is readable."""
+        game = getattr(self, "game", None)
+        if game is None:
+            return None
+        path = Path(game.cfg.runtime_dir) / "jobs.json"
+        if not path.exists():
+            return None
+        ledger = json.loads(path.read_text(encoding="utf-8"))
+        if ledger.get("schema_version") != 2 or ledger.get("world_id") != obs.get("world_id"):
+            return None
+        return [job for job in ledger.get("jobs", {}).values() if job.get("world_id") == obs["world_id"]]
+
+    def idle_action(self, obs):
+        """Start lab research while no job acts, or return None.
+
+        None while research is running, while any job has an unresolved world
+        effect or an active job owns research (a capability taking a
+        ``technology``), within IDLE_RESEARCH_INTERVAL_TICKS of the previous
+        attempt, or without a proven automatic lab science supply. Otherwise
+        ``research_policy.choose_research`` picks a technology steered by the
+        upcoming roadmap steps, and the ``research`` capability's own step
+        produces the start action, so its shape and start record are unchanged.
+        """
+        if obs.get("research"):
+            return None
+        jobs = self._same_world_jobs(obs)
+        if jobs is None or _unresolved_world_effect(jobs):
+            return None
+        if any(is_active(job) and _owns_research(job.get("capability")) for job in jobs):
+            return None
+        last = getattr(self, "idle_research_tick", None)
+        if last is not None and 0 <= obs["tick"] - last < IDLE_RESEARCH_INTERVAL_TICKS:
+            return None
+        self.idle_research_tick = obs["tick"]
+        supplied = self.normal_research.supplied_packs(obs)
+        if not supplied:
+            return None
+        from . import progression, research_policy
+
+        wanted = progression.roadmap_wanted_technologies(jobs, obs.get("technologies") or {})
+        choice = research_policy.choose_research(
+            self.catalog,
+            obs,
+            wanted_recipes=progression.roadmap_wanted_recipes(jobs, CAPABILITIES),
+            wanted_technologies=[name for name in wanted if name in self.catalog.technologies],
+            preferences=research_policy.legacy_upgrade_preferences(),
+            supplied_packs=supplied,
+        )
+        if choice is None:
+            return None
+        action = self.normal_research.step(obs, {"technology": choice.technology})
+        return action if action.get("type") == "research" else None
+
     def _approved_initial_defense(self, obs, *, maintain_armed=False):
         """Finish an already requested perimeter; never invent a defense job."""
         perimeter = getattr(self, "perimeter", None)
@@ -1208,24 +1281,10 @@ class StarterExecutors:
             return None
         if not all(obs.get("enabled_recipes", {}).get(name) for name in ("gun-turret", "firearm-magazine")):
             return None
-        game = getattr(self, "game", None)
-        if game is None:
-            return None
-        path = Path(game.cfg.runtime_dir) / "jobs.json"
-        if not path.exists():
-            return None
-        ledger = json.loads(path.read_text(encoding="utf-8"))
-        if ledger.get("schema_version") != 2 or ledger.get("world_id") != obs.get("world_id"):
-            return None
-        same_world = [job for job in ledger.get("jobs", {}).values() if job.get("world_id") == obs["world_id"]]
+        same_world = self._same_world_jobs(obs)
         # No background defense mutation during any unresolved world effect,
         # even an empty durable intent or a clean older defense approval.
-        if any(
-            "pending_action" in job
-            or "outcome_unknown" in str(job.get("reason", ""))
-            or job.get("reason") == "world_rollback_requires_reconciliation"
-            for job in same_world
-        ):
+        if same_world is None or _unresolved_world_effect(same_world):
             return None
         rows = [job for job in same_world if job.get("capability") == "defense_perimeter"]
         known = {"pending", "running", "waiting", "paused", "blocked", "failed", "succeeded"}
@@ -2053,13 +2112,42 @@ def _active_in_priority_order(ledger: Ledger) -> list[str]:
     return [job["key"] for job in active]
 
 
+def _perform_idle_action(game, executors, ledger: Ledger, obs: dict) -> bool:
+    """Perform the executors' optional idle action once; True when an action was sent.
+
+    The action has no job record and no durable intent. Ordinary failures
+    (ValueError, RuntimeError) are logged and swallowed; connection and
+    timeout errors, including RconError, propagate.
+    """
+    from .core.rcon import RconError
+
+    idle = getattr(executors, "idle_action", None)
+    if not callable(idle):
+        return False
+    try:
+        action = idle(obs)
+        if not isinstance(action, dict) or not action.get("type"):
+            return False
+        ledger.event(IDLE_LANE, "action_intent", tick=obs["tick"], action=action)
+        receipt = game.act(action)
+    except (ValueError, RuntimeError) as exc:
+        if isinstance(exc, RconError):
+            raise
+        ledger.event(IDLE_LANE, "action_error", tick=obs["tick"], error=type(exc).__name__ + ": " + str(exc)[:500])
+        return False
+    ledger.event(IDLE_LANE, "action_result", tick=obs["tick"], result=receipt)
+    return True
+
+
 def run_jobs(root: Path, game, executors, *, seconds: float = 25) -> dict:
     """Interleave every active job at action granularity for one bounded slice.
 
     Each pass shares one observation. A job that only waits or reports a
     status hands the same observation to the next job; the first job that
     performs a world-changing action ends the pass so that the next pass
-    plans against a fresh observation.
+    plans against a fresh observation. A pass in which no job acted offers
+    the actor to ``executors.idle_action`` (if defined); a performed idle
+    action is counted in ``idle_actions`` and also starts a new pass.
     """
     _validate_slice_seconds(seconds)
     with RunLock(root / "writer.lock"):
@@ -2068,6 +2156,7 @@ def run_jobs(root: Path, game, executors, *, seconds: float = 25) -> dict:
         last_results: dict[str, dict] = {}
         touched: list[str] = []
         actions = 0
+        idle_actions = 0
         any_active = False
 
         def receipt(status: str) -> dict:
@@ -2084,6 +2173,7 @@ def run_jobs(root: Path, game, executors, *, seconds: float = 25) -> dict:
                     for key in touched
                 },
                 "actions": actions,
+                "idle_actions": idle_actions,
                 "last_tick": ledger.data["last_tick"],
             }
 
@@ -2138,4 +2228,8 @@ def run_jobs(root: Path, game, executors, *, seconds: float = 25) -> dict:
                     _save_if_due(game)
                 return finished()
             if not acted:
+                # An action-free pass leaves the actor free for the research lane.
+                if _perform_idle_action(game, executors, ledger, obs):
+                    idle_actions += 1
+                    continue
                 time.sleep(min(0.5, max(0, deadline - time.monotonic())))
