@@ -1038,6 +1038,12 @@ return success{boiler_fuel=fuel(boiler),drill_fuel=fuel(drill),
             self.state["coal_plan"] = plan
             self._save()
         coal = self.state["coal_plan"]
+        # The electric coal cutover mines the burner drill and then places its
+        # electric replacement. Between the two, rebuilding the burner from the
+        # still-unrewritten plan would strand the cutover; wait instead.
+        cutover = self.state.get("electric_coal_cutover")
+        if cutover and _find(observation, cutover["old"]) is None:
+            return _report("waiting", "electric coal cutover owns the coal drill site", cutover=cutover)
         result = self.ensure_plan(observation, coal)
         if result.get("status") != "succeeded":
             return result

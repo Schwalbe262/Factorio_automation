@@ -1,4 +1,21 @@
-"""Paid, staged electric upgrade of the dedicated coal source, preserving trunk."""
+"""Paid, staged electric upgrade of the dedicated coal source, preserving trunk.
+
+The upgrade accepts a saved coal plan by what it is. Every supported cell has
+an east-facing burner drill whose electric replacement is centred half a tile
+up-left of it, so the electric drill drops onto the same belt tile as the
+burner did. The cells differ only in where their burner fuel inserter stands:
+
+- ``legacy_trunk``: plans regularised by ``RegularizePower`` (policy
+  ``pcb-trunks-v1``). Behaviour is unchanged from before variants existed.
+- ``boundary_compact``: the boundary cell the v2 power job builds on new maps
+  (``compact_coal_cell``); the fuel inserter is outside the 3x3 footprint and
+  is recovered after the output proof, like the legacy cell.
+- ``inner_fuel_arm``: the base ``FactoryBuilder._coal_plan`` cell; the fuel
+  inserter is inside the 3x3 footprint, so it leaves the plan and is mined
+  (identity-guarded) before the electric drill is placed.
+
+Any other layout is refused with ``electric_coal_unsupported_coal_layout``.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +27,151 @@ from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.core.deterministic_state import _atomic_json
 from .board import entity
 from .power_grid import plan_connection
+
+
+EAST = 4
+LEGACY_TRUNK_POLICY = "pcb-trunks-v1"
+# Template, layout policy and fuel inserter (dx, dy, direction) relative to
+# the burner drill centre. Both generators only ever emit east-facing cells.
+COAL_LAYOUTS = {
+    "boundary_compact": {
+        "template": "dedicated_boundary_coal_feed_v2",
+        "layout_policy": "pcb-starter-boundary-coal-v2",
+        "fuel_inserter": (1.5, 0.5, 4),
+    },
+    "inner_fuel_arm": {
+        "template": "dedicated_coal_feed",
+        "layout_policy": None,
+        "fuel_inserter": (-1.5, -0.5, 12),
+    },
+}
+# The electric drill centre relative to the burner drill centre.
+REPLACEMENT_OFFSET = (-0.5, -0.5)
+# The belt both drills drop onto, relative to the burner drill centre.
+DROP_BELT_OFFSET = (1.5, -0.5)
+# The first power pole goal relative to the electric drill centre. Variant
+# layouts also try the other tiles of the ring touching the 3x3 footprint.
+POWER_GOAL_OFFSET = (2, -2)
+POWER_GOAL_RING = tuple(
+    [POWER_GOAL_OFFSET]
+    + [
+        (dx, dy)
+        for dy in (-2, -1, 0, 1, 2)
+        for dx in (-2, -1, 0, 1, 2)
+        if max(abs(dx), abs(dy)) == 2 and (dx, dy) != POWER_GOAL_OFFSET
+    ]
+)
+
+
+def replacement_for(drill_position):
+    """The electric drill that replaces a burner drill at ``drill_position``."""
+    return entity(
+        "electric-mining-drill",
+        drill_position["x"] + REPLACEMENT_OFFSET[0],
+        drill_position["y"] + REPLACEMENT_OFFSET[1],
+        EAST,
+    )
+
+
+def inside_footprint(center, position):
+    """True when a one-tile entity centre lies inside the 3x3 drill footprint."""
+    return abs(position["x"] - center["x"]) < 1.5 and abs(position["y"] - center["y"]) < 1.5
+
+
+def east_drop(center, vector):
+    """Drop point of an east-facing drill, from its north-facing place vector.
+
+    Mirrors the survey Lua: rotating (vx, vy) clockwise gives (-vy, vx).
+    """
+    return {"x": center["x"] - vector[1], "y": center["y"] + vector[0]}
+
+
+def matching_belt(entities, drop):
+    """The plan belt whose tile contains ``drop``, or None."""
+    return next(
+        (
+            e
+            for e in entities
+            if e["name"] == "transport-belt"
+            and abs(e["position"]["x"] - drop["x"]) < 0.49
+            and abs(e["position"]["y"] - drop["y"]) < 0.49
+        ),
+        None,
+    )
+
+
+def _same_spec(a, b):
+    return a["name"] == b["name"] and a["position"] == b["position"]
+
+
+def classify_coal_layout(plan):
+    """Decide which supported coal cell a saved plan is, from the plan alone.
+
+    Rules:
+    - a missing plan is refused with ``starter_coal_plan_required``;
+    - ``pcb-trunks-v1`` is the legacy variant: every burner inserter is
+      obsolete and recovered after proof, exactly as before;
+    - otherwise template and layout policy must match one ``COAL_LAYOUTS``
+      row, the drill must be an east-facing burner drill, the plan must hold
+      exactly one burner inserter at that row's position and direction, no
+      other plan entity may stand inside the electric footprint, and a plan
+      belt must sit on the drop tile;
+    - the fuel inserter is ``displaced`` (removed before placement) when it is
+      inside the electric footprint and ``obsolete`` (removed after proof)
+      otherwise.
+    """
+    if not plan or not plan.get("drill") or not plan.get("entities"):
+        return {"ok": False, "reason": "starter_coal_plan_required"}
+    entities = plan["entities"]
+    inserters = [e for e in entities if e["name"] == "burner-inserter"]
+    if plan.get("layout_policy") == LEGACY_TRUNK_POLICY:
+        return {"ok": True, "variant": "legacy_trunk", "displaced": [], "obsolete": inserters}
+    identity = {"template": plan.get("template"), "layout_policy": plan.get("layout_policy")}
+    variant = next(
+        (
+            name
+            for name, row in COAL_LAYOUTS.items()
+            if row["template"] == identity["template"] and row["layout_policy"] == identity["layout_policy"]
+        ),
+        None,
+    )
+    if variant is None:
+        return {"ok": False, "reason": "electric_coal_unsupported_coal_layout", **identity}
+    drill = plan["drill"]
+    if drill["name"] == "electric-mining-drill":
+        return {"ok": False, "reason": "coal_drill_already_upgraded"}
+    if drill["name"] != "burner-mining-drill" or drill.get("direction", 0) != EAST:
+        return {"ok": False, "reason": "electric_coal_drill_facing_unsupported", "variant": variant, **identity}
+    x, y = drill["position"]["x"], drill["position"]["y"]
+    dx, dy, direction = COAL_LAYOUTS[variant]["fuel_inserter"]
+    expected = {"x": x + dx, "y": y + dy}
+    if len(inserters) != 1 or inserters[0]["position"] != expected or inserters[0].get("direction", 0) != direction:
+        return {
+            "ok": False,
+            "reason": "electric_coal_fuel_inserter_not_at_template_position",
+            "variant": variant,
+            "expected": expected,
+            "found": [e["position"] for e in inserters],
+        }
+    center = replacement_for(drill["position"])["position"]
+    conflicts = [
+        e
+        for e in entities
+        if not _same_spec(e, drill) and e["name"] != "burner-inserter" and inside_footprint(center, e["position"])
+    ]
+    if conflicts:
+        return {
+            "ok": False,
+            "reason": "electric_coal_footprint_holds_retained_plan_entity",
+            "variant": variant,
+            "conflicts": conflicts,
+        }
+    drop = {"x": x + DROP_BELT_OFFSET[0], "y": y + DROP_BELT_OFFSET[1]}
+    if matching_belt(entities, drop) is None:
+        return {"ok": False, "reason": "electric_coal_drop_belt_missing_from_plan", "variant": variant}
+    displaced = [e for e in inserters if inside_footprint(center, e["position"])]
+    obsolete = [e for e in inserters if not inside_footprint(center, e["position"])]
+    return {"ok": True, "variant": variant, "displaced": displaced, "obsolete": obsolete}
 
 
 class ElectricCoal:
@@ -27,24 +189,32 @@ class ElectricCoal:
     def prepare(self, obs):
         self.builder._sync(obs)
         old = self.builder.state.get("coal_plan")
-        if not old or old.get("layout_policy") != "pcb-trunks-v1":
-            return {"ok": False, "reason": "regular_starter_coal_plan_required"}
+        layout = classify_coal_layout(old)
+        if not layout.get("ok"):
+            return layout
         original = self.find(obs, old["drill"])
         if not original:
             return {"ok": False, "reason": "owned_old_drill_missing"}
         if original["name"] != "burner-mining-drill":
             return {"ok": False, "reason": "coal_drill_already_upgraded"}
-        p = original["position"]
-        replacement = entity("electric-mining-drill", p["x"] - 0.5, p["y"] - 0.5, 4)
-        payload = json.dumps(json.dumps({"old": original["unit_number"], "new": replacement}, separators=(",", ":")))
+        replacement = replacement_for(original["position"])
+        displaced = [
+            {"spec": deepcopy(spec), "unit_number": (self.find(obs, spec) or {}).get("unit_number")}
+            for spec in layout["displaced"]
+        ]
+        # Only the old drill and the displaced fuel inserter, both removed by
+        # this controller, may stand in the electric footprint.
+        ignore = [original["unit_number"]] + [row["unit_number"] for row in displaced if row["unit_number"]]
+        payload = json.dumps(json.dumps({"ignore": ignore, "new": replacement}, separators=(",", ":")))
         survey = self.game.query(
             """
 local args=helpers.json_to_table("""
             + payload
             + """);local n=args.new;local proto=prototypes.entity[n.name]
+local ignore={};for _,id in ipairs(args.ignore) do ignore[id]=true end
 local left=n.position.x-1.5;local top=n.position.y-1.5;local right=left+3;local bottom=top+3
 for _,e in pairs(s.find_entities_filtered{area={{left+.01,top+.01},{right-.01,bottom-.01}}}) do
- if e.type~="resource" and e.unit_number~=args.old and e~=a and not e.prototype.collision_mask.colliding_with_tiles_only then
+ if e.type~="resource" and not (e.unit_number and ignore[e.unit_number]) and e~=a and not e.prototype.collision_mask.colliding_with_tiles_only then
   return {ok=false,reason="electric_upgrade_footprint_obstructed"}
  end
 end
@@ -62,20 +232,10 @@ return {ok=true,drop=drop,remaining=amount}
         )
         if not survey.get("ok"):
             return survey
-        recipient = next(
-            (
-                e
-                for e in old["entities"]
-                if e["name"] == "transport-belt"
-                and abs(e["position"]["x"] - survey["drop"]["x"]) < 0.49
-                and abs(e["position"]["y"] - survey["drop"]["y"]) < 0.49
-            ),
-            None,
-        )
+        recipient = matching_belt(old["entities"], survey["drop"])
         if recipient is None:
             return {"ok": False, "reason": "electric_drop_does_not_match_retained_belt"}
-        destination = {"x": replacement["position"]["x"] + 2, "y": replacement["position"]["y"] - 2}
-        power = plan_connection(self.game, self.builder, obs, destination, [replacement])
+        power = self._plan_power(obs, layout, old, replacement)
         if not power.get("ok"):
             return power
         self.state = {
@@ -86,7 +246,9 @@ return {ok=true,drop=drop,remaining=amount}
             "power_plan": power,
             "receiver": recipient,
             "phase": "fund_and_power",
-            "obsolete_inserters": [self.find(obs, e) for e in old["entities"] if e["name"] == "burner-inserter"],
+            "layout_variant": layout["variant"],
+            "displaced_inserters": displaced,
+            "obsolete_inserters": [self.find(obs, e) for e in layout["obsolete"]],
             "coal_plan_before": deepcopy(old),
         }
         _atomic_json(self.path, self.state)
@@ -95,7 +257,97 @@ return {ok=true,drop=drop,remaining=amount}
             "wire_hops": power["wire_hops"],
             "replacement": replacement,
             "retained_drop_belt": recipient,
+            "layout_variant": layout["variant"],
         }
+
+    def _plan_power(self, obs, layout, old, replacement):
+        """Plan the pole chain to the electric drill with ``plan_connection``.
+
+        The legacy variant keeps its single goal at ``POWER_GOAL_OFFSET``.
+        Other variants try the ring of tiles touching the 3x3 footprint, that
+        offset first, skipping tiles a retained plan entity occupies; the
+        first candidate's failure is reported when none connects.
+        """
+        center = replacement["position"]
+        if layout["variant"] == "legacy_trunk":
+            goals = [POWER_GOAL_OFFSET]
+        else:
+            retained = [
+                e
+                for e in old["entities"]
+                if not _same_spec(e, old["drill"]) and not any(_same_spec(e, d) for d in layout["displaced"])
+            ]
+            occupied = self.builder._occupied_by_plan(retained)
+            goals = [
+                offset
+                for offset in POWER_GOAL_RING
+                if (center["x"] + offset[0], center["y"] + offset[1]) not in occupied
+            ]
+        first = None
+        for dx, dy in goals:
+            destination = {"x": center["x"] + dx, "y": center["y"] + dy}
+            power = plan_connection(self.game, self.builder, obs, destination, [replacement])
+            if power.get("ok"):
+                return power
+            first = first or power
+        if first is None:
+            return {"ok": False, "reason": "electric_coal_no_free_power_goal"}
+        return dict(first, power_goal_candidates=len(goals))
+
+    def _rewrite_coal_plan(self, keep):
+        """Replace the saved coal plan with its entities that pass ``keep``.
+
+        Required items are recomputed; every other plan field is preserved.
+        """
+        saved = self.builder.state["coal_plan"]
+        entities = [e for e in saved["entities"] if keep(e)]
+        if len(entities) == len(saved["entities"]):
+            return
+        extra = {k: v for k, v in saved.items() if k not in {"entities", "ports", "required_items", "ok", "reason"}}
+        self.builder.state["coal_plan"] = _plan(entities, saved["ports"], **extra)
+        self.builder._save()
+
+    def _displaced_inserter_action(self, obs):
+        """Remove fuel inserters standing in the electric footprint.
+
+        Rule: the inserter first leaves the saved coal plan, so no power job
+        rebuilds it, then leaves the world by ordinary mining guarded by the
+        unit number observed at prepare. A different unit blocks.
+        """
+        rows = self.state.get("displaced_inserters") or []
+        if not rows:
+            return None
+        self.builder._sync(obs)
+        specs = [row["spec"] for row in rows]
+        self._rewrite_coal_plan(lambda e: not any(_same_spec(e, spec) for spec in specs))
+        for row in rows:
+            actual = self.find(obs, row["spec"])
+            if actual is None:
+                continue
+            if row.get("unit_number") is None or actual["unit_number"] != row["unit_number"]:
+                return {"status": "blocked", "reason": "displaced_fuel_inserter_identity_changed"}
+            return {
+                "type": "mine",
+                "name": actual["name"],
+                "position": actual["position"],
+                "count": 1,
+                "expected_entity_unit": actual["unit_number"],
+                "expected_entity_world_id": obs["world_id"],
+                "reason": "recover burner fuel inserter inside the electric drill footprint before cutover",
+            }
+        return None
+
+    def _mark_cutover(self, obs):
+        """Tell the builder that the drill site belongs to this cutover.
+
+        ``ensure_power`` waits instead of rebuilding the burner drill while the
+        old drill is absent and the coal plan still names it.
+        """
+        self.builder._sync(obs)
+        marker = {"old": deepcopy(self.state["old"]), "new": deepcopy(self.state["replacement"])}
+        if self.builder.state.get("electric_coal_cutover") != marker:
+            self.builder.state["electric_coal_cutover"] = marker
+            self.builder._save()
 
     def step(self, obs):
         if not obs.get("technologies", {}).get("electric-mining-drill"):
@@ -130,6 +382,10 @@ return {ok=true,drop=drop,remaining=amount}
                     }
                 self.state["phase"] = "replace"
                 _atomic_json(self.path, self.state)
+            removal = self._displaced_inserter_action(obs)
+            if removal is not None:
+                return removal
+            self._mark_cutover(obs)
             old = self.find(obs, self.state["old"])
             if old is not None:
                 if old["unit_number"] != self.state["old_unit_number"]:
@@ -161,6 +417,8 @@ return {ok=true,drop=drop,remaining=amount}
         if saved.get("required_items", {}).get("burner-mining-drill"):
             extra = {k: v for k, v in saved.items() if k not in {"entities", "ports", "required_items", "ok", "reason"}}
             self.builder.state["coal_plan"] = _plan(saved["entities"], saved["ports"], **extra)
+            self.builder._save()
+        if self.builder.state.pop("electric_coal_cutover", None) is not None:
             self.builder._save()
         if not actual.get("electric_network_connected") or actual.get("energy", 0) <= 0:
             return {"status": "blocked", "reason": "replacement_electric_drill_has_no_power"}
