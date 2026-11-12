@@ -118,10 +118,13 @@ requires both real output lanes. WaterDistribution is commissioned4584058 with
 31 normal actions: outlet16713 at89.5,-57.5 has real water and28 reciprocal
 connections, while original outlet6989 remains fixed. A same-consumer planned
 fluid underground crossing preserves foreign/resource/future hard cells. Sulfur
-is fully built with134 actions but is not commissioned: native4719458 found
-six missing owned upstream crude/Petroleum/Gas pipes, isolating empty gas segment14
-from the refinery's full gas output. Typed normally paid infrastructure repair
-is being implemented; no missing units or chemistry progress were fabricated.
+is commissioned4780144 on its original key with134 actions and zero failures.
+Watch normally restored six lost crude/gas pipes at4766812, spending six real
+pipe items and recording new units16915–16920,364 reciprocal edges and owner
+publication; original ports6963/7228/7231 stayed fixed. Native4777771 found real
+gas at all those ports and45 sulfur cycles. Blue's initial job is blocked with
+zero actions by an AdvancedCircuit belt fault at182.5,-40.5; its complete owned
+layout is under inspection. No fabricated chemistry progress.
 Watch maintains
 the remaining perimeter: it restocks/rebuilds known posts and
 ordinary defense research has unlocked walls, radar and repair packs. Three-post
@@ -131,8 +134,12 @@ successor10915 is rebound after actor11's death;4103 corpse items were recovered
 with conserved rounds/durability, one spare repair tool remains in the corpse.
 The transport-belt mall is commissioned4561808 with67 actions. Native4600230
 confirmed100 normal belt craft cycles and200 actual chest belts, with zero
-internal product WIP and the native200 cap. Guarded stock collection is available
-to later construction; its actual transfer remains a separate acceptance check.
+internal product WIP and the native200 cap. Guarded stock collection supplied
+eight actual belts to Steel expansion at4799204: requested8/moved8, with no
+handcraft fallback. Steel expansion4810835 retained285 old units and output6213,
+added two normally paid furnaces and proved each produced steel. Its15/min
+catalog rating is not a sustained measurement. Engine's fresh4818782 source proof
+accepted the additive receipt chain without rewriting its original source pins.
 Original coal drill956 exhausted its patch. Automatic recovery shared one fresh
 66/min-potential bank between both boilers (54/min max), normally recovered two
 exact belts and preserved279 units. Four-engine generation and automatic fuel

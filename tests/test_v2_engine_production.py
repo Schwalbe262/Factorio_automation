@@ -267,6 +267,65 @@ function target(p,name)if owned and p.x==first.x and p.y==first.y then return{fo
         next(e for e in self.obs['entities']if e['name']=='underground-belt')['underground_pair_verified']=False
         self.assertIsNone(self.c.proof(self.obs));self.assertEqual(self.c.last_proof_failure['reason'],'engine_native_underground_pairs_unverified')
 
+    def _install_real_additive_steel_receipt(self):
+        from factorio_agent.steel_production import steel_core
+        from factorio_agent.steel_capacity import MODE,_bound
+        from factorio_agent.bus_tap import signature
+        self.cat.recipes['steel-plate']=dict(energy=16,categories=['smelting'],ingredients=[dict(name='iron-plate',type='item',amount=5)],
+            products=[dict(name='steel-plate',type='item',amount=1)])
+        self.cat.entities['stone-furnace']=dict(burner=True,crafting_speed=1,crafting_categories=['smelting'],energy_usage=1500)
+        self.cat.items={'coal':{'fuel_value':4000000}}
+        old=steel_core(self.cat,98,-40);steel_rows=[];furnace_units=iter([6172,6176])
+        for index,q in enumerate(old['entities']):
+            if q['name']=='transport-belt'and xy(q)==(108.5,-37.5):
+                steel_rows.append(next(e for e in self.obs['entities']if e['unit_number']==6213));continue
+            unit=next(furnace_units)if q['name']=='stone-furnace'else 7000+index
+            steel_rows.append(dict(q,unit_number=unit));self.obs['entities'].append(steel_rows[-1])
+        self.steel.state.update(plan=old,core=old)
+        self.install()
+        expanded=steel_core(self.cat,98,-40,per_side_count=2);old_by={signature(q):q for q in steel_rows}
+        current=[]
+        for index,q in enumerate(expanded['entities']):
+            row=old_by.get(signature(q))
+            if row is None:row=dict(q,unit_number=9000+index);self.obs['entities'].append(row)
+            current.append(row)
+        all_units=[q['unit_number']for q in current if q['name']=='stone-furnace'];added=set(all_units)-{6172,6176}
+        receipt=dict(mode=MODE,world_id='w',catalog_fingerprint='c',old_plan_revision=_hash(old),new_plan_revision=_hash(expanded),
+            old_plan=old,new_plan=expanded,source=deepcopy(self.c.state['steel_source']),retained_units=[_bound(q)for q in steel_rows],
+            old_furnace_units=[6172,6176],current_furnace_units=all_units,added_furnace_units=sorted(added),
+            production_witness={'ok':True,'furnaces':[dict(unit_number=u,products_finished=1)for u in sorted(added)]},
+            native_output_lanes={'left':{'steel-plate':1},'right':{'steel-plate':1}})
+        receipt['receipt_id']=_hash(receipt)
+        self.steel.state.update(core=expanded,plan=expanded,capacity_revisions=[receipt])
+        self.steel.proof.return_value=dict(furnace_units=all_units,rated=expanded['rated'],output_buffers_present=False)
+        return receipt,all_units
+
+    def test_step_and_proof_accept_real_additive_steel_receipt_without_rewriting_original_pins(self):
+        receipt,all_units=self._install_real_additive_steel_receipt()
+        keys=('steel_plan_revision','steel_furnace_units','steel_source','shared_steel_nominal_per_minute')
+        original={k:deepcopy(self.c.state[k])for k in keys};self.builder.ensure_plan.reset_mock()
+        result=self.c.step(self.obs)
+        self.assertEqual(result['type'],'craft',result);self.builder.ensure_plan.assert_called_once()
+        outlet=self.c.state['core']['ports'][-1]
+        self.game.query.return_value={'ok':True,'tick':self.obs['tick'],'outlet_unit':self.c.state['bindings'][_key(dict(outlet,name='transport-belt'))]}
+        proof=self.c.proof(self.obs);self.assertIsNotNone(proof,self.c.last_proof_failure)
+        self.assertEqual(proof['shared_steel_nominal_per_minute'],15)
+        self.assertEqual(proof['steel_capacity_ancestry'],[receipt['receipt_id']])
+        self.steel.proof.assert_called_with(self.obs,consumer_furnace_units=all_units)
+        self.assertEqual({k:self.c.state[k]for k in keys},original)
+
+    def test_missing_or_tampered_additive_receipt_blocks_engine_before_build_and_proof(self):
+        receipt,_=self._install_real_additive_steel_receipt();self.builder.ensure_plan.reset_mock()
+        for rows in([], [dict(receipt,receipt_id='forged')]):
+            self.steel.state['capacity_revisions']=rows
+            result=self.c.step(self.obs);self.assertEqual(result['reason'],'engine_bound_steel_plan_changed')
+            self.assertFalse(result['evidence']['ok']);self.builder.ensure_plan.assert_not_called()
+            self.assertIsNone(self.c.proof(self.obs));self.assertEqual(self.c.last_proof_failure['reason'],'engine_normal_steel_source_proof_missing')
+        self.steel.state['capacity_revisions']=[receipt]
+        next(q for q in self.obs['entities']if q['unit_number']==6172)['unit_number']=19999
+        self.assertEqual(self.c.step(self.obs)['reason'],'engine_bound_steel_plan_changed')
+        self.builder.ensure_plan.assert_not_called()
+
     @unittest.skipUnless(LuaRuntime,'optional Lua runtime: pip install lupa')
     def test_actual_proof_lua_normal_inputs_vectors_priority_and_real_output(self):
         self.install();lua=LuaRuntime(unpack_returned_tuples=True)

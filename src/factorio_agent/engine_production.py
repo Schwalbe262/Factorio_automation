@@ -252,6 +252,13 @@ class EngineProduction:
                 'furnace_units':proof['furnace_units'],'plan_revision':_hash(self.steel.state['plan']),
                 'nominal_steel_per_minute':proof['rated']['steel_per_minute']}
 
+    def _steel_capacity_authority(self,obs):
+        """Accept only published additive ancestry; original consumer pins stay fixed."""
+        from .steel_capacity import verify_steel_capacity
+        return verify_steel_capacity(self.game,obs,self.catalog,self.steel,
+            pinned_plan_revision=self.state['steel_plan_revision'],pinned_source=self.state['steel_source'],
+            pinned_furnace_units=self.state['steel_furnace_units'])
+
     def prepare(self,obs):
         """Whole prospective tap, both adapters, future slots, power and defense."""
         if self.state:return deepcopy(self.state)if self._identity(obs,self.state)else{'ok':False,'reason':'engine_world_or_catalog_changed'}
@@ -459,10 +466,14 @@ return {ok=true}''')
                 q=s[name];live=actual.get(('transport-belt',*xy(q)))
                 if not live or live.get('unit_number')!=q['unit_number']or live.get('direction')!=q['facing']:
                     return {'ok':False,'reason':'engine_fixed_feed_source_changed','source':name}
-            steel=self._steel_source(obs)
-            if(not steel.get('ok')or steel['source']!=s['steel_source']or steel['plan_revision']!=s['steel_plan_revision']
-                    or sorted(steel['furnace_units'])!=sorted(s['steel_furnace_units'])):
-                return {'ok':False,'reason':'engine_fixed_steel_production_authority_changed'}
+            if _hash(self.steel.state.get('plan'))!=s['steel_plan_revision']:
+                authority=self._steel_capacity_authority(obs)
+                if not authority.get('ok'):return {'ok':False,'reason':'engine_fixed_steel_production_authority_changed','evidence':authority}
+            else:
+                steel=self._steel_source(obs)
+                if(not steel.get('ok')or steel['source']!=s['steel_source']
+                        or sorted(steel['furnace_units'])!=sorted(s['steel_furnace_units'])):
+                    return {'ok':False,'reason':'engine_fixed_steel_production_authority_changed'}
             if not self._fixed_tap_authority(obs):return {'ok':False,'reason':'engine_fixed_tap_proof_missing'}
             coverage=self.perimeter.coverage_proof(obs,SCOPE_ID)
             if not coverage or not isinstance(coverage.get('posts'),list):return {'ok':False,'reason':'engine_existing_coverage_proof_required'}
@@ -619,7 +630,8 @@ return {ok=true}''')
             self.state=ready;self._save()
         if not self._identity(obs,self.state):return {'status':'blocked','reason':'engine_world_or_catalog_changed'}
         if _hash(self.steel.state.get('plan'))!=self.state['steel_plan_revision']:
-            return {'status':'blocked','reason':'engine_bound_steel_plan_changed'}
+            authority=self._steel_capacity_authority(obs)
+            if not authority.get('ok'):return {'status':'blocked','reason':'engine_bound_steel_plan_changed','evidence':authority}
         feed=self.state.get('feed_replan',{})
         if feed.get('phase')=='publishing':return self._publish_feed_replan(obs)
         if feed.get('phase')=='planning':return {'status':'blocked','reason':'engine_feed_replan_interrupted_before_publication'}
@@ -675,10 +687,18 @@ return {ok=true}''')
             if(not live or type(unit)is not int or live.get('unit_number')!=unit
                     or(spec['name']!='small-electric-pole'and live.get('direction')!=spec['direction'])):
                 self.last_proof_failure={'reason':'engine_asset_identity_or_direction_changed','entity':spec};return None
-        steel_proof=self.steel.proof(obs,consumer_furnace_units=self.state['steel_furnace_units'])
-        if _hash(self.steel.state.get('plan'))!=self.state['steel_plan_revision']or not steel_proof:
+        authority=None
+        if _hash(self.steel.state.get('plan'))!=self.state['steel_plan_revision']:
+            authority=self._steel_capacity_authority(obs)
+            if not authority.get('ok'):
+                self.last_proof_failure={'reason':'engine_normal_steel_source_proof_missing','capacity_ancestry':authority};return None
+            steel_proof=authority['proof'];expected_furnaces=authority['current_furnace_units']
+        else:
+            steel_proof=self.steel.proof(obs,consumer_furnace_units=self.state['steel_furnace_units'])
+            expected_furnaces=self.state['steel_furnace_units']
+        if not steel_proof:
             self.last_proof_failure={'reason':'engine_normal_steel_source_proof_missing'};return None
-        if sorted(steel_proof.get('furnace_units',[]))!=sorted(self.state['steel_furnace_units']):
+        if sorted(steel_proof.get('furnace_units',[]))!=sorted(expected_furnaces):
             self.last_proof_failure={'reason':'engine_bound_steel_furnace_units_changed'};return None
         def bound(e):return dict(e,unit_number=self.state['bindings'][_key(e)])
         args={'machines':[bound(e)for e in self.state['core']['machines']],
@@ -691,7 +711,8 @@ return {ok=true}''')
         result=self.game.query(ENGINE_PROOF_LUA.replace('PAYLOAD',_payload(args)))
         if not result.get('ok'):self.last_proof_failure=result;return None
         return {'tick':result['tick'],'native':result,'rated':self.state['rated'],
-            'shared_steel_nominal_per_minute':self.state['shared_steel_nominal_per_minute'],'defense_coverage':defense,
+            'shared_steel_nominal_per_minute':authority['rated']['steel_per_minute']if authority else self.state['shared_steel_nominal_per_minute'],
+            'steel_capacity_ancestry':authority['chain']if authority else [],'defense_coverage':defense,
             'output':dict(self.state['core']['ports'][-1],name='transport-belt',unit_number=result['outlet_unit'],world_id=obs['world_id']),
             'scope':'native normally supplied automatic engines; nominal rate and shared steel ceiling are not measured throughput'}
 

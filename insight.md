@@ -6673,3 +6673,8 @@ Improvement: distinguish a sole perpendicular belt corner from true side loading
 - Improvement: continuously distinguish absent registered nodes from a consumer throughput wait; restore exactsites using prepaidnormalitems and nativeold/newunitreceipts, then append-onlyownerCAS.
 - Before: refineryfullgas whiledownstreamgas0, sixlostinternalpipes blockedbuiltSulfur. After: Watch2actions/native4766812 paid6pipes MAIN6to0/new16915..16920,364reciprocaledges andbothownersverified; fixedsourceports preserved.
 - Evidence:60focusedPASS includeunknownposteffectintent,receiptidempotency/interrupted2ownerpublication,foreignlivepins andhistoricaljobreceipt exclusion. Remainingrisk: onlyordinaryinternalPetroleum/Gaspipes whitelist; foreignpins/publishedports/partialunknowns requireexplicitreview, actualconsumerflow stillseparateproof.
+
+## 2026-11-12T17:39:00+09:00 | Source Part19 retained additive capacity and actual factory stock
+- Improvement: acceptnormallypaidadditiveproducerexpansion throughnativecapacityreceiptancestry whilepreservingconsumeroriginalhash/units/ports; accountaddedrawdemandseparatelyfromimmutablebusdescriptors.
+- Before: exactoldhashguard wouldrejectlegitimateextraSteelpair; empty-all-inventorybaseline rejectednormalautomaticcoalpreload. After: native4810835new16921/16924each1cycle/old285fixed; processinput/outputempty+0cyclebaseline permitsvalidatednormalcoal. Engine4818782proofacceptedrealchain withoriginalpinsunchanged.
+- Evidence:90focusedPASS; indexed1159total1157PASS2skip; native4799204guardedMall8beltsfundedextension(nohandcraftfallback). Remainingrisk:15/mincatalognotmeasured, sharedFe683.5peakvs375source deficit308.5; partialforeignchangesfailclosed, sourcecapacitymustgrowbeforeclaimedconcurrentthroughput.

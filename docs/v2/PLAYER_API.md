@@ -244,6 +244,13 @@ posts below five magazines to ten. There is no idle background worker, automatic
 ammo factory, or general repair system. Missing posts require another perimeter
 job; an unexpected replacement identity blocks. See [defense evidence](DEFENSE.md).
 
+`steel_capacity --rate-per-minute 15` adds a normally paid opposing furnace pair
+without moving the original steel assets or fixed output. A later22.5 target
+fills its final reserved pair. Actual new production, both output lanes and
+preserved original IDs are required; existing Engine pins accept only verified
+additive ancestry. Shared iron demand includes the added allocation; catalog
+capacity is not measured throughput. See [steel expansion](STEEL_CAPACITY.md).
+
 `steam_expansion` preserves the original plant, adds a dedicated paired coal
 bank and another boiler/two-engine cell, then samples actual native generation
 for thirty game seconds. Added1800kW is nameplate capacity; loaded positive

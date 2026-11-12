@@ -21,6 +21,7 @@ from .smelting import merge_entities, port
 from .transport import plan_connection, surface_pipe_proof, underground_proof, unbuilt_external_keepouts, xy
 from .bus_tap import BusTap, extend_bus, signature
 from .mall_bus_extension import MallBusExtension, propose_mall_taps
+from .bus_budget import declared_bus_demand
 
 
 TARGETS={'transport-belt':200,'inserter':50,'medium-electric-pole':50,'gun-turret':8,'stone-wall':100}
@@ -211,7 +212,7 @@ class ConstructionMall:
                 priority_splitter=dict(name='splitter',position=split['position'],unit_number=split['unit_number'],direction=0,input_priority='left',output_priority='left'))
             sources[item]=source
             profile=bus['capacity']['materials'][item];supply=profile['supply_ceiling_per_minute']
-            declared=sum(q.get('demand_per_minute',0)for q in bus['ports']if q.get('item')==item and q.get('priority'))
+            declared=declared_bus_demand(board,item)
             budgets[item]=dict(source_nominal_per_minute=supply,all_declared_demand_per_minute=declared,
                 design_deficit_per_minute=max(0,declared-supply),cell_peak_per_minute=peak,burst_only=True,
                 guaranteed_surplus_per_minute=0,scope='native downstream surplus priority; capped finite fill, no sustained-rate guarantee')

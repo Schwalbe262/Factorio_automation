@@ -83,6 +83,8 @@ CAPABILITIES = {
                      "effect":"normally install and prove a surplus-priority iron bus outlet at a bounded resource-free station"},
     "steel_production": {"parameters":{},"requires":["steel_supply","dedicated_materials"],
                          "effect":"normally build defended automatic iron/coal steel furnaces with fixed ports and prove native output"},
+    "steel_capacity": {"parameters":{"rate_per_minute":"positive absolute steel target within reserved furnace pairs"},"requires":["steel_production"],
+                       "effect":"normally add paired steel furnaces while preserving every old unit, output port and consumer pin; prove new production and account for additional shared iron demand"},
     "steel_coal_supply": {"parameters":{},"requires":["brick_production"],
                          "effect":"normally split the proven brick coal header into a shared steel outlet, preserve existing consumers and the total source capacity"},
     "brick_production": {"parameters":{},"requires":["dedicated_materials"],
@@ -141,6 +143,9 @@ class Request:
         elif self.capability == "smelting_capacity":
             from .smelting import validate_capacity
             validate_capacity(self.parameters)
+        elif self.capability == "steel_capacity":
+            from .steel_capacity import validate_parameters
+            validate_parameters(self.parameters)
         elif self.capability == "automation_science":
             from .science import validate_rate
             validate_rate(self.parameters)
@@ -428,6 +433,7 @@ class StarterExecutors:
         self.gas_distribution=GasDistribution(game,self.builder,catalog,self.perimeter,
                                              petroleum=self.petroleum,chemical=self.chemicals)
         self.infrastructure_repair=None
+        self.steel_capacity=None
         from .advanced_circuits import AdvancedCircuitProduction
         self.advanced_circuits=AdvancedCircuitProduction(game,self.builder,catalog,self.perimeter,
                                                         bus_factory=self.bus_factory,science=self.science,
@@ -498,6 +504,13 @@ class StarterExecutors:
             self.coal_retry_tick=obs['tick']+1800
             self.coal_retry_diagnostic=result
         return None if result.get('status')=='succeeded' else result
+
+    def _steel_capacity(self):
+        if self.steel_capacity is None:
+            from .steel_capacity import SteelCapacity
+            self.steel_capacity=SteelCapacity(self.game,self.builder,self.catalog,self.perimeter,
+                steel=self.industrial_operations.steel,industrial=self.industrial_operations)
+        return self.steel_capacity
 
     def _piercing_upkeep(self,obs):
         factory=getattr(self,'piercing_ammo',None)
@@ -757,6 +770,8 @@ class StarterExecutors:
             return self.industrial_operations.steel_supply(obs)
         if capability == "steel_production":
             return self.industrial_operations.steel_production(obs)
+        if capability == "steel_capacity":
+            return self._steel_capacity().step(obs,parameters or {})
         if capability == "steel_coal_supply":
             return self.steel_coal_supply.step(obs)
         if capability == "brick_production":
@@ -853,6 +868,8 @@ class StarterExecutors:
             return self.industrial_operations.steel_supply_proof(obs)
         if capability == "steel_production":
             return self.industrial_operations.steel_production_proof(obs)
+        if capability == "steel_capacity":
+            return self.steel_capacity.proof(obs) if self.steel_capacity is not None else None
         if capability == "steel_coal_supply":
             return self.steel_coal_supply.proof(obs)
         if capability == "brick_production":
