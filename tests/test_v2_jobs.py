@@ -292,6 +292,18 @@ class JobBoundaryTests(unittest.TestCase):
         self.assertEqual(job['pending_action']['transaction_id'],'a'*64)
         self.assertEqual(job['uncertain_batch_receipt']['paid_pipes'],2)
         with self.assertRaises(ValueError):control(self.root,self.game,'test','retry')
+        with self.assertRaisesRegex(ValueError,'reviewed native reconciliation'):
+            control(self.root,self.game,'test','reconcile')
+        self.assertIn('pending_action',Ledger(self.root).data['jobs']['test'])
+
+    def test_unknown_belt_repair_cannot_clear_intent_without_a_matching_review_epoch(self):
+        submit(self.root,self.game,self.request())
+        self.game.act=lambda _: {'ok':False,'reason':'infrastructure_repair_outcome_unknown','paid_belts':6}
+        with self.assertRaises(RuntimeError):
+            run_slice(self.root,self.game,Executor({'type':'repair_registered_belts','transaction_id':'a'*64}),'test')
+        with self.assertRaisesRegex(ValueError,'reviewed native reconciliation'):
+            control(self.root,self.game,'test','reconcile')
+        self.assertEqual(Ledger(self.root).data['jobs']['test']['pending_action']['transaction_id'],'a'*64)
 
     def test_intentional_pause_does_not_spend_execution_deadline(self):
         submit(self.root, self.game, self.request())

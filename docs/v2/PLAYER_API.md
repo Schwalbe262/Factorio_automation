@@ -67,6 +67,9 @@ proof uses `verified_postcondition`. Terminal receipts remain historical.
 - `reconcile --key <key>`: explicitly reobserve an uncertain action outcome and
   replan from actual state; never replay the old mutation. World rollback needs
   separate reconciliation and is not accepted by this command.
+  Registered infrastructure additionally requires an exact reviewed native
+  reconciliation epoch before the frontend may clear its pending action.
+  Clearing a job intent alone does not prove a backend operation completed.
 - `watch` / `watch --hide`: show/hide the existing automation client.
 - `status`: persisted job receipts. Historical success needs live reinspection
   before claiming the factory is still producing after damage or rollback.

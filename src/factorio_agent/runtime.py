@@ -31,6 +31,12 @@ class WorldBoundGame(DeterministicGame):
         return super().query(body)
 
     def act(self,action:dict)->dict:
+        if action.get('type')=='reconcile_registered_belts':
+            from .registered_belt_repair import execute_reconcile_registered_belts
+            return self._record_action(action,execute_reconcile_registered_belts(self,action))
+        if action.get('type')=='repair_registered_belts':
+            from .registered_belt_repair import execute_repair_registered_belts
+            return self._record_action(action,execute_repair_registered_belts(self,action))
         if action.get('type')=='repair_registered_infrastructure':
             from .infrastructure_repair import execute_repair_registered_infrastructure
             return self._record_action(action,execute_repair_registered_infrastructure(self,action))

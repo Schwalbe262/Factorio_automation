@@ -322,6 +322,12 @@ def control(root: Path, game, key: str, operation: str) -> dict:
                 if (job["reason"] != "action_outcome_unknown_reconcile_required"
                         or "rollback_tick" in ledger.data):
                     raise ValueError("only an uncertain action in the same live world can be reconciled")
+                if job.get('uncertain_batch_receipt',{}).get('reason')=='infrastructure_repair_outcome_unknown':
+                    pending=job.get('pending_action',{})
+                    from .registered_belt_repair import approved_reconciliation
+                    if(pending.get('type')!='repair_registered_belts'
+                            or not approved_reconciliation(root,key,pending.get('transaction_id'))):
+                        raise ValueError('registered infrastructure requires an exact reviewed native reconciliation epoch')
                 # These registered executors replan from observed inventories,
                 # entity identities and crafting queues; no old action is replayed.
                 ledger.event(key, "unknown_action_reconciled", old_intent=job.pop("pending_action", None),
@@ -433,6 +439,7 @@ class StarterExecutors:
         self.gas_distribution=GasDistribution(game,self.builder,catalog,self.perimeter,
                                              petroleum=self.petroleum,chemical=self.chemicals)
         self.infrastructure_repair=None
+        self.registered_belt_repair=None
         self.steel_capacity=None
         from .advanced_circuits import AdvancedCircuitProduction
         self.advanced_circuits=AdvancedCircuitProduction(game,self.builder,catalog,self.perimeter,
@@ -445,6 +452,8 @@ class StarterExecutors:
         from .normal_research import NormalResearch
         self.normal_research=NormalResearch(game,catalog,self.science,self.green,blue=self.blue)
         ledger=Ledger(Path(game.cfg.runtime_dir)).data
+        self.registered_belt_autodetect=(any(j['capability']=='advanced_circuit_production' and j['status']=='succeeded'
+            for j in ledger['jobs'].values()) and (Path(game.cfg.runtime_dir)/'advanced-circuits.json').exists())
         self.infrastructure_autodetect=(any(j['capability']=='basic_petroleum' and j['status']=='succeeded'
             for j in ledger['jobs'].values()) and all((Path(game.cfg.runtime_dir)/name).exists()for name in
                 ('basic-petroleum.json','pcb-board.json','fluid-sources.json')))
@@ -535,6 +544,21 @@ class StarterExecutors:
         # Material waits retry promptly; quiet or rejected surveys stay bounded.
         delay=180 if (factory.last_diagnostic or {}).get('reason')=='normally prepay registered pipe replacements' else 1800
         self.infrastructure_retry_tick=obs.get('tick',0)+delay
+        return None
+
+    def _registered_belt_upkeep(self,obs):
+        if obs.get('tick',0)<getattr(self,'belt_repair_retry_tick',0):return None
+        factory=getattr(self,'registered_belt_repair',None)
+        if factory is None:
+            if not getattr(self,'registered_belt_autodetect',False):return None
+            from .registered_belt_repair import RegisteredBeltRepair
+            factory=self.registered_belt_repair=RegisteredBeltRepair(self.game,self.builder,self.catalog,
+                advanced=self.advanced_circuits)
+        result=factory.step(obs)
+        self.belt_repair_diagnostic=factory.last_diagnostic
+        if result and result.get('type'):return result
+        delay=180 if (factory.last_diagnostic or {}).get('reason')=='normally fund registered belt replacements' else 1800
+        self.belt_repair_retry_tick=obs.get('tick',0)+delay
         return None
 
     def starter_observation(self,obs):
@@ -667,6 +691,8 @@ class StarterExecutors:
             if result.get('status')=='succeeded':
                 infrastructure=self._infrastructure_upkeep(obs)
                 if infrastructure:return infrastructure
+                belts=self._registered_belt_upkeep(obs)
+                if belts:return belts
                 wall=self.hardening.upkeep(obs)
                 if wall:return wall
                 repair=self.defense_repairs.next_action(obs)
@@ -676,6 +702,7 @@ class StarterExecutors:
                 return {'status':'waiting','reason':'watching armed defenses and replenishing normal ammunition',
                         'evidence':{**result.get('evidence',{}),**({'piercing_factory':supplied} if supplied else {}),
                                     **({'infrastructure':self.infrastructure_diagnostic} if getattr(self,'infrastructure_diagnostic',None) else {}),
+                                    **({'registered_belts':self.belt_repair_diagnostic} if getattr(self,'belt_repair_diagnostic',None) else {}),
                                     **({'coal_recovery':coal} if coal else {})}}
             return result
         if capability == "starter":
@@ -699,6 +726,8 @@ class StarterExecutors:
                           'advanced_circuit_production','chemical_science'):
             infrastructure=self._infrastructure_upkeep(obs)
             if infrastructure:return infrastructure
+            belts=self._registered_belt_upkeep(obs)
+            if belts:return belts
         if capability not in ("research","defense_perimeter"):
             from .upgrades import next_upgrade
             upgrade=next_upgrade(obs,self.normal_research)

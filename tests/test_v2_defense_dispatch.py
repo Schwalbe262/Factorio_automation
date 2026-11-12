@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock,patch
 import unittest
 
 from factorio_agent.jobs import StarterExecutors
@@ -197,6 +197,47 @@ class EmergencyDispatchTests(unittest.TestCase):
         self.assertEqual(ex.step('chemical_production',{'tick':100},{'product':'sulfur'})['status'],'waiting')
         ex.infrastructure_repair.step.assert_called_once()
         ex.chemicals.step.assert_called_once()
+
+    def test_registered_belt_recovery_runs_after_arming_before_routine_wall_upkeep(self):
+        ex=self.executor()
+        ex.registered_belt_repair=SimpleNamespace(last_diagnostic=None,
+            step=Mock(return_value={'type':'repair_registered_belts'}))
+        self.assertEqual(ex.step('defense_watch',{'tick':100})['type'],'repair_registered_belts')
+        ex.hardening.upkeep.assert_not_called()
+        ex.registered_belt_repair.step.reset_mock()
+        ex.perimeter.step.return_value={'type':'insert','item':'firearm-magazine'}
+        self.assertEqual(ex.step('defense_watch',{'tick':101})['type'],'insert')
+        ex.registered_belt_repair.step.assert_not_called()
+
+    def test_foreign_belt_pin_stays_a_bounded_diagnostic_while_defense_continues(self):
+        ex=self.executor()
+        ex.registered_belt_repair=SimpleNamespace(last_diagnostic={'ok':False,'reason':'foreign current pin'},
+            step=Mock(return_value=None))
+        result=ex.step('defense_watch',{'tick':100})
+        self.assertEqual(result['status'],'waiting')
+        self.assertEqual(result['evidence']['registered_belts']['reason'],'foreign current pin')
+        ex.step('defense_watch',{'tick':101})
+        ex.registered_belt_repair.step.assert_called_once()
+
+    def test_blue_job_repairs_its_registered_ingredient_transport_before_planning(self):
+        ex=self.executor();ex.starter_upkeep.return_value={'status':'succeeded'}
+        ex.starter_observation=Mock(return_value={});ex.blue=SimpleNamespace(step=Mock())
+        ex.registered_belt_repair=SimpleNamespace(last_diagnostic=None,
+            step=Mock(return_value={'type':'take_mall_stock','item':'transport-belt','count':6}))
+        self.assertEqual(ex.step('chemical_science',{'tick':100})['count'],6)
+        ex.blue.step.assert_not_called()
+
+    def test_world_bound_belt_dispatch_records_the_native_receipt(self):
+        from factorio_agent.runtime import WorldBoundGame
+        game=WorldBoundGame.__new__(WorldBoundGame)
+        for name in ('repair_registered_belts','reconcile_registered_belts'):
+            with self.subTest(name=name):
+                action={'type':name};receipt={'ok':True,'paid_belts':6}
+                game._record_action=Mock(return_value=receipt)
+                with patch('factorio_agent.registered_belt_repair.execute_'+name,return_value=receipt)as execute:
+                    self.assertEqual(game.act(action),receipt)
+                execute.assert_called_once_with(game,action)
+                game._record_action.assert_called_once_with(action,receipt)
 
 
 if __name__=='__main__':unittest.main()
