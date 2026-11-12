@@ -48,6 +48,33 @@ def report(root, gap_seconds=30.0):
     execution = sum(j.get("execution_seconds", 0) for j in jobs.values())
     action_types = Counter(r.get("action", {}).get("type") for r in job_events if r.get("event") == "action_intent")
 
+    # Progress, not activity: when each job finished, and how repetitive the
+    # most recent actions are. A run that only repeats one small action is busy
+    # but stuck, whatever its actions-per-minute says.
+    capability = {key: job.get("capability") for key, job in jobs.items()}
+    start = times[0] if times else 0.0
+    milestones = [
+        {
+            "minute": round((r["time"] - start) / 60, 1),
+            "capability": capability.get(r.get("key")),
+            "reason": str(r.get("reason"))[:60],
+        }
+        for r in job_events
+        if r.get("event") == "terminal" and r.get("status") == "succeeded"
+    ]
+    intents = [r for r in job_events if r.get("event") == "action_intent"]
+    recent = intents[-100:]
+    repeated = Counter(
+        (
+            capability.get(r.get("key")),
+            r.get("action", {}).get("type"),
+            r.get("action", {}).get("item") or r.get("action", {}).get("name"),
+            r.get("action", {}).get("count"),
+        )
+        for r in recent
+    ).most_common(3)
+    last_success = milestones[-1]["minute"] if milestones else None
+
     decisions = Counter(r.get("operation") for r in controller if r.get("event") == "decision")
     slice_reasons = Counter(r.get("reason") for r in controller if r.get("event") == "slice")
     errors = Counter(str(r.get("reason"))[:120] for r in controller if r.get("event") == "error")
@@ -86,6 +113,13 @@ def report(root, gap_seconds=30.0):
         "idle_gap_minutes": round(sum(gaps) / 60, 1),
         "idle_gap_share": round(sum(gaps) / wall, 3) if wall else 0.0,
         "longest_gaps_seconds": [round(g) for g in sorted(gaps, reverse=True)[:5]],
+        "jobs_succeeded": len(milestones),
+        "minutes_since_last_success": round(minutes - last_success, 1) if last_success is not None else None,
+        "milestones": milestones,
+        "recent_100_actions_top": [
+            {"job": j, "type": ty, "item": i, "count": c, "times": n} for (j, ty, i, c), n in repeated
+        ],
+        "recent_repeat_share": round(sum(n for _, n in repeated[:2]) / len(recent), 2) if recent else 0.0,
         "planning_seconds": round(planning, 1),
         "execution_seconds": round(execution, 1),
         "planning_per_execution": round(planning / execution, 2) if execution else None,
@@ -113,7 +147,11 @@ def main(argv=None):
         print(json.dumps(data, ensure_ascii=False, indent=1))
         return
     for key, value in data.items():
-        if key == "per_job":
+        if key == "milestones":
+            print("milestones:")
+            for row in value:
+                print("  {minute:6.1f} min  {capability}  ({reason})".format(**row))
+        elif key == "per_job":
             print("per_job:")
             for job in value:
                 print(
