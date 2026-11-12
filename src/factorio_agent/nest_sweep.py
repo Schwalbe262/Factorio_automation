@@ -228,8 +228,9 @@ def choose_wave(candidates,rears,targets,*,count=POST_COUNT):
 
 class NestSweep(NestAssault):
     """One complete paid wave. The older paused NestAssault checkpoint is untouched."""
-    def __init__(self,game,bootstrap,builder,catalog,perimeter):
+    def __init__(self,game,bootstrap,builder,catalog,perimeter,*,ammo_source=None):
         self.game,self.bootstrap,self.builder,self.catalog,self.perimeter=game,bootstrap,builder,catalog,perimeter
+        self.ammo_source=ammo_source
         self.path=Path(game.cfg.runtime_dir)/'nest-sweep.json'
         self.state=json.loads(self.path.read_text(encoding='utf-8'))if self.path.exists()else{}
         self.threats=NearbyThreats(game,catalog)
@@ -347,35 +348,19 @@ class NestSweep(NestAssault):
         held=native['main_ammo']['full_normal_magazines']
         if obs.get('crafting_queue'):return {'status':'waiting','reason':'sweep_waiting_normally_paid_crafting_queue'}
         if held>=STOCK_MAGAZINES:return None
-        issued=self.state.get('crafted_by_item',{});product=next(p for p in self.catalog.recipes[AMMO_ITEM]['products']if p['name']==AMMO_ITEM)
-        from factorio_ai.world_catalog import _yield
-        yield_per_run=_yield(product);missing=min(STOCK_MAGAZINES-held,STOCK_MAGAZINES-issued.get(AMMO_ITEM,0),50)
-        if missing<=0:return {'status':'blocked','reason':'sweep_finite_red_craft_budget_exhausted_without_full_stock'}
-        runs=math.ceil(missing/yield_per_run)
-        for ingredient in self.catalog.recipes[AMMO_ITEM]['ingredients']:
-            if ingredient.get('type','item')!='item':return {'status':'blocked','reason':'sweep_ammunition_requires_ordinary_solid_recipe'}
-            name=ingredient['name'];amount=math.ceil(ingredient['amount']*runs)
-            if name=='firearm-magazine':
-                report=self.perimeter.inspect(obs)
-                if not report.get('ok'):return {'status':'blocked','reason':'sweep_native_main_precursor_ammo_inspection_failed'}
-                full=report['actor_full_magazines']
-                if full>=amount:continue
-                deficit=amount-full;source=getattr(self.perimeter,'ammo_source',None)
-                if source is not None and source.commissioned:
-                    transfer=source.ensure_full_magazines(obs,amount)
-                    # Avoid endless small pickups while the original defenses use the same producer.
-                    if transfer and transfer.get('type')and transfer.get('count',0)>=deficit:return transfer
-                yellow_recipe=self.catalog.recipes[name];yellow_product=next(p for p in yellow_recipe['products']if p['name']==name)
-                yellow_yield=_yield(yellow_product);budget=STOCK_MAGAZINES-issued.get(name,0)
-                yellow_runs=math.ceil(deficit/yellow_yield)
-                if yellow_runs*yellow_yield>budget:return {'status':'blocked','reason':'sweep_finite_precursor_supplement_budget_exhausted'}
-                for raw in yellow_recipe['ingredients']:
-                    needed=math.ceil(raw['amount']*yellow_runs)
-                    if raw.get('type','item')!='item':return {'status':'blocked','reason':'sweep_precursor_requires_plain_solid_items'}
-                    if obs.get('inventory',{}).get(raw['name'],0)<needed:return self.bootstrap.ensure_item(obs,raw['name'],needed)
-                return self._craft(name,yellow_runs,'finite normally paid full precursor batch for single concentrated wave')
-            if obs.get('inventory',{}).get(name,0)<amount:return self.bootstrap.ensure_item(obs,name,amount)
-        return self._craft(AMMO_ITEM,runs,'normally craft the remaining prepaid concentrated-wave piercing stock')
+        source=self.ammo_source
+        evidence={'required_capability':'piercing_ammo','item':AMMO_ITEM,'required_full_stock':STOCK_MAGAZINES,
+                  'held_full_stock':held,'missing_full_stock':STOCK_MAGAZINES-held,'production_policy':'factory_only_ammunition'}
+        if source is None or not source.commissioned:
+            return {'status':'waiting','reason':'sweep_commissioned_piercing_ammo_factory_required',**evidence}
+        action=source.ensure_full_magazines(obs,STOCK_MAGAZINES)
+        if action is None:return {'status':'waiting','reason':'sweep_reobserve_normally_assembled_factory_stock',**evidence}
+        if action.get('type'):
+            if(action['type']!='take_factory_magazines'or action.get('item')!=AMMO_ITEM
+                    or type(action.get('count'))is not int or not 1<=action['count']<=50):
+                return {'status':'blocked','reason':'sweep_factory_provider_must_supply_guarded_full_piercing_magazines',**evidence}
+            return action
+        return {**action,**evidence}
 
     def _start_action(self,obs):
         return dict(type='start_nest_sweep',operation_id=self.state['id'],target_set_hash=self.state['target_set_hash'],

@@ -13,7 +13,7 @@ $env:PYTHONPATH='src'
 
 The command format is `python -B -m factorio_agent --runtime <directory> <command>`.
 
-- `observe`: current world ID/tick, concise production/inventory, technology,
+- `observe`: current world ID/tick, current native crafting queue, production/inventory, technology,
   entities, available capabilities and job receipts.
 - `actor-status`: inspect the pinned player and any actual successor character
   even when ordinary observation reports `agent_dead`; creates no character/items.
@@ -102,6 +102,7 @@ Current capabilities:
 | defense_watch | none | defense_perimeter; bounded worker restocks/rebuilds known posts, selects ordinary prerequisite-ready combat/productivity research, and natively repairs damaged posts at quiet armed service sites |
 | defense_hardening | none | defense_perimeter and naturally researched walls; add two/three mutually covering paid turrets and open-rear wall bastions at an observed loss hotspot |
 | nest_sweep | none | defense_hardening; one prepared concentrated wave, armed rear cover, multiple normally paid guns placed rapidly within actual spawner range; [contract](NEST_SWEEP.md) |
+| piercing_ammo | none | ammo_production and defense_perimeter; capped ordinary assembler factory with its own yellow-magazine precursors; real batch-fed machine production for bulk red ammunition |
 | radar_network | none | defense_perimeter and naturally researched radar; one paid defended base radar with measured power headroom and native scan proof |
 | steam_coal_reroute | none | steam_expansion; prebuild alternative, verify loaded engines, recover obsolete owned transport |
 | legacy_coal_cleanup | none | steam_expansion and dedicated_materials; isolated burner/cache recovery after replacement supply and headroom proof |

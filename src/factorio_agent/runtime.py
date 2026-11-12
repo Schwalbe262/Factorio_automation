@@ -43,6 +43,15 @@ class WorldBoundGame(DeterministicGame):
         if action.get('type')=='start_nest_sweep':
             from .nest_sweep import execute_start_sweep
             return self._record_action(action,execute_start_sweep(self,action))
+        if action.get('type')=='take_factory_magazines':
+            from .factory_ammo_transfer import execute_take_factory_magazines
+            return self._record_action(action,execute_take_factory_magazines(self,action))
+        if action.get('type')=='configure_piercing_factory':
+            from .piercing_ammo import execute_configure_piercing
+            return self._record_action(action,execute_configure_piercing(self,action))
+        if action.get('type')=='supply_piercing_input':
+            from .piercing_ammo import execute_supply_piercing_input
+            return self._record_action(action,execute_supply_piercing_input(self,action))
         if action.get('type')=='build_defense_replacement':
             from .defense_relocation import execute_build_replacement
             return self._record_action(action,execute_build_replacement(self,action))

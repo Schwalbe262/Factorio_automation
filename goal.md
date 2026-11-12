@@ -22,10 +22,11 @@ only the framework interface and its documented state, with no parent decisions.
 - Maintain radar coverage, normally repaired wall-backed mutually covering turrets,
   and ordinary damage/fire-rate/productivity upgrades. Repeated losses require
   reinforcement. Remove dangerously close nests using paid native projectile combat.
-- Immediate priority (2026-11-12 user steering): remove the nearby eastern enemy
-  cluster before more bus or science expansion. Spawners replenish local units
-  independently of pollution; proximity combat can sustain the repeated losses.
-  Keep the paid wall backstop armed, then use bounded prepared native combat.
+- Nearby eastern cluster priority was completed at native4156939: six spawners
+  and four worms destroyed by one normally funded ten-turret projectile wave.
+  Continue monitoring future nearby clusters: spawners replenish local units
+  independently of pollution. Keep the paid wall backstop armed, then use
+  bounded prepared native combat when another cluster requires removal.
 - Latest combat steering: keep an armed rear cover, then accept ordinary worm
   hits while rapidly placing enough guns where they can actually hit spawners.
   Commit a prepared concentrated push; never sustain nest-adjacent harassment or
@@ -47,6 +48,12 @@ only the framework interface and its documented state, with no parent decisions.
   ammunition after its native unlock; gather stock and rapidly deploy a prepared
   turret group for assaults. Refeed recovered surplus to verified consuming
   factories while preserving construction/combat reserves and stock caps.
+- Bulk ammunition demand such as200 magazines requires an actual normally
+  supplied assembler factory. Do not repeatedly handcraft red or yellow raid
+  stock. Honor existing paid stock/queues; new stock comes from machine output.
+  Reserve precursor capacity for the red line so existing base upkeep cannot
+  consume its only yellow supply. Report finite batch logistics separately from
+  sustained automatic belt supply and enforce real inventory stock limits.
 - Early factories and transport trunks avoid resource patches. Permit only
   explicit local mining footprints and minimal bounded surface exits; prebuild safe
   replacement corridors before moving existing supplies off ore. Do not silently

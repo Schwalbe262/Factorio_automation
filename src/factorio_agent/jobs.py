@@ -55,6 +55,8 @@ CAPABILITIES = {
                       "effect":"normally build a defended radar behind the front with measured electrical headroom; prove native scanning"},
     "nest_sweep": {"parameters":{},"requires":["defense_hardening"],
                    "effect":"prestock one concentrated paid turret wave, retain armed rear cover and rapidly deploy multiple guns in actual spawner range despite reviewed worm fire; no incremental harassment or offensive rebuild loop"},
+    "piercing_ammo": {"parameters":{},"requires":["ammo_production","defense_perimeter"],
+                      "effect":"normally build a capped bulk ammunition factory with local yellow precursor assemblers and piercing assemblers; use real batch-fed ingredients and native machine production, never bulk character crafting"},
     "main_bus_factory": {"parameters":{},"requires":["paired_smelting","logistic_science","defense_perimeter"],
                          "effect":"replace separate raw plate corridors with shared northbound iron/copper buses and native priority taps; commission compact green then normally retire obsolete western hardware; no throughput certification"},
     "dedicated_materials": {"parameters":{"resource":"coal|stone"},"requires":["paired_mining"],
@@ -192,6 +194,7 @@ class Ledger:
 def summary(obs: dict, ledger: Ledger) -> dict:
     return {"world_id": obs["world_id"], "tick": obs["tick"],
             "inventory": obs.get("inventory", {}),
+            "crafting_queue": obs.get("crafting_queue"),
             "entities": dict(Counter(e["name"] for e in obs.get("entities", []))),
             "production": obs.get("production", {}), "technologies": sorted(obs.get("technologies", {})),
             "research": obs.get("research"), "enemies_near_start": obs.get("enemies"),
@@ -357,6 +360,8 @@ class StarterExecutors:
         from .nest_assault import NestAssault
         self.nest_assault=NestAssault(game,self.bootstrap,self.builder,catalog,self.perimeter)
         self.nest_sweep=None
+        self.piercing_ammo=None
+        self.piercing_path=Path(game.cfg.runtime_dir)/'piercing-ammo.json'
         from .radar_network import RadarNetwork
         self.radars=RadarNetwork(game,self.builder,catalog,self.perimeter)
         self.outposts.perimeter=self.perimeter
@@ -420,6 +425,20 @@ class StarterExecutors:
         self.industrial_mode=any(j['capability']=='smelting_district' and j['status']=='succeeded'
                                  for j in ledger['jobs'].values())
 
+    def _piercing_factory(self):
+        if self.piercing_ammo is None:
+            from .piercing_ammo import PiercingAmmo
+            self.piercing_ammo=PiercingAmmo(self.game,self.builder,self.catalog,self.perimeter)
+        return self.piercing_ammo
+
+    def _piercing_upkeep(self,obs):
+        factory=getattr(self,'piercing_ammo',None)
+        if factory is None:
+            path=getattr(self,'piercing_path',None)
+            if path is None or not path.exists():return None
+            factory=self._piercing_factory()
+        return factory.upkeep(obs) if getattr(factory,'commissioned',False) else None
+
     def starter_observation(self,obs):
         return {**obs,'entities':[e for e in obs.get('entities',[])
             if not self.builder.owns_automated_burner(e) and not self.smelting.owns_furnace(e,obs)
@@ -469,17 +488,31 @@ class StarterExecutors:
             upkeep=self.perimeter.upkeep(obs)
             if upkeep and(upkeep.get('type')or upkeep.get('status')=='blocked'):return upkeep
             return result
+        if capability == 'piercing_ammo':
+            self.builder._sync(obs)
+            result=self._piercing_factory().step(obs)
+            if result.get('type')or result.get('status')!='waiting':return result
+            restored=self.bastion_maintenance.step(obs)
+            if restored and(restored.get('type')or restored.get('status')=='blocked'):return restored
+            upkeep=self.perimeter.upkeep(obs)
+            if upkeep and(upkeep.get('type')or upkeep.get('status')=='blocked'):return upkeep
+            return result
         if capability == 'nest_sweep':
             self.builder._sync(obs)
             if self.nest_sweep is None:
                 from .nest_sweep import NestSweep
-                self.nest_sweep=NestSweep(self.game,self.bootstrap,self.builder,self.catalog,self.perimeter)
+                self.nest_sweep=NestSweep(self.game,self.bootstrap,self.builder,self.catalog,self.perimeter,
+                    ammo_source=self._piercing_factory())
             restored=self.bastion_maintenance.step(obs)
             if restored and(restored.get('type')or restored.get('status')=='blocked'):return restored
-            # Convert a funded ammunition batch before base topoffs consume its
-            # precursor. While native crafting runs, keep the rear guns supplied.
+            # Collect machine-produced raid stock before optional base topoffs.
+            # Service factory inputs while stocking, then isolate committed combat.
             result=self.nest_sweep.step(obs)
             if result.get('type')or result.get('status')!='waiting':return result
+            state=getattr(self.nest_sweep,'state',{})
+            if not state.get('started_tick') and not state.get('funded_geometry_refresh_tick'):
+                supplied=self._piercing_upkeep(obs)
+                if supplied and(supplied.get('type')or supplied.get('status')=='blocked'):return supplied
             upkeep=self.perimeter.upkeep(obs)
             if upkeep and(upkeep.get('type')or upkeep.get('status')=='blocked'):return upkeep
             return result
@@ -499,8 +532,10 @@ class StarterExecutors:
                 if wall:return wall
                 repair=self.defense_repairs.next_action(obs)
                 if repair:return repair
+                supplied=self._piercing_upkeep(obs)
+                if supplied and supplied.get('type'):return supplied
                 return {'status':'waiting','reason':'watching armed defenses and replenishing normal ammunition',
-                        'evidence':result.get('evidence',{})}
+                        'evidence':{**result.get('evidence',{}),**({'piercing_factory':supplied} if supplied else {})}}
             return result
         if capability == "starter":
             self.builder._sync(obs)
@@ -651,6 +686,8 @@ class StarterExecutors:
             return self.nest_assault.proof(obs)
         if capability == 'nest_sweep':
             return self.nest_sweep.proof(obs) if self.nest_sweep is not None else None
+        if capability == 'piercing_ammo':
+            return self.piercing_ammo.proof(obs) if self.piercing_ammo is not None else None
         if capability == "main_bus_factory":
             return self.bus_factory.proof(obs)
         if capability == "dedicated_materials":

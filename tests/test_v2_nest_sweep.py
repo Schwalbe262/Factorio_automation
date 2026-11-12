@@ -52,19 +52,67 @@ class SweepTests(unittest.TestCase):
         self.assertNotIn('op.loss_count>=2',SWEEP_DEPLOYMENT_GUARD_LUA)
         self.assertIn('sweep_target_not_covered_by_two_planned_guns',SWEEP_DEPLOYMENT_GUARD_LUA)
 
-    def test_real_existing_fifty_red_are_kept_and_small_factory_transfers_do_not_starve_a_precursor_batch(self):
-        self.perimeter.inspect.return_value={'ok':True,'actor_full_magazines':6}
-        self.perimeter.ammo_source=SimpleNamespace(commissioned=True,ensure_full_magazines=Mock(return_value={'type':'collect_full_ammo','count':1}))
-        result=self.op._stock_wave(self.obs,{'main_gun_turrets':11,'main_ammo':{'full_normal_magazines':50}})
-        self.assertEqual((result['type'],result['recipe'],result['count']),('craft','firearm-magazine',44))
-        self.assertEqual(self.op.state['handcrafted_magazines_issued'],0)
-        self.assertEqual(self.op.state['pending_craft']['runs'],44)
+    def test_existing_red_stock_is_kept_and_missing_factory_is_actionable_without_handcraft(self):
+        self.op._save();before=self.op.path.read_bytes()
+        self.perimeter.ammo_source=SimpleNamespace(commissioned=True,ensure_full_magazines=Mock())
+        with patch.object(self.op,'_craft')as craft:
+            result=self.op._stock_wave(self.obs,{'main_gun_turrets':11,'main_ammo':{'full_normal_magazines':100}})
+            craft.assert_not_called()
+        self.assertEqual((result['status'],result['required_capability']),('waiting','piercing_ammo'))
+        self.assertEqual((result['held_full_stock'],result['missing_full_stock']),(100,100))
+        self.assertEqual(self.op.path.read_bytes(),before);self.bootstrap.ensure_item.assert_not_called()
+        self.perimeter.ammo_source.ensure_full_magazines.assert_not_called()
+
+    def test_factory_provider_collects_bounded_red_batches_even_after_old_craft_budget(self):
+        action={'type':'take_factory_magazines','item':'piercing-rounds-magazine','count':50}
+        provider=SimpleNamespace(commissioned=True,ensure_full_magazines=Mock(return_value=action))
+        self.op.ammo_source=provider;self.op.state['crafted_by_item']={'piercing-rounds-magazine':200,'firearm-magazine':200}
+        self.op._save();before=self.op.path.read_bytes()
+        with patch.object(self.op,'_craft')as craft:
+            self.assertEqual(self.op._stock_wave(self.obs,{'main_gun_turrets':11,'main_ammo':{'full_normal_magazines':100}}),action)
+            craft.assert_not_called()
+        provider.ensure_full_magazines.assert_called_once_with(self.obs,200)
+        self.assertEqual(self.op.path.read_bytes(),before);self.bootstrap.ensure_item.assert_not_called()
+
+    def test_provider_cannot_request_red_or_yellow_crafting_or_unbounded_transfers(self):
+        provider=SimpleNamespace(commissioned=True,ensure_full_magazines=Mock());self.op.ammo_source=provider
+        for action in({'type':'craft','recipe':'piercing-rounds-magazine','count':25},
+                       {'type':'craft','recipe':'firearm-magazine','count':50},
+                       {'type':'take_factory_magazines','item':'firearm-magazine','count':50},
+                       {'type':'take_factory_magazines','item':'piercing-rounds-magazine','count':51}):
+            provider.ensure_full_magazines.return_value=action
+            result=self.op._stock_wave(self.obs,{'main_gun_turrets':11,'main_ammo':{'full_normal_magazines':100}})
+            self.assertEqual(result['status'],'blocked');self.bootstrap.ensure_item.assert_not_called()
+
+    def test_factory_wait_and_complete_paid_stock_issue_no_supplement(self):
+        provider=SimpleNamespace(commissioned=True,ensure_full_magazines=Mock(return_value={'status':'waiting','reason':'factory_empty'}))
+        self.op.ammo_source=provider
+        result=self.op._stock_wave(self.obs,{'main_gun_turrets':11,'main_ammo':{'full_normal_magazines':100}})
+        self.assertEqual(result['reason'],'factory_empty')
+        provider.ensure_full_magazines.reset_mock()
+        self.assertIsNone(self.op._stock_wave(self.obs,{'main_gun_turrets':11,'main_ammo':{'full_normal_magazines':200}}))
+        provider.ensure_full_magazines.assert_not_called();self.bootstrap.ensure_item.assert_not_called()
 
     def test_active_queue_wait_is_cooperative_and_keeps_checkpoint_byte_identical(self):
         self.op._save();before=self.op.path.read_bytes();obs=dict(self.obs,crafting_queue=[{'recipe':'piercing-rounds-magazine','count':25}])
         result=self.op._stock_wave(obs,{'main_gun_turrets':11,'main_ammo':{'full_normal_magazines':50}})
         self.assertEqual(result['status'],'waiting');self.assertEqual(self.op.path.read_bytes(),before)
         self.assertNotIn('pending_craft',self.op.state);self.perimeter.inspect.assert_not_called()
+
+    def test_legacy_started_batch_reconciles_once_then_waits_without_rewriting_paid_history(self):
+        action=self.op._craft('piercing-rounds-magazine',25,'old policy already-paid native batch fixture')
+        rows=[dict(event='action_intent',key='same-sweep',tick=100,action=action),
+              dict(event='action_result',key='same-sweep',tick=100,result={'ok':True,'started':25})]
+        (self.root/'job-events.jsonl').write_text(''.join(json.dumps(q)+'\n'for q in rows))
+        native=dict(ok=True,native_started=False,main_gun_turrets=11,main_ammo={'full_normal_magazines':100},posts=[],targets=[])
+        obs=dict(self.obs,crafting_queue=[{'recipe':'piercing-rounds-magazine','count':25}])
+        with patch.object(self.op,'inspect',return_value=native),patch.object(self.op,'_craft')as new_craft:
+            self.assertEqual(self.op.step(obs)['reason'],'sweep_waiting_normally_paid_crafting_queue')
+            saved=deepcopy(self.op.state);self.assertEqual(saved['crafted_by_item']['piercing-rounds-magazine'],50)
+            self.assertNotIn('pending_craft',saved)
+            self.assertEqual(self.op.step(obs)['reason'],'sweep_waiting_normally_paid_crafting_queue')
+            self.assertEqual(self.op.state,saved);new_craft.assert_not_called()
+        self.bootstrap.ensure_item.assert_not_called()
 
     def native_committed(self,losses=3):
         posts=[];lost={}
