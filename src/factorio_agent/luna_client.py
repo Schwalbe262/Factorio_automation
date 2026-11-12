@@ -11,10 +11,9 @@ import subprocess
 import tempfile
 import threading
 
-from .incidents import DOCUMENT_CHAR_CAP
+from .incidents import DOCUMENT_CHAR_CAP, OPERATIONS
 
 
-OPERATIONS = ("plan", "request", "continue", "retry", "pause", "wait")
 PARAMETERS = {
     "type": "string",
     "description": "A JSON object of documented capability parameters; use {} for no parameters.",

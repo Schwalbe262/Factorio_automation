@@ -40,7 +40,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from .capacity_planning import _fund_seconds, _number, _stock
+from .capacity_planning import fund_seconds, finite_number, stock_on_hand
 from .progression import RAW_ITEMS, raw_cost, roadmap_wanted_technologies
 
 RED_PACK = "automation-science-pack"
@@ -267,7 +267,7 @@ def _bottleneck(queue: _Queue) -> str:
 
 def _add(cost: dict[str, float], extra: Mapping[str, float], times: float) -> None:
     for name, amount in extra.items():
-        value = _number(amount)
+        value = finite_number(amount)
         if value is not None and value > 0 and times > 0:
             cost[name] = cost.get(name, 0.0) + times * value
 
@@ -278,7 +278,7 @@ def _fund(cost: Mapping[str, float], evidence: Mapping) -> float:
         row = evidence.get(item)
         if not isinstance(row, Mapping):
             return math.inf if amount > 0 else longest
-        longest = max(longest, _fund_seconds(amount, _stock(row), _number(row.get("produced_per_minute"))))
+        longest = max(longest, fund_seconds(amount, stock_on_hand(row), finite_number(row.get("produced_per_minute"))))
     return longest
 
 
@@ -291,8 +291,8 @@ def _capped_extra_rate(extra: float, pack_cost, cost, evidence, uncapped_seconds
         row = evidence.get(item)
         if not isinstance(row, Mapping):
             return 0.0
-        net = _number(row.get("net_per_minute")) or 0.0
-        left = max(0.0, _stock(row) - cost.get(item, 0.0))
+        net = finite_number(row.get("net_per_minute")) or 0.0
+        left = max(0.0, stock_on_hand(row) - cost.get(item, 0.0))
         headroom = max(0.0, net)
         if math.isfinite(uncapped_seconds) and uncapped_seconds > 0:
             headroom += 60.0 * left / uncapped_seconds
@@ -469,11 +469,17 @@ def labs_without_assemblers(row: Mapping, config=ResearchCapacityConfig()) -> in
 # --- catalog helpers -------------------------------------------------------
 
 
-def _product_amount(recipe: Mapping, item: str) -> float:
+def _deterministic_product_amount(recipe: Mapping, item: str) -> float:
+    """Exact ``amount * probability`` of ``item`` per craft; raises without one.
+
+    Deliberately stricter than ``progression._product_amount`` (an estimate
+    that averages ``amount_min``/``amount_max`` and defaults to 1): machine
+    counts here must not rest on a guessed yield.
+    """
     for product in recipe.get("products") or ():
         if isinstance(product, Mapping) and product.get("name") == item:
-            amount = _number(product.get("amount"))
-            probability = _number(product.get("probability", 1))
+            amount = finite_number(product.get("amount"))
+            probability = finite_number(product.get("probability", 1))
             if amount and probability:
                 return amount * probability
     raise ValueError(item + " recipe has no deterministic product amount")
@@ -482,11 +488,11 @@ def _product_amount(recipe: Mapping, item: str) -> float:
 def pack_rate_per_assembler(catalog, pack, machine=DEFAULT_MACHINE) -> float:
     """Packs/minute one ``machine`` makes: ``60 * crafting_speed * yield / energy``."""
     recipe = catalog.recipe_for_product(pack)
-    speed = _number(catalog.entities[machine].get("crafting_speed"))
-    energy = _number(recipe.get("energy"))
+    speed = finite_number(catalog.entities[machine].get("crafting_speed"))
+    energy = finite_number(recipe.get("energy"))
     if not recipe or not speed or not energy or speed <= 0 or energy <= 0:
         raise ValueError(pack + " machine rate unknown")
-    return 60.0 * speed * _product_amount(recipe, pack) / energy
+    return 60.0 * speed * _deterministic_product_amount(recipe, pack) / energy
 
 
 def _machine_demand(catalog, item, rate, speed, depth, out) -> None:
@@ -496,15 +502,15 @@ def _machine_demand(catalog, item, rate, speed, depth, out) -> None:
     recipe = catalog.recipe_for_product(item)
     if not recipe:
         return
-    energy = _number(recipe.get("energy"))
+    energy = finite_number(recipe.get("energy"))
     if not energy or energy <= 0:
         raise ValueError(item + " recipe energy unknown")
-    made = _product_amount(recipe, item)
+    made = _deterministic_product_amount(recipe, item)
     out[recipe["name"]] = out.get(recipe["name"], 0.0) + rate * energy / (60.0 * speed * made)
     crafts = rate / made
     for ingredient in recipe.get("ingredients") or ():
         if isinstance(ingredient, Mapping) and ingredient.get("type", "item") == "item":
-            amount = _number(ingredient.get("amount"))
+            amount = finite_number(ingredient.get("amount"))
             if amount:
                 _machine_demand(catalog, ingredient["name"], crafts * amount, speed, depth + 1, out)
 
@@ -521,7 +527,7 @@ def expansion_costs(catalog, pack, *, current_assemblers=1, machine=DEFAULT_MACH
     the second and third science assemblers need no new gear assembler.
     Every machine of the unit also gets ``INSERTERS_PER_ASSEMBLER`` inserters.
     """
-    speed = _number(catalog.entities[machine].get("crafting_speed"))
+    speed = finite_number(catalog.entities[machine].get("crafting_speed"))
     if not speed or speed <= 0:
         raise ValueError(machine + " crafting speed unknown")
     rate = pack_rate_per_assembler(catalog, pack, machine)
@@ -556,18 +562,18 @@ def research_target(catalog, technology, *, progress=0.0) -> ResearchTarget | No
     tech = (getattr(catalog, "technologies", None) or {}).get(technology)
     if not isinstance(tech, Mapping) or tech.get("count_formula") or tech.get("research_trigger"):
         return None
-    units = _number(tech.get("unit_count"))
-    energy = _number(tech.get("unit_energy"))
+    units = finite_number(tech.get("unit_count"))
+    energy = finite_number(tech.get("unit_energy"))
     if not units or units <= 0 or energy is None or energy <= 0:
         return None
     packs = {}
     for row in tech.get("ingredients") or ():
-        amount = _number(row.get("amount")) if isinstance(row, Mapping) else None
+        amount = finite_number(row.get("amount")) if isinstance(row, Mapping) else None
         if amount:
             packs[row["name"]] = packs.get(row["name"], 0.0) + amount
     if not packs:
         return None
-    done = _number(progress) or 0.0
+    done = finite_number(progress) or 0.0
     remaining = units * (1.0 - min(1.0, max(0.0, done)))
     return ResearchTarget(technology, remaining, energy / 60.0, packs)
 
@@ -601,7 +607,7 @@ def recommended_science_rate(
     sustain = math.inf
     for item, amount in per_pack.items():
         row = materials.get(item)
-        net = _number(row.get("net_per_minute")) if isinstance(row, Mapping) else None
+        net = finite_number(row.get("net_per_minute")) if isinstance(row, Mapping) else None
         if net is None or amount <= 0:
             return None
         sustain = min(sustain, max(0.0, net) / amount)
@@ -664,14 +670,14 @@ def hardware_from_observation(catalog, observation: Mapping, packs: Iterable[str
         assemblers[pack] = len(machines)
         machine = machines[0]["name"] if machines else DEFAULT_MACHINE
         rates[pack] = pack_rate_per_assembler(catalog, pack, machine)
-        stock[pack] = float(_number(inventory.get(pack)) or 0.0)
+        stock[pack] = float(finite_number(inventory.get(pack)) or 0.0)
     for entity in entities:
         if entity.get("name") != "lab" or entity.get("electric_network_connected") is False:
             continue
         labs += 1
         held = entity.get("inventory") if isinstance(entity.get("inventory"), Mapping) else {}
         for pack in stock:
-            stock[pack] += float(_number(held.get(pack)) or 0.0)
+            stock[pack] += float(finite_number(held.get(pack)) or 0.0)
     return ResearchHardware(assemblers, rates, labs, DEFAULT_LAB_SPEED, stock)
 
 

@@ -32,7 +32,7 @@ SOURCE_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = SOURCE_ROOT.parent
 ACTIVE = {"pending", "running", "waiting"}
 TERMINAL = {"succeeded", "blocked", "failed"}
-OPERATIONS = {"plan", "request", "continue", "retry", "pause", "wait"}
+OPERATIONS = incident_rules.OPERATIONS
 AUTO_RETRY_LIMIT = 3
 QUEUED = ("pending", "ready")
 # Existing nodes in these states absorb a new node with the same capability and parameters.

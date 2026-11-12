@@ -95,7 +95,7 @@ class CapacityDecision:
     evidence: dict[str, Any] = field(default_factory=dict)
 
 
-def _number(value) -> float | None:
+def finite_number(value) -> float | None:
     """A finite int/float, else None (bools are not numbers here)."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -108,10 +108,10 @@ def _evidence(supply: Mapping, item: str) -> Mapping | None:
     return evidence if isinstance(evidence, Mapping) else None
 
 
-def _stock(evidence: Mapping) -> float:
+def stock_on_hand(evidence: Mapping) -> float:
     """Items on hand now: ``available`` (held + collectable) or ``collectable``."""
     for key in ("available", "collectable"):
-        value = _number(evidence.get(key))
+        value = finite_number(evidence.get(key))
         if value is not None:
             return max(0.0, value)
     return 0.0
@@ -123,13 +123,13 @@ def _cost_per_cell(evidence: Mapping) -> dict[str, float]:
         return {}
     cost = {}
     for name, amount in raw.items():
-        value = _number(amount)
+        value = finite_number(amount)
         if value is not None and value > 0:
             cost[name] = value
     return cost
 
 
-def _fund_seconds(need: float, stock: float, produced: float | None) -> float:
+def fund_seconds(need: float, stock: float, produced: float | None) -> float:
     """Seconds until ``need`` items are on hand from stock, then gross production."""
     missing = need - stock
     if missing <= 0:
@@ -166,17 +166,17 @@ class _Facts:
 
 
 def _facts(item: str, evidence: Mapping, demand: Mapping, config: CapacityConfig) -> _Facts:
-    shortfall = max(0.0, _number(evidence.get("shortfall")) or 0.0)
-    extra = max(0.0, _number(demand.get(item)) or 0.0) if isinstance(demand, Mapping) else 0.0
+    shortfall = max(0.0, finite_number(evidence.get("shortfall")) or 0.0)
+    extra = max(0.0, finite_number(demand.get(item)) or 0.0) if isinstance(demand, Mapping) else 0.0
     # Stock beyond the current bill (plates sitting in furnaces and chests)
     # already covers part of the upcoming demand; do not expand to make it twice.
-    available = _number(evidence.get("available"))
-    billed = _number(evidence.get("required"))
+    available = finite_number(evidence.get("available"))
+    billed = finite_number(evidence.get("required"))
     if available is not None and billed is not None:
         extra = max(0.0, extra - max(0.0, available - billed))
-    produced = _number(evidence.get("produced_per_minute"))
-    productive = _number(evidence.get("productive_cells"))
-    cell_rate = _number(evidence.get("cell_capacity_per_minute"))
+    produced = finite_number(evidence.get("produced_per_minute"))
+    productive = finite_number(evidence.get("productive_cells"))
+    cell_rate = finite_number(evidence.get("cell_capacity_per_minute"))
     if cell_rate is None or cell_rate <= 0:
         if produced is not None and produced > 0 and productive:
             cell_rate = produced / productive
@@ -185,18 +185,18 @@ def _facts(item: str, evidence: Mapping, demand: Mapping, config: CapacityConfig
     current = evidence.get("installed_live_cells")
     if isinstance(current, bool) or not isinstance(current, int):
         current = int(productive) if productive else 0
-    build = _number(evidence.get("build_seconds"))
+    build = finite_number(evidence.get("build_seconds"))
     return _Facts(
         item=item,
         required=shortfall + extra,
         shortfall=shortfall,
         demand=extra,
         produced=produced,
-        consumed=_number(evidence.get("consumed_per_minute")),
-        net=_number(evidence.get("net_per_minute")) or 0.0,
+        consumed=finite_number(evidence.get("consumed_per_minute")),
+        net=finite_number(evidence.get("net_per_minute")) or 0.0,
         cell_rate=cell_rate,
         current=max(0, current),
-        stock=_stock(evidence),
+        stock=stock_on_hand(evidence),
         cost=_cost_per_cell(evidence),
         build_seconds=build if build is not None and build >= 0 else config.build_seconds_per_cell,
     )
@@ -205,7 +205,7 @@ def _facts(item: str, evidence: Mapping, demand: Mapping, config: CapacityConfig
 def _option_seconds(facts: _Facts, k: int, supply: Mapping, net: float, config: CapacityConfig) -> dict:
     """Time until ``required`` is on hand after adding ``k`` cells (see module rules)."""
     own_cost = k * facts.cost.get(facts.item, 0.0)
-    fund = _fund_seconds(own_cost, facts.stock, facts.produced)
+    fund = fund_seconds(own_cost, facts.stock, facts.produced)
     cross = 0.0
     for name, per_cell in facts.cost.items():
         if name == facts.item:
@@ -214,7 +214,9 @@ def _option_seconds(facts: _Facts, k: int, supply: Mapping, net: float, config: 
         if other is None:
             cross = math.inf
             break
-        cross = max(cross, _fund_seconds(k * per_cell, _stock(other), _number(other.get("produced_per_minute"))))
+        cross = max(
+            cross, fund_seconds(k * per_cell, stock_on_hand(other), finite_number(other.get("produced_per_minute")))
+        )
     gain = facts.cell_rate
     if facts.item == FUEL_ITEM:
         gain -= config.fuel_per_drill_per_minute

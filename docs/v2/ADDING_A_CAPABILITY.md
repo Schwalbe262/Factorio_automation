@@ -22,7 +22,7 @@ slice, so all state lives in files, never only in memory).
 - **Status dict**: no `"type"`, `"status"` in `running | waiting | blocked |
   failed | succeeded`, plus `"reason"` (stable snake_case, it is what the
   report and incidents show) and optional `"evidence"`. Anything else raises
-  `executor returned no recognized action or status` (`jobs.py:2047`).
+  `executor returned no recognized action or status` (`jobs.py:772`).
 - `succeeded` is only a claim: `_advance_job` re-observes and calls `proof`;
   `None` makes the job `blocked / postcondition_not_verified`.
 - `waiting` must name what it waits for; a job without a progress change for
@@ -34,23 +34,33 @@ slice, so all state lives in files, never only in memory).
   resource policy check (`power_layout.py:295`). Items come from the actor's
   inventory only (`V2Bootstrap.ensure_item`).
 
-## 2. Register it (`src/factorio_agent/jobs.py`)
+## 2. Register it
 
 1. `CAPABILITIES["<name>"]` (`jobs.py:19`): `parameters` (human-readable
    contract), `requires` (capabilities that must have *succeeded*),
    optional `native_recipes` (gates autopilot until enabled), `effect`.
-2. `Request.validate` (`jobs.py:313`): an `elif self.capability == "<name>"`
-   branch calling your module's `validate_parameters` (structure only; raise
-   `ValueError`). Without a branch the capability must take `{}`.
-3. `StarterExecutors.__init__` (`jobs.py:673`): construct the controller with
-   the shared objects it needs (`self.builder`, `catalog`, `site=self.site`).
-   Never create a second `SiteService`.
-4. `StarterExecutors.step` (`jobs.py:1381`): `if capability == "<name>": return self.<ctl>.step(obs, parameters or {})`.
-   Add `self.builder.ensure_power(obs)` first if the block needs live power.
-5. `StarterExecutors.proof` (`jobs.py:1763`): matching branch. A capability
-   missing here falls to the generic flow-proof fallback at the end.
-6. If it selects a technology, put `technology` in its `parameters` (idle
-   research then yields) and add it to `RESEARCH_CAPABILITIES` (`jobs.py:485`).
+2. `StarterExecutors.__init__` (`executors.py:38`): construct the controller
+   with the shared objects it needs (`self.builder`, `catalog`,
+   `site=self.site`), or add a lazy `_<name>()` factory. Never create a
+   second `SiteService`.
+3. A handler in the matching domain module `src/factorio_agent/handlers/<domain>.py`
+   (each <= 400 lines; `handlers/__init__.py` lists them), registered at its bottom:
+   `register("<name>", step=<name>_step, proof=<name>_proof, validate=validate_<name>)`.
+   Handlers take the executors object as `ex`, e.g. `produce` in `bus_and_industry.py`:
+   `early, _ = shared_upkeep(ex, obs, "<name>")`; `if early is not None: return early`;
+   then `return ex.<ctl>.step(obs, parameters or {})`. Add
+   `ex.builder.ensure_power(obs)` first if the block needs live power.
+   `handlers/upkeep.py` holds the shared upkeep (`shared_upkeep`,
+   `defense_upkeep_while_waiting`); `StarterExecutors.step` (`executors.py:734`)
+   only runs the common prelude (pending repair, initial defense) and dispatches.
+4. `proof(ex, obs, result, parameters)`; without one the generic
+   `executors.flow_proof` applies. `validate(parameters)` checks structure only
+   (raise `ValueError`); without one the capability must take `{}`.
+   `record_action` is only for controllers that track receipts.
+5. If it selects a technology, put `technology` in its `parameters` (idle
+   research then yields) and add it to `RESEARCH_CAPABILITIES` (`jobs.py:428`).
+6. `tests/test_v2_capability_registry.py` fails until `CAPABILITIES` and the
+   registry agree.
 
 ## 3. Get a site (never fixed coordinates)
 
@@ -128,7 +138,7 @@ restart path (state file present) and world/catalog change.
 
 ## 8. Before commit
 
-1. `powershell -ExecutionPolicy Bypass -File tools/check.ps1 test_v2_<yours> test_v2_jobs test_v2_progression`, then the full `tools/check.ps1`.
+1. `powershell -ExecutionPolicy Bypass -File tools/check.ps1 test_v2_<yours> test_v2_capability_registry test_v2_jobs test_v2_progression`, then the full `tools/check.ps1`.
 2. `git diff --stat`; review only your hunks.
 3. `git add` the exact files. Never `git add -A`/`.`: `oil_gathering.py` and
    `water_gathering.py` carry frozen uncommitted WIP and must stay unstaged.

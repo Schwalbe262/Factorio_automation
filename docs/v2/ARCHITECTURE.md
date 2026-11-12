@@ -21,6 +21,7 @@ Supervisor.run (supervisor.py) loops _cycle():
   8 _run_slice       "run --all --seconds 25" -> jobs.run_jobs
 Commands go through kernel.InProcessBridge -> kernel.Session -> __main__.execute (one RCON socket).
 jobs.run_jobs: per pass one observe; jobs in priority order; StarterExecutors.step(capability)
+  -> shared prelude, then the capability's handler (capability_registry.handler_for)
   -> action dict: durable pending_action, game.act, receipt -> pass ends (fresh observe next)
   -> status dict: recorded; next job gets the same observation
   pass without any action -> StarterExecutors.idle_action (research lane "lane:research")
@@ -35,7 +36,9 @@ jobs.run_jobs: per pass one observe; jobs in priority order; StarterExecutors.st
 | Entry | `__main__.py` | `execute(argv)`: typed commands (`observe`, `request`, `run`, `pause`, `retry`, ...); builds the observe receipt |
 | Entry | `kernel/session.py` | `Session` (cached game + catalog, 2 s observe reuse, profiler), `InProcessBridge` |
 | Entry | `automation_config.py` | validated `automation_config.json`: world seed/settings, `controller.planner` |
-| Jobs | `jobs.py` | `CAPABILITIES`, `Request.validate`, `Ledger`, `submit`/`control`, `run_jobs`/`run_slice`, `StarterExecutors` |
+| Jobs | `jobs.py` | `CAPABILITIES`, `Request.validate`, `Ledger`, `submit`/`control`, `run_jobs`/`run_slice`; re-exports `StarterExecutors` |
+| Jobs | `executors.py` | `StarterExecutors`: controller construction, lazy factories, upkeep helpers, `step`/`proof`/`record_action` dispatch, `idle_action` |
+| Jobs | `capability_registry.py`, `handlers/` | one `Handler` (step, proof, validate, record_action) per capability, grouped by domain; `handlers/upkeep.py` shared upkeep |
 | Plan | `progression.py` | `ROADMAP` (Step list), `autopilot_nodes`, `capacity_nodes`, `produce_nodes`, `lookahead_demand`, `bulk_item_demand` |
 | Plan | `capacity_planning.py` | `plan_capacity`: starter cells, wait vs expand by time |
 | Plan | `research_capacity.py` | labs + science assemblers sized together; `research_capacity_receipt`, `recommended_science_rate` |
@@ -63,7 +66,7 @@ jobs.run_jobs: per pass one observe; jobs in priority order; StarterExecutors.st
 | Tools | `tools/check.ps1`, `tools/report_run.py`, `tools/luna_incident_replay.py` | lint + tests; run report; offline incident replay |
 
 All other top-level modules are capability controllers constructed in
-`StarterExecutors.__init__` (`jobs.py:673`).
+`StarterExecutors.__init__` (`executors.py:38`).
 
 ## Runtime directory files (`runtime/v2/<name>/`)
 
@@ -99,7 +102,8 @@ All other top-level modules are capability controllers constructed in
 
 Inside a job, `StarterExecutors.step` first runs shared upkeep before the
 capability's own controller: `pending_repair` and `_approved_initial_defense`
-(`jobs.py:1381-1395`); fuel upkeep is folded into several branches. So an
+(`executors.py:734-751`); most handlers then call `handlers.upkeep.shared_upkeep`
+(starter/fuel upkeep, background construction, upgrades). So an
 action in a job's events may belong to upkeep, not to the capability.
 
 ## Safety invariants
@@ -110,27 +114,27 @@ action in a job's events may belong to upkeep, not to the capability.
    inventories; `research` uses `add_research` after prerequisites and refuses
    trigger technologies. The freeplay inventory is inserted once in `initialize`.
    Nothing checks this automatically: review every new Lua body for it.
-2. Durable intent, no blind retry. `_advance_job` (`jobs.py:1969`) stores
+2. Durable intent, no blind retry. `_advance_job` (`jobs.py:693`) stores
    `pending_action` before `game.act`; an exception or a reason in
    `UNKNOWN_BATCH_OUTCOMES` leaves the job blocked with
    `action_outcome_unknown_reconcile_required`. `control("retry")` refuses it,
-   only `reconcile` clears it (`jobs.py:570-645`); `DeterministicGame._execute`
+   only `reconcile` clears it (`jobs.py:513-588`); `DeterministicGame._execute`
    never resends a command (`deterministic_game.py:401`).
 3. World identity. `WorldBoundGame.query` prefixes every Lua body with a
    `world_id` check (`runtime.py:43`); `Ledger.sync` raises on a changed world
-   (`jobs.py:426`); `Supervisor._world_guard` / `_snapshot` (`supervisor.py:809,861`);
+   (`jobs.py:369`); `Supervisor._world_guard` / `_snapshot` (`supervisor.py:809,861`);
    controller state and `SiteService` caches carry `world_id`.
 4. Rollback detection. A tick below `last_tick` blocks every job with
    `world_rollback_requires_reconciliation` and records `rollback_tick`
-   (`jobs.py:429`); `submit` and `Supervisor._snapshot` then refuse to continue.
+   (`jobs.py:373`); `submit` and `Supervisor._snapshot` then refuse to continue.
 5. Resource protection. `V2FactoryBuilder.ensure_plan` runs
    `resource_policy.ensure_resource_policy` before any build (`power_layout.py:295`);
    `planning.preflight` rejects resource violations; only entities annotated by
    `mark_mining_core` / `annotate_mining_exit` may stand on ore; `mine` refuses
    crash-site artifacts.
 6. One research-owning job. `jobs._admission_error` with `RESEARCH_CAPABILITIES`
-   (`jobs.py:485`); `idle_action` yields to any active job taking a `technology`.
-7. Admission limits (`jobs.py:474-543`, `1991-2042`): at most `MAX_ACTIVE_JOBS = 4`
+   (`jobs.py:428`); `idle_action` yields to any active job taking a `technology`.
+7. Admission limits (`jobs.py:416-486`, `710-761`): at most `MAX_ACTIVE_JOBS = 4`
    active, one per capability; request observation at most 3600 ticks old;
    `requires` capabilities succeeded; job deadline 108000 ticks or 3600 s;
    blocked after 18000 ticks without a `progress_key` change or 3 identical

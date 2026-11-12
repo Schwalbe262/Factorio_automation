@@ -87,7 +87,7 @@ Rank: (a) first researchable step on the unlock path of a wanted technology
 or recipe (next 6 roadmap steps); (b) same for `upgrades.PRIORITIES`; (c)
 cheapest finite (`unit_count * pack kinds`). Only packs with proven supply
 (`NormalResearch.supplied_packs`), never trigger technologies; at most every
-`IDLE_RESEARCH_INTERVAL_TICKS = 600` (`jobs.py:651`).
+`IDLE_RESEARCH_INTERVAL_TICKS = 600` (`jobs.py:594`).
 Pinned by `tests/test_v2_research_policy.py`, `tests/test_v2_idle_research.py`.
 
 ## Batching and hand-craft constants (`construction_supply.py`, `industry.py`)

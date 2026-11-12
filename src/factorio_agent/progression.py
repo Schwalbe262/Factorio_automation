@@ -27,12 +27,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .capacity_planning import plan_capacity
+from .jobs import RESEARCH_CAPABILITIES
 
 TERMINAL_STATUSES = frozenset({"succeeded", "blocked", "failed"})
 STALLED_STATUSES = frozenset({"blocked", "failed"})
 OPEN_NODE_STATUSES = frozenset({"pending", "ready", "running", "waiting"})
 RESEARCH_CAPABILITY = "research"
-RESEARCH_CAPABILITIES = frozenset({"starter_research", "bootstrap_research", RESEARCH_CAPABILITY})
 CAPACITY_CAPABILITY = "starter_capacity"
 NODE_PREFIX = "auto_"
 # Autopilot nodes rank below the planner's usual non-negative priorities, so

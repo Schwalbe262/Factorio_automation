@@ -34,6 +34,8 @@ from typing import Any, Callable, Iterable, Mapping
 SEVERITY = ("empty_queue", "blocked_job", "no_progress", "planner_review")
 ACTIVE = frozenset({"pending", "running", "waiting"})
 QUEUED = frozenset({"pending", "ready"})
+# Every operation a planner decision may name (supervisor check and luna schema).
+OPERATIONS = ("plan", "request", "continue", "retry", "pause", "wait")
 REMEDY_OPERATION = {"retry": "retry", "pause": "pause", "add_nodes": "plan", "wait": "wait"}
 MAX_NEW_NODES = 3
 # About 6,000 tokens at four characters per token.
