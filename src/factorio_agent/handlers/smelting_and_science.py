@@ -178,7 +178,17 @@ def chemical_science_step(ex, obs, parameters):
     early, _ = shared_upkeep(ex, obs, "chemical_science")
     if early is not None:
         return early
+    from ..chemical_science import count_for_rate
+
+    rate = (parameters or {}).get("rate_per_minute")
+    ex.blue.count = count_for_rate(ex.catalog, rate) if rate else 2
     return ex.blue.step(obs)
+
+
+def validate_chemical_science_parameters(parameters):
+    from ..chemical_science import validate_chemical_science
+
+    validate_chemical_science(parameters)
 
 
 def chemical_science_proof(ex, obs, result, parameters):
@@ -208,4 +218,9 @@ register(
 register(
     "logistic_science", step=logistic_science_step, proof=logistic_science_proof, validate=validate_logistic_science
 )
-register("chemical_science", step=chemical_science_step, proof=chemical_science_proof)
+register(
+    "chemical_science",
+    step=chemical_science_step,
+    proof=chemical_science_proof,
+    validate=validate_chemical_science_parameters,
+)

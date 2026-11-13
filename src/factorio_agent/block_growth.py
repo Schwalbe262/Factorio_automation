@@ -11,9 +11,10 @@ it cost?" without knowing each controller. Every option is one row::
   ``in_place`` while reserved slots remain; one step = one more machine (its machine and arms),
   the action is the same ``produce`` request at the higher rate (``ProductionRows._extend``);
   without a slot the kind is ``rebuild`` (``limit`` says why).
-* blocks without a rate parameter yet (``advanced_circuit_production``, ``chemical_science``):
-  kind ``fixed``, ``action`` None, ``beyond`` names what growth needs (a second block or a rate
-  parameter). Their rate comes from their saved plan when it declares one.
+* ``advanced_circuit_production`` / ``chemical_science``: a new block is sized by the job's
+  ``rate_per_minute`` (two to four machines); a built block reports its rate, its reserved slots
+  (``core.growth_slots``) and the slot unit's cost with kind ``rebuild`` (no in-place extension
+  in the controller yet).
 
 Callers rank and choose; this module never acts.
 """
@@ -96,21 +97,37 @@ def growth_options(root, world_id: str | None = None) -> list[dict]:
         state = _load(root / name)
         if not isinstance(state, dict) or (world_id is not None and state.get("world_id") not in (None, world_id)):
             continue
-        rate = state.get("rate_per_minute") or (state.get("plan") or {}).get("rated_per_minute")
-        found.append(
-            {
-                "block": capability,
-                "capability": capability,
-                "item": item,
-                "kind": "fixed",
-                "rate_now": rate if isinstance(rate, (int, float)) else None,
-                "step_rate": None,
-                "max_rate_in_place": rate if isinstance(rate, (int, float)) else None,
-                "slots": 0,
-                "cost": {"items": {}},
-                "action": None,
-                "limit": "no_rate_parameter",
-                "beyond": f"a second {capability} block or a rate parameter on the controller",
-            }
-        )
+        found.append(_block_option(capability, item, state))
     return found
+
+
+def _block_option(capability: str, item: str, state: dict) -> dict:
+    """A two-to-four machine block (advanced circuits, chemical science): its rate, its free slots.
+
+    A new block is sized by the job's ``rate_per_minute`` (``count_for_rate``). A built block keeps
+    its reserved slots (``core.growth_slots``, the ``pack_growth.block_view`` contract) but its
+    controller has no in-place extension yet: kind ``rebuild`` with the slot unit as the cost."""
+    core = state.get("core") if isinstance(state.get("core"), dict) else {}
+    rated = state.get("rated") if isinstance(state.get("rated"), dict) else {}
+    key = "advanced_circuits_per_minute" if capability == "advanced_circuit_production" else "science_per_minute"
+    rate = rated.get(key)
+    machines = len(core.get("red_machines") or core.get("machines") or ()) or None
+    slots = [g for g in core.get("growth_slots") or () if isinstance(g, list)]
+    per = rate / machines if isinstance(rate, (int, float)) and machines else None
+    unit: dict[str, int] = {}
+    for e in slots[0] if slots else ():
+        unit[e["name"]] = unit.get(e["name"], 0) + 1
+    return {
+        "block": capability,
+        "capability": capability,
+        "item": item,
+        "kind": "rebuild" if state.get("plan") else "new",
+        "rate_now": round(rate, 3) if isinstance(rate, (int, float)) else None,
+        "step_rate": round(per, 3) if per else None,
+        "max_rate_in_place": round(per * (machines + len(slots)), 3) if per else None,
+        "slots": len(slots),
+        "cost": {"items": unit},
+        "action": None,
+        "limit": "no_in_place_extension" if slots else "no_reserved_slot",
+        "beyond": f"extend {capability} into its reserved slots (not implemented) or a second block",
+    }

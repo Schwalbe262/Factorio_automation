@@ -147,6 +147,30 @@ def advanced_circuit_rates(catalog, count=2):
     }
 
 
+def count_for_rate(catalog, rate) -> int:
+    """Smallest supported machine count (2..4) whose nameplate covers ``rate`` items/min (4 above)."""
+    for count in (2, 3, 4):
+        if advanced_circuit_rates(catalog, count)["advanced_circuits_per_minute"] + 1e-9 >= rate:
+            return count
+    return 4
+
+
+def validate_advanced_circuits(parameters) -> None:
+    """``{}`` (two machines) or ``{"rate_per_minute": (0, 600]}`` (sized by ``count_for_rate``)."""
+    if parameters in (None, {}):
+        return
+    if not isinstance(parameters, dict) or set(parameters) != {"rate_per_minute"}:
+        raise ValueError("takes {} or {rate_per_minute}")
+    rate = parameters["rate_per_minute"]
+    if type(rate) not in (int, float) or not math.isfinite(rate) or not 0 < rate <= 600:
+        raise ValueError("rate_per_minute must be finite in (0, 600]")
+
+
+def growth_slots(core) -> list[list[dict]]:
+    """Reserved in-place slots (``pack_growth.block_view``): one entity group per free machine slot."""
+    return [list(group) for group in core.get("growth_slots") or ()]
+
+
 def advanced_circuit_core(catalog, x, y, count=2):
     """31x22 fixed headers; four red slots and a second wire slot remain reserved."""
     rated = advanced_circuit_rates(catalog, count)
@@ -238,6 +262,18 @@ def advanced_circuit_core(catalog, x, y, count=2):
     extensions = [
         entity("assembling-machine-1", x + 3 + 6 * i, y + 12, recipe="advanced-circuit") for i in range(count, 4)
     ]
+    slots = [
+        [
+            entity("assembling-machine-1", x + 3 + 6 * i, y + 12, recipe="advanced-circuit"),
+            entity("inserter", x + 3 + 6 * i, y + 10),
+            entity("long-handed-inserter", x + 2 + 6 * i, y + 10),
+            entity("inserter", x + 5 + 6 * i, y + 12, 12),
+            entity("small-electric-pole", x + 1 + 6 * i, y + 11),
+            entity("small-electric-pole", x + 5 + 6 * i, y + 11),
+            *(entity("transport-belt", x + 6 + 6 * i, y + yy, 8) for yy in range(12, 18)),
+        ]
+        for i in range(count, 4)
+    ]
     if count == 2:
         extensions.append(entity("assembling-machine-1", x + 11, y + 3, recipe="copper-cable"))
     return _plan(
@@ -252,6 +288,7 @@ def advanced_circuit_core(catalog, x, y, count=2):
         rated=rated,
         reserved_area=[[x - 4.5, y - 1.5], [x + 26.5, y + 20.5]],
         extension_slots=extensions,
+        growth_slots=slots,
         output_access=[entity("transport-belt", x + dx, y + 18, 4) for dx in (27, 28)],
         raw_feed_lanes={"left": "copper-plate", "right": "iron-plate"},
         component_feed_lanes={"left": "copper-cable", "right": "electronic-circuit"},
@@ -484,6 +521,7 @@ class AdvancedCircuitProduction:
         self.chemical = chemical if chemical is not None else ChemicalProduction(game, builder, catalog, perimeter)
         self.path = Path(game.cfg.runtime_dir) / "advanced-circuits.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
+        self.count = 2  # red assemblers of a new block (count_for_rate of the job's rate_per_minute)
         self.last_proof_failure = None
 
     def _identity(self, obs, value):
@@ -565,7 +603,7 @@ class AdvancedCircuitProduction:
                 return {"ok": False, "reason": "another_bus_tap_cutover_unfinished"}
             if any(p.get("name") in TAP_NAMES.values() for p in old_bus["ports"]):
                 return {"ok": False, "reason": "advanced_tap_exists_without_factory_checkpoint"}
-            rated = advanced_circuit_rates(self.catalog)
+            rated = advanced_circuit_rates(self.catalog, self.count)
             choices = {
                 item: free_tap_parameters(
                     old_bus,
@@ -576,7 +614,10 @@ class AdvancedCircuitProduction:
                 )
                 for item, name in TAP_NAMES.items()
             }
-            cores = [advanced_circuit_core(self.catalog, x, y) for x, y in advanced_circuit_anchors(old_bus, board)]
+            cores = [
+                advanced_circuit_core(self.catalog, x, y, self.count)
+                for x, y in advanced_circuit_anchors(old_bus, board)
+            ]
         except (OSError, KeyError, TypeError, ValueError) as exc:
             return {"ok": False, "reason": "advanced_circuit_preparation_context_unavailable", "detail": str(exc)}
         for core in cores:
