@@ -189,3 +189,56 @@ Engine unit, 6/min: twin-sub-row rows (`none` 20x22, `default` 28x22 with 2 slot
 to 12/min, `max` 44x22 with 6 slots up to 24/min) and a 3-machine cluster (18x10,
 3/min with assembling machine 1: short of the request, so it only wins where nothing
 else fits).
+
+## Mine output trunk (`mine_trunk.py`)
+
+A mine does not leave a patch in many branches. Cause on eval-2874201674: three
+capabilities each planned their own drills and belt on one coal patch -
+`power`/`power_coal_feed` (burner drill + belt east to the boiler, later swapped to an
+electric drill by `electric_coal`), `mining_outpost` coal (paired bank, exit south to the
+smelting district; the district records "existing power feed remains separate") and
+`dedicated_materials` coal (`material_supply.py`: an *independent* pair planned with every
+existing bank as a keep-out, so it landed elsewhere on the patch with its own splitter hub
+for brick/steel coal). Their belts then crossed.
+
+Rule:
+
+1. One mining block per patch: the patch's oldest proven non-material bank
+   (`mine_trunk.patch_bank`, patch = within `PATCH_REACH` of the resource seed), grown in
+   place along its reserved strip by `mining_outpost` (`prepare_extension`). A new consumer
+   does not open a second drill group. Burner starter cells with chests are exempt (retired
+   by `starter_retirement`).
+2. The bank's output port (its facing chosen by the site fit, `mining_site.site_exit`) is the
+   head of the trunk; `trunk_bus` models it as a one-lane planned bus with the next lane
+   reserved on the side away from the taps. Lanes: `lane_count = ceil(demand / belt rate)`
+   (`BELT_RATE_PER_MINUTE`, both belt sides); 2+ lanes get an input-balanced merge at the
+   patch edge (`balancer_plan`: 2-2 = one splitter; more lanes are reserved and recorded,
+   docs/v2/BALANCERS.md).
+3. Consumers take from the trunk with priority splitter taps built by the bus tap geometry
+   (`planned_tap.layout` / `candidates` on a `BusView` of the trunk): one trunk belt is
+   replaced by the splitter, the branch leaves sideways in two tiles, never crossing a lane;
+   tap windows keep `WINDOW_ROWS + WINDOW_GAP` rows apart. `serve="first"` gives the branch
+   output priority (power's coal), `serve="after"` serves the downstream consumer first and
+   the branch takes the rest (materials).
+4. Demand: each tap records `demand_per_minute` and the patch's first-consumer demand in
+   `mine-trunks.json`; the observe receipt `mine_trunks` compares the total with the patch's
+   proven nominal supply and `mine_trunk_nodes` proposes a `mining_outpost` target that grows
+   the same bank (priority -53, after critical plate growth).
+5. Cut-over (`mine_trunk.cutover`): the replaced trunk belt is first removed from its owner's
+   saved plan and board copy (`release_trunk_belts`: smelting district, mining banks), every
+   item is carried, then the one belt is mined by unit and the splitter built and configured.
+
+Wired today: `dedicated_materials` (coal and stone, also the chemistry purpose) taps the patch
+bank when one exists (`material_supply.TRUNK_MODE`; coal gets a two-output even hub splitter
+for `coal` / `brick-coal`). A supply prepared before this rule keeps its own bank. When the
+trunk has no tap site (no observed straight run, every row rejected) the old independent pair
+is still planned and the entry records `second_group_reason`: a recorded exception to retire
+later, not the design.
+
+Not yet: power's boiler feed as a `serve="first"` tap (the starter feed stays separate and is
+not retired), smelting fuel on a tap, building a second trunk lane and its 2-2 splitter (the
+receipt flags `second_lane_required`), retiring an old separate group through `obsolete.py`.
+The whole-patch grid of the Mining Patch Planner "simple" layout (several row pairs, all
+lanes to one edge, searched grid shift, pole lanes, lane merging by saturation) is the
+target shape for the patch plan; today a patch is one row pair with reserved pair slots, and
+only the saturation / lane-count arithmetic (`lane_saturation`, `lane_count`) exists.

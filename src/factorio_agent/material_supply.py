@@ -16,6 +16,7 @@ from .transport import xy
 from .resource_policy import annotate_mining_exit, mining_exit_candidates, MINING_EXIT_LUA
 from .power_grid import plan_connection as power_connection
 from .industrial import PlanningBudget
+from . import mine_trunk
 
 
 def validate_material(parameters):
@@ -27,15 +28,21 @@ def validate_material(parameters):
         raise ValueError("dedicated_materials requires resource coal or stone")
 
 
+TRUNK_MODE = "trunk_tap"  # the supply is a splitter tap on the patch bank's trunk (mine_trunk.py)
+
+
 def _same_plan(a, b):
     return a["plan"] == b["plan"] and a.get("reserved_area") == b.get("reserved_area")
 
 
 class DedicatedMaterials:
-    def __init__(self, game, builder, catalog, outposts, *, perimeter=None, purpose=None):
+    def __init__(self, game, builder, catalog, outposts, *, perimeter=None, purpose=None, smelting=None):
         if purpose not in (None, "chemistry"):
             raise ValueError("material purpose must be omitted or chemistry")
         self.game, self.builder, self.catalog, self.outposts = game, builder, catalog, outposts
+        # The district controller of this slice: its in-memory plan is refreshed when a
+        # trunk tap republishes it (mine_trunk.release_trunk_belts), so it never saves the old one.
+        self.smelting = smelting
         self.perimeter = perimeter
         self.purpose = purpose
         filename = "material-supply-chemistry.json" if purpose else "material-supply.json"
@@ -69,6 +76,15 @@ class DedicatedMaterials:
 
     def _entry_valid(self, entry, world, resource):
         expected = self._supply_id(world, resource)
+        if entry.get("mode") == TRUNK_MODE:
+            return (
+                entry.get("resource") == resource
+                and entry.get("material_supply_id") == expected
+                and entry.get("purpose") == self.purpose
+                and isinstance(entry.get("tap"), dict)
+                and entry.get("bank", {}).get("plan", {}).get("resource") == resource
+                and (self.purpose is None or resource == "coal")
+            )
         return (
             entry.get("resource") == resource
             and entry.get("material_supply_id") == expected
@@ -248,6 +264,17 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
         existing = [b for b in saved.get("banks", []) if b.get("material_supply_id") == supply_id]
         if len(existing) > 1:
             return {"ok": False, "reason": "duplicate_dedicated_material_bank_identity"}
+        seed = mine_trunk.patch_seed(obs, resource)
+        patch = (
+            None if existing else mine_trunk.patch_bank(saved.get("banks"), resource, seed, exclude_supply=supply_id)
+        )
+        second_group = None
+        if patch is not None:
+            # One mining block per patch (mine_trunk rule 1): tap the patch bank's trunk.
+            tapped = self._prepare_trunk(obs, resource, supply_id, patch, board)
+            if tapped.get("ok"):
+                return tapped
+            second_group = {k: tapped[k] for k in ("reason", "rows_rejected", "failures") if k in tapped}
         if existing:
             bank = deepcopy(existing[0])
             if (
@@ -451,7 +478,154 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
             "entity_units": deepcopy(bank.get("material_entity_units", [])),
             "phase": "build",
             **extra,
+            # Recorded exception: the patch bank's trunk had no tap site, so this supply opens
+            # its own group; it is to be retired once a trunk tap serves the consumer.
+            **({"second_group_reason": second_group} if second_group is not None else {}),
         }
+
+    def _tap_name(self, resource):
+        return "dedicated_materials:" + resource + (":" + self.purpose if self.purpose else "")
+
+    def _port_keys(self, resource):
+        if resource != "coal":
+            return None
+        return ("plastic-coal", "chemical-coal-reserve") if self.purpose else ("coal", "brick-coal")
+
+    def _prepare_trunk(self, obs, resource, supply_id, bank, board):
+        """A splitter tap on the patch bank's trunk plus its output ports (no ``act``)."""
+        from .board import blocks_without_bus, surface_conflict
+
+        drills = sum(e["name"] == "electric-mining-drill" for e in bank["plan"]["entities"]) or 1
+        # What an independent pair would have supplied; the trunk receipt grows the bank to cover it.
+        demand = 2 * float(bank.get("nominal_rate_per_minute", 0)) / drills
+        root = self.path.parent
+        name = self._tap_name(resource)
+        key = mine_trunk.trunk_key(bank)
+        blocks = blocks_without_bus(board)
+        keys = self._port_keys(resource)
+        failures = []
+
+        def accept(tap):
+            extra = mine_trunk.hub(tap, keys) if keys else None
+            entities = list(tap["entities"]) + (extra["entities"] if extra else [])
+            clash = surface_conflict(self.builder, obs, blocks, entities)
+            if clash is not None:
+                failures.append({"reason": "mine_trunk_tap_meets_planned_hardware", "along": tap["along"]})
+                return False
+            check = preflight(self.game, self.builder, obs, entities, ignored_units=tuple(tap["remove_units"]))
+            if not check.get("ok"):
+                failures.append({"reason": check.get("reason"), "along": tap["along"], "side": tap["side"]})
+                return False
+            tap["hub"] = extra
+            return True
+
+        planned = mine_trunk.plan_tap(
+            bank,
+            obs,
+            owner="dedicated_materials",
+            name=name,
+            demand=demand,
+            serve="after",
+            stations=mine_trunk.stations(root, obs["world_id"], key, exclude=name),
+            accept=accept,
+        )
+        if not planned.get("ok"):
+            return dict(planned, failures=failures[-6:])
+        tap = planned["taps"][0]
+        extra = tap.pop("hub")
+        ports = extra["ports"] if extra else {resource: tap["port"]}
+        hardware = list(tap["entities"]) + (extra["entities"] if extra else [])
+        entry = {
+            "ok": True,
+            "mode": TRUNK_MODE,
+            "world_id": obs["world_id"],
+            "catalog_fingerprint": self.catalog.fingerprint,
+            "resource": resource,
+            "material_supply_id": supply_id,
+            "purpose": self.purpose,
+            "trunk": key,
+            "tap": tap,
+            "hub": extra,
+            "ports": ports,
+            "reserved_area": mine_trunk.tap_area([e for e in hardware if e is not tap["splitter"]]),
+            "bank": deepcopy(bank),
+            "entity_units": [],
+            "phase": "build",
+        }
+        if self.purpose:
+            defense = self.perimeter.prepare_coverage(obs, supply_id, [bank["reserved_area"]])
+            if not defense.get("ok"):
+                return {"ok": False, "reason": "chemistry_coal_defense_preflight_failed", "evidence": defense}
+            entry["defense_preview"] = defense
+        return entry
+
+    def _trunk_hardware(self, entry):
+        return list(entry["tap"]["entities"]) + list((entry.get("hub") or {}).get("entities", []))
+
+    def _trunk_block(self, entry):
+        plan = mine_trunk.tap_plan(entry["tap"], (entry.get("hub") or {}).get("entities", []))
+        plan["ports"] = list(entry["ports"].values())
+        return "material_tap:" + entry["material_supply_id"], dict(
+            plan, reserved_area=entry["reserved_area"], owner="dedicated_materials", trunk=entry["trunk"]
+        )
+
+    def _step_trunk(self, obs, parameters, entry):
+        saved = self._outposts()
+        bank = mine_trunk.find_bank(saved.get("banks"), entry["trunk"])
+        if bank is None or not bank.get("ready"):
+            return {"status": "blocked", "reason": "mine_trunk_patch_bank_missing", "trunk": entry["trunk"]}
+        root = self.path.parent
+        result = mine_trunk.record_tap(root, obs["world_id"], entry["tap"], block=self._trunk_block(entry))
+        if result:
+            return result
+        if self.perimeter is not None:
+            result = self.perimeter.ensure_coverage(obs, entry["material_supply_id"], [bank["reserved_area"]])
+            if result is not None:
+                return result
+        # The owner's plan is republished before its trunk belt is mined.
+        changed = mine_trunk.release_trunk_belts(root, obs["world_id"], entry["tap"])
+        if "smelting_district" in changed and self.smelting is not None:
+            self.smelting.state = json.loads((root / "smelting-district.json").read_text(encoding="utf-8"))
+        if any(owner != "smelting_district" for owner in changed):
+            self.outposts.state = self._outposts()
+        hub = (entry.get("hub") or {}).get("entities", [])
+        action = mine_trunk.cutover(self.builder, obs, entry["tap"], hub)
+        if entry["tap"].get("built"):
+            mine_trunk.record_tap(root, obs["world_id"], entry["tap"])
+        self._save()
+        if action is not None:
+            return action
+        entry["bank"] = deepcopy(bank)
+        return self._finish(obs, parameters, entry, "material output tapped from the patch bank's trunk")
+
+    def _finish(self, obs, parameters, entry, reason):
+        """Trunk mode: proof, then the typed sources (the patch bank is not this supply's to register)."""
+        proof = self.proof(obs, parameters)
+        if not proof:
+            return {
+                "status": "waiting",
+                "reason": "waiting for the trunk tap and both native collector lanes of the patch bank",
+            }
+        saved = (
+            json.loads(self.sources_path.read_text(encoding="utf-8"))
+            if self.sources_path.exists()
+            else {"world_id": obs["world_id"], "catalog_fingerprint": self.catalog.fingerprint, "sources": {}}
+        )
+        if not self._valid(saved, obs["world_id"]):
+            return {"status": "blocked", "reason": "material_source_registry_identity_changed"}
+        for key, value in proof["sources"].items():
+            old = saved["sources"].get(key)
+            if old and (
+                old.get("material_supply_id") != entry["material_supply_id"]
+                or old.get("unit_number") != value["unit_number"]
+            ):
+                return {"status": "blocked", "reason": "published_material_output_identity_changed"}
+            saved["sources"][key] = value
+        _atomic_json(self.sources_path, saved)
+        entry["phase"] = "verified"
+        entry["proof"] = proof
+        self._save()
+        return {"status": "succeeded", "reason": reason, "evidence": proof}
 
     def _register(self, obs, entry, *, ready=False):
         if not self._entry_valid(entry, obs["world_id"], entry["resource"]):
@@ -483,7 +657,8 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
     def _bind(self, obs, entry):
         actual = {(e["name"], *xy(e)): e for e in obs["entities"]}
         bound = {(e["name"], *xy(e)): e for e in entry["entity_units"]}
-        for spec in entry["bank"]["plan"]["entities"]:
+        owned = self._trunk_hardware(entry) if entry.get("mode") == TRUNK_MODE else entry["bank"]["plan"]["entities"]
+        for spec in owned:
             if spec["name"] == "small-electric-pole" and not self.purpose:
                 continue
             key = spec["name"], *xy(spec)
@@ -527,6 +702,8 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
         if result:
             return result
         self._save()
+        if entry.get("mode") == TRUNK_MODE:
+            return self._step_trunk(obs, parameters, entry)
         result = self._register(obs, entry, ready=entry["phase"] == "verified")
         if result:
             return result
@@ -591,8 +768,16 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
             if defense is None:
                 return None
         bank = entry["bank"]
+        trunk = entry.get("mode") == TRUNK_MODE
         actual = {(e["name"], *xy(e)): e for e in obs["entities"]}
-        if any((e["name"], *xy(e)) not in actual for e in bank["plan"]["entities"]):
+        if trunk:
+            # The patch bank as saved now (it may have grown in place since the tap was planned).
+            current = mine_trunk.find_bank(self._outposts().get("banks"), entry["trunk"])
+            hub = (entry.get("hub") or {}).get("entities", [])
+            if current is None or not mine_trunk.tap_standing(obs, entry["tap"], hub):
+                return None
+            bank = current
+        elif any((e["name"], *xy(e)) not in actual for e in bank["plan"]["entities"]):
             return None
         native = self.outposts.bank_proof(obs, bank)
         lanes = (native or {}).get("native_producer_lanes") or {}
@@ -605,9 +790,12 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
         witness = entry.get("lane_witness")
         if not witness or witness["drill_units"] != drill_units or not 0 <= obs["tick"] - witness["tick"] <= 600:
             return None
-        ports = {"stone": bank["plan"]["ports"][0]} if item == "stone" else bank["material_distribution"]["ports"]
+        if trunk:
+            ports = entry["ports"]
+        else:
+            ports = {"stone": bank["plan"]["ports"][0]} if item == "stone" else bank["material_distribution"]["ports"]
         if item == "coal":
-            spec = bank["material_distribution"]["splitter"]
+            spec = entry["hub"]["splitter"] if trunk else bank["material_distribution"]["splitter"]
             splitter = actual.get(("splitter", *xy(spec)))
             if not splitter or any(
                 splitter.get(k) != "none" for k in ("splitter_input_priority", "splitter_output_priority")

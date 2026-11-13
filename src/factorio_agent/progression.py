@@ -600,6 +600,11 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     proposed += throughput_growth_nodes(jobs, seen, observation, capabilities, critical=True)[
         : max(0, limit - len(proposed))
     ]
+    from .mine_trunk import mine_trunk_nodes  # patch bank grows in place when its trunk's taps outgrow it
+
+    proposed += mine_trunk_nodes(jobs, list(queue_nodes) + proposed, observation, capabilities)[
+        : max(0, limit - len(proposed))
+    ]
     for index, step in enumerate(ROADMAP):
         if len(proposed) >= limit:
             break

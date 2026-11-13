@@ -252136,3 +252136,11 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: gate run; unmeasured on a fleet (no runs started: 12 parallel runs on the machine).
 - failure reason: none yet; no new depot chest on a SiteService spot (existing storage chest is the depot).
 - next action: fleet run, check job-events for "put carried surplus" / "put retiring coal" and inventory coal over time.
+
+## 2026-11-13 mine output trunk (worker)
+- part: one mining block per patch; consumers tap the patch bank's trunk.
+- cause (eval-2874201674 coal patch): power_coal_feed/electric_coal single drill + belt east (boiler), mining_outpost coal pair exit south (smelting fuel; district "existing power feed remains separate"), dedicated_materials coal = independent pair planned with all banks as keep-outs (brick/steel coal hub). Three groups, crossing belts.
+- actions: mine_trunk.py (patch_bank, trunk_bus over planned_tap.layout, serve first/after priorities, hub, ledger mine-trunks.json, release_trunk_belts republishes owner plans before the mine, cutover, lane_count/balancer_plan, trunk_receipt + mine_trunk_nodes -> mining_outpost growth); material_supply TRUNK_MODE; tests/test_v2_mine_trunk.py; LAYOUT_PRINCIPLES "Mine output trunk".
+- result: gate run; unmeasured live.
+- failure reason / open: power feed not a tap yet and not retired; second lane not built; fallback to an independent pair when no tap site (recorded second_group_reason).
+- next action: fleet run with bricks; check material-supply.json mode trunk_tap, mine-trunks.json, no new coal bank.

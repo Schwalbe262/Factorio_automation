@@ -298,6 +298,14 @@ def execute(argv=None, services=None):
                     obs["throughput_growth"] = throughput
             except Exception as exc:  # a growth estimate must never break observe
                 obs["throughput_growth_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .mine_trunk import trunk_receipt
+
+            try:  # patch trunk demand vs bank supply (mine_trunk.mine_trunk_nodes)
+                trunks = trunk_receipt(root, list(Ledger(root).data["jobs"].values()), obs)
+                if trunks is not None:
+                    obs["mine_trunks"] = trunks
+            except Exception as exc:  # a growth estimate must never break observe
+                obs["mine_trunks_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .defense_perimeter import growth_receipt as defense_growth_receipt
 
             try:
