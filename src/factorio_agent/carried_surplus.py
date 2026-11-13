@@ -25,6 +25,17 @@ Rules (PLANNERS.md "Carried surplus"):
    ``trip_room`` (allowance + what consumers and depots accept - carried) and
    puts any excess into a consumer or depot first (``starter_retirement._collect``).
 
+Wood (owner, 2026-11-13: wood is burned in the power plant) has no carry
+allowance: all carried wood is surplus, boilers first. A base boiler has one
+fuel slot, so wood goes directly only into a boiler whose slot is empty or
+holds wood; a hand-fed boiler swaps its coal for wood
+(``power_coal_feed.boiler_fuel_action``, which holds ``reserve`` wood for it);
+a belt-fed plant takes wood through the wood feed chest
+(``wood_burner_feed``), the next sink after the boilers. Burner drills and
+furnaces follow, then depots. Wood is moved from ``WOOD_BATCH`` on in an idle
+pass (no job acted) and from ``WOOD_CARRY_CAP`` on in every upkeep, so a
+clearing batch is not interrupted for every tree.
+
 Plates are construction stock and stay with ``inventory_storage.KEEP``.
 """
 
@@ -42,6 +53,8 @@ STUCK = frozenset({"no_minable_resources", "waiting_for_space_in_destination", "
 CHEST_SLOTS = {"wooden-chest": 16, "iron-chest": 32, "steel-chest": 48}  # base game container sizes
 DEPOSIT_LIMIT = 1000  # storage_transfer.validate_deposit envelope
 DEFAULT_STACK = 50
+WOOD = "wood"
+WOOD_CARRY_CAP = 100  # upkeep (not idle) moves carried wood from one wood stack on
 
 
 def stack_size(catalog, item) -> int:
@@ -51,6 +64,8 @@ def stack_size(catalog, item) -> int:
 
 def allowance(item, catalog) -> int | None:
     """Items of ``item`` the actor may carry for known demand (module rule 1); None for other items."""
+    if item == WOOD:
+        return 0  # wood is burned, never carried for later (module doc)
     if item in FUELS:
         from .construction_supply import FUEL_FETCH
         from .power_coal_feed import boiler_sizing
@@ -64,6 +79,10 @@ def allowance(item, catalog) -> int | None:
 
 
 def threshold(item, catalog) -> int:
+    if item == WOOD:
+        from .wood_burner_feed import WOOD_BATCH
+
+        return WOOD_BATCH
     return SURPLUS_STACKS * stack_size(catalog, item)
 
 
@@ -133,8 +152,19 @@ def chest_room(chest, item, catalog) -> int:
 
 
 class CarriedSurplus:
-    def __init__(self, catalog, storage=None, retirement=None):
+    def __init__(self, catalog, storage=None, retirement=None, wood_feed=None, reserve=None):
         self.catalog, self.storage, self.retirement = catalog, storage, retirement
+        self.wood_feed = wood_feed  # wood_burner_feed.WoodBurnerFeed: its chest feeds the boilers
+        self.reserve = reserve  # reserve(obs, item) -> carried items held for a hand-fed boiler
+
+    def held_back(self, obs, item) -> int:
+        return max(0, int(self.reserve(obs, item) or 0)) if callable(self.reserve) else 0
+
+    def wood_chest(self, obs, item) -> dict | None:
+        """The wood feed chest when ``item`` is wood and it stands, else None."""
+        if item != WOOD or self.wood_feed is None:
+            return None
+        return self.wood_feed.chest(obs)
 
     def _excluded(self, obs):
         return self.retirement.cell_keys(obs) if self.retirement is not None else set()
@@ -151,6 +181,8 @@ class CarriedSurplus:
     def sink_room(self, obs, item) -> int:
         """Items of ``item`` that consumers and depots accept now."""
         room = sum(r["room"] for r in consumers(obs, item, self.catalog, self._excluded(obs)))
+        feed = self.wood_chest(obs, item)
+        room += chest_room(feed, item, self.catalog) if feed else 0
         return room + sum(chest_room(c, item, self.catalog) for c in self.depots(obs))
 
     def trip_room(self, obs, item) -> int:
@@ -161,11 +193,21 @@ class CarriedSurplus:
         return max(0, allowed + self.sink_room(obs, item) - carried(obs, item))
 
     def sink_action(self, obs, item, amount, reason) -> dict | None:
-        """One paid move of up to ``amount`` carried ``item``: consumer first (rule 2a), else a depot (2b)."""
+        """One paid move of up to ``amount`` carried ``item``: consumer first (rule 2a), else a depot (2b).
+
+        Wood: boilers, then the wood feed chest, then the other consumers.
+        """
         amount = min(int(amount), carried(obs, item))
         if amount <= 0:
             return None
-        for row in consumers(obs, item, self.catalog, self._excluded(obs)):
+        rows = consumers(obs, item, self.catalog, self._excluded(obs))
+        feed = self.wood_chest(obs, item)
+        if feed is not None and chest_room(feed, item, self.catalog) > 0:
+            boilers = [r for r in rows if r["entity"].get("name") == "boiler"]
+            rows = boilers + [{"chest": feed}] + [r for r in rows if r not in boilers]
+        for row in rows:
+            if "chest" in row:
+                return self._deposit(obs, row["chest"], item, amount, reason + " (wood feed)")
             e = row["entity"]
             return {
                 "type": "insert",
@@ -177,27 +219,39 @@ class CarriedSurplus:
                 "reason": reason,
             }
         for chest in self.depots(obs):
-            room = min(amount, chest_room(chest, item, self.catalog), DEPOSIT_LIMIT)
-            if room > 0:
-                return {
-                    "type": "deposit",
-                    "name": chest["name"],
-                    "position": dict(chest["position"]),
-                    "item": item,
-                    "count": int(room),
-                    "expected_entity_unit": chest["unit_number"],
-                    "expected_entity_world_id": obs["world_id"],
-                    "reason": reason + " (depot)",
-                }
+            action = self._deposit(obs, chest, item, amount, reason + " (depot)")
+            if action is not None:
+                return action
         return None
 
-    def step(self, obs) -> dict | None:
-        """Upkeep: one disposal action for the first item whose surplus reaches the threshold, else None."""
+    def _deposit(self, obs, chest, item, amount, reason) -> dict | None:
+        room = min(amount, chest_room(chest, item, self.catalog), DEPOSIT_LIMIT)
+        if room <= 0:
+            return None
+        return {
+            "type": "deposit",
+            "name": chest["name"],
+            "position": dict(chest["position"]),
+            "item": item,
+            "count": int(room),
+            "expected_entity_unit": chest["unit_number"],
+            "expected_entity_world_id": obs["world_id"],
+            "reason": reason,
+        }
+
+    def step(self, obs, *, idle=False) -> dict | None:
+        """Upkeep: one disposal action for the first item whose surplus reaches the threshold, else None.
+
+        ``idle``: a pass in which no job acted; wood then moves from
+        ``threshold`` on, in other passes only from ``WOOD_CARRY_CAP`` on.
+        """
         if not obs.get("world_id"):
             return None
         for item in ITEMS:
-            allowed = allowance(item, self.catalog)
+            allowed = allowance(item, self.catalog) + self.held_back(obs, item)
             excess = carried(obs, item) - allowed
+            if item == WOOD and not idle and excess < WOOD_CARRY_CAP:
+                continue
             if excess >= threshold(item, self.catalog):
                 action = self.sink_action(obs, item, excess, f"put carried surplus {item} where it is used")
                 if action is not None:

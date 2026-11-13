@@ -318,6 +318,14 @@ def execute(argv=None, services=None):
                 obs[BELT_RECEIPT] = belts
         except Exception as exc:  # an estimate must never break observe
             obs[BELT_RECEIPT + "_error"] = f"{type(exc).__name__}: {exc}"[:200]
+        from .wood_burner_feed import receipt as wood_receipt
+
+        try:  # wood waiting for the boilers (wood_burner_feed.wood_burner_feed_nodes)
+            wood = wood_receipt(root, obs)
+            if wood is not None:
+                obs["wood_burner_feed"] = wood
+        except Exception as exc:  # an estimate must never break observe
+            obs["wood_burner_feed_error"] = f"{type(exc).__name__}: {exc}"[:200]
         result = summary(obs, Ledger(root))
     elif args.command == "request":
         parameters = json.loads(args.parameters)

@@ -261,6 +261,38 @@ class BoilerUpkeepTests(unittest.TestCase):
             b.bootstrap.ensure_item = Mock(return_value={"status": "waiting", "reason": "waiting for coal"})
             self.assertIsNone(pcf.boiler_fuel_action(b, b.bootstrap, CATALOG, obs(boiler=boiler_row(coal=5))))
 
+    def test_carried_wood_replaces_coal_in_the_hand_fed_boiler(self):
+        with tempfile.TemporaryDirectory() as d:
+            b = builder(d, power_mode=HAND_FED)
+            state = obs(coal_carried=60, boiler=boiler_row(coal=10))
+            state["inventory"]["wood"] = 80
+            take = pcf.boiler_fuel_action(b, b.bootstrap, CATALOG, state)
+            self.assertEqual(
+                (take["type"], take["item"], take["inventory"], take["count"]), ("take", "coal", "fuel", 10)
+            )
+            empty = obs(coal_carried=70, boiler=boiler_row(coal=0, burning=1e6))
+            empty["inventory"]["wood"] = 80
+            insert = pcf.boiler_fuel_action(b, b.bootstrap, CATALOG, empty)
+            self.assertEqual((insert["type"], insert["item"], insert["count"]), ("insert", "wood", 80))
+            # Wood in the slot counts at its own fuel value: 20 wood = 10 coal-equivalent, below 14.
+            low = obs(coal_carried=60, boiler=dict(boiler_row(coal=0), inventory={"wood": 20}))
+            topped = pcf.boiler_fuel_action(b, b.bootstrap, CATALOG, dict(low, inventory={"coal": 60, "wood": 5}))
+            self.assertEqual((topped["item"], topped["count"]), ("wood", 5))  # any wood tops up a wood slot
+            swap = pcf.boiler_fuel_action(b, b.bootstrap, CATALOG, low)
+            self.assertEqual((swap["type"], swap["item"], swap["count"]), ("take", "wood", 20))  # no wood left: coal
+            self.assertEqual(pcf.hand_fed_wood_reserve(b, CATALOG, low, "wood"), 100)
+            self.assertEqual(pcf.hand_fed_wood_reserve(b, CATALOG, low, "coal"), 0)
+            b.state["power_mode"] = BELT_FED
+            self.assertEqual(pcf.hand_fed_wood_reserve(b, CATALOG, low, "wood"), 0)
+
+    def test_a_few_wood_do_not_replace_a_coal_refill(self):
+        with tempfile.TemporaryDirectory() as d:
+            b = builder(d, power_mode=HAND_FED)
+            state = obs(coal_carried=60, boiler=boiler_row(coal=10))
+            state["inventory"]["wood"] = 8
+            action = pcf.boiler_fuel_action(b, b.bootstrap, CATALOG, state)
+            self.assertEqual((action["type"], action["item"], action["count"]), ("insert", "coal", 40))
+
     def test_boiler_goes_before_the_burner_cells_in_starter_upkeep(self):
         with tempfile.TemporaryDirectory() as d:
             ex = StarterExecutors.__new__(StarterExecutors)

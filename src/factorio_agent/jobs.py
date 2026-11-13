@@ -356,6 +356,12 @@ CAPABILITIES = {
         "requires": ["starter"],
         "effect": "collect the remaining stock of a retired resource's burner starter cells in large trips, then mine the cold, empty, unlinked cells (paid, guarded) to free their tiles",
     },
+    "wood_burner_feed": {
+        "parameters": {},
+        "requires": ["power_coal_feed"],
+        "native_recipes": ["splitter"],
+        "effect": "burn carried wood in the belt-fed boilers: a wooden chest, a burner arm and a splitter that replaces one coal feed belt with input priority on the wood side (wood first, coal fills the rest); the chest is the wood depot for carried surplus",
+    },
     "startup_science_retirement": {
         "parameters": {},
         "requires": ["automation_science"],
@@ -481,6 +487,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "defense_growth": obs.get("defense_growth"),
         "early_start_inputs": obs.get("early_start_inputs"),
         "coal_feed_belts": obs.get("coal_feed_belts"),
+        "wood_burner_feed": obs.get("wood_burner_feed"),
         "capabilities": CAPABILITIES,
         "jobs": [
             {k: v for k, v in job.items() if k in {"key", "capability", "status", "reason", "actions", "last_tick"}}

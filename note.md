@@ -252141,3 +252141,9 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - actions: new site/nature.py (ranked/tiebreak, CLEARANCE_BATCH, batches); free_sites drops MAX_CLEARABLE and the per-tree distance penalty; search_bus drops clear_weight from the score (tie-break only); caps removed in planning.preflight (96), transport corridor (64), starter coal corridor (128); V2FactoryBuilder clears clear_obstacles in 96-obstacle batches, one paid mine per step, cleared batches memoised per world.
 - metrics: tests/test_v2_site_nature.py (8); bus/strips identical with a dense forest on the bus (old code moved the bus 24 tiles).
 - next action: live fleet in a forested seed to confirm clearing time and inventory (wood) headroom.
+
+## 2026-11-13 wood burned in the power plant (carried_surplus, power_coal_feed, wood_burner_feed)
+- goal: owner rule, carried wood is burned in the boilers; boiler has ONE fuel slot (Factorio 2.1.20 data/base entities.lua boiler fuel_inventory_size=1), so coal blocks wood.
+- actions: wood allowance 0, threshold WOOD_BATCH 25 in idle passes, WOOD_CARRY_CAP 100 in upkeep; hand-fed boiler takes leftover coal out and burns carried wood first (one wood slot reserved); new capability wood_burner_feed (owner's design): wooden chest -> burner arm -> splitter replacing one straight coal-feed belt, input priority wood side, output priority feed side; chest is the wood sink after boilers; proposed once when belt-fed, splitter enabled and >=25 wood carried/in depots. power_evidence counts every fuel by fuel_value.
+- metrics: tests test_v2_wood_burner_feed (7), carried_surplus +4, power_coal_feed +2.
+- next action: live fleet: confirm burner arm self-fuels from wood, splitter priority keeps coal as filler, and boiler proofs that count only coal (steam_expansion, base_coal_recovery) tolerate wood.

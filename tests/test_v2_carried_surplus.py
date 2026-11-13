@@ -11,6 +11,7 @@ from factorio_agent import carried_surplus as cs
 from factorio_agent import starter_retirement as sr
 from factorio_agent.construction_supply import FUEL_FETCH, V2Bootstrap
 from factorio_agent.power_coal_feed import boiler_sizing
+from factorio_agent.wood_burner_feed import WOOD_BATCH
 from test_v2_starter_retirement import COAL_BANK, COAL_DONE, PLATES_DONE, STONE_DONE, board, entity, retired_jobs
 
 WORLD = "world-1"
@@ -178,6 +179,51 @@ class FetchTests(unittest.TestCase):
         cell_chest = entity("wooden-chest", 1, 1, 8, inventory={"coal": 400})
         action = boot._take_output(obs(0, cell_chest), "coal", 24)
         self.assertEqual((action["reason"], action["count"]), ("collect produced coal", 24))
+
+
+def wood_obs(wood, *entities, coal=0):
+    return dict(obs(coal, *entities), inventory={"coal": coal, "wood": wood})
+
+
+class WoodTests(unittest.TestCase):
+    """Owner, 2026-11-13: carried wood is burned in the power plant, boilers first."""
+
+    def test_wood_has_no_allowance_and_waits_for_an_idle_pass_or_a_full_stack(self):
+        self.assertEqual((cs.allowance("wood", CATALOG), cs.threshold("wood", CATALOG)), (0, WOOD_BATCH))
+        surplus = cs.CarriedSurplus(CATALOG)
+        empty = entity("boiler", 10, 0, 1, inventory={}, status_name="working")
+        self.assertIsNone(surplus.step(wood_obs(WOOD_BATCH - 1, empty), idle=True))
+        self.assertIsNone(surplus.step(wood_obs(60, empty)))  # a clearing batch is not interrupted for 60 wood
+        idle = surplus.step(wood_obs(WOOD_BATCH, empty), idle=True)
+        self.assertEqual((idle["type"], idle["name"], idle["item"], idle["count"]), ("insert", "boiler", "wood", 25))
+        full = surplus.step(wood_obs(cs.WOOD_CARRY_CAP, empty))
+        self.assertEqual((full["item"], full["count"]), ("wood", 50))  # one slot: 50 = default stack in CATALOG
+
+    def test_coal_filled_boiler_takes_no_wood_but_the_wood_feed_chest_does_before_drills(self):
+        feed_chest = entity("wooden-chest", 40, 0, 31, inventory={"wood": 10})
+        feed = SimpleNamespace(chest=lambda o: feed_chest)
+        surplus = cs.CarriedSurplus(CATALOG, wood_feed=feed)
+        wood_drill = entity("burner-mining-drill", 20, 0, 2, inventory={}, status_name="working")
+        state = wood_obs(120, boiler(45), wood_drill)
+        action = surplus.step(state, idle=True)
+        self.assertEqual((action["type"], action["expected_entity_unit"], action["count"]), ("deposit", 31, 120))
+        self.assertIn("wood feed", action["reason"])
+        state["inventory"]["wood"] = 0  # the deposit moved every carried wood
+        self.assertIsNone(surplus.step(state, idle=True))
+        no_feed = cs.CarriedSurplus(CATALOG).step(wood_obs(120, boiler(45), wood_drill), idle=True)
+        self.assertEqual(no_feed["name"], "burner-mining-drill")  # drills stay secondary consumers
+
+    def test_hand_fed_reserve_holds_one_slot_of_wood_for_the_boiler(self):
+        surplus = cs.CarriedSurplus(CATALOG, reserve=lambda o, item: 100 if item == "wood" else 0)
+        drill = entity("burner-mining-drill", 20, 0, 2, inventory={}, status_name="working")
+        self.assertIsNone(surplus.step(wood_obs(120, boiler(45), drill), idle=True))
+        action = surplus.step(wood_obs(130, boiler(45), drill), idle=True)
+        self.assertEqual((action["name"], action["count"]), ("burner-mining-drill", 30))
+
+    def test_coal_behaviour_unchanged_by_wood(self):
+        surplus = cs.CarriedSurplus(CATALOG, wood_feed=SimpleNamespace(chest=lambda o: None))
+        action = surplus.step(wood_obs(0, boiler(0), coal=ALLOW + 50))
+        self.assertEqual((action["item"], action["count"], action["name"]), ("coal", 50, "boiler"))
 
 
 if __name__ == "__main__":
