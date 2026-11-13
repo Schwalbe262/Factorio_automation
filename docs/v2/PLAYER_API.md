@@ -90,7 +90,7 @@ Current capabilities:
 | electric_coal | none | power and naturally unlocked electric-mining-drill |
 | mining_outpost | `--resource iron-ore` (or copper-ore/coal/stone), `--rate-per-minute 1..960` absolute nominal target | power and electric-mining-drill |
 | smelting_district | none; initial district has iron60/copper30 nominal inputs | power, bootstrap_logistics, mining_outpost; one ready bank each iron60/copper30/coal30 |
-| smelting_capacity | `--resource iron-ore` or copper-ore, `--rate-per-minute` finite (0,450] absolute nominal target | smelting_district; connected ore and installed furnace types must cover the target within six reserved pairs |
+| smelting_capacity | `--resource iron-ore` or copper-ore, `--rate-per-minute` finite (0,450] absolute nominal target | smelting_district; connected ore and installed furnace types must cover the target within the bank's reserved slots (12 pairs on a fresh district, 6 on old rows); proposed by `progression.smelting_capacity_nodes` when bus taps claim 80% of a bank |
 | paired_smelting | none | smelting_district; old development map migration only, not a roadmap step |
 | paired_mining | none | paired_smelting; old development map migration only, not a roadmap step (fresh banks are built paired) |
 | automation_science | `--rate-per-minute` finite (0,30] requested red-science rate | smelting_district; normally connect the district's plate output ports, machines and labs |
@@ -204,8 +204,11 @@ reserve an additional aligned bank and connect it to an identity-bound same-item
 smelter trunk through a declared side-load. Its native output and consumer
 connection must both be valid. Natural obstacles on a preflighted corridor are
 cleared only by ordinary mining of approved neutral minable trees/rocks.
-Smelting reserves a32x32 expansion footprint before construction. Parameterized
-furnace rows have separate ore/coal side-load lanes, ordinary inserters and fixed
+Smelting reserves a 48x32 district before construction: two paired banks
+(`smelting.paired_furnace_bank`), each two furnace rows around one shared output
+belt with 12 reserved slots per row (`growth_area`, `growth_slots`), which no
+feed route, pole or other block may use; `smelting_capacity` builds slots in place.
+Furnace rows have separate ore/coal side-load lanes, ordinary inserters and fixed
 plate outputs. A separate coal bank supplies one real balanced splitter; the
 existing power feed remains operating. Full route/placement preflight precedes
 payment. Perpendicular foreign belt crossings use normal underground endpoints

@@ -29,7 +29,8 @@ Conventions (map tiles, x east, y south, Factorio 2.0 16-way directions:
 Recognised plan keys, recursively (so nested ``banks`` / candidate dicts
 work): any point dict {x, y, ...} (``position``, ``join``, ...);
 ``facing`` and integer ``direction``;
-``reserved_area`` / ``area`` / ``mining_footprint`` / ``mining_reserved_area``
+``reserved_area`` / ``area`` / ``mining_footprint`` / ``mining_reserved_area`` /
+``growth_area``
 [[x0, y0], [x1, y1]]; underground pair
 ``input`` / ``output`` [x, y]; splitter priorities. ``clear_obstacles``
 names real map objects and must be empty (transform before preflight).
@@ -73,7 +74,7 @@ ORIENTED = frozenset(
     }
 )
 SIDED_KEYS = frozenset({"input_priority", "output_priority", "lane"})
-RECT_KEYS = frozenset({"reserved_area", "area", "mining_footprint", "mining_reserved_area"})
+RECT_KEYS = frozenset({"reserved_area", "area", "mining_footprint", "mining_reserved_area", "growth_area"})
 UNMIRRORABLE = frozenset({"chemical-plant", "oil-refinery"})
 FOOTPRINTS = {"boiler": (3, 2), "steam-engine": (3, 5), "rocket-silo": (9, 9)}
 

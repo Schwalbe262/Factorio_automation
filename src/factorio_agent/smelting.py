@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 from pathlib import Path
@@ -13,10 +14,9 @@ from .power_grid import plan_connection as power_connection
 from .transport import plan_connection as belt_connection, underground_proof, xy
 from .planning import preflight
 from .site.transform import apply as apply_transform
-from .smelting_site import canonical_bank, corridor_guide, district_candidate, plan_candidates
+from .smelting_site import DISTRICT_SIZE, canonical_bank, corridor_guide, district_candidate, plan_candidates
 
 FURNACE_NAMES = frozenset({"stone-furnace", "steel-furnace", "electric-furnace"})
-DISTRICT_TILES = 32  # side of the square a smelting district reserves
 
 
 def smelting_site_anchors(sources):
@@ -93,6 +93,176 @@ def furnace_bank(x, y, count, resource, *, furnace_name="stone-furnace"):
     return _plan(
         es, ports, template="dual_lane_furnace_row", resource=resource, product=product, count=count, capacity_slots=6
     )
+
+
+BANK_SLOTS = 12  # furnace slots per row of a paired district bank
+SLOT_PITCH = 3  # furnace (2 tiles) + pole column
+BANK_LENGTH = 48  # tiles from the ore entry edge to the plate port edge
+BANK_DEPTH = 12  # tile rows of one bank (ore entry row .. lower input belt)
+RESERVED_TILE = "reserved-tile"  # 1x1 routing keepout, never built
+
+
+def _slot_entities(x0, y0, slot, row, furnace_name):
+    """Furnace, input/output inserters, pole and input belts of one slot (see :func:`paired_furnace_bank`)."""
+    cx = x0 + 9 + SLOT_PITCH * slot
+    if row == "right":  # upper row, drops onto the right lane of the eastbound output
+        fy, inserter_y, output_y, pole_y, belt_y, direction = y0 + 4, y0 + 2.5, y0 + 5.5, y0 + 4.5, y0 + 1.5, 0
+    else:  # lower row, drops onto the left lane
+        fy, inserter_y, output_y, pole_y, belt_y, direction = y0 + 9, y0 + 10.5, y0 + 7.5, y0 + 8.5, y0 + 11.5, 8
+    belts = [cx - 0.5, cx + 0.5] if slot == 0 else [cx - 1.5, cx - 0.5, cx + 0.5]
+    return [
+        entity(furnace_name, cx, fy),
+        entity("inserter", cx + 0.5, inserter_y, direction),
+        entity("inserter", cx + 0.5, output_y, direction),
+        entity("small-electric-pole", cx + 1.5, pole_y),
+        *(entity("transport-belt", bx, belt_y, 4) for bx in belts),
+    ]
+
+
+def paired_furnace_bank(
+    x0, y0, per_row, resource, *, slots=BANK_SLOTS, length=BANK_LENGTH, furnace_name="stone-furnace"
+):
+    """Two furnace rows around one shared eastbound output, ``slots`` furnace slots each.
+
+    Canonical frame, band ``[x0, x0 + length) x [y0, y0 + 12)``::
+
+        row 0   ore enters on the west edge (port, facing east) and side-loads the
+        row 1   mixed belt: stub, coal side-load from the south, splitter, upper input row
+        row 2   upper input inserters                    (splitter lower output turns south)
+        row 3-4 upper furnaces, poles in the pole column (vertical feed at x0 + 7.5)
+        row 5   upper output inserters
+        row 6   output belt from x0 + 9.5 to the east edge (plate port, both lanes)
+        row 7   lower output inserters
+        row 8-9 lower furnaces and poles
+        row 10  lower input inserters
+        row 11  lower input row (fed by the vertical belt, lanes kept by two curves)
+
+    Slot ``i`` sits at ``x0 + 9 + 3 i``; the last slot ends four tiles before the
+    port so the bus feed splitter and branch fit beside it. ``per_row`` slots
+    of both rows are built; the others are the bank's reserved growth
+    (``growth_slots``/``growth_entities``, inside ``growth_area``), added in
+    place by ``SmeltingDistrict.capacity_step`` without rerouting anything.
+    """
+    product = {"iron-ore": "iron-plate", "copper-ore": "copper-plate"}[resource]
+    if not 1 <= per_row <= slots or 9 + SLOT_PITCH * (slots - 1) + 2 > length - 4:
+        raise ValueError("paired bank slots do not fit its length")
+    fixed = [entity("transport-belt", x0 + dx + 0.5, y0 + 0.5, 4) for dx in range(4)]
+    fixed += [
+        entity("transport-belt", x0 + 4.5, y0 + 0.5, 8),
+        # The empty west stub keeps the coal junction straight, so coal side-loads one lane.
+        entity("transport-belt", x0 + 2.5, y0 + 1.5, 4),
+        entity("transport-belt", x0 + 3.5, y0 + 1.5, 4),
+        entity("transport-belt", x0 + 4.5, y0 + 1.5, 4),
+        entity("transport-belt", x0 + 3.5, y0 + 2.5, 0),
+        entity("transport-belt", x0 + 3.5, y0 + 3.5, 0),
+        dict(entity("splitter", x0 + 5.5, y0 + 2, 4), _width=2, _height=1),
+        entity("transport-belt", x0 + 6.5, y0 + 1.5, 4),
+        entity("transport-belt", x0 + 6.5, y0 + 2.5, 4),
+        entity("transport-belt", x0 + 7.5, y0 + 1.5, 4),
+        *(entity("transport-belt", x0 + 7.5, y0 + dy + 0.5, 8) for dy in range(2, 11)),
+        entity("transport-belt", x0 + 7.5, y0 + 11.5, 4),
+    ]
+    fixed += [entity("transport-belt", x0 + dx + 0.5, y0 + 6.5, 4) for dx in range(9, length)]
+    built, growth, rows = [], [], {"right": [], "left": []}
+    for row in ("right", "left"):
+        for slot in range(slots):
+            es = _slot_entities(x0, y0, slot, row, furnace_name)
+            if slot < per_row:
+                built += es
+                rows[row].append(es[0])
+            else:
+                growth.append({"row": row, "slot": slot, "entities": es})
+    feed = [
+        {"x": e["position"]["x"], "y": e["position"]["y"]}
+        for row in ("right", "left")
+        for slot in range(slots)
+        for e in _slot_entities(x0, y0, slot, row, furnace_name)
+        if e["name"] == "transport-belt"
+    ]
+    ports = [
+        port(resource, x0 + 0.5, y0 + 0.5, 4),
+        port("coal", x0 + 3.5, y0 + 3.5, 0),
+        dict(port(product, x0 + length - 0.5, y0 + 6.5, 4, "output"), lane_items={"left": product, "right": product}),
+    ]
+    return _plan(
+        built + fixed,
+        ports,
+        template="paired_furnace_bank",
+        layout_policy="pcb-independent-producers-per-lane-v1",
+        resource=resource,
+        product=product,
+        count=2 * per_row,
+        per_side_count=per_row,
+        capacity_slots=slots,
+        producer_rows=rows,
+        feed_belts=feed,
+        growth_area=[[x0 + 8, y0 + 1], [x0 + 9 + SLOT_PITCH * (slots - 1) + 2, y0 + 12]],
+        growth_slots=growth,
+        growth_entities=[e for g in growth for e in g["entities"]],
+    )
+
+
+def growth_tiles(builder, banks):
+    """Tiles of every bank's ``growth_area`` its built entities do not occupy (reserved for growth)."""
+    tiles = set()
+    for bank in banks:
+        area = bank.get("growth_area")
+        if not area:
+            continue
+        (x0, y0), (x1, y1) = area
+        built = builder._occupied_by_plan(bank["entities"])
+        tiles.update(
+            (x + 0.5, y + 0.5)
+            for x in range(math.floor(x0), math.ceil(x1))
+            for y in range(math.floor(y0), math.ceil(y1))
+            if (x + 0.5, y + 0.5) not in built
+        )
+    return tiles
+
+
+def growth_keepouts(builder, banks):
+    """1x1 non-belt keepout specs on every growth tile, for ``reserved`` of belt and pole planners.
+
+    Belt routing (``transport.plan_connection``) treats a reserved non-belt
+    as hard, the pole planner (``power_grid.plan_connection``) removes its
+    tile from the legal points; neither is ever built or preflighted.
+    """
+    return [entity(RESERVED_TILE, x, y) for x, y in sorted(growth_tiles(builder, banks))]
+
+
+def grown_bank(bank, per_row):
+    """``bank`` with every reserved slot below ``per_row`` built in both rows (pure).
+
+    Only entities of ``growth_slots`` move into ``entities``; ports, the
+    output belt and the feed stay as they are. A furnace keeps the bank's
+    ``furnace_name`` when it has one.
+    """
+    if not 1 <= per_row <= bank["capacity_slots"]:
+        raise ValueError("per-row furnace count outside the bank's reserved slots")
+    if per_row <= bank["per_side_count"]:
+        return copy.deepcopy(bank)
+    furnace = bank.get("furnace_name")
+    entities = copy.deepcopy(bank["entities"])
+    rows = copy.deepcopy(bank["producer_rows"])
+    kept = []
+    for slot in sorted(bank["growth_slots"], key=lambda g: (g["row"], g["slot"])):
+        if slot["slot"] >= per_row:
+            kept.append(slot)
+            continue
+        added = copy.deepcopy(slot["entities"])
+        if furnace:
+            added[0]["name"] = furnace
+        entities += added
+        rows[slot["row"]].append(added[0])
+    extra = {k: v for k, v in bank.items() if k not in ("ok", "reason", "entities", "ports", "required_items")}
+    extra.update(
+        count=2 * per_row,
+        per_side_count=per_row,
+        producer_rows=rows,
+        growth_slots=kept,
+        growth_entities=[e for g in kept for e in g["entities"]],
+    )
+    return _plan(entities, bank["ports"], **extra)
 
 
 def merge_entities(*groups):
@@ -173,8 +343,12 @@ def feed_lane_positions(bank):
 
     The canonical rule (same row as the first entity minus 2.5, from its x +
     0.5 on) is applied in the bank's canonical frame, so a turned or mirrored
-    bank selects the same belts.
+    bank selects the same belts. A paired bank lists its input rows in
+    ``feed_belts`` (map positions); only the built ones are returned.
     """
+    if "feed_belts" in bank:
+        built = {xy(e) for e in bank["entities"] if e["name"] == "transport-belt"}
+        return [dict(p) for p in bank["feed_belts"] if (p["x"], p["y"]) in built]
     canonical, _turn = canonical_bank(bank)
     first = canonical["entities"][0]["position"]
     picked = []
@@ -257,6 +431,8 @@ class SmeltingDistrict:
                 "available_nominal_ore_rate": available,
             }
         old = next(b for b in self.state["banks"] if b["resource"] == resource)
+        if "growth_slots" in old:
+            return self._grow(obs, old, rate)
         existing = {xy(e): e["name"] for e in old["entities"] if e["name"] in FURNACE_NAMES}
         if not existing or set(existing.values()) - {"stone-furnace", "steel-furnace"}:
             return {"status": "blocked", "reason": "row_expansion_requires_existing_two_by_two_burner_furnaces"}
@@ -350,6 +526,69 @@ class SmeltingDistrict:
             }
         return {"status": "waiting", "reason": "waiting for added furnaces to smelt ordinary belt inputs"}
 
+    def _grow(self, obs, old, rate):
+        """Paired-bank growth: build reserved slots in place (both rows), nothing is rerouted."""
+        resource = old["resource"]
+        names = {e["name"] for e in old["entities"] if e["name"] in FURNACE_NAMES}
+        preferred = old.get("furnace_name", "stone-furnace")
+        if names - {preferred} or preferred not in {"stone-furnace", "steel-furnace"}:
+            return {"status": "blocked", "reason": "row_expansion_requires_existing_two_by_two_burner_furnaces"}
+        each = self.catalog.entities[preferred]["crafting_speed"] * 60 / self.catalog.recipes[old["product"]]["energy"]
+        wanted = max(1, math.ceil(rate / each / 2 - 1e-9))
+        slots = old["capacity_slots"]
+        if wanted > slots:
+            # The next step is a second bank of the same product (module doc of smelting_site).
+            return {
+                "status": "blocked",
+                "reason": "paired_bank_full_next_growth_is_another_bank",
+                "evidence": {"capacity_slots": slots, "full_bank_rate_per_minute": 2 * slots * each},
+            }
+        new = grown_bank(old, max(wanted, old["per_side_count"]))
+        if new["entities"] != old["entities"]:
+            board_path = self.path.parent / "pcb-board.json"
+            board = json.loads(board_path.read_text(encoding="utf-8"))
+            if board.get("world_id") != obs["world_id"] or board.get("catalog_fingerprint") != self.catalog.fingerprint:
+                return {"status": "blocked", "reason": "board_identity_or_catalog_changed"}
+            before = {(e["name"], *xy(e)) for e in old["entities"]}
+            added = [e for e in new["entities"] if (e["name"], *xy(e)) not in before]
+            es = merge_entities(self.state["plan"]["entities"], added)
+            boxes = [self.builder._occupied_by_plan([e]) for e in es]
+            if sum(map(len, boxes)) != len(set().union(*boxes)):
+                return {"status": "blocked", "reason": "expanded_row_prospective_overlap"}
+            native = preflight(self.game, self.builder, obs, added)
+            if not native.get("ok"):
+                return {"status": "blocked", "reason": "expanded_row_native_preflight_failed", "detail": native}
+            banks = [new if b["resource"] == resource else b for b in self.state["banks"]]
+            extra = {
+                k: v
+                for k, v in self.state["plan"].items()
+                if k not in ("ok", "reason", "entities", "ports", "required_items")
+            }
+            obstacles = {(e["name"], *xy(e)): e for e in self.state["plan"].get("clear_obstacles", [])}
+            obstacles.update({(e["name"], *xy(e)): e for e in native.get("clear_obstacles", [])})
+            extra.update(
+                clear_obstacles=list(obstacles.values()),
+                clearance_world_id=obs["world_id"],
+                growth_entities=[e for b in banks for e in b.get("growth_entities", [])],
+            )
+            plan = _plan(es, self.state["plan"]["ports"], **extra)
+            self.state.update(plan=plan, banks=banks)
+            self.state["nominal_smelting_capacity_per_minute"] = bank_capacities(self.catalog, banks)
+            _atomic_json(self.path, self.state)
+            board["blocks"]["smelting_district"] = plan
+            _atomic_json(board_path, board)
+        result = self.builder.ensure_plan(obs, self.state["plan"])
+        if result.get("status") != "succeeded":
+            return result
+        proof = self.proof(obs)
+        if proof:
+            return {
+                "status": "succeeded",
+                "reason": "reserved furnace slots built in place; ports and feed unchanged",
+                "evidence": proof,
+            }
+        return {"status": "waiting", "reason": "waiting for added furnaces to smelt ordinary belt inputs"}
+
     def _map_site_anchors(self, game, sources):
         """District anchors on free land nearest the ore and coal sources, from one bulk map survey.
 
@@ -362,10 +601,10 @@ class SmeltingDistrict:
         points = [(p["position"]["x"], p["position"]["y"]) for p in sources.values()]
         try:
             world = survey_around(game, points)
-            rects = free_sites(world, points, DISTRICT_TILES, DISTRICT_TILES, limit=12)
+            rects = free_sites(world, points, *DISTRICT_SIZE, limit=12)
         except Exception:  # noqa: BLE001 - site search is an optimisation, never a new failure mode
             return []
-        # The district's reserved area is [x - 8, x + 24) x [y - 8, y + 24).
+        # The district's reserved area is [x - 8, x + 40) x [y - 8, y + 24).
         return [(rect.x0 + 8, rect.y0 + 8) for rect in rects]
 
     def prepare(self, obs):
@@ -420,7 +659,8 @@ class SmeltingDistrict:
         unbuilt = planned_unbuilt_hardware(self.builder, obs, board.get("blocks", {}), exclude=("smelting_district",))
         for candidate in planned + fallback:
             area = candidate["area"]
-            if hardware_conflicts(self.builder, candidate["entities"], unbuilt):
+            growth = [e for b in candidate["banks"] for e in b.get("growth_entities", [])]
+            if hardware_conflicts(self.builder, candidate["entities"] + growth, unbuilt):
                 continue
             if any(
                 area[0][0] < b["reserved_area"][1][0]
@@ -432,7 +672,9 @@ class SmeltingDistrict:
             ):
                 continue
             candidates.append(candidate)
-        args = json.dumps(json.dumps(candidates, separators=(",", ":")))
+        # Only what the survey reads: banks carry their (large) growth metadata.
+        surveyed = [{"area": c["area"], "entities": c["entities"]} for c in candidates]
+        args = json.dumps(json.dumps(surveyed, separators=(",", ":")))
         survey = game.query(
             """
 local plans=helpers.json_to_table("""
@@ -475,10 +717,16 @@ return {ok=true,legal=legal}
             connections = []
             for bank, branch in zip(site["banks"], site["coal_branches"]):
                 connections.append((branch, next(p for p in bank["ports"] if p["item"] == "coal")))
+            for bank in site["banks"]:
                 connections.append(
                     (sources[bank["resource"]], next(p for p in bank["ports"] if p["item"] == bank["resource"]))
                 )
             connections.append((sources["coal"], site["coal_input"]))
+            # The banks' unbuilt furnace slots are hard for the district's own
+            # feed routes and pole bridges (once registered, the whole reserved
+            # area is hard for every other block's routes and poles).
+            keepouts = growth_keepouts(self.builder, site["banks"])
+            reserved_growth = {xy(e) for e in keepouts}
             for source, destination in connections:
                 if budget.expired():
                     good = False
@@ -487,7 +735,7 @@ return {ok=true,legal=legal}
                 guide = None
                 if master is not None and source in sources.values():
                     guide = corridor_guide(master, source["item"])
-                route = belt_connection(game, self.builder, obs, source, destination, es, **guided(guide))
+                route = belt_connection(game, self.builder, obs, source, destination, es + keepouts, **guided(guide))
                 if not route.get("ok"):
                     failures.append(
                         {
@@ -508,7 +756,11 @@ return {ok=true,legal=legal}
             for bank in site["banks"]:
                 pole = next(e for e in bank["entities"] if e["name"] == "small-electric-pole")
                 power = power_connection(
-                    game, self.builder, obs, pole["position"], [e for e in es if e["name"] != "small-electric-pole"]
+                    game,
+                    self.builder,
+                    obs,
+                    pole["position"],
+                    [e for e in es if e["name"] != "small-electric-pole"] + keepouts,
                 )
                 if not power.get("ok"):
                     failures.append({"stage": "power", "area": site["area"], "reason": power.get("reason")})
@@ -521,6 +773,11 @@ return {ok=true,legal=legal}
             if sum(map(len, boxes)) != len(set().union(*boxes)):
                 failures.append(
                     {"stage": "whole_geometry", "area": site["area"], "reason": "whole_prospective_plan_overlaps"}
+                )
+                continue
+            if set().union(*boxes) & reserved_growth:
+                failures.append(
+                    {"stage": "growth_footprint", "area": site["area"], "reason": "plan_entity_in_reserved_growth_slot"}
                 )
                 continue
             # Corridors may include exact approved natural clearances. A raw
@@ -540,6 +797,7 @@ return {ok=true,legal=legal}
                 underground_pairs=pairs,
                 clear_obstacles=whole["clear_obstacles"],
                 clearance_world_id=obs["world_id"],
+                growth_entities=[e for b in site["banks"] for e in b.get("growth_entities", [])],
                 **({"site_transform": site["site_transform"]} if "site_transform" in site else {}),
             )
             return {

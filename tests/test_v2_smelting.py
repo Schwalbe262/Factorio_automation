@@ -132,7 +132,8 @@ class SmeltingPreparationTests(unittest.TestCase):
             self.assertTrue(result["ok"], result)
             self.assertEqual(result["plan"]["clear_obstacles"], [tree])
             self.assertEqual(result["plan"]["clearance_world_id"], "w")
-            self.assertEqual(len(result["routes"]), 5)
+            # Two ore feeds and the coal input; the coal branches are fixed district belts.
+            self.assertEqual(len(result["routes"]), 3)
             builder.can_place.assert_not_called()
             native.assert_called_once()
             self.assertFalse((Path(directory) / "smelting-district.json").exists())

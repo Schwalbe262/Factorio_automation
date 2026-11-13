@@ -66,12 +66,15 @@ class TransformTests(unittest.TestCase):
         by_x = transform_plan(plan, rotation=8, mirror="x", origin=(24, -8))
         self.assertEqual(audit(by_y["entities"]), audit(by_x["entities"]))
 
-    def test_square_reserved_area_maps_onto_itself_about_its_centre(self):
+    def test_reserved_area_maps_onto_itself_or_its_transpose_about_its_centre(self):
         plan = district()
         (x0, y0), (x1, y1) = plan["area"]
         centre = ((x0 + x1) / 2, (y0 + y1) / 2)
+        hw, hh = (x1 - x0) / 2, (y1 - y0) / 2
+        transposed = [[centre[0] - hh, centre[1] - hw], [centre[0] + hh, centre[1] + hw]]
         for t in variants(centre):
-            self.assertEqual(apply(t, plan)["area"], plan["area"])
+            expected = transposed if t.rotation in (4, 12) else plan["area"]
+            self.assertEqual(apply(t, plan)["area"], expected)
 
     def test_directions_ports_and_pairs(self):
         t = Transform(4, None, (0, 0))
@@ -117,17 +120,17 @@ class FitTests(unittest.TestCase):
         self.assertLess(port_score(port, (0, 10), "out"), port_score(port, (0, -10), "out"))
 
     def test_orientation_turns_the_district_towards_feeders_and_outlet(self):
-        target = Rect(-64, 0, -32, 32)
+        target = Rect(-64, 0, -32, 48)  # the 48 x 32 district stood on end
 
         def wants(candidate):
             rows = [(b["ports"][0], (-48, -20), "in") for b in candidate["banks"]]
             rows += [(b["ports"][-1], (-48, 52), "out") for b in candidate["banks"]]
             return rows
 
-        best = orientations(lambda x0, y0: district_candidate(x0 + 8, y0 + 8, COUNTS), (32, 32), target, wants)
-        self.assertEqual(len(best), 8)
+        best = orientations(lambda x0, y0: district_candidate(x0 + 8, y0 + 8, COUNTS), (48, 32), target, wants)
+        self.assertEqual(len(best), 4)  # only the quarter turns stand it on end
         top = best[0]
-        self.assertEqual(top.plan["area"], [[-64, 0], [-32, 32]])
+        self.assertEqual(top.plan["area"], [[-64, 0], [-32, 48]])
         outputs = [b["ports"][-1] for b in top.plan["banks"]]
         self.assertTrue(all(p["facing"] == 8 for p in outputs), outputs)
         self.assertLess(top.score, 1000)
