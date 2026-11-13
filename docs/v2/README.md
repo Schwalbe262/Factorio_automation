@@ -34,6 +34,19 @@ read incrementally and a missing or half-written JSON keeps its last good value.
 | 최근 활동 | last 40 `action_intent` rows of `job-events.jsonl` with their result, report's repeated-action top 3, `open_incidents` of the controller state, last controller errors |
 | 레이아웃 | `site-map.json` + `site-plan.json` drawn by `site.planrender.render_dashboard_svg` (map, zones, corridors, rail, bus lanes, allocations) with the `pcb-board.json` blocks' `reserved_area` on top; a placeholder until `SiteService` wrote the plan |
 
+Tab `병렬 실행` (`#fleets`, endpoint `/api/fleets`): every `<base>/fleets/*.json`
+manifest newest first (commit from the manifest or `fleets/reports/<name>.report.txt`,
+target, planner, client / TEST MODE, running/stopped by process check, one health
+line); per fleet one row per seed with server/supervisor/client state, game minute,
+the milestone strip of `fleet.py report` (+ green science when a run has it), furthest
+step, active/blocked jobs and the current blocked reason, then min/median/max and
+reached N/M; blocked-reason histograms (`fleet.aggregate`) per fleet and over the last
+5 fleets; a round-to-round median table with sparkline for name series such as `auto-*`.
+Per run it re-reads only changed files (job-events incrementally), ~0.1 s per refresh
+with 19 fleets / ~140 runs. A seed links to `/?runtime=<folder>#run`: `/api/state` and
+`/api/layout.svg` accept `?runtime=` for a strict folder name under `<base>/v2`.
+`--base` (default `runtime`) sets where fleets and runs are read.
+
 ## Fleet runs (N maps in parallel, one report)
 
 ```

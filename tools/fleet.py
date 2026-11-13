@@ -181,15 +181,21 @@ def _read(path, default=None):
         return default
 
 
-def run_tick(root):
-    """Last observed game tick: controller state, else the newest job tick."""
-    state = _read(Path(root) / "logs" / "controller-state.json", {}) or {}
+def tick_of(state, jobs):
+    """Last observed game tick from loaded controller state and jobs: the state's, else the newest job tick."""
     tick = state.get("last_observed_tick")
     if type(tick) is int:
         return tick
-    jobs = (_read(Path(root) / "jobs.json", {}) or {}).get("jobs", {})
     ticks = [j.get("last_tick") for j in jobs.values() if type(j.get("last_tick")) is int]
     return max(ticks) if ticks else None
+
+
+def run_tick(root):
+    """Last observed game tick: controller state, else the newest job tick."""
+    state = _read(Path(root) / "logs" / "controller-state.json", {}) or {}
+    if type(state.get("last_observed_tick")) is int:
+        return state["last_observed_tick"]
+    return tick_of(state, (_read(Path(root) / "jobs.json", {}) or {}).get("jobs", {}))
 
 
 def quick_summary(root):
@@ -197,9 +203,14 @@ def quick_summary(root):
     root = Path(root)
     jobs = (_read(root / "jobs.json", {}) or {}).get("jobs", {})
     state = _read(root / "logs" / "controller-state.json", {}) or {}
+    return job_summary(jobs, state)
+
+
+def job_summary(jobs, state):
+    """`quick_summary` from an already loaded ``jobs`` mapping and controller state (the dashboard's cache)."""
     done = [j for j in jobs.values() if j.get("status") == "succeeded" and type(j.get("last_tick")) is int]
     last = max(done, key=lambda j: j["last_tick"]) if done else None
-    tick = run_tick(root)
+    tick = tick_of(state, jobs)
     return dict(
         game_minutes=round(tick / TICKS_PER_MINUTE, 1) if tick is not None else None,
         last_milestone=last.get("capability") if last else None,

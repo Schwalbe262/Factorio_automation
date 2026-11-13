@@ -75,15 +75,48 @@ label.toggle { font-size: 13px; display: inline-flex; gap: 4px; align-items: cen
 .warn { color: var(--wait); background: var(--wait-bg); padding: 6px 8px; border-radius: 6px; margin: 6px 0; font-size: 13px; }
 .cols { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
 @media (min-width: 1000px) { .cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
-#conn.bad { color: var(--blocked); }
+#conn.bad, #fconn.bad { color: var(--blocked); }
+main[hidden], .chips[hidden] { display: none; }
+.tabs { display: flex; gap: 4px; margin: 0 0 8px; }
+.tabs button { border-radius: 6px 6px 0 0; border-bottom-width: 2px; }
+.tabs button[aria-selected="true"] { background: var(--card); border-color: var(--line); border-bottom-color: var(--active); font-weight: 600; }
+a { color: var(--active); }
+td.ms, th.ms { text-align: center; white-space: nowrap; padding: 4px 3px; min-width: 3.2em; font-variant-numeric: tabular-nums; }
+td.ms.on { background: var(--done-bg); color: var(--done); font-weight: 600; border-left: 2px solid var(--card); }
+td.ms.off { color: var(--muted); border-left: 2px solid var(--card); }
+table.runs { width: max-content; min-width: 100%; }
+table.runs th { white-space: nowrap; }
+table.runs td.why { min-width: 14em; max-width: 30em; overflow-wrap: normal; word-break: break-word; }
+tfoot td { color: var(--muted); border-bottom: 0; }
+tfoot tr:first-child td { border-top: 2px solid var(--line); }
+details.fleet { border: 1px solid var(--line); border-radius: 6px; margin: 0 0 6px; }
+details.fleet[open] { border-color: var(--muted); }
+details.fleet > summary { cursor: pointer; padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; list-style-position: inside; }
+details.fleet > summary .health { flex-basis: 100%; color: var(--muted); font-size: 13px; padding-left: 1.2em; }
+details.fleet > .inner { padding: 0 10px 10px; }
+.meta { color: var(--muted); font-size: 13px; }
+.up { font-size: 12px; white-space: nowrap; }
+.spark { color: var(--muted); vertical-align: middle; }
+.delta-good { color: var(--done); font-size: 12px; }
+.delta-bad { color: var(--blocked); font-size: 12px; }
 </style>
 </head>
 <body>
 <header>
   <h1>Factorio 자동화 현황 <small id="runtime">불러오는 중…</small></h1>
+  <nav class="tabs" role="tablist">
+    <button type="button" role="tab" id="tab-run" data-tab="run" aria-selected="true">단일 런</button>
+    <button type="button" role="tab" id="tab-fleets" data-tab="fleets" aria-selected="false">병렬 실행</button>
+  </nav>
   <div class="chips" id="chips"></div>
+  <div class="chips" id="fleet-chips" hidden></div>
 </header>
-<main>
+<main id="view-fleets" hidden>
+  <section id="fleets" class="wide"><h2>병렬 실행 (플릿) <small class="reason">최신순 · 칸 = 그 단계가 성공한 게임 분</small></h2><div class="body"></div></section>
+  <section id="fleet-blocked"><h2>막힘 이유 · 최근 플릿 합계</h2><div class="body"></div></section>
+  <section id="fleet-trend"><h2>라운드별 추세 (자동 루프)</h2><div class="body"></div></section>
+</main>
+<main id="view-run">
   <section id="now"><h2>진행 중</h2><div class="body"></div></section>
   <section id="done"><h2>완료 · 로켓까지의 로드맵</h2><div class="body"></div></section>
   <section id="layout" class="wide">
@@ -149,6 +182,7 @@ function renderHeader(d) {
   const hd = d.header, sup = hd.supervisor || {};
   document.getElementById("runtime").textContent = hd.runtime + " · seed " + (hd.seed ?? "-");
   const chips = [
+    RUNTIME ? h("span", { class: "chip" }, "선택한 런 ", h("b", {}, RUNTIME), " · ", h("a", { href: "/#run" }, "기본 런으로")) : null,
     h("span", { class: "chip" }, "감독자 ", badge(sup.alive ? "running" : "blocked", sup.alive ? "실행 중" : "중지됨"),
       " ", h("span", { class: "reason" }, (sup.basis || "") + (sup.last_event_seconds_ago != null ? " · 마지막 이벤트 " + ago(sup.last_event_seconds_ago / 60) : ""))),
     h("span", { class: "chip" }, "실제 ", h("b", {}, fmtMin(hd.wall_minutes)), " / 게임 ", h("b", {}, fmtMin(hd.game_minutes))),
@@ -257,7 +291,7 @@ document.getElementById("fit-all").addEventListener("click", () => { if (layout)
 document.querySelectorAll("[data-layer]").forEach(c => c.addEventListener("change", () => mapEl.classList.toggle("hide-" + c.dataset.layer, !c.checked)));
 
 async function loadSvg(info) {
-  const r = await fetch("/api/layout.svg?v=" + info.version, { cache: "no-store" });
+  const r = await fetch("/api/layout.svg?v=" + info.version + (RUNTIME ? "&runtime=" + encodeURIComponent(RUNTIME) : ""), { cache: "no-store" });
   if (!r.ok) throw new Error("layout " + r.status);
   const text = await r.text();
   const doc = new DOMParser().parseFromString(text, "image/svg+xml");
@@ -300,20 +334,177 @@ function renderLayout(d) {
   document.getElementById("layout-lists").replaceChildren(h("div", {}, h("h3", {}, "계획 대 실제"), blocks, allocs), h("div", {}, h("h3", {}, "마스터 플랜 구역"), zones));
 }
 
+// ----- fleets tab ----------------------------------------------------------
+const openFleets = new Set();
+let openInit = false, lastFleets = null;
+function runLink(name, text) {
+  return h("a", { href: "/?runtime=" + encodeURIComponent(name) + "#run", target: "_blank", rel: "noopener", title: name + " 단일 런 보기" }, text);
+}
+function when(t) {
+  return t ? new Date(t * 1000).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "-";
+}
+function num(v) { return v === null || v === undefined ? "-" : (typeof v === "number" ? (Number.isInteger(v) ? String(v) : v.toFixed(1)) : String(v)); }
+function upMark(ok, label) { return h("span", { class: "badge " + (ok ? "s-done" : "s-pending"), title: label + (ok ? " 실행 중" : " 꺼짐") }, label + (ok ? " ✓" : " ✗")); }
+const CLIENT = { live: "클라 ✓", none: "클라 없음", detached: "클라 분리", down: "클라 ✗" };
+const HEALTH = { ok: ["done", "양호"], warn: ["wait", "막힘 있음"], bad: ["blocked", "문제"] };
+
+function runsTable(f) {
+  const cols = f.columns;
+  const head = h("tr", {}, h("th", {}, "시드"), h("th", {}, "프로세스"), h("th", { class: "num" }, "게임 분"),
+    cols.map(c => h("th", { class: "ms", title: c.label + " (" + c.step + ")" }, c.label.replace(" 전초기지", "").replace(" 연구", ""))),
+    h("th", {}, "최고 단계"), h("th", { class: "num", title: "진행 중 작업" }, "활성"), h("th", { class: "num", title: "막힘/실패 작업" }, "막힘"), h("th", {}, "현재 막힌 이유"));
+  const body = f.runs.map(r => h("tr", {},
+    h("td", { class: "t" }, r.link ? runLink(r.runtime, String(r.seed)) : String(r.seed ?? "-"),
+      r.test_mode ? h("div", {}, h("span", { class: "badge s-blocked" }, "TEST")) : null,
+      r.status && r.status !== "running" && r.status !== "stopped" ? h("div", { class: "reason" }, r.status) : null),
+    h("td", { class: "up" }, upMark(r.server, "서버"), " ", upMark(r.supervisor, "감독"), h("div", { class: "reason" }, CLIENT[r.client] || r.client)),
+    h("td", { class: "num" }, num(r.game_minutes)),
+    cols.map(c => {
+      const m = r.milestones[c.step];
+      return m === undefined
+        ? h("td", { class: "ms off", title: c.label + ": 미도달" }, "–")
+        : h("td", { class: "ms on", title: c.label + ": 게임 " + m + "분" }, num(m));
+    }),
+    h("td", {}, r.furthest ? h("span", {}, r.furthest.step, h("span", { class: "reason" }, " @" + num(r.furthest.minute))) : "-"),
+    h("td", { class: "num" }, num(r.active)), h("td", { class: "num" }, num(r.blocked)),
+    h("td", { class: "reason why" }, r.blocked_now ? (r.blocked_now.capability || "?") + ": " + r.blocked_now.reason : (r.launch_error ? "시작 실패: " + r.launch_error : "-"))));
+  const label = { min: "최소", median: "중앙값", max: "최대" };
+  const foot = ["min", "median", "max"].map(k => h("tr", {}, h("td", { colspan: 3, class: "num" }, label[k]),
+    cols.map(c => h("td", { class: "ms" }, num(f.stats[c.head][k]))), h("td", { colspan: 4 })));
+  foot.push(h("tr", {}, h("td", { colspan: 3, class: "num" }, "도달 (N / M)"),
+    cols.map(c => h("td", { class: "ms", title: f.runs_with_data + "개 런 중 " + f.stats[c.head].n + "개 도달" }, f.stats[c.head].n + "/" + f.runs_with_data)), h("td", { colspan: 4 })));
+  return h("div", { class: "scroll" }, h("table", { class: "runs" }, h("thead", {}, head), h("tbody", {}, body), h("tfoot", {}, foot)));
+}
+
+function blockedTable(rows) {
+  return table([["건수", "num"], ["런", "num"], ["막힌 이유 (숫자 정규화)"], ["작업"], ["예시 런"]],
+    rows.map(b => [h("td", { class: "num" }, b.count), h("td", { class: "num" }, b.runs), h("td", { class: "reason" }, b.reason),
+      h("td", {}, b.capability || "-"), h("td", { class: "t" }, b.example_runtime ? runLink(b.example_runtime, String(b.example)) : String(b.example ?? "-"))]));
+}
+
+function fleetSummary(f) {
+  const [state, text] = HEALTH[f.health_level] || HEALTH.ok;
+  return h("summary", {},
+    h("b", {}, f.name),
+    h("span", { class: "meta" }, when(f.created_at)),
+    f.commit ? h("span", { class: "meta" }, "커밋 " + f.commit) : null,
+    h("span", { class: "meta" }, "목표 " + (f.target_minutes ? num(f.target_minutes) + "분" : "-")),
+    h("span", { class: "meta" }, "플래너 " + (f.planner || "-") + " · 클라이언트 " + (f.client || "always")),
+    f.test_runs ? h("span", { class: "badge s-blocked" }, "TEST MODE client_free " + f.test_runs + "런") : null,
+    h("span", {}, badge(f.running ? "running" : "pending", "실행 " + f.running), " ", badge("pending", "중지 " + f.stopped)),
+    badge(state, text),
+    h("span", { class: "health" }, f.health));
+}
+
+function trendBlock(t) {
+  const rounds = t.rounds;
+  const head = h("tr", {}, h("th", {}, "단계 (중앙값 분)"),
+    rounds.map(r => h("th", { class: "num", title: r.name + (r.commit ? " · 커밋 " + r.commit : "") },
+      r.name.slice(t.prefix.length + 1), h("div", { class: "reason" }, r.commit || "커밋 ?"),
+      h("div", { class: "reason" }, r.running ? "진행 중" : (r.finished ? "완료" : "")))),
+    h("th", {}, "추이"));
+  const body = t.heads.map(c => {
+    const vals = rounds.map(r => r.median[c.head]);
+    return h("tr", {}, h("td", {}, c.label),
+      rounds.map((r, i) => {
+        const v = vals[i], prev = i ? vals[i - 1] : null;
+        let delta = null;
+        if (v != null && prev != null && Math.abs(v - prev) >= 0.1) {
+          const d = v - prev;
+          delta = h("span", { class: d < 0 ? "delta-good" : "delta-bad", title: d < 0 ? "이전보다 빠름" : "이전보다 느림" }, (d < 0 ? " ▼" : " ▲") + Math.abs(d).toFixed(1));
+        }
+        return h("td", { class: "num" }, num(v), delta, h("div", { class: "reason" }, r.reached[c.head] + "/" + r.runs));
+      }),
+      h("td", {}, spark(vals, c.label)));
+  });
+  return h("div", {}, h("h3", {}, t.prefix + "-* · " + rounds.length + "라운드 (▼ 빠름 · ▲ 느림, 아래 줄 = 도달 런 수)"),
+    h("div", { class: "scroll" }, h("table", {}, h("thead", {}, head), h("tbody", {}, body))));
+}
+
+function spark(vals, label) {
+  const pts = vals.map((v, i) => [i, v]).filter(p => p[1] != null);
+  const W = 72, H = 20, ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("class", "spark");
+  svg.setAttribute("role", "img"); svg.setAttribute("aria-label", label + " 중앙값 추이: " + vals.map(num).join(", "));
+  const t = document.createElementNS(ns, "title"); t.textContent = label + ": " + vals.map(num).join(" → ") + " 분"; svg.append(t);
+  if (pts.length < 2) return svg;
+  const lo = Math.min(...pts.map(p => p[1])), hi = Math.max(...pts.map(p => p[1])), n = Math.max(vals.length - 1, 1);
+  const xy = p => [4 + (W - 8) * p[0] / n, hi === lo ? H / 2 : 3 + (H - 6) * (1 - (p[1] - lo) / (hi - lo))];
+  const line = document.createElementNS(ns, "polyline");
+  line.setAttribute("points", pts.map(p => xy(p).join(",")).join(" "));
+  line.setAttribute("fill", "none"); line.setAttribute("stroke", "currentColor"); line.setAttribute("stroke-width", "2");
+  line.setAttribute("stroke-linejoin", "round"); line.setAttribute("stroke-linecap", "round");
+  svg.append(line);
+  const last = document.createElementNS(ns, "circle"), [x, y] = xy(pts[pts.length - 1]);
+  last.setAttribute("cx", x); last.setAttribute("cy", y); last.setAttribute("r", 2.5); last.setAttribute("fill", "currentColor");
+  svg.append(last);
+  return svg;
+}
+
+function renderFleets(d) {
+  lastFleets = d;
+  if (!openInit && d.default_open) { openFleets.add(d.default_open); openInit = true; }
+  const runs = d.fleets.reduce((a, f) => a + f.running, 0);
+  document.getElementById("fleet-chips").replaceChildren(
+    h("span", { class: "chip", title: d.base }, "플릿 ", h("b", {}, d.fleets.length), "개 · 실행 중 런 ", h("b", {}, runs), "개"),
+    h("span", { class: "chip", id: "fconn" }, "갱신 " + new Date(d.generated_at * 1000).toLocaleTimeString()));
+  const list = d.fleets.map(f => {
+    const el = h("details", { class: "fleet", open: openFleets.has(f.name) ? "" : null }, fleetSummary(f));
+    el.addEventListener("toggle", () => {
+      if (el.open) {
+        openFleets.add(f.name);
+        if (!el.querySelector(".inner")) el.append(fleetInner(f));
+      } else openFleets.delete(f.name);
+    });
+    if (el.open) el.append(fleetInner(f));
+    return el;
+  });
+  fill("fleets", list.length ? list : h("p", { class: "empty" }, "플릿 manifest가 없습니다 (" + d.base + "\\fleets)"));
+  fill("fleet-blocked", h("p", { class: "reason" }, "최근 " + d.recent_fleets.length + "개 플릿: " + d.recent_fleets.join(", ")), blockedTable(d.recent_blocked));
+  fill("fleet-trend", d.trend.length ? d.trend.map(trendBlock) : h("p", { class: "empty" }, "같은 접두사(auto- 등)의 플릿이 둘 이상일 때 표시합니다."));
+}
+function fleetInner(f) {
+  return h("div", { class: "inner" }, runsTable(f),
+    h("h3", {}, "이 플릿의 막힘 이유 (이유 → 건수 → 예시 시드)"), blockedTable(f.blocked));
+}
+
+// ----- tabs and polling ------------------------------------------------------
+const RUNTIME = new URLSearchParams(location.search).get("runtime");
+let tab = location.hash === "#fleets" ? "fleets" : "run", timer = null;
+function showTab(next) {
+  tab = next;
+  document.getElementById("view-run").hidden = tab !== "run";
+  document.getElementById("view-fleets").hidden = tab !== "fleets";
+  document.getElementById("chips").hidden = tab !== "run";
+  document.getElementById("fleet-chips").hidden = tab !== "fleets";
+  document.querySelectorAll("[data-tab]").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
+  if (tab === "fleets") document.getElementById("runtime").textContent = "병렬 실행 요약";
+  if (location.hash !== "#" + tab) history.replaceState(null, "", location.pathname + location.search + "#" + tab);
+  clearTimeout(timer); tick();
+}
+document.querySelectorAll("[data-tab]").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
+window.addEventListener("hashchange", () => showTab(location.hash === "#fleets" ? "fleets" : "run"));
+
 async function tick() {
+  const current = tab;
   try {
-    const r = await fetch("/api/state", { cache: "no-store" });
-    if (!r.ok) throw new Error(r.status);
+    const url = current === "fleets" ? "/api/fleets" : "/api/state" + (RUNTIME ? "?runtime=" + encodeURIComponent(RUNTIME) : "");
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status + " " + (await r.text()));
     const d = await r.json();
-    renderHeader(d); renderNow(d); renderDone(d); renderActivity(d); renderLayout(d);
+    if (current !== tab) return;
+    if (current === "fleets") renderFleets(d);
+    else { renderHeader(d); renderNow(d); renderDone(d); renderActivity(d); renderLayout(d); }
   } catch (err) {
-    const c = document.getElementById("conn");
-    if (c) { c.textContent = "연결 끊김 — 마지막 값 표시 중"; c.classList.add("bad"); }
+    const c = document.getElementById(current === "fleets" ? "fconn" : "conn");
+    if (c) { c.textContent = "연결 끊김 — 마지막 값 표시 중 (" + err.message + ")"; c.classList.add("bad"); }
+    else if (current === "run") document.getElementById("runtime").textContent = "불러오기 실패: " + err.message;
   } finally {
-    setTimeout(tick, 5000);
+    if (current === tab) { clearTimeout(timer); timer = setTimeout(tick, 5000); }
   }
 }
-tick();
+showTab(tab);
 </script>
 </body>
 </html>
