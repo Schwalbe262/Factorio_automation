@@ -6,7 +6,19 @@ import unittest
 from unittest.mock import Mock, patch
 
 from factorio_agent.core.deterministic_builder import FactoryBuilder
-from factorio_agent.oil_gathering import OilGathering, oil_core, _key
+from factorio_agent import plan_needs, postmortem, remedy
+from factorio_agent.oil_gathering import (
+    OIL_SCOUT_GENERATE_WAIT_TICKS,
+    OIL_SCOUT_MAX_TARGETS,
+    OIL_SURVEY_LUA,
+    OIL_SURVEY_RADIUS_MAX,
+    OilGathering,
+    _key,
+    _xy,
+    oil_core,
+    survey_radius,
+    survey_rings,
+)
 from factorio_agent.resource_policy import mining_reservations
 
 try:
@@ -321,6 +333,184 @@ function target(p,name)
                 lua.execute(change)
                 self.assertIsNone(self.c.proof(self.obs))
                 lua.execute(restore)
+
+
+class OilFieldSurveyTests(unittest.TestCase):
+    """No crude-oil field in range: survey rings, nearest connection, scouting, needs, the remedy rung."""
+
+    setUp = OilGatheringTests.setUp
+
+    def survey(self, wells=(), scout=None, unknown=0, isolate=lambda body: {"ok": True}):
+        reply = {"ok": True, "wells": list(wells), "unknown_chunks": unknown}
+        if scout:
+            reply["scout"] = scout
+        self.game.query.side_effect = lambda body: reply if "local wells={}" in body else isolate(body)
+
+    def payload(self):
+        body = [c.args[0] for c in self.game.query.call_args_list if "local wells={}" in c.args[0]][-1]
+        return json.loads(json.loads(body.split("helpers.json_to_table(", 1)[1].split(");local c=", 1)[0]))
+
+    def well(self, x, y, distance):
+        return {"position": {"x": x, "y": y}, "amount": 10000, "distance": distance}
+
+    def test_rings_widen_to_a_hard_maximum_only_under_the_remedy_rung(self):
+        self.assertEqual(survey_rings(survey_radius()), [256, 384, 512])
+        with remedy.applied({"oil_survey_radius": 5000}):
+            self.assertEqual(survey_radius(), OIL_SURVEY_RADIUS_MAX)
+            self.assertEqual(survey_rings(survey_radius()), [256, 384, 512, 640, 768, 896, 1024])
+        with remedy.applied({"oil_survey_radius": "far"}):
+            self.assertEqual(survey_radius(), 512)
+        rung = next(r for r in remedy.ladder("oil_gathering") if r.name == "site:wider_survey")
+        self.assertEqual(rung.options["oil_survey_radius"], OIL_SURVEY_RADIUS_MAX)
+        self.assertEqual(rung.kinds, ("site",))
+        self.assertIn("oil_gathering", postmortem.DRY_RUN)
+
+    def test_survey_is_centred_on_the_refinery_origin_not_a_fixed_point(self):
+        self.board["blocks"]["steel_production"] = {"reserved_area": [[100, -60], [120, -40]]}
+        (self.root / "pcb-board.json").write_text(json.dumps(self.board))
+        self.survey([self.well(10.5, -20.5, 40)])
+        self.assertTrue(self.c.prepare(self.obs)["ok"])
+        args = self.payload()
+        self.assertEqual(args["center"], {"x": 105.5, "y": -71.5})
+        self.assertEqual(args["radius"], 512)
+        with remedy.applied({"oil_survey_radius": 1024}):
+            self.c.prepare(self.obs)
+        self.assertEqual(self.payload()["radius"], 1024)
+
+    def test_nearest_connection_first_ring_by_ring_with_a_per_ring_cap(self):
+        near = [self.well(10.5 + 4 * i, -20.5, 100 + i) for i in range(10)]
+        far = self.well(300.5, 0.5, 400)
+        tried = []
+
+        def preflight(game, builder, obs, entities):
+            pump = next(e for e in entities if e["name"] == "pumpjack")["position"]
+            tried.append((pump["x"], pump["y"]))
+            return {"ok": pump["x"] == 300.5, "reason": "blocked", "clear_obstacles": []}
+
+        self.preflight.side_effect = preflight
+        self.survey(near + [far])
+        result = self.c.prepare(self.obs)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["well"]["position"], far["position"])
+        order = list(dict.fromkeys(tried))
+        # Ring 256: the 8 nearest; ring 384: the 2 left over; ring 512: the far well.
+        self.assertEqual(order, [_xy(w) for w in near] + [_xy(far)])
+
+    def test_no_field_in_range_blocks_with_site_needs_naming_the_radius(self):
+        self.survey([])
+        result = self.c.step(self.obs)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason"], "no_crude_field_within_survey_radius")
+        needs = plan_needs.from_result("oil_gathering", result)
+        self.assertEqual(needs["kind"], "site")
+        self.assertEqual(needs["change"], "a crude-oil field within 512 tiles (charted)")
+        tried = [{"rung": "replan", "signature": plan_needs.signature(needs)}]
+        rung, _ = remedy.choose("oil_gathering", needs, tried)
+        self.assertEqual(rung.name, "site:wider_survey")
+        with remedy.applied(rung.options):
+            needs = plan_needs.from_result("oil_gathering", dict(self.c.prepare(self.obs), status="blocked"))
+        self.assertEqual(needs["change"], "a crude-oil field within 1024 tiles (charted)")
+        self.assertFalse(self.c.path.exists())
+
+    def test_wells_that_do_not_fit_also_return_site_needs(self):
+        self.preflight.return_value = {"ok": False, "reason": "entity_collision"}
+        self.survey([self.well(10.5, -20.5, 40)])
+        result = self.c.prepare(self.obs)
+        self.assertEqual(result["reason"], "no_defended_crude_well_with_native_outlet_and_power")
+        needs = plan_needs.from_result("oil_gathering", dict(result, status="blocked"))
+        self.assertEqual(needs["kind"], "site")
+        self.assertEqual(needs["rejected_by"], {"entity_collision": 16})
+
+    def test_ungenerated_area_scouts_with_a_paid_move_then_waits_with_a_named_unblock(self):
+        scout = {"chunk": {"x": 12, "y": -3}, "distance": 420, "stand": {"x": 368.5, "y": -79.5}}
+        self.survey([], scout=scout, unknown=5)
+        prepared = self.c.prepare(self.obs)
+        self.assertNotIn("ok", prepared)
+        self.assertIsNone(remedy.fits(prepared))  # a wait, not a plan and not a dead end
+        self.obs["position"] = {"x": 0, "y": 0}
+        action = self.c.step(self.obs)
+        self.assertEqual((action["type"], action["position"]), ("move", scout["stand"]))
+        self.assertFalse(self.c.path.exists())
+        self.obs["position"] = {"x": 366.0, "y": -80.0}
+        waiting = self.c.step(self.obs)
+        self.assertEqual(waiting["status"], "waiting")
+        self.assertIn("chunk (12,-3) generated", waiting["wait_for"])
+        self.obs["tick"] += OIL_SCOUT_GENERATE_WAIT_TICKS
+        self.assertEqual(self.c.step(self.obs)["reason"], "oil_scout_target_stayed_ungenerated")
+        self.c.prepare(self.obs)
+        self.assertEqual(self.payload()["abandoned"], ["12,-3"])
+
+    def test_scouting_is_bounded_then_blocks_with_needs(self):
+        scout = {"chunk": {"x": 12, "y": -3}, "distance": 420, "stand": {"x": 368.5, "y": -79.5}}
+        abandoned = ["%d,0" % i for i in range(OIL_SCOUT_MAX_TARGETS)]
+        self.c.scout_path.write_text(json.dumps({"world_id": "w", "abandoned": abandoned}))
+        self.survey([], scout=scout, unknown=7)
+        result = self.c.step(self.obs)
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn("7 chunks unexplored, scouting exhausted", result["plan_needs"]["change"])
+        self.c.scout_path.write_text(json.dumps({"world_id": "other", "abandoned": abandoned}))
+        self.obs["position"] = {"x": 0, "y": 0}
+        self.assertEqual(self.c.step(self.obs)["type"], "move")
+
+    @unittest.skipUnless(LuaRuntime, "optional Lua runtime: pip install lupa")
+    def test_survey_lua_sorts_by_connection_and_scouts_beside_the_nearest_ungenerated_chunk(self):
+        lua = LuaRuntime(unpack_returned_tuples=True)
+
+        def table(v):
+            if isinstance(v, dict):
+                return lua.table_from({k: table(a) for k, a in v.items()})
+            if isinstance(v, list):
+                return lua.table_from([table(a) for a in v])
+            return v
+
+        def decode(v):
+            if not hasattr(v, "items"):
+                return v
+            keys = list(v.keys())
+            if keys and all(type(k) is int for k in keys) and sorted(keys) == list(range(1, len(keys) + 1)):
+                return [decode(v[i]) for i in range(1, len(keys) + 1)]
+            return {k: decode(a) for k, a in v.items()}
+
+        lua.globals().helpers = lua.table_from({"json_to_table": lambda raw: table(json.loads(raw))})
+        lua.execute("""
+function pos(p)return {x=p.x,y=p.y}end
+ores={{position={x=200.5,y=0.5},amount=10},{position={x=30.5,y=-10.5},amount=10},
+ {position={x=-60.5,y=0.5},amount=0},{position={x=700.5,y=0.5},amount=10}}
+enemies={}
+s={}
+function s.find_entities_filtered(q)local out={}
+ for _,e in ipairs(ores)do if (e.position.x-q.position.x)^2+(e.position.y-q.position.y)^2<=q.radius^2 then out[#out+1]=e end end
+ return out end
+function s.is_chunk_generated(c)return c.x<=5 end
+function s.count_entities_filtered(q)local n=0
+ for _,e in ipairs(enemies)do if e.x>=q.area[1][1] and e.x<q.area[2][1] and e.y>=q.area[1][2] and e.y<q.area[2][2] then n=n+1 end end
+ return n end""")
+        args = {
+            "center": {"x": 0.5, "y": 0.5},
+            "radius": 256,
+            "limit": 8,
+            "abandoned": [],
+            "window": 4,
+            "candidates": 16,
+        }
+
+        def run(a):
+            body = OIL_SURVEY_LUA.replace("PAYLOAD", json.dumps(json.dumps(a)))
+            self.assertNotIn("--", body)
+            return decode(lua.execute("return (function() " + " ".join(body.splitlines()) + " end)()"))
+
+        result = run(args)
+        self.assertEqual([w["position"]["x"] for w in result["wells"]], [30.5, 200.5])
+        self.assertEqual(result["wells"][0]["distance"], 41)
+        self.assertGreater(result["unknown_chunks"], 0)
+        self.assertEqual(result["scout"]["chunk"], {"x": 6, "y": 0})
+        self.assertEqual(result["scout"]["stand"], {"x": 5 * 32 + 16.5, "y": 16.5})
+        lua.execute("enemies={{x=180,y=10}}")
+        result = run(args)
+        self.assertNotEqual(result["scout"]["stand"], {"x": 5 * 32 + 16.5, "y": 16.5})
+        lua.execute("enemies={}")
+        result = run(dict(args, abandoned=["6,0"]))
+        self.assertNotEqual(result["scout"]["chunk"], {"x": 6, "y": 0})
 
 
 if __name__ == "__main__":

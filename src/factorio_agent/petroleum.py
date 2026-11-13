@@ -20,7 +20,8 @@ from .board import entity
 from .planning import overlap, preflight, survey_slots
 from .power_grid import plan_connection as power_connection
 from .resource_policy import mining_reservations
-from .routing import VECTORS, route_trunks
+from . import remedy
+from .routing import LONG_ROUTE_TURNS, VECTORS, route_trunks
 from .smelting import merge_entities
 from .transport import xy
 
@@ -247,6 +248,35 @@ return {ok=true,hard=hard,soft=soft}
 """
 
 
+# Crude corridor survey: one query covers at most PIPE_SURVEY_CELLS tiles; a long
+# connection (a far crude field, oil_gathering survey rings) is surveyed in row
+# strips up to the hard maximum PIPE_SURVEY_MAX_CELLS. A route still needs one
+# native pipeline segment (pipeline_extent); pump segments are not planned yet.
+PIPE_SURVEY_CELLS = 40000
+PIPE_SURVEY_MAX_CELLS = 160000
+
+
+def refinery_origin(board):
+    """Where the refinery block is sought: west of the industrial district (the crude consumer)."""
+    industrial = [
+        b["reserved_area"]
+        for k, b in (board or {}).get("blocks", {}).items()
+        if k in ("steel_production", "brick_production") and b.get("reserved_area")
+    ]
+    base_x = math.floor(min((a[0][0] for a in industrial), default=77)) + 5.5
+    base_y = math.floor(min((a[0][1] for a in industrial), default=-45)) - 11.5
+    return base_x, base_y
+
+
+def _survey_strips(bounds):
+    width = bounds["max_x"] - bounds["min_x"] + 1
+    rows = max(1, PIPE_SURVEY_CELLS // width)
+    y = bounds["min_y"]
+    while y <= bounds["max_y"]:
+        yield dict(bounds, min_y=y, max_y=min(bounds["max_y"], y + rows - 1))
+        y += rows
+
+
 def plan_crude_connection(game, builder, obs, source, destination, core):
     a, b = source["position"], destination["position"]
     bounds = {
@@ -255,8 +285,14 @@ def plan_crude_connection(game, builder, obs, source, destination, core):
         "min_y": min(a["y"], b["y"]) - 12,
         "max_y": max(a["y"], b["y"]) + 12,
     }
-    if (bounds["max_x"] - bounds["min_x"] + 1) * (bounds["max_y"] - bounds["min_y"] + 1) > 40000:
-        return {"ok": False, "reason": "pipe_corridor_survey_budget_exceeded"}
+    cells = (bounds["max_x"] - bounds["min_x"] + 1) * (bounds["max_y"] - bounds["min_y"] + 1)
+    if cells > PIPE_SURVEY_MAX_CELLS or bounds["max_x"] - bounds["min_x"] + 1 > PIPE_SURVEY_CELLS:
+        return {
+            "ok": False,
+            "reason": "pipe_corridor_survey_budget_exceeded",
+            "cells": cells,
+            "limit": PIPE_SURVEY_MAX_CELLS,
+        }
     boxes = game.query("""local out={};for _,b in pairs(prototypes.entity["pipe-to-ground"].fluidbox_prototypes)do
  for _,c in pairs(b.pipe_connections)do if c.connection_type=="underground"then out[#out+1]=c.max_underground_distance end end end
 return {ok=true,spans=out}""")
@@ -273,21 +309,19 @@ return {ok=true,spans=out}""")
         return {"ok": False, "reason": "pipe_routing_board_world_changed"}
     reservations = [b["reserved_area"] for b in board.get("blocks", {}).values() if b.get("reserved_area")]
     reservations += [r["area"] for r in board.get("shared_main_bus", {}).get("reservations", []) if r.get("area")]
-    survey = game.query(
-        PIPE_SURVEY_LUA.replace(
-            "PAYLOAD",
-            _payload(
-                {
-                    "bounds": bounds,
-                    "source": source,
-                    "reservations": reservations,
-                    "zones": mining_reservations(game, obs["world_id"]),
-                }
-            ),
+    zones = mining_reservations(game, obs["world_id"])
+    survey = {"ok": True, "hard": [], "soft": []}
+    for strip in _survey_strips(bounds):
+        part = game.query(
+            PIPE_SURVEY_LUA.replace(
+                "PAYLOAD",
+                _payload({"bounds": strip, "source": source, "reservations": reservations, "zones": zones}),
+            )
         )
-    )
-    if not survey.get("ok"):
-        return survey
+        if not part.get("ok"):
+            return part
+        survey["hard"] += part.get("hard", [])
+        survey["soft"] += part.get("soft", [])
     hard = {xy({"position": p}) for p in survey.get("hard", [])}
     hard.update(builder._occupied_by_plan(core["entities"]))
     area = core.get("reserved_area")
@@ -306,6 +340,9 @@ return {ok=true,spans=out}""")
     def accepts(route):
         return compile_pipe_crossings(route, soft, boxes["spans"][0]).get("ok", False)
 
+    # The shared long-route fallback (routing.LONG_ROUTE_*, remedy.ROUTE_RELAX) for a far crude field.
+    relax = remedy.route_limits()
+    reach = {"long_route_distance": relax["long_route_distance"]} if relax["long_route_distance"] else {}
     route = route_trunks(
         a,
         b,
@@ -313,10 +350,12 @@ return {ok=true,spans=out}""")
         bounds=bounds,
         start_direction=source["facing"],
         end_direction=destination["facing"],
-        max_nodes=200000,
+        max_nodes=max(200000, min(400000, int(abs(a["x"] - b["x"]) + abs(a["y"] - b["y"]) + 1) * 2000)),
         max_turns=6,
-        max_detour_ratio=1.35,
+        max_detour_ratio=max(1.35, relax["max_detour_ratio"] or 1.35),
         candidate_validator=accepts,
+        long_route_turns=relax["long_route_turns"] or LONG_ROUTE_TURNS,
+        **reach,
     )
     result = compile_pipe_crossings(route, soft, boxes["spans"][0])
     if not result.get("ok"):
@@ -468,13 +507,7 @@ return {ok=true,extent=e.get_fluid_segment_extent_bounding_box(1),limit=prototyp
         reserved = [b["reserved_area"] for b in board.get("blocks", {}).values() if b.get("reserved_area")]
         reserved += [r["area"] for r in board.get("shared_main_bus", {}).get("reservations", []) if r.get("area")]
         # Relative to existing industrial district's west edge, not a well-specific waypoint.
-        industrial = [
-            b["reserved_area"]
-            for k, b in board.get("blocks", {}).items()
-            if k in ("steel_production", "brick_production") and b.get("reserved_area")
-        ]
-        base_x = math.floor(min((a[0][0] for a in industrial), default=77)) + 5.5
-        base_y = math.floor(min((a[0][1] for a in industrial), default=-45)) - 11.5
+        base_x, base_y = refinery_origin(board)
         anchors = [(base_x + dx, base_y + dy) for dx, dy in ((0, 0), (32, 0), (0, -16), (32, -16), (0, -32), (32, -32))]
         failures = []
         deadline = time.monotonic() + 20

@@ -149,6 +149,16 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
     "steel_production": (ROUTE_RELAX_1, ROUTE_RELAX_2),
     "steel_supply": (ROUTE_RELAX_1, ROUTE_RELAX_2),
     "supply_cell": (ROUTE_RELAX_1,),
+    "oil_gathering": (
+        Rung(
+            "site:wider_survey",
+            "site",
+            {"oil_survey_radius": 1024},  # oil_gathering.OIL_SURVEY_RADIUS_MAX (the planner clamps to it)
+            kinds=("site",),
+            cost_seconds=240.0,  # scouting walks into the wider ring before a field is known
+            note="crude-oil survey rings widened from 512 to the hard maximum of 1024 tiles, scouting included",
+        ),
+    ),
 }
 
 

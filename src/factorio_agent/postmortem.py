@@ -271,6 +271,9 @@ DRY_RUN = {
     "ammo_production": DryRun(lambda ex, obs, p: _row_prepare(ex, obs, "AMMO_ROW")),
     "steam_expansion": DryRun(lambda ex, obs, p: ex.steam_expansion.prepare(obs)),
     "trunk_return_feed": DryRun(lambda ex, obs, p: ex.trunk_return_feed.prepare(obs, p["resource"])),
+    "oil_gathering": DryRun(
+        lambda ex, obs, p: ex.oil_gathering.prepare(obs), lambda ex, obs, p: ex.oil_gathering.step(obs)
+    ),
 }
 
 

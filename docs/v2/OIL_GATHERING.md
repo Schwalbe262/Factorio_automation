@@ -7,8 +7,31 @@ pumpjack recipe. The installed `oil-processing` technology must retain its
 native `mine-entity: crude-oil` research trigger. This controller never writes
 research state, counters or fluid contents.
 
-Preparation checks at most eight wells within384 tiles, four pumpjack
-orientations and four adjacent service-pole sites per well. Local output
+Preparation surveys crude wells in generated chunks around the refinery origin
+(`petroleum.refinery_origin`, the crude consumer), nearest connection length
+(Manhattan tiles) first, in rings `OIL_SURVEY_RINGS` (256, 384, 512), at most
+`OIL_WELLS_PER_RING` (8) wells per ring, four pumpjack orientations and four
+adjacent service-pole sites per well. When no field fits:
+
+- ungenerated chunks inside the radius: `prepare` returns a `waiting` result
+  with `scout` (nearest ungenerated chunk, a generated enemy-free stand chunk
+  within `OIL_SCOUT_WINDOW_CHUNKS`) and `wait_for` naming that chunk; `step`
+  walks the actor there with an ordinary paid `move` and waits. Generation
+  follows the actor (a connected player; client-free:
+  `emulate_player_presence`). A target still ungenerated
+  `OIL_SCOUT_GENERATE_WAIT_TICKS` after arrival is given up (`oil-scout.json`);
+  after `OIL_SCOUT_MAX_TARGETS` the survey stops scouting;
+- otherwise it blocks with `plan_needs` kind `site`, change "a crude-oil field
+  within N tiles (charted)". The remedy rung `site:wider_survey`
+  (`oil_survey_radius`) widens the rings by `OIL_SURVEY_RING_STEP` (128) up to
+  the hard maximum `OIL_SURVEY_RADIUS_MAX` (1024), scouting included.
+
+A far field's crude connection is planned by `petroleum.plan_crude_connection`:
+its corridor survey runs in row strips of `PIPE_SURVEY_CELLS` up to
+`PIPE_SURVEY_MAX_CELLS` with the shared long-route fallback. Not yet: pump
+segments (a route beyond one native pipeline extent blocks with
+`pipeline_requires_explicit_pump_segment`) and a rail alternative for a very
+far field. Local output
 geometry comes from the installed catalog's four rotated internal fluid-port
 positions plus their outward direction. Each candidate includes one pumpjack,
 three ordinary pipe tiles and one local pole. A bounded ordinary pole bridge

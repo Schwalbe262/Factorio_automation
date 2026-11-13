@@ -168,6 +168,35 @@ class PetroleumGeometryTests(unittest.TestCase):
             self.assertLessEqual(result["route_metrics"]["turns"], 6)
             self.assertLessEqual(result["route_metrics"]["length"], 1.35 * 20 + 4)
 
+    def test_long_crude_connection_is_surveyed_in_strips_up_to_a_hard_maximum(self):
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, "pcb-board.json").write_text(json.dumps({"world_id": "w", "blocks": {}}))
+            surveys = []
+
+            def query(body):
+                if "max_underground_distance" in body:
+                    return {"ok": True, "spans": [10]}
+                args = json.loads(json.loads(body.split("helpers.json_to_table(", 1)[1].split(");local b=", 1)[0]))
+                surveys.append(args["bounds"])
+                return {"ok": True, "hard": [], "soft": []}
+
+            game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=root), query=query)
+            builder = SimpleNamespace(_occupied_by_plan=FactoryBuilder.__new__(FactoryBuilder)._occupied_by_plan)
+            source = {"position": {"x": 0.5, "y": 0.5}, "unit_number": 1, "facing": 4}
+            target = {"position": {"x": 300.5, "y": 150.5}, "facing": 4}
+            result = plan_crude_connection(game, builder, {"world_id": "w"}, source, target, {"entities": []})
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(len(surveys), 2)
+            self.assertTrue(
+                all((b["max_x"] - b["min_x"] + 1) * (b["max_y"] - b["min_y"] + 1) <= 40000 for b in surveys)
+            )
+            self.assertEqual((surveys[0]["min_y"], surveys[-1]["max_y"]), (-11.5, 162.5))
+            self.assertEqual(surveys[0]["max_y"] + 1, surveys[1]["min_y"])
+            far = {"position": {"x": 600.5, "y": 300.5}, "facing": 4}
+            result = plan_crude_connection(game, builder, {"world_id": "w"}, source, far, {"entities": []})
+            self.assertEqual(result["reason"], "pipe_corridor_survey_budget_exceeded")
+            self.assertEqual(len(surveys), 2)
+
     def test_real_planner_keeps_future_refinery_slots_empty_except_typed_entry(self):
         with tempfile.TemporaryDirectory() as root:
             Path(root, "pcb-board.json").write_text(json.dumps({"world_id": "w", "blocks": {}}))

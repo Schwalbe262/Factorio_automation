@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from copy import deepcopy
 import hashlib
 import json
@@ -11,12 +12,78 @@ from pathlib import Path
 
 from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
 from factorio_agent.core.deterministic_state import _atomic_json
+from . import plan_needs, remedy
 from .board import entity
+from .petroleum import refinery_origin
 from .planning import overlap, preflight
 from .power_grid import plan_connection as power_connection
 from .resource_policy import mark_pumpjack
 from .smelting import merge_entities
 from .transport import VECTORS, xy
+
+# Crude-field survey (rule, no fixed coordinates): wells are read from generated chunks
+# around the refinery origin (petroleum.refinery_origin, the crude consumer) and tried
+# nearest connection length first (Manhattan tiles: pipes run orthogonally), ring by ring,
+# OIL_WELLS_PER_RING wells per ring. The planner's own maximum is OIL_SURVEY_RINGS[-1];
+# the remedy rung ``site:wider_survey`` (option ``oil_survey_radius``) widens it in
+# OIL_SURVEY_RING_STEP rings up to the hard maximum OIL_SURVEY_RADIUS_MAX.
+OIL_SURVEY_RINGS = (256, 384, 512)
+OIL_SURVEY_RING_STEP = 128
+OIL_SURVEY_RADIUS_MAX = 1024
+OIL_WELLS_PER_RING = 8
+OIL_SURVEY_WELL_LIMIT = 256
+# Scouting (paid ``move``): when nothing fits and ungenerated chunks lie inside the radius,
+# the actor walks to a generated, enemy-free chunk within OIL_SCOUT_WINDOW_CHUNKS of the
+# nearest one and waits up to OIL_SCOUT_GENERATE_WAIT_TICKS for it to generate; after
+# OIL_SCOUT_MAX_TARGETS targets given up the survey blocks with its needs.
+OIL_SCOUT_WINDOW_CHUNKS = 4
+OIL_SCOUT_CANDIDATES = 16
+OIL_SCOUT_ARRIVE_TILES = 12  # an assisted move lands within 8 tiles (find_non_colliding_position)
+OIL_SCOUT_GENERATE_WAIT_TICKS = 1800
+OIL_SCOUT_MAX_TARGETS = 24
+
+
+def survey_radius():
+    """The planner's ring maximum, or the remedy's wider one, never above the hard maximum."""
+    value = remedy.option("oil_survey_radius", OIL_SURVEY_RINGS[-1])
+    if type(value) is not int:
+        value = OIL_SURVEY_RINGS[-1]
+    return max(OIL_SURVEY_RINGS[-1], min(OIL_SURVEY_RADIUS_MAX, value))
+
+
+def survey_rings(radius):
+    """Outer connection lengths of the survey rings, innermost first, the last one ``radius``."""
+    rings = [r for r in OIL_SURVEY_RINGS if r <= radius]
+    while rings[-1] + OIL_SURVEY_RING_STEP <= radius:
+        rings.append(rings[-1] + OIL_SURVEY_RING_STEP)
+    if rings[-1] < radius:
+        rings.append(radius)
+    return rings
+
+
+OIL_SURVEY_LUA = r"""
+local x=helpers.json_to_table(PAYLOAD);local c=x.center;local R=x.radius;local wells={}
+for _,e in pairs(s.find_entities_filtered{position=c,radius=R,name="crude-oil"})do local d=math.abs(e.position.x-c.x)+math.abs(e.position.y-c.y)
+ if e.amount>0 and d<=R then wells[#wells+1]={position=pos(e.position),amount=e.amount,distance=d}end end
+table.sort(wells,function(p,q)if p.distance~=q.distance then return p.distance<q.distance end;if p.position.x~=q.position.x then return p.position.x<q.position.x end;return p.position.y<q.position.y end)
+local selected={};for i=1,math.min(x.limit,#wells)do selected[#selected+1]=wells[i]end
+local skip={};for _,k in ipairs(x.abandoned or{})do skip[k]=true end
+local unknown=0;local targets={};local n=math.ceil(R/32)+1;local ox=math.floor(c.x/32);local oy=math.floor(c.y/32)
+for cx=ox-n,ox+n do for cy=oy-n,oy+n do local d=math.abs(cx*32+16-c.x)+math.abs(cy*32+16-c.y)
+ if d<=R and not s.is_chunk_generated({x=cx,y=cy})then unknown=unknown+1
+  if not skip[cx..","..cy]then targets[#targets+1]={x=cx,y=cy,distance=d}end end
+end end
+table.sort(targets,function(p,q)if p.distance~=q.distance then return p.distance<q.distance end;if p.x~=q.x then return p.x<q.x end;return p.y<q.y end)
+local scout=nil;local w=x.window
+for i=1,math.min(x.candidates,#targets)do local t=targets[i];local best=nil;local bd=nil
+ for gx=t.x-w,t.x+w do for gy=t.y-w,t.y+w do
+  if s.is_chunk_generated({x=gx,y=gy})then local gd=(gx-t.x)^2+(gy-t.y)^2
+   if(not bd or gd<bd)and s.count_entities_filtered{area={{gx*32-32,gy*32-32},{gx*32+64,gy*32+64}},force="enemy",limit=1}==0 then best={x=gx,y=gy};bd=gd end end
+ end end
+ if best then scout={chunk={x=t.x,y=t.y},distance=t.distance,stand={x=best.x*32+16.5,y=best.y*32+16.5}};break end
+end
+return {ok=true,wells=selected,unknown_chunks=unknown,scout=scout}
+"""
 
 
 def oil_core(catalog, position, direction=0, power_offset=(0, 2), pipe_count=3):
@@ -82,6 +149,10 @@ def oil_core(catalog, position, direction=0, power_offset=(0, 2), pipe_count=3):
     )
 
 
+def _xy(well):
+    return (well["position"]["x"], well["position"]["y"])
+
+
 def _key(e):
     return e["name"] + ":" + str(e["position"]["x"]) + ":" + str(e["position"]["y"])
 
@@ -100,6 +171,9 @@ class OilGathering:
         filename = "oil-gathering.json" if source_key == "crude-oil" else "oil-gathering-" + source_key + ".json"
         self.path = Path(game.cfg.runtime_dir) / filename
         self.sources_path = self.path.parent / "fluid-sources.json"
+        self.scout_path = self.path.parent / (
+            "oil-scout.json" if source_key == "crude-oil" else "oil-scout-" + source_key + ".json"
+        )
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
         if self.state and source_key != "crude-oil" and self.state.get("source_key") != source_key:
             raise ValueError("independent oil source checkpoint belongs to another profile")
@@ -140,104 +214,210 @@ class OilGathering:
                 return {"ok": False, "reason": "oil_source_exists_without_intake_checkpoint"}
         reserved = [b["reserved_area"] for b in board.get("blocks", {}).values() if b.get("reserved_area")]
         reserved += [r["area"] for r in board.get("shared_main_bus", {}).get("reservations", []) if r.get("area")]
-        well_query = """local wells={};for _,e in pairs(s.find_entities_filtered{position={0,0},radius=384,name="crude-oil",limit=64})do
- if e.amount>0 then wells[#wells+1]={position=pos(e.position),amount=e.amount}end end
-table.sort(wells,function(a,b)return a.position.x^2+a.position.y^2<b.position.x^2+b.position.y^2 end)
-local selected={};for i=1,math.min(8,#wells)do selected[#selected+1]=wells[i]end
-return {ok=true,wells=selected}"""
+        # Connection length is measured to the crude consumer: the refinery site petroleum seeks.
+        ox, oy = refinery_origin(board)
+        center = {"x": ox, "y": oy}
+        radius = survey_radius()
+        abandoned = self._scout_state(obs).get("abandoned", [])
+        args = {
+            "center": center,
+            "radius": radius,
+            "limit": OIL_SURVEY_WELL_LIMIT,
+            "abandoned": abandoned,
+            "window": OIL_SCOUT_WINDOW_CHUNKS,
+            "candidates": OIL_SCOUT_CANDIDATES,
+        }
+        query = OIL_SURVEY_LUA.replace("PAYLOAD", json.dumps(json.dumps(args, separators=(",", ":"))))
         if self.source_key != "crude-oil":
-            well_query = well_query.replace(
-                "if e.amount>0 then",
-                'if e.amount>0 and s.count_entities_filtered{position=e.position,radius=.1,name="pumpjack"}==0 then',
+            query = query.replace(
+                "if e.amount>0 and",
+                'if e.amount>0 and s.count_entities_filtered{position=e.position,radius=.1,name="pumpjack"}==0 and',
             )
-        wells = self.game.query(well_query)
+        wells = self.game.query(query)
         if not wells.get("ok"):
             return wells
+        rows = wells.get("wells", [])
         failures = []
-        for well in wells.get("wells", []):
-            for direction in VECTORS:
-                for offset in ((0, 2), (-2, 0), (2, 0), (0, -2)):
-                    try:
-                        core = oil_core(self.catalog, well["position"], direction, offset)
-                    except (ValueError, KeyError) as exc:
-                        return {"ok": False, "reason": "unsupported_native_pumpjack_geometry", "detail": str(exc)}
-                    if any(overlap(core["reserved_area"], r) for r in reserved):
-                        continue
-                    check = preflight(self.game, self.builder, obs, core["entities"])
-                    if not check.get("ok"):
-                        failures.append(check.get("reason"))
-                        continue
-                    payload = json.dumps(json.dumps(core["entities"], separators=(",", ":")))
-                    isolated = self.game.query(
-                        """local specs=helpers.json_to_table("""
-                        + payload
-                        + """)
+        seen = set()
+        for outer in survey_rings(radius):
+            ring = [w for w in rows if _xy(w) not in seen and w.get("distance", 0) <= outer][:OIL_WELLS_PER_RING]
+            for well in ring:
+                seen.add(_xy(well))
+                found = self._candidate(obs, well, reserved, failures)
+                if found is not None:
+                    return found
+        survey = {
+            "center": center,
+            "radius": radius,
+            "wells_known": len(rows),
+            "wells_tried": len(seen),
+            "unknown_chunks": wells.get("unknown_chunks", 0),
+            "scouts_abandoned": len(abandoned),
+        }
+        scout = wells.get("scout")
+        if isinstance(scout, dict) and len(abandoned) < OIL_SCOUT_MAX_TARGETS:
+            # Not a plan and not a dead end: the field may lie in ungenerated area the actor can explore.
+            chunk = scout.get("chunk") or {}
+            return {
+                "status": "waiting",
+                "reason": "crude_field_survey_needs_scouting",
+                "scout": scout,
+                "survey": survey,
+                "wait_for": "chunk (%s,%s) generated by the scouting actor: no crude-oil field fits within %d tiles"
+                % (chunk.get("x"), chunk.get("y"), radius),
+            }
+        if not rows:
+            reason = "no_crude_field_within_survey_radius"
+            change = "a crude-oil field within %d tiles (charted)" % radius
+        else:
+            reason = "no_defended_crude_well_with_native_outlet_and_power"
+            change = "a crude-oil well within %d tiles (charted) with a clear outlet, power and defense" % radius
+        if survey["unknown_chunks"]:
+            change += "; %d chunks unexplored, scouting exhausted" % survey["unknown_chunks"]
+        return {
+            "ok": False,
+            "reason": reason,
+            "candidate_failures": failures[-16:],
+            "survey": survey,
+            "plan_needs": plan_needs.make(
+                "site",
+                reason,
+                item="crude-oil",
+                at=center,
+                limit="survey radius %d<=%d" % (radius, OIL_SURVEY_RADIUS_MAX),
+                tried=len(seen),
+                rejected_by=Counter(str(f) for f in failures),
+                change=change,
+            ),
+        }
+
+    def _candidate(self, obs, well, reserved, failures):
+        """The first fitting rotation / service pole of one well (a plan or an error), else None."""
+        for direction in VECTORS:
+            for offset in ((0, 2), (-2, 0), (2, 0), (0, -2)):
+                try:
+                    core = oil_core(self.catalog, well["position"], direction, offset)
+                except (ValueError, KeyError) as exc:
+                    return {"ok": False, "reason": "unsupported_native_pumpjack_geometry", "detail": str(exc)}
+                if any(overlap(core["reserved_area"], r) for r in reserved):
+                    continue
+                check = preflight(self.game, self.builder, obs, core["entities"])
+                if not check.get("ok"):
+                    failures.append(check.get("reason"))
+                    continue
+                payload = json.dumps(json.dumps(core["entities"], separators=(",", ":")))
+                isolated = self.game.query(
+                    """local specs=helpers.json_to_table("""
+                    + payload
+                    + """)
 for _,spec in ipairs(specs)do if spec.name=="pipe"then local p=spec.position
  for _,other in pairs(s.find_entities_filtered{area={{p.x-1.49,p.y-1.49},{p.x+1.49,p.y+1.49}},force=f})do
   for _ in pairs(other.prototype.fluidbox_prototypes or {})do return {ok=false,reason="oil_outlet_near_existing_fluid_network"}end
  end end end;return {ok=true}"""
-                    )
-                    if not isolated.get("ok"):
-                        failures.append(isolated.get("reason"))
-                        continue
-                    power = power_connection(
-                        self.game,
-                        self.builder,
-                        obs,
-                        core["power_port"]["position"],
-                        [e for e in core["entities"] if e["name"] != "small-electric-pole"],
-                    )
-                    if not power.get("ok"):
-                        failures.append(power.get("reason"))
-                        continue
-                    es = merge_entities(power["entities"], core["entities"])
-                    check = preflight(self.game, self.builder, obs, es)
-                    if not check.get("ok"):
-                        failures.append(check.get("reason"))
-                        continue
-                    scope = (
-                        "oil-"
-                        + hashlib.sha256(
-                            json.dumps([obs["world_id"], well["position"], core["ports"]], sort_keys=True).encode()
-                        ).hexdigest()[:20]
-                    )
-                    defense = self.perimeter.prepare_coverage(obs, scope, [core["reserved_area"]])
-                    if not defense.get("ok"):
-                        return {"ok": False, "reason": "oil_well_defense_preflight_failed", "defense": defense}
-                    plan = _plan(
-                        es,
-                        core["ports"],
-                        reserved_area=core["reserved_area"],
-                        resource="crude-oil",
-                        mining_reserved_area=core["mining_reserved_area"],
-                        clear_obstacles=check["clear_obstacles"],
-                        clearance_world_id=obs["world_id"],
-                        layout_policy="native-defended-crude-well-v1",
-                    )
-                    actual = {(e["name"], *xy(e)): e for e in obs["entities"]}
-                    bindings = {
-                        _key(e): actual[(e["name"], *xy(e))]["unit_number"] for e in es if (e["name"], *xy(e)) in actual
-                    }
-                    return {
-                        "ok": True,
-                        "world_id": obs["world_id"],
-                        "catalog_fingerprint": self.catalog.fingerprint,
-                        "phase": "build",
-                        "prepared_tick": obs.get("tick"),
-                        "plan": plan,
-                        "core": core,
-                        "well": well,
-                        "defense_scope_id": scope,
-                        "defense_preview": defense,
-                        "bindings": bindings,
-                        "wire_hops": power["wire_hops"],
-                        **({"source_key": self.source_key} if self.source_key != "crude-oil" else {}),
-                    }
-        return {
-            "ok": False,
-            "reason": "no_defended_crude_well_with_native_outlet_and_power",
-            "candidate_failures": failures[-16:],
-        }
+                )
+                if not isolated.get("ok"):
+                    failures.append(isolated.get("reason"))
+                    continue
+                power = power_connection(
+                    self.game,
+                    self.builder,
+                    obs,
+                    core["power_port"]["position"],
+                    [e for e in core["entities"] if e["name"] != "small-electric-pole"],
+                )
+                if not power.get("ok"):
+                    failures.append(power.get("reason"))
+                    continue
+                es = merge_entities(power["entities"], core["entities"])
+                check = preflight(self.game, self.builder, obs, es)
+                if not check.get("ok"):
+                    failures.append(check.get("reason"))
+                    continue
+                scope = (
+                    "oil-"
+                    + hashlib.sha256(
+                        json.dumps([obs["world_id"], well["position"], core["ports"]], sort_keys=True).encode()
+                    ).hexdigest()[:20]
+                )
+                defense = self.perimeter.prepare_coverage(obs, scope, [core["reserved_area"]])
+                if not defense.get("ok"):
+                    return {"ok": False, "reason": "oil_well_defense_preflight_failed", "defense": defense}
+                plan = _plan(
+                    es,
+                    core["ports"],
+                    reserved_area=core["reserved_area"],
+                    resource="crude-oil",
+                    mining_reserved_area=core["mining_reserved_area"],
+                    clear_obstacles=check["clear_obstacles"],
+                    clearance_world_id=obs["world_id"],
+                    layout_policy="native-defended-crude-well-v1",
+                )
+                actual = {(e["name"], *xy(e)): e for e in obs["entities"]}
+                bindings = {
+                    _key(e): actual[(e["name"], *xy(e))]["unit_number"] for e in es if (e["name"], *xy(e)) in actual
+                }
+                return {
+                    "ok": True,
+                    "world_id": obs["world_id"],
+                    "catalog_fingerprint": self.catalog.fingerprint,
+                    "phase": "build",
+                    "prepared_tick": obs.get("tick"),
+                    "plan": plan,
+                    "core": core,
+                    "well": well,
+                    "defense_scope_id": scope,
+                    "defense_preview": defense,
+                    "bindings": bindings,
+                    "wire_hops": power["wire_hops"],
+                    **({"source_key": self.source_key} if self.source_key != "crude-oil" else {}),
+                }
+        return None
+
+    def _scout_state(self, obs):
+        """Read-only: this world's scouting record (targets given up), else empty."""
+        if not self.scout_path.exists():
+            return {}
+        state = json.loads(self.scout_path.read_text(encoding="utf-8"))
+        return state if state.get("world_id") == obs.get("world_id") else {}
+
+    def _scout(self, obs, prepared):
+        """Paid exploration: walk the actor beside the nearest ungenerated chunk, then wait for it.
+
+        Generation follows the actor (a connected player; client-free: ``emulate_player_presence``).
+        A target still ungenerated ``OIL_SCOUT_GENERATE_WAIT_TICKS`` after arrival is given up; after
+        ``OIL_SCOUT_MAX_TARGETS`` such targets ``prepare`` blocks with its needs.
+        """
+        scout = prepared["scout"]
+        chunk, stand = scout.get("chunk"), scout.get("stand")
+        actor = obs.get("position")
+        if not all(isinstance(v, dict) for v in (chunk, stand, actor)):
+            return {"status": "blocked", "reason": "oil_scout_requires_actor_and_target_positions"}
+        key = "%d,%d" % (chunk["x"], chunk["y"])
+        state = self._scout_state(obs) or {"world_id": obs["world_id"], "abandoned": []}
+        if math.hypot(actor["x"] - stand["x"], actor["y"] - stand["y"]) > OIL_SCOUT_ARRIVE_TILES:
+            if state.get("target") != key:
+                state.update(target=key, arrived_tick=None)
+                _atomic_json(self.scout_path, state)
+            return {
+                "type": "move",
+                "position": deepcopy(stand),
+                "reason": "scout beside ungenerated chunk %s for a crude-oil field" % key,
+            }
+        tick = obs.get("tick") if type(obs.get("tick")) is int else 0
+        if state.get("target") != key or type(state.get("arrived_tick")) is not int:
+            state.update(target=key, arrived_tick=tick)
+            _atomic_json(self.scout_path, state)
+        elif tick - state["arrived_tick"] >= OIL_SCOUT_GENERATE_WAIT_TICKS:
+            state["abandoned"] = (state.get("abandoned", []) + [key])[-OIL_SCOUT_MAX_TARGETS:]
+            state.update(target=None, arrived_tick=None)
+            _atomic_json(self.scout_path, state)
+            return {
+                "status": "waiting",
+                "reason": "oil_scout_target_stayed_ungenerated",
+                "chunk": key,
+                "wait_for": "the next scouting target",
+            }
+        return {"status": "waiting", "reason": prepared["reason"], "chunk": key, "wait_for": prepared["wait_for"]}
 
     def _save(self):
         _atomic_json(self.path, self.state)
@@ -295,6 +475,8 @@ for _,spec in ipairs(specs)do if spec.name=="pipe"then local p=spec.position
     def step(self, obs):
         if not self.state:
             prepared = self.prepare(obs)
+            if prepared.get("scout"):
+                return self._scout(obs, prepared)
             if not prepared.get("ok"):
                 return {"status": "blocked", **prepared}
             self.state = prepared
