@@ -351,7 +351,8 @@ HAND_FED_POWER = {
 class CoalFeedGateTests(unittest.TestCase):
     def test_stocked_belts_open_the_feed_step_before_the_cell_job_succeeds(self):
         building = {"capability": "supply_cell", "status": "running", "parameters": {"products": ["transport-belt"]}}
-        jobs = [HAND_FED_POWER, building]
+        done = [{"capability": c, "status": "succeeded"} for c in pcf.PLATE_CRITICAL]  # rule 3a
+        jobs = [HAND_FED_POWER, building, *done]
         self.assertFalse(pcf.feed_step_ready(jobs, {"tick": 30000, "coal_feed_belts": {"needed": 95, "stocked": 94}}))
         self.assertTrue(pcf.feed_step_ready(jobs, {"tick": 30000, "coal_feed_belts": {"needed": 95, "stocked": 95}}))
 
