@@ -434,6 +434,49 @@ def plan_research_capacity(
     )
 
 
+def hardware_option(
+    targets,
+    hardware: ResearchHardware,
+    new: ResearchHardware,
+    materials: ResearchMaterials,
+    *,
+    cost: Mapping[str, float],
+    build_seconds: float,
+    pack: str | None = None,
+) -> dict:
+    """``fund + build + research`` seconds of moving from ``hardware`` to ``new`` for ``cost`` raw items.
+
+    The same time model as one planner option, for options the planner's
+    ``(a, l)`` grid does not hold (another block, faster machines): the extra
+    ``pack`` rate of ``new`` over ``hardware`` is capped by the raw items as
+    in the module docstring; an item missing from the evidence and not
+    produced makes the option impossible (inf).
+    """
+    targets = _targets(targets)
+    spend = {name: float(amount) for name, amount in cost.items() if finite_number(amount)}
+    fund = _fund(spend, materials.evidence) if spend else 0.0
+    rates = _rates(new)
+    capped = False
+    if pack:
+        extra = rates.get(pack, 0.0) - _rates(hardware).get(pack, 0.0)
+        if extra > 1e-9:
+            uncapped = _queue(targets, new).seconds
+            allowed = _capped_extra_rate(extra, materials.pack_cost.get(pack, {}), spend, materials.evidence, uncapped)
+            if allowed < extra - 1e-9:
+                capped = True
+                rates[pack] = rates[pack] - extra + allowed
+    queue = _queue(targets, new, rates)
+    return {
+        "fund_seconds": fund,
+        "build_seconds": float(build_seconds),
+        "research_seconds": queue.seconds,
+        "seconds": fund + float(build_seconds) + queue.seconds,
+        "pack_rate_per_minute": rates.get(pack, 0.0) if pack else 0.0,
+        "materials_capped": capped,
+        "raw_cost": {name: round(amount, 2) for name, amount in sorted(spend.items())},
+    }
+
+
 def labs_without_assemblers(row: Mapping, config=ResearchCapacityConfig()) -> int:
     """Labs to build when a saved decision's extra assemblers cannot be built.
 
