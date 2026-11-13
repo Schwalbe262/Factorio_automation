@@ -497,6 +497,42 @@ def pending_starter_cells(root, obs) -> dict:
     return blocks
 
 
+# Plans saved by capabilities that build without a board block: (file, plan keys).
+UNBOARDED_PLANS = (
+    ("factory-builder.json", ("coal_plan", "power_plan")),
+    ("electric-coal.json", ("power_plan",)),
+)
+
+
+def unboarded_plans(root, obs) -> dict:
+    """Board-shaped blocks of the plans no board block holds: the builder's power / coal feed and
+    electric coal's pole chain, plus the pending starter cells (:func:`pending_starter_cells`).
+
+    Fleet all-1113-2155 seed 2064942095: ``electric_coal`` planned a pole at (-53.5, 49.5) in the
+    same slice in which the smelting district routed its coal belt there; the pole was built, the
+    district's build stopped on ``reserved block placement is obstructed`` and the run was dead.
+    The pole chain lived only in ``electric-coal.json``. Built parts drop out in
+    :func:`planned_unbuilt_hardware`. Empty for another world.
+    """
+    blocks = dict(pending_starter_cells(root, obs))
+    if root is None:
+        return blocks
+    for name, keys in UNBOARDED_PLANS:
+        state = _read_json(Path(root) / name)
+        if state.get("world_id") != obs.get("world_id"):
+            continue
+        for key in keys:
+            plan = state.get(key)
+            entities = plan.get("entities") if isinstance(plan, dict) else None
+            if isinstance(entities, list):
+                rows = [
+                    e for e in entities if isinstance(e, dict) and isinstance(e.get("position"), dict) and e.get("name")
+                ]
+                if rows:
+                    blocks[name.split(".")[0] + ":" + key] = {"entities": rows}
+    return blocks
+
+
 def starter_keepouts(root, obs, *, exclude=()) -> dict:
     """What a site chosen from the live map must not cover: ``{"areas": [[x1, y1, x2, y2]], "tiles": ["x,y"]}``.
 
@@ -524,7 +560,34 @@ def starter_keepouts(root, obs, *, exclude=()) -> dict:
     pending = {k: v for k, v in pending_starter_cells(root, obs).items() if k not in exclude}
     tiles = planned_unbuilt_hardware(_Footprints(), obs, dict(blocks, **pending))
     keys = sorted({f"{math.floor(x)},{math.floor(y)}" for x, y in tiles})
+    upgrade = coal_upgrade_area(root, obs) if "power_coal_feed" not in exclude else None
+    if upgrade is not None:
+        areas.append(upgrade)
     return {"areas": areas, "tiles": keys}
+
+
+def coal_upgrade_area(root, obs):
+    """``[x1, y1, x2, y2]`` of the 3 x 3 electric drill that will replace the power feed's burner drill, or None.
+
+    Fleets all-1113-2155 seed 3910665204 and all-1113-2243 seed 2627250004: a starter coal cell's
+    burner drill was placed beside the feed's burner drill, inside the electric replacement's
+    footprint (``electric_mining.replacement_for``), and ``electric_coal`` blocked for good with
+    ``electric_upgrade_footprint_obstructed`` by that burner drill.
+    """
+    state = _read_json(Path(root) / "factory-builder.json") if root is not None else {}
+    if state.get("world_id") != obs.get("world_id"):
+        return None
+    drill = (state.get("coal_plan") or {}).get("drill")
+    if (
+        not isinstance(drill, dict)
+        or drill.get("name") != "burner-mining-drill"
+        or not isinstance(drill.get("position"), dict)
+    ):
+        return None
+    from .electric_mining import replacement_for
+
+    p = replacement_for(drill["position"])["position"]
+    return [p["x"] - 1.5, p["y"] - 1.5, p["x"] + 1.5, p["y"] + 1.5]
 
 
 def keepout_tiles(keepouts) -> set:

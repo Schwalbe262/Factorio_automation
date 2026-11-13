@@ -228,8 +228,16 @@ def _prospective_mining_source(game, builder, obs, source, reserved):
     return {"ok": True, "entities": core}
 
 
-def unbuilt_external_keepouts(builder, obs, blocks, *, released_block=None):
-    """Reserve prospective external hardware and tunnels until native assets exist."""
+def unbuilt_external_keepouts(builder, obs, blocks, *, released_block=None, crossable_belts=None):
+    """Reserve prospective external hardware and tunnels until native assets exist.
+
+    With a ``crossable_belts`` list, another block's planned surface ``transport-belt`` (outside
+    its reserved area) is appended there instead of making its tile and neighbours hard: the
+    router then crosses it with an underground pair, exactly as it crosses a built belt. Live map
+    eval-1575138435 (seed 1575138435): the hand-fed power's planned coal feed ran north along
+    x 54.5 for 20 tiles right in front of the coal bank's east port; as a 3-wide wall it refused
+    every coal trunk to all 17 legal district sites until the feed was built.
+    """
     actual = built_keys(obs)
     hard = set()
     for name, block in blocks.items():
@@ -240,6 +248,18 @@ def unbuilt_external_keepouts(builder, obs, blocks, *, released_block=None):
         if not area or mining or name == released_block:
             continue
         missing = [e for e in block.get("entities", []) if (e["name"], *xy(e)) not in actual]
+        if crossable_belts is not None:
+            outside = [
+                e
+                for e in missing
+                if e["name"] == "transport-belt"
+                and not (
+                    area[0][0] <= e["position"]["x"] <= area[1][0] and area[0][1] <= e["position"]["y"] <= area[1][1]
+                )
+            ]
+            crossable_belts += outside
+            keys = {(e["name"], *xy(e)) for e in outside}
+            missing = [e for e in missing if (e["name"], *xy(e)) not in keys]
         cells = builder._occupied_by_plan(missing)
         for e in missing:
             if e["name"] in ("transport-belt", "underground-belt", "pipe", "pipe-to-ground"):
@@ -429,6 +449,12 @@ def _production_keepouts(game, builder, obs, source, destination, reserved, boun
                 return {"ok": False, "reason": "transport_unbuilt_receiver_release_identity_changed"}
             released = destination_owner
         hard = unbuilt_external_keepouts(builder, obs, board.get("blocks", {}), released_block=released)
+        # Cells hard only because of other blocks' planned surface belts: a route may tunnel
+        # under such a belt (``planned_belts``), its surface belts stay off the neighbours.
+        planned_belts = []
+        planned_soft = hard - unbuilt_external_keepouts(
+            builder, obs, board.get("blocks", {}), released_block=released, crossable_belts=planned_belts
+        )
         if xy(source) in hard or xy(destination) in hard:
             return {"ok": False, "reason": "transport_endpoint_conflicts_with_unbuilt_external_plan"}
         for index, block in enumerate(blocks):
@@ -469,6 +495,8 @@ def _production_keepouts(game, builder, obs, source, destination, reserved, boun
             "source_prefix": source_prefix,
             "destination_suffix": destination_suffix,
             "aprons": aprons,
+            "planned_belts": planned_belts,
+            "planned_soft": planned_soft,
         }
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return {"ok": False, "reason": "invalid_transport_production_reservation", "detail": str(exc)}
@@ -549,11 +577,14 @@ def plan_connection(
     released_unbuilt_receiver=None,
     guide=None,
     bus_route=False,
+    max_detour_ratio=None,
 ):
     """Route one belt from ``source`` to ``destination`` port.
 
     ``guide`` is an optional reserved corridor bounding box (x0, y0, x1, y1)
     in tiles from the master plan; it only widens the search box.
+    ``max_detour_ratio`` (default: the router's 1.35) lets a route follow a
+    reserved corridor that itself detours (``smelting_site.corridor_detour``).
     ``bus_route`` marks the bus's own feed; every other route keeps out of
     the site plan's bus band (``bus_band``) and may not end inside it.
     """
@@ -766,10 +797,15 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
     # hardware to route around, not a foreign belt merging into the route.
     feeders = {xy(e) for e in foreign if e["name"] == "transport-belt" and _recipient(e) == (a["x"], a["y"])}
     foreign = [e for e in foreign if xy(e) not in feeders]
+    # Other blocks' planned surface belts are crossed like built ones (unbuilt_external_keepouts).
+    known = {xy(e) for e in foreign}
+    foreign += [e for e in production.get("planned_belts", []) if xy(e) not in known and xy(e) not in ends]
     foreign += pipes
     hard = {(p["x"], p["y"]) for p in survey["blocked"]}
     hard.update(feeders)
-    hard.update(production["hard"])
+    soft = production.get("planned_soft", set())
+    hard.update(production["hard"] - soft)
+    soft_neighbours = soft - {xy(e) for e in production.get("planned_belts", [])} - ends
     hard.update(builder._occupied_by_plan([e for e in reserved if e["name"] != "transport-belt"]))
     if band is not None:
         hard.update(_band_cells(band, bounds))
@@ -803,6 +839,9 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
         if accepted and production["aprons"]:
             by_position = {xy(e): e for e in layered["entities"]}
             accepted = all((p["x"], p["y"]) in by_position for apron in production["aprons"] for p in apron["points"])
+        if accepted and soft_neighbours:
+            # Beside another block's planned belt only underground mouths may stand (no incidental feed).
+            accepted = not any(e["name"] == "transport-belt" and xy(e) in soft_neighbours for e in layered["entities"])
         if not accepted:
             rejected += 1
         return accepted
@@ -819,6 +858,7 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
             end_direction=destination["facing"],
             max_nodes=node_budget,
             candidate_validator=accepts_layers,
+            **({"max_detour_ratio": max_detour_ratio} if max_detour_ratio is not None else {}),
         )
         compiled = compile_crossings(route, foreign, maximum_span=survey["max_span"], verified_pipes=pipes)
         if compiled.get("ok"):
