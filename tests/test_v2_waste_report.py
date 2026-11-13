@@ -197,6 +197,30 @@ class CriticalChainTests(unittest.TestCase):
             self.assertEqual(totals["producer"]["binding"], {"waits for splitter": 1})
             self.assertEqual(totals["bus"]["median_end"], 26.0)
 
+    def test_plate_supply_bound_from_iron_cells_and_district_furnaces(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.chain_run(Path(directory), 1, 18.5)
+            events = (run / "job-events.jsonl").read_text(encoding="utf-8")
+            drills = [  # two iron cells from minute 0, one coal cell (not iron supply)
+                act("p", n, type="build", name="burner-mining-drill", position={"x": n, "y": 9}, reason=reason)
+                for n, reason in ((1, "build direct iron-ore supply cell"), (2, "expand iron-ore starter capacity"))
+            ]
+            drills.append(
+                act("p", 3, type="build", name="burner-mining-drill", position={"x": 3, "y": 9}, reason="coal")
+            )
+            (run / "job-events.jsonl").write_text(
+                "".join(json.dumps(e) + "\n" for e in drills) + events, encoding="utf-8"
+            )
+            bound = tool.plate_supply_bound(run)
+            # 3 takes of 9 plates by the district end: 27 plates; 2 cells x 15/min pay them by 0.9 min.
+            self.assertEqual(bound["district"], {"actual": 24.0, "bound": 0.9, "bill": 27})
+            self.assertEqual(bound["bus"]["bill"], 27)
+            # Supply starts: 2 iron cells, then the district iron furnace once the prefix (18.5) is complete.
+            starts = tool._iron_supply_starts(tool.cp.Run(run), run, int(18.5 * 3600))
+            self.assertEqual([rate for _, rate in starts], [15.0, 15.0, 18.75])
+            self.assertEqual(tool._bound_tick([(0, 15.0)], 30), 2 * 3600)
+            self.assertIsNone(tool._bound_tick([], 5))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -496,8 +496,12 @@ def actor_death_waste(root, end, w) -> list[dict]:
 #   finished within RESEARCH_GATE_MINUTES of the logistics research is the research.
 # - district / bus: plate-bound when at least PLATE_SHORT_SHARE of the iron takes in the segment
 #   moved less than they asked for (the starter furnaces were empty).
+#   Not gated: "admitted after logistics" when the district job was submitted within
+#   ADMITTED_SLACK_TICKS of the logistics end (its slot came only then), else "plates" when at least
+#   PLATE_SHORT_SHARE of its slice reasons after logistics wait for a plate, else "waits for <entity>".
 LAB_BOUND_SLACK = 1.25
 RESEARCH_GATE_MINUTES = 1.0
+ADMITTED_SLACK_TICKS = 600
 PLATE_SHORT_SHARE = 0.4
 CHAIN_RESEARCH = ("electric-mining-drill", "logistics")
 
@@ -537,6 +541,22 @@ def _iron_short_share(run, lo, hi):
                 if lo <= tick < hi and isinstance(a.get("count"), int):
                     rows.append((r.get("moved") or 0) < a["count"])
     return round(sum(rows) / len(rows), 2) if rows else None
+
+
+def _plate_wait_share(run, capability, lo, hi):
+    """Share of ``capability``'s slice reasons in [lo, hi] that wait for a plate (0.0 without slices)."""
+    if lo is None or hi is None:
+        return 0.0
+    keys = {k for k, j in run.jobs.items() if j.get("capability") == capability}
+    reasons = [
+        str(row.get("reason") or "")
+        for s in run.slices
+        if lo <= s.get("tick", -1) <= hi
+        for k, row in (s.get("jobs") or {}).items()
+        if k in keys and isinstance(row, dict)
+    ]
+    plates = sum(1 for r in reasons if re.search(r"waiting for .*-plate", r))
+    return plates / len(reasons) if reasons else 0.0
 
 
 def _first_bank_prefix(root):
@@ -627,8 +647,30 @@ def critical_chain(root, run=None) -> list[dict]:
                 and logistics is not None
                 and prefix_end - logistics <= RESEARCH_GATE_MINUTES * 3600
             )
-            producer["binding"] = "logistics research" if gated else f"waits for {last[0]}"
-            producer["evidence"] = {"last_entity": last[0], "prefix_entities": len(prefix)}
+            admitted = min(
+                (
+                    run.start[k]
+                    for k, j in run.jobs.items()
+                    if j.get("capability") == "smelting_district" and k in run.start
+                ),
+                default=None,
+            )
+            late = sum(1 for k in prefix if logistics is not None and built[k] > logistics)
+            if gated:
+                producer["binding"] = "logistics research"
+            elif logistics is not None and admitted is not None and admitted >= logistics - ADMITTED_SLACK_TICKS:
+                # The job got its slot only when logistics ended; the prefix was built after it.
+                producer["binding"] = "admitted after logistics"
+            elif _plate_wait_share(run, "smelting_district", logistics, prefix_end) >= PLATE_SHORT_SHARE:
+                producer["binding"] = "plates"
+            else:
+                producer["binding"] = f"waits for {last[0]}"
+            producer["evidence"] = {
+                "last_entity": last[0],
+                "prefix_entities": len(prefix),
+                "built_after_logistics": late,
+                "admitted": m(admitted),
+            }
     rows.append(producer)
     for name, lo, hi in (("district", prefix_end, district), ("bus", district, bus)):
         row = {"segment": name, "start": m(lo), "end": m(hi)}
@@ -643,6 +685,100 @@ def critical_chain(root, run=None) -> list[dict]:
         start, end = row.get("start"), row.get("end")
         row["minutes"] = round(end - start, 1) if start is not None and end is not None else None
     return rows
+
+
+# --- plate-supply bound -------------------------------------------------------------------
+# The earliest minute the run's own iron supply could have paid what the run spent on iron up to
+# a step (district, bus): actual near the bound = plate-bound, far above it = rule-bound (plates
+# stood ready while the step waited on something else). Supply capacity, an upper bound (so the
+# minute is a lower bound): every iron starter cell from its burner drill's build (the build reason
+# names "iron-ore"), STARTER_CELL_RATE plates/min, plus every district/smelting_capacity iron
+# furnace from its build, but not before the district's producer prefix is complete (its feed head
+# carries the outposts' ore), DISTRICT_FURNACE_RATE plates/min. The bill: iron-plate taken
+# (moved) by any job up to the step (game production counters are not kept for the whole run).
+STARTER_CELL_RATE = 15.0  # burner mining drill 0.25 ore/s
+DISTRICT_FURNACE_RATE = 18.75  # stone furnace 0.3125 plates/s
+PLATE_BOUND_STEPS = (("district", "smelting_district"), ("bus", "planned_main_bus"))
+
+
+def _iron_supply_starts(run, root, prefix_end):
+    """``[(tick, plates per minute)]``: each iron starter cell and each iron district furnace coming online."""
+    starts = []
+    for tick, _key, a in sorted(run.actions, key=lambda r: r[0]):
+        if a.get("type") == "build" and a.get("name") == "burner-mining-drill" and "iron-ore" in str(a.get("reason")):
+            starts.append((tick, STARTER_CELL_RATE))
+    try:
+        state = json.loads((Path(root) / "smelting-district.json").read_text(encoding="utf-8"))
+        banks = state.get("banks") or []
+    except (OSError, ValueError, TypeError):
+        banks = []
+    iron = {
+        (e["name"], e["position"]["x"], e["position"]["y"])
+        for b in banks
+        if b.get("resource") == "iron-ore"
+        for e in b.get("entities") or ()
+        if e.get("name") in ("stone-furnace", "steel-furnace")
+    }
+    if prefix_end is not None:
+        for key, tick in _built_ticks(run).items():
+            if key in iron:
+                starts.append((max(tick, prefix_end), DISTRICT_FURNACE_RATE))
+    return sorted(starts)
+
+
+def _iron_taken(run):
+    """``[(tick, plates moved)]`` of every iron-plate take/take_many."""
+    pending, rows = {}, []
+    for e in run.events:
+        if e.get("event") == "action_intent":
+            pending[e.get("key")] = e
+        elif e.get("event") == "action_result" and e.get("key") in pending:
+            intent = pending.pop(e.get("key"))
+            a, r = intent.get("action") or {}, e.get("result") or {}
+            if a.get("type") in ("take", "take_many") and a.get("item") == "iron-plate":
+                moved = r.get("moved")
+                if isinstance(intent.get("tick"), int) and isinstance(moved, (int, float)) and moved > 0:
+                    rows.append((intent["tick"], moved))
+    return sorted(rows)
+
+
+def _bound_tick(starts, bill):
+    """First tick at which the cumulative supply of ``starts`` reaches ``bill`` plates (None: never)."""
+    supplied, rate, last = 0.0, 0.0, 0
+    for tick, add in starts:
+        if rate > 0 and supplied + rate * (tick - last) / 3600 >= bill:
+            break
+        supplied += rate * (tick - last) / 3600
+        rate, last = rate + add, tick
+    if rate <= 0:
+        return None if bill > 0 else 0
+    return int(last + max(0.0, bill - supplied) / rate * 3600)
+
+
+def plate_supply_bound(root, run=None) -> dict:
+    """Per PLATE_BOUND_STEPS segment: ``bound`` and ``actual`` game minutes and the iron ``bill`` (rules above)."""
+    root = Path(root)
+    run = run or cp.Run(root)
+    found = _first_bank_prefix(root)
+    built = _built_ticks(run)
+    prefix_end = None
+    if found and found[0] and all(k in built for k in found[0]):
+        prefix_end = max(built[k] for k in found[0])
+    starts = _iron_supply_starts(run, root, prefix_end)
+    taken = _iron_taken(run)
+    out = {}
+    for name, capability in PLATE_BOUND_STEPS:
+        end = _job_end(run, capability)
+        if end is None:
+            continue
+        bill = sum(moved for tick, moved in taken if tick <= end)
+        bound = _bound_tick(starts, bill)
+        out[name] = {
+            "actual": round(end / 3600, 1),
+            "bound": None if bound is None else round(bound / 3600, 1),
+            "bill": round(bill),
+        }
+    return out
 
 
 def _text(value) -> str:

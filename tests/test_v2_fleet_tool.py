@@ -268,6 +268,24 @@ class PaceTests(unittest.TestCase):
         lines = fleet.format_report(dict(name="f"), rows, fleet.aggregate(rows), window_text="0-30")
         self.assertIn(line, lines)
 
+    def test_pace_line_adds_the_plate_supply_bound(self):
+        rows = [
+            dict(
+                seed=1,
+                milestones={"smelting_district": 26.0},
+                plate_bound={"district": {"actual": 26.0, "bound": 23.0}},
+            ),
+            dict(
+                seed=2,
+                milestones={"smelting_district": 30.0},
+                plate_bound={"district": {"actual": 30.0, "bound": 24.0}},
+            ),
+            dict(seed=3, milestones={}, plate_bound={}),
+        ]
+        line = fleet.pace_line(rows)
+        self.assertIn("smelt median 28.0 (+8.0), 0/3 under, plate bound 23.5 (actual +4.5)", line)
+        self.assertIn("bus median - (never), 0/3 under;", line + ";")
+
 
 if __name__ == "__main__":
     unittest.main()
