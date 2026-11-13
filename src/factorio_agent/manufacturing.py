@@ -8,6 +8,7 @@ from factorio_agent.core.deterministic_builder import _plan
 from .board import entity
 from .smelting import port, merge_entities
 from .power_grid import plan_connection as power_connection
+from .power_grid import supplied_networks
 
 
 def recipe_cell(x, y, recipe, ingredients, *, split_output=False):
@@ -223,9 +224,7 @@ def connect_power_groups(game, builder, obs, groups, entities):
     """Plan wire connectivity incrementally; native power is proved after build."""
     virtual = deepcopy(obs)
     result = []
-    networks = {
-        e.get("electric_network_id") for e in obs["entities"] if e["name"] == "steam-engine" and e.get("energy", 0) > 0
-    }
+    networks = supplied_networks(obs)
     if not networks:
         return {"ok": False, "reason": "no_supplied_pole_network"}
     network = next(iter(networks))

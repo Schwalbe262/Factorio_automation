@@ -23,6 +23,7 @@ from pathlib import Path
 from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.core.deterministic_state import _atomic_json
 from .planning import preflight
+from .power_grid import generating
 from .power_grid import plan_connection as power_connection
 from .smelting import merge_entities
 from .paired_mining import prepare_new_bank, lane_evidence
@@ -87,7 +88,7 @@ class SteamExpansion:
     def prepare(self, obs):
         """Plan the pair, its paired coal bank, coal belt, water link and poles; no action."""
         engines = [e for e in obs["entities"] if e["name"] == "steam-engine"]
-        if not engines or not any(e.get("energy", 0) > 0 for e in engines):
+        if not engines or not any(generating(e) for e in engines):
             # A wait, not a planning failure (seed 1188507449: the boiler had run out of coal and
             # upkeep refuelled it in the same step); ``step`` reports it as waiting.
             return {"ok": False, "reason": "running_source_plant_required", "wait": True}

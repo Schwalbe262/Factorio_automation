@@ -15,6 +15,7 @@ from .board import entity
 from .industrial import PlanningBudget
 from .planning import overlap, preflight, survey_slots
 from .power_grid import plan_connection as power_connection
+from .power_grid import supplied_networks
 from .radar_network import RADAR_POWER_LUA, planned_power_watts
 from .routing import VECTORS
 from .smelting import merge_entities, port
@@ -575,11 +576,7 @@ class ConstructionMall:
             ]
             if not producers:
                 return {"ok": False, "reason": "mall_existing_productive_base_required"}
-            networks = {
-                q.get("electric_network_id")
-                for q in obs["entities"]
-                if q["name"] == "steam-engine" and q.get("energy", 0) > 0
-            }
+            networks = supplied_networks(obs)
             supply = [
                 xy(q)
                 for q in obs["entities"]

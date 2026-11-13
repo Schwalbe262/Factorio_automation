@@ -94,6 +94,53 @@ class MineTrunkRules(unittest.TestCase):
         second = mine_trunk.plan_tap(bank, obs, owner="b", name="b:coal", demand=30, stations=[first])["taps"][0]
         self.assertGreaterEqual(abs(second["along"] - first["along"]), mine_trunk.WINDOW_ROWS + 1)
 
+    def test_tap_search_passes_the_trunk_underground_under_a_crossing_line(self):
+        # eval-1575138435 (257 min): the coal trunk dives under the starter boiler feed 6 tiles past
+        # the port (underground 53.5 -> 55.5, feed belt on x=54.5); power_coal_tap saw a 7-tile run
+        # and blocked mine_trunk_tap_unavailable (tap_beyond_bus_length 12, tap_window_taken 8).
+        bank = patch_bank()
+        port = bank["plan"]["ports"][0]["position"]
+        belts = [b for b in trunk_belts(bank) if b["position"]["x"] - port["x"] not in (6, 7, 8)]
+        belts += [
+            {
+                "name": "underground-belt",
+                "position": {"x": port["x"] + 6, "y": port["y"]},
+                "direction": 4,
+                "belt_to_ground_type": "input",
+                "unit_number": 900,
+                "underground_neighbour": {"unit_number": 901},
+            },
+            {
+                "name": "underground-belt",
+                "position": {"x": port["x"] + 8, "y": port["y"]},
+                "direction": 4,
+                "belt_to_ground_type": "output",
+                "unit_number": 901,
+            },
+        ]
+        belts += [
+            {
+                "name": "transport-belt",
+                "position": {"x": port["x"] + 7, "y": port["y"] + dy},
+                "direction": 0,
+                "unit_number": 950 + dy,
+            }
+            for dy in (-1, 0, 1)
+        ]
+        obs = {"world_id": "w", "entities": belts}
+        self.assertEqual(len(mine_trunk.trace_trunk(obs, bank["plan"]["ports"][0])), 6)
+        ((head, run),) = mine_trunk.trunk_segments(obs, bank["plan"]["ports"][0], undergrounds=True)
+        self.assertEqual(len(run), RUN)
+        self.assertEqual(
+            [e["name"] for e in run[6:9]], ["underground-belt", mine_trunk.UNDERGROUND_GAP, "underground-belt"]
+        )
+        found = mine_trunk.plan_tap(bank, obs, owner="power", name="power:coal", demand=27, serve="first")
+        self.assertTrue(found["ok"], found)
+        for tap in found["taps"]:
+            replaced = {round(p["x"] - port["x"]) for p in tap["remove"]}
+            self.assertFalse(replaced & {6, 7, 8})
+        self.assertEqual(found["taps"][0]["frame"]["length"], RUN)  # the whole run, not the 6 tiles to the dive
+
     def test_no_observed_trunk_is_a_precise_failure(self):
         result = mine_trunk.plan_tap(patch_bank(), {"world_id": "w", "entities": []}, owner="a", name="a", demand=1)
         self.assertEqual(result["reason"], "mine_trunk_not_observed")

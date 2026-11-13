@@ -97,6 +97,7 @@ from .construction_supply import COLLECT_BATCH, HANDCRAFT_LIMIT
 from .core.deterministic_builder import FactoryBuilder, _plan
 from .core.deterministic_state import _atomic_json
 from .machine_stock import STALL_TICKS
+from .power_grid import supplied_networks
 from .routing import VECTORS
 
 # ----- constants (tuning = change here and the pinning test) -----------------
@@ -790,11 +791,7 @@ class SupplyCell:
             canonical = layout(self.catalog, products, chest=chest, enabled=enabled)
         except ValueError as exc:
             return {"ok": False, "reason": "supply_cell_design_unsupported", "detail": str(exc)[:200]}
-        networks = {
-            e.get("electric_network_id")
-            for e in obs.get("entities", [])
-            if e.get("name") == "steam-engine" and e.get("energy", 0) > 0
-        }
+        networks = supplied_networks(obs)
         poles = [
             e for e in obs.get("entities", []) if e.get("name") == POLE and e.get("electric_network_id") in networks
         ]

@@ -195,6 +195,29 @@ class SteamExpansionTests(unittest.TestCase):
         self.assertEqual(result["evidence"]["wait_for"], "running_source_plant_required")
         self.assertEqual(obj.state, {})
 
+    def test_a_plant_at_its_limit_generates_with_an_empty_buffer(self):
+        # eval-1575138435 (257 min): both engines "working" with 199 steam and energy 0 (the
+        # network drew every tick's output): the expansion waited for a running plant, and every
+        # power bridge failed no_supplied_pole_network, while the plant was simply overloaded.
+        from factorio_agent.power_grid import generating, supplied_networks
+
+        live = {
+            "name": "steam-engine",
+            "status_name": "working",
+            "energy": 0,
+            "electric_network_id": 1,
+            "fluids": {"steam": 199.25},
+        }
+        self.assertTrue(generating(live))
+        self.assertEqual(supplied_networks({"entities": [live]}), {1})
+        self.assertFalse(generating(dict(live, status_name="no_input_fluid")))
+        obj, bank, obs = self.fixture()
+        obj.state = {}
+        obs["entities"][0].update(energy=0, status_name="working")
+        with prepared(bank):
+            result = obj.prepare(obs)
+        self.assertNotEqual(result.get("reason"), "running_source_plant_required")
+
     def test_prepare_then_step_to_thirty_second_proof(self):
         obj, bank, obs = self.fixture()
         obj.state = {}
