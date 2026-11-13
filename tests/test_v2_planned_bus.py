@@ -208,8 +208,55 @@ class ControllerTests(unittest.TestCase):
             h.bus.site = None
             self.assertEqual(h.bus.prepare(h.obs())["reason"], "planned_bus_requires_site_plan")
             h.bus.site = h.site
-            anchor = pb.feed_branch(h.plan, h.plan["ports"][0])["anchor"]
-            self.assertEqual(h.bus.prepare(h.obs(drop={at(anchor)}))["reason"], "planned_bus_feed_anchor_missing")
+            port = h.plan["ports"][0]
+            anchors = {at(pb.feed_branch(h.plan, port, k)["anchor"]) for k in pb.FEED_UPSTREAM}
+            self.assertEqual(h.bus.prepare(h.obs(drop=anchors))["reason"], "planned_bus_feed_anchor_missing")
+            # Without the default anchor the feed moves to the next distance on the same belt (2 tiles).
+            default = at(pb.feed_branch(h.plan, port)["anchor"])
+            prepared = h.bus.prepare(h.obs(drop={default}))
+            self.assertTrue(prepared["ok"], prepared)
+            moved = next(f for f in prepared["feeds"] if f["item"] == port["item"])
+            self.assertEqual(moved["upstream"], 2)
+
+    def test_feed_moves_upstream_off_a_district_entity_beside_the_default_anchor(self):
+        """418128958 / 790557522: a district underground on the feed splitter's second tile."""
+        with TemporaryDirectory() as root:
+            h = Harness(root, PLANS[1])
+            port = h.plan["ports"][0]
+            default = pb.feed_branch(h.plan, port)
+            occupied = FactoryBuilder.__new__(FactoryBuilder)._occupied_by_plan
+            second = sorted(occupied([default["splitter"]]) - occupied([{"name": "x", "position": default["anchor"]}]))
+            self.assertEqual(len(second), 1)
+            tx, ty = second[0]
+            crossing = {"name": "underground-belt", "position": {"x": tx + 0.5, "y": ty + 0.5}, "direction": 0}
+            h.plan["entities"].append(crossing)  # planned, not built (418128958)
+            self.assertTrue(pb.feed_meets_district(default, h.plan))
+            prepared = h.bus.prepare(h.obs())
+            self.assertTrue(prepared["ok"], prepared)
+            moved = next(f for f in prepared["feeds"] if f["item"] == port["item"])
+            self.assertEqual(moved["upstream"], 2)
+            self.assertFalse(pb.feed_meets_district(moved, h.plan))
+            other = next(f for f in prepared["feeds"] if f["item"] != port["item"])
+            self.assertNotIn("upstream", other)  # the other port keeps the default geometry
+
+    def test_cut_over_never_mines_the_anchor_when_the_splitter_cannot_stand(self):
+        with TemporaryDirectory() as root:
+            h = Harness(root, PLANS[7])
+            h.bus.step(h.obs())  # prepared, staged plan built
+            h.bus.check = Mock(
+                return_value={
+                    "ok": False,
+                    "reason": "block_protected_entity_obstruction",
+                    "entity": "underground-belt",
+                    "position": {"x": 0.5, "y": -16.5},
+                }
+            )
+            result = h.bus.step(h.obs(inventory={"splitter": 2}))
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(result["reason"], "planned_bus_feed_splitter_obstructed")
+            self.assertEqual(
+                (result["failed_entity"], result["position"]), ("underground-belt", {"x": 0.5, "y": -16.5})
+            )
 
     def test_second_route_order_is_tried_when_the_first_fails(self):
         with TemporaryDirectory() as root:
@@ -278,6 +325,24 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(result["status"], "succeeded", result)
             self.assertEqual([row["item"] for row in result["evidence"]["lanes"]], list(pb.BUILT_MATERIALS))
             self.assertEqual(h.bus.state["phase"], "verified")
+
+    def test_proof_walks_only_the_extensions_of_built_taps(self):
+        """2311522763: an unbuilt row's tap moved both tails 64 -> 72; the loaded bus never proved."""
+        with TemporaryDirectory() as root:
+            h = Harness(root, PLANS[1])
+            h.bus.state = h.bus.prepare(h.obs())
+            h.bus.state["phase"] = "commission"
+            built = self.built(h, plates=True)
+            lanes = {t["lane"]: pb.TRUNK_TILES + 8 for t in h.bus.state["trunks"]}
+            tap = {"name": "production_row_inserter:iron-plate", "built": False, "extension": lanes, "remove": []}
+            h.bus.state["taps"] = [tap]
+            for trunk in h.bus.state["trunks"]:
+                trunk["length"] = pb.TRUNK_TILES + 8
+            self.assertIsNotNone(h.bus.proof(h.obs(extra=built)))
+            bus = Bus.from_dict(h.bus.state["bus"])
+            self.assertEqual(pb.proven_length(h.bus.state, h.bus.state["trunks"][0], bus), pb.TRUNK_TILES)
+            tap["built"] = True  # a built tap's extension is walked (its belts are then in the plan)
+            self.assertEqual(pb.proven_length(h.bus.state, h.bus.state["trunks"][0], bus), pb.TRUNK_TILES + 8)
 
     def test_proof_rejects_a_mixed_lane_and_a_missing_belt(self):
         with TemporaryDirectory() as root:

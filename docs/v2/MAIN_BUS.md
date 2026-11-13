@@ -12,13 +12,22 @@ of the port a splitter replaces the district belt and a five-belt branch
 leaves the district beside the port (the side opposite green science's
 branch), routed to the lane head with the `corridor:smelting->bus` guide. Red
 science keeps the port; the feed splitter gives the bus branch output
-priority, so the port gets what the bus does not take. Phases:
+priority, so the port gets what the bus does not take. When the splitter or
+branch would stand on another district plan tile (a district route diving
+under its own output belt beside the anchor), the feed takes the next distance
+of `FEED_UPSTREAM` (3, 2, 4, 5, 6), per port; a failed route or whole preflight
+also tries the next distance before the bus blocks (aud-1114-0436 seeds
+418128958, 790557522). Phases:
 build (everything but the splitters), splice (splitters go into the district
-plan, splitter stock first, the exact old belt is mined, splitter built),
+plan, splitter stock first, the splitter's site is preflighted, then the exact
+old belt is mined and the splitter built; an obstructed site blocks
+`planned_bus_feed_splitter_obstructed` before the district line is cut),
 commission (feed and tap splitters get their priorities), verified. Proof:
 every planned belt as planned, native underground partners, every feed and
 tap splitter with its wanted priorities, each built trunk carries only its
-plate and its tail belt holds plates.
+plate and its tail belt holds plates; the tail is that of the prepared trunk
+plus the extensions of built taps only (`proven_length`: a recorded but unbuilt
+tap moved both tails 64 -> 72 on seed 2311522763 and the loaded bus never proved).
 
 Splitter priorities (`planned_bus.feed_priorities`, `tap_priorities`):
 

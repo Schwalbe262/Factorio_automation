@@ -65,7 +65,7 @@ import json
 from pathlib import Path
 
 from .board import blocks_without_bus, entity, foreign_belts, surface_conflict
-from .core.deterministic_builder import _plan
+from .core.deterministic_builder import FactoryBuilder, _plan
 from .core.deterministic_state import _atomic_json
 from .planning import preflight
 from .plate_supply import district_ports
@@ -222,17 +222,21 @@ def lane_band(bus: Bus, item: str) -> list[list[int]]:
     return [[rect.x0, rect.y0], [rect.x1, rect.y1]]
 
 
-def feed_branch(district_plan: dict, port: dict) -> dict:
-    """Splitter, branch belts, feed source and anchor for one district plate port (see module doc)."""
+def feed_branch(district_plan: dict, port: dict, upstream: int = 3) -> dict:
+    """Splitter, branch belts, feed source and anchor for one district plate port (see module doc).
+
+    ``upstream``: tiles from the port to the anchor belt (3 in the module doc; ``FEED_UPSTREAM``
+    lists the further ones ``prepare`` tries when the district plan stands beside the default).
+    """
     turn = Transform.from_dict(district_plan.get("site_transform"))
     canonical = apply_transform(turn.inverse(), port)
     if canonical.get("facing") != 4:
         raise ValueError("district plate port does not leave east in the district frame")
     x, y = canonical["position"]["x"], canonical["position"]["y"]
     shape = {
-        "anchor": {"x": x - 3, "y": y},
-        "splitter": dict(entity("splitter", x - 3, y + 0.5, 4), _width=2, _height=1),
-        "belts": [entity("transport-belt", x + dx, y + 1, 4) for dx in (-2, -1, 0, 1, 2)],
+        "anchor": {"x": x - upstream, "y": y},
+        "splitter": dict(entity("splitter", x - upstream, y + 0.5, 4), _width=2, _height=1),
+        "belts": [entity("transport-belt", x + dx, y + 1, 4) for dx in range(1 - upstream, 3)],
         "source": {
             "kind": "item",
             "item": port["item"],
@@ -243,7 +247,39 @@ def feed_branch(district_plan: dict, port: dict) -> dict:
     }
     feed = dict(apply_transform(turn, shape), item=port["item"], district_port=dict(port["position"]))
     feed["splitter"].update(feed_priorities(feed))
+    if upstream != 3:
+        feed["upstream"] = upstream
     return feed
+
+
+# Anchor distances the feed tries in order. The district plan may cross its own plate output belt
+# right beside the default anchor (a coal or ore route diving under it): aud-1114-0436 seeds 418128958
+# and 790557522 had a district underground on the feed splitter's second tile; the fixed geometry
+# met it on every re-plan (790: built before the bus planned, preflight failed 5 times; 418: still
+# unbuilt, so the bus mined the district's plate belt and then could not place its splitter).
+# 2 comes second: a crossing at the default anchor column also lies under every longer branch;
+# 2 keeps green science's anchor at x-1 and red's port at x (module doc).
+FEED_UPSTREAM = (3, 2, 4, 5, 6)
+GEOMETRY = FactoryBuilder.__new__(FactoryBuilder)
+
+
+def _footprint(e: dict) -> dict:
+    """A plan entity with the splitter's 2x1 size when the plan leaves it out."""
+    if e.get("name") == "splitter" and "_width" not in e:
+        return dict(e, _width=2, _height=1)
+    return e
+
+
+def feed_meets_district(feed: dict, district_plan: dict) -> bool:
+    """True when the feed's splitter or branch belts stand on a district plan tile other than its anchor belt."""
+    anchor = _at(feed["anchor"])
+    others = [
+        _footprint(e)
+        for e in district_plan.get("entities", ())
+        if not (e["name"] == "transport-belt" and xy(e) == anchor)
+    ]
+    planned = GEOMETRY._occupied_by_plan(others)
+    return bool(planned & GEOMETRY._occupied_by_plan([feed["splitter"], *feed["belts"]]))
 
 
 def _at(position) -> tuple:
@@ -379,10 +415,35 @@ def failure_scalars(detail: dict) -> dict:
         out["failed_entity"] = str(entity.get("name"))
         if isinstance(entity.get("position"), dict):
             out["position"] = dict(entity["position"])
+    elif isinstance(entity, str):
+        # planning.preflight names the obstruction by name and position at the top level
+        # (790557522 kept only failed_check; the post-mortem found a district underground).
+        out["failed_entity"] = entity[:80]
+        if isinstance(detail.get("position"), dict):
+            out["position"] = dict(detail["position"])
     blockers = detail.get("blockers")
     if isinstance(blockers, list) and blockers and isinstance(blockers[0], dict):
         out["first_blocker"] = f"{blockers[0].get('name')}: {blockers[0].get('reason')}"[:200]
     return out
+
+
+def proven_length(state: dict, trunk: dict, bus: Bus) -> int:
+    """Trunk tiles the proof walks: the prepared trunk plus the extensions of BUILT taps only.
+
+    ``planned_tap.publish`` extends ``trunk["length"]`` (and its tail) when a consumer records its
+    tap, before the tap's extension belts exist. The proof walked to that unbuilt tail: on
+    aud-1114-0436 seed 2311522763 an unbuilt inserter row's tap moved both tails from 64 to 72 and
+    the fully built bus, 64 tiles loaded with plates, waited from 28.8 min to the end of the run.
+    """
+    length = min(TRUNK_TILES, bus.length)
+    for tap in state.get("taps", ()):
+        if not tap.get("built"):
+            continue
+        extension = tap.get("extension") or {}
+        target = extension.get(trunk["lane"], extension.get(str(trunk["lane"])))
+        if isinstance(target, int) and not isinstance(target, bool):
+            length = max(length, target)
+    return min(length, trunk["length"])
 
 
 def _splitter_over(live: dict, belt: dict):
@@ -467,46 +528,36 @@ class PlannedBus:
                     "length": length,
                 }
             )
-        feeds, anchors = [], []
-        for item in BUILT_MATERIALS:
-            try:
-                feed = feed_branch(district["plan"], ports[item])
-            except (KeyError, ValueError) as exc:
-                return {"ok": False, "reason": "planned_bus_feed_branch_invalid", "item": item, "detail": str(exc)}
-            if _inside(district["plan"].get("reserved_area", [[0, 0], [0, 0]]), feed["source"]["position"]):
-                return {"ok": False, "reason": "planned_bus_feed_source_inside_district", "item": item}
-            anchor = next(
-                (
-                    e
-                    for e in obs["entities"]
-                    if e["name"] == "transport-belt"
-                    and _at(feed["anchor"]) == xy(e)
-                    and e["direction"] == feed["splitter"]["direction"]
-                ),
-                None,
-            )
-            owned = any(
-                e["name"] == "transport-belt" and xy(e) == _at(feed["anchor"]) for e in district["plan"]["entities"]
-            )
-            if anchor is None or not owned:
-                return {"ok": False, "reason": "planned_bus_feed_anchor_missing", "item": item}
-            feed["anchor_unit"] = anchor["unit_number"]
-            anchors.append(anchor["unit_number"])
-            feeds.append(feed)
-            entities = merge_entities(entities, [feed["splitter"], *feed["belts"]])
-        routed = self._route_feeds(obs, bus, lanes, feeds, entities, corridor_box(master.corridor(HEADER_CORRIDOR)))
-        if not routed["ok"]:
-            return routed
-        entities = routed["entities"]
-        pairs += routed["pairs"]
-        whole = self.check(self.game, self.builder, obs, entities, ignored_units=anchors)
-        if not whole.get("ok"):
-            return {
-                "ok": False,
-                "reason": "planned_bus_whole_preflight_failed",
-                "detail": whole,
-                **failure_scalars(whole),
-            }
+        # Each port's feed at the first anchor distance (FEED_UPSTREAM) whose splitter and branch stay
+        # off the district plan; then routes and the whole preflight. A failed route or preflight tries
+        # the next distance before the bus blocks with the first (default) failure.
+        trunk_entities, failure = entities, None
+        for first in range(len(FEED_UPSTREAM)):
+            feeds = self._feeds(obs, district, ports, first)
+            if not feeds["ok"]:
+                failure = failure or feeds
+                continue
+            entities = merge_entities(trunk_entities, *([f["splitter"], *f["belts"]] for f in feeds["feeds"]))
+            anchors = [f["anchor_unit"] for f in feeds["feeds"]]
+            guide = corridor_box(master.corridor(HEADER_CORRIDOR))
+            routed = self._route_feeds(obs, bus, lanes, feeds["feeds"], entities, guide)
+            if not routed["ok"]:
+                failure = failure or routed
+                continue
+            whole = self.check(self.game, self.builder, obs, routed["entities"], ignored_units=anchors)
+            if not whole.get("ok"):
+                failure = failure or {
+                    "ok": False,
+                    "reason": "planned_bus_whole_preflight_failed",
+                    "detail": whole,
+                    **failure_scalars(whole),
+                }
+                continue
+            feeds, entities = feeds["feeds"], routed["entities"]
+            pairs += routed["pairs"]
+            break
+        else:
+            return failure
         ports_out = trunk_ports(bus, trunks)
         common = dict(
             layout_policy="pcb-planned-main-bus-v1",
@@ -529,6 +580,53 @@ class PlannedBus:
             ),
             "phase": "build",
         }
+
+    def _feeds(self, obs, district: dict, ports: dict, first: int) -> dict:
+        """Per built material the feed at the first distance of ``FEED_UPSTREAM[first:]`` that fits.
+
+        Fits: an observed district belt in the splitter's direction on the anchor tile that the
+        district plan owns, and the splitter and branch belts on no other district plan tile.
+        """
+        feeds = []
+        for item in BUILT_MATERIALS:
+            failure = None
+            for upstream in FEED_UPSTREAM[first:]:
+                try:
+                    feed = feed_branch(district["plan"], ports[item], upstream)
+                except (KeyError, ValueError) as exc:
+                    return {"ok": False, "reason": "planned_bus_feed_branch_invalid", "item": item, "detail": str(exc)}
+                if _inside(district["plan"].get("reserved_area", [[0, 0], [0, 0]]), feed["source"]["position"]):
+                    return {"ok": False, "reason": "planned_bus_feed_source_inside_district", "item": item}
+                anchor = next(
+                    (
+                        e
+                        for e in obs["entities"]
+                        if e["name"] == "transport-belt"
+                        and _at(feed["anchor"]) == xy(e)
+                        and e["direction"] == feed["splitter"]["direction"]
+                    ),
+                    None,
+                )
+                owned = any(
+                    e["name"] == "transport-belt" and xy(e) == _at(feed["anchor"]) for e in district["plan"]["entities"]
+                )
+                if anchor is None or not owned:
+                    failure = failure or {"ok": False, "reason": "planned_bus_feed_anchor_missing", "item": item}
+                    continue
+                if feed_meets_district(feed, district["plan"]):
+                    failure = failure or {
+                        "ok": False,
+                        "reason": "planned_bus_feed_meets_district_plan",
+                        "item": item,
+                        "upstream": upstream,
+                    }
+                    continue
+                feed["anchor_unit"] = anchor["unit_number"]
+                feeds.append(feed)
+                break
+            else:
+                return failure or {"ok": False, "reason": "planned_bus_feed_anchor_missing", "item": item}
+        return {"ok": True, "feeds": feeds}
 
     def _route_feeds(self, obs, bus, lanes, feeds, entities, guide) -> dict:
         """Route each feed source to its lane head; the second order is tried when the first fails."""
@@ -640,6 +738,16 @@ class PlannedBus:
                 continue
             if old.get("unit_number") != feed["anchor_unit"]:
                 return {"status": "blocked", "reason": "planned_bus_feed_anchor_identity_changed", "item": feed["item"]}
+            # Never cut the district's plate line for a splitter that cannot stand there (418128958:
+            # the anchor was mined, then a district underground on the second tile kept the splitter out).
+            room = self.check(self.game, self.builder, obs, [feed["splitter"]], ignored_units=[feed["anchor_unit"]])
+            if not room.get("ok"):
+                return {
+                    "status": "blocked",
+                    "reason": "planned_bus_feed_splitter_obstructed",
+                    "item": feed["item"],
+                    **failure_scalars(room),
+                }
             return {
                 "type": "mine",
                 "name": old["name"],
@@ -750,7 +858,7 @@ class PlannedBus:
             item = trunk["item"]
             tiles = [
                 _at(row["position"])
-                for row in trunk_segments(bus, lanes[trunk["lane"]], trunk["length"])
+                for row in trunk_segments(bus, lanes[trunk["lane"]], proven_length(state, trunk, bus))
                 if _at(row["position"]) not in replaced
             ]
             if not tiles:
