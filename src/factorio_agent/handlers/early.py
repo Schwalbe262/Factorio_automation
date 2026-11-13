@@ -6,9 +6,22 @@ from ..capability_registry import register
 from .upkeep import shared_upkeep
 
 
+# Iron cells the starter itself builds before it waits for the first unlocks.
+# One cell (15 plates/min) made the 50-plate steam-power unlock and the boiler,
+# engine and lab that follow a long wait (user rule: start with two).
+STARTER_IRON_CELLS = 2
+
+
 def starter_step(ex, obs, parameters):
     ex.builder._sync(obs)
-    return ex.starter_upkeep(obs)
+    result = ex.starter_upkeep(obs)
+    capacity = getattr(ex, "capacity", None)
+    if capacity is not None and isinstance(result, dict) and result.get("status") == "waiting":
+        # Everything the starter can do now is done; use the wait for the second iron cell.
+        extra = capacity.step(obs, {"resource": "iron-ore", "cells": STARTER_IRON_CELLS})
+        if isinstance(extra, dict) and extra.get("type"):
+            return extra
+    return result
 
 
 def starter_proof(ex, obs, result, parameters):

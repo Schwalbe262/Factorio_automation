@@ -430,5 +430,26 @@ class InvalidationTests(unittest.TestCase):
         self.assertIsNone(district.proof({"world_id": "w", "entities": []}))
 
 
+class StarterSecondIronCellTests(unittest.TestCase):
+    def test_starter_builds_a_second_iron_cell_while_it_waits(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        from factorio_agent.handlers.early import STARTER_IRON_CELLS, starter_step
+
+        build = {"type": "build", "name": "burner-mining-drill"}
+        ex = SimpleNamespace(
+            builder=Mock(),
+            starter_upkeep=Mock(return_value={"status": "waiting", "reason": "waiting for unlock"}),
+            capacity=Mock(step=Mock(return_value=build)),
+        )
+        self.assertEqual(starter_step(ex, {"tick": 1}, {}), build)
+        ex.capacity.step.assert_called_with({"tick": 1}, {"resource": "iron-ore", "cells": STARTER_IRON_CELLS})
+        ex.capacity.step.return_value = {"status": "succeeded"}
+        self.assertEqual(starter_step(ex, {"tick": 1}, {})["status"], "waiting")
+        ex.starter_upkeep.return_value = {"type": "craft"}
+        self.assertEqual(starter_step(ex, {"tick": 1}, {}), {"type": "craft"})
+
+
 if __name__ == "__main__":
     unittest.main()
