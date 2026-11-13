@@ -220,6 +220,11 @@ def roadmap_position(jobs, nodes, observation: Mapping, capabilities: Mapping, s
         after = [name for name in step.after if name in by_id and not satisfied(by_id[name])]
         if after:
             waiting.append("after " + ",".join(after))
+        if getattr(step, "gate", None):
+            from .progression import gate_ready
+
+            if not gate_ready(step, jobs, observation):
+                waiting.append("gate " + step.gate)
         technology = step.parameters.get("technology")
         if technology and listed is not None and technology not in listed:
             waiting.append("technology " + technology + " not researchable yet")

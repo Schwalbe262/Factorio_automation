@@ -35,7 +35,10 @@ BELTS = {"transport-belt": {"count": 30, "raw_per_item": {"iron-plate": 1.5}}}
 class BulkDemandTests(unittest.TestCase):
     def test_finished_items_of_the_next_steps_without_raw_plates(self):
         demand = bulk_item_demand(catalog(), [], {}, horizon=4)
-        self.assertEqual(demand["transport-belt"]["count"], 30)  # power step
+        self.assertEqual(demand["transport-belt"]["count"], 5)  # power step: the boiler's coal stub only
+        # The dedicated coal feed's belts belong to power_coal_feed (step 5).
+        demand = bulk_item_demand(catalog(), [], {}, horizon=5)
+        self.assertEqual(demand["transport-belt"]["count"], 105)
         self.assertEqual(demand["transport-belt"]["raw_per_item"], {"iron-plate": 1.5})
         self.assertEqual(demand["pipe"]["count"], 8)
         self.assertNotIn("coal", demand)

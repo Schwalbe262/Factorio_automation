@@ -35,6 +35,55 @@ def power_flow_ready(evidence: dict[str, Any]) -> bool:
     )
 
 
+# Two-phase starter power (docs/v2/PLANNERS.md "Starter power in two phases"):
+# ``power`` builds the plant and runs it on a hand-fed boiler; the later
+# ``power_coal_feed`` step builds the dedicated coal drill and belt. The saved
+# ``power_mode`` says which phase owns the boiler's fuel.
+HAND_FED = "hand_fed"
+BELT_FED = "belt_fed"
+COAL_FEED_REPLANS = 2  # new routes ensure_coal_feed may choose when the reserved one got built over
+
+
+def coal_feed_mode(state: dict[str, Any]) -> str:
+    """``BELT_FED`` once the dedicated coal feed is proven, else ``HAND_FED``.
+
+    A state saved before the split has a ``coal_plan`` but no ``power_mode``:
+    its power job built the feed together with the plant, so it is belt-fed.
+    """
+    mode = state.get("power_mode")
+    if mode in (HAND_FED, BELT_FED):
+        return mode
+    return BELT_FED if "coal_plan" in state else HAND_FED
+
+
+def coal_fuel_value(catalog: Any) -> float:
+    """Joules in one coal from the catalog (4 MJ in the base game)."""
+    value = (getattr(catalog, "items", None) or {}).get("coal", {}).get("fuel_value")
+    return float(value) if isinstance(value, (int, float)) and value > 0 else 4_000_000.0
+
+
+def boiler_coal_per_minute(catalog: Any) -> float:
+    """Coal/minute a boiler burns at full load: catalog ``energy_usage`` (J/tick) x 3600 / coal fuel value.
+
+    Base game: 30 kJ/tick = 1.8 MW -> 27 coal/min. Without a catalog row the
+    base boiler's 30 kJ/tick is assumed.
+    """
+    usage = (getattr(catalog, "entities", None) or {}).get("boiler", {}).get("energy_usage")
+    usage = float(usage) if isinstance(usage, (int, float)) and usage > 0 else 30_000.0
+    return round(usage * 3600 / coal_fuel_value(catalog), 3)
+
+
+def hand_fed_power_ready(evidence: dict[str, Any]) -> bool:
+    """``power_flow_ready`` without the coal drill and belt: the boiler is fuelled by hand."""
+    return bool(
+        evidence.get("ok")
+        and evidence.get("water", 0) > 0
+        and evidence.get("steam", 0) > 0
+        and evidence.get("boiler_fuel", 0) > 0
+        and evidence.get("connected_engines") == 2
+    )
+
+
 def _position(x: float, y: float) -> dict[str, float]:
     return {"x": round(x, 3), "y": round(y, 3)}
 
@@ -185,6 +234,7 @@ class FactoryBuilder:
         catalog_changed = "catalog_fingerprint" in self.state and self.state["catalog_fingerprint"] != fingerprint
         if tick < self.state.get("last_tick", 0) or catalog_changed:
             self.state.pop("power_sample_tick", None)
+            self.state.pop("coal_feed_sample_tick", None)
             self.state.pop("power_verified_once", None)
             self.state["seeds"] = {}
         self.state["catalog_fingerprint"] = fingerprint
@@ -1004,13 +1054,14 @@ return success{sites=out}
             "reason": "one-time power bootstrap fuel",
         }
 
-    def power_evidence(self, power: dict, coal: dict) -> dict:
+    def power_evidence(self, power: dict, coal: dict | None) -> dict:
+        """Native plant measurements; ``coal`` None (hand-fed boiler) leaves out the feed drill and belts."""
         targets = {
             "boiler": next(e for e in power["entities"] if e["name"] == "boiler"),
             "engines": [e for e in power["entities"] if e["name"] == "steam-engine"],
             "pole": next(e for e in power["entities"] if e["name"] == "small-electric-pole"),
-            "drill": coal["drill"],
-            "belts": [e for e in coal["entities"] if e["name"] == "transport-belt"],
+            "drill": coal["drill"] if coal else None,
+            "belts": [e for e in coal["entities"] if e["name"] == "transport-belt"] if coal else [],
         }
         payload = json.dumps(json.dumps(targets, separators=(",", ":")))
         return self.game.query(
@@ -1026,7 +1077,7 @@ local function fluid(e,name)
  if not e then return 0 end
  local contents=e.get_fluid_contents();return contents[name] or 0
 end
-local boiler=target(t.boiler.position,t.boiler.name);local drill=target(t.drill.position,t.drill.name)
+local boiler=target(t.boiler.position,t.boiler.name);local drill=t.drill and target(t.drill.position,t.drill.name) or nil
 local steam=0;local connected=0;local energized=0
 for _,row in ipairs(t.engines) do local e=target(row.position,row.name)
  if e then steam=steam+fluid(e,"steam");if e.is_connected_to_electric_network() then connected=connected+1 end;if e.energy>0 then energized=energized+1 end end
@@ -1070,6 +1121,131 @@ return success{boiler_fuel=fuel(boiler),drill_fuel=fuel(drill),
         result = self.ensure_plan(observation, power)
         if result.get("status") != "succeeded":
             return result
+        if coal_feed_mode(self.state) == HAND_FED:
+            return self._ensure_hand_fed_power(observation, power)
+        return self._ensure_belt_fed_power(observation, power, "power_sample_tick")
+
+    def _reserve_coal_feed(self, power: dict) -> None:
+        """Choose the dedicated coal feed once, right after the plant stands, but do not build it.
+
+        The plan is saved as ``coal_plan`` so every later planner keeps its
+        route free (``power_coal_feed.publish_planned_feed`` puts it on the
+        board). A failed choice does not stop electricity; the
+        ``power_coal_feed`` step chooses again.
+        """
+        if "coal_plan" in self.state or "coal_feed_reservation_failed" in self.state:
+            return
+        plan = self._choose_coal_plan(power)
+        if plan.get("ok"):
+            self.state["coal_plan"] = plan
+        else:
+            self.state["coal_feed_reservation_failed"] = str(plan.get("reason", "coal feed planning failed"))[:200]
+        self._save()
+
+    def _ensure_hand_fed_power(self, observation: dict, power: dict) -> dict:
+        """Phase 1: the plant runs on a boiler that the upkeep fuels by hand.
+
+        Succeeds on the native plant evidence of ``power_flow_ready`` minus the
+        feed drill and belt (``hand_fed_power_ready``), verified for 30 game
+        seconds. The boiler's first and every later coal comes from the
+        boiler upkeep (``power_coal_feed.boiler_fuel_action``), which runs in
+        shared upkeep before this method.
+        """
+        if self.state.get("power_mode") != HAND_FED:
+            self.state["power_mode"] = HAND_FED
+            self._save()
+        self._reserve_coal_feed(power)
+        boiler = next(e for e in power["entities"] if e["name"] == "boiler")
+        actual = _find(observation, boiler) or {}
+        if not int((actual.get("inventory") or {}).get("coal", 0)) and actual.get("remaining_burning_fuel", 0) <= 0:
+            self.state.pop("power_sample_tick", None)
+            self._save()
+            return _report("waiting", "hand-fed boiler waits for coal from the boiler upkeep", boiler=boiler)
+        evidence = self.power_evidence(power, None)
+        if not evidence.get("ok"):
+            return _report("blocked", "power evidence query failed", diagnostics=evidence)
+        evidence = dict(
+            evidence,
+            hand_fed=True,
+            coal_feed="planned" if "coal_plan" in self.state else "unplanned",
+            boiler_full_load_coal_per_minute=boiler_coal_per_minute(self.catalog),
+            coal_fuel_value=coal_fuel_value(self.catalog),
+        )
+        if not hand_fed_power_ready(evidence):
+            self.state.pop("power_sample_tick", None)
+            self._save()
+            return _report("waiting", "waiting for water, steam and a fuelled hand-fed boiler", **evidence)
+        tick = int(evidence.get("tick", observation.get("tick", 0)))
+        first = self.state.setdefault("power_sample_tick", tick)
+        self._save()
+        if tick - first < 1800:
+            return _report("waiting", "verifying hand-fed power supply over 30 game seconds", **evidence)
+        self.state["power_verified_once"] = True
+        self._save()
+        return _report(
+            "succeeded",
+            "steam power runs on a hand-fed boiler; the coal drill and belt follow in power_coal_feed",
+            **evidence,
+            flow_verified=True,
+            verification_ticks=tick - first,
+            power_ports=[p for p in power["ports"] if p["kind"] == "power"],
+        )
+
+    def ensure_coal_feed(self, observation: dict) -> dict:
+        """Phase 2 (capability ``power_coal_feed``): build and prove the dedicated coal drill and belt.
+
+        Uses the reserved ``coal_plan`` (chosen again when the reservation
+        failed). Success switches ``power_mode`` to ``BELT_FED``, which stops
+        boiler hand-fuelling. A belt-fed state (old maps) is only re-verified.
+        """
+        self._sync(observation)
+        power = self.state.get("power_plan")
+        if not power:
+            return _report("blocked", "power_coal_feed requires the built power plant")
+        result = self.ensure_plan(observation, power)
+        if result.get("status") != "succeeded":
+            return result
+        if "coal_plan" not in self.state:
+            self.state.pop("coal_feed_reservation_failed", None)
+            self._reserve_coal_feed(power)
+            if "coal_plan" not in self.state:
+                reason = self.state.pop("coal_feed_reservation_failed", "coal feed planning failed")
+                self._save()
+                return _report("blocked", reason)
+        if not self.state.get("coal_feed_started"):
+            self.state["coal_feed_started"] = True  # the feed is now part of the construction bill
+            self._save()
+        result = self._ensure_belt_fed_power(observation, power, "coal_feed_sample_tick")
+        if (
+            result.get("reason") == "reserved block placement is obstructed"
+            and coal_feed_mode(self.state) == HAND_FED
+            and self.state.get("coal_feed_replans", 0) < COAL_FEED_REPLANS
+            and not any(_find(observation, e) for e in self.state["coal_plan"]["entities"])
+        ):
+            # Something was built on the reserved route while the boiler was
+            # hand-fed (e.g. a starter cell). Nothing of the feed stands yet,
+            # so choose a new route instead of blocking.
+            self.state.pop("coal_plan")
+            self.state["coal_feed_replans"] = self.state.get("coal_feed_replans", 0) + 1
+            self._save()
+            return _report(
+                "waiting",
+                "reserved coal feed route is obstructed; planning a new route",
+                obstruction=result.get("evidence"),
+            )
+        if result.get("status") != "succeeded":
+            return result
+        if self.state.get("power_mode") != BELT_FED:
+            self.state["power_mode"] = BELT_FED
+            self._save()
+        return _report(
+            "succeeded",
+            "steam power has a dedicated self-fueled coal feed; boiler hand-fuelling stopped",
+            **result["evidence"],
+        )
+
+    def _ensure_belt_fed_power(self, observation: dict, power: dict, sample_key: str) -> dict:
+        """Build/repair the dedicated coal feed and verify belt-fed flow (``power_flow_ready``)."""
         if "coal_plan" not in self.state:
             plan = self._choose_coal_plan(power)
             if not plan.get("ok"):
@@ -1108,11 +1284,11 @@ return success{boiler_fuel=fuel(boiler),drill_fuel=fuel(drill),
             return _report("blocked", "power evidence query failed", diagnostics=evidence)
         ready = power_flow_ready(evidence)
         if not ready:
-            self.state.pop("power_sample_tick", None)
+            self.state.pop(sample_key, None)
             self._save()
             return _report("waiting", "waiting for dedicated coal, water, and steam flow", **evidence)
         tick = int(evidence.get("tick", observation.get("tick", 0)))
-        first = self.state.setdefault("power_sample_tick", tick)
+        first = self.state.setdefault(sample_key, tick)
         self._save()
         if tick - first < 1800:
             return _report("waiting", "verifying power supply over 30 game seconds", **evidence)

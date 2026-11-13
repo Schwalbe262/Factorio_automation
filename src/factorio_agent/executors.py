@@ -659,6 +659,11 @@ class StarterExecutors:
         # while only they are active nobody fuelled the iron cells and a machine
         # science batch waited for plates until it stalled (live, seed 397906970).
         bootstrap = getattr(self, "bootstrap", None)
+        from .power_coal_feed import boiler_upkeep  # hand-fed boiler first (power_coal_feed.py)
+
+        boiler = boiler_upkeep(self, obs)
+        if isinstance(boiler, dict) and boiler.get("type"):
+            return boiler
         if bootstrap is not None:
             fuel = bootstrap.maintain_fuel(self.starter_observation(obs))
             if isinstance(fuel, dict) and fuel.get("type"):
@@ -747,6 +752,12 @@ class StarterExecutors:
             repair = self.defense_repairs.next_action(obs)
             if repair:
                 return repair
+        # Hand-fed boiler before the burner cells: a dead boiler stops research and assemblers.
+        from .power_coal_feed import boiler_upkeep
+
+        boiler = boiler_upkeep(self, obs)
+        if boiler:
+            return boiler
         filtered = self.starter_observation(obs)
         if not getattr(self, "industrial_mode", False):
             return self.bootstrap.next_action(filtered)

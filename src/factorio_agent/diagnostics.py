@@ -191,14 +191,20 @@ def construction_budget(root, obs, catalog):
     path = Path(root) / "factory-builder.json"
     if path.exists():
         builder = json.loads(path.read_text(encoding="utf-8"))
+        from .power_coal_feed import feed_in_bill
+
         for key in ("power_plan", "coal_plan"):
+            if key == "coal_plan" and builder.get(key) and not feed_in_bill(builder):
+                continue  # reserved for the later power_coal_feed step, not part of the current bill
             if builder.get(key):
                 plans.append(builder[key])
             else:
                 unplanned.append(key)
     path = Path(root) / "pcb-board.json"
     if path.exists():
-        plans += list(json.loads(path.read_text(encoding="utf-8")).get("blocks", {}).values())
+        blocks = json.loads(path.read_text(encoding="utf-8")).get("blocks", {})
+        # The power_coal_feed block mirrors the builder's coal_plan (counted above when due).
+        plans += [block for name, block in blocks.items() if name != "power_coal_feed"]
     path = Path(root) / "electric-coal.json"
     if path.exists():
         plan = json.loads(path.read_text(encoding="utf-8")).get("power_plan")

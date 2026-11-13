@@ -30,7 +30,21 @@ def power_step(ex, obs, parameters):
     early, _ = shared_upkeep(ex, obs, "power")
     if early is not None:
         return early
-    return ex.builder.ensure_power(obs)
+    result = ex.builder.ensure_power(obs)
+    from ..power_coal_feed import publish_planned_feed  # reserved, unbuilt coal feed on the board
+
+    return publish_planned_feed(ex, obs) or result
+
+
+def power_coal_feed_step(ex, obs, parameters):
+    """Phase 2 of starter power: the dedicated coal drill and belt (``power_coal_feed.py``)."""
+    early, _ = shared_upkeep(ex, obs, "power_coal_feed")
+    if early is not None:
+        return early
+    from ..power_coal_feed import publish_planned_feed
+
+    result = ex.builder.ensure_coal_feed(obs)
+    return publish_planned_feed(ex, obs) or result
 
 
 def starter_capacity_step(ex, obs, parameters):
@@ -99,6 +113,8 @@ def regularize_power_layout_proof(ex, obs, result, parameters):
 register("starter", step=starter_step, proof=starter_proof)
 # power has no own proof: the generic flow proof (executors.flow_proof) applies.
 register("power", step=power_step)
+# power_coal_feed: the generic flow proof applies as well (flow_verified, verification_ticks).
+register("power_coal_feed", step=power_coal_feed_step)
 register(
     "starter_capacity", step=starter_capacity_step, proof=starter_capacity_proof, validate=validate_starter_capacity
 )

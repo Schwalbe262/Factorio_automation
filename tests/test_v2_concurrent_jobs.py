@@ -112,15 +112,15 @@ class ConcurrentJobTests(unittest.TestCase):
     def test_fifth_active_job_is_refused(self):
         self.submit("power", "power")
         run_slice(self.root, self.game, Executor({"power": [{"status": "succeeded"}]}, {"power": {"ok": 1}}), "power")
-        for key in ("regularize_power_layout", "defense_perimeter", "bootstrap_logistics", "electric_coal"):
+        for key in ("regularize_power_layout", "defense_perimeter", "bootstrap_logistics", "power_coal_feed"):
             self.submit(key, key)
         self.assertEqual(MAX_ACTIVE_JOBS, 4)
         with self.assertRaisesRegex(ValueError, "at most 4 jobs may be active"):
             self.submit("water_gathering", "water_gathering")
-        control(self.root, self.game, "electric_coal", "pause")
+        control(self.root, self.game, "power_coal_feed", "pause")
         self.submit("water_gathering", "water_gathering")
         with self.assertRaisesRegex(ValueError, "at most 4 jobs may be active"):
-            control(self.root, self.game, "electric_coal", "resume")
+            control(self.root, self.game, "power_coal_feed", "resume")
 
     def test_priority_is_stored_but_not_part_of_identity(self):
         job = self.submit("a", "power", priority=7)

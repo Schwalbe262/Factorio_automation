@@ -71,6 +71,10 @@ class Step:
     # filled; a step without ``builds`` contributes no lookahead demand, so
     # later stages are under-estimated.
     builds: Mapping[str, float] | None = None
+    # Optional extra readiness rule (``gate_ready``) and a fixed priority that
+    # replaces ``TOP_PRIORITY - index`` (a step kept off the critical path).
+    gate: str | None = None
+    priority: int | None = None
 
 
 def _research(technology: str, after: tuple[str, ...] = ()) -> Step:
@@ -80,20 +84,29 @@ def _research(technology: str, after: tuple[str, ...] = ()) -> Step:
 
 # ``builds`` of the early steps, counted from the executors. "estimate" marks
 # a routed part whose length depends on the map.
-# power: core/deterministic_builder.py:777-790 (pump, steam bank, pipe route),
-# core/factory_templates.py:259-280 (1 boiler, 2 engines, 3 pipes, 5 belts,
-# 1 burner inserter, 3 poles), deterministic_builder.py:811-834 (coal drill,
-# 13 belts, 1 burner inserter) and :988-991 (8 coal seeded into drill and boiler).
+# power (phase 1, hand-fed boiler): FactoryBuilder._choose_power_plan (pump,
+# steam bank, pipe route), core/factory_templates.py steam bank (1 boiler,
+# 2 engines, pipes, the 5-belt coal stub under the boiler inserter, 1 burner
+# inserter, 3 poles); coal = the first boiler fill (power_coal_feed.boiler_sizing
+# "target": one stack).
 POWER_BUILDS = {
     "boiler": 1,
     "steam-engine": 2,
     "offshore-pump": 1,
-    "pipe": 8,  # 3 fixed + about 5 routed (estimate)
-    "transport-belt": 30,  # 5 + 13 fixed + about 12 routed (estimate)
-    "burner-inserter": 2,
+    "pipe": 8,  # 3 fixed + about 5 routed (estimate; saved plans 6 and 11)
+    "transport-belt": 5,
+    "burner-inserter": 1,
     "small-electric-pole": 3,
+    "coal": 50,
+}
+# power_coal_feed (phase 2): the dedicated feed of the saved coal_plan
+# (V2FactoryBuilder._choose_coal_plan: burner drill, fuel arm, routed belt to the
+# boiler; saved plans on two maps had 95 and 141 belts) plus its 8-coal drill seed.
+POWER_COAL_FEED_BUILDS = {
     "burner-mining-drill": 1,
-    "coal": 16,
+    "burner-inserter": 1,
+    "transport-belt": 100,  # estimate; saved plans 95 and 141
+    "coal": 8,
 }
 # starter_research: one lab next to power (research.py:56-63); packs come from unit_count.
 STARTER_RESEARCH_BUILDS = {"lab": 1}
@@ -163,11 +176,23 @@ ROADMAP: tuple[Step, ...] = (
         after=("starter_research_automation",),
         builds=BOOTSTRAP_LOGISTICS_BUILDS,
     ),
+    # Phase 2 of starter power: the dedicated coal drill and belt replace hand
+    # fuelling of the boiler once belts are machine-made (power_coal_feed.py).
+    # Listed here so its belts count in the lookahead and supply cell demand;
+    # its low fixed priority keeps it off the research and outpost path.
+    Step(
+        "power_coal_feed",
+        "power_coal_feed",
+        {},
+        builds=POWER_COAL_FEED_BUILDS,
+        gate="machine_made_belts",
+        priority=TOP_PRIORITY - 400,
+    ),
     Step(
         "electric_coal",
         "electric_coal",
         {},
-        after=("starter_research_electric_mining_drill",),
+        after=("starter_research_electric_mining_drill", "power_coal_feed"),
         builds=ELECTRIC_COAL_BUILDS,
     ),
     Step(
@@ -364,6 +389,20 @@ def _recipes_ready(step: Step, capabilities: Mapping, observation: Mapping) -> b
     return set(required) <= _names(observation["enabled_recipes"])
 
 
+def gate_ready(step: Step, jobs, observation: Mapping) -> bool:
+    """A step's ``gate`` rule; a step without one is ready.
+
+    ``machine_made_belts``: ``power_coal_feed.feed_step_ready`` (belts come
+    from a supply cell or produce row, the fallback time passed, or the power
+    job of an old map already built the feed).
+    """
+    if step.gate == "machine_made_belts":
+        from .power_coal_feed import feed_step_ready
+
+        return feed_step_ready(jobs, observation)
+    return step.gate is None
+
+
 def _research_ready(step: Step, observation: Mapping) -> bool:
     """A research step waits until the receipt lists its technology as researchable now."""
     if step.capability != RESEARCH_CAPABILITY:
@@ -421,10 +460,13 @@ def capacity_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
         for job in jobs
         if job.get("capability") == "mining_outpost" and job.get("status") == "succeeded"
     }
+    from .power_coal_feed import hand_fed_coal_per_minute  # the hand-fed boiler burns starter coal too
+
     try:
         decisions = plan_capacity(
             observation.get("resource_supply_options") or {},
             observation.get("roadmap_material_demand") or {},
+            hand_fed_coal_per_minute=hand_fed_coal_per_minute(jobs, observation),
         )
     except (ValueError, TypeError, KeyError, AttributeError):
         return []
@@ -490,13 +532,15 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
             continue
         if not _recipes_ready(step, capabilities, observation) or not _research_ready(step, observation):
             continue
+        if not gate_ready(step, jobs, observation):
+            continue
         parameters, note = _sized_parameters(step, observation)
         proposed.append(
             {
                 "id": node_id,
                 "capability": step.capability,
                 "parameters": parameters,
-                "priority": TOP_PRIORITY - index,
+                "priority": step.priority if step.priority is not None else TOP_PRIORITY - index,
                 "depends_on": [],
                 "reason": f"autopilot roadmap step {index + 1}/{len(ROADMAP)}: {step.id}{note}",
             }
