@@ -519,6 +519,9 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "wood_burner_feed": obs.get("wood_burner_feed"),
         "trunk_return_feeds": obs.get("trunk_return_feeds"),
         "feed_head_rework": obs.get("feed_head_rework"),
+        # Bottleneck auditor (bottleneck_audit.py): diagnosis, proposals, idle_with_work for the supervisor.
+        "bottlenecks": obs.get("bottlenecks"),
+        "bottlenecks_error": obs.get("bottlenecks_error"),
         "capabilities": CAPABILITIES,
         "jobs": [
             {

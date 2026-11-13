@@ -868,6 +868,77 @@ hold like the bus), `logistic_science` (after its research), `steel_production`
 (after steel processing), `dedicated_materials_*`. Pinned by
 `tests/test_v2_early_start.py`, `tests/test_v2_early_outposts.py`.
 
+## Bottleneck auditor (`bottleneck_audit.py`, `growth_providers.py`; receipt `bottlenecks`)
+
+One online rule for "it should act without being pointed at each thing": sustained starvation,
+back-pressure and idleness of ANY block, diagnosed upstream to the limit, with the growth (or the
+gate that holds it) named in one receipt. Before, each case needed its own planner (plates short while
+a single-step rule said wait; labs idle for packs read as no need; science growth without a slot;
+green 3.7x short with no growth path; the queue-low gate starving every proposal).
+
+```
+evidence  every CLI observe adds <= 1 sample per SAMPLE_TICKS (300) to bottleneck-samples.json
+          (world-bound, WINDOW_TICKS 18000 = 5 game min, <= 64 samples; observer.lock like rate-samples):
+          groups  = assembler/furnace/drill/lab by board block (the plan entity at that position) and product
+                    (recipe main product; a furnace without recipe takes its nearest same-block sibling's;
+                    drills the block's resource; labs "research"): counts working / starved per missing item
+                    (ingredient below its amount; no_fuel -> coal; packs of the current research a lab lacks) /
+                    full (full_output, waiting_for_space_in_destination) / no_power / no_research / other;
+                    labs: backlog (every pack >= 2) and packs on the lab block's belts
+          jobs    = waiting jobs -> items they claim (critical_path.claims minus own products; only
+                    makeable or mined items)
+          ports   = belt_lane_observation lane fill (count / 4 per tile lane); stock = chest contents of
+                    every product/missing item; actions = the jobs' action total (last_action: tick it moved)
+sustained >= MIN_SAMPLES (3) samples over >= MIN_SPAN_TICKS (1800); else status "sampling"
+diagnose  consumer group starved on item i for >= STARVED_SHARE (0.25) of the window, or a waiting job:
+            lost = 60 x units x share   (a job: 60 s/min shared over its items)
+          walk i upstream: producers = groups whose product is i (registered blocks before transitional)
+            no producer            -> no_producer (raw: no mine)
+            no_power >= 0.5        -> no_power
+            starved on j >= 0.25   -> walk j (depth <= 6)
+            full >= BACKED_SHARE   -> transport (belt_bandwidth findings attached); when the consumer
+                                      block's own feed has a SHORTFALL finding the consumer feed is the limit
+            working >= 0.7         -> at_capacity (else partly_working)
+          labs working >= 0.7 while pack producers are full >= 0.5, or >= 8 packs on the lab belts, or
+            half the labs back up   -> consumer_capacity at the labs (lost = pack machines full, floor 6 s/min)
+          labs no_research >= 0.5   -> idle entry no_research (follow-up: the research queue)
+          one row per (limit group, kind, item): consumers, longest chain, lost seconds/min, evidence
+          (samples, window, measured rate, chest stock, port fill); ranked by lost, <= 8
+proposal  growth_providers.assess (below): provider, chosen option or gate, seconds saved, node ids
+watchdog  idle_with_work when the jobs' action total has not moved for IDLE_SECONDS (60) and work exists:
+            bottleneck with lost > 0     gate = its proposal gate; a "propose" not merged yet ->
+                                         queue_not_low (autopilot gated) | autopilot_limit
+            blocked job with next_remedy gate remedy_pending; blocked without needs: no_remedy_rule
+            ready node not dispatched    gate lane_busy:<lane> | job_slots_full | dispatch_pending
+          Supervisor._idle_watch logs event idle_with_work (top item, top gate, gates) per episode start,
+          gate change or IDLE_WATCH_SECONDS (60) more; waste_report type idle_with_work and the fleet
+          report line "idle with work: seconds in runs; top gates" sum the episodes (idle_episodes)
+```
+
+Gates of `assess` (in order): `transitional_block` (the limit is the startup science cell, the supply
+cell or an unregistered starter cell: its replacement grows, never it), `consumer_transitional`
+(every consumer is transitional), `no_provider`, `<provider>_wait` (every option infeasible: the
+wrapped planner's own reason, e.g. throughput_growth's wait-vs-spend), `growth_in_flight` (an open
+node or job of the option's lane), `settling` (one succeeded < `SETTLE_TICKS` 3600 ago),
+`provider_rule_holds` (the planner's node rule refuses: requires, stalled before).
+
+Live cases (fixtures in `tests/test_v2_bottleneck_audit.py`):
+
+| Case | Auditor names | Proposal |
+|---|---|---|
+| eval-4177156614 ~67 min, bus waits for iron | `smelting_district|iron-plate` at_capacity (job consumer 60 s/min) | plates: throughput_growth +1 pair +2 furnaces -> 150/min, saves 103 s (mining_outpost then smelting_capacity) |
+| furnaces idle for ore | `iron-ore_mining|iron-ore` at_capacity, chain iron-plate -> iron-ore | plates (the ore's plate row) |
+| ~82 min, a lab missing red | `automation_science|automation-science-pack` at_capacity, labs lose 60 s/min | science_growth 2 -> 3 machines |
+| ~127 min, 128 packs on the lab belt | `laboratories|research` consumer_capacity (2 machines output-full) | science_growth labs 2 -> 4 |
+| ~185 min, green short for 8 labs | `logistic_science|logistic-science-pack` at_capacity, 480 s/min | wait: no green rule until `science_growth.growth_options` exists (hook) |
+| steel/brick block, feed side-loaded before the splitter | `steel_production|steel-plate` transport (single_lane_feed) | wait: rework_feed_head is not a capability yet |
+| brick short of stone | `stone_mining|stone` at_capacity | mine: mine_trunk growth (mining_outpost) |
+| eval-1575138435 93.5 min, 8 labs no research | no bottleneck; idle no_research 480 s/min | follow-up: research queue |
+
+Not modelled yet: per-port supply routing (producers of an item are all groups making it, same block
+first only through the registered/transitional split), fluids beyond ingredient fill, the generic
+produce-row provider's time comparison (it sizes by starved share only).
+
 ## Supervisor and incidents (`supervisor.py`, `incidents.py`, `IncidentConfig`)
 
 | Kind (severity order) | Opens when | Default |
