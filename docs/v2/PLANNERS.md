@@ -16,7 +16,41 @@ tuning = change the dataclass default and the test that pins it.
   stalled (blocked/failed job), `requires` succeeded, `after` satisfied,
   `native_recipes` enabled, research listed in `available_research`. Science
   steps take `research_capacity.recommended_rates` when `0 < rate <= default`.
+- A step with a `gate` also needs `progression.gate_ready` (only `machine_made_belts`
+  of `power_coal_feed`); a step with a fixed `priority` uses it instead of `-100 - index`.
 - Tune: `ROADMAP` order/`after`/`builds`; pinned by `tests/test_v2_progression.py`.
+
+## Starter power in two phases (`power_coal_feed.py`, `FactoryBuilder.ensure_power` / `ensure_coal_feed`)
+
+The dedicated coal drill and its belt (95 and 141 hand-crafted belts on two
+live maps) kept `power` busy for minutes while research waited. A player
+fuels the first boiler by hand and lays the belt once belts are machine-made.
+
+```
+power            plant built (pump, boiler, engines, poles); coal_plan chosen and saved but not built (reservation);
+                 boiler fuelled by the upkeep; success = water, steam, boiler fuel, 2 connected engines for 1800 ticks;
+                 evidence hand_fed: true, coal_feed: planned|unplanned            builder state power_mode: hand_fed
+upkeep           while power_mode is hand_fed (StarterExecutors.starter_upkeep and idle_action, before maintain_fuel):
+                 burn   = boiler energy_usage * 3600 / coal fuel_value          (catalog; base 27 coal/min at 1.8 MW)
+                 refill when slot coal + burning remainder < max(8, ceil(burn * 30 s))   (base 14)
+                 fill   = min(coal stack * 1 fuel slot, ceil(burn * 2 min)) - slot coal   (base: to 50)
+                 insert when carried >= min(fill, 8) or the boiler is out; else ensure_item(coal) from the coal chests
+feed step        roadmap power_coal_feed (after power, before electric_coal), gate machine_made_belts, priority -500:
+                 a succeeded supply_cell with transport-belt or a succeeded produce row for it,
+                 or FEED_FALLBACK_TICKS (54000) after power, or an old map's power job (feed evidence, not hand_fed)
+                 -> ensure_coal_feed builds coal_plan, proves power_flow_ready for 1800 ticks -> power_mode: belt_fed
+after            hand fuelling stops; electric_coal (requires power_coal_feed) replaces the burner drill
+```
+
+| Rule | Where |
+|---|---|
+| saved state without `power_mode`: `coal_plan` present = belt-fed (old maps keep the old full path), absent = hand-fed | `deterministic_builder.coal_feed_mode` |
+| the reserved feed is board block `power_coal_feed` (entities, no ports, reserved area = drill footprint) while hand-fed, removed once belt-fed | `power_coal_feed.publish_planned_feed` |
+| the reserved feed is not in `known_project_construction_budget` until the feed step started (`coal_feed_started`) | `power_coal_feed.feed_in_bill`, `diagnostics.construction_budget` |
+| a route built over before the feed started is re-planned (at most `COAL_FEED_REPLANS` 2) | `FactoryBuilder.ensure_coal_feed` |
+| `POWER_BUILDS` holds the plant and the first fill (50 coal); `POWER_COAL_FEED_BUILDS` the drill, arm and about 100 belts | `progression.py` |
+
+Pinned by `tests/test_v2_power_coal_feed.py`.
 
 ## Starter capacity (`capacity_planning.plan_capacity`, `CapacityConfig`)
 
@@ -28,7 +62,8 @@ T(0)     = 60 * required / net                      (inf when net <= 0)
 T(k)     = fund + cross_fund + k * build_seconds + 60 * (required + k * own_cost) / (net + k * gain)
 gain     = cell_rate  (coal: cell_rate - fuel_per_drill_per_minute)
 expand k when T(0) - T(k) >= min_saving_seconds and T(k) <= max_ratio * T(0)
-coal cells needed = ceil(fuel_margin * (smelting cells * 3.6 + drill-only cells * 2.25) / (cell_rate - 2.25)), at least 1
+coal cells needed = ceil(fuel_margin * (smelting cells * 3.6 + drill-only cells * 2.25 + hand-fed boiler) / (cell_rate - 2.25)), at least 1
+hand-fed boiler = power_coal_feed.hand_fed_coal_per_minute (0 once the feed step succeeded)
 coal: never above cells needed; +1 cell when installed < needed (measured coal rates are not used)
 every item: net += max(0, installed cells * cell_rate - produced)   # cells built but not producing yet
 ```

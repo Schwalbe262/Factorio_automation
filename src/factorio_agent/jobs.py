@@ -25,7 +25,13 @@ CAPABILITIES = {
     "power": {
         "parameters": {},
         "requires": ["starter"],
-        "effect": "steam power with real self-fueling coal belt; verify 30 game seconds",
+        "effect": "steam power on a hand-fed boiler (feed route reserved); verify 30 game seconds",
+    },
+    # Phase 2 of starter power (power_coal_feed.py): proposed once belts are machine-made.
+    "power_coal_feed": {
+        "parameters": {},
+        "requires": ["power"],
+        "effect": "dedicated burner coal drill and belt to the boiler; verify 30 game seconds, then stop hand-fuelling",
     },
     "starter_capacity": {
         "parameters": {"resource": "iron-ore|copper-ore|coal|stone", "cells": "integer 1..8, absolute target"},
@@ -62,7 +68,7 @@ CAPABILITIES = {
     },
     "electric_coal": {
         "parameters": {},
-        "requires": ["power"],
+        "requires": ["power", "power_coal_feed"],
         "effect": "normally craft electric drill, prebuild grid, reserve-backed cutover and real coal output onto retained trunk",
     },
     "mining_outpost": {

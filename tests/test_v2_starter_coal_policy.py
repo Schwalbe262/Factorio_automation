@@ -96,13 +96,28 @@ class StarterCoalPolicyTests(unittest.TestCase):
         builder._save.assert_not_called()
 
     def test_failed_new_selection_is_not_persisted_by_startup(self):
+        # Belt-fed starter power (the feed is due now) blocks on a failed choice.
         builder = self.builder([])
         builder.state["power_plan"] = self.power()
+        builder.state["power_mode"] = "belt_fed"
         builder.ensure_plan = Mock(return_value={"status": "succeeded"})
         result = builder.ensure_power({"world_id": "w", "technologies": {"steam-power": True}})
         self.assertEqual(result["status"], "blocked")
         self.assertNotIn("coal_plan", builder.state)
         builder._save.assert_not_called()
+        builder.ensure_plan.assert_called_once()
+
+    def test_failed_feed_reservation_does_not_block_hand_fed_power(self):
+        builder = self.builder([])
+        builder.state["power_plan"] = self.power()
+        builder.ensure_plan = Mock(return_value={"status": "succeeded"})
+        result = builder.ensure_power({"world_id": "w", "technologies": {"steam-power": True}, "entities": []})
+        # No coal in the boiler yet: power waits for the boiler upkeep, not for the feed.
+        self.assertEqual(result["status"], "waiting")
+        self.assertIn("hand-fed boiler", result["reason"])
+        self.assertNotIn("coal_plan", builder.state)
+        self.assertIn("coal_feed_reservation_failed", builder.state)
+        self.assertEqual(builder.state["power_mode"], "hand_fed")
         builder.ensure_plan.assert_called_once()
 
     def test_failed_route_never_returns_a_buildable_partial_cell(self):

@@ -368,17 +368,20 @@ def _fuel_burn(decision: CapacityDecision, config: CapacityConfig) -> float:
     return extra * per_cell
 
 
-def fuel_cells_needed(supply: Mapping, decisions: list[CapacityDecision], config: CapacityConfig) -> int:
+def fuel_cells_needed(
+    supply: Mapping, decisions: list[CapacityDecision], config: CapacityConfig, hand_fed_coal_per_minute: float = 0.0
+) -> int:
     """Coal cells that fuel every burner cell, counted from the cells themselves.
 
-    burn = smelting cells x fuel_per_cell + drill-only cells x fuel_per_drill,
-    including the cells the kept decisions add; one coal cell nets
-    default_cell_rate - fuel_per_drill. At least one. Measured coal rates are
-    not used: they lag each expansion and once drove coal to 5 cells while
-    iron had 3 (seed 2099054105).
+    burn = smelting cells x fuel_per_cell + drill-only cells x fuel_per_drill
+    + the hand-fed boiler's coal/min (``power_coal_feed.hand_fed_coal_per_minute``,
+    0 once its dedicated feed exists), including the cells the kept decisions
+    add; one coal cell nets default_cell_rate - fuel_per_drill. At least one.
+    Measured coal rates are not used: they lag each expansion and once drove
+    coal to 5 cells while iron had 3 (seed 2099054105).
     """
     targets = {decision.item: decision.target_cells for decision in decisions}
-    burn = 0.0
+    burn = max(0.0, finite_number(hand_fed_coal_per_minute) or 0.0)
     for item in RESOURCE_FOR_ITEM:
         if item == FUEL_ITEM:
             continue
@@ -394,12 +397,16 @@ def fuel_cells_needed(supply: Mapping, decisions: list[CapacityDecision], config
     return max(1, math.ceil(burn * config.fuel_margin / net_per_coal_cell))
 
 
-def plan_capacity(supply, demand, *, config: CapacityConfig = CapacityConfig()) -> list[CapacityDecision]:
+def plan_capacity(
+    supply, demand, *, config: CapacityConfig = CapacityConfig(), hand_fed_coal_per_minute: float = 0.0
+) -> list[CapacityDecision]:
     """Starter capacity expansions that finish the required items sooner than waiting.
 
     Items without evidence are skipped; partial receipts never raise. Coal is
     assessed last so it can include the fuel of the other decisions' new
-    cells (only decisions that survive the ordering rule count).
+    cells (only decisions that survive the ordering rule count) and the
+    hand-fed boiler (``hand_fed_coal_per_minute``, counted in the cells needed;
+    its measured burn is already in the coal row's consumption).
     """
     if not isinstance(supply, Mapping):
         return []
@@ -417,7 +424,7 @@ def plan_capacity(supply, demand, *, config: CapacityConfig = CapacityConfig()) 
     if coal is None:
         return kept
     burn = sum(_fuel_burn(decision, config) for decision in kept)
-    needed = fuel_cells_needed(supply, kept, config)
+    needed = fuel_cells_needed(supply, kept, config, hand_fed_coal_per_minute)
     facts = _facts(FUEL_ITEM, coal, demand, config)
     decision = _assess(facts, supply, config, extra_fuel_burn=burn, fuel_cells_needed=needed)
     if decision is None:

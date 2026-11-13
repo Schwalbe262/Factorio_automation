@@ -48,7 +48,8 @@ jobs.run_jobs: per pass one observe; jobs in priority order; StarterExecutors.st
 | Plan | `luna_client.py` | `LunaDecisionClient.decide(document)` via the Codex CLI (planner luna only) |
 | Game | `core/rcon.py`, `core/deterministic_game.py` | RCON client; `query`/`observe`/`act` (all world effects are Lua bodies in `act`) |
 | Game | `runtime.py` | `create`/`start`/`game_for`/`catalog_for`; `WorldBoundGame`; `NETWORK_SEGMENT_SETTINGS` |
-| Game | `core/deterministic_builder.py` | `_plan(entities, ports)`, `FactoryBuilder.ensure_plan` (one action per call), coal sites |
+| Game | `core/deterministic_builder.py` | `_plan(entities, ports)`, `FactoryBuilder.ensure_plan` (one action per call), coal sites; starter power in two phases: `ensure_power` (hand-fed boiler, feed reserved), `ensure_coal_feed` (dedicated coal belt), `coal_feed_mode` |
+| Game | `power_coal_feed.py` | phase rules of starter power: hand-fed boiler upkeep (`boiler_fuel_action`), feed step gate (`feed_step_ready`), boiler coal for the capacity planner, reserved feed on the board (PLANNERS.md) |
 | Game | `power_layout.py` | `V2FactoryBuilder.ensure_plan` = resource policy check + base `ensure_plan`; `RegularizePower` |
 | Game | `core/deterministic_bootstrap.py`, `construction_supply.py` | starter cells; `V2Bootstrap`: fuel/stock batching, hand-craft cap |
 | Game | `starter_retirement.py` | starter cells of a resource with a permanent source: no fuel, no rebuild, collected and mined (`starter_retirement` capability); bus surplus tiles as the construction plate stock (PLANNERS.md) |
@@ -150,6 +151,8 @@ action in a job's events may belong to upkeep, not to the capability.
 8. Batching (`construction_supply.py:136-148`): fuel in batches of `FUEL_BATCH = 8`
    for every job; no fuel for burners with full output or `FUEL_SKIP_STOCK = 50`
    finished items; stock collected in `take_many` batches of `COLLECT_BATCH = 10`;
+   while the starter boiler is hand-fed (`power_mode: hand_fed`) it is refilled to one
+   coal stack below 30 s of full-load burn, before the burner cells (`power_coal_feed.py`);
    bootstrap science carried in `SCIENCE_COURIER_BATCH = 5` per lab (`industry.py:33`).
 9. Hand-craft cap. Above `HANDCRAFT_LIMIT = 10` missing items with a producing
    `produce` row or supply cell, `V2Bootstrap.ensure_item` collects or waits instead of crafting
