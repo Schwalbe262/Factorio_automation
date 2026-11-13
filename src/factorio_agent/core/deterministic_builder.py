@@ -210,6 +210,52 @@ def _rotate(x: float, y: float, direction: int) -> tuple[float, float]:
     return x, y
 
 
+CONTAINERS = frozenset({"wooden-chest", "iron-chest", "steel-chest"})
+INSERTER_NAMES = frozenset({"burner-inserter", "inserter", "long-handed-inserter", "fast-inserter"})
+
+
+def containers_before_their_inserters(entities: list[dict]) -> list[dict]:
+    """Plan order with every chest moved ahead of the first inserter that reaches its tile.
+
+    An inserter built before its target chest drops its items on the ground
+    there and the chest can no longer be placed (seeds 1024125955 /
+    1188507449: the magazine row's output chest). A chest within an inserter's
+    reach (1 tile, 2 for a long-handed one) on the inserter's axis is built
+    first; every other row keeps its order.
+    """
+    inserters = [(i, e) for i, e in enumerate(entities) if e.get("name") in INSERTER_NAMES]
+    if not inserters:
+        return list(entities)
+    moved: dict[int, int] = {}
+    for j, chest in enumerate(entities):
+        if chest.get("name") not in CONTAINERS:
+            continue
+        cx, cy = chest["position"]["x"], chest["position"]["y"]
+        for i, arm in inserters:
+            if i >= j:
+                break
+            reach = 2 if arm["name"] == "long-handed-inserter" else 1
+            ax, ay = arm["position"]["x"], arm["position"]["y"]
+            vertical = (arm.get("direction", 0) or 0) % 8 == 0
+            if (abs(cx - ax) < 0.01 and abs(abs(cy - ay) - reach) < 0.01 and vertical) or (
+                abs(cy - ay) < 0.01 and abs(abs(cx - ax) - reach) < 0.01 and not vertical
+            ):
+                moved[j] = i
+                break
+    if not moved:
+        return list(entities)
+    ahead: dict[int, list[dict]] = {}
+    for j, i in moved.items():
+        ahead.setdefault(i, []).append(entities[j])
+    out = []
+    for index, row in enumerate(entities):
+        if index in moved:
+            continue
+        out.extend(ahead.get(index, ()))
+        out.append(row)
+    return out
+
+
 def _plan(entities: list[dict], ports: list[dict], **extra: Any) -> dict:
     unique = {}
     for entity in entities:
@@ -306,7 +352,7 @@ class FactoryBuilder:
         entities = (
             sorted(plan["entities"], key=lambda row: row["name"] == "electric-mining-drill")
             if plan.get("resource_cell")
-            else plan["entities"]
+            else containers_before_their_inserters(plan["entities"])
         )
         find = _plan_lookup(observation)
         deferred: dict[str, str] = {}  # early start: item -> why its entities wait (see _deferred)
@@ -423,6 +469,8 @@ return {ok=true,only_actor=own_actor and not other and terrain}
                             "reason": "step outside the reserved build footprint before placement",
                         }
                 recovery = self._recover_resource_cell_obstruction(observation, plan, entity)
+                if recovery is None and not plan.get("resource_cell"):
+                    recovery = self._recover_ground_items(observation, entity)
                 if recovery is not None:
                     return recovery
                 return _report(
@@ -564,6 +612,64 @@ return {ok=true,world_id=d and d.world_id,emitter=emitter,ground=ground}
             "quality": row["quality"],
             "count": min(50, row["count"]),
             "reason": "collect spilled ore before constructing the reserved resource receiver",
+        }
+
+    def _recover_ground_items(self, observation: dict, entity: dict) -> dict | None:
+        """Pick up item stacks lying on a reserved tile when nothing else obstructs it.
+
+        Seeds 1024125955 / 1188507449 (long-1114-0039): the magazine row's output
+        inserter stood before its iron chest (the chest waited for its craft),
+        dropped magazines on the chest tile and the chest blocked for good on
+        "reserved block placement is obstructed". Only ``item-entity`` stacks
+        (and the actor) may stand in the footprint and the tile must take the
+        entity once they are gone; anything else stays a block.
+        """
+        payload = json.dumps(json.dumps(entity, separators=(",", ":")))
+        survey = self.game.query(
+            """
+local x=helpers.json_to_table("""
+            + payload
+            + """)
+if target(x.position,x.name) then return {ok=false} end
+local proto=prototypes.entity[x.name];if not proto then return {ok=false} end
+local box=proto.collision_box
+local function rotate(px,py)
+ local direction=x.direction or 0
+ if direction==4 then return -py,px elseif direction==8 then return -px,-py elseif direction==12 then return py,-px end
+ return px,py
+end
+local x1,y1=rotate(box.left_top.x,box.left_top.y);local x2,y2=rotate(box.right_bottom.x,box.right_bottom.y)
+local left,right=x.position.x+math.min(x1,x2),x.position.x+math.max(x1,x2)
+local top,bottom=x.position.y+math.min(y1,y2),x.position.y+math.max(y1,y2)
+local ground={}
+for _,e in pairs(s.find_entities_filtered{area={{left,top},{right,bottom}}}) do
+ if e~=a and e.type~="resource" then
+  if e.type~="item-entity" or not e.stack.valid_for_read or e.stack.prototype.type~="item" then return {ok=false} end
+  ground[#ground+1]={name=e.name,position=pos(e.position),item=e.stack.name,quality=e.stack.quality.name,count=e.stack.count}
+ end
+end
+if #ground==0 or not s.can_place_entity{name=x.name,position=x.position,direction=x.direction or 0,force=f,
+ build_check_type=defines.build_check_type.manual_ghost,forced=true} then return {ok=false} end
+return {ok=true,world_id=d and d.world_id,ground=ground}
+"""
+        )
+        if not survey.get("ok") or survey.get("world_id") != observation.get("world_id"):
+            return None
+        ground = sorted(
+            survey.get("ground") or [],
+            key=lambda row: (row["position"]["x"], row["position"]["y"], row["item"], row["quality"]),
+        )
+        if not ground:
+            return None
+        row = ground[0]
+        return {
+            "type": "take",
+            "name": row["name"],
+            "position": row["position"],
+            "item": row["item"],
+            "quality": row["quality"],
+            "count": min(50, row["count"]),
+            "reason": f"pick up items lying on the reserved {entity['name']} tile before building it",
         }
 
     def _build_ahead(self, observation: dict, plan: dict, later: list[dict], find) -> dict | None:

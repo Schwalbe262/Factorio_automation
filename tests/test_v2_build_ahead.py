@@ -178,5 +178,49 @@ class BuildBatchTests(BuildAheadTests):
         self.assertEqual(len(action["actions"]), BUILD_BATCH_LIMIT)
 
 
+class GroundItemGame(Game):
+    """Placement fails (an item stack lies on the tile); the footprint survey finds only that stack."""
+
+    def query(self, body):
+        self.queries += 1
+        if "find_entities_filtered" in body:
+            stack = {"name": "item-on-ground", "position": {"x": 97.5, "y": -40.5}, "item": "firearm-magazine"}
+            return {"ok": True, "world_id": "w", "ground": [dict(stack, quality="normal", count=1)]}
+        return {"ok": False, "blocked": [{"name": "iron-chest", "reason": "terrain_or_entity_collision"}]}
+
+
+class ChestOrderTests(BuildAheadTests):
+    """Seeds 1024125955 / 1188507449 (long-1114-0039): the magazine row's chest blocked for good."""
+
+    def row(self):
+        arm = dict(entity("inserter", 97.5, -39.5), direction=8)
+        chest = entity("iron-chest", 97.5, -40.5)
+        pole = entity("small-electric-pole", 96.5, -39.5)
+        return arm, chest, pole
+
+    def test_a_chest_is_built_before_the_inserter_that_drops_into_it(self):
+        from factorio_agent.core.deterministic_builder import containers_before_their_inserters
+
+        arm, chest, pole = self.row()
+        belt = entity("transport-belt", 90.5, -30.5)
+        self.assertEqual(containers_before_their_inserters([belt, arm, chest, pole]), [belt, chest, arm, pole])
+        aside = entity("iron-chest", 99.5, -39.5)  # not on the inserter's axis: order kept
+        self.assertEqual(containers_before_their_inserters([arm, aside]), [arm, aside])
+        builder = self.builder()
+        action = builder.ensure_plan(self.obs({"inserter": 1, "iron-chest": 1}), self.plan(arm, chest, pole))
+        first = action["actions"][0] if action["type"] == "build_many" else action
+        self.assertEqual((first["name"], first["position"]), ("iron-chest", chest["position"]))
+
+    def test_items_lying_on_a_reserved_tile_are_picked_up_first(self):
+        _, chest, _ = self.row()
+        builder = self.builder()
+        builder.game = GroundItemGame(self.root)
+        action = builder.ensure_plan(self.obs({"iron-chest": 1}), self.plan(chest))
+        self.assertEqual(
+            (action["type"], action["item"], action["position"]), ("take", "firearm-magazine", chest["position"])
+        )
+        self.assertIn("reserved iron-chest tile", action["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()
