@@ -57,7 +57,7 @@ class EngineResearchTests(unittest.TestCase):
                 "research": None,
                 "production": {"automation-science-pack": {"consumed": 55}},
             }
-            self.assertEqual(obj.step(obs, {"technology": "gun-turret"})["type"], "research")
+            self.assertEqual(obj.step(obs, {"technology": "gun-turret"})["type"], "research_queue")
             obs["technologies"]["gun-turret"] = True
             self.assertIsNone(obj.proof(obs, {"technology": "gun-turret"}))
             obs["production"]["automation-science-pack"]["consumed"] = 65
@@ -95,7 +95,7 @@ class EngineResearchTests(unittest.TestCase):
             request = {"technology": "advanced-material-processing"}
             self.assertEqual(obj.step(obs, request)["reason"], "continuous_science_supply_not_implemented")
             obj.green = SimpleNamespace(proof=lambda o: {"science_units": [2]})
-            self.assertEqual(obj.step(obs, request)["type"], "research")
+            self.assertEqual(obj.step(obs, request)["type"], "research_queue")
 
     def test_blue_research_requires_fresh_supply_and_records_actual_consumption(self):
         with TemporaryDirectory() as directory:
@@ -131,7 +131,7 @@ class EngineResearchTests(unittest.TestCase):
                 "lab_units": list(range(20, 28)),
                 "actual_blue_in_all_labs": True,
             }
-            self.assertEqual(obj.step(obs, request)["type"], "research")
+            self.assertEqual(obj.step(obs, request)["type"], "research_queue")
             obs["technologies"]["processing-unit"] = True
             self.assertIsNone(obj.proof(obs, request))
             for name in names:

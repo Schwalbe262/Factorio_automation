@@ -682,7 +682,11 @@ def hardware_from_observation(catalog, observation: Mapping, packs: Iterable[str
 
 
 def queue_targets(catalog, jobs, observation: Mapping, *, horizon=4) -> list[ResearchTarget]:
-    """The running research (with its progress) and the next roadmap technologies, at most ``horizon``."""
+    """The running research (with its progress), the native queue behind it, then the next roadmap technologies.
+
+    At most ``horizon``; the native queue (``observation["research_queue"]``)
+    is what the labs research next, so it ranks before the roadmap.
+    """
     researched = _researched(observation)
     names = []
     current = observation.get("research")
@@ -692,7 +696,9 @@ def queue_targets(catalog, jobs, observation: Mapping, *, horizon=4) -> list[Res
         if target is not None:
             targets.append(target)
             names.append(current)
-    for name in roadmap_wanted_technologies(list(jobs or ()), researched):
+    queued = observation.get("research_queue")
+    queued = [name for name in queued if isinstance(name, str)] if isinstance(queued, list) else []
+    for name in queued + roadmap_wanted_technologies(list(jobs or ()), researched):
         if len(targets) >= horizon:
             break
         if name in names or name in researched:

@@ -108,7 +108,11 @@ def research_step(ex, obs, parameters):
     early, _ = shared_upkeep(ex, obs, "research")
     if early is not None:
         return early
-    return ex.normal_research.step(obs, parameters or {})
+    parameters = parameters or {}
+    plan = None
+    if hasattr(ex, "research_queue_plan") and isinstance(parameters.get("technology"), str):
+        plan = ex.research_queue_plan(obs, first=parameters["technology"])
+    return ex.normal_research.step(obs, parameters, plan=plan)
 
 
 def research_proof(ex, obs, result, parameters):

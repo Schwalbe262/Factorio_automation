@@ -375,6 +375,21 @@ def _research_ready(step: Step, observation: Mapping) -> bool:
     return step.parameters["technology"] in listed
 
 
+def _natively_queued(step: Step, observation: Mapping) -> bool:
+    """A research step whose technology already sits in the native research queue needs no job.
+
+    The queue researches it; the step is satisfied once it is researched, so
+    roadmap research steps no longer wait behind each other as separate jobs.
+    """
+    if step.capability != RESEARCH_CAPABILITY:
+        return False
+    queue = observation.get("research_queue")
+    names = set(queue) if isinstance(queue, list) else set()
+    if isinstance(observation.get("research"), str):
+        names.add(observation["research"])
+    return step.parameters.get("technology") in names
+
+
 def _capacity_taken(resource: str, cells: int, jobs, queue_nodes) -> bool:
     """A starter capacity node or job for ``resource`` is open, or this exact target already stalled.
 
@@ -489,6 +504,8 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
         if not all(progress.satisfied(steps[name]) for name in step.after):
             continue
         if not _recipes_ready(step, capabilities, observation) or not _research_ready(step, observation):
+            continue
+        if _natively_queued(step, observation):
             continue
         parameters, note = _sized_parameters(step, observation)
         proposed.append(

@@ -508,12 +508,14 @@ for _,name in ipairs({'iron-plate','copper-plate','coal','automation-science-pac
  production[name]={produced=stats.get_input_count(name),consumed=stats.get_output_count(name)}
 end
 local current=f.current_research
+local research_queue={}
+for _,t in pairs(f.research_queue or {}) do research_queue[#research_queue+1]=t.name end
 return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.position),inventory=contents(a.get_main_inventory()),
  inventory_empty_slots=a.get_main_inventory().count_empty_stacks(),
  actor_unit_number=a.unit_number,equipped_ammo=contents(equipped),recoverable_equipped_ammo=recoverable,
  repair_pending=d.native_repair and {request=d.native_repair.request} or nil,
  crafting_queue=a.crafting_queue,entities=rows,resources=resources,technologies=techs,enabled_recipes=enabled,
- research=current and current.name or nil,research_progress=f.research_progress,production=production,rockets_launched=f.rockets_launched,
+ research=current and current.name or nil,research_queue=research_queue,research_progress=f.research_progress,production=production,rockets_launched=f.rockets_launched,
  enemies=s.count_entities_filtered{position={0,0},radius=128,force="enemy",type={"unit","unit-spawner"}}}
 """
         )
@@ -745,6 +747,11 @@ if f.current_research and f.current_research.name==t.name then return success{st
 if not f.add_research(t) then return failure("research_rejected") end
 return success{status="running"}
 """
+        elif kind == "research_queue":
+            from ..research_queue import RESEARCH_QUEUE_LUA, validate_queue_action
+
+            validate_queue_action(action)
+            body += RESEARCH_QUEUE_LUA
         elif kind == "stop":
             from .deterministic_repair_control import STOP_REPAIR_LUA
 

@@ -57,7 +57,8 @@ class NormalResearch:
         self.path = Path(game.cfg.runtime_dir) / "normal-research.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
 
-    def step(self, obs, parameters):
+    def step(self, obs, parameters, *, plan=None):
+        """Wait while the technology sits in the native queue; otherwise queue it (``plan`` = policy order)."""
         validate_parameters(parameters)
         name = parameters["technology"]
         tech = self.catalog.technologies.get(name)
@@ -108,11 +109,6 @@ class NormalResearch:
                 "reason": "continuous_science_supply_not_implemented",
                 "packs": sorted(unsupported),
             }
-        if obs.get("research") not in (None, name):
-            # The idle lane may have started another technology; it finishes on
-            # its own, so wait for the labs instead of blocking the roadmap step
-            # (seed 2099054105: four research steps blocked one after another).
-            return {"status": "waiting", "reason": "another_research_is_running", "running": obs.get("research")}
         supply = self.science.proof(obs)
         if not supply:
             return {"status": "waiting", "reason": "waiting for commissioned machine science and automatic lab supply"}
@@ -129,18 +125,31 @@ class NormalResearch:
                 "consumed": {p["name"]: obs["production"][p["name"]]["consumed"] for p in tech["ingredients"]},
             }
             _atomic_json(self.path, self.state)
-        if obs.get("research") != name:
-            return {
-                "type": "research",
-                "technology": name,
-                "reason": "research model-selected technology with automatically belt-fed machine packs",
-            }
+        from factorio_agent.research_queue import native_queue, queue_action
+
+        queue = native_queue(obs)
+        if name not in queue:
+            # Not queued yet: enqueue it right after the running research,
+            # followed by the rest of the policy plan (research_queue.py).
+            technologies = list(plan or ())
+            if name not in technologies:
+                technologies = [name]
+            action = queue_action(
+                obs,
+                technologies,
+                reason="queue roadmap technology with automatically belt-fed machine packs",
+                require_room=False,
+            )
+            if action is not None:
+                return action
         return {
             "status": "waiting",
             "reason": "native labs consume normally produced science",
             "evidence": {
                 "technology": name,
-                "research_progress": obs.get("research_progress", 0),
+                "queue_position": queue.index(name) if name in queue else None,
+                "research_queue": queue,
+                "research_progress": obs.get("research_progress", 0) if obs.get("research") == name else 0,
                 "autonomous_wait": True,
                 "background_work_safe": True,
             },
