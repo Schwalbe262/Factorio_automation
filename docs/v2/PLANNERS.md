@@ -309,7 +309,7 @@ allowance(i)   coal: boiler_sizing target + FUEL_FETCH (one boiler fill + one bu
 surplus(i)     carried(i) - allowance(i); acts once >= SURPLUS_STACKS (1) catalog stacks
 upkeep         CarriedSurplus.step, first in starter_upkeep and after the boiler in idle_action: one paid action
   a consumer   insert up to the slot: fuel -> boiler, burner drill, smelting furnace (nearest within rank);
-               ore -> furnace_source of a fuelled furnace smelting that ore with no other product;
+               ore -> crafter_input of a fuelled furnace smelting that ore with no other product;
                never a retiring cell (StarterRetirement.cell_keys) or a stuck entity (STUCK statuses)
                wood: boiler (slot empty or wood) -> wood feed chest -> burner drill -> furnace
   b depot      deposit into a paid storage chest registered by InventoryStorage (inventory-storage.json)
